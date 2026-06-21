@@ -32,6 +32,7 @@ package com.xiwei.sujian.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.model.LocalSettings
@@ -208,7 +209,7 @@ class EditorViewModel(
                         editorEnabled = false,
                         saveStatus = SaveStatus.Idle
                     )
-                    emitErrorEvent("获取章节内容失败: ${e.message}")
+                    emitErrorEvent(getApplication<Application>().getString(R.string.error_load_chapter_failed, e.message ?: ""))
                 }
             }
         }
@@ -325,15 +326,15 @@ class EditorViewModel(
                         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                         if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
                             if (!isAutoSave) {
-                                _events.send(EditorEvent.ShowSaveFailedDialog("已阻止空内容覆盖，请检查内容是否丢失。"))
+                                _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)))
                             } else {
-                                emitErrorEvent("已阻止空内容覆盖保存")
+                                emitErrorEvent(getApplication<Application>().getString(R.string.error_empty_overwrite_save_blocked))
                             }
                         } else {
                             if (!isAutoSave) {
-                                _events.send(EditorEvent.ShowSaveFailedDialog("保存失败: ${result.message}"))
+                                _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_failed, result.message)))
                             } else {
-                                emitErrorEvent("自动保存失败: ${result.message}")
+                                emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_failed, result.message))
                             }
                         }
                         false
@@ -341,7 +342,7 @@ class EditorViewModel(
                     com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
                         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                         if (!isAutoSave) {
-                            _events.send(EditorEvent.ShowSaveFailedDialog("保存失败: Native库未加载"))
+                            _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_native_not_loaded)))
                         }
                         false
                     }
@@ -349,9 +350,9 @@ class EditorViewModel(
             } catch (e: Throwable) {
                 _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                 if (!isAutoSave) {
-                    _events.send(EditorEvent.ShowSaveFailedDialog("保存异常: ${e.message}"))
+                    _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_exception, e.message ?: "")))
                 } else {
-                    emitErrorEvent("自动保存异常: ${e.message}")
+                    emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_exception, e.message ?: ""))
                 }
                 return false
             }
@@ -371,7 +372,7 @@ class EditorViewModel(
                 }
             } catch (e: Throwable) {
                 launch(kotlinx.coroutines.Dispatchers.Main) {
-                    emitErrorEvent("更新章节备注失败: ${e.message}")
+                    emitErrorEvent(getApplication<Application>().getString(R.string.error_update_chapter_note_failed, e.message ?: ""))
                 }
             }
         }

@@ -64,13 +64,13 @@ struct Index {
           // Fail-fast：native 初始化失败直接报错，不降级到 mock
           const errCode = nativeBridge.getLastInitErrorCode()
           const rustError = await nativeBridge.getLastError()
-          let errDesc = `未知错误(${errCode})`
-          if (errCode === -1) { errDesc = '路径为空' }
-          else if (errCode === -2) { errDesc = '路径编码无效' }
-          else if (errCode === -3) { errDesc = '内部状态异常' }
-          else if (errCode === -4) { errDesc = '工作区目录创建失败' }
-          else if (errCode === -999) { errDesc = 'NAPI调用异常(SO加载失败?)' }
-          this.errorMessage = `Native 核心初始化失败: ${errDesc}\n路径: ${workspacePath}\n详情: ${rustError}`
+          let errDesc = `Unknown error(${errCode})`
+          if (errCode === -1) { errDesc = 'Path is empty' }
+          else if (errCode === -2) { errDesc = 'Invalid path encoding' }
+          else if (errCode === -3) { errDesc = 'Internal state error' }
+          else if (errCode === -4) { errDesc = 'Workspace dir creation failed' }
+          else if (errCode === -999) { errDesc = 'NAPI exception (SO load failed?)' }
+          this.errorMessage = `Native core init failed: ${errDesc}\nPath: ${workspacePath}\nDetail: ${rustError}`
           this.isLoading = false
           return
         }
@@ -80,7 +80,7 @@ struct Index {
 
       await this.loadWorkspace()
     } catch (err) {
-      this.errorMessage = `初始化时发生错误: ${err}`
+      this.errorMessage = `Init error: ${err}`
       this.isLoading = false
     }
   }
@@ -99,14 +99,14 @@ struct Index {
         this.projects = workspaceResult.data.projects
         this.recentEdits = workspaceResult.data.recentEdits
       } else {
-        this.errorMessage = workspaceResult.userMessage || '加载工作区失败'
+        this.errorMessage = workspaceResult.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
       }
 
       if (statsResult.success && statsResult.data) {
         this.writingStats = statsResult.data
       }
     } catch (err) {
-      this.errorMessage = '加载工作区时发生错误'
+      this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace_detail').id)
     } finally {
       this.isLoading = false
     }
@@ -116,7 +116,7 @@ struct Index {
     Column() {
       // Header — 受内容最大宽度约束，居中显示
       Row() {
-        Text('写作软件')
+        Text($r('app.string.app_title'))
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -124,12 +124,12 @@ struct Index {
         Blank()
 
         Column() {
-           Text(this.workspacePath ? this.extractWorkspaceName(this.workspacePath) : '我的写作空间')
+           Text(this.workspacePath ? this.extractWorkspaceName(this.workspacePath) : $r('app.string.my_writing_space'))
              .fontSize(15)
              .fontColor(this.themeConfig.colors.textSecondary)
 
           if (this.writingStats) {
-            Text(`今日: ${this.writingStats.todayChars} 字`)
+             Text(getContext(this).resourceManager.getStringSync($r('app.string.today_chars_format').id).replace('%s', `${this.writingStats.todayChars}`))
               .fontSize(13)
               .fontColor(this.themeConfig.colors.textHint)
           }
@@ -152,7 +152,7 @@ struct Index {
             .width(48)
             .height(48)
             .color(this.themeConfig.colors.primary)
-          Text('加载中...')
+          Text($r('app.string.loading'))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
@@ -167,7 +167,7 @@ struct Index {
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
-          Button('重试')
+          Button($r('app.string.retry'))
             .onClick(() => this.initAndLoad())
             .backgroundColor(this.themeConfig.colors.primary)
         }
@@ -211,7 +211,7 @@ struct Index {
   WritingStatsCard() {
     Row() {
       Column() {
-        Text('今日写作')
+        Text($r('app.string.today_writing'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
@@ -221,7 +221,7 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.primary)
 
-        Text('字')
+        Text($r('app.string.unit_char'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
       }
@@ -234,7 +234,7 @@ struct Index {
         .color(this.themeConfig.colors.divider)
 
       Column() {
-        Text('今日时长')
+        Text($r('app.string.today_duration'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
@@ -244,7 +244,7 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.secondary)
 
-        Text('分钟')
+        Text($r('app.string.unit_minute'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
       }
@@ -257,7 +257,7 @@ struct Index {
         .color(this.themeConfig.colors.divider)
 
       Column() {
-        Text('总字数')
+        Text($r('app.string.total_words'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ bottom: 8 })
@@ -267,7 +267,7 @@ struct Index {
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.success)
 
-        Text('字')
+        Text($r('app.string.unit_char'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
       }
@@ -287,14 +287,14 @@ struct Index {
   RecentEditsSection() {
     Column() {
       Row() {
-        Text('最近编辑')
+        Text($r('app.string.recent_edits'))
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
-        Text('查看全部')
+        Text($r('app.string.view_all'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.primary)
           .onClick(() => {
@@ -306,13 +306,13 @@ struct Index {
       ForEach(this.recentEdits, (edit: RecentEdit) => {
         Row() {
           Column() {
-            Text(`章节 ${edit.chapterId}`)
-              .fontSize(16)
-              .fontColor(this.themeConfig.colors.textPrimary)
-              .margin({ bottom: 6 })
+             Text(`Chapter ${edit.chapterId}`)
+               .fontSize(16)
+               .fontColor(this.themeConfig.colors.textPrimary)
+               .margin({ bottom: 6 })
 
-            Row() {
-              Text(`作品 ${edit.projectId}`)
+             Row() {
+               Text(`Project ${edit.projectId}`)
                 .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ right: 16 })
@@ -335,7 +335,7 @@ struct Index {
             url: 'pages/WritingPage',
             params: {
               chapterId: edit.chapterId,
-              chapterTitle: `章节 ${edit.chapterId}`
+              chapterTitle: `Chapter ${edit.chapterId}`
             }
           })
         })
@@ -349,19 +349,19 @@ struct Index {
   ProjectsSection() {
     Column() {
       Row() {
-        Text('我的作品')
+        Text($r('app.string.my_projects'))
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
-        Button('+ 新建作品')
+        Button($r('app.string.new_project'))
           .fontSize(14)
           .height(32)
           .backgroundColor(this.themeConfig.colors.primary)
           .onClick(async () => {
-            const result = await this.bridge.createProject('新作品')
+            const result = await this.bridge.createProject(getContext(this).resourceManager.getStringSync($r('app.string.default_new_project_title').id))
             if (result.success) {
               this.loadWorkspace()
             }
@@ -424,7 +424,7 @@ struct Index {
   @Builder
   QuickActions() {
     Column() {
-      Text('快捷操作')
+      Text($r('app.string.quick_actions'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
@@ -440,7 +440,7 @@ struct Index {
               .fillColor(this.themeConfig.colors.primary)
               .margin({ bottom: 10 })
 
-            Text('新建章节')
+            Text($r('app.string.new_chapter'))
               .fontSize(14)
               .fontColor(this.themeConfig.colors.textPrimary)
           }
@@ -461,7 +461,7 @@ struct Index {
               .fillColor(this.themeConfig.colors.secondary)
               .margin({ bottom: 10 })
 
-            Text('星图')
+            Text($r('app.string.starmap'))
               .fontSize(14)
               .fontColor(this.themeConfig.colors.textPrimary)
           }
@@ -476,7 +476,7 @@ struct Index {
             url: 'pages/StarMapPage',
             params: {
               starmapId: 'starmap-001',
-              starmapTitle: '人物关系图'
+               starmapTitle: 'Character Relations'
             }
           })
         })
@@ -489,7 +489,7 @@ struct Index {
               .fillColor(this.themeConfig.colors.textSecondary)
               .margin({ bottom: 10 })
 
-            Text('设置')
+            Text($r('app.string.settings'))
               .fontSize(14)
               .fontColor(this.themeConfig.colors.textPrimary)
           }
@@ -511,7 +511,7 @@ struct Index {
               .fillColor(this.themeConfig.colors.success)
               .margin({ bottom: 10 })
 
-            Text('同步')
+            Text($r('app.string.sync'))
               .fontSize(14)
               .fontColor(this.themeConfig.colors.textPrimary)
           }
@@ -532,11 +532,11 @@ struct Index {
 
   async deleteProject(projectId: string) {
     AlertDialog.show({
-      title: '确认删除',
-      message: '确认删除此作品及其所有内容？此操作不可撤销。',
-      primaryButton: { value: '取消', action: () => {} },
+      title: $r('app.string.confirm_delete') as string,
+      message: $r('app.string.confirm_delete_project') as string,
+      primaryButton: { value: $r('app.string.cancel') as string, action: () => {} },
       secondaryButton: {
-        value: '删除',
+        value: $r('app.string.delete') as string,
         action: () => {
           this.doDeleteProject(projectId)
         }
@@ -563,11 +563,11 @@ struct Index {
     const hours = Math.floor(diff / 3600000)
 
     if (minutes < 1) {
-      return '刚刚'
+      return getContext(this).resourceManager.getStringSync($r('app.string.just_now').id)
     } else if (minutes < 60) {
-      return `${minutes} 分钟前`
+      return getContext(this).resourceManager.getStringSync($r('app.string.minutes_ago_format').id).replace('%s', `${minutes}`)
     } else if (hours < 24) {
-      return `${hours} 小时前`
+      return getContext(this).resourceManager.getStringSync($r('app.string.hours_ago_format').id).replace('%s', `${hours}`)
     } else {
       return `${date.getMonth() + 1}/${date.getDate()}`
     }
@@ -575,10 +575,10 @@ struct Index {
 
   extractWorkspaceName(path: string): string {
     if (!path) {
-      return '我的写作空间'
+      return getContext(this).resourceManager.getStringSync($r('app.string.my_writing_space').id)
     }
     const segments = path.replace(/\\/g, '/').split('/')
     const last = segments[segments.length - 1]
-    return last || '我的写作空间'
+    return last || getContext(this).resourceManager.getStringSync($r('app.string.my_writing_space').id)
   }
 }

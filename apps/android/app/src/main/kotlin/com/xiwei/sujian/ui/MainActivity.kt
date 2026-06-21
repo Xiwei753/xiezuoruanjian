@@ -1063,8 +1063,8 @@ class MainActivity : AppCompatActivity() {
             // We just show the IDs if we don't have the titles handy,
             // but ideally we should fetch the titles. For MVP, we'll try to find the project title.
             val project = projects.find { it.id == edit.projectId }
-            holder.tvRecentTitle.text = project?.title ?: "未知作品"
-            holder.tvRecentSubtitle.text = "继续编写..."
+            holder.tvRecentTitle.text = project?.title ?: getString(R.string.unknown_project)
+            holder.tvRecentSubtitle.text = getString(R.string.continue_writing)
         }
 
         override fun getItemCount() = recentEdits.size

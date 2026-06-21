@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::api::error::WriterError;
@@ -17,6 +19,14 @@ where
     pub data: Option<T>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+    /// i18n message key，供 UI 层做本地化映射。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_key: Option<String>,
+    /// i18n 模板参数，配合 message_key 做插值。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_args: Option<HashMap<String, String>>,
+    /// 已废弃：UI 应使用 `error_code` + `message_key` + `message_args` 做本地化。
+    /// 保留仅作为 fallback。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -43,6 +53,8 @@ where
             success: true,
             data: Some(data),
             error_code: None,
+            message_key: None,
+            message_args: None,
             user_message: None,
             raw_error: None,
             warnings: Vec::new(),
@@ -63,11 +75,14 @@ where
         }
     }
 
+    #[allow(deprecated)]
     pub fn error(error: WriterError) -> Self {
         Self {
             success: false,
             data: None,
             error_code: Some(error.code().to_string()),
+            message_key: Some(error.message_key().to_string()),
+            message_args: Some(error.params()),
             user_message: Some(error.user_message().to_string()),
             raw_error: Some(error.to_string()),
             warnings: Vec::new(),
@@ -88,6 +103,7 @@ where
             serde_json::json!({
                 "success": false,
                 "errorCode": "JSON_ERROR",
+                "messageKey": "error.json",
                 "userMessage": "结果序列化失败",
                 "rawError": err.to_string(),
                 "warnings": [],
@@ -110,6 +126,8 @@ mod tests {
         assert!(envelope.success);
         assert_eq!(envelope.data, Some("test_data".to_string()));
         assert_eq!(envelope.error_code, None);
+        assert_eq!(envelope.message_key, None);
+        assert_eq!(envelope.message_args, None);
         assert_eq!(envelope.user_message, None);
         assert_eq!(envelope.raw_error, None);
         assert!(envelope.warnings.is_empty());
@@ -143,12 +161,14 @@ mod tests {
 
         assert!(json.contains("\"success\":false"));
         assert!(json.contains("\"errorCode\":\"PROJECT_NOT_FOUND\""));
+        assert!(json.contains("\"messageKey\":\"error.project_not_found\""));
         assert!(json.contains("\"userMessage\":"));
         assert!(json.contains("\"rawError\":"));
         assert!(json.contains("\"warnings\":[]"));
     }
 
     #[test]
+    #[allow(deprecated)]
     fn from_api_result_maps_ok_to_success() {
         let result: Result<String, WriterError> = Ok("test_data".to_string());
         let envelope = ResultEnvelope::from_api_result(result);
@@ -156,11 +176,14 @@ mod tests {
         assert!(envelope.success);
         assert_eq!(envelope.data, Some("test_data".to_string()));
         assert_eq!(envelope.error_code, None);
+        assert_eq!(envelope.message_key, None);
+        assert_eq!(envelope.message_args, None);
         assert_eq!(envelope.user_message, None);
         assert_eq!(envelope.raw_error, None);
     }
 
     #[test]
+    #[allow(deprecated)]
     fn from_api_result_maps_err_to_error() {
         let error = WriterError::ProjectNotFound;
         let expected_error_code = error.code().to_string();
@@ -173,21 +196,54 @@ mod tests {
         assert!(!envelope.success);
         assert_eq!(envelope.data, None);
         assert_eq!(envelope.error_code, Some(expected_error_code));
+        assert_eq!(envelope.message_key, Some("error.project_not_found".to_string()));
+        assert!(envelope.message_args.unwrap().is_empty());
         assert_eq!(envelope.user_message, Some(expected_user_message));
         assert_eq!(envelope.raw_error, Some(expected_raw_error));
     }
 
     #[test]
+    #[allow(deprecated)]
     fn error_envelope_extracts_fields_correctly() {
         let error = WriterError::ProjectNotFound;
         let envelope = ResultEnvelope::<()>::error(error);
 
         assert!(!envelope.success);
         assert_eq!(envelope.error_code.as_deref(), Some("PROJECT_NOT_FOUND"));
+        assert_eq!(envelope.message_key.as_deref(), Some("error.project_not_found"));
+        assert!(envelope.message_args.as_ref().unwrap().is_empty());
         assert_eq!(envelope.user_message.as_deref(), Some("作品不存在或已被删除"));
         assert_eq!(envelope.raw_error.as_deref(), Some("Project not found"));
         assert!(envelope.warnings.is_empty());
         assert!(envelope.changed_paths.is_empty());
         assert!(envelope.changed_entities.is_empty());
+    }
+
+    #[test]
+    fn error_envelope_with_params() {
+        let error = WriterError::EmptyOverwriteBlocked {
+            chapter_id: "ch1".into(),
+            old_len: 100,
+            new_len: 0,
+            reason: "empty content".into(),
+        };
+        let envelope = ResultEnvelope::<()>::error(error);
+
+        assert_eq!(envelope.message_key.as_deref(), Some("error.empty_overwrite_blocked"));
+        let args = envelope.message_args.unwrap();
+        assert_eq!(args.get("chapter_id").unwrap(), "ch1");
+        assert_eq!(args.get("old_len").unwrap(), "100");
+        assert_eq!(args.get("new_len").unwrap(), "0");
+        assert_eq!(args.get("reason").unwrap(), "empty content");
+    }
+
+    #[test]
+    fn error_envelope_json_contains_message_key() {
+        let error = WriterError::SyncConflict("path conflict".into());
+        let json = ResultEnvelope::<()>::error(error).to_json_string();
+
+        assert!(json.contains("\"messageKey\":\"error.sync_conflict\""));
+        assert!(json.contains("\"messageArgs\""));
+        assert!(json.contains("\"detail\""));
     }
 }

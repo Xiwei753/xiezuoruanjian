@@ -117,7 +117,7 @@ struct SettingsPage {
     try {
       const result = await this.bridge.saveLocalSettings(this.settings)
       if (result.success) {
-        this.saveMessage = '设置已保存'
+        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.settings_saved').id)
         this.themeAdapter.updateFromSettings({
           theme: this.settings.themeMode || 'system',
           fontSize: this.settings.editorFontSize,
@@ -128,10 +128,10 @@ struct SettingsPage {
           this.saveMessage = ''
         }, 2000)
       } else {
-        this.saveMessage = result.userMessage || '保存失败'
+        this.saveMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
       }
     } catch (err) {
-      this.saveMessage = '保存时发生错误'
+      this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
     } finally {
       this.isSaving = false
     }
@@ -144,7 +144,7 @@ struct SettingsPage {
     try {
       const result = await this.bridge.performSync()
       if (result.success && result.data) {
-        this.syncMessage = `同步完成: ${result.data.downloadedFiles.length} 个文件已下载`
+        this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', `${result.data.downloadedFiles.length}`)
         setTimeout(() => {
           this.syncMessage = ''
         }, 3000)
@@ -190,7 +190,7 @@ struct SettingsPage {
           remoteUrlSanitized: '',
           transport: '',
           errorCategory: 'unknown',
-          userMessage: result.userMessage || '诊断失败'
+          userMessage: result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error').id)
         } as SyncDiagnosticsResult
       }
     } catch (err) {
@@ -217,7 +217,7 @@ struct SettingsPage {
         remoteUrlSanitized: '',
         transport: '',
         errorCategory: 'unknown',
-        userMessage: '诊断时发生错误'
+        userMessage: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error_detail').id)
       } as SyncDiagnosticsResult
     } finally {
       this.isDiagnosing = false
@@ -234,7 +234,7 @@ struct SettingsPage {
           .fillColor(this.themeConfig.colors.textPrimary)
           .onClick(() => router.back())
 
-        Text('设置')
+        Text($r('app.string.settings'))
           .fontSize(20)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -246,7 +246,7 @@ struct SettingsPage {
         if (this.saveMessage) {
           Text(this.saveMessage)
             .fontSize(12)
-            .fontColor(this.saveMessage === '设置已保存' ? this.themeConfig.colors.success : this.themeConfig.colors.error)
+            .fontColor(this.saveMessage === getContext(this).resourceManager.getStringSync($r('app.string.settings_saved').id) ? this.themeConfig.colors.success : this.themeConfig.colors.error)
         }
       }
       .width('100%')
@@ -259,7 +259,7 @@ struct SettingsPage {
             .width(48)
             .height(48)
             .color(this.themeConfig.colors.primary)
-          Text('加载中...')
+          Text($r('app.string.loading'))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
@@ -296,7 +296,7 @@ struct SettingsPage {
   @Builder
   AppearanceSettingsSection() {
     Column() {
-      Text('外观')
+      Text($r('app.string.appearance'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
@@ -304,15 +304,15 @@ struct SettingsPage {
 
       // 主题模式 — 顺序必须是 跟随系统→浅色→深色
       Row() {
-        Text('主题模式')
+        Text($r('app.string.theme_mode'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
 
         Select([
-          { value: '跟随系统', icon: '' },
-          { value: '浅色', icon: '' },
-          { value: '深色', icon: '' }
+          { value: $r('app.string.follow_system') as string, icon: '' },
+          { value: $r('app.string.light_mode') as string, icon: '' },
+          { value: $r('app.string.dark_mode') as string, icon: '' }
         ] as SettingsSelectOption[])
           .selected(this.getThemeIndex())
           .value(this.getThemeName())
@@ -329,7 +329,7 @@ struct SettingsPage {
 
       // 字体大小
       Row() {
-        Text('字体大小')
+        Text($r('app.string.font_size'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -349,7 +349,7 @@ struct SettingsPage {
 
       // 行距倍数
       Row() {
-        Text('行距倍数')
+        Text($r('app.string.line_spacing_multiplier'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -377,7 +377,7 @@ struct SettingsPage {
   @Builder
   EditorSettingsSection() {
     Column() {
-      Text('编辑器')
+      Text($r('app.string.editor'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
@@ -385,7 +385,7 @@ struct SettingsPage {
 
       // 自动缩进
       Row() {
-        Text('自动缩进')
+        Text($r('app.string.auto_indent'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -400,7 +400,7 @@ struct SettingsPage {
 
       // 缩进宽度
       Row() {
-        Text('缩进宽度')
+        Text($r('app.string.indent_width'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -420,7 +420,7 @@ struct SettingsPage {
 
       // 打字动画
       Row() {
-        Text('打字动画')
+        Text($r('app.string.typing_animation'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -436,7 +436,7 @@ struct SettingsPage {
       // 打字动画时长
       if (this.settings.editorTypingAnimationEnabled) {
         Row() {
-          Text('打字动画时长')
+           Text($r('app.string.typing_animation_duration'))
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
@@ -457,7 +457,7 @@ struct SettingsPage {
 
       // 平滑光标
       Row() {
-        Text('平滑光标')
+        Text($r('app.string.smooth_cursor'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -473,7 +473,7 @@ struct SettingsPage {
       // 平滑光标时长
       if (this.settings.editorSmoothCursorEnabled) {
         Row() {
-          Text('平滑光标时长')
+           Text($r('app.string.smooth_cursor_duration'))
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
@@ -503,7 +503,7 @@ struct SettingsPage {
   @Builder
   SaveSettingsSection() {
     Column() {
-      Text('保存')
+      Text($r('app.string.save_section'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
@@ -511,7 +511,7 @@ struct SettingsPage {
 
       // 自动保存
       Row() {
-        Text('自动保存')
+        Text($r('app.string.auto_save'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -527,11 +527,11 @@ struct SettingsPage {
       // 自动保存延迟
       if (this.settings.autoSaveEnabled) {
         Row() {
-          Text('自动保存延迟')
+           Text($r('app.string.auto_save_delay'))
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
-          Text(`${Math.round(this.settings.autoSaveDelayMs / 1000)} 秒`)
+          Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id).replace('%s', `${Math.round(this.settings.autoSaveDelayMs / 1000)}`))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
@@ -558,7 +558,7 @@ struct SettingsPage {
   SyncSettingsSection() {
     Column() {
       Row() {
-        Text('同步')
+        Text($r('app.string.sync_section'))
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -576,7 +576,7 @@ struct SettingsPage {
 
       // Sync enabled
       Row() {
-        Text('启用同步')
+        Text($r('app.string.enable_sync'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -594,16 +594,16 @@ struct SettingsPage {
       // Sync backend type
       if (this.syncConfig?.enabled) {
         Row() {
-          Text('同步方式')
+           Text($r('app.string.sync_method'))
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
-          Select([
+           Select([
             { value: 'GitHub', icon: '' },
             { value: 'GitLab', icon: '' },
             { value: 'Gitea', icon: '' },
-            { value: '自定义', icon: '' }
+            { value: $r('app.string.custom') as string, icon: '' }
           ] as SettingsSelectOption[])
             .selected(this.getSyncProviderIndex())
             .value(this.getSyncProviderName())
@@ -619,7 +619,7 @@ struct SettingsPage {
 
         // Auto sync
         Row() {
-          Text('自动同步')
+           Text($r('app.string.auto_sync'))
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
@@ -636,12 +636,12 @@ struct SettingsPage {
 
         // Sync interval
         Row() {
-          Text('同步间隔')
+           Text($r('app.string.sync_interval'))
             .fontSize(16)
             .fontColor(this.themeConfig.colors.textPrimary)
             .layoutWeight(1)
 
-          Text(`${this.syncConfig?.syncIntervalSeconds || 300} 秒`)
+          Text(getContext(this).resourceManager.getStringSync($r('app.string.seconds_format').id).replace('%s', `${this.syncConfig?.syncIntervalSeconds || 300}`))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 16 })
@@ -664,14 +664,14 @@ struct SettingsPage {
 
         // Sync actions
         Row() {
-          Button('同步')
+          Button($r('app.string.sync_section'))
             .fontSize(14)
             .height(36)
             .backgroundColor(this.themeConfig.colors.primary)
             .enabled(!this.isSyncing)
             .onClick(() => this.performSync())
 
-          Button('诊断')
+          Button($r('app.string.diagnose'))
             .fontSize(14)
             .height(36)
             .backgroundColor(this.themeConfig.colors.secondary || '#6b7280')
@@ -686,7 +686,7 @@ struct SettingsPage {
         // Diagnostics result card
         if (this.syncDiagnostics) {
           Column() {
-            Text('诊断结果')
+             Text($r('app.string.diagnostics_result'))
               .fontSize(16)
               .fontWeight(FontWeight.Medium)
               .fontColor(this.themeConfig.colors.textPrimary)
@@ -694,10 +694,10 @@ struct SettingsPage {
 
             // Four check items
             Row() {
-              this.DiagnosticItem('网络', this.syncDiagnostics.networkOk, this.syncDiagnostics.networkStatus)
-              this.DiagnosticItem('认证', this.syncDiagnostics.authOk, this.syncDiagnostics.authStatus)
-              this.DiagnosticItem('仓库', this.syncDiagnostics.repoOk, this.syncDiagnostics.repoStatus)
-              this.DiagnosticItem('分支', this.syncDiagnostics.branchOk, this.syncDiagnostics.branchStatus)
+              this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.network').id), this.syncDiagnostics.networkOk, this.syncDiagnostics.networkStatus)
+              this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.auth').id), this.syncDiagnostics.authOk, this.syncDiagnostics.authStatus)
+              this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.repository').id), this.syncDiagnostics.repoOk, this.syncDiagnostics.repoStatus)
+              this.DiagnosticItem(getContext(this).resourceManager.getStringSync($r('app.string.branch').id), this.syncDiagnostics.branchOk, this.syncDiagnostics.branchStatus)
             }
             .width('100%')
             .justifyContent(FlexAlign.SpaceAround)
@@ -712,7 +712,7 @@ struct SettingsPage {
             // Error category
             if (this.syncDiagnostics.errorCategory && this.syncDiagnostics.errorCategory.length > 0) {
               Row() {
-                Text('错误分类: ')
+                Text(getContext(this).resourceManager.getStringSync($r('app.string.error_category').id) + ': ')
                   .fontSize(12)
                   .fontColor(this.themeConfig.colors.textSecondary)
                 Text(this.syncDiagnostics.errorCategory)
@@ -726,7 +726,7 @@ struct SettingsPage {
             // Remote URL
             if (this.syncDiagnostics.remoteUrlSanitized) {
               Row() {
-                Text('远程地址: ')
+                Text(getContext(this).resourceManager.getStringSync($r('app.string.remote_address').id) + ': ')
                   .fontSize(12)
                   .fontColor(this.themeConfig.colors.textSecondary)
                 Text(this.syncDiagnostics.remoteUrlSanitized)
@@ -740,7 +740,7 @@ struct SettingsPage {
             // Transport
             if (this.syncDiagnostics.transport) {
               Row() {
-                Text('传输协议: ')
+                Text(getContext(this).resourceManager.getStringSync($r('app.string.transport_protocol').id) + ': ')
                   .fontSize(12)
                   .fontColor(this.themeConfig.colors.textSecondary)
                 Text(this.syncDiagnostics.transport)
@@ -769,14 +769,14 @@ struct SettingsPage {
   @Builder
   AiSettingsSection() {
     Column() {
-      Text('AI')
+      Text($r('app.string.ai_section'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
 
       Row() {
-        Text('启用 AI')
+        Text($r('app.string.enable_ai'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -799,7 +799,7 @@ struct SettingsPage {
   @Builder
   AboutSettingsSection() {
     Column() {
-      Text('关于/高级')
+      Text($r('app.string.about_advanced'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
@@ -807,7 +807,7 @@ struct SettingsPage {
 
       // 工作区路径
       Row() {
-        Text('工作区路径')
+        Text($r('app.string.workspace_path'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
@@ -817,11 +817,11 @@ struct SettingsPage {
 
       // 版本信息
       Row() {
-        Text('版本信息')
+        Text($r('app.string.version_info'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textPrimary)
           .layoutWeight(1)
-        Text('HarmonyOS 客户端')
+        Text($r('app.string.harmonyos_client'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textSecondary)
       }
@@ -862,10 +862,10 @@ struct SettingsPage {
   }
 
   getThemeName(): string {
-    if (this.settings.themeMode === 'system') return '跟随系统'
-    if (this.settings.themeMode === 'light') return '浅色'
-    if (this.settings.themeMode === 'dark') return '深色'
-    return '跟随系统'
+    if (this.settings.themeMode === 'system') return getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id)
+    if (this.settings.themeMode === 'light') return getContext(this).resourceManager.getStringSync($r('app.string.light_mode').id)
+    if (this.settings.themeMode === 'dark') return getContext(this).resourceManager.getStringSync($r('app.string.dark_mode').id)
+    return getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id)
   }
 
   getSyncProviderIndex(): number {
@@ -878,6 +878,6 @@ struct SettingsPage {
     if (p === 'github') return 'GitHub'
     if (p === 'gitlab') return 'GitLab'
     if (p === 'gitea') return 'Gitea'
-    return '自定义'
+    return getContext(this).resourceManager.getStringSync($r('app.string.custom').id)
   }
 }

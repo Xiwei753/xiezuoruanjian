@@ -19,6 +19,546 @@
     {
       "name": "permission_file_reason",
       "value": "用于读写本地写作作品文件"
+    },
+    {
+      "name": "loading",
+      "value": "加载中..."
+    },
+    {
+      "name": "retry",
+      "value": "重试"
+    },
+    {
+      "name": "cancel",
+      "value": "取消"
+    },
+    {
+      "name": "delete",
+      "value": "删除"
+    },
+    {
+      "name": "save",
+      "value": "保存"
+    },
+    {
+      "name": "confirm_delete",
+      "value": "确认删除"
+    },
+    {
+      "name": "word_count_format",
+      "value": "%s 字"
+    },
+    {
+      "name": "chapter_count_format",
+      "value": "%s 章"
+    },
+    {
+      "name": "volume_count_format",
+      "value": "%s 卷"
+    },
+    {
+      "name": "just_now",
+      "value": "刚刚"
+    },
+    {
+      "name": "minutes_ago_format",
+      "value": "%s 分钟前"
+    },
+    {
+      "name": "hours_ago_format",
+      "value": "%s 小时前"
+    },
+    {
+      "name": "days_ago_format",
+      "value": "%s 天前"
+    },
+    {
+      "name": "app_title",
+      "value": "写作软件"
+    },
+    {
+      "name": "my_writing_space",
+      "value": "我的写作空间"
+    },
+    {
+      "name": "today_writing",
+      "value": "今日写作"
+    },
+    {
+      "name": "today_duration",
+      "value": "今日时长"
+    },
+    {
+      "name": "total_words",
+      "value": "总字数"
+    },
+    {
+      "name": "unit_char",
+      "value": "字"
+    },
+    {
+      "name": "unit_minute",
+      "value": "分钟"
+    },
+    {
+      "name": "recent_edits",
+      "value": "最近编辑"
+    },
+    {
+      "name": "view_all",
+      "value": "查看全部"
+    },
+    {
+      "name": "my_projects",
+      "value": "我的作品"
+    },
+    {
+      "name": "new_project",
+      "value": "+ 新建作品"
+    },
+    {
+      "name": "new_chapter",
+      "value": "新建章节"
+    },
+    {
+      "name": "starmap",
+      "value": "星图"
+    },
+    {
+      "name": "settings",
+      "value": "设置"
+    },
+    {
+      "name": "sync",
+      "value": "同步"
+    },
+    {
+      "name": "quick_actions",
+      "value": "快捷操作"
+    },
+    {
+      "name": "confirm_delete_project",
+      "value": "确认删除此作品及其所有内容？此操作不可撤销。"
+    },
+    {
+      "name": "default_new_project_title",
+      "value": "新作品"
+    },
+    {
+      "name": "today_chars_format",
+      "value": "今日: %s 字"
+    },
+    {
+      "name": "select_project",
+      "value": "选择作品"
+    },
+    {
+      "name": "new_volume",
+      "value": "+ 新卷"
+    },
+    {
+      "name": "no_projects",
+      "value": "还没有作品"
+    },
+    {
+      "name": "click_to_create",
+      "value": "点击下方按钮创建"
+    },
+    {
+      "name": "back_to_project_list",
+      "value": "返回作品列表"
+    },
+    {
+      "name": "no_volumes_chapters",
+      "value": "还没有卷和章节"
+    },
+    {
+      "name": "click_new_volume_to_start",
+      "value": "点击上方\u201c新卷\u201d开始创作"
+    },
+    {
+      "name": "no_chapters",
+      "value": "暂无章节"
+    },
+    {
+      "name": "select_chapter_to_write",
+      "value": "从左侧选择章节开始写作"
+    },
+    {
+      "name": "select_project_first",
+      "value": "从左侧选择作品"
+    },
+    {
+      "name": "then_select_chapter",
+      "value": "然后选择章节开始写作"
+    },
+    {
+      "name": "confirm_delete_volume",
+      "value": "确认删除此卷及其所有章节？此操作不可撤销。"
+    },
+    {
+      "name": "confirm_delete_chapter",
+      "value": "确认删除此章节？此操作不可撤销。"
+    },
+    {
+      "name": "default_new_volume_title",
+      "value": "新卷"
+    },
+    {
+      "name": "default_new_chapter_title",
+      "value": "新章节"
+    },
+    {
+      "name": "recent_edits_count_format",
+      "value": "%s 个最近编辑"
+    },
+    {
+      "name": "auto_save",
+      "value": "自动保存"
+    },
+    {
+      "name": "saved",
+      "value": "已保存"
+    },
+    {
+      "name": "unsaved",
+      "value": "未保存"
+    },
+    {
+      "name": "save_failed",
+      "value": "保存失败"
+    },
+    {
+      "name": "auto_saved",
+      "value": "已自动保存"
+    },
+    {
+      "name": "saving",
+      "value": "保存中"
+    },
+    {
+      "name": "error_load_workspace",
+      "value": "加载工作区失败"
+    },
+    {
+      "name": "error_load_workspace_detail",
+      "value": "加载工作区时发生错误"
+    },
+    {
+      "name": "error_load_project",
+      "value": "加载项目失败"
+    },
+    {
+      "name": "error_load_project_detail",
+      "value": "加载项目时发生错误"
+    },
+    {
+      "name": "error_load_chapter",
+      "value": "加载章节失败"
+    },
+    {
+      "name": "error_load_chapter_detail",
+      "value": "加载章节时发生错误"
+    },
+    {
+      "name": "error_save",
+      "value": "保存时发生错误"
+    },
+    {
+      "name": "cleared",
+      "value": "已清空"
+    },
+    {
+      "name": "clear_failed",
+      "value": "清空失败"
+    },
+    {
+      "name": "confirm_clear",
+      "value": "确认清空"
+    },
+    {
+      "name": "confirm_clear_message",
+      "value": "确认清空本章内容？此操作会保存为空。"
+    },
+    {
+      "name": "confirm_clear_action",
+      "value": "确认清空"
+    },
+    {
+      "name": "start_writing_placeholder",
+      "value": "开始写作..."
+    },
+    {
+      "name": "node_info",
+      "value": "节点信息"
+    },
+    {
+      "name": "related_relations",
+      "value": "关联关系"
+    },
+    {
+      "name": "unnamed_relation",
+      "value": "未命名关系"
+    },
+    {
+      "name": "legend",
+      "value": "图例"
+    },
+    {
+      "name": "nodes_edges_format",
+      "value": "%s 节点 · %s 连线"
+    },
+    {
+      "name": "reset",
+      "value": "重置"
+    },
+    {
+      "name": "error_load_starmap",
+      "value": "加载星图失败"
+    },
+    {
+      "name": "error_load_starmap_detail",
+      "value": "加载星图时发生错误"
+    },
+    {
+      "name": "node_kind_character",
+      "value": "角色"
+    },
+    {
+      "name": "node_kind_location",
+      "value": "地点"
+    },
+    {
+      "name": "node_kind_event",
+      "value": "事件"
+    },
+    {
+      "name": "node_kind_theme",
+      "value": "主题"
+    },
+    {
+      "name": "node_kind_plot",
+      "value": "情节"
+    },
+    {
+      "name": "node_kind_item",
+      "value": "物品"
+    },
+    {
+      "name": "node_kind_organization",
+      "value": "组织"
+    },
+    {
+      "name": "node_kind_custom",
+      "value": "自定义"
+    },
+    {
+      "name": "node_kind_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "edge_kind_character_relation",
+      "value": "角色关系"
+    },
+    {
+      "name": "edge_kind_depends_on",
+      "value": "依赖"
+    },
+    {
+      "name": "edge_kind_timeline",
+      "value": "时间线"
+    },
+    {
+      "name": "edge_kind_conflicts_with",
+      "value": "冲突"
+    },
+    {
+      "name": "edge_kind_related_to",
+      "value": "关联"
+    },
+    {
+      "name": "edge_kind_custom",
+      "value": "自定义"
+    },
+    {
+      "name": "edge_kind_unknown",
+      "value": "未知"
+    },
+    {
+      "name": "appearance",
+      "value": "外观"
+    },
+    {
+      "name": "theme_mode",
+      "value": "主题模式"
+    },
+    {
+      "name": "follow_system",
+      "value": "跟随系统"
+    },
+    {
+      "name": "light_mode",
+      "value": "浅色"
+    },
+    {
+      "name": "dark_mode",
+      "value": "深色"
+    },
+    {
+      "name": "font_size",
+      "value": "字体大小"
+    },
+    {
+      "name": "line_spacing_multiplier",
+      "value": "行距倍数"
+    },
+    {
+      "name": "editor",
+      "value": "编辑器"
+    },
+    {
+      "name": "auto_indent",
+      "value": "自动缩进"
+    },
+    {
+      "name": "indent_width",
+      "value": "缩进宽度"
+    },
+    {
+      "name": "typing_animation",
+      "value": "打字动画"
+    },
+    {
+      "name": "typing_animation_duration",
+      "value": "打字动画时长"
+    },
+    {
+      "name": "smooth_cursor",
+      "value": "平滑光标"
+    },
+    {
+      "name": "smooth_cursor_duration",
+      "value": "平滑光标时长"
+    },
+    {
+      "name": "save_section",
+      "value": "保存"
+    },
+    {
+      "name": "auto_save_delay",
+      "value": "自动保存延迟"
+    },
+    {
+      "name": "seconds_format",
+      "value": "%s 秒"
+    },
+    {
+      "name": "sync_section",
+      "value": "同步"
+    },
+    {
+      "name": "enable_sync",
+      "value": "启用同步"
+    },
+    {
+      "name": "sync_method",
+      "value": "同步方式"
+    },
+    {
+      "name": "custom",
+      "value": "自定义"
+    },
+    {
+      "name": "auto_sync",
+      "value": "自动同步"
+    },
+    {
+      "name": "sync_interval",
+      "value": "同步间隔"
+    },
+    {
+      "name": "diagnose",
+      "value": "诊断"
+    },
+    {
+      "name": "diagnostics_result",
+      "value": "诊断结果"
+    },
+    {
+      "name": "network",
+      "value": "网络"
+    },
+    {
+      "name": "auth",
+      "value": "认证"
+    },
+    {
+      "name": "repository",
+      "value": "仓库"
+    },
+    {
+      "name": "branch",
+      "value": "分支"
+    },
+    {
+      "name": "error_category",
+      "value": "错误分类"
+    },
+    {
+      "name": "remote_address",
+      "value": "远程地址"
+    },
+    {
+      "name": "transport_protocol",
+      "value": "传输协议"
+    },
+    {
+      "name": "ai_section",
+      "value": "AI"
+    },
+    {
+      "name": "enable_ai",
+      "value": "启用 AI"
+    },
+    {
+      "name": "about_advanced",
+      "value": "关于/高级"
+    },
+    {
+      "name": "workspace_path",
+      "value": "工作区路径"
+    },
+    {
+      "name": "version_info",
+      "value": "版本信息"
+    },
+    {
+      "name": "harmonyos_client",
+      "value": "HarmonyOS 客户端"
+    },
+    {
+      "name": "settings_saved",
+      "value": "设置已保存"
+    },
+    {
+      "name": "sync_complete_format",
+      "value": "同步完成: %s 个文件已下载"
+    },
+    {
+      "name": "diagnostics_error",
+      "value": "诊断失败"
+    },
+    {
+      "name": "diagnostics_error_detail",
+      "value": "诊断时发生错误"
+    },
+    {
+      "name": "select_chapter_to_start",
+      "value": "选择一个章节开始写作"
+    },
+    {
+      "name": "auto_saving",
+      "value": "自动保存中"
     }
   ]
 }

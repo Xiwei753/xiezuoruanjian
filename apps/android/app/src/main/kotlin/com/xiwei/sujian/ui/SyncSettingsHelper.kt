@@ -112,7 +112,7 @@ internal class SyncSettingsHelper(
     fun handleDryRun() {
         if (!SyncSession.lock.compareAndSet(false, true)) return
         val taskId = SyncSession.currentTaskId.incrementAndGet()
-        btnDryRun.text = "检查中..."
+        btnDryRun.text = activity.getString(R.string.sync_checking)
         btnDryRun.isEnabled = false
         btnPerformSync.isEnabled = false
         btnTestConnection.isEnabled = false
@@ -132,14 +132,14 @@ internal class SyncSettingsHelper(
                     return@runOnUiThread
                 }
                 SyncSession.lock.set(false)
-                btnDryRun.text = "检查同步计划"
+                btnDryRun.text = activity.getString(R.string.btn_dry_run)
                 btnDryRun.isEnabled = true
                 btnPerformSync.isEnabled = true
                 btnTestConnection.isEnabled = true
                 when (result) {
                     is BridgeResult.Success -> {
                         val plan = result.data
-                        val msg = "同步计划检查完成: " + activity.getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.filesToDeleteRemote.size, plan.filesToDeleteLocal.size, plan.ignoredFiles.size)
+                        val msg = activity.getString(R.string.sync_plan_check_complete, activity.getString(R.string.sync_dry_run_result, plan.filesToUpload.size, plan.filesToDownload.size, plan.filesToDeleteRemote.size, plan.filesToDeleteLocal.size, plan.ignoredFiles.size))
                         android.widget.Toast.makeText(activity, msg, android.widget.Toast.LENGTH_LONG).show()
                     }
                     is BridgeResult.Error -> {
@@ -156,7 +156,7 @@ internal class SyncSettingsHelper(
     fun handleTestConnection() {
         if (!SyncSession.lock.compareAndSet(false, true)) return
         val taskId = SyncSession.currentTaskId.incrementAndGet()
-        btnTestConnection.text = "检查中..."
+        btnTestConnection.text = activity.getString(R.string.sync_checking)
         btnTestConnection.isEnabled = false
         btnDryRun.isEnabled = false
         btnPerformSync.isEnabled = false
@@ -186,43 +186,41 @@ internal class SyncSettingsHelper(
                         val msgBuilder = StringBuilder()
                             val mapStatus = { s: String ->
                                 when (s) {
-                                    "ok" -> "正常"
-                                    "failed" -> "失败"
-                                    "skipped" -> "已跳过"
-                                    else -> if (s.startsWith("failed")) "失败 ($s)" else "未检查 ($s)"
+                                    "ok" -> activity.getString(R.string.diag_status_ok)
+                                    "failed" -> activity.getString(R.string.diag_status_failed)
+                                    "skipped" -> activity.getString(R.string.diag_status_skipped)
+                                    else -> if (s.startsWith("failed")) activity.getString(R.string.diag_status_failed_detail, s) else activity.getString(R.string.diag_status_unchecked, s)
                                 }
                             }
 
-                            msgBuilder.append("=== 权限状态 ===\n")
-                            msgBuilder.append("INTERNET 权限: ${if (diag.androidHasInternetPermission) "已授予" else "缺失"}\n")
-                            msgBuilder.append("网络状态权限: ${if (diag.androidHasAccessNetworkStatePermission) "已授予" else "缺失"}\n")
-                            msgBuilder.append("网络状态: ${
-                                when (diag.androidNetworkState) {
-                                    "permission_granted" -> "权限已授予，可检测网络"
-                                    "unknown_no_permission" -> "未知（缺少 ACCESS_NETWORK_STATE 权限）"
-                                    "failed_no_internet_permission" -> "无 INTERNET 权限，无法联网"
-                                    else -> diag.androidNetworkState
-                                }
-                            }\n\n")
+                            msgBuilder.append(activity.getString(R.string.diag_permission_section)).append("\n")
+                            msgBuilder.append(activity.getString(R.string.diag_internet_permission, if (diag.androidHasInternetPermission) activity.getString(R.string.diag_permission_granted) else activity.getString(R.string.diag_permission_missing))).append("\n")
+                            msgBuilder.append(activity.getString(R.string.diag_network_state_permission, if (diag.androidHasAccessNetworkStatePermission) activity.getString(R.string.diag_permission_granted) else activity.getString(R.string.diag_permission_missing))).append("\n")
+                            msgBuilder.append(when (diag.androidNetworkState) {
+                                "permission_granted" -> activity.getString(R.string.diag_network_state_granted)
+                                "unknown_no_permission" -> activity.getString(R.string.diag_network_state_unknown)
+                                "failed_no_internet_permission" -> activity.getString(R.string.diag_network_state_no_internet)
+                                else -> diag.androidNetworkState
+                            }).append("\n\n")
 
                             if (!diag.androidHasInternetPermission) {
                                 msgBuilder.append("\n${diag.userMessage}")
                                 AlertDialog.Builder(activity)
-                                    .setTitle("诊断失败")
+                                    .setTitle(activity.getString(R.string.diag_title_failed))
                                     .setMessage(msgBuilder.toString())
                                     .setPositiveButton(activity.getString(R.string.action_ok), null)
                                     .show()
                                 return@runOnUiThread
                             }
 
-                            msgBuilder.append("网络连接: ${mapStatus(diag.networkStatus)}\n")
-                            msgBuilder.append("身份认证: ${mapStatus(diag.authStatus)}\n")
-                            msgBuilder.append("仓库访问: ${mapStatus(diag.repoStatus)}\n")
-                            msgBuilder.append("分支存在: ${mapStatus(diag.branchStatus)}\n\n")
+                            msgBuilder.append(activity.getString(R.string.diag_network_connection, mapStatus(diag.networkStatus))).append("\n")
+                            msgBuilder.append(activity.getString(R.string.diag_auth_status, mapStatus(diag.authStatus))).append("\n")
+                            msgBuilder.append(activity.getString(R.string.diag_repo_access, mapStatus(diag.repoStatus))).append("\n")
+                            msgBuilder.append(activity.getString(R.string.diag_branch_exists, mapStatus(diag.branchStatus))).append("\n\n")
 
                             if (!diag.networkProbeSummary.isNullOrEmpty()) {
-                                msgBuilder.append("=== 自动网络探测 ===\n")
-                                msgBuilder.append("最终选择模式: ${diag.chosenNetworkMode ?: "未知"}\n")
+                                msgBuilder.append(activity.getString(R.string.diag_auto_probe_section)).append("\n")
+                                msgBuilder.append(activity.getString(R.string.diag_chosen_mode, diag.chosenNetworkMode ?: activity.getString(R.string.diag_unknown_mode))).append("\n")
                                 diag.networkProbeSummary.forEach { probe ->
                                     val mark = if (probe.success) "✅" else "❌"
                                     msgBuilder.append("$mark ${probe.mode}: ${probe.message}\n")
@@ -233,11 +231,11 @@ internal class SyncSettingsHelper(
                             msgBuilder.append(diag.userMessage)
 
                             if (diag.rawError != null && diag.rawError.isNotEmpty()) {
-                                msgBuilder.append("\n\n原始错误:\n${diag.rawError}")
+                                msgBuilder.append("\n\n").append(activity.getString(R.string.diag_raw_error_section, diag.rawError))
                             }
 
                         AlertDialog.Builder(activity)
-                            .setTitle(if (diag.success) "诊断成功" else "诊断失败")
+                            .setTitle(if (diag.success) activity.getString(R.string.diag_title_success) else activity.getString(R.string.diag_title_failed))
                             .setMessage(msgBuilder.toString())
                             .setPositiveButton(activity.getString(R.string.action_ok), null)
                             .show()
@@ -256,7 +254,7 @@ internal class SyncSettingsHelper(
     fun handlePerformSync() {
         if (!SyncSession.lock.compareAndSet(false, true)) return
         val taskId = SyncSession.currentTaskId.incrementAndGet()
-        btnPerformSync.text = "同步中..."
+        btnPerformSync.text = activity.getString(R.string.sync_syncing)
         btnPerformSync.isEnabled = false
         btnDryRun.isEnabled = false
         btnTestConnection.isEnabled = false
@@ -264,7 +262,7 @@ internal class SyncSettingsHelper(
 
         if (currentSyncSecrets.token.isNullOrEmpty()) {
             SyncSession.lock.set(false)
-            btnPerformSync.text = "立即同步"
+            btnPerformSync.text = activity.getString(R.string.btn_perform_sync)
             btnPerformSync.isEnabled = true
             btnDryRun.isEnabled = true
             btnTestConnection.isEnabled = true
@@ -286,7 +284,7 @@ internal class SyncSettingsHelper(
                     return@runOnUiThread
                 }
                 SyncSession.lock.set(false)
-                btnPerformSync.text = "立即同步"
+                btnPerformSync.text = activity.getString(R.string.btn_perform_sync)
                 btnPerformSync.isEnabled = true
                 btnDryRun.isEnabled = true
                 btnTestConnection.isEnabled = true
@@ -301,16 +299,16 @@ internal class SyncSettingsHelper(
                                 if (summary != null) {
                                     msgBuilder.append(summary.blockedReason).append("\n\n")
                                     if (summary.conflictedFiles.isNotEmpty()) {
-                                        msgBuilder.append("冲突文件:\n")
+                                        msgBuilder.append(activity.getString(R.string.sync_conflict_files)).append("\n")
                                         for (file in summary.conflictedFiles) {
                                             msgBuilder.append("  - ").append(file).append("\n")
                                         }
                                         msgBuilder.append("\n")
                                     }
                                 } else {
-                                    msgBuilder.append("同步中检测到冲突。\n\n")
+                                    msgBuilder.append(activity.getString(R.string.sync_conflict_detected))
                                     if (syncResult.conflicts.isNotEmpty()) {
-                                        msgBuilder.append("冲突文件:\n")
+                                        msgBuilder.append(activity.getString(R.string.sync_conflict_files)).append("\n")
                                         for (c in syncResult.conflicts) {
                                             msgBuilder.append("  - ").append(c.localPath).append("\n")
                                         }
@@ -319,28 +317,26 @@ internal class SyncSettingsHelper(
                                 }
 
                                 if (!settingConflicts.isNullOrEmpty()) {
-                                    msgBuilder.append("具体设置冲突:\n")
+                                    msgBuilder.append(activity.getString(R.string.sync_setting_conflicts)).append("\n")
                                     for (sc in settingConflicts) {
-                                        msgBuilder.append("  • 键名: ").append(sc.key)
-                                            .append(", 本地值: ").append(sc.localValue)
-                                            .append(", 远程值: ").append(sc.remoteValue).append("\n")
+                                        msgBuilder.append(activity.getString(R.string.sync_setting_conflict_detail, sc.key, sc.localValue, sc.remoteValue)).append("\n")
                                     }
                                     msgBuilder.append("\n")
                                 }
 
                                 if (summary != null && summary.safeNextSteps.isNotEmpty()) {
-                                    msgBuilder.append("安全建议:\n")
+                                    msgBuilder.append(activity.getString(R.string.sync_safe_suggestions)).append("\n")
                                     for (step in summary.safeNextSteps) {
                                         msgBuilder.append("• ").append(step).append("\n")
                                     }
                                 } else {
-                                    msgBuilder.append("安全建议:\n")
-                                    msgBuilder.append("• 备份当前工作区。\n")
-                                    msgBuilder.append("• 确认诊断状态或手动合并后重新同步。")
+                                    msgBuilder.append(activity.getString(R.string.sync_safe_suggestions)).append("\n")
+                                    msgBuilder.append(activity.getString(R.string.sync_suggestion_backup)).append("\n")
+                                    msgBuilder.append(activity.getString(R.string.sync_suggestion_merge))
                                 }
 
                                 AlertDialog.Builder(activity)
-                                    .setTitle("同步冲突")
+                                    .setTitle(activity.getString(R.string.sync_conflict_title))
                                     .setMessage(msgBuilder.toString().trim())
                                     .setPositiveButton(activity.getString(R.string.action_ok), null)
                                     .show()
@@ -349,25 +345,25 @@ internal class SyncSettingsHelper(
                                        syncResult.status == com.xiwei.sujian.model.SyncStatus.NoChanges ||
                                        syncResult.status == com.xiwei.sujian.model.SyncStatus.LatestWinsApplied) {
                                 val successMsg = syncResult.userMessage ?: if (syncResult.status == com.xiwei.sujian.model.SyncStatus.NoChanges) {
-                                    "同步完成：本地和远端均已是最新状态。"
+                                    activity.getString(R.string.sync_complete_no_changes)
                                 } else {
                                     val title = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.BranchMissingRecovered) {
-                                        "同步成功 (已关联并恢复缺失的分支)"
+                                        activity.getString(R.string.sync_success_recovered)
                                     } else {
                                         activity.getString(R.string.sync_success)
                                     }
-                                    "$title\n上传: ${syncResult.uploadedFiles.size} 下载: ${syncResult.downloadedFiles.size} 本地删除: ${syncResult.localDeletes.size} 远端删除: ${syncResult.remoteDeletes.size} 覆盖: ${syncResult.overwrittenFiles.size}"
+                                    activity.getString(R.string.sync_success_detail, title, syncResult.uploadedFiles.size, syncResult.downloadedFiles.size, syncResult.localDeletes.size, syncResult.remoteDeletes.size, syncResult.overwrittenFiles.size)
                                 }
                                 android.widget.Toast.makeText(activity, successMsg, android.widget.Toast.LENGTH_LONG).show()
                             } else if (syncResult.status == com.xiwei.sujian.model.SyncStatus.DirtyRepoBlocked) {
                                 AlertDialog.Builder(activity)
-                                    .setTitle("同步被阻止")
-                                    .setMessage("同步被阻止：本地仓库有未提交的改动，且非安全设置文件，请先提交或备份改动后再试。")
+                                    .setTitle(activity.getString(R.string.sync_blocked_title))
+                                    .setMessage(activity.getString(R.string.sync_blocked_message))
                                     .setPositiveButton(activity.getString(R.string.action_ok), null)
                                     .show()
                             } else if (syncResult.status == com.xiwei.sujian.model.SyncStatus.RecoverableError || syncResult.status == com.xiwei.sujian.model.SyncStatus.FatalError || syncResult.status == com.xiwei.sujian.model.SyncStatus.Error) {
-                                val title = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.RecoverableError) "可恢复错误" else "同步失败"
-                                val errMsg = syncResult.userMessage ?: syncResult.error ?: "未知同步错误"
+                                val title = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.RecoverableError) activity.getString(R.string.sync_recoverable_error_title) else activity.getString(R.string.sync_fatal_error_title)
+                                val errMsg = syncResult.userMessage ?: syncResult.error ?: activity.getString(R.string.sync_unknown_error)
                                 AlertDialog.Builder(activity)
                                     .setTitle(title)
                                     .setMessage(errMsg)
@@ -404,9 +400,9 @@ internal class SyncSettingsHelper(
     fun formatSyncIntervalText(seconds: Int): String {
         val minutes = seconds / 60
         return if (minutes < 15) {
-            "${minutes}分钟 (有效后台间隔: 15分钟)"
+            activity.getString(R.string.sync_interval_minutes_effective, minutes)
         } else {
-            "${minutes}分钟"
+            activity.getString(R.string.sync_interval_minutes, minutes)
         }
     }
 

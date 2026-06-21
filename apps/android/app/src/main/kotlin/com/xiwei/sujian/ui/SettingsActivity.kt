@@ -124,10 +124,10 @@ class SettingsActivity : AppCompatActivity() {
             tvLineSpacingValue.text = "${String.format("%.1f", value)}x"
         }
         sbAutoSaveDelay.addOnChangeListener { _, value, _ ->
-            tvAutoSaveDelayValue.text = "${value.toInt()}秒"
+            tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, value.toInt())
         }
         sbAutoIndentWidth.addOnChangeListener { _, value, _ ->
-            tvAutoIndentWidthValue.text = "${value}字符"
+            tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, value)
         }
         sbTypingAnimationDuration.addOnChangeListener { _, value, _ ->
             tvTypingAnimationDurationValue.text = "${value.toInt()}ms"
@@ -223,8 +223,8 @@ class SettingsActivity : AppCompatActivity() {
         // Initial texts
         tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
-        tvAutoSaveDelayValue.text = "${(currentSettings.autoSaveDelayMs / 1000).toInt()}秒"
-        tvAutoIndentWidthValue.text = "${currentSettings.autoIndentWidth}字符"
+        tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
+        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
         tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
         tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
 
@@ -255,9 +255,9 @@ class SettingsActivity : AppCompatActivity() {
                 @Suppress("DEPRECATION")
                 packageInfo.versionCode.toLong()
             }
-            tvVersionInfo.text = "v$vName (Build $vCode) Android Native 客户端"
+            tvVersionInfo.text = getString(R.string.version_info, vName, vCode)
         } catch (e: Exception) {
-            tvVersionInfo.text = "Android Native 客户端"
+            tvVersionInfo.text = getString(R.string.version_info_fallback)
         }
 
         syncHelper.btnDryRun.setOnClickListener {
@@ -308,8 +308,8 @@ class SettingsActivity : AppCompatActivity() {
 
         tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
-        tvAutoSaveDelayValue.text = "${(currentSettings.autoSaveDelayMs / 1000).toInt()}秒"
-        tvAutoIndentWidthValue.text = "${currentSettings.autoIndentWidth}字符"
+        tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
+        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
         tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
         tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
 

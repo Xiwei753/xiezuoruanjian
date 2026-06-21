@@ -154,4 +154,165 @@
     <string name="action_blocked_dangerous">危险操作，调试页不执行</string>
     <string name="action_not_loaded">底层库未加载</string>
     <string name="action_result_title">执行结果</string>
+
+    <!-- Error messages (WriterError mapping) -->
+    <string name="error_io">文件读写失败，请检查工作区权限和磁盘状态</string>
+    <string name="error_json">数据文件格式异常，请检查工作区文件是否损坏</string>
+    <string name="error_invalid_workspace">不是有效的工作区</string>
+    <string name="error_project_not_found">作品不存在或已被删除</string>
+    <string name="error_volume_not_found">卷不存在或已被删除</string>
+    <string name="error_chapter_not_found">章节不存在或已被删除</string>
+    <string name="error_empty_overwrite_blocked">已阻止空内容覆盖现有章节</string>
+    <string name="error_not_implemented">该功能尚未实现</string>
+    <string name="error_refuse_delete_workspace_root">拒绝删除工作区根目录</string>
+    <string name="error_invalid_delete_target">删除目标无效</string>
+    <string name="error_sync_conflict">同步冲突，请手动处理冲突文件后重试</string>
+    <string name="error_sync_failed">同步失败，请检查网络和配置</string>
+    <string name="error_other">操作失败</string>
+
+    <!-- ErrorUtil -->
+    <string name="error_internal">应用内部错误，请查看日志</string>
+
+    <!-- EditorViewModel error messages -->
+    <string name="error_load_chapter_failed">获取章节内容失败: %1$s</string>
+    <string name="error_empty_overwrite_save_blocked">已阻止空内容覆盖保存</string>
+    <string name="error_empty_overwrite_dialog">已阻止空内容覆盖，请检查内容是否丢失。</string>
+    <string name="error_save_failed">保存失败: %1$s</string>
+    <string name="error_auto_save_failed">自动保存失败: %1$s</string>
+    <string name="error_save_native_not_loaded">保存失败: Native库未加载</string>
+    <string name="error_save_exception">保存异常: %1$s</string>
+    <string name="error_auto_save_exception">自动保存异常: %1$s</string>
+    <string name="error_update_chapter_note_failed">更新章节备注失败: %1$s</string>
+
+    <!-- EditorFragment -->
+    <string name="error_chapter_deleted_remotely">当前章节已在其他设备删除，已返回列表。</string>
+
+    <!-- ChapterListActivity -->
+    <string name="stats_total_words">总字数: %1$d</string>
+    <string name="stats_volumes">卷: %1$d</string>
+    <string name="stats_chapters">章: %1$d</string>
+    <string name="confirm_delete_volume_message">确定要删除分卷 \"%1$s\" 吗？\n%2$s</string>
+    <string name="confirm_delete_chapter_message">确定要删除章节 \"%1$s\" 吗？</string>
+    <string name="error_open_editor">无法打开编辑器: %1$s</string>
+    <string name="word_count_label">字数: %1$d</string>
+
+    <!-- DetailChapterAdapter -->
+    <string name="chapter_title_with_count">  %1$s  (%2$d字)</string>
+    <string name="empty_volume_hint">  （空卷，点击新建章节）</string>
+
+    <!-- SettingsActivity -->
+    <string name="auto_save_delay_seconds">%1$d秒</string>
+    <string name="auto_indent_width_chars">%1$s字符</string>
+    <string name="version_info">v%1$s (Build %2$d) Android Native 客户端</string>
+    <string name="version_info_fallback">Android Native 客户端</string>
+
+    <!-- MainActivity -->
+    <string name="unknown_project">未知作品</string>
+    <string name="continue_writing">继续编写...</string>
+
+    <!-- StarMapController -->
+    <string name="default_starmap_title">作品宇宙</string>
+    <string name="default_starmap_desc">自动生成的默认星图</string>
+    <string name="hint_node_name">节点名称</string>
+    <string name="dialog_new_node_title">新建节点</string>
+    <string name="node_kind_character">角色</string>
+    <string name="node_kind_location">地点</string>
+    <string name="node_kind_event">事件</string>
+    <string name="node_kind_item">物品</string>
+    <string name="node_kind_concept">概念</string>
+    <string name="node_kind_chapter">章节</string>
+    <string name="node_kind_other">其它</string>
+    <string name="error_create_node_failed">创建失败: %1$s</string>
+
+    <!-- ActionRegistryActivity -->
+    <string name="action_load_failed">加载失败: %1$s</string>
+    <string name="action_confirm_required">需要确认</string>
+    <string name="action_execute_success">执行成功</string>
+    <string name="action_execute_failed">执行失败</string>
+    <string name="action_return_data">返回数据:\n%1$s</string>
+    <string name="action_error_prefix">错误: %1$s</string>
+
+    <!-- SyncSettingsHelper -->
+    <string name="sync_checking">检查中...</string>
+    <string name="sync_syncing">同步中...</string>
+    <string name="sync_plan_check_complete">同步计划检查完成: %1$s</string>
+    <string name="diag_status_ok">正常</string>
+    <string name="diag_status_failed">失败</string>
+    <string name="diag_status_skipped">已跳过</string>
+    <string name="diag_status_failed_detail">失败 (%1$s)</string>
+    <string name="diag_status_unchecked">未检查 (%1$s)</string>
+    <string name="diag_permission_section">=== 权限状态 ===</string>
+    <string name="diag_internet_permission">INTERNET 权限: %1$s</string>
+    <string name="diag_permission_granted">已授予</string>
+    <string name="diag_permission_missing">缺失</string>
+    <string name="diag_network_state_permission">网络状态权限: %1$s</string>
+    <string name="diag_network_state_granted">权限已授予，可检测网络</string>
+    <string name="diag_network_state_unknown">未知（缺少 ACCESS_NETWORK_STATE 权限）</string>
+    <string name="diag_network_state_no_internet">无 INTERNET 权限，无法联网</string>
+    <string name="diag_title_failed">诊断失败</string>
+    <string name="diag_network_connection">网络连接: %1$s</string>
+    <string name="diag_auth_status">身份认证: %1$s</string>
+    <string name="diag_repo_access">仓库访问: %1$s</string>
+    <string name="diag_branch_exists">分支存在: %1$s</string>
+    <string name="diag_auto_probe_section">=== 自动网络探测 ===</string>
+    <string name="diag_chosen_mode">最终选择模式: %1$s</string>
+    <string name="diag_unknown_mode">未知</string>
+    <string name="diag_raw_error_section">原始错误:\n%1$s</string>
+    <string name="diag_title_success">诊断成功</string>
+    <string name="sync_conflict_title">同步冲突</string>
+    <string name="sync_conflict_detected">同步中检测到冲突。\n\n</string>
+    <string name="sync_conflict_files">冲突文件:</string>
+    <string name="sync_setting_conflicts">具体设置冲突:</string>
+    <string name="sync_setting_conflict_detail">  • 键名: %1$s, 本地值: %2$s, 远程值: %3$s</string>
+    <string name="sync_safe_suggestions">安全建议:</string>
+    <string name="sync_suggestion_backup">• 备份当前工作区。</string>
+    <string name="sync_suggestion_merge">• 确认诊断状态或手动合并后重新同步。</string>
+    <string name="sync_complete_no_changes">同步完成：本地和远端均已是最新状态。</string>
+    <string name="sync_success_recovered">同步成功 (已关联并恢复缺失的分支)</string>
+    <string name="sync_success_detail">%1$s\n上传: %2$d 下载: %3$d 本地删除: %4$d 远端删除: %5$d 覆盖: %6$d</string>
+    <string name="sync_blocked_title">同步被阻止</string>
+    <string name="sync_blocked_message">同步被阻止：本地仓库有未提交的改动，且非安全设置文件，请先提交或备份改动后再试。</string>
+    <string name="sync_recoverable_error_title">可恢复错误</string>
+    <string name="sync_fatal_error_title">同步失败</string>
+    <string name="sync_unknown_error">未知同步错误</string>
+    <string name="sync_interval_minutes">%1$d分钟</string>
+    <string name="sync_interval_minutes_effective">%1$d分钟 (有效后台间隔: 15分钟)</string>
+
+    <!-- WorkspaceRepository Exception messages -->
+    <string name="repo_workspace_init_failed">工作区初始化失败: %1$s</string>
+    <string name="repo_native_not_loaded">Native库未加载</string>
+    <string name="repo_native_not_loaded_init">Native库未加载，无法初始化工作区</string>
+    <string name="repo_get_projects_failed">获取作品列表失败: %1$s</string>
+    <string name="repo_get_recent_edits_failed">获取最近编辑失败: %1$s</string>
+    <string name="repo_get_chapter_content_failed">获取章节内容失败: %1$s</string>
+    <string name="repo_update_chapter_note_failed">更新章节备注失败: %1$s</string>
+    <string name="repo_get_volumes_failed">获取卷列表失败: %1$s</string>
+    <string name="repo_get_chapters_failed">获取章节列表失败: %1$s</string>
+    <string name="repo_get_project_stats_failed">获取作品统计失败: %1$s</string>
+    <string name="repo_create_project_failed">创建作品失败: %1$s</string>
+    <string name="repo_create_volume_failed">创建卷失败: %1$s</string>
+    <string name="repo_create_chapter_failed">创建章节失败: %1$s</string>
+    <string name="repo_rename_project_failed">重命名作品失败: %1$s</string>
+    <string name="repo_delete_project_failed">删除作品失败: %1$s</string>
+    <string name="repo_reorder_projects_failed">重排作品失败: %1$s</string>
+    <string name="repo_rename_volume_failed">重命名分卷失败: %1$s</string>
+    <string name="repo_delete_volume_failed">删除分卷失败: %1$s</string>
+    <string name="repo_reorder_volumes_failed">重排分卷失败: %1$s</string>
+    <string name="repo_rename_chapter_failed">重命名章节失败: %1$s</string>
+    <string name="repo_delete_chapter_failed">删除章节失败: %1$s</string>
+    <string name="repo_reorder_chapters_failed">重排章节失败: %1$s</string>
+
+    <!-- BridgeResult -->
+    <string name="error_parse_json_failed">解析 %1$s JSON 失败: %2$s</string>
+
+    <!-- StatsController -->
+    <string name="stats_duration_hours_minutes">%1$d时%2$d分</string>
+    <string name="stats_duration_minutes">%1$d分</string>
+    <string name="stats_summary">纯输入: %1$d 字\n活跃时长: %2$s</string>
+    <string name="stats_load_failed">加载失败: %1$s</string>
+    <string name="stats_not_loaded">未加载</string>
+    <string name="stats_no_project_data">无项目数据</string>
+    <string name="stats_unnamed_project">未命名</string>
+    <string name="stats_project_line">项目: %1$s</string>
+    <string name="stats_input_chars">输入: %1$d 字</string>
 </resources>

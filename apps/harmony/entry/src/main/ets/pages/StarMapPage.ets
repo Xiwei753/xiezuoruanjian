@@ -143,10 +143,10 @@ struct StarMapPage {
           this.edgeRenders = edgeResult.data
         }
       } else {
-        this.errorMessage = result.userMessage || '加载星图失败'
+        this.errorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)
       }
     } catch (err) {
-      this.errorMessage = '加载星图时发生错误'
+      this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap_detail').id)
     } finally {
       this.isLoading = false
     }
@@ -198,28 +198,28 @@ struct StarMapPage {
 
   getNodeTypeName(kind: string): string {
     const kindNames: Record<string, string> = {
-      'Character': '角色',
-      'Location': '地点',
-      'Event': '事件',
-      'Theme': '主题',
-      'Plot': '情节',
-      'Item': '物品',
-      'Organization': '组织',
-      'Custom': '自定义'
+      'Character': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_character').id),
+      'Location': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_location').id),
+      'Event': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_event').id),
+      'Theme': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_theme').id),
+      'Plot': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_plot').id),
+      'Item': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_item').id),
+      'Organization': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_organization').id),
+      'Custom': getContext(this).resourceManager.getStringSync($r('app.string.node_kind_custom').id)
     }
-    return kindNames[kind] || '未知'
+    return kindNames[kind] || getContext(this).resourceManager.getStringSync($r('app.string.node_kind_unknown').id)
   }
 
   getEdgeTypeName(kind: string): string {
     const kindNames: Record<string, string> = {
-      'CharacterRelation': '角色关系',
-      'DependsOn': '依赖',
-      'Timeline': '时间线',
-      'ConflictsWith': '冲突',
-      'RelatedTo': '关联',
-      'Custom': '自定义'
+      'CharacterRelation': getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_character_relation').id),
+      'DependsOn': getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_depends_on').id),
+      'Timeline': getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_timeline').id),
+      'ConflictsWith': getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_conflicts_with').id),
+      'RelatedTo': getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_related_to').id),
+      'Custom': getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_custom').id)
     }
-    return kindNames[kind] || '未知'
+    return kindNames[kind] || getContext(this).resourceManager.getStringSync($r('app.string.edge_kind_unknown').id)
   }
 
   selectNode(nodeId: string) {
@@ -360,7 +360,7 @@ struct StarMapPage {
               this.zoomScale = Math.min(3, this.zoomScale + 0.1)
             })
 
-          Button('重置')
+          Button($r('app.string.reset'))
             .fontSize(12)
             .height(36)
             .backgroundColor(this.themeConfig.colors.surface)
@@ -383,7 +383,7 @@ struct StarMapPage {
             .width(48)
             .height(48)
             .color(this.themeConfig.colors.primary)
-          Text('加载中...')
+          Text($r('app.string.loading'))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
@@ -398,7 +398,7 @@ struct StarMapPage {
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
-          Button('重试')
+          Button($r('app.string.retry'))
             .onClick(() => this.loadStarMap())
             .backgroundColor(this.themeConfig.colors.primary)
         }
@@ -520,7 +520,7 @@ struct StarMapPage {
   NodeInfoPanel() {
     Column() {
       Row() {
-        Text('节点信息')
+        Text($r('app.string.node_info'))
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -580,7 +580,7 @@ struct StarMapPage {
 
         // Related edges
         if (this.graph) {
-          Text('关联关系')
+          Text($r('app.string.related_relations'))
             .fontSize(14)
             .fontWeight(FontWeight.Medium)
             .fontColor(this.themeConfig.colors.textPrimary)
@@ -595,7 +595,7 @@ struct StarMapPage {
                 .margin({ right: 8 })
 
               Column() {
-                Text(edge.label || '未命名关系')
+                 Text(edge.label || $r('app.string.unnamed_relation') as string)
                   .fontSize(13)
                   .fontColor(this.themeConfig.colors.textPrimary)
 
@@ -628,24 +628,24 @@ struct StarMapPage {
   @Builder
   Legend() {
     Column() {
-      Text('图例')
+      Text($r('app.string.legend'))
         .fontSize(12)
         .fontColor(this.themeConfig.colors.textHint)
         .margin({ bottom: 8 })
 
       Row() {
-        this.LegendItem('#4A90D9', '角色')
-        this.LegendItem('#F39C12', '地点')
-        this.LegendItem('#9B59B6', '事件')
-        this.LegendItem('#2ECC71', '主题')
+        this.LegendItem('#4A90D9', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_character').id))
+        this.LegendItem('#F39C12', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_location').id))
+        this.LegendItem('#9B59B6', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_event').id))
+        this.LegendItem('#2ECC71', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_theme').id))
       }
       .margin({ bottom: 4 })
 
       Row() {
-        this.LegendItem('#E74C3C', '情节')
-        this.LegendItem('#1ABC9C', '物品')
-        this.LegendItem('#3498DB', '组织')
-        this.LegendItem('#95A5A6', '自定义')
+        this.LegendItem('#E74C3C', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_plot').id))
+        this.LegendItem('#1ABC9C', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_item').id))
+        this.LegendItem('#3498DB', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_organization').id))
+        this.LegendItem('#95A5A6', getContext(this).resourceManager.getStringSync($r('app.string.node_kind_custom').id))
       }
     }
     .padding(12)
@@ -676,7 +676,7 @@ struct StarMapPage {
   GraphInfo() {
     Column() {
       if (this.graph) {
-        Text(`${this.graph.nodes.length} 节点 · ${this.graph.edges.length} 连线`)
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.nodes_edges_format').id).replace('%s', `${this.graph.nodes.length}`).replace('%s', `${this.graph.edges.length}`))
           .fontSize(12)
           .fontColor(this.themeConfig.colors.textHint)
       }

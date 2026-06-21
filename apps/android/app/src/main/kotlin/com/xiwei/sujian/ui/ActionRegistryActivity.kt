@@ -74,7 +74,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                 renderActions(result.data)
             }
             is BridgeResult.Error -> {
-                tvLoading.text = "加载失败: ${result.message}"
+                tvLoading.text = getString(R.string.action_load_failed, result.message)
             }
             BridgeResult.NotLoaded -> {
                 tvLoading.text = getString(R.string.action_not_loaded)
@@ -147,7 +147,7 @@ class ActionRegistryActivity : AppCompatActivity() {
 
         if (action.confirmRequired) {
             content.addView(TextView(this@ActionRegistryActivity).apply {
-                text = "需要确认"
+                text = getString(R.string.action_confirm_required)
                 textSize = 12f
                 setTextColor(getColor(com.google.android.material.R.color.material_dynamic_tertiary50))
                 setPadding(0, 0, 0, 8)
@@ -404,7 +404,7 @@ class ActionRegistryActivity : AppCompatActivity() {
         when (result) {
             is BridgeResult.Success -> {
                 val actionResult = result.data
-                val msg = actionResult.message ?: if (actionResult.success) "执行成功" else "执行失败"
+                val msg = actionResult.message ?: if (actionResult.success) getString(R.string.action_execute_success) else getString(R.string.action_execute_failed)
 
                 resultContainer.addView(TextView(this).apply {
                     text = msg
@@ -419,7 +419,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                 if (actionResult.data != null) {
                     val dataStr = actionResult.data.toString()
                     resultContainer.addView(TextView(this).apply {
-                        text = "返回数据:\n$dataStr"
+                        text = getString(R.string.action_return_data, dataStr)
                         textSize = 12f
                         setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_medium))
                         setPadding(0, 4, 0, 0)
@@ -428,7 +428,7 @@ class ActionRegistryActivity : AppCompatActivity() {
             }
             is BridgeResult.Error -> {
                 resultContainer.addView(TextView(this).apply {
-                    text = "错误: ${result.message}"
+                    text = getString(R.string.action_error_prefix, result.message)
                     textSize = 14f
                     setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
                     setPadding(0, 8, 0, 0)

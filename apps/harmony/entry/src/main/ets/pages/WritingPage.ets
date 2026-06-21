@@ -194,10 +194,10 @@ struct WritingPage {
         this.sessionId = `hm-${this.chapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
       } else {
-        this.errorMessage = result.userMessage || '加载章节失败'
+        this.errorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
       }
     } catch (err) {
-      this.errorMessage = '加载章节时发生错误'
+      this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter_detail').id)
     } finally {
       this.isLoading = false
     }
@@ -267,19 +267,19 @@ struct WritingPage {
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
         this.wordCount = result.data.wordCount
-        this.saveMessage = isAutoSave ? '已自动保存' : '已保存'
+        this.saveMessage = isAutoSave ? getContext(this).resourceManager.getStringSync($r('app.string.auto_saved').id) : getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
         return true
       } else {
         this.lastSaveFailed = true
-        this.saveMessage = result.userMessage || '保存失败'
+        this.saveMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
         return false
       }
     } catch (err) {
       this.lastSaveFailed = true
-      this.saveMessage = '保存时发生错误'
+      this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
       return false
     } finally {
       this.isSaving = false
@@ -314,11 +314,11 @@ struct WritingPage {
   }
 
   private getSaveStatusText(): string {
-    if (this.lastSaveFailed) return '保存失败'
-    if (this.isSaving && this.isAutoSaving) return '自动保存中'
-    if (this.isSaving) return '保存中'
-    if (this.hasUnsavedChanges) return '未保存'
-    return '已保存'
+    if (this.lastSaveFailed) return getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
+    if (this.isSaving && this.isAutoSaving) return getContext(this).resourceManager.getStringSync($r('app.string.auto_saving').id)
+    if (this.isSaving) return getContext(this).resourceManager.getStringSync($r('app.string.saving').id)
+    if (this.hasUnsavedChanges) return getContext(this).resourceManager.getStringSync($r('app.string.unsaved').id)
+    return getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
   }
 
   private getSaveStatusColor(): ResourceColor {
@@ -447,14 +447,14 @@ struct WritingPage {
 
   async clearContent() {
     AlertDialog.show({
-      title: '确认清空',
-      message: '确认清空本章内容？此操作会保存为空。',
+      title: $r('app.string.confirm_clear') as string,
+      message: $r('app.string.confirm_clear_message') as string,
       primaryButton: {
-        value: '取消',
+        value: $r('app.string.cancel') as string,
         action: () => {}
       },
       secondaryButton: {
-        value: '确认清空',
+        value: $r('app.string.confirm_clear_action') as string,
         action: () => {
           this.doClearContent()
         }
@@ -472,17 +472,17 @@ struct WritingPage {
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
         this.wordCount = 0
-        this.saveMessage = '已清空'
+        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.cleared').id)
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
       } else {
         this.lastSaveFailed = true
-        this.saveMessage = '清空失败'
+        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
       }
     } catch (err) {
       this.lastSaveFailed = true
-      this.saveMessage = '清空失败'
+      this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.clear_failed').id)
     } finally {
       this.isSaving = false
     }
@@ -524,12 +524,12 @@ struct WritingPage {
             .margin({ right: 8 })
         }
 
-        Text(`${this.wordCount} 字`)
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${this.wordCount}`))
           .fontSize(12)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
-        Button('保存')
+        Button($r('app.string.save'))
           .fontSize(14)
           .height(32)
           .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
@@ -547,7 +547,7 @@ struct WritingPage {
             .width(48)
             .height(48)
             .color(this.themeConfig.colors.primary)
-          Text('加载中...')
+          Text($r('app.string.loading'))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
@@ -562,7 +562,7 @@ struct WritingPage {
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
-          Button('重试')
+          Button($r('app.string.retry'))
             .onClick(() => this.loadChapter())
             .backgroundColor(this.themeConfig.colors.primary)
         }
@@ -572,7 +572,7 @@ struct WritingPage {
       } else {
         Scroll() {
           Stack() {
-            TextArea({ text: this.content, placeholder: '开始写作...', controller: this.textAreaController })
+            TextArea({ text: this.content, placeholder: getContext(this).resourceManager.getStringSync($r('app.string.start_writing_placeholder').id), controller: this.textAreaController })
               .width('100%')
               .constraintSize({ minHeight: '100%' })
               .fontSize(this.settings.editorFontSize)
@@ -641,7 +641,7 @@ struct WritingPage {
       // Bottom toolbar
       Row() {
         if (this.settings.autoSaveEnabled) {
-          Text('自动保存')
+          Text($r('app.string.auto_save'))
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textHint)
         }

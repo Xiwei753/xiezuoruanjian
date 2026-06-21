@@ -1,6 +1,7 @@
 package com.xiwei.sujian.data
 
 import android.content.Context
+import com.xiwei.sujian.R
 import com.xiwei.sujian.model.*
 
 class WorkspaceRepository(private val context: Context) {
@@ -12,10 +13,10 @@ class WorkspaceRepository(private val context: Context) {
         when (val result = workspaceBridge.createWorkspaceIfNeeded()) {
             is BridgeResult.Error -> {
                 android.util.Log.e("WorkspaceRepository", "工作区初始化失败: ${result.message}")
-                throw RepositoryException("工作区初始化失败: ${result.message}")
+                throw RepositoryException(context.getString(R.string.repo_workspace_init_failed, result.message))
             }
             BridgeResult.NotLoaded -> {
-                android.util.Log.e("WorkspaceRepository", "Native库未加载，无法初始化工作区")
+                android.util.Log.e("WorkspaceRepository", context.getString(R.string.repo_native_not_loaded_init))
             }
             is BridgeResult.Success -> {
                 android.util.Log.d("WorkspaceRepository", "工作区初始化成功")
@@ -26,8 +27,8 @@ class WorkspaceRepository(private val context: Context) {
     fun getProjects(): List<Project> {
         return when (val result = workspaceBridge.getProjects()) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("获取作品列表失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_projects_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
@@ -35,7 +36,7 @@ class WorkspaceRepository(private val context: Context) {
         return when (val result = workspaceBridge.getRecentEdits()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                android.util.Log.w("WorkspaceRepository", "获取最近编辑失败: ${result.message}")
+                android.util.Log.w("WorkspaceRepository", context.getString(R.string.repo_get_recent_edits_failed, result.message))
                 emptyList()
             }
             BridgeResult.NotLoaded -> emptyList()
@@ -49,40 +50,40 @@ class WorkspaceRepository(private val context: Context) {
     fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): Pair<String, ChapterMeta> {
         return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
             is BridgeResult.Success -> Pair(result.data.content, result.data.meta)
-            is BridgeResult.Error -> throw RepositoryException("获取章节内容失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_chapter_content_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun updateChapterNote(projectId: String, volumeId: String, chapterId: String, note: String): Boolean {
         return when (val result = writingBridge.updateChapterNote(projectId, volumeId, chapterId, note)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("更新章节备注失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_update_chapter_note_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun getVolumes(projectId: String): List<Volume> {
         return when (val result = workspaceBridge.getVolumes(projectId)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("获取卷列表失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_volumes_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun getChapters(projectId: String, volumeId: String): List<ChapterMeta> {
         return when (val result = workspaceBridge.getChapters(projectId, volumeId)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("获取章节列表失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_chapters_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun getChapterContent(projectId: String, volumeId: String, chapterId: String): String {
         return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
             is BridgeResult.Success -> result.data.content
-            is BridgeResult.Error -> throw RepositoryException("获取章节内容失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_chapter_content_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
@@ -120,104 +121,104 @@ class WorkspaceRepository(private val context: Context) {
     fun getProjectStats(projectId: String): ProjectStats {
         return when (val result = statsBridge.getProjectStats(projectId)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("获取作品统计失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_get_project_stats_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun createProject(title: String): Project {
         return when (val result = workspaceBridge.createProject(title)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("创建作品失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_create_project_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun createVolume(projectId: String, title: String): Volume {
         return when (val result = workspaceBridge.createVolume(projectId, title)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("创建卷失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_create_volume_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun createChapter(projectId: String, volumeId: String, title: String): ChapterMeta {
         return when (val result = workspaceBridge.createChapter(projectId, volumeId, title)) {
             is BridgeResult.Success -> result.data
-            is BridgeResult.Error -> throw RepositoryException("创建章节失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_create_chapter_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun renameProject(projectId: String, newTitle: String) {
         when (val result = workspaceBridge.renameProject(projectId, newTitle)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("重命名作品失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_rename_project_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun deleteProject(projectId: String) {
         when (val result = workspaceBridge.deleteProject(projectId)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("删除作品失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_delete_project_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun reorderProjects(orderedProjectIds: List<String>) {
         when (val result = workspaceBridge.reorderProjects(orderedProjectIds)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("重排作品失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_reorder_projects_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun renameVolume(projectId: String, volumeId: String, newTitle: String) {
         when (val result = workspaceBridge.renameVolume(projectId, volumeId, newTitle)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("重命名分卷失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_rename_volume_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun deleteVolume(projectId: String, volumeId: String) {
         when (val result = workspaceBridge.deleteVolume(projectId, volumeId)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("删除分卷失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_delete_volume_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun reorderVolumes(projectId: String, orderedVolumeIds: List<String>) {
         when (val result = workspaceBridge.reorderVolumes(projectId, orderedVolumeIds)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("重排分卷失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_reorder_volumes_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun renameChapter(projectId: String, volumeId: String, chapterId: String, newTitle: String) {
         when (val result = workspaceBridge.renameChapter(projectId, volumeId, chapterId, newTitle)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("重命名章节失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_rename_chapter_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun deleteChapter(projectId: String, volumeId: String, chapterId: String) {
         when (val result = workspaceBridge.deleteChapter(projectId, volumeId, chapterId)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("删除章节失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_delete_chapter_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 
     fun reorderChapters(projectId: String, volumeId: String, orderedChapterIds: List<String>) {
         when (val result = workspaceBridge.reorderChapters(projectId, volumeId, orderedChapterIds)) {
             is BridgeResult.Success -> {}
-            is BridgeResult.Error -> throw RepositoryException("重排章节失败: ${result.message}")
-            BridgeResult.NotLoaded -> throw RepositoryException("Native库未加载")
+            is BridgeResult.Error -> throw RepositoryException(context.getString(R.string.repo_reorder_chapters_failed, result.message))
+            BridgeResult.NotLoaded -> throw RepositoryException(context.getString(R.string.repo_native_not_loaded))
         }
     }
 

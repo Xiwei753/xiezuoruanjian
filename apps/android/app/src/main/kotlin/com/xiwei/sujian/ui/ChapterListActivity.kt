@@ -129,9 +129,9 @@ class ChapterListActivity : AppCompatActivity() {
                 val stats = workspaceRepository.getProjectStats(pid)
                 withContext(Dispatchers.Main) {
                     statsHeaderLayout.visibility = View.VISIBLE
-                    tvStatsTotalWords.text = "总字数: ${stats.totalWordCount}"
-                    tvStatsVolumes.text = "卷: ${stats.volumeCount}"
-                    tvStatsChapters.text = "章: ${stats.chapterCount}"
+                    tvStatsTotalWords.text = getString(R.string.stats_total_words, stats.totalWordCount)
+                    tvStatsVolumes.text = getString(R.string.stats_volumes, stats.volumeCount)
+                    tvStatsChapters.text = getString(R.string.stats_chapters, stats.chapterCount)
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to load project stats", e)
@@ -293,7 +293,7 @@ class ChapterListActivity : AppCompatActivity() {
         val pid = projectId ?: return
         AlertDialog.Builder(this)
             .setTitle(R.string.confirm_delete_volume)
-            .setMessage("确定要删除分卷 \"${title}\" 吗？\n" + getString(R.string.warning_delete_volume))
+            .setMessage(getString(R.string.confirm_delete_volume_message, title, getString(R.string.warning_delete_volume)))
             .setPositiveButton(R.string.action_delete) { _, _ ->
                 ErrorUtil.safeRun(this) {
                     workspaceRepository.deleteVolume(pid, volumeId)
@@ -403,7 +403,7 @@ class ChapterListActivity : AppCompatActivity() {
         val pid = projectId ?: return
         AlertDialog.Builder(this)
             .setTitle(R.string.confirm_delete_chapter)
-            .setMessage("确定要删除章节 \"${title}\" 吗？")
+            .setMessage(getString(R.string.confirm_delete_chapter_message, title))
             .setPositiveButton(R.string.action_delete) { _, _ ->
                 ErrorUtil.safeRun(this) {
                     workspaceRepository.deleteChapter(pid, volumeId, chapterId)
@@ -518,7 +518,7 @@ class ChapterListActivity : AppCompatActivity() {
                             startActivity(intent)
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to open editor", e)
-                            android.widget.Toast.makeText(this@ChapterListActivity, "无法打开编辑器: ${e.message}", android.widget.Toast.LENGTH_LONG).show()
+                            android.widget.Toast.makeText(this@ChapterListActivity, getString(R.string.error_open_editor, e.message ?: ""), android.widget.Toast.LENGTH_LONG).show()
                         }
                     }
                 }
@@ -572,7 +572,7 @@ class ChapterListActivity : AppCompatActivity() {
                 is ListItem.Chapter -> {
                     val chapterHolder = holder as ChapterViewHolder
                     chapterHolder.tvChapterTitle.text = item.chapterTitle
-                    chapterHolder.tvWordCount.text = "字数: ${item.wordCount}"
+                    chapterHolder.tvWordCount.text = getString(R.string.word_count_label, item.wordCount)
                 }
                 is ListItem.EmptyVolumeHint -> {
                     // Nothing to bind

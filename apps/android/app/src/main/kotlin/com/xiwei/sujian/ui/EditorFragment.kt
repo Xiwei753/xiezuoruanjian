@@ -219,7 +219,7 @@ class EditorFragment : Fragment() {
                 try {
                     workspaceRepository.getChapterContentWithMeta(pid, vid, cid)
                 } catch (_: Exception) {
-                    Toast.makeText(requireContext(), "当前章节已在其他设备删除，已返回列表。", Toast.LENGTH_LONG).show()
+                    Toast.makeText(requireContext(), getString(R.string.error_chapter_deleted_remotely), Toast.LENGTH_LONG).show()
                     callback?.onBackRequested()
                     return
                 }

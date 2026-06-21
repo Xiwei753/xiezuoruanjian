@@ -247,10 +247,10 @@ struct MainWorkspace {
         this.projects = workspaceResult.data.projects
         this.recentEdits = workspaceResult.data.recentEdits
       } else {
-        this.initErrorMessage = workspaceResult.userMessage || '加载工作区失败'
+        this.initErrorMessage = workspaceResult.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
       }
     } catch (err) {
-      this.initErrorMessage = '加载工作区时发生错误'
+      this.initErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace_detail').id)
     } finally {
       this.isInitialLoading = false
     }
@@ -275,10 +275,10 @@ struct MainWorkspace {
           this.expandedVolumes.add(this.volumeTrees[0].volume.id)
         }
       } else {
-        this.treeErrorMessage = result.userMessage || '加载项目失败'
+        this.treeErrorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_project').id)
       }
     } catch (err) {
-      this.treeErrorMessage = '加载项目时发生错误'
+      this.treeErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_project_detail').id)
     } finally {
       this.isTreeLoading = false
     }
@@ -304,10 +304,10 @@ struct MainWorkspace {
         this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
       } else {
-        this.errorMessage = result.userMessage || '加载章节失败'
+        this.errorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
       }
     } catch (err) {
-      this.errorMessage = '加载章节时发生错误'
+      this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter_detail').id)
     } finally {
       this.isLoading = false
     }
@@ -382,19 +382,19 @@ struct MainWorkspace {
         this.hasUnsavedChanges = false
         this.lastSaveFailed = false
         this.wordCount = result.data.wordCount
-        this.saveMessage = '已保存'
+        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
         setTimeout(() => {
           this.saveMessage = ''
         }, 2000)
         return true
       } else {
         this.lastSaveFailed = true
-        this.saveMessage = result.userMessage || '保存失败'
+        this.saveMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
         return false
       }
     } catch (err) {
       this.lastSaveFailed = true
-      this.saveMessage = '保存时发生错误'
+      this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
       return false
     } finally {
       this.isSaving = false
@@ -519,7 +519,7 @@ struct MainWorkspace {
 
   async createVolume() {
     try {
-      const result = await this.bridge.createVolume(this.selectedProjectId, '新卷')
+      const result = await this.bridge.createVolume(this.selectedProjectId, getContext(this).resourceManager.getStringSync($r('app.string.default_new_volume_title').id))
       if (result.success) {
         this.loadProjectTree(this.selectedProjectId)
       }
@@ -530,7 +530,7 @@ struct MainWorkspace {
 
   async createChapter(volumeId: string) {
     try {
-      const result = await this.bridge.createChapter(volumeId, '新章节')
+      const result = await this.bridge.createChapter(volumeId, getContext(this).resourceManager.getStringSync($r('app.string.default_new_chapter_title').id))
       if (result.success) {
         this.loadProjectTree(this.selectedProjectId)
       }
@@ -541,10 +541,10 @@ struct MainWorkspace {
 
   async deleteVolume(volumeId: string) {
     AlertDialog.show({
-      title: '确认删除',
-      message: '确认删除此卷及其所有章节？此操作不可撤销。',
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: { value: '删除', action: () => this.doDeleteVolume(volumeId) }
+      title: $r('app.string.confirm_delete') as string,
+      message: $r('app.string.confirm_delete_volume') as string,
+      primaryButton: { value: $r('app.string.cancel') as string, action: () => {} },
+      secondaryButton: { value: $r('app.string.delete') as string, action: () => this.doDeleteVolume(volumeId) }
     })
   }
 
@@ -561,10 +561,10 @@ struct MainWorkspace {
 
   async deleteChapter(chapterId: string) {
     AlertDialog.show({
-      title: '确认删除',
-      message: '确认删除此章节？此操作不可撤销。',
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: { value: '删除', action: () => this.doDeleteChapter(chapterId) }
+      title: $r('app.string.confirm_delete') as string,
+      message: $r('app.string.confirm_delete_chapter') as string,
+      primaryButton: { value: $r('app.string.cancel') as string, action: () => {} },
+      secondaryButton: { value: $r('app.string.delete') as string, action: () => this.doDeleteChapter(chapterId) }
     })
   }
 
@@ -593,10 +593,10 @@ struct MainWorkspace {
 
   async deleteProject(projectId: string) {
     AlertDialog.show({
-      title: '确认删除',
-      message: '确认删除此作品及其所有内容？此操作不可撤销。',
-      primaryButton: { value: '取消', action: () => {} },
-      secondaryButton: { value: '删除', action: () => this.doDeleteProject(projectId) }
+      title: $r('app.string.confirm_delete') as string,
+      message: $r('app.string.confirm_delete_project') as string,
+      primaryButton: { value: $r('app.string.cancel') as string, action: () => {} },
+      secondaryButton: { value: $r('app.string.delete') as string, action: () => this.doDeleteProject(projectId) }
     })
   }
 
@@ -692,7 +692,7 @@ struct MainWorkspace {
     Column() {
       // 左侧面板标题栏
       Row() {
-        Text(this.selectedProjectName || '选择作品')
+        Text(this.selectedProjectName || $r('app.string.select_project'))
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -701,7 +701,7 @@ struct MainWorkspace {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
         if (this.selectedProjectId) {
-          Button('+ 新卷')
+          Button($r('app.string.new_volume'))
             .fontSize(12)
             .height(28)
             .backgroundColor(this.themeConfig.colors.primary)
@@ -721,7 +721,7 @@ struct MainWorkspace {
             .width(36)
             .height(36)
             .color(this.themeConfig.colors.primary)
-          Text('加载中...')
+          Text($r('app.string.loading'))
             .fontSize(13)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 8 })
@@ -736,7 +736,7 @@ struct MainWorkspace {
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 12 })
 
-          Button('重试')
+          Button($r('app.string.retry'))
             .fontSize(13)
             .height(32)
             .backgroundColor(this.themeConfig.colors.primary)
@@ -763,7 +763,7 @@ struct MainWorkspace {
           .width(36)
           .height(36)
           .color(this.themeConfig.colors.primary)
-        Text('加载中...')
+        Text($r('app.string.loading'))
           .fontSize(13)
           .fontColor(this.themeConfig.colors.textHint)
           .margin({ top: 8 })
@@ -778,7 +778,7 @@ struct MainWorkspace {
           .fontColor(this.themeConfig.colors.error)
           .margin({ bottom: 12 })
 
-        Button('重试')
+        Button($r('app.string.retry'))
           .fontSize(13)
           .height(32)
           .backgroundColor(this.themeConfig.colors.primary)
@@ -792,12 +792,12 @@ struct MainWorkspace {
         Column() {
           if (this.projects.length === 0) {
             Column() {
-              Text('还没有作品')
+              Text($r('app.string.no_projects'))
                 .fontSize(15)
                 .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ bottom: 8 })
 
-              Text('点击下方按钮创建')
+              Text($r('app.string.click_to_create'))
                 .fontSize(13)
                 .fontColor(this.themeConfig.colors.textHint)
             }
@@ -846,14 +846,14 @@ struct MainWorkspace {
           }
 
           // 新建作品按钮
-          Button('+ 新建作品')
+          Button($r('app.string.new_project'))
             .fontSize(14)
             .height(36)
             .width('100%')
             .backgroundColor(this.themeConfig.colors.primary)
             .margin({ top: 12 })
             .onClick(async () => {
-              const result = await this.bridge.createProject('新作品')
+              const result = await this.bridge.createProject(getContext(this).resourceManager.getStringSync($r('app.string.default_new_project_title').id))
               if (result.success) {
                 this.loadInitialData()
               }
@@ -879,7 +879,7 @@ struct MainWorkspace {
             .fillColor(this.themeConfig.colors.textSecondary)
             .margin({ right: 8 })
 
-          Text('返回作品列表')
+          Text($r('app.string.back_to_project_list'))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textSecondary)
         }
@@ -898,12 +898,12 @@ struct MainWorkspace {
 
         if (this.volumeTrees.length === 0) {
           Column() {
-            Text('还没有卷和章节')
+            Text($r('app.string.no_volumes_chapters'))
               .fontSize(14)
               .fontColor(this.themeConfig.colors.textSecondary)
               .margin({ bottom: 8 })
 
-            Text('点击上方"新卷"开始创作')
+            Text($r('app.string.click_new_volume_to_start'))
               .fontSize(13)
               .fontColor(this.themeConfig.colors.textHint)
           }
@@ -944,7 +944,7 @@ struct MainWorkspace {
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
 
-        Text(`${volumeTree.chapters.length} 章`)
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.chapter_count_format').id).replace('%s', `${volumeTree.chapters.length}`))
           .fontSize(11)
           .fontColor(this.themeConfig.colors.textHint)
           .margin({ right: 6 })
@@ -975,7 +975,7 @@ struct MainWorkspace {
       // 章节列表
       if (this.expandedVolumes.has(volumeTree.volume.id)) {
         if (volumeTree.chapters.length === 0) {
-          Text('暂无章节')
+          Text($r('app.string.no_chapters'))
             .fontSize(13)
             .fontColor(this.themeConfig.colors.textHint)
             .padding({ left: 32, top: 8, bottom: 8 })
@@ -993,7 +993,7 @@ struct MainWorkspace {
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
 
                 Row() {
-                  Text(`${chapter.wordCount} 字`)
+                  Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${chapter.wordCount}`))
                     .fontSize(11)
                     .fontColor(this.themeConfig.colors.textSecondary)
                     .margin({ right: 8 })
@@ -1057,15 +1057,15 @@ struct MainWorkspace {
   RightPanelEmptyState() {
     Column() {
       if (this.selectedProjectId) {
-        Text('从左侧选择章节开始写作')
+        Text($r('app.string.select_chapter_to_write'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textHint)
       } else {
-        Text('从左侧选择作品')
+        Text($r('app.string.select_project_first'))
           .fontSize(16)
           .fontColor(this.themeConfig.colors.textHint)
 
-        Text('然后选择章节开始写作')
+        Text($r('app.string.then_select_chapter'))
           .fontSize(14)
           .fontColor(this.themeConfig.colors.textHint)
           .margin({ top: 8 })
@@ -1097,12 +1097,12 @@ struct MainWorkspace {
             .margin({ right: 8 })
         }
 
-        Text(`${this.wordCount} 字`)
+        Text(getContext(this).resourceManager.getStringSync($r('app.string.word_count_format').id).replace('%s', `${this.wordCount}`))
           .fontSize(12)
           .fontColor(this.themeConfig.colors.textSecondary)
           .margin({ right: 8 })
 
-        Button('保存')
+        Button($r('app.string.save'))
           .fontSize(14)
           .height(32)
           .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
@@ -1120,7 +1120,7 @@ struct MainWorkspace {
             .width(48)
             .height(48)
             .color(this.themeConfig.colors.primary)
-          Text('加载中...')
+          Text($r('app.string.loading'))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
@@ -1135,7 +1135,7 @@ struct MainWorkspace {
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
-          Button('重试')
+          Button($r('app.string.retry'))
             .onClick(() => this.loadChapter())
             .backgroundColor(this.themeConfig.colors.primary)
         }
@@ -1147,7 +1147,7 @@ struct MainWorkspace {
         Scroll() {
           Column() {
             Stack() {
-              TextArea({ text: this.content, placeholder: '开始写作...', controller: this.textAreaController })
+              TextArea({ text: this.content, placeholder: getContext(this).resourceManager.getStringSync($r('app.string.start_writing_placeholder').id), controller: this.textAreaController })
                 .width('100%')
                 .constraintSize({ minHeight: '100%' })
                 .fontSize(this.settings.editorFontSize)
@@ -1217,7 +1217,7 @@ struct MainWorkspace {
       // 底部工具栏
       Row() {
         if (this.settings.autoSaveEnabled) {
-          Text('自动保存')
+          Text($r('app.string.auto_save'))
             .fontSize(12)
             .fontColor(this.themeConfig.colors.textHint)
         }
@@ -1225,7 +1225,7 @@ struct MainWorkspace {
         Blank()
 
 
-        Text(this.hasUnsavedChanges ? '未保存' : '已保存')
+        Text(this.hasUnsavedChanges ? $r('app.string.unsaved') : $r('app.string.saved'))
           .fontSize(12)
           .fontColor(this.getSaveStatusColor())
       }
@@ -1248,7 +1248,7 @@ struct MainWorkspace {
     Column() {
       // 标题栏
       Row() {
-        Text('写作软件')
+        Text($r('app.string.app_title'))
           .fontSize(28)
           .fontWeight(FontWeight.Bold)
           .fontColor(this.themeConfig.colors.textPrimary)
@@ -1256,7 +1256,7 @@ struct MainWorkspace {
         Blank()
 
         if (this.recentEdits.length > 0) {
-          Text(`${this.recentEdits.length} 个最近编辑`)
+          Text(getContext(this).resourceManager.getStringSync($r('app.string.recent_edits_count_format').id).replace('%s', `${this.recentEdits.length}`))
             .fontSize(13)
             .fontColor(this.themeConfig.colors.textHint)
         }
@@ -1270,7 +1270,7 @@ struct MainWorkspace {
             .width(48)
             .height(48)
             .color(this.themeConfig.colors.primary)
-          Text('加载中...')
+           Text($r('app.string.loading'))
             .fontSize(14)
             .fontColor(this.themeConfig.colors.textHint)
             .margin({ top: 12 })
@@ -1285,7 +1285,7 @@ struct MainWorkspace {
             .fontColor(this.themeConfig.colors.error)
             .margin({ bottom: 16 })
 
-          Button('重试')
+          Button($r('app.string.retry'))
             .onClick(() => this.loadInitialData())
             .backgroundColor(this.themeConfig.colors.primary)
         }
@@ -1321,7 +1321,7 @@ struct MainWorkspace {
   @Builder
   RecentEditsSection() {
     Column() {
-      Text('最近编辑')
+      Text($r('app.string.recent_edits'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
@@ -1331,13 +1331,13 @@ struct MainWorkspace {
       ForEach(this.recentEdits, (edit: RecentEdit) => {
         Row() {
           Column() {
-            Text(`章节 ${edit.chapterId}`)
-              .fontSize(16)
-              .fontColor(this.themeConfig.colors.textPrimary)
-              .margin({ bottom: 4 })
+             Text(`Chapter ${edit.chapterId}`)
+               .fontSize(16)
+               .fontColor(this.themeConfig.colors.textPrimary)
+               .margin({ bottom: 4 })
 
-            Row() {
-              Text(`作品 ${edit.projectId}`)
+             Row() {
+               Text(`Project ${edit.projectId}`)
                 .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ right: 16 })
@@ -1360,7 +1360,7 @@ struct MainWorkspace {
             url: 'pages/WritingPage',
             params: {
               chapterId: edit.chapterId,
-              chapterTitle: `章节 ${edit.chapterId}`,
+              chapterTitle: `Chapter ${edit.chapterId}`,
               projectId: edit.projectId,
               volumeId: edit.volumeId
             }
@@ -1376,19 +1376,19 @@ struct MainWorkspace {
   ProjectsSection() {
     Column() {
       Row() {
-        Text('我的作品')
+        Text($r('app.string.my_projects'))
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
           .fontColor(this.themeConfig.colors.textPrimary)
 
         Blank()
 
-        Button('+ 新建作品')
+        Button($r('app.string.new_project'))
           .fontSize(14)
           .height(32)
           .backgroundColor(this.themeConfig.colors.primary)
           .onClick(async () => {
-            const result = await this.bridge.createProject('新作品')
+            const result = await this.bridge.createProject(getContext(this).resourceManager.getStringSync($r('app.string.default_new_project_title').id))
             if (result.success) {
               this.loadInitialData()
             }
@@ -1487,13 +1487,13 @@ struct MainWorkspace {
     const days = Math.floor(diff / 86400000)
 
     if (minutes < 1) {
-      return '刚刚'
+      return getContext(this).resourceManager.getStringSync($r('app.string.just_now').id)
     } else if (minutes < 60) {
-      return `${minutes} 分钟前`
+      return getContext(this).resourceManager.getStringSync($r('app.string.minutes_ago_format').id).replace('%s', `${minutes}`)
     } else if (hours < 24) {
-      return `${hours} 小时前`
+      return getContext(this).resourceManager.getStringSync($r('app.string.hours_ago_format').id).replace('%s', `${hours}`)
     } else if (days < 7) {
-      return `${days} 天前`
+      return getContext(this).resourceManager.getStringSync($r('app.string.days_ago_format').id).replace('%s', `${days}`)
     } else {
       return `${date.getMonth() + 1}/${date.getDate()}`
     }

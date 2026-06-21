@@ -281,8 +281,103 @@ fn configure_cpp_standard(config: &mut cpp_build::Config) {
     }
 }
 
+/// Find the Qt6 lrelease tool for compiling .ts → .qm translation files.
+fn find_lrelease() -> Option<PathBuf> {
+    if let Ok(lrelease) = std::env::var("LRELEASE") {
+        let path = PathBuf::from(lrelease);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+
+    // Try to find lrelease alongside qmake
+    if let Some(qmake) = find_qt6_qmake() {
+        if let Some(bin_dir) = qmake.parent() {
+            let candidate = bin_dir.join("lrelease");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+            // Some distros use lrelease6
+            let candidate6 = bin_dir.join("lrelease6");
+            if candidate6.exists() {
+                return Some(candidate6);
+            }
+        }
+    }
+
+    // Try common names on PATH
+    for name in &["lrelease6", "lrelease-qt6", "lrelease"] {
+        if let Ok(output) = Command::new(name).arg("-version").output() {
+            if output.status.success() {
+                return Some(PathBuf::from(name));
+            }
+        }
+    }
+
+    None
+}
+
+/// Compile .ts translation files to .qm using lrelease.
+/// Returns the list of generated .qm file paths.
+fn compile_translations() -> Vec<PathBuf> {
+    let i18n_dir = Path::new("i18n");
+    let mut qm_files = Vec::new();
+
+    // Ensure the i18n directory exists
+    if !i18n_dir.exists() {
+        return qm_files;
+    }
+
+    // Find lrelease
+    let Some(lrelease) = find_lrelease() else {
+        println!("cargo:warning=lrelease not found; skipping .ts → .qm compilation. Install qt6-qttools-devel or set LRELEASE env var.");
+        return qm_files;
+    };
+
+    println!("cargo:warning=Using lrelease: {}", lrelease.display());
+
+    // Compile each .ts file
+    if let Ok(entries) = fs::read_dir(i18n_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "ts") {
+                let qm_path = path.with_extension("qm");
+                println!("cargo:rerun-if-changed={}", path.display());
+
+                let output = Command::new(&lrelease)
+                    .arg(&path)
+                    .arg("-qm")
+                    .arg(&qm_path)
+                    .arg("-compress")
+                    .arg("-removeidentical")
+                    .output();
+
+                match output {
+                    Ok(out) => {
+                        if out.status.success() {
+                            println!("cargo:warning=Compiled {} → {}", path.display(), qm_path.display());
+                            qm_files.push(qm_path);
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            println!("cargo:warning=lrelease failed for {}: {}", path.display(), stderr);
+                        }
+                    }
+                    Err(e) => {
+                        println!("cargo:warning=Failed to run lrelease on {}: {}", path.display(), e);
+                    }
+                }
+            }
+        }
+    }
+
+    qm_files
+}
+
 fn main() {
     let qt_info = select_qt6_build_info();
+
+    // Compile .ts → .qm translation files
+    let _qm_files = compile_translations();
 
     // Pages
     println!("cargo:rerun-if-changed=qml/main.qml");
@@ -348,6 +443,15 @@ fn main() {
         }
     }
     println!("cargo:rerun-if-changed=resources/icons/sujian.svg");
+    // i18n translation files
+    if let Ok(entries) = fs::read_dir("i18n") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "ts" || ext == "qm") {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
 
     // Recursively scan src/**/*.rs for files containing cpp! macros.
     // rust-cpp's build.rs must re-scan these files whenever they change,

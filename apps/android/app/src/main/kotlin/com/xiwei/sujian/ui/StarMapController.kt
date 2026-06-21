@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui
 
 import android.widget.FrameLayout
 import android.widget.Toast
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.data.StarMapBridge
 import com.xiwei.sujian.model.StarMapData
@@ -77,7 +78,7 @@ class StarMapController(
             CoroutineScope(Dispatchers.IO).launch {
                 var starmaps = bridge.listStarmaps()
                 if (starmaps is BridgeResult.Success && starmaps.data.isEmpty()) {
-                    bridge.createStarmap("作品宇宙", "自动生成的默认星图")
+                    bridge.createStarmap(activity.getString(R.string.default_starmap_title), activity.getString(R.string.default_starmap_desc))
                     starmaps = bridge.listStarmaps()
                 }
                 if (starmaps is BridgeResult.Success && starmaps.data.isNotEmpty()) {
@@ -151,19 +152,27 @@ class StarMapController(
         layout.setPadding(48, 48, 48, 48)
         
         val titleInput = android.widget.EditText(activity)
-        titleInput.hint = "节点名称"
+        titleInput.hint = activity.getString(R.string.hint_node_name)
         layout.addView(titleInput)
         
         val kindSpinner = android.widget.Spinner(activity)
-        val kinds = arrayOf("角色", "地点", "事件", "物品", "概念", "章节", "其它")
+        val kinds = arrayOf(
+            activity.getString(R.string.node_kind_character),
+            activity.getString(R.string.node_kind_location),
+            activity.getString(R.string.node_kind_event),
+            activity.getString(R.string.node_kind_item),
+            activity.getString(R.string.node_kind_concept),
+            activity.getString(R.string.node_kind_chapter),
+            activity.getString(R.string.node_kind_other)
+        )
         val kindMap = mapOf(
-            "角色" to com.xiwei.sujian.model.StarMapNodeKind.Character,
-            "地点" to com.xiwei.sujian.model.StarMapNodeKind.Location,
-            "事件" to com.xiwei.sujian.model.StarMapNodeKind.Event,
-            "物品" to com.xiwei.sujian.model.StarMapNodeKind.Item,
-            "概念" to com.xiwei.sujian.model.StarMapNodeKind.Concept,
-            "章节" to com.xiwei.sujian.model.StarMapNodeKind.Chapter,
-            "其它" to com.xiwei.sujian.model.StarMapNodeKind.Custom
+            activity.getString(R.string.node_kind_character) to com.xiwei.sujian.model.StarMapNodeKind.Character,
+            activity.getString(R.string.node_kind_location) to com.xiwei.sujian.model.StarMapNodeKind.Location,
+            activity.getString(R.string.node_kind_event) to com.xiwei.sujian.model.StarMapNodeKind.Event,
+            activity.getString(R.string.node_kind_item) to com.xiwei.sujian.model.StarMapNodeKind.Item,
+            activity.getString(R.string.node_kind_concept) to com.xiwei.sujian.model.StarMapNodeKind.Concept,
+            activity.getString(R.string.node_kind_chapter) to com.xiwei.sujian.model.StarMapNodeKind.Chapter,
+            activity.getString(R.string.node_kind_other) to com.xiwei.sujian.model.StarMapNodeKind.Custom
         )
         val adapter = android.widget.ArrayAdapter(activity, android.R.layout.simple_spinner_item, kinds)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
@@ -171,9 +180,9 @@ class StarMapController(
         layout.addView(kindSpinner)
         
         androidx.appcompat.app.AlertDialog.Builder(activity)
-            .setTitle("新建节点")
+            .setTitle(activity.getString(R.string.dialog_new_chapter_title))
             .setView(layout)
-            .setPositiveButton("确定") { _, _ ->
+            .setPositiveButton(activity.getString(R.string.action_ok)) { _, _ ->
                 val title = titleInput.text.toString().trim()
                 if (title.isNotEmpty()) {
                     val kindStr = kindSpinner.selectedItem.toString()
@@ -181,7 +190,7 @@ class StarMapController(
                     addNode(title, kind)
                 }
             }
-            .setNegativeButton("取消", null)
+            .setNegativeButton(activity.getString(R.string.action_cancel), null)
             .show()
     }
 
@@ -197,7 +206,7 @@ class StarMapController(
                 if (result is BridgeResult.Success) {
                     loadGraph()
                 } else if (result is BridgeResult.Error) {
-                    Toast.makeText(activity, "创建失败: ${result.message}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(activity, activity.getString(R.string.error_create_node_failed, result.message), Toast.LENGTH_SHORT).show()
                 }
             }
         }

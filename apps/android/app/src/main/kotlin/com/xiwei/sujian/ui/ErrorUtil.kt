@@ -3,6 +3,7 @@ package com.xiwei.sujian.ui
 import android.content.Context
 import android.util.Log
 import android.widget.Toast
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.RepositoryException
 
 /**
@@ -30,7 +31,7 @@ object ErrorUtil {
             fallback
         } catch (e: Throwable) {
             Log.e(TAG, "Unexpected error", e)
-            Toast.makeText(context, "应用内部错误，请查看日志", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
             fallback
         }
     }
@@ -44,7 +45,7 @@ object ErrorUtil {
             fallback
         } catch (e: Throwable) {
             Log.e(TAG, "Unexpected error", e)
-            Toast.makeText(context, "应用内部错误，请查看日志", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
             fallback
         }
     }
@@ -57,7 +58,7 @@ object ErrorUtil {
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
         } catch (e: Throwable) {
             Log.e(TAG, "Unexpected error", e)
-            Toast.makeText(context, "应用内部错误，请查看日志", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
         }
     }
 
@@ -69,7 +70,7 @@ object ErrorUtil {
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
         } catch (e: Throwable) {
             Log.e(TAG, "Unexpected error", e)
-            Toast.makeText(context, "应用内部错误，请查看日志", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
         }
     }
 }

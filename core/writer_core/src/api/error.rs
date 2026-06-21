@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::error::Error;
 
 #[derive(Debug, thiserror::Error)]
@@ -54,6 +56,71 @@ impl WriterError {
         }
     }
 
+    /// 返回稳定的 i18n message key，供 UI 层做本地化映射。
+    ///
+    /// 这些 key 是跨端 API 契约，不可随意更改。
+    pub fn message_key(&self) -> &'static str {
+        match self {
+            WriterError::Io(_) => "error.io",
+            WriterError::Json(_) => "error.json",
+            WriterError::InvalidWorkspace => "error.invalid_workspace",
+            WriterError::ProjectNotFound => "error.project_not_found",
+            WriterError::VolumeNotFound => "error.volume_not_found",
+            WriterError::ChapterNotFound => "error.chapter_not_found",
+            WriterError::EmptyOverwriteBlocked { .. } => "error.empty_overwrite_blocked",
+            WriterError::NotImplemented => "error.not_implemented",
+            WriterError::RefuseToDeleteWorkspaceRoot => "error.refuse_delete_workspace_root",
+            WriterError::InvalidDeleteTarget(_) => "error.invalid_delete_target",
+            WriterError::SyncConflict(_) => "error.sync_conflict",
+            WriterError::SyncFailed(_) => "error.sync_failed",
+            WriterError::Other(_) => "error.other",
+        }
+    }
+
+    /// 结构化错误参数，供 UI 层做本地化模板插值。
+    ///
+    /// UI 根据 `message_key` + `params` 生成用户提示，不依赖硬编码中文文案。
+    pub fn params(&self) -> HashMap<String, String> {
+        let mut m = HashMap::new();
+        match self {
+            WriterError::EmptyOverwriteBlocked {
+                chapter_id,
+                old_len,
+                new_len,
+                reason,
+            } => {
+                m.insert("chapter_id".into(), chapter_id.clone());
+                m.insert("old_len".into(), old_len.to_string());
+                m.insert("new_len".into(), new_len.to_string());
+                m.insert("reason".into(), reason.clone());
+            }
+            WriterError::InvalidDeleteTarget(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::SyncConflict(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::SyncFailed(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::Io(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::Json(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            WriterError::Other(detail) => {
+                m.insert("detail".into(), detail.clone());
+            }
+            _ => {}
+        }
+        m
+    }
+
+    /// 已废弃：UI 应使用 `code()` + `message_key()` 做本地化映射，不再直接展示此中文文案。
+    /// 保留仅作为 fallback/debug 用途。
+    #[deprecated(note = "Use code() + message_key() for i18n, this returns hardcoded Chinese")]
+    #[allow(deprecated)]
     pub fn user_message(&self) -> &'static str {
         match self {
             WriterError::Io(_) => "文件读写失败，请检查工作区权限和磁盘状态",
@@ -148,5 +215,95 @@ impl WriterError {
 impl From<serde_json::Error> for WriterError {
     fn from(e: serde_json::Error) -> Self {
         WriterError::Json(e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_message_key_stable() {
+        assert_eq!(WriterError::Io("test".into()).message_key(), "error.io");
+        assert_eq!(WriterError::Json("test".into()).message_key(), "error.json");
+        assert_eq!(WriterError::InvalidWorkspace.message_key(), "error.invalid_workspace");
+        assert_eq!(WriterError::ProjectNotFound.message_key(), "error.project_not_found");
+        assert_eq!(WriterError::VolumeNotFound.message_key(), "error.volume_not_found");
+        assert_eq!(WriterError::ChapterNotFound.message_key(), "error.chapter_not_found");
+        assert_eq!(
+            WriterError::EmptyOverwriteBlocked {
+                chapter_id: "ch1".into(),
+                old_len: 100,
+                new_len: 0,
+                reason: "empty".into(),
+            }
+            .message_key(),
+            "error.empty_overwrite_blocked"
+        );
+        assert_eq!(WriterError::NotImplemented.message_key(), "error.not_implemented");
+        assert_eq!(
+            WriterError::RefuseToDeleteWorkspaceRoot.message_key(),
+            "error.refuse_delete_workspace_root"
+        );
+        assert_eq!(
+            WriterError::InvalidDeleteTarget("test".into()).message_key(),
+            "error.invalid_delete_target"
+        );
+        assert_eq!(
+            WriterError::SyncConflict("detail".into()).message_key(),
+            "error.sync_conflict"
+        );
+        assert_eq!(
+            WriterError::SyncFailed("detail".into()).message_key(),
+            "error.sync_failed"
+        );
+        assert_eq!(WriterError::Other("test".into()).message_key(), "error.other");
+    }
+
+    #[test]
+    fn test_params_empty_overwrite_blocked() {
+        let err = WriterError::EmptyOverwriteBlocked {
+            chapter_id: "ch1".into(),
+            old_len: 100,
+            new_len: 0,
+            reason: "empty content".into(),
+        };
+        let p = err.params();
+        assert_eq!(p.get("chapter_id").unwrap(), "ch1");
+        assert_eq!(p.get("old_len").unwrap(), "100");
+        assert_eq!(p.get("new_len").unwrap(), "0");
+        assert_eq!(p.get("reason").unwrap(), "empty content");
+    }
+
+    #[test]
+    fn test_params_sync_conflict() {
+        let err = WriterError::SyncConflict("path conflict".into());
+        let p = err.params();
+        assert_eq!(p.get("detail").unwrap(), "path conflict");
+    }
+
+    #[test]
+    fn test_params_sync_failed() {
+        let err = WriterError::SyncFailed("network timeout".into());
+        let p = err.params();
+        assert_eq!(p.get("detail").unwrap(), "network timeout");
+    }
+
+    #[test]
+    fn test_params_simple_variants_empty() {
+        // 不携带结构化参数的变体应返回空 HashMap
+        assert!(WriterError::InvalidWorkspace.params().is_empty());
+        assert!(WriterError::ProjectNotFound.params().is_empty());
+        assert!(WriterError::VolumeNotFound.params().is_empty());
+        assert!(WriterError::ChapterNotFound.params().is_empty());
+        assert!(WriterError::NotImplemented.params().is_empty());
+        assert!(WriterError::RefuseToDeleteWorkspaceRoot.params().is_empty());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn test_user_message_still_works() {
+        // user_message 虽然标记 deprecated，但功能不变
+        assert!(!WriterError::ProjectNotFound.user_message().is_empty());
     }
 }

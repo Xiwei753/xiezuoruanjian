@@ -92,14 +92,14 @@ class StatsController(
                 val chars = stats.totalHumanTypedChars ?: 0
                 val activeSeconds = stats.totalActiveSeconds ?: 0
                 val duration = if (activeSeconds > 3600) {
-                    "${activeSeconds / 3600}时${(activeSeconds % 3600) / 60}分"
+                    activity.getString(R.string.stats_duration_hours_minutes, activeSeconds / 3600, (activeSeconds % 3600) / 60)
                 } else {
-                    "${activeSeconds / 60}分"
+                    activity.getString(R.string.stats_duration_minutes, activeSeconds / 60)
                 }
-                "纯输入: $chars 字\n活跃时长: $duration"
+                activity.getString(R.string.stats_summary, chars, duration)
             }
-            is BridgeResult.Error -> "加载失败: ${result.message}"
-            BridgeResult.NotLoaded -> "未加载"
+            is BridgeResult.Error -> activity.getString(R.string.stats_load_failed, result.message)
+            BridgeResult.NotLoaded -> activity.getString(R.string.stats_not_loaded)
         }
     }
 
@@ -108,19 +108,19 @@ class StatsController(
             is BridgeResult.Success -> {
                 val statsMap = result.data.projects
                 if (statsMap.isNullOrEmpty()) {
-                    return "无项目数据"
+                    return activity.getString(R.string.stats_no_project_data)
                 }
                 val sb = StringBuilder()
                 for (projectStats in statsMap) {
                     val chars = projectStats.humanTypedChars ?: 0
-                    val title = projectStats.projectTitle ?: "未命名"
-                    sb.append("项目: $title\n")
-                    sb.append("输入: $chars 字\n\n")
+                    val title = projectStats.projectTitle ?: activity.getString(R.string.stats_unnamed_project)
+                    sb.append(activity.getString(R.string.stats_project_line, title)).append("\n")
+                    sb.append(activity.getString(R.string.stats_input_chars, chars)).append("\n\n")
                 }
                 sb.toString()
             }
-            is BridgeResult.Error -> "加载失败: ${result.message}"
-            BridgeResult.NotLoaded -> "未加载"
+            is BridgeResult.Error -> activity.getString(R.string.stats_load_failed, result.message)
+            BridgeResult.NotLoaded -> activity.getString(R.string.stats_not_loaded)
         }
     }
 }
