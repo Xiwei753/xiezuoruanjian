@@ -235,7 +235,7 @@ internal fun SyncDiagnosticsResultDto.toModel() = SyncDiagnosticsResult(
     remoteUrlSanitized = remoteUrlSanitized,
     transport = transport,
     errorCategory = errorCategory,
-    userMessage = userMessage,
+    userMessage = userMessage ?: "",
     rawError = rawError,
     chosenNetworkMode = chosenNetworkMode,
     networkProbeSummary = networkProbeSummary?.map { it.toModel() } ?: emptyList()
@@ -263,7 +263,7 @@ internal fun SyncResultDto.toModel() = SyncResult(
     error = error,
     errorCategory = errorCategory,
     firstSyncMode = firstSyncMode.toFirstSyncMode(),
-    userMessage = userMessage,
+    userMessage = userMessage ?: "",
     chosenNetworkMode = chosenNetworkMode,
     networkProbeSummary = networkProbeSummary?.map { it.toModel() } ?: emptyList()
 )

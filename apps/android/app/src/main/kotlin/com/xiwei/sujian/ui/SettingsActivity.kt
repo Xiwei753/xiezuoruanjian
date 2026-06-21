@@ -127,7 +127,7 @@ class SettingsActivity : AppCompatActivity() {
             tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, value.toInt())
         }
         sbAutoIndentWidth.addOnChangeListener { _, value, _ ->
-            tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, value)
+            tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, value.toInt().toString())
         }
         sbTypingAnimationDuration.addOnChangeListener { _, value, _ ->
             tvTypingAnimationDurationValue.text = "${value.toInt()}ms"
@@ -224,7 +224,7 @@ class SettingsActivity : AppCompatActivity() {
         tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
         tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
-        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
+        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth.toInt().toString())
         tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
         tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
 
@@ -309,7 +309,7 @@ class SettingsActivity : AppCompatActivity() {
         tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
         tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
         tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
-        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
+        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth.toInt().toString())
         tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
         tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
 

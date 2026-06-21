@@ -843,6 +843,7 @@ impl GitBackend for Git2Backend {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn fetch_and_reset_local_repo(
     workspace_path: &Path,
     config: &SyncConfig,

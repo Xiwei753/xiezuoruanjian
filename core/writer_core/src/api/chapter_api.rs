@@ -150,6 +150,7 @@ impl WriterCoreApi {
 
     // --- Chapter/Project/Volume envelope helpers (internal) ---
 
+    #[allow(dead_code)]
     fn changed_value_envelope<T: serde::Serialize>(
         data: T,
         entity_type: &str,
@@ -165,6 +166,7 @@ impl WriterCoreApi {
         )
     }
 
+    #[allow(dead_code)]
     fn changed_result_envelope<T: serde::Serialize>(
         result: ApiResult<T>,
         entity_type: &str,
@@ -177,6 +179,7 @@ impl WriterCoreApi {
     }
 
 
+    #[allow(dead_code)]
     fn delete_envelope(
         result: ApiResult<bool>,
         entity_type: &str,

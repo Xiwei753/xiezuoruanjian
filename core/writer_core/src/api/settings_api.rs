@@ -3,6 +3,7 @@ use super::types::*;
 use super::{ChangedEntityDto, ResultEnvelope};
 
 impl WriterCoreApi {
+    #[allow(dead_code)]
     fn settings_saved_envelope(result: ApiResult<bool>, path: &str) -> ResultEnvelope<bool> {
         match result {
             Ok(data) => ResultEnvelope::success_with_changes(

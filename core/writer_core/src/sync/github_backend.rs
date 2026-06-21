@@ -325,7 +325,7 @@ impl SyncBackend for GitHubApiBackend {
         let probed_res = Self::build_auto_client(config, secrets, None);
         let (client, mode, probe_summary) = match probed_res {
             Ok((p, summary)) => (p.client, p.mode, summary),
-            Err(e) => {
+            Err(_e) => {
                 result.user_message = None;
                 result.error_category = "network_probe_failed".to_string();
                 return Ok(result);

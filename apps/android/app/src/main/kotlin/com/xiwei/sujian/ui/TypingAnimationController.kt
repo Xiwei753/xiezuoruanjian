@@ -110,7 +110,7 @@ class TypingAnimationController(
         if (isSuppressAnimations) {
             clearPendingDelete()
             renderLayer.clear()
-            if (DEBUG_ANIM) {
+            if (true) {
                 android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")
             }
             return
@@ -138,7 +138,7 @@ class TypingAnimationController(
             }
         }
 
-        if (DEBUG_ANIM) {
+        if (true) {
             android.util.Log.d(TAG, "beforeTextChanged - replaced: $count, after: $after, cursor: ($cursorBeforeX, $cursorBeforeY)")
         }
     }
@@ -250,7 +250,7 @@ class TypingAnimationController(
                 lastAddedCount = 0
                 return
             } catch (e: Exception) {
-                if (DEBUG_ANIM) {
+                if (true) {
                     android.util.Log.w(TAG, "Core animation events failed, falling back", e)
                 }
                 // Core 调用失败，回退到下面的本地逻辑
@@ -287,7 +287,7 @@ class TypingAnimationController(
         val isComposing = composingStart != -1 && composingEnd != -1
 
         if (isComposing && lastAddedStart >= composingStart && lastAddedStart + lastAddedCount <= composingEnd) {
-            if (DEBUG_ANIM) android.util.Log.d(TAG, "afterTextChanged - skipping animation for composing text.")
+            if (true) android.util.Log.d(TAG, "afterTextChanged - skipping animation for composing text.")
             lastAddedStart = -1
             lastAddedCount = 0
             return
@@ -331,7 +331,7 @@ class TypingAnimationController(
                     }
                 }
 
-                if (DEBUG_ANIM) {
+                if (true) {
                     android.util.Log.d(TAG, "afterTextChanged - recorded event: start=$start, length=${insertedText.length}")
                 }
             }
@@ -478,7 +478,7 @@ private fun parseAnimationEvents(json: String): List<CoreAnimationEvent> {
         }
         events
     } catch (e: Exception) {
-        if (DEBUG_ANIM) {
+        if (true) {
             android.util.Log.w("WriterEditorAnim", "Failed to parse animation events JSON", e)
         }
         emptyList()

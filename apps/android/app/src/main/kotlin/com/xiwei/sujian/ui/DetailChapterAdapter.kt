@@ -58,7 +58,7 @@ class DetailChapterAdapter(
             }
             is ChapterListItem.ChapterItem -> {
                 holder.volumeTitle.visibility = View.GONE
-                holder.chapterTitle.text = parent.context.getString(R.string.chapter_title_with_count, item.title, item.wordCount)
+                holder.chapterTitle.text = holder.itemView.context.getString(R.string.chapter_title_with_count, item.title, item.wordCount)
                 holder.chapterTitle.visibility = View.VISIBLE
                 holder.emptyHint.visibility = View.GONE
                 holder.chapterTitle.setOnClickListener {
@@ -68,7 +68,7 @@ class DetailChapterAdapter(
             is ChapterListItem.EmptyHint -> {
                 holder.volumeTitle.visibility = View.GONE
                 holder.chapterTitle.visibility = View.GONE
-                holder.emptyHint.text = parent.context.getString(R.string.empty_volume_hint)
+                holder.emptyHint.text = holder.itemView.context.getString(R.string.empty_volume_hint)
                 holder.emptyHint.visibility = View.VISIBLE
                 holder.emptyHint.setOnClickListener(null)
             }

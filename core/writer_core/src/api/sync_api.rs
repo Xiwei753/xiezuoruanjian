@@ -64,6 +64,7 @@ impl WriterCoreApi {
 
     // --- Sync envelope helpers (internal) ---
 
+    #[allow(dead_code)]
     fn sync_saved_envelope(result: ApiResult<bool>, path: &str) -> ResultEnvelope<bool> {
         match result {
             Ok(data) => ResultEnvelope::success_with_changes(
@@ -78,6 +79,7 @@ impl WriterCoreApi {
         }
     }
 
+    #[allow(dead_code)]
     fn sync_result_envelope(result: ApiResult<SyncResultDto>) -> ResultEnvelope<SyncResultDto> {
         match result {
             Ok(dto) => {
@@ -152,6 +154,7 @@ impl WriterCoreApi {
         }
     }
 
+    #[allow(dead_code)]
     fn sync_plan_envelope(result: ApiResult<SyncPlanDto>) -> ResultEnvelope<SyncPlanDto> {
         match result {
             Ok(dto) => ResultEnvelope::success(dto),
@@ -159,6 +162,7 @@ impl WriterCoreApi {
         }
     }
 
+    #[allow(dead_code)]
     fn sync_diagnostics_envelope(
         result: ApiResult<SyncDiagnosticsResultDto>,
     ) -> ResultEnvelope<SyncDiagnosticsResultDto> {

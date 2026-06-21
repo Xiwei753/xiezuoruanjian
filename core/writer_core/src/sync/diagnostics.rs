@@ -11,6 +11,7 @@ use crate::sync::url::sanitize_remote_url;
 /// 已废弃：Core 不应包含用户可见的 UI 文案。
 /// 保留仅作为内部参考，新代码应使用 error_category + message_key 模式。
 #[deprecated(note = "Use error_category for i18n lookup instead of hardcoded Chinese strings")]
+#[allow(dead_code)]
 pub(crate) fn get_user_friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
     if e.contains("failed to resolve address")
