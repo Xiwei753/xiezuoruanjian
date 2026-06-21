@@ -1,21 +1,7 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
-use super::{ChangedEntityDto, ResultEnvelope};
 
 impl WriterCoreApi {
-    fn settings_saved_envelope(result: ApiResult<bool>, path: &str) -> ResultEnvelope<bool> {
-        match result {
-            Ok(data) => ResultEnvelope::success_with_changes(
-                data,
-                vec![path.to_string()],
-                vec![ChangedEntityDto {
-                    entity_type: "SettingsSaved".to_string(),
-                    entity_id: None,
-                }],
-            ),
-            Err(error) => ResultEnvelope::error(error),
-        }
-    }
 
     pub fn load_local_settings(&self) -> ApiResult<LocalSettingsDto> {
         self.core()

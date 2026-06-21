@@ -1,6 +1,5 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
-use super::{ChangedEntityDto, ResultEnvelope};
 
 impl WriterCoreApi {
     pub fn load_sync_config(&self) -> ApiResult<SyncConfigDto> {
@@ -64,109 +63,9 @@ impl WriterCoreApi {
 
     // --- Sync envelope helpers (internal) ---
 
-    fn sync_saved_envelope(result: ApiResult<bool>, path: &str) -> ResultEnvelope<bool> {
-        match result {
-            Ok(data) => ResultEnvelope::success_with_changes(
-                data,
-                vec![path.to_string()],
-                vec![ChangedEntityDto {
-                    entity_type: "SyncConfigSaved".to_string(),
-                    entity_id: None,
-                }],
-            ),
-            Err(error) => ResultEnvelope::error(error),
-        }
-    }
 
-    fn sync_result_envelope(result: ApiResult<SyncResultDto>) -> ResultEnvelope<SyncResultDto> {
-        match result {
-            Ok(dto) => {
-                let status = dto.status.clone();
-                let is_success = matches!(
-                    status.as_str(),
-                    "success" | "no_changes" | "latest_wins_applied" | "branch_missing_recovered"
-                );
-                let is_conflict = status == "conflict";
 
-                if is_success {
-                    let mut changed_paths = Vec::new();
-                    changed_paths.extend(dto.uploaded_files.clone());
-                    changed_paths.extend(dto.downloaded_files.clone());
-                    ResultEnvelope::success_with_changes(
-                        dto,
-                        changed_paths,
-                        vec![ChangedEntityDto {
-                            entity_type: "SyncCompleted".to_string(),
-                            entity_id: None,
-                        }],
-                    )
-                } else if is_conflict {
-                    let conflict_files: Vec<String> =
-                        dto.conflicts.iter().map(|c| c.local_path.clone()).collect();
-                    let detail = if conflict_files.is_empty() {
-                        "checkout_conflict".to_string()
-                    } else {
-                        format!("checkout_conflict: {}", conflict_files.join(", "))
-                    };
-                    ResultEnvelope {
-                        success: false,
-                        data: Some(dto),
-                        error_code: Some("SYNC_CONFLICT".to_string()),
-                        message_key: Some("error.sync_conflict".to_string()),
-                        message_args: None,
-                        user_message: None,
-                        raw_error: Some(detail),
-                        warnings: Vec::new(),
-                        changed_paths: Vec::new(),
-                        changed_entities: Vec::new(),
-                    }
-                } else {
-                    let error_msg = dto
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| format!("sync status: {}", status));
-                    let error_code =
-                        dto.error_category
-                            .clone()
-                            .unwrap_or_else(|| match status.as_str() {
-                                "dirty_repo_blocked" => "DIRTY_REPO_BLOCKED".to_string(),
-                                "fatal_error" => "SYNC_FATAL_ERROR".to_string(),
-                                "recoverable_error" => "SYNC_RECOVERABLE_ERROR".to_string(),
-                                _ => "SYNC_FAILED".to_string(),
-                            });
-                    ResultEnvelope {
-                        success: false,
-                        data: Some(dto),
-                        error_code: Some(error_code),
-                        message_key: Some("error.sync_failed".to_string()),
-                        message_args: None,
-                        user_message: None,
-                        raw_error: Some(error_msg),
-                        warnings: Vec::new(),
-                        changed_paths: Vec::new(),
-                        changed_entities: Vec::new(),
-                    }
-                }
-            }
-            Err(error) => ResultEnvelope::error(error),
-        }
-    }
 
-    fn sync_plan_envelope(result: ApiResult<SyncPlanDto>) -> ResultEnvelope<SyncPlanDto> {
-        match result {
-            Ok(dto) => ResultEnvelope::success(dto),
-            Err(error) => ResultEnvelope::error(error),
-        }
-    }
-
-    fn sync_diagnostics_envelope(
-        result: ApiResult<SyncDiagnosticsResultDto>,
-    ) -> ResultEnvelope<SyncDiagnosticsResultDto> {
-        match result {
-            Ok(dto) => ResultEnvelope::success(dto),
-            Err(error) => ResultEnvelope::error(error),
-        }
-    }
 }
 
 #[cfg(test)]

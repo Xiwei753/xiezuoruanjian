@@ -1,6 +1,5 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
-use super::{ChangedEntityDto, ResultEnvelope};
 
 impl WriterCoreApi {
     pub fn list_chapters(
@@ -150,50 +149,9 @@ impl WriterCoreApi {
 
     // --- Chapter/Project/Volume envelope helpers (internal) ---
 
-    fn changed_value_envelope<T: serde::Serialize>(
-        data: T,
-        entity_type: &str,
-        entity_id: Option<String>,
-    ) -> ResultEnvelope<T> {
-        ResultEnvelope::success_with_changes(
-            data,
-            Vec::new(),
-            vec![ChangedEntityDto {
-                entity_type: entity_type.to_string(),
-                entity_id,
-            }],
-        )
-    }
-
-    fn changed_result_envelope<T: serde::Serialize>(
-        result: ApiResult<T>,
-        entity_type: &str,
-        entity_id: Option<String>,
-    ) -> ResultEnvelope<T> {
-        match result {
-            Ok(data) => Self::changed_value_envelope(data, entity_type, entity_id),
-            Err(error) => ResultEnvelope::error(error),
-        }
-    }
 
 
-    fn delete_envelope(
-        result: ApiResult<bool>,
-        entity_type: &str,
-        entity_id: &str,
-    ) -> ResultEnvelope<bool> {
-        match result {
-            Ok(_) => ResultEnvelope::success_with_changes(
-                true,
-                Vec::new(),
-                vec![ChangedEntityDto {
-                    entity_type: format!("{}Deleted", entity_type),
-                    entity_id: Some(entity_id.to_string()),
-                }],
-            ),
-            Err(error) => ResultEnvelope::error(error),
-        }
-    }
+
 
 
 }

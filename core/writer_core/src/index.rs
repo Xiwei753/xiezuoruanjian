@@ -154,7 +154,7 @@ impl SearchIndex {
 
         let ac = match aho_corasick::AhoCorasick::builder()
             .ascii_case_insensitive(!options.case_sensitive)
-            .build(&[query])
+            .build([query])
         {
             Ok(ac) => ac,
             Err(_) => return hits, // Fallback for empty/invalid patterns, though build rarely fails for string slices
@@ -227,7 +227,7 @@ impl SearchIndex {
 
         let ac = match aho_corasick::AhoCorasick::builder()
             .ascii_case_insensitive(!options.case_sensitive)
-            .build(&[query])
+            .build([query])
         {
             Ok(ac) => ac,
             Err(_) => return hits,

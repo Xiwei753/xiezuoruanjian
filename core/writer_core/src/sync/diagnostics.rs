@@ -11,44 +11,6 @@ use crate::sync::url::sanitize_remote_url;
 /// 已废弃：Core 不应包含用户可见的 UI 文案。
 /// 保留仅作为内部参考，新代码应使用 error_category + message_key 模式。
 #[deprecated(note = "Use error_category for i18n lookup instead of hardcoded Chinese strings")]
-pub(crate) fn get_user_friendly_error(err: &str) -> String {
-    let e = err.to_lowercase();
-    if e.contains("failed to resolve address")
-        || e.contains("no address associated with hostname")
-        || e.contains("could not resolve host")
-        || e.contains("name resolution")
-    {
-        return "无法解析 GitHub。请检查手机网络、DNS、代理/VPN/Clash 是否允许本应用访问 GitHub，然后重试。".to_string();
-    }
-    if e.contains("authentication failed") || e.contains("invalid credentials") || e.contains("401")
-    {
-        return "身份验证失败。请检查您的 GitHub Token 是否正确，或者该 Token 是否具有访问该仓库的权限。".to_string();
-    }
-    if e.contains("repository not found") || e.contains("not found") || e.contains("404") {
-        return "找不到仓库。请检查您填写的 GitHub 仓库地址是否正确，或者您的 Token 是否有权限访问该私有仓库。".to_string();
-    }
-    if e.contains("ssl") || e.contains("certificate") {
-        return "SSL 证书或网络错误。请检查您的网络环境、代理/VPN 设置或系统时间是否正确。"
-            .to_string();
-    }
-    if e.contains("timeout")
-        || e.contains("connection refused")
-        || e.contains("network unreachable")
-    {
-        return "网络连接失败或超时。请检查您的网络连接或代理设置。".to_string();
-    }
-    if e.contains("conflict") {
-        return "同步代码冲突。请在另一端解决冲突后重试。".to_string();
-    }
-    if e.contains("operation not permitted") && e.contains("127.0.0.1") {
-        return "代理 127.0.0.1:7890 连接被拒绝，请确认手机代理 App 开启本机 HTTP 端口，或选择不使用手动代理，改走系统 VPN/全局模式。".to_string();
-    }
-    if e.contains("unsupported proxy protocol") && e.contains("socks5") {
-        return "当前构建版本的底层网络库不支持 SOCKS5 代理。请尝试使用 HTTP 代理或更新应用。"
-            .to_string();
-    }
-    format!("同步失败，请检查网络重试。({})", err)
-}
 
 impl crate::sync::SyncService {
     pub fn perform_sync_diagnostics(
