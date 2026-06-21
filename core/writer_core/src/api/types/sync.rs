@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncConfigDto {
     pub enabled: bool,
@@ -193,7 +195,9 @@ pub struct SyncDiagnosticsResultDto {
     pub remote_url_sanitized: String,
     pub transport: String,
     pub error_category: String,
-    pub user_message: String,
+    /// 已废弃：UI 应使用 error_category 做本地化映射。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<String>,
     pub raw_error: Option<String>,
     pub chosen_network_mode: Option<String>,
     pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
@@ -275,6 +279,8 @@ pub struct SyncResultDto {
     pub error: Option<String>,
     pub error_category: Option<String>,
     pub first_sync_mode: String,
+    /// 已废弃：UI 应使用 error_category/status 做本地化映射。
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_message: Option<String>,
     pub chosen_network_mode: Option<String>,
     pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,

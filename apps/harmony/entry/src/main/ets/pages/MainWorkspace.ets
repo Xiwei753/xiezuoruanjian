@@ -247,7 +247,7 @@ struct MainWorkspace {
         this.projects = workspaceResult.data.projects
         this.recentEdits = workspaceResult.data.recentEdits
       } else {
-        this.initErrorMessage = workspaceResult.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
+        this.initErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
       }
     } catch (err) {
       this.initErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace_detail').id)
@@ -275,7 +275,7 @@ struct MainWorkspace {
           this.expandedVolumes.add(this.volumeTrees[0].volume.id)
         }
       } else {
-        this.treeErrorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_project').id)
+        this.treeErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_project').id)
       }
     } catch (err) {
       this.treeErrorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_project_detail').id)
@@ -304,7 +304,7 @@ struct MainWorkspace {
         this.sessionId = `hm-${this.selectedChapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
       } else {
-        this.errorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
+        this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
       }
     } catch (err) {
       this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter_detail').id)
@@ -389,7 +389,7 @@ struct MainWorkspace {
         return true
       } else {
         this.lastSaveFailed = true
-        this.saveMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
+        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
         return false
       }
     } catch (err) {

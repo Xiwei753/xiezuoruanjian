@@ -274,8 +274,10 @@ pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
         msg.push_str(&format!("\n错误分类: {}", result.error_category));
     }
 
-    if !result.user_message.is_empty() {
-        msg.push_str(&format!("\n\n说明:\n{}", result.user_message));
+    if let Some(um) = &result.user_message {
+        if !um.is_empty() {
+            msg.push_str(&format!("\n\n说明:\n{}", um));
+        }
     }
     if let Some(err) = &result.raw_error {
         msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(err)));

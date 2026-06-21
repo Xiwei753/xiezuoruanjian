@@ -124,4 +124,11 @@
     <string name="action_blocked_dangerous">Dangerous operation blocked in debug page</string>
     <string name="action_not_loaded">Core library not loaded</string>
     <string name="action_result_title">Result</string>
+
+    <!-- Error messages (WriterError mapping) -->
+    <string name="error_io">File I/O failed. Check workspace permissions and disk status.</string>
+    <string name="error_json">Data file format error. Check if workspace files are corrupted.</string>
+    <string name="error_sync_conflict">Sync conflict. Please resolve conflicting files and retry.</string>
+    <string name="error_sync_failed">Sync failed. Check your network and configuration.</string>
+    <string name="sync_unknown_error">Unknown sync error</string>
 </resources>

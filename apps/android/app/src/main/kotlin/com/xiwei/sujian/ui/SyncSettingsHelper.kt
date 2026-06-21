@@ -204,7 +204,7 @@ internal class SyncSettingsHelper(
                             }).append("\n\n")
 
                             if (!diag.androidHasInternetPermission) {
-                                msgBuilder.append("\n${diag.userMessage}")
+                                msgBuilder.append("\n${errorMessageFromCategory(diag.errorCategory)}")
                                 AlertDialog.Builder(activity)
                                     .setTitle(activity.getString(R.string.diag_title_failed))
                                     .setMessage(msgBuilder.toString())
@@ -228,7 +228,7 @@ internal class SyncSettingsHelper(
                                 msgBuilder.append("\n")
                             }
 
-                            msgBuilder.append(diag.userMessage)
+                            msgBuilder.append(errorMessageFromCategory(diag.errorCategory))
 
                             if (diag.rawError != null && diag.rawError.isNotEmpty()) {
                                 msgBuilder.append("\n\n").append(activity.getString(R.string.diag_raw_error_section, diag.rawError))
@@ -344,7 +344,7 @@ internal class SyncSettingsHelper(
                                        syncResult.status == com.xiwei.sujian.model.SyncStatus.BranchMissingRecovered ||
                                        syncResult.status == com.xiwei.sujian.model.SyncStatus.NoChanges ||
                                        syncResult.status == com.xiwei.sujian.model.SyncStatus.LatestWinsApplied) {
-                                val successMsg = syncResult.userMessage ?: if (syncResult.status == com.xiwei.sujian.model.SyncStatus.NoChanges) {
+                                val successMsg = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.NoChanges) {
                                     activity.getString(R.string.sync_complete_no_changes)
                                 } else {
                                     val title = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.BranchMissingRecovered) {
@@ -363,15 +363,15 @@ internal class SyncSettingsHelper(
                                     .show()
                             } else if (syncResult.status == com.xiwei.sujian.model.SyncStatus.RecoverableError || syncResult.status == com.xiwei.sujian.model.SyncStatus.FatalError || syncResult.status == com.xiwei.sujian.model.SyncStatus.Error) {
                                 val title = if (syncResult.status == com.xiwei.sujian.model.SyncStatus.RecoverableError) activity.getString(R.string.sync_recoverable_error_title) else activity.getString(R.string.sync_fatal_error_title)
-                                val errMsg = syncResult.userMessage ?: syncResult.error ?: activity.getString(R.string.sync_unknown_error)
+                                val errMsg = syncResult.error ?: errorMessageFromCategory(syncResult.errorCategory)
                                 AlertDialog.Builder(activity)
                                     .setTitle(title)
                                     .setMessage(errMsg)
                                     .setPositiveButton(activity.getString(R.string.action_ok), null)
                                     .show()
-                            } else if (syncResult.userMessage != null) {
+                            } else if (syncResult.errorCategory != null) {
                                 AlertDialog.Builder(activity)
-                                    .setMessage(syncResult.userMessage)
+                                    .setMessage(errorMessageFromCategory(syncResult.errorCategory))
                                     .setPositiveButton(activity.getString(R.string.action_ok), null)
                                     .show()
                             } else if (syncResult.firstSyncMode == FirstSyncMode.UnrelatedHistories || syncResult.firstSyncMode == FirstSyncMode.BlockedNonEmptyRemote) {
@@ -439,5 +439,19 @@ internal class SyncSettingsHelper(
         return if (tokenInput.isNotEmpty()) {
             currentSyncSecrets.copy(token = tokenInput)
         } else currentSyncSecrets
+    }
+
+    /**
+     * 根据 errorCategory 映射到对应的 string resource。
+     * Core 层已完成 user_message 去中文化，UI 层不再依赖 userMessage 直接展示。
+     */
+    private fun errorMessageFromCategory(errorCategory: String?): String {
+        return when (errorCategory) {
+            "SYNC_CONFLICT" -> activity.getString(R.string.error_sync_conflict)
+            "SYNC_FAILED" -> activity.getString(R.string.error_sync_failed)
+            "IO_ERROR" -> activity.getString(R.string.error_io)
+            "JSON_ERROR" -> activity.getString(R.string.error_json)
+            else -> activity.getString(R.string.sync_unknown_error)
+        }
     }
 }

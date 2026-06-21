@@ -75,7 +75,6 @@ where
         }
     }
 
-    #[allow(deprecated)]
     pub fn error(error: WriterError) -> Self {
         Self {
             success: false,
@@ -83,7 +82,9 @@ where
             error_code: Some(error.code().to_string()),
             message_key: Some(error.message_key().to_string()),
             message_args: Some(error.params()),
-            user_message: Some(error.user_message().to_string()),
+            // user_message 不再填充：Core 不应包含用户可见 UI 文案，
+            // UI 层应通过 error_code + message_key + message_args 做本地化。
+            user_message: None,
             raw_error: Some(error.to_string()),
             warnings: Vec::new(),
             changed_paths: Vec::new(),
@@ -104,7 +105,7 @@ where
                 "success": false,
                 "errorCode": "JSON_ERROR",
                 "messageKey": "error.json",
-                "userMessage": "结果序列化失败",
+
                 "rawError": err.to_string(),
                 "warnings": [],
                 "changedPaths": [],
@@ -162,7 +163,8 @@ mod tests {
         assert!(json.contains("\"success\":false"));
         assert!(json.contains("\"errorCode\":\"PROJECT_NOT_FOUND\""));
         assert!(json.contains("\"messageKey\":\"error.project_not_found\""));
-        assert!(json.contains("\"userMessage\":"));
+        // user_message 不再填充，不应出现在 JSON 中
+        assert!(!json.contains("\"userMessage\":"));
         assert!(json.contains("\"rawError\":"));
         assert!(json.contains("\"warnings\":[]"));
     }
@@ -183,11 +185,9 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn from_api_result_maps_err_to_error() {
         let error = WriterError::ProjectNotFound;
         let expected_error_code = error.code().to_string();
-        let expected_user_message = error.user_message().to_string();
         let expected_raw_error = error.to_string();
 
         let result: Result<String, WriterError> = Err(error);
@@ -198,12 +198,12 @@ mod tests {
         assert_eq!(envelope.error_code, Some(expected_error_code));
         assert_eq!(envelope.message_key, Some("error.project_not_found".to_string()));
         assert!(envelope.message_args.unwrap().is_empty());
-        assert_eq!(envelope.user_message, Some(expected_user_message));
+        // user_message 不再填充
+        assert_eq!(envelope.user_message, None);
         assert_eq!(envelope.raw_error, Some(expected_raw_error));
     }
 
     #[test]
-    #[allow(deprecated)]
     fn error_envelope_extracts_fields_correctly() {
         let error = WriterError::ProjectNotFound;
         let envelope = ResultEnvelope::<()>::error(error);
@@ -212,7 +212,8 @@ mod tests {
         assert_eq!(envelope.error_code.as_deref(), Some("PROJECT_NOT_FOUND"));
         assert_eq!(envelope.message_key.as_deref(), Some("error.project_not_found"));
         assert!(envelope.message_args.as_ref().unwrap().is_empty());
-        assert_eq!(envelope.user_message.as_deref(), Some("作品不存在或已被删除"));
+        // user_message 不再填充
+        assert_eq!(envelope.user_message, None);
         assert_eq!(envelope.raw_error.as_deref(), Some("Project not found"));
         assert!(envelope.warnings.is_empty());
         assert!(envelope.changed_paths.is_empty());

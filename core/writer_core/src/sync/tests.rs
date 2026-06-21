@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use crate::sync::backends::SyncBackend;
     use crate::sync::git_backend::Git2Backend;
@@ -190,7 +191,8 @@ mod tests {
             SyncService::perform_sync(dir.path(), &config, &secrets, &MockUnrelatedBackend)
                 .unwrap();
         assert_eq!(result.first_sync_mode, FirstSyncMode::UnrelatedHistories);
-        assert!(result.user_message.unwrap().contains("远端仓库不是空仓库"));
+        // user_message 不再填充中文文案，UI 层应通过 error_category 做本地化
+        assert_eq!(result.user_message, None);
     }
 
     #[test]
@@ -688,10 +690,8 @@ mod tests {
             SyncService::perform_sync(dir.path(), &config, &secrets, &MockInitNonEmptyBackend)
                 .unwrap();
         assert_eq!(res.first_sync_mode, FirstSyncMode::UnrelatedHistories);
-        assert!(res
-            .user_message
-            .unwrap()
-            .contains("推荐使用空 GitHub 私人仓库"));
+        // user_message 不再填充中文文案
+        assert_eq!(res.user_message, None);
     }
 
     #[test]
@@ -786,7 +786,8 @@ mod tests {
 
         let res = SyncService::perform_sync(dir.path(), &config, &secrets, &MockBackendOk).unwrap();
         assert!(matches!(res.status, SyncStatus::FatalError(_)));
-        assert!(res.user_message.unwrap().contains("同步状态保存失败"));
+        // user_message 不再填充中文文案
+        assert_eq!(res.user_message, None);
     }
 
     #[test]
@@ -1179,10 +1180,8 @@ mod tests {
             .unwrap();
         assert_eq!(res.status, SyncStatus::Success);
         assert_eq!(res.first_sync_mode, FirstSyncMode::InitExistingWorkspace);
-        assert!(res
-            .user_message
-            .unwrap()
-            .contains("已初始化远端分支并完成首次同步"));
+        // user_message 不再填充中文文案
+        assert_eq!(res.user_message, None);
     }
 
     #[test]

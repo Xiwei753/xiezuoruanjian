@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,7 +175,10 @@ pub struct SyncDiagnosticsResult {
     pub app_proxy_status: String,
     /// Error category for proxy_enabled=false failures
     pub error_category: String,
-    pub user_message: String,
+    /// 已废弃：UI 应使用 `error_category` 做本地化映射。
+    #[deprecated(note = "Use error_category for i18n lookup instead")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_message: Option<String>,
     pub raw_error: Option<String>,
     pub chosen_network_mode: Option<String>,
     pub network_probe_summary: Vec<NetworkProbeResult>,
@@ -206,7 +210,7 @@ impl SyncDiagnosticsResult {
             transport: "unknown".to_string(),
             app_proxy_status: "未启用".to_string(),
             error_category: "none".to_string(),
-            user_message: "".to_string(),
+            user_message: None,
             raw_error: None,
             chosen_network_mode: None,
             network_probe_summary: Vec::new(),
@@ -236,6 +240,9 @@ pub struct SyncResult {
     pub error_category: Option<String>,
     pub conflict_summary: Option<SyncConflictSummary>,
     pub first_sync_mode: FirstSyncMode,
+    /// 已废弃：UI 应使用 `error_category` + `status` 做本地化映射。
+    #[deprecated(note = "Use error_category/status for i18n lookup instead")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub user_message: Option<String>,
     pub chosen_network_mode: Option<String>,
     pub network_probe_summary: Vec<NetworkProbeResult>,
@@ -271,6 +278,7 @@ impl SyncResult {
         }
     }
 
+    #[allow(deprecated)]
     pub fn error(
         status: SyncStatus,
         first_sync_mode: FirstSyncMode,
@@ -298,6 +306,7 @@ impl SyncResult {
         }
     }
 
+    #[allow(deprecated)]
     pub fn conflict(
         conflicts: Vec<SyncConflict>,
         error: String,

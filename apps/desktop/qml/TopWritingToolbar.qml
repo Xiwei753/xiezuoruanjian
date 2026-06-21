@@ -25,7 +25,7 @@ Rectangle {
     property string saveStatus: ""
     property string currentProjectId: ""
     readonly property int minFontSize: 10
-    readonly property int maxFontSize: 120
+    readonly property int maxFontSize: 72
 
     // ── ScreenPolicyAdapter：从 Core 获取按钮位置语义 ──
     ScreenPolicyAdapter {
@@ -412,7 +412,7 @@ Rectangle {
                 }
 
                 AppText {
-                    text: "120"
+                    text: "72"
                     color: dt ? dt.textMuted : "#8C9198"
                     font.pixelSize: dt ? dt.fontXs : 11
                 }

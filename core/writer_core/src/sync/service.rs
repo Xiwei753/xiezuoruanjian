@@ -1,6 +1,7 @@
+#![allow(deprecated)]
 use crate::sync::conflict::build_conflict_summary;
 use crate::sync::conflict::collect_git_status_summary;
-use crate::sync::diagnostics::get_user_friendly_error;
+
 use crate::sync::git_backend::GitAuth;
 use crate::sync::git_backend::GitBackend;
 use crate::sync::lww;
@@ -147,7 +148,7 @@ fn handle_pull_error(
         let mut res = SyncResult::error(
             SyncStatus::Conflict,
             first_sync_mode,
-            Some("同步冲突，已停止，未覆盖任何文件".to_string()),
+            None,
             "Settings semantic merge conflict".to_string(),
         );
         res.settings_conflicts = details;
@@ -178,7 +179,7 @@ fn handle_pull_error(
         let mut res = SyncResult::error(
             SyncStatus::Conflict,
             first_sync_mode,
-            Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
+            None,
             "Pull failed due to conflict.".to_string(),
         );
         res.conflict_summary = summary;
@@ -193,7 +194,7 @@ fn handle_pull_error(
         let mut res = SyncResult::error(
             SyncStatus::Conflict,
             first_sync_mode,
-            Some("本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。".to_string()),
+            None,
             format!("Pull failed: {}", e),
         );
         if let Ok(repo) = git2::Repository::open(workspace_path) {
@@ -215,16 +216,10 @@ fn handle_pull_error(
         || e_str_lower.contains("no common ancestor")
     {
         let status = classify_error(&e.to_string());
-        let user_msg = if first_sync_mode == FirstSyncMode::InitExistingWorkspace {
-            "远端仓库不是空仓库，且和本地作品历史不一致。推荐使用空 GitHub 私人仓库。"
-        } else {
-            "远端仓库不是空仓库，且和本地作品历史不一致。请使用空 GitHub 私人仓库，或手动处理后再同步。"
-        };
-
         return PullOutcome::Return(SyncResult::error(
             status,
             FirstSyncMode::UnrelatedHistories,
-            Some(user_msg.to_string()),
+            None,
             format!("Pull failed: {}", e),
         ));
     }
@@ -238,7 +233,7 @@ fn handle_pull_error(
             return PullOutcome::Return(SyncResult::error(
                 classify_error(&e.to_string()),
                 first_sync_mode,
-                Some("拉取失败，远程分支不存在。".to_string()),
+                None,
                 format!("Pull failed: {}", e),
             ));
         }
@@ -251,9 +246,7 @@ fn handle_pull_error(
         PullOutcome::Return(SyncResult::error(
             classify_error(&e.to_string()),
             first_sync_mode,
-            Some(get_user_friendly_error(
-                &(format!("Pull failed: {}", e)).to_string(),
-            )),
+            None,
             format!("Pull failed: {}", e),
         ))
     }
@@ -311,8 +304,7 @@ fn handle_merge_conflict(
                 None => {
                     result.status = SyncStatus::Conflict;
                     result.error = Some("Sync Conflict: unknown path".to_string());
-                    result.user_message =
-                        Some("存在无法识别路径的冲突文件，需要手动处理。".to_string());
+                    result.user_message = None;
                     continue;
                 }
             };
@@ -440,7 +432,7 @@ impl SyncService {
             return Ok(SyncResult::error(
                 SyncStatus::Error("Remote URL is empty".to_string()),
                 FirstSyncMode::NotAttempted,
-                Some("远程仓库地址为空。".to_string()),
+                None,
                 "Remote URL is empty".to_string(),
             ));
         }
@@ -458,7 +450,7 @@ impl SyncService {
             return Ok(SyncResult::error(
                 SyncStatus::Error("No token provided".to_string()),
                 FirstSyncMode::NotAttempted,
-                Some("缺少 GitHub Token。".to_string()),
+                None,
                 "No token provided".to_string(),
             ));
         }
@@ -480,7 +472,7 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     SyncStatus::Error("SshDeployKey is not implemented".to_string()),
                     FirstSyncMode::NotAttempted,
-                    Some("当前不支持 SSH 同步方式。".to_string()),
+                    None,
                     "SshDeployKey is not implemented".to_string(),
                 ));
             }
@@ -494,7 +486,7 @@ impl SyncService {
                     return Ok(SyncResult::error(
                         SyncStatus::Error(e.to_string()),
                         FirstSyncMode::NotAttempted,
-                        Some("检查本地工作区失败。".to_string()),
+                        None,
                         e.to_string(),
                     ));
                 }
@@ -502,7 +494,7 @@ impl SyncService {
 
             if is_empty_or_git_only {
                 result.first_sync_mode = FirstSyncMode::CloneIntoEmptyWorkspace;
-                result.user_message = Some("已克隆远端仓库到空工作区。".to_string());
+                result.user_message = None;
                 if let Err(e) = backend
                     .clone_repo(&sanitized_url, workspace_path, auth.as_ref(), Some(config))
                     .map_err(map_git_error)
@@ -510,14 +502,13 @@ impl SyncService {
                     return Ok(SyncResult::error(
                         SyncStatus::Error(e.to_string()),
                         FirstSyncMode::CloneIntoEmptyWorkspace,
-                        Some("已克隆远端仓库到空工作区。".to_string()),
+                        None,
                         e.to_string(),
                     ));
                 }
             } else {
                 result.first_sync_mode = FirstSyncMode::InitExistingWorkspace;
-                result.user_message =
-                    Some("本地已有作品，已初始化为 Git 仓库并准备同步。".to_string());
+                result.user_message = None;
                 if let Err(e) = backend.init_repo(workspace_path) {
                     result.status = SyncStatus::Error(e.to_string());
                     result.error = Some(e.to_string());
@@ -556,7 +547,7 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     classify_error(&e.to_string()),
                     result.first_sync_mode,
-                    Some("初始化本地分支失败。".to_string()),
+                    None,
                     e.to_string(),
                 ));
             }
@@ -573,10 +564,7 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     SyncStatus::DirtyRepoBlocked,
                     result.first_sync_mode,
-                    Some(format!(
-                        "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件:\n{}",
-                        dirty_non_whitelisted.join("\n")
-                    )),
+                    None,
                     "Dirty repo blocked: non-whitelisted files modified".to_string(),
                 ));
             }
@@ -594,7 +582,7 @@ impl SyncService {
                     return Ok(SyncResult::error(
                         classify_error(&e.to_string()),
                         result.first_sync_mode,
-                        Some("暂存本地更改失败。".to_string()),
+                        None,
                         e.to_string(),
                     ));
                 }
@@ -602,7 +590,7 @@ impl SyncService {
                     return Ok(SyncResult::error(
                         classify_error(&e.to_string()),
                         result.first_sync_mode,
-                        Some("提交本地更改失败。".to_string()),
+                        None,
                         e.to_string(),
                     ));
                 }
@@ -621,8 +609,7 @@ impl SyncService {
                 } => {
                     if missing {
                         pull_branch_missing = true;
-                        result.user_message =
-                            Some("远程分支不存在，首次同步将创建该分支。".to_string());
+                        result.user_message = None;
                     }
                 }
                 PullOutcome::Return(res) => return Ok(res),
@@ -635,7 +622,7 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     classify_error(&e.to_string()),
                     result.first_sync_mode,
-                    Some(get_user_friendly_error(&(e.to_string()).to_string())),
+                    None,
                     e.to_string(),
                 ));
             }
@@ -649,9 +636,7 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     classify_error(&e.to_string()),
                     result.first_sync_mode,
-                    Some(get_user_friendly_error(
-                        &(format!("Stage failed: {}", e)).to_string(),
-                    )),
+                    None,
                     format!("Stage failed: {}", e),
                 ));
             }
@@ -676,9 +661,7 @@ impl SyncService {
                     return Ok(SyncResult::error(
                         classify_error(&e.to_string()),
                         result.first_sync_mode,
-                        Some(get_user_friendly_error(
-                            &(format!("Commit failed: {}", e)).to_string(),
-                        )),
+                        None,
                         format!("Commit failed: {}", e),
                     ));
                 }
@@ -691,16 +674,14 @@ impl SyncService {
                 return Ok(SyncResult::error(
                     classify_error(&e.to_string()),
                     result.first_sync_mode,
-                    Some(get_user_friendly_error(
-                        &(format!("Push failed: {}", e)).to_string(),
-                    )),
+                    None,
                     format!("Push failed: {}", e),
                 ));
             }
         }
 
         if pull_branch_missing {
-            result.user_message = Some("已初始化远端分支并完成首次同步".to_string());
+            result.user_message = None;
         }
 
         let mut state = Self::load_sync_state(workspace_path).unwrap_or_default();
@@ -720,9 +701,7 @@ impl SyncService {
         if let Err(e) = Self::save_sync_state(workspace_path, &state) {
             result.status = classify_error(&e.to_string());
             result.error = Some(format!("Failed to save sync state: {}", e));
-            result.user_message = Some(
-                "同步操作完成，但同步状态保存失败，请不要连续同步，先检查存储权限。".to_string(),
-            );
+            result.user_message = None;
             return Ok(result);
         }
 

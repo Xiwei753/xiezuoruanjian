@@ -127,7 +127,7 @@ export class HarmonyThemeAdapter {
   }
 
   setFontSize(fontSize: number): void {
-    this.currentTheme.fontSize = Math.max(12, Math.min(32, fontSize))
+    this.currentTheme.fontSize = Math.max(12, Math.min(72, fontSize))
     this.notifyObservers()
   }
 

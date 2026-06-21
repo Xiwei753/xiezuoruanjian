@@ -122,7 +122,7 @@ Dialog {
                     label: qsTr("字体大小")
                     valueText: Math.round(value) + " px"
                     from: 12.0
-                    to: 120.0
+                    to: 72.0
                     stepSize: 1.0
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_font_size = value; root.saveAndNotify() }
                 }
@@ -177,7 +177,7 @@ Dialog {
                     theme: root.dt
                     label: qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
-                    from: 0
+                    from: 30
                     to: 1000
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.saveAndNotify() }
@@ -196,7 +196,7 @@ Dialog {
                     theme: root.dt
                     label: qsTr("平滑光标持续时间")
                     valueText: Math.round(value) + " ms"
-                    from: 0
+                    from: 30
                     to: 1000
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.saveAndNotify() }

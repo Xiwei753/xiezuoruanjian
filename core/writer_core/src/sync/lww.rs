@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use crate::sync::github_api_client::{
     github_delete_content_serial, github_get_content, github_put_content_serial,
 };
@@ -131,7 +132,7 @@ pub(crate) fn perform_lww_sync(
         return Ok(SyncResult::error(
             SyncStatus::Error("Remote URL is empty".to_string()),
             FirstSyncMode::NotAttempted,
-            Some("远程仓库地址为空。".to_string()),
+            None,
             "Remote URL is empty".to_string(),
         ));
     }
@@ -141,7 +142,7 @@ pub(crate) fn perform_lww_sync(
         return Ok(SyncResult::error(
             SyncStatus::Error("No token provided".to_string()),
             FirstSyncMode::NotAttempted,
-            Some("缺少 GitHub Token。".to_string()),
+            None,
             "No token provided".to_string(),
         ));
     }
@@ -165,7 +166,7 @@ pub(crate) fn perform_lww_sync(
                 elapsed, min_interval
             );
             result.status = SyncStatus::Success;
-            result.user_message = Some("同步间隔过短，跳过本次同步。".to_string());
+            result.user_message = None;
             return Ok(result);
         }
     }
@@ -176,7 +177,7 @@ pub(crate) fn perform_lww_sync(
         Ok((p, summary)) => (p.client, p.mode, summary),
         Err(e) => {
             result.error = Some(e.to_string());
-            result.user_message = Some(format!("网络探测失败: {}", e));
+            result.user_message = None;
             result.status = SyncStatus::RecoverableError(e.to_string());
             return Ok(result);
         }
@@ -214,10 +215,7 @@ pub(crate) fn perform_lww_sync(
                         SyncStatus::RecoverableError("api_error".to_string())
                     };
                     result.error = Some(err.clone());
-                    result.user_message = Some(format!(
-                        "同步失败，已重试 {} 次。错误: {}",
-                        max_retries, err
-                    ));
+                    result.user_message = None;
                     return Ok(result);
                 }
                 std::thread::sleep(std::time::Duration::from_millis(500));
@@ -768,27 +766,13 @@ fn execute_lww_sync_attempt(
     if has_doc_conflicts {
         result.status = SyncStatus::PartialConflict;
         result.conflicts = doc_conflicts;
-        result.user_message = Some(format!(
-            "同步完成，但 {} 个正文文件存在双端修改冲突，已保留本地和远端两个版本，请手动处理。上传: {}, 下载: {} (网络模式: {})。",
-            result.conflicts.len(),
-            to_upload.len(),
-            to_download.len(),
-            mode
-        ));
+        result.user_message = None;
     } else if has_changes {
         result.status = SyncStatus::LatestWinsApplied;
-        result.user_message = Some(format!(
-            "双向同步完成。上传: {}, 下载: {}, 本地删除: {}, 远端删除: {}, 覆盖: {} (网络模式: {})。",
-            to_upload.len(),
-            to_download.len(),
-            local_deletes_count.len(),
-            remote_deletes_count.len(),
-            overwritten_files.len(),
-            mode
-        ));
+        result.user_message = None;
     } else {
         result.status = SyncStatus::NoChanges;
-        result.user_message = Some(format!("同步完成，无变更 (网络模式: {})。", mode));
+        result.user_message = None;
     }
 
     result.uploaded_files = to_upload;

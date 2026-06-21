@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use crate::sync::git_backend::GitBackend;
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
@@ -7,6 +8,9 @@ use crate::sync::types::SyncTransport;
 use crate::sync::url::detect_transport;
 use crate::sync::url::sanitize_remote_url;
 
+/// 已废弃：Core 不应包含用户可见的 UI 文案。
+/// 保留仅作为内部参考，新代码应使用 error_category + message_key 模式。
+#[deprecated(note = "Use error_category for i18n lookup instead of hardcoded Chinese strings")]
 pub(crate) fn get_user_friendly_error(err: &str) -> String {
     let e = err.to_lowercase();
     if e.contains("failed to resolve address")
@@ -63,7 +67,7 @@ impl crate::sync::SyncService {
             config.android_has_access_network_state_permission;
 
         if !config.android_has_internet_permission {
-            result.user_message = "缺少 INTERNET 权限。Android 应用无法联网，请在 AndroidManifest.xml 中添加 android.permission.INTERNET。".to_string();
+            result.user_message = None;
             result.network_status = "failed_no_internet_permission".to_string();
             result.auth_status = "skipped".to_string();
             result.repo_status = "skipped".to_string();
@@ -89,7 +93,7 @@ impl crate::sync::SyncService {
         };
 
         if transport == SyncTransport::SshDeployKey {
-            result.user_message = "检测到 SSH remote。由于跨平台网络限制，强烈建议改用 HTTPS API 模式 (https://github.com/owner/repo.git)。".to_string();
+            result.user_message = None;
             result.error_category = "ssh_not_recommended".to_string();
             result.network_status = "skipped_ssh".to_string();
             result.auth_status = "skipped".to_string();
@@ -106,7 +110,7 @@ impl crate::sync::SyncService {
         }
 
         if sanitized_url.is_empty() {
-            result.user_message = "远程仓库地址为空。".to_string();
+            result.user_message = None;
             result.error_category = "empty_url".to_string();
             return Ok(result);
         }
@@ -118,8 +122,7 @@ impl crate::sync::SyncService {
             .or(token_from_parsed)
             .unwrap_or_default();
         if token.is_empty() {
-            result.user_message =
-                "缺少 GitHub Token。请在设置中配置，这是目前最推荐的同步方式。".to_string();
+            result.user_message = None;
             result.error_category = "token_missing".to_string();
             return Ok(result);
         }
@@ -139,8 +142,7 @@ impl crate::sync::SyncService {
         result.branch_status = "assumed_exists".to_string();
 
         result.success = true;
-        result.user_message =
-            "基础配置检查通过。底层网络直连已简化，实际网络状况以执行同步时为准。".to_string();
+        result.user_message = None;
 
         Ok(result)
     }

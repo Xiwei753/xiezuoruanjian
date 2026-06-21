@@ -99,7 +99,7 @@ struct Index {
         this.projects = workspaceResult.data.projects
         this.recentEdits = workspaceResult.data.recentEdits
       } else {
-        this.errorMessage = workspaceResult.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
+        this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
       }
 
       if (statsResult.success && statsResult.data) {

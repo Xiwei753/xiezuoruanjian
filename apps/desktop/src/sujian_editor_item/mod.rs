@@ -1131,7 +1131,7 @@ impl SujianEditorItem {
                     byte_start: abs_byte,
                     byte_end: abs_byte + ch_str.len(),
                     text: ch_str,
-                    rect: (line.x + x_pos, line.y, ch_w, line.height),
+                    rect: (line.x + x_pos, line.y - self.current_scroll_y as f64, ch_w, line.height),
                     baseline_y,
                     line_index: line_idx,
                 });
@@ -1199,7 +1199,7 @@ impl SujianEditorItem {
                             let ch = text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
                             glyph_rects.push(GlyphRect {
                                 x: line.x + x_pos,
-                                y: line.y,
+                                y: line.y - self.current_scroll_y as f64,
                                 w: ch_w,
                                 h: line.height,
                                 char_: ch.to_string(),
@@ -1244,7 +1244,7 @@ impl SujianEditorItem {
                             let ch = old_text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
                             glyph_rects.push(GlyphRect {
                                 x: line.x + x_pos,
-                                y: line.y,
+                                y: line.y - self.current_scroll_y as f64,
                                 w: ch_w,
                                 h: line.height,
                                 char_: ch.to_string(),
@@ -1308,7 +1308,7 @@ impl SujianEditorItem {
                     byte_start: abs_byte,
                     byte_end: abs_byte + ch_str.len(),
                     text: ch_str,
-                    rect: (line.x + x_pos, line.y, ch_w, line.height),
+                    rect: (line.x + x_pos, line.y - self.current_scroll_y as f64, ch_w, line.height),
                     baseline_y,
                     line_index: line_idx,
                 });

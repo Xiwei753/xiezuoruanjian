@@ -143,7 +143,7 @@ struct StarMapPage {
           this.edgeRenders = edgeResult.data
         }
       } else {
-        this.errorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)
+        this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap').id)
       }
     } catch (err) {
       this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_starmap_detail').id)

@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use crate::sync::backends::build_http_client;
 use crate::sync::backends::SyncBackend;
 use crate::sync::service::SyncService;
@@ -306,14 +307,14 @@ impl SyncBackend for GitHubApiBackend {
         };
 
         if !config.android_has_internet_permission {
-            result.user_message = "缺少 INTERNET 权限。".to_string();
+            result.user_message = None;
             result.error_category = "missing_permission".to_string();
             return Ok(result);
         }
 
         let token = secrets.token.clone().unwrap_or_default();
         if token.is_empty() {
-            result.user_message = "缺少 GitHub Token。".to_string();
+            result.user_message = None;
             result.error_category = "token_missing".to_string();
             return Ok(result);
         }
@@ -325,7 +326,7 @@ impl SyncBackend for GitHubApiBackend {
         let (client, mode, probe_summary) = match probed_res {
             Ok((p, summary)) => (p.client, p.mode, summary),
             Err(e) => {
-                result.user_message = format!("网络探测失败: {}", e);
+                result.user_message = None;
                 result.error_category = "network_probe_failed".to_string();
                 return Ok(result);
             }
@@ -356,10 +357,7 @@ impl SyncBackend for GitHubApiBackend {
                     result.repo_status = "ok".to_string();
                     result.branch_ok = true;
                     result.branch_status = "ok".to_string();
-                    result.user_message = format!(
-                        "诊断成功：GitHub API 可达，Token 有效，仓库和分支存在。(使用网络模式: {})",
-                        mode
-                    );
+                    result.user_message = None;
                 } else if status == 401 || status == 403 {
                     result.network_ok = true;
                     result.network_status = "ok".to_string();
@@ -371,14 +369,7 @@ impl SyncBackend for GitHubApiBackend {
                         "token_permission_denied"
                     }
                     .to_string();
-                    result.user_message = if status == 401 {
-                        format!("身份验证失败。Token 无效或已过期。(使用网络模式: {})", mode)
-                    } else {
-                        format!(
-                            "Token 权限不足。请确认 Token 具有 repo 权限范围。(使用网络模式: {})",
-                            mode
-                        )
-                    };
+                    result.user_message = None;
                     result.raw_error = Some(format!(
                         "HTTP {} (body truncated): {}",
                         status,
@@ -392,10 +383,7 @@ impl SyncBackend for GitHubApiBackend {
                     result.repo_ok = false;
                     result.repo_status = "failed".to_string();
                     result.error_category = "repo_not_found_or_no_permission".to_string();
-                    result.user_message = format!(
-                        "找不到仓库或分支。请检查仓库地址和分支名称。(使用网络模式: {})",
-                        mode
-                    );
+                    result.user_message = None;
                     result.raw_error = Some(format!(
                         "HTTP {} (body truncated): {}",
                         status,
@@ -405,10 +393,7 @@ impl SyncBackend for GitHubApiBackend {
                     result.network_ok = false;
                     result.network_status = "failed".to_string();
                     result.error_category = "github_network_failed".to_string();
-                    result.user_message = format!(
-                        "GitHub API 返回意外状态码: {} (使用网络模式: {})",
-                        status, mode
-                    );
+                    result.user_message = None;
                     result.raw_error = Some(format!(
                         "HTTP {} (body truncated): {}",
                         status,
@@ -424,32 +409,22 @@ impl SyncBackend for GitHubApiBackend {
                     || err_msg.contains("name resolution")
                 {
                     result.error_category = "dns_failed".to_string();
-                    result.user_message = format!(
-                        "无法解析 GitHub API 地址。请检查网络/DNS 设置。(尝试过的最后模式: {})",
-                        mode
-                    );
+                    result.user_message = None;
                 } else if err_msg.contains("ssl")
                     || err_msg.contains("certificate")
                     || err_msg.contains("tls")
                 {
                     result.error_category = "tls_failed".to_string();
-                    result.user_message = format!(
-                        "SSL/TLS 连接失败。请检查网络环境或系统时间。(尝试过的最后模式: {})",
-                        mode
-                    );
+                    result.user_message = None;
                 } else if err_msg.contains("connection refused")
                     || err_msg.contains("timeout")
                     || err_msg.contains("network unreachable")
                 {
                     result.error_category = "github_network_failed".to_string();
-                    result.user_message = format!(
-                        "网络连接失败或超时。所有尝试路径均不可用。(尝试过的最后模式: {})",
-                        mode
-                    );
+                    result.user_message = None;
                 } else {
                     result.error_category = "github_network_failed".to_string();
-                    result.user_message =
-                        format!("GitHub API 请求失败: {} (尝试过的最后模式: {})", e, mode);
+                    result.user_message = None;
                 }
                 result.network_ok = false;
                 result.network_status = "failed".to_string();
@@ -463,7 +438,7 @@ impl SyncBackend for GitHubApiBackend {
         Ok(SyncResult::error(
             SyncStatus::Error("backend_not_implemented".to_string()),
             FirstSyncMode::NotAttempted,
-            Some("GitHub API 后端的 pull 操作尚未实现。".to_string()),
+            None,
             "GitHub API pull not implemented".to_string(),
         ))
     }
@@ -472,7 +447,7 @@ impl SyncBackend for GitHubApiBackend {
         Ok(SyncResult::error(
             SyncStatus::Error("backend_not_implemented".to_string()),
             FirstSyncMode::NotAttempted,
-            Some("GitHub API 后端的 push 操作尚未实现。".to_string()),
+            None,
             "GitHub API push not implemented".to_string(),
         ))
     }
@@ -502,7 +477,7 @@ impl SyncBackend for GitHubApiBackend {
                 Ok(SyncResult::error(
                     SyncStatus::FatalError("backend_panic".to_string()),
                     FirstSyncMode::NotAttempted,
-                    Some("同步底层发生异常，已阻止显示成功。".to_string()),
+                    None,
                     format!("backend_panic: {}", panic_msg),
                 ))
             }

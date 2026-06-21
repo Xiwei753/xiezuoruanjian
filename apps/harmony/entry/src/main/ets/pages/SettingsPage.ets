@@ -128,7 +128,7 @@ struct SettingsPage {
           this.saveMessage = ''
         }, 2000)
       } else {
-        this.saveMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
+        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
       }
     } catch (err) {
       this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_save').id)
@@ -149,10 +149,10 @@ struct SettingsPage {
           this.syncMessage = ''
         }, 3000)
       } else {
-        this.syncMessage = result.userMessage || '同步失败'
+        this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_failed').id)
       }
     } catch (err) {
-      this.syncMessage = '同步时发生错误'
+      this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
     } finally {
       this.isSyncing = false
     }
@@ -190,7 +190,7 @@ struct SettingsPage {
           remoteUrlSanitized: '',
           transport: '',
           errorCategory: 'unknown',
-          userMessage: result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error').id)
+          userMessage: getContext(this).resourceManager.getStringSync($r('app.string.diagnostics_error').id)
         } as SyncDiagnosticsResult
       }
     } catch (err) {

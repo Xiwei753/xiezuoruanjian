@@ -194,7 +194,7 @@ struct WritingPage {
         this.sessionId = `hm-${this.chapterId}-${Date.now()}`
         this.sessionStartTime = Date.now()
       } else {
-        this.errorMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
+        this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)
       }
     } catch (err) {
       this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter_detail').id)
@@ -274,7 +274,7 @@ struct WritingPage {
         return true
       } else {
         this.lastSaveFailed = true
-        this.saveMessage = result.userMessage || getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
+        this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
         return false
       }
     } catch (err) {

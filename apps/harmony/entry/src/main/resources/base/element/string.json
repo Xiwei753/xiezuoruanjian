@@ -559,6 +559,14 @@
     {
       "name": "auto_saving",
       "value": "自动保存中"
+    },
+    {
+      "name": "sync_failed",
+      "value": "同步失败"
+    },
+    {
+      "name": "sync_error",
+      "value": "同步时发生错误"
     }
   ]
 }
