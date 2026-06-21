@@ -377,7 +377,7 @@ private fun findLibraryName(componentName: String): String {
     if (libOverride != null) {
         return libOverride
     }
-    return "writer_core"
+    return "uniffi_writer_core"
 }
 
 private inline fun <reified Lib : Library> loadIndirect(
@@ -864,6 +864,8 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -925,6 +927,8 @@ internal interface UniffiLib : Library {
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_delete_volume(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`volumeId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_editor_animation_events(`ptr`: Pointer,`oldText`: RustBuffer.ByValue,`newText`: RustBuffer.ByValue,`oldCursorIndex`: Int,`newCursorIndex`: Int,`cause`: RustBuffer.ByValue,`maxAnimatedChars`: Int,`animationDurationMs`: Long,uniffi_out_err: UniffiRustCallStatus,
+    ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_execute_action(`ptr`: Pointer,`actionId`: RustBuffer.ByValue,`argsJson`: RustBuffer.ByValue,`contextJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_find_starmap_references(`ptr`: Pointer,`targetStarmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1195,6 +1199,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_delete_volume(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_editor_animation_events(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_execute_action(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_find_starmap_references(
@@ -1382,6 +1388,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_delete_volume() != 5254.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_editor_animation_events() != 4637.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_execute_action() != 64822.toShort()) {
@@ -2045,6 +2054,8 @@ public interface WriterAppServiceInterface {
     
     fun `deleteVolume`(`projectId`: kotlin.String, `volumeId`: kotlin.String): kotlin.Boolean
     
+    fun `editorAnimationEvents`(`oldText`: kotlin.String, `newText`: kotlin.String, `oldCursorIndex`: kotlin.UInt, `newCursorIndex`: kotlin.UInt, `cause`: EditorTransactionCauseDto, `maxAnimatedChars`: kotlin.UInt, `animationDurationMs`: kotlin.ULong): List<EditorAnimationEventDto>
+
     fun `executeAction`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): ActionResultDto
     
     fun `findStarmapReferences`(`targetStarmapId`: kotlin.String): List<StarMapReferenceDto>
@@ -2465,6 +2476,18 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     )
     }
     
+
+    override fun `editorAnimationEvents`(`oldText`: kotlin.String, `newText`: kotlin.String, `oldCursorIndex`: kotlin.UInt, `newCursorIndex`: kotlin.UInt, `cause`: EditorTransactionCauseDto, `maxAnimatedChars`: kotlin.UInt, `animationDurationMs`: kotlin.ULong): List<EditorAnimationEventDto> {
+            return FfiConverterSequenceTypeEditorAnimationEventDto.lift(
+    callWithPointer {
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_editor_animation_events(
+        it, FfiConverterString.lower(`oldText`),FfiConverterString.lower(`newText`),FfiConverterUInt.lower(`oldCursorIndex`),FfiConverterUInt.lower(`newCursorIndex`),FfiConverterTypeEditorTransactionCauseDto.lower(`cause`),FfiConverterUInt.lower(`maxAnimatedChars`),FfiConverterULong.lower(`animationDurationMs`),_status)
+}
+    }
+    )
+    }
+
 
     
     @Throws(WriterException::class)override fun `executeAction`(`actionId`: kotlin.String, `argsJson`: kotlin.String, `contextJson`: kotlin.String): ActionResultDto {
@@ -3702,6 +3725,62 @@ public object FfiConverterTypeDeviceStatsSummaryDto: FfiConverterRustBuffer<Devi
     override fun write(value: DeviceStatsSummaryDto, buf: ByteBuffer) {
             FfiConverterTypeDateRangeDto.write(value.`range`, buf)
             FfiConverterSequenceTypeDeviceStatsRecordDto.write(value.`devices`, buf)
+    }
+}
+
+
+
+data class EditorAnimationEventDto (
+    var `id`: kotlin.ULong,
+    var `kind`: EditorAnimationKindDto,
+    var `rangeStart`: kotlin.UInt,
+    var `rangeLen`: kotlin.UInt,
+    var `text`: kotlin.String,
+    var `oldCursorIndex`: kotlin.UInt,
+    var `newCursorIndex`: kotlin.UInt,
+    var `durationMs`: kotlin.ULong
+) {
+
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEditorAnimationEventDto: FfiConverterRustBuffer<EditorAnimationEventDto> {
+    override fun read(buf: ByteBuffer): EditorAnimationEventDto {
+        return EditorAnimationEventDto(
+            FfiConverterULong.read(buf),
+            FfiConverterTypeEditorAnimationKindDto.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterUInt.read(buf),
+            FfiConverterULong.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: EditorAnimationEventDto) = (
+            FfiConverterULong.allocationSize(value.`id`) +
+            FfiConverterTypeEditorAnimationKindDto.allocationSize(value.`kind`) +
+            FfiConverterUInt.allocationSize(value.`rangeStart`) +
+            FfiConverterUInt.allocationSize(value.`rangeLen`) +
+            FfiConverterString.allocationSize(value.`text`) +
+            FfiConverterUInt.allocationSize(value.`oldCursorIndex`) +
+            FfiConverterUInt.allocationSize(value.`newCursorIndex`) +
+            FfiConverterULong.allocationSize(value.`durationMs`)
+    )
+
+    override fun write(value: EditorAnimationEventDto, buf: ByteBuffer) {
+            FfiConverterULong.write(value.`id`, buf)
+            FfiConverterTypeEditorAnimationKindDto.write(value.`kind`, buf)
+            FfiConverterUInt.write(value.`rangeStart`, buf)
+            FfiConverterUInt.write(value.`rangeLen`, buf)
+            FfiConverterString.write(value.`text`, buf)
+            FfiConverterUInt.write(value.`oldCursorIndex`, buf)
+            FfiConverterUInt.write(value.`newCursorIndex`, buf)
+            FfiConverterULong.write(value.`durationMs`, buf)
     }
 }
 
@@ -5910,7 +5989,7 @@ data class SyncDiagnosticsResultDto (
     var `remoteUrlSanitized`: kotlin.String, 
     var `transport`: kotlin.String, 
     var `errorCategory`: kotlin.String, 
-    var `userMessage`: kotlin.String, 
+    var `userMessage`: kotlin.String?,
     var `rawError`: kotlin.String?, 
     var `chosenNetworkMode`: kotlin.String?, 
     var `networkProbeSummary`: List<NetworkProbeResultDto>?
@@ -5947,7 +6026,7 @@ public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<S
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
+            FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalSequenceTypeNetworkProbeResultDto.read(buf),
@@ -5977,7 +6056,7 @@ public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<S
             FfiConverterString.allocationSize(value.`remoteUrlSanitized`) +
             FfiConverterString.allocationSize(value.`transport`) +
             FfiConverterString.allocationSize(value.`errorCategory`) +
-            FfiConverterString.allocationSize(value.`userMessage`) +
+            FfiConverterOptionalString.allocationSize(value.`userMessage`) +
             FfiConverterOptionalString.allocationSize(value.`rawError`) +
             FfiConverterOptionalString.allocationSize(value.`chosenNetworkMode`) +
             FfiConverterOptionalSequenceTypeNetworkProbeResultDto.allocationSize(value.`networkProbeSummary`)
@@ -6006,7 +6085,7 @@ public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<S
             FfiConverterString.write(value.`remoteUrlSanitized`, buf)
             FfiConverterString.write(value.`transport`, buf)
             FfiConverterString.write(value.`errorCategory`, buf)
-            FfiConverterString.write(value.`userMessage`, buf)
+            FfiConverterOptionalString.write(value.`userMessage`, buf)
             FfiConverterOptionalString.write(value.`rawError`, buf)
             FfiConverterOptionalString.write(value.`chosenNetworkMode`, buf)
             FfiConverterOptionalSequenceTypeNetworkProbeResultDto.write(value.`networkProbeSummary`, buf)
@@ -6641,6 +6720,37 @@ public object FfiConverterTypeAiActionType: FfiConverterRustBuffer<AiActionType>
 
 
 
+enum class EditorAnimationKindDto {
+
+    INSERT,
+    DELETE,
+    CURSOR;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEditorAnimationKindDto: FfiConverterRustBuffer<EditorAnimationKindDto> {
+    override fun read(buf: ByteBuffer) = try {
+        EditorAnimationKindDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: EditorAnimationKindDto) = 4UL
+
+    override fun write(value: EditorAnimationKindDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
 enum class EditorModeDto {
     
     FULL_WIDTH,
@@ -6662,6 +6772,43 @@ public object FfiConverterTypeEditorModeDto: FfiConverterRustBuffer<EditorModeDt
     override fun allocationSize(value: EditorModeDto) = 4UL
 
     override fun write(value: EditorModeDto, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class EditorTransactionCauseDto {
+
+    TYPING,
+    DELETE,
+    IME_COMPOSITION,
+    PASTE,
+    UNDO,
+    REDO,
+    LOAD,
+    FORMAT,
+    PROGRAMMATIC;
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeEditorTransactionCauseDto: FfiConverterRustBuffer<EditorTransactionCauseDto> {
+    override fun read(buf: ByteBuffer) = try {
+        EditorTransactionCauseDto.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: EditorTransactionCauseDto) = 4UL
+
+    override fun write(value: EditorTransactionCauseDto, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -8120,6 +8267,34 @@ public object FfiConverterSequenceTypeDeviceStatsRecordDto: FfiConverterRustBuff
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeDeviceStatsRecordDto.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeEditorAnimationEventDto: FfiConverterRustBuffer<List<EditorAnimationEventDto>> {
+    override fun read(buf: ByteBuffer): List<EditorAnimationEventDto> {
+        val len = buf.getInt()
+        return List<EditorAnimationEventDto>(len) {
+            FfiConverterTypeEditorAnimationEventDto.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<EditorAnimationEventDto>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeEditorAnimationEventDto.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<EditorAnimationEventDto>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeEditorAnimationEventDto.write(it, buf)
         }
     }
 }

@@ -478,9 +478,7 @@ private fun parseAnimationEvents(json: String): List<CoreAnimationEvent> {
         }
         events
     } catch (e: Exception) {
-        if (DEBUG_ANIM) {
-            android.util.Log.w("WriterEditorAnim", "Failed to parse animation events JSON", e)
-        }
+        // Fallback for parsing errors
         emptyList()
     }
 }
