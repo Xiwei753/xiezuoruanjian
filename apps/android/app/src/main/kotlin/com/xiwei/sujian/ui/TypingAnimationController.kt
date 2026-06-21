@@ -264,10 +264,13 @@ class TypingAnimationController(
             }
         }
 
-        // ── 本地回退路径 ──
-        // 仅当 animationEventProvider 为 null 时使用（Core 未初始化的场景）
-        // Core provider 存在时，上面已经 return，不会走到这里
-        // Core 调用失败时，上面也已 return（跳过动画），不会走到这里
+        // ── 本地回退路径（临时降级，仅 Core 未初始化时使用）──
+        // ⚠️ 边界约束：
+        // 1. 仅当 animationEventProvider 为 null 时使用（Core 未初始化的场景）
+        // 2. Core provider 存在时，上面已经 return，不会走到这里
+        // 3. Core 调用失败时，上面也已 return（跳过动画），不会走到这里
+        // 4. 正式编辑页初始化后必须注入 provider；如果没注入，typing animation 应禁用
+        // 5. 此路径将在 Core 初始化流程稳定后移除
 
         // 提交待处理的删除动画
         if (pendingDeleteStart >= 0 && typingAnimationEnabled && editText.layout != null) {

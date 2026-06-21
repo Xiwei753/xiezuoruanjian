@@ -51,6 +51,9 @@ class WorkspaceRepository(private val context: Context) {
         workspaceBridge.recordRecentEdit(projectId, volumeId, chapterId)
     }
 
+    // TODO: Add flushRecentEdits() once UniFFI bindings are regenerated
+    // with the new flush_recent_edits method from api.udl
+
     fun getChapterContentWithMeta(projectId: String, volumeId: String, chapterId: String): Pair<String, ChapterMeta> {
         return when (val result = writingBridge.openChapter(projectId, volumeId, chapterId)) {
             is BridgeResult.Success -> Pair(result.data.content, result.data.meta)

@@ -99,6 +99,9 @@ class AppServiceBridge(workspacePath: String) {
         service.recordRecentEdit(projectId, volumeId, chapterId)
     }
 
+    // TODO: Add flushRecentEdits() once UniFFI bindings are regenerated
+    // with the new flush_recent_edits method from api.udl
+
     fun validateWorkspace(): BridgeResult<Boolean> = wrapResult {
         service.validateWorkspace()
     }

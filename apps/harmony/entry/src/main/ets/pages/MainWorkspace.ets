@@ -39,16 +39,6 @@ import {
   getAdaptiveState
 } from '../common/AdaptiveContext'
 
-// ========== 辅助接口 ==========
-
-interface ChangedRange {
-  start: number
-  oldEnd: number
-  newEnd: number
-  insertedText: string
-  deletedText: string
-}
-
 // ========== 常量 ==========
 
 /** 左侧面板宽度（Expanded 双栏模式） */
@@ -118,36 +108,15 @@ struct MainWorkspace {
   // Harmony 写作区动画存在多源问题（content/TextArea/onContentChange/getCaretOffset/scrollOffsetY
   // 多个来源控制同一个视觉结果），等桌面/Android 稳定后再做。
   // 当前保留原生 TextArea 稳定输入、保存、字数统计。
+  // 禁用的 overlay 代码已移至 HarmonyAnimationOverlayDisabled.ets
   @State typingAnimationEnabled: boolean = false  // 强制关闭，不从设置读取
   @State smoothCursorEnabled: boolean = false     // 强制关闭，不从设置读取
   @State cursorVisible: boolean = true
-  @State lastInsertedText: string = ''
-  @State showInsertAnimation: boolean = false     // 禁用
-  @State cursorBlinkOpacity: number = 1.0
-  @State insertAnimX: number = 0
-  @State insertAnimY: number = 0
-  @State showDeleteAnimation: boolean = false     // 禁用
-  @State deleteAnimText: string = ''
-  @State deleteAnimX: number = 0
-  @State deleteAnimY: number = 0
   @State isScrolling: boolean = false
-  @State cursorX: number = 0
-  @State cursorY: number = 0
+  @State scrollOffsetY: number = 0
 
   // ── getCaretOffset() 防御性编码 ──
   @State caretOffsetApiAvailable: boolean = true
-
-  // ── 删除动画"吞回"效果 ──
-
-  @State deleteAnimTranslateX: number = 0
-  @State deleteAnimTranslateY: number = 0
-  @State deleteAnimScale: number = 1.0
-  @State deleteAnimOpacity: number = 0.8
-
-  // ── 滚动偏移补偿 ──
-  // getCaretOffset() 可能返回的是 TextArea 内容坐标（未扣 scroll），
-  // 如果 DevEco 实测发现返回的已是可视区坐标，则不需要扣减 scrollOffsetY
-  @State scrollOffsetY: number = 0
 
   // ── 通用状态 ──
   @State isInitialLoading: boolean = true
@@ -162,8 +131,6 @@ struct MainWorkspace {
   private autoSaveObserver: AutoSaveLifecycleObserver | null = null
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
-  private insertAnimTimer: number = -1
-  private deleteAnimTimer: number = -1
   private textAreaController: TextAreaController = new TextAreaController()
 
   // ========== 生命周期 ==========
@@ -225,16 +192,6 @@ struct MainWorkspace {
     }
     if (this.adaptiveObserver) {
       this.adaptiveContext.removeObserver(this.adaptiveObserver)
-    }
-
-    // 清理动画定时器
-    if (this.insertAnimTimer !== -1) {
-      clearTimeout(this.insertAnimTimer)
-      this.insertAnimTimer = -1
-    }
-    if (this.deleteAnimTimer !== -1) {
-      clearTimeout(this.deleteAnimTimer)
-      this.deleteAnimTimer = -1
     }
   }
 
@@ -406,101 +363,8 @@ struct MainWorkspace {
   }
 
   onContentChange(text: string) {
-    const oldContent = this.content
-    const oldLength = oldContent.length
-    const newLength = text.length
-    const changed = this.findChangedRange(oldContent, text)
-
-    // 插入动画 — 已降级禁用（typingAnimationEnabled 强制 false，不会进入）
-    // 等桌面/Android 稳定后再做 Harmony 写作区动画
-    if (this.typingAnimationEnabled && changed.insertedText.length > 0 && changed.insertedText.length <= 3 && !this.isScrolling) {
-      if (this.caretOffsetApiAvailable) {
-        try {
-          const caretOffset = this.textAreaController.getCaretOffset()
-          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-            const insertedText = changed.insertedText
-            if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
-              this.lastInsertedText = insertedText
-              this.insertAnimX = caretOffset.x
-              // 滚动偏移补偿：getCaretOffset() 返回的 y 可能是内容坐标，需扣减 scrollOffsetY
-              this.insertAnimY = caretOffset.y - this.scrollOffsetY
-              this.showInsertAnimation = true
-              if (this.insertAnimTimer !== -1) {
-                clearTimeout(this.insertAnimTimer)
-              }
-              this.insertAnimTimer = setTimeout(() => {
-                this.showInsertAnimation = false
-                this.lastInsertedText = ''
-                this.insertAnimTimer = -1
-              }, this.settings.editorTypingAnimationDurationMs || 150) as number
-            }
-          }
-        } catch (err) {
-          // getCaretOffset() API 不可用或异常，优雅降级：不播放动画
-          this.caretOffsetApiAvailable = false
-        }
-      }
-    }
-
-    // 删除动画 — 已降级禁用（typingAnimationEnabled 强制 false，不会进入）
-    if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
-      if (this.caretOffsetApiAvailable) {
-        try {
-          const caretOffset = this.textAreaController.getCaretOffset()
-          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-            const deletedText = changed.deletedText
-            if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
-              this.deleteAnimText = deletedText
-              // 终点：当前光标位置
-              this.deleteAnimX = caretOffset.x
-              this.deleteAnimY = caretOffset.y - this.scrollOffsetY
-              // 起点：从光标右侧偏移 deletedText.length * fontSize * 0.6 处飞回
-              this.deleteAnimTranslateX = deletedText.length * this.settings.editorFontSize * 0.6
-              this.deleteAnimTranslateY = 0
-              this.deleteAnimScale = 1.0
-              this.deleteAnimOpacity = 0.8
-              this.showDeleteAnimation = true
-              if (this.deleteAnimTimer !== -1) {
-                clearTimeout(this.deleteAnimTimer)
-              }
-              // 触发吞回动画：translate 从偏移归零（从右侧飞回光标位置）
-              animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
-                this.deleteAnimTranslateX = 0
-                this.deleteAnimTranslateY = 0
-                this.deleteAnimScale = 0.5
-                this.deleteAnimOpacity = 0
-              })
-              this.deleteAnimTimer = setTimeout(() => {
-                this.showDeleteAnimation = false
-                this.deleteAnimTimer = -1
-              }, this.settings.editorTypingAnimationDurationMs || 150) as number
-            }
-          }
-        } catch (err) {
-          this.caretOffsetApiAvailable = false
-        }
-      }
-    }
-
-    // 平滑光标 — 已降级禁用（smoothCursorEnabled 强制 false，不会进入）
-    if (this.smoothCursorEnabled && !this.isScrolling) {
-      if (this.caretOffsetApiAvailable) {
-        try {
-          const caretOffset = this.textAreaController.getCaretOffset()
-          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-            animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
-              this.cursorX = caretOffset.x
-              // 滚动偏移补偿
-              this.cursorY = caretOffset.y - this.scrollOffsetY
-            })
-            this.cursorVisible = true
-          }
-        } catch (err) {
-          // getCaretOffset() API 不可用或异常，优雅降级：不播放动画
-          this.caretOffsetApiAvailable = false
-        }
-      }
-    }
+    // 动画已降级禁用（typingAnimationEnabled 强制 false）
+    // 禁用的动画代码已移至 HarmonyAnimationOverlayDisabled.ets
 
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
@@ -1161,40 +1025,8 @@ struct MainWorkspace {
                 .fontColor(this.themeConfig.colors.textPrimary)
                 .placeholderColor(this.themeConfig.colors.textHint)
                 .onChange((value: string): void => { this.onContentChange(value) })
-
-              // 打字动画 overlay — 已降级禁用（typingAnimationEnabled 强制 false，不会渲染）
-              if (this.typingAnimationEnabled && this.showInsertAnimation) {
-                Text(this.lastInsertedText)
-                  .fontSize(this.settings.editorFontSize)
-                  .fontColor(this.themeConfig.colors.primary)
-                  .opacity(0.6)
-                  .position({ x: this.insertAnimX, y: this.insertAnimY })
-                  .scale({ x: 1.1, y: 1.1 })
-                  .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseOut })
-              }
-
-              // 删除动画 overlay — 已降级禁用（typingAnimationEnabled 强制 false，不会渲染）
-              if (this.typingAnimationEnabled && this.showDeleteAnimation) {
-                Text(this.deleteAnimText)
-                  .fontSize(this.settings.editorFontSize)
-                  .fontColor(this.themeConfig.colors.textPrimary)
-                  .opacity(this.deleteAnimOpacity)
-                  .position({ x: this.deleteAnimX, y: this.deleteAnimY })
-                  .scale({ x: this.deleteAnimScale, y: this.deleteAnimScale })
-                  .translate({ x: this.deleteAnimTranslateX, y: this.deleteAnimTranslateY })
-                  .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
-              }
-
-              // 自定义光标 overlay — 已降级禁用（smoothCursorEnabled 强制 false，不会渲染）
-              if (this.smoothCursorEnabled) {
-                Column()
-                  .width(2)
-                  .height(this.settings.editorFontSize * 1.2)
-                  .backgroundColor(this.themeConfig.colors.primary)
-                  .opacity(this.cursorBlinkOpacity)
-                  .position({ x: this.cursorX, y: this.cursorY })
-                  .animation({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut })
-              }
+              // 动画 overlay 已移至 HarmonyAnimationOverlayDisabled.ets
+              // typingAnimationEnabled / smoothCursorEnabled 强制 false，不渲染任何 overlay
             }
             .width('100%')
           }
@@ -1448,32 +1280,6 @@ struct MainWorkspace {
   }
 
   // ========== 工具方法 ==========
-
-  private findChangedRange(oldText: string, newText: string): ChangedRange {
-    const oldLen = oldText.length
-    const newLen = newText.length
-    const minLen = Math.min(oldLen, newLen)
-
-    // 找公共前缀
-    let start = 0
-    while (start < minLen && oldText.charAt(start) === newText.charAt(start)) {
-      start++
-    }
-
-    // 找公共后缀
-    let oldEnd = oldLen
-    let newEnd = newLen
-    while (oldEnd > start && newEnd > start && oldText.charAt(oldEnd - 1) === newText.charAt(newEnd - 1)) {
-      oldEnd--
-      newEnd--
-    }
-
-    const deletedText = oldText.substring(start, oldEnd)
-    const insertedText = newText.substring(start, newEnd)
-
-    const result: ChangedRange = { start: start, oldEnd: oldEnd, newEnd: newEnd, insertedText: insertedText, deletedText: deletedText }
-    return result
-  }
 
   private getSaveStatusColor(): ResourceColor {
     if (this.lastSaveFailed) return this.themeConfig.colors.error

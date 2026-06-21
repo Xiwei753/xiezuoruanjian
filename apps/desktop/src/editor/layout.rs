@@ -1942,4 +1942,178 @@ mod tests {
             );
         }
     }
+
+    // ── Mixed-script regression tests ──
+    // These cover the cases specified in the acceptance criteria:
+    //   ]"  ]"  中]"  中英文abc]"混排  emoji  全角标点
+
+    #[test]
+    fn mixed_script_close_quote_roundtrip() {
+        init_qt();
+        // "]\"" — closing Chinese quote after ASCII bracket
+        let text = "]\"";
+        let snapshot = snapshot_for(text, 320.0);
+        assert_line_end_roundtrip(&snapshot);
+        // Verify cursor at every position is valid
+        for byte_pos in 0..=text.len() {
+            let pos = text.floor_char_boundary(byte_pos);
+            let rect = caret_rect(&snapshot, pos, CaretAffinity::Downstream, 0.0, 800.0);
+            assert!(
+                rect.x > 0.0 || pos == 0,
+                "cursor at byte {} must have x > 0, got {:.4}",
+                pos, rect.x
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_script_open_quote_roundtrip() {
+        init_qt();
+        // "]\"" — opening Chinese quote after ASCII bracket
+        let text = "]\"";
+        let snapshot = snapshot_for(text, 320.0);
+        assert_line_end_roundtrip(&snapshot);
+    }
+
+    #[test]
+    fn mixed_script_chinese_close_quote_roundtrip() {
+        init_qt();
+        // "中]\"" — Chinese char + bracket + closing quote
+        let text = "中]\"";
+        let snapshot = snapshot_for(text, 320.0);
+        assert_line_end_roundtrip(&snapshot);
+        for byte_pos in 0..=text.len() {
+            let pos = text.floor_char_boundary(byte_pos);
+            let rect = caret_rect(&snapshot, pos, CaretAffinity::Downstream, 0.0, 800.0);
+            assert!(
+                rect.x >= 0.0,
+                "cursor at byte {} must have x >= 0, got {:.4}",
+                pos, rect.x
+            );
+        }
+    }
+
+    #[test]
+    fn mixed_script_full_mixed_roundtrip() {
+        init_qt();
+        // "中英文abc]\"混排" — full mixed-script with closing quote
+        let text = "中英文abc]\"混排";
+        let snapshot = snapshot_for(text, 320.0);
+        assert_line_end_roundtrip(&snapshot);
+        // Verify hit_test and caret_rect agree for every position
+        for line in &snapshot.lines {
+            if line.start == line.end || line.para_text.is_empty() {
+                continue;
+            }
+            let mid_byte = line.start + (line.end - line.start) / 2;
+            let mid_cursor = text.floor_char_boundary(mid_byte).max(line.start).min(line.end);
+            let rect = caret_rect(&snapshot, mid_cursor, CaretAffinity::Downstream, 0.0, 800.0);
+            let (hit, _affinity) = hit_test(&snapshot, rect.x + 1.0, line.y + 2.0, 0.0);
+            let hit_rect = caret_rect(&snapshot, hit, CaretAffinity::Downstream, 0.0, 800.0);
+            assert_eq!(
+                hit_rect.visual_line_id, line.id,
+                "hit_test and caret_rect must agree on visual_line_id for mixed-script text"
+            );
+        }
+    }
+
+    #[test]
+    fn emoji_layout_roundtrip() {
+        init_qt();
+        let text = "你好🙂世界🎉测试";
+        let snapshot = snapshot_for(text, 320.0);
+        assert_line_end_roundtrip(&snapshot);
+        // Verify cursor at every char boundary
+        for (byte_pos, _ch) in text.char_indices() {
+            let rect = caret_rect(&snapshot, byte_pos, CaretAffinity::Downstream, 0.0, 800.0);
+            assert!(
+                rect.x >= 0.0,
+                "cursor at emoji text byte {} must have x >= 0, got {:.4}",
+                byte_pos, rect.x
+            );
+        }
+    }
+
+    #[test]
+    fn fullwidth_punctuation_roundtrip() {
+        init_qt();
+        // Full-width punctuation: 。，！？：；""''【】
+        let text = "你好。世界！测试？混合：标点；";
+        let snapshot = snapshot_for(text, 320.0);
+        assert_line_end_roundtrip(&snapshot);
+    }
+
+    #[test]
+    fn large_font_scroll_mixed_script() {
+        init_qt();
+        // Max font size scrolling with mixed script
+        let text = "中英文abc]\"混排测试，验证大字号下滚动和光标定位。This is a longer paragraph to force wrapping at large font sizes. 继续中文测试。";
+        let mut layout = EditorLayout::default();
+        let snapshot = layout.snapshot(
+            text,
+            LayoutParams {
+                width: 820.0,
+                font_size: 45.0,
+                font_family: "serif".to_string(),
+                line_spacing: 1.5,
+                text_indent: 32.0,
+                padding: 16.0,
+            },
+            1,
+        ).clone();
+        assert!(snapshot.lines.len() >= 2, "must wrap at fontSize=45");
+        assert_line_end_roundtrip(&snapshot);
+    }
+
+    #[test]
+    fn font_size_change_scroll_to_bottom() {
+        init_qt();
+        // Simulate font size change: layout at small font, then at large font
+        let text = "第一行测试文字。第二行继续。第三行更多内容。第四行验证。第五行结束。";
+        let mut layout = EditorLayout::default();
+
+        // Small font
+        let snapshot_small = layout.snapshot(
+            text,
+            LayoutParams {
+                width: 820.0,
+                font_size: 16.0,
+                font_family: "serif".to_string(),
+                line_spacing: 1.5,
+                text_indent: 32.0,
+                padding: 16.0,
+            },
+            1,
+        ).clone();
+
+        // Large font
+        let snapshot_large = layout.snapshot(
+            text,
+            LayoutParams {
+                width: 820.0,
+                font_size: 45.0,
+                font_family: "serif".to_string(),
+                line_spacing: 1.5,
+                text_indent: 32.0,
+                padding: 16.0,
+            },
+            2,
+        ).clone();
+
+        // Both must have valid line-end roundtrips
+        assert_line_end_roundtrip(&snapshot_small);
+        assert_line_end_roundtrip(&snapshot_large);
+
+        // Large font must have more lines (or equal) than small font
+        assert!(
+            snapshot_large.lines.len() >= snapshot_small.lines.len(),
+            "large font should produce >= lines than small font"
+        );
+
+        // Cursor at end of text must be valid in both
+        let rect_small = caret_rect(&snapshot_small, text.len(), CaretAffinity::Upstream, 0.0, 800.0);
+        let rect_large = caret_rect(&snapshot_large, text.len(), CaretAffinity::Upstream, 0.0, 800.0);
+        assert!(rect_small.x > 0.0, "small font end cursor x must be > 0");
+        assert!(rect_large.x > 0.0, "large font end cursor x must be > 0");
+    }
 }

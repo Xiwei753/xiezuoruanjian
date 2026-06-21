@@ -10,6 +10,7 @@ class WorkspaceBridge(val appService: AppServiceBridge) {
     fun getProjects(): BridgeResult<List<Project>> = listProjects()
     fun getRecentEdits(): BridgeResult<List<RecentEdit>> = appService.getRecentEdits()
     fun recordRecentEdit(projectId: String, volumeId: String, chapterId: String): BridgeResult<Boolean> = appService.recordRecentEdit(projectId, volumeId, chapterId)
+    // TODO: Add flushRecentEdits() once UniFFI bindings are regenerated
     fun validateWorkspace(): BridgeResult<Boolean> = appService.validateWorkspace()
     fun createWorkspaceIfNeeded(): BridgeResult<Boolean> = appService.createWorkspaceIfNeeded()
     fun createProject(title: String): BridgeResult<Project> = appService.createProject(title)

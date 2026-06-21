@@ -455,7 +455,7 @@ fn ffi_project_maps_title_to_title() {
 #[test]
 fn window_metrics_dto_fields_match_harmony() {
     let metrics = crate::layout_policy::WindowMetrics::default();
-    let json = serde_json::to_value(&metrics).unwrap();
+    let _json = serde_json::to_value(&metrics).unwrap();
     // Core uses snake_case internally, but FFI JSON output uses camelCase
     // Verify the expected camelCase keys exist when serialized through FFI
     let ffi_json = json!({

@@ -385,6 +385,15 @@ class EditorViewModel(
     override fun onCleared() {
         super.onCleared()
         autoSaveJob?.cancel()
+        // Best-effort flush on ViewModel destruction.
+        // flushWritingStats also triggers a Core-level flush cycle.
+        // flushRecentEdits will be called once UniFFI bindings are regenerated
+        // to include the new method (added to api.udl).
+        try {
+            workspaceRepository.flushWritingStats()
+        } catch (_: Exception) {
+            // Best-effort; non-critical data (at most 5s of recent_edits entries)
+        }
     }
 
     private fun calculateWordCount(text: String): Int {

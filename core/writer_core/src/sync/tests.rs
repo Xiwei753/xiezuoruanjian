@@ -1126,7 +1126,7 @@ mod tests {
         let _repo = git2::Repository::init(dir.path()).unwrap();
 
         let backend = Git2Backend;
-        let res = backend.push(dir.path(), "main", None, None);
+        let res = backend.push(dir.path(), "main", None);
         assert!(res.is_err());
         let err_msg = res.unwrap_err().to_string();
         assert!(err_msg.contains("recoverable_error") || err_msg.contains("unborn"));
@@ -1169,7 +1169,7 @@ mod tests {
         // Now branch reference refs/heads/main does not exist, but HEAD points to a commit.
         // We verify that calling Git2Backend::push reconstructs the branch ref successfully!
         let backend = Git2Backend;
-        let _res = backend.push(dir.path(), "main", None, None);
+        let _res = backend.push(dir.path(), "main", None);
         // Verify branch ref has been reconstructed!
         assert!(repo.find_reference("refs/heads/main").is_ok());
     }
@@ -1264,7 +1264,7 @@ mod tests {
 
         // Verify pull/merge fails with settings_conflict_payload
         let backend = Git2Backend;
-        let res = backend.pull(dir.path(), "main", None, None);
+        let res = backend.pull(dir.path(), "main", None);
         assert!(res.is_err());
         let err_msg = res.unwrap_err().to_string();
         assert!(err_msg.contains("settings_conflict_payload"));

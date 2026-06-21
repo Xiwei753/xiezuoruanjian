@@ -43,6 +43,10 @@ impl WriterAppService {
             .record_recent_edit(&project_id, &volume_id, &chapter_id)
     }
 
+    pub fn flush_recent_edits(&self) -> Result<bool, WriterError> {
+        self.api.flush_recent_edits()
+    }
+
     pub fn create_project(&self, title: String) -> Result<ProjectDto, WriterError> {
         self.api.create_project(&title)
     }

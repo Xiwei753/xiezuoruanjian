@@ -768,6 +768,9 @@ interface WriterAppService {
     boolean record_recent_edit(string project_id, string volume_id, string chapter_id);
 
     [Throws=WriterError]
+    boolean flush_recent_edits();
+
+    [Throws=WriterError]
     ProjectDto create_project(string title);
 
     [Throws=WriterError]
