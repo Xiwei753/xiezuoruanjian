@@ -55,8 +55,9 @@ class EditorSettingsTest {
         assertEquals(0L, editText.cursorAnimationDurationMs())
 
         // Disable typing animation setting
+        // TypingAnimationController clamps duration to [80, 180]ms, so 0L becomes 80L
         editText.setTypingAnimationEnabled(false, 0L)
-        assertEquals(0L, editText.typingAnimationDurationMs())
+        assertEquals(80L, editText.typingAnimationDurationMs())
     }
 
     @Test

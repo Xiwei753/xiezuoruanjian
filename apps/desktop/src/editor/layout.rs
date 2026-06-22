@@ -7,6 +7,7 @@ cpp! {{
     #include <QtGlobal>
     #include <QtGui/QFont>
     #include <QtGui/QFontMetricsF>
+    #include <QtGui/QPainter>
     #include <QtGui/QTextLayout>
     #include <QtGui/QTextOption>
     #include <QGuiApplication>
