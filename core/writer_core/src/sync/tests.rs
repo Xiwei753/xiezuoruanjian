@@ -2,8 +2,11 @@
 #[allow(deprecated)]
 mod tests {
     use crate::sync::backends::SyncBackend;
+    #[cfg(feature = "git-https")]
     use crate::sync::git_backend::Git2Backend;
+    #[cfg(feature = "git-https")]
     use crate::sync::git_backend::GitAuth;
+    #[cfg(feature = "git-https")]
     use crate::sync::git_backend::GitBackend;
     use crate::sync::github_backend::GitHubApiBackend;
     use crate::sync::service::SyncService;
@@ -99,6 +102,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_first_sync_mode_unrelated_histories() {
         // Test logic added via GitBackend trait mock
         struct MockUnrelatedBackend;
@@ -210,6 +214,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_perform_sync_non_empty_no_git_init() {
         // Just a mock test to verify the logic inside perform_sync
         let dir = tempdir().unwrap();
@@ -465,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), feature = "git-https"))]
     fn test_stage_blacklisted_files() {
         let dir = tempdir().unwrap();
 
@@ -545,6 +550,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_perform_sync_empty_remote_url() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
@@ -576,6 +582,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_perform_sync_non_empty_remote() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
@@ -663,7 +670,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), feature = "git-https"))]
     fn test_save_sync_state_failure() {
         let dir = tempfile::tempdir().unwrap();
         let state_dir = dir.path().join("app-meta/sync");
@@ -753,6 +760,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_first_sync_mode_clone_into_empty_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
@@ -833,6 +841,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_first_sync_mode_init_existing_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
@@ -913,6 +922,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_first_sync_mode_already_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
@@ -1034,6 +1044,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_first_sync_empty_remote_branch_not_found() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
@@ -1123,7 +1134,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), feature = "git-https"))]
     fn test_push_preflight_unborn_head() {
         let dir = tempfile::tempdir().unwrap();
         // Repository is initialized but has no commits (unborn HEAD)
@@ -1137,7 +1148,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), feature = "git-https"))]
     fn test_push_preflight_missing_branch_ref_recovered() {
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
@@ -1179,7 +1190,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(windows))]
+    #[cfg(all(not(windows), feature = "git-https"))]
     fn test_settings_semantic_merge_conflict_recovery() {
         let dir = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(dir.path()).unwrap();
@@ -3023,5 +3034,217 @@ mod tests {
 
         shutdown4.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread4.join();
+    }
+
+    /// P0: When pending_take_remote encounters a remote-missing file, the sync
+    /// must NOT upload the local content, must NOT clear pending_take_remote,
+    /// and must return a RecoverableError.
+    #[test]
+    #[cfg(not(windows))]
+    fn test_pending_take_remote_remote_missing_no_upload() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version A";
+        let local_content = "local version B";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        // Simulate: user already chose "take remote", path is in pending_take_remote
+        state.pending_take_remote.insert(chapter_rel.to_string());
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // Remote manifest has the file record, but the actual file content is
+        // missing from the mock server (initial_files is empty).
+        let remote_hash = format!("{:x}", md5::compute("remote version C".as_bytes()));
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_hash.clone(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        // No files in initial_files → mock server returns 404 for content GET
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), std::collections::HashMap::new());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        // Must NOT upload the local content
+        assert!(
+            !res.uploaded_files.contains(&chapter_rel.to_string()),
+            "pending_take_remote with remote missing must NOT upload local content"
+        );
+
+        // Must NOT download (remote is missing)
+        assert!(
+            !res.downloaded_files.contains(&chapter_rel.to_string()),
+            "pending_take_remote with remote missing must NOT download"
+        );
+
+        // Status should be RecoverableError
+        match &res.status {
+            SyncStatus::RecoverableError(msg) => {
+                assert!(
+                    msg.starts_with("pending_take_remote_failed"),
+                    "Error message should mention pending_take_remote_failed, got: {}",
+                    msg
+                );
+            }
+            other => panic!(
+                "Expected RecoverableError, got {:?}",
+                other
+            ),
+        }
+
+        // pending_take_remote must still contain the path (not cleared)
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            state_after.pending_take_remote.contains(chapter_rel),
+            "pending_take_remote must NOT be cleared when remote is missing"
+        );
+
+        // Local file must remain unchanged
+        let local_after = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(
+            local_after, local_content,
+            "Local file must remain unchanged when remote is missing"
+        );
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+    }
+
+    /// P0: When pending_take_remote succeeds (remote file exists), the local
+    /// file becomes the remote content, pending is cleared, and downloaded_files
+    /// contains the path.
+    #[test]
+    #[cfg(not(windows))]
+    fn test_pending_take_remote_remote_exists_downloads_and_clears() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version A";
+        let local_content = "local version B";
+        let remote_content = "remote version C";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        // Simulate: user already chose "take remote", path is in pending_take_remote
+        state.pending_take_remote.insert(chapter_rel.to_string());
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(chapter_rel.to_string(), remote_content.to_string());
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_hash.clone(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest), initial_files);
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        // Must download the remote content
+        assert!(
+            res.downloaded_files.contains(&chapter_rel.to_string()),
+            "pending_take_remote with remote existing must download"
+        );
+
+        // Must NOT upload the old local content
+        assert!(
+            !res.uploaded_files.contains(&chapter_rel.to_string()),
+            "pending_take_remote with remote existing must NOT upload local content"
+        );
+
+        // Local file must now be the remote version
+        let local_after = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(
+            local_after, remote_content,
+            "Local file must be the remote version after pending_take_remote + sync"
+        );
+
+        // pending_take_remote must be cleared
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after.pending_take_remote.contains(chapter_rel),
+            "pending_take_remote must be cleared after successful download"
+        );
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
     }
 }

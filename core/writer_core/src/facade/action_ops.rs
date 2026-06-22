@@ -167,11 +167,9 @@ impl super::WriterCore {
                 let token = secrets.token.clone().unwrap_or_default();
                 let mut secrets_for_diag = secrets.clone();
                 secrets_for_diag.token = Some(token);
-                let backend = crate::sync::Git2Backend;
                 let result = crate::sync::SyncService::perform_sync_diagnostics(
                     &diagnostics_config,
                     &secrets_for_diag,
-                    &backend,
                 );
                 match result {
                     Ok(diag) => Ok(ActionResult {

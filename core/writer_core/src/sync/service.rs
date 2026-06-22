@@ -1,24 +1,35 @@
 #![allow(deprecated)]
+#[cfg(feature = "git-https")]
 use crate::sync::conflict::build_conflict_summary;
+#[cfg(feature = "git-https")]
 use crate::sync::conflict::collect_git_status_summary;
 
+#[cfg(feature = "git-https")]
 use crate::sync::git_backend::GitAuth;
+#[cfg(feature = "git-https")]
 use crate::sync::git_backend::GitBackend;
 use crate::sync::lww;
 use crate::sync::scanner;
+#[cfg(feature = "git-https")]
 use crate::sync::types::FirstSyncMode;
+#[cfg(feature = "git-https")]
 use crate::sync::types::SettingConflictDetail;
 use crate::sync::types::SyncConfig;
+#[cfg(feature = "git-https")]
 use crate::sync::types::SyncConflict;
+#[cfg(feature = "git-https")]
 use crate::sync::types::SyncConflictSummary;
 use crate::sync::types::SyncPlan;
 use crate::sync::types::SyncResult;
 use crate::sync::types::SyncSecrets;
 use crate::sync::types::SyncStatus;
+#[cfg(feature = "git-https")]
 use crate::sync::types::SyncTransport;
+#[cfg(feature = "git-https")]
 use crate::sync::url::sanitize_remote_url;
 use std::path::Path;
 
+#[cfg(feature = "git-https")]
 fn map_git_error(e: crate::Error) -> crate::Error {
     if let crate::Error::Io(io_err) = &e {
         let msg = io_err.to_string();
@@ -60,6 +71,7 @@ pub struct SyncService {
 }
 
 impl SyncService {
+    #[cfg(feature = "git-https")]
     fn ensure_local_branch_exists(repo: &git2::Repository, branch: &str) -> crate::Result<()> {
         let branch_ref_name = format!("refs/heads/{}", branch);
 
@@ -121,11 +133,13 @@ impl SyncService {
     }
 }
 
+#[cfg(feature = "git-https")]
 enum PullOutcome {
     Continue { pull_branch_missing: bool },
     Return(SyncResult),
 }
 
+#[cfg(feature = "git-https")]
 fn handle_pull_error(
     e: crate::Error,
     workspace_path: &Path,
@@ -248,6 +262,7 @@ fn handle_pull_error(
     }
 }
 
+#[cfg(feature = "git-https")]
 fn handle_merge_conflict(
     workspace_path: &Path,
     result: &SyncResult,
@@ -410,6 +425,7 @@ fn handle_merge_conflict(
 }
 
 impl SyncService {
+    #[cfg(feature = "git-https")]
     pub fn perform_sync(
         workspace_path: &Path,
         config: &SyncConfig,

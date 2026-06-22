@@ -1,5 +1,4 @@
 #![allow(deprecated)]
-use crate::sync::git_backend::GitBackend;
 use crate::sync::types::BackendType;
 use crate::sync::types::SyncConfig;
 use crate::sync::types::SyncDiagnosticsResult;
@@ -47,7 +46,6 @@ impl crate::sync::SyncService {
     pub fn perform_sync_diagnostics(
         config: &SyncConfig,
         secrets: &SyncSecrets,
-        _backend: &dyn GitBackend,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
         result.backend_type = match config.backend_type {

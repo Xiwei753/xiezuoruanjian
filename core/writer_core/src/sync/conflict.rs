@@ -4,6 +4,7 @@ use crate::sync::types::SyncConflict;
 use crate::sync::types::SyncConflictSummary;
 use std::path::Path;
 
+#[cfg(feature = "git-https")]
 pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<String>) {
     let mut opts = git2::StatusOptions::new();
     opts.include_untracked(true);
@@ -33,6 +34,7 @@ pub(crate) fn collect_git_status_summary(repo: &git2::Repository) -> (bool, Vec<
     (local_dirty, dirty_files)
 }
 
+#[cfg(feature = "git-https")]
 pub(crate) fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
     let mut conflicted = Vec::new();
     if let Ok(index) = repo.index() {
@@ -63,6 +65,7 @@ pub(crate) fn collect_index_conflicts(repo: &git2::Repository) -> Vec<String> {
     conflicted
 }
 
+#[cfg(feature = "git-https")]
 pub(crate) fn build_conflict_summary(
     repo: &git2::Repository,
     fetch_commit_id: Option<git2::Oid>,

@@ -28,6 +28,7 @@ pub mod backends;
 pub mod config_store;
 pub mod conflict;
 pub mod diagnostics;
+#[cfg(feature = "git-https")]
 pub mod git_backend;
 pub mod github_api_client;
 pub mod github_backend;
@@ -40,6 +41,7 @@ pub mod url;
 pub mod utils;
 
 pub use backends::*;
+#[cfg(feature = "git-https")]
 pub use git_backend::*;
 pub use github_backend::*;
 pub use service::*;

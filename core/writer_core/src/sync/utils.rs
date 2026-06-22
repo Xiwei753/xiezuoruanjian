@@ -7,6 +7,7 @@ impl crate::sync::SyncService {
     }
 }
 
+#[cfg(feature = "git-https")]
 impl crate::sync::SyncService {
     pub fn compute_git_hash(content: &[u8]) -> String {
         match git2::Oid::hash_object(git2::ObjectType::Blob, content) {
@@ -16,7 +17,7 @@ impl crate::sync::SyncService {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "git-https"))]
 mod tests {
     use crate::sync::SyncService;
 

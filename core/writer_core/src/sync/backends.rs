@@ -1,4 +1,3 @@
-use crate::sync::git_backend::Git2Backend;
 use crate::sync::github_backend::GitHubApiBackend;
 use crate::sync::service::SyncService;
 use crate::sync::types::BackendType;
@@ -34,16 +33,17 @@ pub trait SyncBackend {
     ) -> crate::Result<SyncResult>;
 }
 
+#[cfg(feature = "git-https")]
 pub struct GitSyncBackend;
 
+#[cfg(feature = "git-https")]
 impl SyncBackend for GitSyncBackend {
     fn diagnose(
         &self,
         config: &SyncConfig,
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncDiagnosticsResult> {
-        let backend = Git2Backend;
-        SyncService::perform_sync_diagnostics(config, secrets, &backend)
+        SyncService::perform_sync_diagnostics(config, secrets)
     }
     fn pull(
         &self,
@@ -51,6 +51,7 @@ impl SyncBackend for GitSyncBackend {
         config: &SyncConfig,
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncResult> {
+        use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
         SyncService::perform_sync(workspace_path, config, secrets, &backend)
     }
@@ -60,6 +61,7 @@ impl SyncBackend for GitSyncBackend {
         config: &SyncConfig,
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncResult> {
+        use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
         SyncService::perform_sync(workspace_path, config, secrets, &backend)
     }
@@ -69,6 +71,7 @@ impl SyncBackend for GitSyncBackend {
         config: &SyncConfig,
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncResult> {
+        use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
         SyncService::perform_sync(workspace_path, config, secrets, &backend)
     }
@@ -76,7 +79,10 @@ impl SyncBackend for GitSyncBackend {
 
 pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
     match backend_type {
+        #[cfg(feature = "git-https")]
         BackendType::Git => Box::new(GitSyncBackend),
+        #[cfg(not(feature = "git-https"))]
+        BackendType::Git => Box::new(GitHubApiBackend),
         BackendType::GithubApi => Box::new(GitHubApiBackend),
     }
 }

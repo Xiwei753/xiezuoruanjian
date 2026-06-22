@@ -406,8 +406,15 @@ fn execute_lww_sync_attempt(
     // to the local file, then update known_files to the new local hash.
     // This must happen BEFORE the three-way comparison loop so that the
     // downloaded content becomes the local version for the sync plan.
+    //
+    // CRITICAL: Regardless of whether the download succeeds or fails, the path
+    // must NOT enter the normal three-way/LWW comparison loop. If it did, a
+    // "local has, remote missing" scenario could cause the old local content to
+    // be uploaded back, violating the "take remote" intent.
+    let pending_take_remote_all_set: std::collections::HashSet<String> =
+        state.pending_take_remote.clone();
     let mut pending_take_remote_downloaded: Vec<String> = Vec::new();
-    let mut pending_take_remote_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut pending_take_remote_failed: Vec<String> = Vec::new();
     if !state.pending_take_remote.is_empty() {
         eprintln!(
             "[sync] processing pending_take_remote count={}",
@@ -435,13 +442,13 @@ fn execute_lww_sync_attempt(
                 let now_ts = chrono::Utc::now().timestamp_millis();
                 state.known_files_updated_at.insert(path.clone(), now_ts);
                 pending_take_remote_downloaded.push(path.clone());
-                pending_take_remote_set.insert(path.clone());
                 eprintln!("[sync] pending_take_remote downloaded path={}", path);
             } else {
                 eprintln!(
                     "[sync] pending_take_remote: remote file missing for path={}, keeping in pending",
                     path
                 );
+                pending_take_remote_failed.push(path.clone());
             }
         }
         // Only clear paths that were successfully downloaded;
@@ -449,7 +456,7 @@ fn execute_lww_sync_attempt(
         // is not silently left with stale local content.
         state
             .pending_take_remote
-            .retain(|p| !pending_take_remote_set.contains(p));
+            .retain(|p| pending_take_remote_failed.contains(p));
     }
 
     let mut merged_manifest_files = std::collections::HashMap::new();
@@ -468,13 +475,27 @@ fn execute_lww_sync_attempt(
         .collect();
 
     for path in all_paths {
-        // Skip paths that have been force-downloaded via pending_take_remote —
-        // they are already in sync with the remote, no upload/download needed.
-        if pending_take_remote_set.contains(&path) {
-            if let Some(remote_rec) = remote_records.get(&path) {
-                merged_manifest_files.insert(path.clone(), remote_rec.clone());
+        // Skip ALL paths that were in pending_take_remote — both successfully
+        // downloaded and failed/missing ones. A failed download must NOT fall
+        // through to the normal three-way/LWW logic, which could upload the
+        // old local content back (violating "take remote" intent).
+        if pending_take_remote_all_set.contains(&path) {
+            if pending_take_remote_downloaded.contains(&path) {
+                // Successfully downloaded: use remote_rec in merged manifest
+                if let Some(remote_rec) = remote_records.get(&path) {
+                    merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                }
+                result.ignored_files.push(path);
+            } else {
+                // Failed/missing: keep whichever record exists, but do NOT
+                // schedule any upload/download/delete. The path remains in
+                // pending_take_remote for the next sync attempt.
+                if let Some(remote_rec) = remote_records.get(&path) {
+                    merged_manifest_files.insert(path.clone(), remote_rec.clone());
+                } else if let Some(local_rec) = local_records.get(&path) {
+                    merged_manifest_files.insert(path.clone(), local_rec.clone());
+                }
             }
-            result.ignored_files.push(path);
             continue;
         }
         // Skip paths that have unresolved conflicts — do not auto-upload,
@@ -877,6 +898,16 @@ fn execute_lww_sync_attempt(
     if has_doc_conflicts {
         result.status = SyncStatus::PartialConflict;
         result.conflicts = doc_conflicts;
+        result.user_message = None;
+    } else if !pending_take_remote_failed.is_empty() {
+        result.status = SyncStatus::RecoverableError(format!(
+            "pending_take_remote_failed: {}",
+            pending_take_remote_failed.join(", ")
+        ));
+        result.error = Some(format!(
+            "pending_take_remote: remote file missing for paths: {}",
+            pending_take_remote_failed.join(", ")
+        ));
         result.user_message = None;
     } else if has_changes {
         result.status = SyncStatus::LatestWinsApplied;

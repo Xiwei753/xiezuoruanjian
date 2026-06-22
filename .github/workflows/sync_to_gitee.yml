@@ -23,6 +23,11 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
+          set -euo pipefail
+          if [ -z "${GITEE_TOKEN:-}" ]; then
+            echo "GITEE_TOKEN is missing"
+            exit 1
+          fi
           HEADER="> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 的镜像备份。**\n>\n> 反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。\n"
           { echo -e "$HEADER"; cat README.md; } > README.tmp && mv README.tmp README.md
           echo -e "\n---\n更多赞助方式请见[源仓库](https://github.com/Xiwei753/xiezuoruanjian)" >> README.md
