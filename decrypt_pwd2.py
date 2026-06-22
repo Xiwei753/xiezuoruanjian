@@ -1,7 +1,6 @@
 from Crypto.Cipher import AES
 from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Hash import SHA1, HMAC
-import binascii
 import base64
 import ctypes
 import ctypes.wintypes
