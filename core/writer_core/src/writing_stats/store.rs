@@ -585,3 +585,152 @@ impl StatsStore {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn create_mock_store() -> StatsStore {
+        StatsStore::new(Path::new("/tmp/mock_workspace"))
+    }
+
+    #[test]
+    fn test_merge_daily_stats_success() {
+        let store = create_mock_store();
+
+        let mut existing = DailyStats {
+            date: "2023-10-26".to_string(),
+            device_id: "device_1".to_string(),
+            platform: "desktop".to_string(),
+            total_human_typed_chars: 100,
+            total_pasted_chars: 50,
+            total_deleted_chars: 10,
+            total_ai_inserted_chars: 20,
+            total_net_delta_chars: 160,
+            active_seconds: 300,
+            sessions_count: 2,
+            per_project: HashMap::new(),
+            per_volume: HashMap::new(),
+            per_chapter: HashMap::new(),
+            speed_buckets: vec![],
+        };
+
+        let mut proj_stats = ProjectStats::default();
+        proj_stats.human_typed_chars = 100;
+        proj_stats.active_seconds = 300;
+        existing.per_project.insert("proj_1".to_string(), proj_stats);
+
+        let incoming = DailyStats {
+            date: "2023-10-26".to_string(),
+            device_id: "device_1".to_string(),
+            platform: "desktop".to_string(),
+            total_human_typed_chars: 50,
+            total_pasted_chars: 10,
+            total_deleted_chars: 5,
+            total_ai_inserted_chars: 0,
+            total_net_delta_chars: 55,
+            active_seconds: 100,
+            sessions_count: 1,
+            per_project: {
+                let mut map = HashMap::new();
+                let mut ps = ProjectStats::default();
+                ps.human_typed_chars = 50;
+                ps.active_seconds = 100;
+                map.insert("proj_1".to_string(), ps);
+
+                let mut ps2 = ProjectStats::default();
+                ps2.human_typed_chars = 20;
+                map.insert("proj_2".to_string(), ps2);
+                map
+            },
+            per_volume: {
+                let mut map = HashMap::new();
+                let mut vs = VolumeStats::default();
+                vs.pasted_chars = 10;
+                map.insert("vol_1".to_string(), vs);
+                map
+            },
+            per_chapter: {
+                let mut map = HashMap::new();
+                let mut cs = ChapterStats::default();
+                cs.deleted_chars = 5;
+                map.insert("chap_1".to_string(), cs);
+                map
+            },
+            speed_buckets: vec![],
+        };
+
+        let result = store.merge_daily_stats(&mut existing, &incoming);
+        assert!(result.is_ok());
+
+        // Verify top-level
+        assert_eq!(existing.total_human_typed_chars, 150);
+        assert_eq!(existing.total_pasted_chars, 60);
+        assert_eq!(existing.total_deleted_chars, 15);
+        assert_eq!(existing.total_ai_inserted_chars, 20);
+        assert_eq!(existing.total_net_delta_chars, 215);
+        assert_eq!(existing.active_seconds, 400);
+        assert_eq!(existing.sessions_count, 3);
+
+        // Verify per_project
+        assert_eq!(existing.per_project.len(), 2);
+        assert_eq!(existing.per_project.get("proj_1").unwrap().human_typed_chars, 150);
+        assert_eq!(existing.per_project.get("proj_1").unwrap().active_seconds, 400);
+        assert_eq!(existing.per_project.get("proj_2").unwrap().human_typed_chars, 20);
+
+        // Verify per_volume
+        assert_eq!(existing.per_volume.len(), 1);
+        assert_eq!(existing.per_volume.get("vol_1").unwrap().pasted_chars, 10);
+
+        // Verify per_chapter
+        assert_eq!(existing.per_chapter.len(), 1);
+        assert_eq!(existing.per_chapter.get("chap_1").unwrap().deleted_chars, 5);
+    }
+
+    #[test]
+    fn test_merge_daily_stats_different_date() {
+        let store = create_mock_store();
+
+        let mut existing = DailyStats::default();
+        existing.date = "2023-10-26".to_string();
+        existing.device_id = "device_1".to_string();
+
+        let incoming = DailyStats {
+            date: "2023-10-27".to_string(),
+            device_id: "device_1".to_string(),
+            ..Default::default()
+        };
+
+        let result = store.merge_daily_stats(&mut existing, &incoming);
+        assert!(result.is_err());
+        if let Err(crate::Error::Other(msg)) = result {
+            assert_eq!(msg, "Cannot merge stats from different dates or devices");
+        } else {
+            panic!("Expected Error::Other");
+        }
+    }
+
+    #[test]
+    fn test_merge_daily_stats_different_device() {
+        let store = create_mock_store();
+
+        let mut existing = DailyStats::default();
+        existing.date = "2023-10-26".to_string();
+        existing.device_id = "device_1".to_string();
+
+        let incoming = DailyStats {
+            date: "2023-10-26".to_string(),
+            device_id: "device_2".to_string(),
+            ..Default::default()
+        };
+
+        let result = store.merge_daily_stats(&mut existing, &incoming);
+        assert!(result.is_err());
+        if let Err(crate::Error::Other(msg)) = result {
+            assert_eq!(msg, "Cannot merge stats from different dates or devices");
+        } else {
+            panic!("Expected Error::Other");
+        }
+    }
+}
