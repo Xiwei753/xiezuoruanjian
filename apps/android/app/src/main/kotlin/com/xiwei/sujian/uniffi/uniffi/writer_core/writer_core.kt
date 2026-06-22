@@ -31,6 +31,7 @@ import java.nio.charset.CodingErrorAction
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.ConcurrentHashMap
 import android.os.Build
+import android.util.Log
 import androidx.annotation.RequiresApi
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -2211,12 +2212,13 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
 
     override fun destroy() {
         // Only allow a single call to this method.
-        // TODO: maybe we should log a warning if called more than once?
         if (this.wasDestroyed.compareAndSet(false, true)) {
             // This decrement always matches the initial count of 1 given at creation time.
             if (this.callCounter.decrementAndGet() == 0L) {
                 cleanable.clean()
             }
+        } else {
+            Log.w("WriterAppService", "destroy() called more than once")
         }
     }
 
