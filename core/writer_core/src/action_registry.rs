@@ -428,6 +428,63 @@ impl ActionRegistry {
             input_schema: None,
             ui_schema: None,
         });
+        self.actions.push(ActionDescriptor {
+            id: "sync.conflict.resolve_keep_local".to_string(),
+            title: "冲突保留本地".to_string(),
+            description: "解决同步冲突：保留本地版本，上传到远端".to_string(),
+            category: "sync".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::ContentWrite,
+            confirm_required: true,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "冲突文件的工作区相对路径" }
+                },
+                "required": ["path"]
+            })),
+            ui_schema: None,
+        });
+        self.actions.push(ActionDescriptor {
+            id: "sync.conflict.resolve_take_remote".to_string(),
+            title: "冲突采用远端".to_string(),
+            description: "解决同步冲突：采用远端版本，覆盖本地".to_string(),
+            category: "sync".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::ContentWrite,
+            confirm_required: true,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "冲突文件的工作区相对路径" }
+                },
+                "required": ["path"]
+            })),
+            ui_schema: None,
+        });
+        self.actions.push(ActionDescriptor {
+            id: "sync.conflict.resolve_mark_merged".to_string(),
+            title: "冲突标记已合并".to_string(),
+            description: "解决同步冲突：用户已手动合并，上传当前本地版本".to_string(),
+            category: "sync".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::ContentWrite,
+            confirm_required: true,
+            undoable: false,
+            platforms: vec!["android".to_string(), "linux".to_string()],
+            input_schema: Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "冲突文件的工作区相对路径" }
+                },
+                "required": ["path"]
+            })),
+            ui_schema: None,
+        });
     }
 
     pub fn list_registered_actions(&self) -> Vec<ActionDescriptor> {

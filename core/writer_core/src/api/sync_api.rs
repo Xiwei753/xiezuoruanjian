@@ -62,6 +62,27 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn resolve_conflict_keep_local(&self, path: &str) -> ApiResult<bool> {
+        self.core()
+            .resolve_conflict_keep_local(path)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    pub fn resolve_conflict_take_remote(&self, path: &str) -> ApiResult<bool> {
+        self.core()
+            .resolve_conflict_take_remote(path)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
+    pub fn resolve_conflict_mark_merged(&self, path: &str) -> ApiResult<bool> {
+        self.core()
+            .resolve_conflict_mark_merged(path)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
+
     // --- Sync envelope helpers (internal) ---
 
     fn sync_saved_envelope(result: ApiResult<bool>, path: &str) -> ResultEnvelope<bool> {

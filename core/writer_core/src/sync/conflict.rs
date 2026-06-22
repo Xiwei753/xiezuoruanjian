@@ -258,7 +258,8 @@ impl crate::sync::SyncService {
     /// Resolve a conflict by keeping the local version.
     ///
     /// Removes the path from `conflicted_files` and updates `known_files` to
-    /// the current local hash so the next sync will upload the local version.
+    /// the remote hash so the next sync sees base=remote_hash, local≠base,
+    /// remote=base → LocalChanged → uploads the local version.
     pub fn resolve_conflict_keep_local(workspace_path: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(workspace_path)?;
         if !state.conflicted_files.remove(path) {
@@ -267,13 +268,25 @@ impl crate::sync::SyncService {
                 path
             )));
         }
-        // Update known_files to the current local file hash so the next sync
-        // sees base=local_hash, local=local_hash, remote=remote_hash → LocalChanged → upload.
-        let full_path = workspace_path.join(path);
-        if full_path.exists() {
-            let content = std::fs::read(&full_path)?;
-            let hash = format!("{:x}", md5::compute(&content));
-            state.known_files.insert(path.to_string(), hash);
+        // Set known_files to the remote_hash so that three-way comparison on the
+        // next sync sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload.
+        // If we set known_files to local_hash instead, three-way would see
+        // RemoteChanged and download the remote version over local — the opposite of
+        // what "keep local" means.
+        if let Some(conflict) = state.conflicts.iter().find(|c| c.local_path == path) {
+            state
+                .known_files
+                .insert(path.to_string(), conflict.remote_hash.clone());
+        } else {
+            // Fallback: if no conflict record, use the current local file hash.
+            // This means the next sync will see NoConflict (if remote matches) or
+            // RemoteChanged (if remote differs). Not ideal but safe.
+            let full_path = workspace_path.join(path);
+            if full_path.exists() {
+                let content = std::fs::read(&full_path)?;
+                let hash = format!("{:x}", md5::compute(&content));
+                state.known_files.insert(path.to_string(), hash);
+            }
         }
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())
@@ -304,8 +317,8 @@ impl crate::sync::SyncService {
     /// Resolve a conflict by marking it as manually merged.
     ///
     /// Removes the path from `conflicted_files` and updates `known_files` to
-    /// the current local hash (assumes the user has already merged the content
-    /// into the local file). The next sync will upload the merged version.
+    /// the remote hash so the next sync sees base=remote_hash, local≠base,
+    /// remote=base → LocalChanged → uploads the merged version.
     pub fn resolve_conflict_mark_merged(workspace_path: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(workspace_path)?;
         if !state.conflicted_files.remove(path) {
@@ -314,12 +327,21 @@ impl crate::sync::SyncService {
                 path
             )));
         }
-        // Update known_files to the current local file hash (the merged result).
-        let full_path = workspace_path.join(path);
-        if full_path.exists() {
-            let content = std::fs::read(&full_path)?;
-            let hash = format!("{:x}", md5::compute(&content));
-            state.known_files.insert(path.to_string(), hash);
+        // Set known_files to the remote_hash so that three-way comparison on the
+        // next sync sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload.
+        // This ensures the merged local version gets uploaded to the remote.
+        if let Some(conflict) = state.conflicts.iter().find(|c| c.local_path == path) {
+            state
+                .known_files
+                .insert(path.to_string(), conflict.remote_hash.clone());
+        } else {
+            // Fallback: if no conflict record, use the current local file hash.
+            let full_path = workspace_path.join(path);
+            if full_path.exists() {
+                let content = std::fs::read(&full_path)?;
+                let hash = format!("{:x}", md5::compute(&content));
+                state.known_files.insert(path.to_string(), hash);
+            }
         }
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())

@@ -556,6 +556,10 @@ fn execute_lww_sync_attempt(
                                 // Record the path as having an unresolved conflict so that
                                 // subsequent syncs skip it until the user explicitly resolves.
                                 state.conflicted_files.insert(path.clone());
+                                // Also persist the conflict record in state.conflicts so that
+                                // resolve_conflict_keep_local / take_remote / mark_merged can
+                                // look up the remote_hash without needing a separate query.
+                                state.conflicts.push(conflict.clone());
                             }
                             // Keep remote_rec in manifest so the remote side stays consistent.
                             // Do NOT update known_files[path] — it must remain at base_hash

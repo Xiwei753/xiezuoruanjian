@@ -89,6 +89,8 @@ android-ndk-r25c-linux.zip
 *.keystore
 *.p12
 *.pem
+*.p7b
+*.cer
 
 # Local native deps doc (not for version control)
 WINDOWS_NATIVE_DEPS.md
