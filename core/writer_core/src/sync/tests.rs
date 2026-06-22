@@ -343,6 +343,7 @@ mod tests {
             deleted_files: std::collections::HashSet::new(),
             device_id: String::new(),
             known_files_updated_at: std::collections::HashMap::new(),
+            conflicted_files: std::collections::HashSet::new(),
         };
         let config_str = serde_json::to_string(&config).unwrap();
         let state_str = serde_json::to_string(&state).unwrap();
@@ -450,6 +451,7 @@ mod tests {
             deleted_files: std::collections::HashSet::new(),
             device_id: String::new(),
             known_files_updated_at: std::collections::HashMap::new(),
+            conflicted_files: std::collections::HashSet::new(),
         };
 
         SyncService::save_sync_state(dir.path(), &state).unwrap();
@@ -2149,10 +2151,16 @@ mod tests {
         );
 
         let loaded_state = SyncService::load_sync_state(dir.path()).unwrap();
+        // After the fix, known_files for a conflicted path must remain at base_hash,
+        // NOT remote_hash. The conflicted_files set prevents auto-resolution.
         assert_eq!(
             loaded_state.known_files.get(chapter_rel).unwrap(),
-            &remote_hash,
-            "known_files should store remote_hash for conflict re-detection"
+            &base_hash,
+            "known_files must stay at base_hash for conflicted paths"
+        );
+        assert!(
+            loaded_state.conflicted_files.contains(chapter_rel),
+            "conflicted_files must contain the conflicted path"
         );
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -2373,5 +2381,294 @@ mod tests {
 
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();
+    }
+
+    /// P0-1: Core conflict state machine test.
+    /// Scenario: base=A, local=B, remote=C.
+    /// 1. First sync generates a conflict.
+    /// 2. Second sync does NOT auto-upload B over C, nor download C over B.
+    /// 3. known_files[path] stays at A (base_hash), not B or C.
+    /// 4. Conflicts persist until user resolves.
+    #[test]
+    #[cfg(not(windows))]
+    fn test_lww_conflict_persists_across_syncs() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version A";
+        let local_content = "local version B";
+        let remote_content = "remote version C";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
+        let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(chapter_rel.to_string(), remote_content.to_string());
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_hash.clone(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        // === First sync: should detect BothChanged conflict ===
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+
+        // First sync: conflict detected
+        assert_eq!(res1.status, SyncStatus::PartialConflict);
+        assert!(!res1.conflicts.is_empty());
+        assert_eq!(res1.conflicts[0].base_hash, base_hash);
+        assert_eq!(res1.conflicts[0].local_hash, local_hash);
+        assert_eq!(res1.conflicts[0].remote_hash, remote_hash);
+
+        // Local file must NOT be overwritten
+        let local_after_first = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(local_after_first, local_content);
+
+        // known_files must stay at base_hash, NOT remote_hash or local_hash
+        let state_after_first = SyncService::load_sync_state(dir.path()).unwrap();
+        assert_eq!(
+            state_after_first.known_files.get(chapter_rel).unwrap(),
+            &base_hash,
+            "known_files must stay at base_hash after conflict"
+        );
+        assert!(
+            state_after_first.conflicted_files.contains(chapter_rel),
+            "conflicted_files must contain the path after first sync"
+        );
+
+        // No upload or download of the conflicted file
+        assert!(!res1.uploaded_files.contains(&chapter_rel.to_string()));
+        assert!(!res1.downloaded_files.contains(&chapter_rel.to_string()));
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+
+        // === Second sync: must NOT auto-resolve the conflict ===
+        let (mock_url2, shutdown2, _files_map2, _manifest_str2, server_thread2) =
+            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+
+        let config2 = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url2,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let res2 = SyncService::perform_lww_sync(dir.path(), &config2, &secrets).unwrap();
+
+        // Second sync: conflict must still be present (not auto-resolved)
+        // The path is in conflicted_files, so it's skipped entirely.
+        // No upload of local B over remote C, no download of remote C over local B.
+        assert!(!res2.uploaded_files.contains(&chapter_rel.to_string()),
+            "Second sync must NOT upload local version over remote");
+        assert!(!res2.downloaded_files.contains(&chapter_rel.to_string()),
+            "Second sync must NOT download remote version over local");
+
+        // Local file must still be the local version B
+        let local_after_second = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(local_after_second, local_content,
+            "Local file must remain unchanged after second sync");
+
+        // known_files must still be base_hash A
+        let state_after_second = SyncService::load_sync_state(dir.path()).unwrap();
+        assert_eq!(
+            state_after_second.known_files.get(chapter_rel).unwrap(),
+            &base_hash,
+            "known_files must still be base_hash after second sync"
+        );
+        assert!(
+            state_after_second.conflicted_files.contains(chapter_rel),
+            "conflicted_files must still contain the path after second sync"
+        );
+
+        shutdown2.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread2.join();
+    }
+
+    /// P0-1: Test that resolve_conflict_keep_local properly clears the conflict
+    /// and allows the next sync to upload the local version.
+    #[test]
+    fn test_resolve_conflict_keep_local() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let local_content = "local version B";
+        let base_hash = "hash_base_A".to_string();
+        let remote_hash = "hash_remote_C".to_string();
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash: remote_hash.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "test conflict".to_string(),
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // Resolve by keeping local
+        SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        // known_files should now be the local file hash
+        let local_hash = format!("{:x}", md5::compute(local_content.as_bytes()));
+        assert_eq!(
+            state_after.known_files.get(chapter_rel).unwrap(),
+            &local_hash,
+            "known_files must be updated to local hash after keep_local"
+        );
+    }
+
+    /// P0-1: Test that resolve_conflict_take_remote properly clears the conflict
+    /// and sets known_files to the remote hash.
+    #[test]
+    fn test_resolve_conflict_take_remote() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+
+        let base_hash = "hash_base_A".to_string();
+        let remote_hash = "hash_remote_C".to_string();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash: remote_hash.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "test conflict".to_string(),
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // Resolve by taking remote
+        SyncService::resolve_conflict_take_remote(dir.path(), chapter_rel).unwrap();
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        assert_eq!(
+            state_after.known_files.get(chapter_rel).unwrap(),
+            &remote_hash,
+            "known_files must be updated to remote hash after take_remote"
+        );
+    }
+
+    /// P0-1: Test that resolve_conflict_mark_merged properly clears the conflict
+    /// and sets known_files to the current local file hash.
+    #[test]
+    fn test_resolve_conflict_mark_merged() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let merged_content = "manually merged content";
+        std::fs::write(&chapter_abs, merged_content).unwrap();
+
+        let base_hash = "hash_base_A".to_string();
+        let remote_hash = "hash_remote_C".to_string();
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state.conflicted_files.insert(chapter_rel.to_string());
+        state.conflicts.push(SyncConflict {
+            local_path: chapter_rel.to_string(),
+            remote_path: chapter_rel.to_string(),
+            local_hash: "hash_local_B".to_string(),
+            remote_hash: remote_hash.clone(),
+            base_hash: base_hash.clone(),
+            created_at: 12345,
+            description: "test conflict".to_string(),
+        });
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // Resolve by marking as merged
+        SyncService::resolve_conflict_mark_merged(dir.path(), chapter_rel).unwrap();
+
+        let state_after = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
+        let merged_hash = format!("{:x}", md5::compute(merged_content.as_bytes()));
+        assert_eq!(
+            state_after.known_files.get(chapter_rel).unwrap(),
+            &merged_hash,
+            "known_files must be updated to merged file hash after mark_merged"
+        );
     }
 }

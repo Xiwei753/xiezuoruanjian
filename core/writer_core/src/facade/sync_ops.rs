@@ -34,6 +34,18 @@ impl super::WriterCore {
         )
     }
 
+    pub fn resolve_conflict_keep_local(&self, path: &str) -> crate::error::Result<()> {
+        crate::sync::SyncService::resolve_conflict_keep_local(&self.workspace_path, path)
+    }
+
+    pub fn resolve_conflict_take_remote(&self, path: &str) -> crate::error::Result<()> {
+        crate::sync::SyncService::resolve_conflict_take_remote(&self.workspace_path, path)
+    }
+
+    pub fn resolve_conflict_mark_merged(&self, path: &str) -> crate::error::Result<()> {
+        crate::sync::SyncService::resolve_conflict_mark_merged(&self.workspace_path, path)
+    }
+
     pub fn get_sync_ignored_paths(&self) -> crate::error::Result<Vec<String>> {
         crate::sync::SyncService::get_sync_ignored_paths(&self.workspace_path)
     }

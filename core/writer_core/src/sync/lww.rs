@@ -395,6 +395,12 @@ fn execute_lww_sync_attempt(
         }
     }
 
+    // Build a quick-lookup set of unresolved conflict paths from the persisted state.
+    // While a path remains in this set, the sync engine must not auto-upload,
+    // auto-download, or apply LWW/three-way resolution to it.
+    let unresolved_conflict_paths: std::collections::HashSet<String> =
+        state.conflicted_files.clone();
+
     let mut merged_manifest_files = std::collections::HashMap::new();
     let mut to_download = Vec::new();
     let mut to_upload = Vec::new();
@@ -411,6 +417,23 @@ fn execute_lww_sync_attempt(
         .collect();
 
     for path in all_paths {
+        // Skip paths that have unresolved conflicts — do not auto-upload,
+        // auto-download, or apply LWW/three-way resolution.
+        if unresolved_conflict_paths.contains(&path) {
+            eprintln!(
+                "[sync] skipping unresolved_conflict path={} (awaiting user resolution)",
+                path
+            );
+            // Keep the remote record in the merged manifest so the remote side
+            // stays consistent, but do NOT schedule any upload/download/delete.
+            if let Some(remote_rec) = remote_records.get(&path) {
+                merged_manifest_files.insert(path.clone(), remote_rec.clone());
+            } else if let Some(local_rec) = local_records.get(&path) {
+                merged_manifest_files.insert(path.clone(), local_rec.clone());
+            }
+            continue;
+        }
+
         let local_opt = local_records.get(&path);
         let remote_opt = remote_records.get(&path);
 
@@ -528,17 +551,17 @@ fn execute_lww_sync_attempt(
                                 None
                             };
 
-                            if let Some(conflict) = conflict {
-                                doc_conflicts.push(conflict);
+                            if let Some(conflict) = &conflict {
+                                doc_conflicts.push(conflict.clone());
+                                // Record the path as having an unresolved conflict so that
+                                // subsequent syncs skip it until the user explicitly resolves.
+                                state.conflicted_files.insert(path.clone());
                             }
-                            // P1-2: Keep remote_rec in manifest, NOT local_rec.
-                            // The remote manifest record must stay pointing to the
-                            // actual remote content hash. Inserting local_rec would
-                            // make the remote manifest claim the file has local_hash
-                            // while GitHub still has remote_hash — a manifest/content
-                            // desync. On next sync, BothChanged is re-detected
-                            // (local_hash != remote_hash still holds) and the conflict
-                            // persists until the user manually resolves it.
+                            // Keep remote_rec in manifest so the remote side stays consistent.
+                            // Do NOT update known_files[path] — it must remain at base_hash
+                            // so that three-way comparison on the next sync still sees
+                            // base=base, local≠base, remote≠base → BothChanged (or the
+                            // unresolved_conflict_paths guard catches it first).
                             merged_manifest_files.insert(path.clone(), remote_rec.clone());
                         }
                     }
@@ -715,10 +738,33 @@ fn execute_lww_sync_attempt(
     state.last_successful_network_mode = Some("direct".to_string());
 
     let post_local_entries = scan_workspace_for_sync(workspace_path)?;
+
+    // Before clearing known_files, save the base_hash values for conflicted
+    // paths so we can restore them after the scan. The scan would otherwise
+    // overwrite them with the current local file hash, which would break the
+    // three-way comparison on the next sync.
+    let conflicted_known_files: std::collections::HashMap<String, String> = state
+        .conflicted_files
+        .iter()
+        .filter_map(|p| state.known_files.get(p).map(|v| (p.clone(), v.clone())))
+        .collect();
+    let conflicted_known_files_updated_at: std::collections::HashMap<String, i64> = state
+        .conflicted_files
+        .iter()
+        .filter_map(|p| state.known_files_updated_at.get(p).map(|v| (p.clone(), v.clone())))
+        .collect();
+
     state.known_files.clear();
     state.known_files_updated_at.clear();
     for entry in post_local_entries {
         if entry.sync_kind == SyncKind::Upload && entry.relative_path != SYNC_MANIFEST_PATH {
+            // Do not let post-sync scan overwrite known_files for paths that
+            // have unresolved conflicts — their known_files must stay at the
+            // base_hash so three-way comparison keeps detecting BothChanged.
+            if state.conflicted_files.contains(&entry.relative_path) {
+                continue;
+            }
+
             state
                 .known_files
                 .insert(entry.relative_path.clone(), entry.file_hash.clone());
@@ -738,14 +784,18 @@ fn execute_lww_sync_attempt(
         }
     }
 
-    // P1-2: For conflicted document files, store remote_hash in known_files
-    // so that next sync's three-way comparison sees base=remote, local=local,
-    // remote=remote → BothChanged again (conflict persists).
-    for conflict in &doc_conflicts {
-        state
-            .known_files
-            .insert(conflict.remote_path.clone(), conflict.remote_hash.clone());
+    // Restore the base_hash values for conflicted paths.
+    for (path, hash) in conflicted_known_files {
+        state.known_files.insert(path, hash);
     }
+    for (path, t) in conflicted_known_files_updated_at {
+        state.known_files_updated_at.insert(path, t);
+    }
+
+    // NOTE: The old logic that set known_files[path] = remote_hash for
+    // conflicted files has been removed. Conflicted paths keep their
+    // known_files at base_hash, and the unresolved_conflict_paths guard
+    // at the top of the sync loop prevents any auto-resolution.
 
     state
         .tombstones

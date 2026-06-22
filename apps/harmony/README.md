@@ -217,6 +217,8 @@ IWriterCoreBridge 定义了完整的接口：
 
 - 签名材料（`.p12`、`.cer`、`.p7b`、密码等）**不得提交到仓库**
 - `build-profile.json5` 中的签名配置已清空为占位符，仅用于本地开发参考
+- **旧 debug 签名材料已废弃**：此前曾误提交的 DevEco Studio 自动生成的 debug 签名（含加密密码、本地路径）已从仓库清除。该签名仅用于开发调试，不具备任何发布效力。如曾使用该签名，请重新生成新的 debug signing material。
+- 任何密码解密脚本（如 `DecryptDevEcoPassword.java`、`decrypt_pwd.py`）不得提交到仓库，已删除
 
 ### GitHub Secrets 注入
 

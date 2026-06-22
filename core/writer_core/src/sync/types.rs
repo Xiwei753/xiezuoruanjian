@@ -396,6 +396,13 @@ pub struct SyncState {
     pub device_id: String,
     #[serde(default)]
     pub known_files_updated_at: std::collections::HashMap<String, i64>,
+    /// Paths that have unresolved sync conflicts. While a path is in this set,
+    /// the sync engine must not auto-upload, auto-download, or apply LWW/three-way
+    /// resolution to it. The conflict persists until the user explicitly resolves
+    /// it via `resolve_conflict_keep_local` / `resolve_conflict_take_remote` /
+    /// `resolve_conflict_mark_merged`.
+    #[serde(default)]
+    pub conflicted_files: std::collections::HashSet<String>,
 }
 
 impl Default for SyncState {
@@ -413,6 +420,7 @@ impl Default for SyncState {
             deleted_files: std::collections::HashSet::new(),
             device_id: uuid::Uuid::new_v4().to_string(),
             known_files_updated_at: std::collections::HashMap::new(),
+            conflicted_files: std::collections::HashSet::new(),
         }
     }
 }

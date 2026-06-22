@@ -254,4 +254,74 @@ impl crate::sync::SyncService {
 
         Ok(())
     }
+
+    /// Resolve a conflict by keeping the local version.
+    ///
+    /// Removes the path from `conflicted_files` and updates `known_files` to
+    /// the current local hash so the next sync will upload the local version.
+    pub fn resolve_conflict_keep_local(workspace_path: &Path, path: &str) -> crate::Result<()> {
+        let mut state = Self::load_sync_state(workspace_path)?;
+        if !state.conflicted_files.remove(path) {
+            return Err(crate::Error::Other(format!(
+                "resolve_conflict_keep_local: path '{}' is not in conflicted_files",
+                path
+            )));
+        }
+        // Update known_files to the current local file hash so the next sync
+        // sees base=local_hash, local=local_hash, remote=remote_hash → LocalChanged → upload.
+        let full_path = workspace_path.join(path);
+        if full_path.exists() {
+            let content = std::fs::read(&full_path)?;
+            let hash = format!("{:x}", md5::compute(&content));
+            state.known_files.insert(path.to_string(), hash);
+        }
+        Self::save_sync_state(workspace_path, &state)?;
+        Ok(())
+    }
+
+    /// Resolve a conflict by taking the remote version.
+    ///
+    /// Removes the path from `conflicted_files` and updates `known_files` to
+    /// the remote hash so the next sync will download the remote version.
+    pub fn resolve_conflict_take_remote(workspace_path: &Path, path: &str) -> crate::Result<()> {
+        let mut state = Self::load_sync_state(workspace_path)?;
+        if !state.conflicted_files.remove(path) {
+            return Err(crate::Error::Other(format!(
+                "resolve_conflict_take_remote: path '{}' is not in conflicted_files",
+                path
+            )));
+        }
+        // Find the conflict record to get the remote_hash.
+        if let Some(conflict) = state.conflicts.iter().find(|c| c.local_path == path) {
+            state
+                .known_files
+                .insert(path.to_string(), conflict.remote_hash.clone());
+        }
+        Self::save_sync_state(workspace_path, &state)?;
+        Ok(())
+    }
+
+    /// Resolve a conflict by marking it as manually merged.
+    ///
+    /// Removes the path from `conflicted_files` and updates `known_files` to
+    /// the current local hash (assumes the user has already merged the content
+    /// into the local file). The next sync will upload the merged version.
+    pub fn resolve_conflict_mark_merged(workspace_path: &Path, path: &str) -> crate::Result<()> {
+        let mut state = Self::load_sync_state(workspace_path)?;
+        if !state.conflicted_files.remove(path) {
+            return Err(crate::Error::Other(format!(
+                "resolve_conflict_mark_merged: path '{}' is not in conflicted_files",
+                path
+            )));
+        }
+        // Update known_files to the current local file hash (the merged result).
+        let full_path = workspace_path.join(path);
+        if full_path.exists() {
+            let content = std::fs::read(&full_path)?;
+            let hash = format!("{:x}", md5::compute(&content));
+            state.known_files.insert(path.to_string(), hash);
+        }
+        Self::save_sync_state(workspace_path, &state)?;
+        Ok(())
+    }
 }

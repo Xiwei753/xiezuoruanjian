@@ -5,13 +5,13 @@
         "name": "default",
         "type": "HarmonyOS",
         "material": {
-          "storeFile": "C:\\Users\\xiwei\\.ohos\\config\\default_harmony_m7XRdiGfGvAV0KGLqf5tHwTREwfAZeU3Rf7Qpdr9W3Y=.p12",
-          "storePassword": "0000001B20D1A538BCEA2F2934125CB51FE66D2362001B469CC80F5657698897091F83AE78002E6367AB1D",
+          "storeFile": "",
+          "storePassword": "",
           "keyAlias": "debugKey",
-          "keyPassword": "0000001B0D7991BA59449BD34156D20B72291FA296C6107B7C630C51FC7AC618854707746E1BE3044CD2C9",
+          "keyPassword": "",
           "signAlg": "SHA256withECDSA",
-          "profile": "C:\\Users\\xiwei\\.ohos\\config\\default_harmony_m7XRdiGfGvAV0KGLqf5tHwTREwfAZeU3Rf7Qpdr9W3Y=.p7b",
-          "certpath": "C:\\Users\\xiwei\\.ohos\\config\\default_harmony_m7XRdiGfGvAV0KGLqf5tHwTREwfAZeU3Rf7Qpdr9W3Y=.cer"
+          "profile": "",
+          "certpath": ""
         }
       }
     ],
