@@ -23,5 +23,10 @@ jobs:
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
+          echo -e "\n---\n更多赞助方式请见[源仓库](https://github.com/Xiwei753/xiezuoruanjian)" >> README.md
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "添加源仓库链接" || true
           git remote add gitee https://wei-xi753:${GITEE_TOKEN}@gitee.com/wei-xi753/xiezuoruanjian.git || true
           git push gitee main --force
