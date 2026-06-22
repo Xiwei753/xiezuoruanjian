@@ -36,9 +36,12 @@ prepend_path_var() {
 }
 
 detect_qt6_header_version() {
-    local header="/usr/include/qt6/QtCore/qtcoreversion.h"
+    local header=""
+    for h in "/run/host/usr/include/qt6/QtCore/qtcoreversion.h" "/usr/include/qt6/QtCore/qtcoreversion.h"; do
+        [ -f "$h" ] && header="$h" && break
+    done
+    [ -n "$header" ] || return 1
     local line version
-    [ -f "$header" ] || return 1
     while IFS= read -r line; do
         case "$line" in
             *QTCORE_VERSION_STR*)
@@ -56,6 +59,10 @@ detect_qt6_header_version() {
 detect_qt6_qmake() {
     local candidates=(
         "${QMAKE:-}"
+        "/run/host/usr/lib64/qt6/bin/qmake"
+        "/run/host/usr/lib64/qt6/bin/qmake6"
+        "/run/host/usr/bin/qmake6"
+        "/run/host/usr/bin/qmake-qt6"
         "/usr/lib64/qt6/bin/qmake"
         "/usr/lib64/qt6/bin/qmake6"
         "/usr/bin/qmake6"
@@ -66,7 +73,11 @@ detect_qt6_qmake() {
     local candidate version
     for candidate in "${candidates[@]}"; do
         [ -n "$candidate" ] || continue
-        if version="$($candidate -query QT_VERSION 2>/dev/null)" && [[ "$version" == 6.* ]]; then
+        local ld_path=""
+        case "$candidate" in
+            /run/host/*) ld_path="LD_LIBRARY_PATH=/run/host/usr/lib64" ;;
+        esac
+        if version="$(${ld_path:+$ld_path }$candidate -query QT_VERSION 2>/dev/null)" && [[ "$version" == 6.* ]]; then
             printf '%s\n' "$candidate"
             return 0
         fi
@@ -77,18 +88,39 @@ detect_qt6_qmake() {
 if QMAKE_DETECTED="$(detect_qt6_qmake)"; then
     export QMAKE="$QMAKE_DETECTED"
     export QT_VERSION_MAJOR=6
-    QT_VERSION_DETECTED="$($QMAKE -query QT_VERSION 2>/dev/null || true)"
+    local_ld_path=""
+    case "$QMAKE" in
+        /run/host/*) local_ld_path="LD_LIBRARY_PATH=/run/host/usr/lib64" ;;
+    esac
+    QT_VERSION_DETECTED="$(${local_ld_path:+$local_ld_path }$QMAKE -query QT_VERSION 2>/dev/null || true)"
 elif QT_VERSION_DETECTED="$(detect_qt6_header_version)"; then
-    export QT_INCLUDE_PATH="${QT_INCLUDE_PATH:-/usr/include/qt6}"
-    export QT_LIBRARY_PATH="${QT_LIBRARY_PATH:-/usr/lib64}"
+    if [ -d "/run/host/usr/include/qt6" ]; then
+        export QT_INCLUDE_PATH="${QT_INCLUDE_PATH:-/run/host/usr/include/qt6}"
+        export QT_LIBRARY_PATH="${QT_LIBRARY_PATH:-/run/host/usr/lib64}"
+    else
+        export QT_INCLUDE_PATH="${QT_INCLUDE_PATH:-/usr/include/qt6}"
+        export QT_LIBRARY_PATH="${QT_LIBRARY_PATH:-/usr/lib64}"
+    fi
     export QT_VERSION_MAJOR=6
 else
     QT_VERSION_DETECTED="unknown"
 fi
 
-prepend_path_var QML2_IMPORT_PATH "/usr/lib64/qt6/qml"
-prepend_path_var QML_IMPORT_PATH "/usr/lib64/qt6/qml"
-prepend_path_var QT_PLUGIN_PATH "/usr/lib64/qt6/plugins"
+# Determine Qt6 QML/plugin paths
+if [ -d "/run/host/usr/lib64/qt6/qml" ]; then
+    prepend_path_var QML2_IMPORT_PATH "/run/host/usr/lib64/qt6/qml"
+    prepend_path_var QML_IMPORT_PATH "/run/host/usr/lib64/qt6/qml"
+    prepend_path_var QT_PLUGIN_PATH "/run/host/usr/lib64/qt6/plugins"
+else
+    prepend_path_var QML2_IMPORT_PATH "/usr/lib64/qt6/qml"
+    prepend_path_var QML_IMPORT_PATH "/usr/lib64/qt6/qml"
+    prepend_path_var QT_PLUGIN_PATH "/usr/lib64/qt6/plugins"
+fi
+
+# Ensure LD_LIBRARY_PATH includes Qt6 library path for runtime
+if [ -d "/run/host/usr/lib64" ]; then
+    prepend_path_var LD_LIBRARY_PATH "/run/host/usr/lib64"
+fi
 
 echo "[start] Qt version detected: $QT_VERSION_DETECTED"
 echo "[start] Qt C++ standard: -std=c++17"
@@ -97,8 +129,8 @@ echo "[start] QT_INCLUDE_PATH: ${QT_INCLUDE_PATH:-}"
 echo "[start] QT_LIBRARY_PATH: ${QT_LIBRARY_PATH:-}"
 echo "[start] QML2_IMPORT_PATH: ${QML2_IMPORT_PATH:-}"
 echo "[start] QT_PLUGIN_PATH: ${QT_PLUGIN_PATH:-}"
-echo "[start] QtQuick.Window qmldir: $( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing )"
-echo "[start] QtQuick Controls qmldir: $( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing )"
+echo "[start] QtQuick.Window qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing ) )"
+echo "[start] QtQuick Controls qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing ) )"
 
 echo "[start] Building sujian-desktop package..."
 cargo build -p sujian-desktop

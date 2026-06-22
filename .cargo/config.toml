@@ -1,7 +1,19 @@
 [env]
-QT_INCLUDE_PATH = { value = "/usr/include/qt6", force = false }
-QT_LIBRARY_PATH = { value = "/usr/lib64", force = false }
+QT_INCLUDE_PATH = { value = "/run/host/usr/include/qt6", force = false }
+QT_LIBRARY_PATH = { value = "/run/host/usr/lib64", force = false }
 QT_VERSION_MAJOR = { value = "6", force = false }
+PKG_CONFIG_PATH = { value = "/run/host/usr/lib64/pkgconfig:/run/host/usr/share/pkgconfig", force = false }
+LD_LIBRARY_PATH = { value = "/run/host/usr/lib64:/run/host/lib64", force = false }
+
+# Add host library search paths for linking (Flatpak runtime needs /run/host paths)
+# /home/xiwei/.local/lib64 contains symlinks to system libs that the linker expects in /lib64/
+[target.x86_64-unknown-linux-gnu]
+rustflags = [
+    "-C", "link-arg=-L/home/xiwei/.local/lib64",
+    "-C", "link-arg=-L/usr/lib/x86_64-linux-gnu",
+    "-C", "link-arg=-L/run/host/lib64",
+    "-C", "link-arg=-L/run/host/usr/lib64",
+]
 
 # HarmonyOS / OHOS cross-compile target
 # Set OHOS_NDK_HOME to your OHOS NDK path before building.

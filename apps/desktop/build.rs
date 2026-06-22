@@ -32,6 +32,10 @@ impl Qt6BuildInfo {
         for path in &self.include_paths {
             config.include(path);
         }
+        // Emit cargo link search paths so the linker can find Qt6 shared libraries
+        for path in &self.library_paths {
+            println!("cargo:rustc-link-search=native={}", path.display());
+        }
     }
 }
 
@@ -66,7 +70,13 @@ fn format_paths(paths: &[PathBuf]) -> String {
 }
 
 fn qmake_query(qmake: &Path, key: &str) -> Option<String> {
-    let output = Command::new(qmake).args(["-query", key]).output().ok()?;
+    let mut cmd = Command::new(qmake);
+    cmd.args(["-query", key]);
+    // When qmake lives under /run/host/usr, it needs LD_LIBRARY_PATH to find libQt6Core.so.6
+    if qmake.starts_with("/run/host") {
+        cmd.env("LD_LIBRARY_PATH", "/run/host/usr/lib64");
+    }
+    let output = cmd.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -89,6 +99,10 @@ fn find_qt6_qmake() -> Option<PathBuf> {
     let candidates = [
         "qmake6",
         "qmake-qt6",
+        "/run/host/usr/lib64/qt6/bin/qmake",
+        "/run/host/usr/lib64/qt6/bin/qmake6",
+        "/run/host/usr/bin/qmake6",
+        "/run/host/usr/bin/qmake-qt6",
         "/usr/lib64/qt6/bin/qmake",
         "/usr/lib64/qt6/bin/qmake6",
         "/usr/bin/qmake6",
@@ -135,6 +149,16 @@ fn detect_qt6_from_pkg_config() -> Option<Qt6BuildInfo> {
     })
 }
 
+/// When qmake is located under /run/host, the paths it returns (e.g. /usr/include/qt6)
+/// need to be remapped to /run/host/usr/include/qt6 so they are accessible inside the container.
+fn remap_host_path(path: &Path, qmake: &Path) -> PathBuf {
+    if qmake.starts_with("/run/host") && path.starts_with("/usr") {
+        PathBuf::from("/run/host").join(path.strip_prefix("/").unwrap_or(path))
+    } else {
+        path.to_path_buf()
+    }
+}
+
 fn detect_qt6_from_qmake() -> Option<Qt6BuildInfo> {
     let Some(qmake) = find_qt6_qmake() else {
         return None;
@@ -143,13 +167,13 @@ fn detect_qt6_from_qmake() -> Option<Qt6BuildInfo> {
     let Some(headers) = qmake_query(&qmake, "QT_INSTALL_HEADERS") else {
         return None;
     };
-    let header_root = PathBuf::from(headers);
+    let header_root = remap_host_path(&PathBuf::from(&headers), &qmake);
     let mut include_paths = vec![header_root.clone()];
     for module in QT6_MODULES {
         include_paths.push(header_root.join(format!("Qt{}", module)));
     }
     let library_paths = qmake_query(&qmake, "QT_INSTALL_LIBS")
-        .map(PathBuf::from)
+        .map(|libs| remap_host_path(&PathBuf::from(&libs), &qmake))
         .into_iter()
         .collect();
     Some(Qt6BuildInfo {
@@ -305,11 +329,26 @@ fn find_lrelease() -> Option<PathBuf> {
         }
     }
 
-    // Try common names on PATH
-    for name in &["lrelease6", "lrelease-qt6", "lrelease"] {
-        if let Ok(output) = Command::new(name).arg("-version").output() {
+    // Try common names on PATH and /run/host
+    let host_candidates = [
+        "lrelease6",
+        "lrelease-qt6",
+        "lrelease",
+        "/run/host/usr/lib64/qt6/bin/lrelease",
+        "/run/host/usr/lib64/qt6/bin/lrelease6",
+        "/run/host/usr/bin/lrelease6",
+        "/run/host/usr/bin/lrelease-qt6",
+    ];
+    for name in &host_candidates {
+        let path = PathBuf::from(name);
+        let mut cmd = Command::new(&path);
+        cmd.arg("-version");
+        if path.starts_with("/run/host") {
+            cmd.env("LD_LIBRARY_PATH", "/run/host/usr/lib64");
+        }
+        if let Ok(output) = cmd.output() {
             if output.status.success() {
-                return Some(PathBuf::from(name));
+                return Some(path);
             }
         }
     }
@@ -361,13 +400,17 @@ fn compile_translations() -> Vec<PathBuf> {
                 let qm_path = path.with_extension("qm");
                 println!("cargo:rerun-if-changed={}", path.display());
 
-                let output = Command::new(&lrelease)
-                    .arg(&path)
+                let mut cmd = Command::new(&lrelease);
+                cmd.arg(&path)
                     .arg("-qm")
                     .arg(&qm_path)
                     .arg("-compress")
-                    .arg("-removeidentical")
-                    .output();
+                    .arg("-removeidentical");
+                // When lrelease lives under /run/host/usr, it needs LD_LIBRARY_PATH
+                if lrelease.starts_with("/run/host") {
+                    cmd.env("LD_LIBRARY_PATH", "/run/host/usr/lib64");
+                }
+                let output = cmd.output();
 
                 match output {
                     Ok(out) => {
