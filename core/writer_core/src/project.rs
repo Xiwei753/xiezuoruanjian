@@ -212,35 +212,12 @@ pub fn delete_project(workspace_path: &Path, project_id: &str) -> Result<()> {
             .to_string_lossy()
             .replace("\\", "/");
 
-        for entry in walkdir::WalkDir::new(&trash_path)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            let rel_file_path = entry
-                .path()
-                .strip_prefix(&trash_path)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace("\\", "/");
-            let original_file_path = format!("{}/{}", rel_project_dir, rel_file_path);
-            let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
-
-            let tombstone = crate::sync::Tombstone {
-                original_path: original_file_path.clone(),
-                trash_path: new_trash_path,
-                deleted_at: chrono::Utc::now().timestamp(),
-                purge_after: chrono::Utc::now().timestamp() + 30 * 24 * 3600,
-                deleted_by: "local".to_string(),
-                original_hash: state
-                    .known_files
-                    .get(&original_file_path)
-                    .cloned()
-                    .unwrap_or_default(),
-                kind: "local_delete".to_string(),
-            };
-            state.tombstones.push(tombstone);
-        }
+        crate::trash::generate_tombstones(
+            &mut state,
+            &trash_path,
+            &rel_project_dir,
+            &rel_trash_path,
+        );
         let _ = crate::sync::SyncService::save_sync_state(workspace_path, &state);
     }
     Ok(())
