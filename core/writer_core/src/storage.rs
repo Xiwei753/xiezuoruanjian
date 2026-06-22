@@ -61,13 +61,13 @@ pub fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
     }
 
     if let Some(parent) = path.parent() {
-        let parent_path = if parent.as_os_str().is_empty() {
-            Path::new(".")
-        } else {
-            parent
-        };
         #[cfg(unix)]
         {
+            let parent_path = if parent.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                parent
+            };
             let dir = File::open(parent_path)?;
             dir.sync_all()?;
         }
