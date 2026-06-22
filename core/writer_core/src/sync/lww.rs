@@ -401,6 +401,52 @@ fn execute_lww_sync_attempt(
     let unresolved_conflict_paths: std::collections::HashSet<String> =
         state.conflicted_files.clone();
 
+    // ── Process pending_take_remote ──
+    // For each path in pending_take_remote, force-download the remote content
+    // to the local file, then update known_files to the new local hash.
+    // This must happen BEFORE the three-way comparison loop so that the
+    // downloaded content becomes the local version for the sync plan.
+    let mut pending_take_remote_downloaded: Vec<String> = Vec::new();
+    let mut pending_take_remote_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+    if !state.pending_take_remote.is_empty() {
+        eprintln!(
+            "[sync] processing pending_take_remote count={}",
+            state.pending_take_remote.len()
+        );
+        let pending_paths: Vec<String> = state.pending_take_remote.iter().cloned().collect();
+        for path in &pending_paths {
+            if let Some((content, _sha)) =
+                github_get_content(client, api_base, token, &config.branch, path)?
+            {
+                let full_path = workspace_path.join(path);
+                if let Some(parent) = full_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                std::fs::write(&tmp_path, &content).map_err(|e| {
+                    crate::Error::Other(format!("local_io_error: write pending_take_remote {}: {}", path, e))
+                })?;
+                std::fs::rename(&tmp_path, &full_path).map_err(|e| {
+                    crate::Error::Other(format!("local_io_error: rename pending_take_remote {}: {}", path, e))
+                })?;
+                // Update known_files to the hash of the newly written content
+                let hash = format!("{:x}", md5::compute(&content));
+                state.known_files.insert(path.clone(), hash);
+                let now_ts = chrono::Utc::now().timestamp_millis();
+                state.known_files_updated_at.insert(path.clone(), now_ts);
+                pending_take_remote_downloaded.push(path.clone());
+                pending_take_remote_set.insert(path.clone());
+                eprintln!("[sync] pending_take_remote downloaded path={}", path);
+            } else {
+                eprintln!(
+                    "[sync] pending_take_remote: remote file missing for path={}, skipping",
+                    path
+                );
+            }
+        }
+        state.pending_take_remote.clear();
+    }
+
     let mut merged_manifest_files = std::collections::HashMap::new();
     let mut to_download = Vec::new();
     let mut to_upload = Vec::new();
@@ -417,6 +463,15 @@ fn execute_lww_sync_attempt(
         .collect();
 
     for path in all_paths {
+        // Skip paths that have been force-downloaded via pending_take_remote —
+        // they are already in sync with the remote, no upload/download needed.
+        if pending_take_remote_set.contains(&path) {
+            if let Some(remote_rec) = remote_records.get(&path) {
+                merged_manifest_files.insert(path.clone(), remote_rec.clone());
+            }
+            result.ignored_files.push(path);
+            continue;
+        }
         // Skip paths that have unresolved conflicts — do not auto-upload,
         // auto-download, or apply LWW/three-way resolution.
         if unresolved_conflict_paths.contains(&path) {
@@ -826,7 +881,10 @@ fn execute_lww_sync_attempt(
     }
 
     result.uploaded_files = to_upload;
-    result.downloaded_files = to_download;
+    // Merge pending_take_remote downloads with regular downloads
+    let mut all_downloaded = pending_take_remote_downloaded;
+    all_downloaded.extend(to_download);
+    result.downloaded_files = all_downloaded;
     result.local_deletes = local_deletes_count;
     result.remote_deletes = remote_deletes_count;
     result.overwritten_files = overwritten_files;

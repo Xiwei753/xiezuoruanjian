@@ -867,6 +867,15 @@ interface WriterAppService {
     SyncResultDto perform_sync(SyncConfigDto config);
 
     [Throws=WriterError]
+    boolean resolve_conflict_keep_local(string path);
+
+    [Throws=WriterError]
+    boolean resolve_conflict_take_remote(string path);
+
+    [Throws=WriterError]
+    boolean resolve_conflict_mark_merged(string path);
+
+    [Throws=WriterError]
     WritingStatsSummaryDto get_writing_stats_summary(string start_date, string end_date);
 
     [Throws=WriterError]

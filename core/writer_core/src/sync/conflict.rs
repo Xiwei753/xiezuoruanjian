@@ -257,9 +257,10 @@ impl crate::sync::SyncService {
 
     /// Resolve a conflict by keeping the local version.
     ///
-    /// Removes the path from `conflicted_files` and updates `known_files` to
-    /// the remote hash so the next sync sees base=remote_hash, local≠base,
-    /// remote=base → LocalChanged → uploads the local version.
+    /// Removes the path from `conflicted_files` and `conflicts`, and updates
+    /// `known_files` to the remote hash so the next sync sees
+    /// base=remote_hash, local≠base, remote=base → LocalChanged → uploads
+    /// the local version.
     pub fn resolve_conflict_keep_local(workspace_path: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(workspace_path)?;
         if !state.conflicted_files.remove(path) {
@@ -277,10 +278,11 @@ impl crate::sync::SyncService {
             state
                 .known_files
                 .insert(path.to_string(), conflict.remote_hash.clone());
+            if let Some(t) = state.known_files_updated_at.get(&conflict.remote_path).cloned() {
+                state.known_files_updated_at.insert(path.to_string(), t);
+            }
         } else {
             // Fallback: if no conflict record, use the current local file hash.
-            // This means the next sync will see NoConflict (if remote matches) or
-            // RemoteChanged (if remote differs). Not ideal but safe.
             let full_path = workspace_path.join(path);
             if full_path.exists() {
                 let content = std::fs::read(&full_path)?;
@@ -288,14 +290,18 @@ impl crate::sync::SyncService {
                 state.known_files.insert(path.to_string(), hash);
             }
         }
+        // Remove the conflict record from state.conflicts
+        state.conflicts.retain(|c| c.local_path != path && c.remote_path != path);
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())
     }
 
     /// Resolve a conflict by taking the remote version.
     ///
-    /// Removes the path from `conflicted_files` and updates `known_files` to
-    /// the remote hash so the next sync will download the remote version.
+    /// Removes the path from `conflicted_files` and `conflicts`, and adds it
+    /// to `pending_take_remote`. On the next `perform_sync`, the engine will
+    /// force-download the remote content to the local file, then update
+    /// `known_files` to the final local hash.
     pub fn resolve_conflict_take_remote(workspace_path: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(workspace_path)?;
         if !state.conflicted_files.remove(path) {
@@ -304,21 +310,21 @@ impl crate::sync::SyncService {
                 path
             )));
         }
-        // Find the conflict record to get the remote_hash.
-        if let Some(conflict) = state.conflicts.iter().find(|c| c.local_path == path) {
-            state
-                .known_files
-                .insert(path.to_string(), conflict.remote_hash.clone());
-        }
+        // Mark as pending_take_remote so the next perform_sync force-downloads
+        // the remote content to the local file.
+        state.pending_take_remote.insert(path.to_string());
+        // Remove the conflict record from state.conflicts
+        state.conflicts.retain(|c| c.local_path != path && c.remote_path != path);
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())
     }
 
     /// Resolve a conflict by marking it as manually merged.
     ///
-    /// Removes the path from `conflicted_files` and updates `known_files` to
-    /// the remote hash so the next sync sees base=remote_hash, local≠base,
-    /// remote=base → LocalChanged → uploads the merged version.
+    /// Removes the path from `conflicted_files` and `conflicts`, and updates
+    /// `known_files` to the remote hash so the next sync sees
+    /// base=remote_hash, local≠base, remote=base → LocalChanged → uploads
+    /// the merged version.
     pub fn resolve_conflict_mark_merged(workspace_path: &Path, path: &str) -> crate::Result<()> {
         let mut state = Self::load_sync_state(workspace_path)?;
         if !state.conflicted_files.remove(path) {
@@ -334,6 +340,9 @@ impl crate::sync::SyncService {
             state
                 .known_files
                 .insert(path.to_string(), conflict.remote_hash.clone());
+            if let Some(t) = state.known_files_updated_at.get(&conflict.remote_path).cloned() {
+                state.known_files_updated_at.insert(path.to_string(), t);
+            }
         } else {
             // Fallback: if no conflict record, use the current local file hash.
             let full_path = workspace_path.join(path);
@@ -343,6 +352,8 @@ impl crate::sync::SyncService {
                 state.known_files.insert(path.to_string(), hash);
             }
         }
+        // Remove the conflict record from state.conflicts
+        state.conflicts.retain(|c| c.local_path != path && c.remote_path != path);
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())
     }

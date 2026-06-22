@@ -344,6 +344,7 @@ mod tests {
             device_id: String::new(),
             known_files_updated_at: std::collections::HashMap::new(),
             conflicted_files: std::collections::HashSet::new(),
+            pending_take_remote: std::collections::HashSet::new(),
         };
         let config_str = serde_json::to_string(&config).unwrap();
         let state_str = serde_json::to_string(&state).unwrap();
@@ -452,6 +453,7 @@ mod tests {
             device_id: String::new(),
             known_files_updated_at: std::collections::HashMap::new(),
             conflicted_files: std::collections::HashSet::new(),
+            pending_take_remote: std::collections::HashSet::new(),
         };
 
         SyncService::save_sync_state(dir.path(), &state).unwrap();
@@ -2580,10 +2582,14 @@ mod tests {
             &remote_hash,
             "known_files must be updated to remote hash after keep_local (so next sync uploads local)"
         );
+        assert!(
+            state_after.conflicts.is_empty(),
+            "conflicts must be cleared after resolution"
+        );
     }
 
     /// P0-1: Test that resolve_conflict_take_remote properly clears the conflict
-    /// and sets known_files to the remote hash.
+    /// and adds the path to pending_take_remote (not known_files).
     #[test]
     fn test_resolve_conflict_take_remote() {
         let dir = tempdir().unwrap();
@@ -2617,10 +2623,19 @@ mod tests {
             !state_after.conflicted_files.contains(chapter_rel),
             "conflicted_files must be cleared after resolution"
         );
+        assert!(
+            state_after.pending_take_remote.contains(chapter_rel),
+            "pending_take_remote must contain the path after take_remote"
+        );
+        assert!(
+            state_after.conflicts.is_empty(),
+            "conflicts must be cleared after resolution"
+        );
+        // known_files should still be at base_hash — the actual download happens in perform_sync
         assert_eq!(
             state_after.known_files.get(chapter_rel).unwrap(),
-            &remote_hash,
-            "known_files must be updated to remote hash after take_remote"
+            &base_hash,
+            "known_files must remain at base_hash after take_remote (download happens in perform_sync)"
         );
     }
 
@@ -2670,6 +2685,10 @@ mod tests {
             state_after.known_files.get(chapter_rel).unwrap(),
             &remote_hash,
             "known_files must be updated to remote hash after mark_merged (so next sync uploads merged)"
+        );
+        assert!(
+            state_after.conflicts.is_empty(),
+            "conflicts must be cleared after resolution"
         );
     }
 
@@ -2839,5 +2858,170 @@ mod tests {
 
         shutdown3.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread3.join();
+    }
+
+    /// End-to-end test: BothChanged conflict → resolve_conflict_take_remote →
+    /// next sync downloads remote content to local, and subsequent sync does
+    /// NOT re-upload the old local version.
+    #[test]
+    #[cfg(not(windows))]
+    fn test_resolve_conflict_take_remote_then_sync() {
+        let dir = tempdir().unwrap();
+        let chapter_rel = "projects/p1/volumes/v1/chapters/c1/chapter.md";
+        let chapter_abs = dir.path().join(chapter_rel);
+        std::fs::create_dir_all(chapter_abs.parent().unwrap()).unwrap();
+
+        let base_content = "base version A";
+        let local_content = "local version B";
+        let remote_content = "remote version C";
+
+        std::fs::write(&chapter_abs, local_content).unwrap();
+
+        let base_hash = format!("{:x}", md5::compute(base_content.as_bytes()));
+        let remote_hash = format!("{:x}", md5::compute(remote_content.as_bytes()));
+
+        let mut state = SyncState::default();
+        state.device_id = "device_local".to_string();
+        state
+            .known_files
+            .insert(chapter_rel.to_string(), base_hash.clone());
+        state
+            .known_files_updated_at
+            .insert(chapter_rel.to_string(), 1000);
+        SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        let mut initial_files = std::collections::HashMap::new();
+        initial_files.insert(chapter_rel.to_string(), remote_content.to_string());
+
+        let initial_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: chapter_rel.to_string(),
+                content_hash: remote_hash.clone(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "device_remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        // === Step 1: First sync generates BothChanged conflict ===
+        let (mock_url, shutdown, _files_map, _manifest_str, server_thread) =
+            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("dummy_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets).unwrap();
+        assert_eq!(res1.status, SyncStatus::PartialConflict);
+
+        shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread.join();
+
+        // === Step 2: Resolve by taking remote ===
+        SyncService::resolve_conflict_take_remote(dir.path(), chapter_rel).unwrap();
+
+        let state_after_resolve = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(!state_after_resolve.conflicted_files.contains(chapter_rel));
+        assert!(state_after_resolve.pending_take_remote.contains(chapter_rel));
+        assert!(state_after_resolve.conflicts.is_empty());
+
+        // === Step 3: Next sync should download remote content to local ===
+        let mut state_before_3 = SyncService::load_sync_state(dir.path()).unwrap();
+        state_before_3.last_sync_time = None;
+        SyncService::save_sync_state(dir.path(), &state_before_3).unwrap();
+
+        let (mock_url3, shutdown3, _files_map3, _manifest_str3, server_thread3) =
+            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+
+        let config3 = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url3,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let res3 = SyncService::perform_lww_sync(dir.path(), &config3, &secrets).unwrap();
+
+        // After take_remote resolution, sync must download the remote content
+        assert!(res3.downloaded_files.contains(&chapter_rel.to_string()),
+            "After take_remote resolution, sync must download the remote version");
+        assert!(!res3.uploaded_files.contains(&chapter_rel.to_string()),
+            "After take_remote resolution, sync must NOT upload the old local version");
+
+        // Local file must now be the remote version
+        let local_after_3 = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(local_after_3, remote_content,
+            "Local file must be the remote version after take_remote + sync");
+
+        // pending_take_remote must be cleared
+        let state_after_3 = SyncService::load_sync_state(dir.path()).unwrap();
+        assert!(
+            !state_after_3.pending_take_remote.contains(chapter_rel),
+            "pending_take_remote must be cleared after sync"
+        );
+        assert!(
+            !state_after_3.conflicted_files.contains(chapter_rel),
+            "conflicted_files must stay cleared after sync"
+        );
+
+        shutdown3.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread3.join();
+
+        // === Step 4: Subsequent sync should NOT re-upload or re-download ===
+        let mut state_before_4 = SyncService::load_sync_state(dir.path()).unwrap();
+        state_before_4.last_sync_time = None;
+        SyncService::save_sync_state(dir.path(), &state_before_4).unwrap();
+
+        let (mock_url4, shutdown4, _files_map4, _manifest_str4, server_thread4) =
+            start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
+
+        let config4 = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: mock_url4,
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+
+        let res4 = SyncService::perform_lww_sync(dir.path(), &config4, &secrets).unwrap();
+
+        assert!(!res4.uploaded_files.contains(&chapter_rel.to_string()),
+            "Subsequent sync must NOT upload after take_remote resolved");
+        assert!(!res4.downloaded_files.contains(&chapter_rel.to_string()),
+            "Subsequent sync must NOT download after take_remote resolved");
+
+        // Local file must still be the remote version
+        let local_after_4 = std::fs::read_to_string(&chapter_abs).unwrap();
+        assert_eq!(local_after_4, remote_content,
+            "Local file must remain the remote version after subsequent sync");
+
+        shutdown4.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = server_thread4.join();
     }
 }

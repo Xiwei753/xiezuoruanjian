@@ -403,6 +403,11 @@ pub struct SyncState {
     /// `resolve_conflict_mark_merged`.
     #[serde(default)]
     pub conflicted_files: std::collections::HashSet<String>,
+    /// Paths where the user chose "take remote" but the remote content has not
+    /// yet been downloaded. On the next `perform_sync`, the engine must force-
+    /// download these paths before any three-way comparison, then clear the set.
+    #[serde(default)]
+    pub pending_take_remote: std::collections::HashSet<String>,
 }
 
 impl Default for SyncState {
@@ -421,6 +426,7 @@ impl Default for SyncState {
             device_id: uuid::Uuid::new_v4().to_string(),
             known_files_updated_at: std::collections::HashMap::new(),
             conflicted_files: std::collections::HashSet::new(),
+            pending_take_remote: std::collections::HashSet::new(),
         }
     }
 }

@@ -866,6 +866,14 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -933,6 +941,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_writer_core_fn_method_writerappservice_find_starmap_references(`ptr`: Pointer,`targetStarmapId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_writer_core_fn_method_writerappservice_flush_recent_edits(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_flush_writing_stats(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_get_project_stats(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1000,6 +1010,12 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_fn_method_writerappservice_reorder_projects(`ptr`: Pointer,`orderedProjectIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_reorder_volumes(`ptr`: Pointer,`projectId`: RustBuffer.ByValue,`orderedVolumeIds`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_resolve_conflict_keep_local(`ptr`: Pointer,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_resolve_conflict_mark_merged(`ptr`: Pointer,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
+    fun uniffi_writer_core_fn_method_writerappservice_resolve_conflict_take_remote(`ptr`: Pointer,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
     fun uniffi_writer_core_fn_method_writerappservice_resolve_layout(`ptr`: Pointer,`metrics`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -1205,6 +1221,8 @@ internal interface UniffiLib : Library {
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_find_starmap_references(
     ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_flush_recent_edits(
+    ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_get_project_stats(
@@ -1272,6 +1290,12 @@ internal interface UniffiLib : Library {
     fun uniffi_writer_core_checksum_method_writerappservice_reorder_projects(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_reorder_volumes(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_resolve_conflict_keep_local(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_resolve_conflict_mark_merged(
+    ): Short
+    fun uniffi_writer_core_checksum_method_writerappservice_resolve_conflict_take_remote(
     ): Short
     fun uniffi_writer_core_checksum_method_writerappservice_resolve_layout(
     ): Short
@@ -1399,6 +1423,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
     if (lib.uniffi_writer_core_checksum_method_writerappservice_find_starmap_references() != 5338.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_recent_edits() != 53163.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_flush_writing_stats() != 56971.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -1499,6 +1526,15 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_reorder_volumes() != 7484.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_resolve_conflict_keep_local() != 12854.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_resolve_conflict_mark_merged() != 40903.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_writer_core_checksum_method_writerappservice_resolve_conflict_take_remote() != 54261.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_writer_core_checksum_method_writerappservice_resolve_layout() != 1934.toShort()) {
@@ -1610,29 +1646,6 @@ public object FfiConverterUByte: FfiConverter<UByte, Byte> {
 
     override fun write(value: UByte, buf: ByteBuffer) {
         buf.put(value.toByte())
-    }
-}
-
-/**
- * @suppress
- */
-public object FfiConverterUShort: FfiConverter<UShort, Short> {
-    override fun lift(value: Short): UShort {
-        return value.toUShort()
-    }
-
-    override fun read(buf: ByteBuffer): UShort {
-        return lift(buf.getShort())
-    }
-
-    override fun lower(value: UShort): Short {
-        return value.toShort()
-    }
-
-    override fun allocationSize(value: UShort) = 2UL
-
-    override fun write(value: UShort, buf: ByteBuffer) {
-        buf.putShort(value.toShort())
     }
 }
 
@@ -2060,6 +2073,8 @@ public interface WriterAppServiceInterface {
     
     fun `findStarmapReferences`(`targetStarmapId`: kotlin.String): List<StarMapReferenceDto>
     
+    fun `flushRecentEdits`(): kotlin.Boolean
+    
     fun `flushWritingStats`(): kotlin.Boolean
     
     fun `getProjectStats`(`projectId`: kotlin.String): ProjectStatsDto
@@ -2127,6 +2142,12 @@ public interface WriterAppServiceInterface {
     fun `reorderProjects`(`orderedProjectIds`: List<kotlin.String>): kotlin.Boolean
     
     fun `reorderVolumes`(`projectId`: kotlin.String, `orderedVolumeIds`: List<kotlin.String>): kotlin.Boolean
+    
+    fun `resolveConflictKeepLocal`(`path`: kotlin.String): kotlin.Boolean
+    
+    fun `resolveConflictMarkMerged`(`path`: kotlin.String): kotlin.Boolean
+    
+    fun `resolveConflictTakeRemote`(`path`: kotlin.String): kotlin.Boolean
     
     fun `resolveLayout`(`metrics`: WindowMetricsDto): LayoutPlanDto
     
@@ -2509,6 +2530,19 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_find_starmap_references(
         it, FfiConverterString.lower(`targetStarmapId`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(WriterException::class)override fun `flushRecentEdits`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_flush_recent_edits(
+        it, _status)
 }
     }
     )
@@ -2951,6 +2985,45 @@ open class WriterAppService: Disposable, AutoCloseable, WriterAppServiceInterfac
     uniffiRustCallWithError(WriterException) { _status ->
     UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_reorder_volumes(
         it, FfiConverterString.lower(`projectId`),FfiConverterSequenceString.lower(`orderedVolumeIds`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(WriterException::class)override fun `resolveConflictKeepLocal`(`path`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_resolve_conflict_keep_local(
+        it, FfiConverterString.lower(`path`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(WriterException::class)override fun `resolveConflictMarkMerged`(`path`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_resolve_conflict_mark_merged(
+        it, FfiConverterString.lower(`path`),_status)
+}
+    }
+    )
+    }
+    
+
+    
+    @Throws(WriterException::class)override fun `resolveConflictTakeRemote`(`path`: kotlin.String): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithPointer {
+    uniffiRustCallWithError(WriterException) { _status ->
+    UniffiLib.INSTANCE.uniffi_writer_core_fn_method_writerappservice_resolve_conflict_take_remote(
+        it, FfiConverterString.lower(`path`),_status)
 }
     }
     )
@@ -5842,10 +5915,6 @@ data class SyncConfigDto (
     var `branch`: kotlin.String, 
     var `autoSync`: kotlin.Boolean, 
     var `syncIntervalSeconds`: kotlin.UInt, 
-    var `proxyEnabled`: kotlin.Boolean, 
-    var `proxyType`: kotlin.String, 
-    var `proxyHost`: kotlin.String, 
-    var `proxyPort`: kotlin.UShort, 
     var `username`: kotlin.String, 
     var `androidHasInternetPermission`: kotlin.Boolean, 
     var `androidHasAccessNetworkStatePermission`: kotlin.Boolean
@@ -5867,10 +5936,6 @@ public object FfiConverterTypeSyncConfigDto: FfiConverterRustBuffer<SyncConfigDt
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterUInt.read(buf),
-            FfiConverterBoolean.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterString.read(buf),
-            FfiConverterUShort.read(buf),
             FfiConverterString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterBoolean.read(buf),
@@ -5885,10 +5950,6 @@ public object FfiConverterTypeSyncConfigDto: FfiConverterRustBuffer<SyncConfigDt
             FfiConverterString.allocationSize(value.`branch`) +
             FfiConverterBoolean.allocationSize(value.`autoSync`) +
             FfiConverterUInt.allocationSize(value.`syncIntervalSeconds`) +
-            FfiConverterBoolean.allocationSize(value.`proxyEnabled`) +
-            FfiConverterString.allocationSize(value.`proxyType`) +
-            FfiConverterString.allocationSize(value.`proxyHost`) +
-            FfiConverterUShort.allocationSize(value.`proxyPort`) +
             FfiConverterString.allocationSize(value.`username`) +
             FfiConverterBoolean.allocationSize(value.`androidHasInternetPermission`) +
             FfiConverterBoolean.allocationSize(value.`androidHasAccessNetworkStatePermission`)
@@ -5902,10 +5963,6 @@ public object FfiConverterTypeSyncConfigDto: FfiConverterRustBuffer<SyncConfigDt
             FfiConverterString.write(value.`branch`, buf)
             FfiConverterBoolean.write(value.`autoSync`, buf)
             FfiConverterUInt.write(value.`syncIntervalSeconds`, buf)
-            FfiConverterBoolean.write(value.`proxyEnabled`, buf)
-            FfiConverterString.write(value.`proxyType`, buf)
-            FfiConverterString.write(value.`proxyHost`, buf)
-            FfiConverterUShort.write(value.`proxyPort`, buf)
             FfiConverterString.write(value.`username`, buf)
             FfiConverterBoolean.write(value.`androidHasInternetPermission`, buf)
             FfiConverterBoolean.write(value.`androidHasAccessNetworkStatePermission`, buf)

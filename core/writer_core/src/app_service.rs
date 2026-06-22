@@ -289,6 +289,18 @@ impl WriterAppService {
         self.api.perform_sync(config)
     }
 
+    pub fn resolve_conflict_keep_local(&self, path: String) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_keep_local(&path)
+    }
+
+    pub fn resolve_conflict_take_remote(&self, path: String) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_take_remote(&path)
+    }
+
+    pub fn resolve_conflict_mark_merged(&self, path: String) -> Result<bool, WriterError> {
+        self.api.resolve_conflict_mark_merged(&path)
+    }
+
 
     pub fn get_writing_stats_summary(
         &self,
