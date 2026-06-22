@@ -285,4 +285,26 @@ mod tests {
             line_end
         );
     }
+
+    #[test]
+    fn test_prev_char_boundary() {
+        assert_eq!(prev_char_boundary("", 0), None);
+        assert_eq!(prev_char_boundary("", 5), None);
+        assert_eq!(prev_char_boundary("abc", 0), None);
+
+        assert_eq!(prev_char_boundary("abc", 1), Some(0));
+        assert_eq!(prev_char_boundary("abc", 2), Some(1));
+        assert_eq!(prev_char_boundary("abc", 3), Some(2));
+        assert_eq!(prev_char_boundary("abc", 10), Some(2));
+
+        let utf8_text = "你好world";
+        assert_eq!(prev_char_boundary(utf8_text, 0), None);
+        assert_eq!(prev_char_boundary(utf8_text, 3), Some(0));
+        assert_eq!(prev_char_boundary(utf8_text, 6), Some(3));
+        assert_eq!(prev_char_boundary(utf8_text, 7), Some(6));
+
+        // Non-char boundary index fallback check
+        assert_eq!(prev_char_boundary(utf8_text, 2), Some(0));
+        assert_eq!(prev_char_boundary(utf8_text, 5), Some(3));
+    }
 }
