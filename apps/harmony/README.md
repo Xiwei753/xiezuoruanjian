@@ -198,18 +198,7 @@ IWriterCoreBridge 定义了完整的接口：
 
 ## 云端构建（CI/CD）
 
-### Workflow 配置
-
-新增 `.github/workflows/harmony_build.yml`，用于自动化构建 HarmonyOS HAP 包。
-
-- **触发条件**：push 到 `apps/harmony/**` 路径，或手动触发（workflow_dispatch）
-- **构建环境**：`ghcr.io/sanchuanhehe/harmony-next-pipeline-docker/harmonyos-ci-image:latest`
-- **构建步骤**：
-  1. `ohpm install --all` — 安装依赖
-  2. `hvigorw assembleHap` — 构建 HAP
-  3. 上传构建产物为 GitHub Artifact
-
-> **注意**：第一阶段只构建无签名/调试 HAP，不代表正式发布包。
+> **注意**：HarmonyOS CI/CD workflow 尚未配置，待后续推进。
 
 ## 签名规则
 
