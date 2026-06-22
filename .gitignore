@@ -74,6 +74,7 @@ tmp/
 
 # Secrets & Local Config
 .github-token
+.gitee-token
 .env*
 secrets.json
 api_keys.json
