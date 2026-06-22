@@ -1,5 +1,4 @@
 import yaml
-import base64
 import ctypes
 import ctypes.wintypes
 
