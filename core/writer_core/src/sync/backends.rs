@@ -36,6 +36,52 @@ pub trait SyncBackend {
 #[cfg(feature = "git-https")]
 pub struct GitSyncBackend;
 
+#[cfg(not(feature = "git-https"))]
+pub struct UnavailableGitBackend;
+
+#[cfg(not(feature = "git-https"))]
+impl SyncBackend for UnavailableGitBackend {
+    fn diagnose(
+        &self,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncDiagnosticsResult> {
+        Err(crate::Error::Other(
+            "git backend is unavailable in this build; use github_api".into(),
+        ))
+    }
+    fn pull(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        Err(crate::Error::Other(
+            "git backend is unavailable in this build; use github_api".into(),
+        ))
+    }
+    fn push(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        Err(crate::Error::Other(
+            "git backend is unavailable in this build; use github_api".into(),
+        ))
+    }
+    fn sync(
+        &self,
+        _workspace_path: &Path,
+        _config: &SyncConfig,
+        _secrets: &SyncSecrets,
+    ) -> crate::Result<SyncResult> {
+        Err(crate::Error::Other(
+            "git backend is unavailable in this build; use github_api".into(),
+        ))
+    }
+}
+
 #[cfg(feature = "git-https")]
 impl SyncBackend for GitSyncBackend {
     fn diagnose(
@@ -82,7 +128,7 @@ pub fn create_sync_backend(backend_type: &BackendType) -> Box<dyn SyncBackend> {
         #[cfg(feature = "git-https")]
         BackendType::Git => Box::new(GitSyncBackend),
         #[cfg(not(feature = "git-https"))]
-        BackendType::Git => Box::new(GitHubApiBackend),
+        BackendType::Git => Box::new(UnavailableGitBackend),
         BackendType::GithubApi => Box::new(GitHubApiBackend),
     }
 }
