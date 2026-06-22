@@ -5,7 +5,7 @@
 [![Android Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml)
 [![Windows Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml)
 
-[English](README_EN.md)
+[English Version](README_EN.md)
 
 <!-- 截图占位：替换为实际应用截图 -->
 <!--
