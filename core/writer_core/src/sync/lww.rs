@@ -439,12 +439,17 @@ fn execute_lww_sync_attempt(
                 eprintln!("[sync] pending_take_remote downloaded path={}", path);
             } else {
                 eprintln!(
-                    "[sync] pending_take_remote: remote file missing for path={}, skipping",
+                    "[sync] pending_take_remote: remote file missing for path={}, keeping in pending",
                     path
                 );
             }
         }
-        state.pending_take_remote.clear();
+        // Only clear paths that were successfully downloaded;
+        // failed/missing paths remain in pending_take_remote so the user
+        // is not silently left with stale local content.
+        state
+            .pending_take_remote
+            .retain(|p| !pending_take_remote_set.contains(p));
     }
 
     let mut merged_manifest_files = std::collections::HashMap::new();
@@ -865,6 +870,7 @@ fn execute_lww_sync_attempt(
     let has_doc_conflicts = !doc_conflicts.is_empty();
     let has_changes = !to_upload.is_empty()
         || !to_download.is_empty()
+        || !pending_take_remote_downloaded.is_empty()
         || !local_deletes_count.is_empty()
         || !remote_deletes_count.is_empty();
 

@@ -20,6 +20,9 @@ use qmetaobject::{
 };
 use rendering::ScrollBuffer;
 use std::cell::Cell;
+use std::time::Instant;
+
+pub use rendering::AnimatedGlyph;
 use writer_core::editor::{EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorAnimationEvent, EditorAnimationKind, GlyphRect};
 
 cpp! {{

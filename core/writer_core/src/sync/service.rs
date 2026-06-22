@@ -621,6 +621,7 @@ impl SyncService {
                 "[sync] processing pending_take_remote count={}",
                 state_for_pending.pending_take_remote.len()
             );
+            let mut succeeded: std::collections::HashSet<String> = std::collections::HashSet::new();
             if let Ok(repo) = git2::Repository::open(workspace_path) {
                 let remote_branch_ref = format!("refs/remotes/origin/{}", config.branch);
                 if let Ok(remote_commit) = repo.find_reference(&remote_branch_ref)
@@ -664,24 +665,35 @@ impl SyncService {
                                         .known_files_updated_at
                                         .insert(path.clone(), now_ts);
                                     result.downloaded_files.push(path.clone());
+                                    succeeded.insert(path.clone());
                                     eprintln!("[sync] pending_take_remote checked out path={}", path);
                                 }
+                            } else {
+                                eprintln!(
+                                    "[sync] pending_take_remote: remote file missing for path={}, keeping in pending",
+                                    path
+                                );
                             }
                         } else {
                             eprintln!(
-                                "[sync] pending_take_remote: could not get remote tree for path={}",
+                                "[sync] pending_take_remote: could not get remote tree for path={}, keeping in pending",
                                 path
                             );
                         }
                     }
                 } else {
                     eprintln!(
-                        "[sync] pending_take_remote: could not resolve remote branch ref={}",
+                        "[sync] pending_take_remote: could not resolve remote branch ref={}, keeping all in pending",
                         remote_branch_ref
                     );
                 }
             }
-            state_for_pending.pending_take_remote.clear();
+            // Only clear paths that were successfully downloaded;
+            // failed/missing paths remain in pending_take_remote so the user
+            // is not silently left with stale local content.
+            state_for_pending
+                .pending_take_remote
+                .retain(|p| !succeeded.contains(p));
             let _ = Self::save_sync_state(workspace_path, &state_for_pending);
         }
 

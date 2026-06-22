@@ -1,5 +1,3 @@
-use std::time::Instant;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EditorSnapshot {
     pub text: String,

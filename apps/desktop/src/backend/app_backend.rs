@@ -20,7 +20,7 @@
 
 use cpp::cpp;
 use qmetaobject::prelude::*;
-use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
+use qmetaobject::{QJsonArray, QJsonObject, QString};
 use rfd::FileDialog;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -31,7 +31,7 @@ use writer_core::api::WriterCoreApi;
 
 use super::json_utils::{
     bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
-    serde_to_qjson_object, serde_value_to_qjson,
+    serde_to_qjson_object,
 };
 use crate::{starmap_bridge, sync_bridge, writing_bridge};
 

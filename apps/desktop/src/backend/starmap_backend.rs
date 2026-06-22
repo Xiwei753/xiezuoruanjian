@@ -17,7 +17,6 @@
 
 use super::*;
 use crate::backend::SafeAppPtr;
-use writer_core::api::WriterCoreApi;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]

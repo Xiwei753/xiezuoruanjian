@@ -8,7 +8,7 @@ default = []
 ai = ["writer_core/ai"]
 
 [dependencies]
-writer_core = { path = "../../core/writer_core" }
+writer_core = { path = "../../core/writer_core", features = ["git-https"] }
 arboard = "3.4.1"
 rfd = "0.14.1"
 qmetaobject = "0.2.10"

@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = ["git-https"]
+default = []
 ai = []
 harmony-ffi = ["once_cell"]
 

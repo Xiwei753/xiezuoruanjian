@@ -76,7 +76,7 @@ pub struct BackendRuntime {
 
 impl BackendRuntime {
     pub fn new() -> Self {
-        let mut app_backend = QObjectBox::new(AppBackend::default());
+        let app_backend = QObjectBox::new(AppBackend::default());
         let app_ptr = SafeAppPtr::new();
         // Safe because app_backend is pinned in the heap inside QObjectBox
         // and its lifetime is identical to BackendRuntime.

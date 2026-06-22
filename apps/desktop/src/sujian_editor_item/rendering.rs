@@ -6,6 +6,7 @@ use qmetaobject::{
     QImage, QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF,
     QString,
 };
+use std::time::Instant;
 
 use super::{sujian_editor_debug_enabled, SujianEditorItem};
 use super::cursor_controller::CursorUpdateResult;
@@ -101,7 +102,7 @@ impl CursorAnimationState {
     pub fn current_position(&self, now: Instant) -> (f64, f64) {
         let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
         let t = (elapsed_ms / self.duration_ms as f64).min(1.0);
-        let eased = 1.0 - (1.0 - t).powi(3);
+        let eased = 1.0 - (1.0 - t).powi(3i32);
         let x = self.start_x + (self.target_x - self.start_x) * eased;
         let y = self.start_y + (self.target_y - self.start_y) * eased;
         (x, y)
@@ -110,6 +111,16 @@ impl CursorAnimationState {
     pub fn is_finished(&self, now: Instant) -> bool {
         now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct AnimatedGlyph {
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub text: String,
+    pub rect: (f64, f64, f64, f64),
+    pub baseline_y: f64,
+    pub line_index: usize,
 }
 
 // Animation display lifecycle has been removed from Rust.  Rust now only

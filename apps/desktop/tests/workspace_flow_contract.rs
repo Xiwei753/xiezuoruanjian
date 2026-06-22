@@ -1,5 +1,4 @@
 use std::fs;
-use tempfile::tempdir;
 
 #[test]
 fn workspace_backend_exposes_path_based_methods() {
