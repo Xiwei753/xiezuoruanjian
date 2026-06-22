@@ -612,6 +612,79 @@ impl SyncService {
             }
         }
 
+        // ── Process pending_take_remote ──
+        // For each path in pending_take_remote, force-checkout the file from the
+        // remote branch so the local file matches the remote version.
+        let mut state_for_pending = Self::load_sync_state(workspace_path).unwrap_or_default();
+        if !state_for_pending.pending_take_remote.is_empty() {
+            eprintln!(
+                "[sync] processing pending_take_remote count={}",
+                state_for_pending.pending_take_remote.len()
+            );
+            if let Ok(repo) = git2::Repository::open(workspace_path) {
+                let remote_branch_ref = format!("refs/remotes/origin/{}", config.branch);
+                if let Ok(remote_commit) = repo.find_reference(&remote_branch_ref)
+                    .and_then(|r| r.peel_to_commit())
+                {
+                    let remote_tree = remote_commit.tree();
+                    for path in state_for_pending.pending_take_remote.iter() {
+                        if let Ok(ref tree) = remote_tree {
+                            if let Ok(entry) = tree.get_path(std::path::Path::new(path)) {
+                                if let Ok(blob) = repo.find_blob(entry.id()) {
+                                    let full_path = workspace_path.join(path);
+                                    if let Some(parent) = full_path.parent() {
+                                        let _ = std::fs::create_dir_all(parent);
+                                    }
+                                    let content = blob.content();
+                                    let tmp_path = full_path.with_extension(format!(
+                                        "tmp.{}",
+                                        uuid::Uuid::new_v4()
+                                    ));
+                                    if let Err(e) = std::fs::write(&tmp_path, content) {
+                                        eprintln!(
+                                            "[sync] pending_take_remote: write failed path={} err={}",
+                                            path, e
+                                        );
+                                        continue;
+                                    }
+                                    if let Err(e) = std::fs::rename(&tmp_path, &full_path) {
+                                        eprintln!(
+                                            "[sync] pending_take_remote: rename failed path={} err={}",
+                                            path, e
+                                        );
+                                        continue;
+                                    }
+                                    // Update known_files to the hash of the newly written content
+                                    let hash = format!("{:x}", md5::compute(content));
+                                    state_for_pending
+                                        .known_files
+                                        .insert(path.clone(), hash);
+                                    let now_ts = chrono::Utc::now().timestamp_millis();
+                                    state_for_pending
+                                        .known_files_updated_at
+                                        .insert(path.clone(), now_ts);
+                                    result.downloaded_files.push(path.clone());
+                                    eprintln!("[sync] pending_take_remote checked out path={}", path);
+                                }
+                            }
+                        } else {
+                            eprintln!(
+                                "[sync] pending_take_remote: could not get remote tree for path={}",
+                                path
+                            );
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "[sync] pending_take_remote: could not resolve remote branch ref={}",
+                        remote_branch_ref
+                    );
+                }
+            }
+            state_for_pending.pending_take_remote.clear();
+            let _ = Self::save_sync_state(workspace_path, &state_for_pending);
+        }
+
         let plan = match scanner::build_sync_plan_from_workspace(workspace_path) {
             Ok(p) => p,
             Err(e) => {
