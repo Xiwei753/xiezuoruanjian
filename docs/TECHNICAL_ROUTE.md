@@ -3,7 +3,7 @@
 Status: active
 Last verified: 2026-06-11
 Truth source: code / product decision / protocol
-Supersedes: docs/TECHNICAL_ROUTE.md
+Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 
 ## 最高优先级规则
 - **核心契约约束：** 项目已建立跨平台业务底线契约：[《跨平台能力契约与 Core-first 架构约束》](archive/CROSS_PLATFORM_CAPABILITY_CONTRACT.md)。所有跨平台业务设计与能力对齐，必须以该契约文档为唯一准则。其优先级高于任何单端（Android、Linux、未来新增端）的局部技术路线和实现细节。
@@ -207,6 +207,16 @@ Supersedes: docs/TECHNICAL_ROUTE.md
 ## 目录级技术路线
 除了本全局技术路线外，各个核心目录也定义了各自的实现边界。后续修改代码时，必须遵守对应目录的技术路线：
 
+| 目录 | 技术路线文档 | 说明 |
+|------|------------|------|
+| `apps/desktop/` | `docs/editor_engine_route.md` | 自研编辑器渲染引擎路线 |
+| `apps/harmony/` | `docs/harmony_route.md` | 鸿蒙端技术路线 |
+| `apps/harmony/` | `docs/harmony_bridge_contract.md` | 鸿蒙桥接契约 |
+| `apps/harmony/` | `docs/harmony_core_action_map.md` | 鸿蒙 Core Action 映射 |
+| `apps/harmony/` | `docs/harmony_native_bridge_plan.md` | 鸿蒙 Native Bridge 接入计划 |
+| `core/writer_core/` (starmap) | `docs/starmap_semantics.md` | 星图语义模型 |
+| `core/writer_core/` (starmap) | `docs/starmap_canvas_model.md` | 星图画布模型契约 |
+| `core/writer_core/` (starmap) | `docs/starmap_implementation_route.md` | 星图实现路线 |
 
 **冲突处理规则**：
 - 如果全局文档和目录文档存在冲突，先以更严格的约束为准。

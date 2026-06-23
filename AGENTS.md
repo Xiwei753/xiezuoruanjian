@@ -13,10 +13,10 @@ Supersedes: AGENTS.md (previous version)
 
 ```
 core/writer_core/          Rust 核心库（唯一业务逻辑层）
-bindings/android/          Android JNI 桥接
 bindings/shared/           跨平台共享绑定
 apps/android/              Kotlin Android 客户端（薄客户端）
-apps/desktop/                Qt/QML Linux 客户端（薄客户端）
+apps/desktop/              Qt/QML Linux 客户端（薄客户端）
+apps/harmony/              ArkTS HarmonyOS NEXT 客户端（薄客户端）
 ```
 
 **核心原则：Rust Core 是唯一事实来源。**
@@ -144,12 +144,21 @@ apps/desktop/
 ```
 core/writer_core/
   src/
-    facade.rs            Facade 层（对外 API 入口）
-    workspace/           工作区管理
-    project/             项目管理
+    facade/              Facade 层（对外 API 入口）
+    api/                 跨平台稳定 API 层（DTO、错误映射、WriterCoreApi）
+    app_service.rs       UniFFI adapter
+    workspace.rs         工作区管理
+    project.rs           项目管理
+    volume.rs            卷管理
+    chapter.rs           章节管理
     sync/                同步逻辑
     settings/            设置管理
-    formatting/          格式化规则
+    starmap/             星图（正式图谱路线）
+    editor/              编辑器事务
+    ffi/                 C-ABI / NAPI 导出
+    writing_stats/       写作统计
+    storage/             存储事务
+    history/             撤销/重做
     ...
 ```
 

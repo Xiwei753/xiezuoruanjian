@@ -49,7 +49,8 @@ Harmony 当前为 WIP shell。不认为已完成 Rust Core 全量接入，不认
 
 ```
 apps/harmony/
-  AppScope.ets                    应用级配置
+  AppScope/                        应用级配置
+    app.json5
   oh-package.json5                依赖配置
   build-profile.json5             构建配置
   hvigorfile.ts                   构建脚本
@@ -58,6 +59,11 @@ apps/harmony/
     hvigorfile.ts                 Entry 构建脚本
     src/main/
       module.json5                模块配置
+      cpp/                        NAPI C++ 桥接层
+        CMakeLists.txt
+        napi_init.cpp
+        writer_core_bridge.h
+        libs/                     预编译 Rust FFI 库
       resources/
         base/
           element/
@@ -72,6 +78,7 @@ apps/harmony/
           EntryAbility.ets        应用入口
         pages/
           Index.ets               首页
+          MainWorkspace.ets       主工作区页面
           WorkspacePage.ets       工作区页面
           WritingPage.ets         写作页面
           StarMapPage.ets         星图页面
@@ -79,17 +86,21 @@ apps/harmony/
         bridge/
           IWriterCoreBridge.ets   桥接接口
           MockWriterCoreBridge.ets Mock 实现
-          NativeWriterCoreBridge.ets Native 空壳
+          NativeWriterCoreBridge.ets Native 实现
+          WriterCoreBridge.ets    桥接入口
         model/
           CoreDtos.ets            数据传输对象
         system/
-          HarmonyFileAccess.ets   文件访问接口
-          HarmonySecureStorage.ets 安全存储接口
-          HarmonyNetworkState.ets 网络状态接口
           HarmonyLifecycle.ets    生命周期管理
+          HarmonyStyleAdapter.ets 样式适配器
           HarmonyThemeAdapter.ets 主题适配器
         common/
           AppContext.ets          应用上下文
+          AdaptiveContext.ets     自适应上下文
+          LayoutPolicyHelper.ets  布局策略辅助
+          ScreenPolicyBridge.ets  屏幕策略桥接
+        utils/
+          MessageKeyMapper.ets    消息键映射
   README.md                       本文件
 ```
 
@@ -105,11 +116,11 @@ IWriterCoreBridge (接口)
 
 ### 系统服务（对齐 HarmonyOS NEXT API 12）
 
-- **HarmonyFileAccess**: 文件系统访问 → 包装 `@ohos.file.fs`
-- **HarmonySecureStorage**: KV 存储 → 包装 `@ohos.data.preferences`
-- **HarmonyNetworkState**: 网络状态 → 包装 `@ohos.net.connection`
 - **HarmonyLifecycle**: 生命周期 → 对齐 UIAbility 回调
+- **HarmonyStyleAdapter**: 样式适配（内部逻辑，不依赖系统 API）
 - **HarmonyThemeAdapter**: 主题适配（内部逻辑，不依赖系统 API）
+
+> 注：HarmonyFileAccess、HarmonySecureStorage、HarmonyNetworkState 等系统服务接口尚未实现为独立文件，相关能力暂通过 NativeWriterCoreBridge 和 MockWriterCoreBridge 内部调用系统 API 实现。
 
 ### 应用上下文
 

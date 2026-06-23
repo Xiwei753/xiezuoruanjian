@@ -30,7 +30,7 @@
 - 鸿蒙端手写 `@ohos.*.d.ts` 类型声明（改用官方依赖）
 - 旧 `mind_map` 图谱模块（已由 StarMap 替代）
 
-## [1.0.0] - 2026-06-01
+## [0.1.0] - 2026-06-01
 
 ### 新增
 - Rust 核心库（core/writer_core）
@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - HarmonyOS handwritten `@ohos.*.d.ts` type declarations (replaced by official dependencies)
 - Legacy `mind_map` module (replaced by StarMap)
 
-## [1.0.0] - 2026-06-01
+## [0.1.0] - 2026-06-01
 
 ### Added
 - Rust core library (core/writer_core)

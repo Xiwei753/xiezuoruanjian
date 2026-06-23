@@ -118,5 +118,12 @@ Requirements:
 - `docs/settings_schema.md`: Local and syncable settings definitions
 - `docs/sync_rules.md`: Sync rules
 - `docs/starmap_semantics.md`: StarMap semantic foundation (independent objects and reference safety)
+- `docs/starmap_canvas_model.md`: StarMap canvas model contract
+- `docs/starmap_implementation_route.md`: StarMap implementation route
 - `docs/editor_engine_route.md`: Custom editor engine and unified event layer route
+- `docs/harmony_route.md`: HarmonyOS client technical route
+- `docs/harmony_bridge_contract.md`: HarmonyOS bridge contract
+- `docs/harmony_core_action_map.md`: HarmonyOS Core Action map
+- `docs/harmony_native_bridge_plan.md`: HarmonyOS Native Bridge plan
 - `docs/archive/desktop_ime_notes.md`: Desktop (Linux) IME notes (archived)
+- `docs/archive/screen_policy_acceptance.md`: Screen policy acceptance table (archived)

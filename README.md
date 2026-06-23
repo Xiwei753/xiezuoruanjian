@@ -120,5 +120,12 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 - `docs/settings_schema.md`: 本地和可同步设置定义
 - `docs/sync_rules.md`: 同步规则
 - `docs/starmap_semantics.md`: 星图语义地基 (独立对象与引用安全)
+- `docs/starmap_canvas_model.md`: 星图画布模型契约
+- `docs/starmap_implementation_route.md`: 星图实现路线
 - `docs/editor_engine_route.md`: 自绘编辑器与统一事件层路线
+- `docs/harmony_route.md`: 鸿蒙端技术路线
+- `docs/harmony_bridge_contract.md`: 鸿蒙桥接契约
+- `docs/harmony_core_action_map.md`: 鸿蒙 Core Action 映射
+- `docs/harmony_native_bridge_plan.md`: 鸿蒙 Native Bridge 接入计划
 - `docs/archive/desktop_ime_notes.md`: Desktop (Linux) 输入法笔记（已归档）
+- `docs/archive/screen_policy_acceptance.md`: 三端布局验收表（已归档）

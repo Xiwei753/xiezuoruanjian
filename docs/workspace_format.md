@@ -1,7 +1,7 @@
 # 工作区格式定义
 
 Status: active
-Last verified: 2026-06-11
+Last verified: 2026-06-23
 Truth source: protocol
 Supersedes: None
 
@@ -14,6 +14,18 @@ workspace/
 │  ├─ settings/
 │  │  ├─ settings.local.json     # 设备特定设置（不同步）
 │  │  └─ settings.sync.json      # 跨设备设置（同步）
+│  ├─ sync/                      # 同步状态与配置
+│  │  ├─ sync_config.json        # 同步配置（remote_url、branch、auto_sync、proxy）
+│  │  ├─ sync_secrets.local.json # 敏感信息（GitHub Token、SSH 私钥，不同步）
+│  │  ├─ sync_state.json         # 同步状态（不同步）
+│  │  ├─ state.local.json        # 本地同步状态（不同步）
+│  │  ├─ conflicts.json          # 冲突记录
+│  │  └─ trash/                  # 同步删除回收站
+│  ├─ ai/                        # AI 相关数据（不同步）
+│  │  └─ traces/                 # AI 推理追踪
+│  ├─ stats/                     # 写作统计
+│  │  ├─ events.local/           # 本地写作事件（不同步）
+│  │  └─ cache/                  # 统计缓存（不同步）
 │  └─ logs/                      # 应用日志
 ├─ projects/
 │  └─ <project_id>/              # 项目目录

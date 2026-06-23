@@ -17,6 +17,12 @@ Supersedes: docs/README.md (previous version)
 | [settings_schema.md](settings_schema.md) | 应用设置与偏好 JSON Schema 规范 |
 | [sync_rules.md](sync_rules.md) | 数据同步与多端冲突合并策略 |
 | [starmap_semantics.md](starmap_semantics.md) | 星图语义模型与独立引用安全机制 |
+| [starmap_canvas_model.md](starmap_canvas_model.md) | 星图画布模型契约（独立画布、节点、边、超链接定义） |
+| [starmap_implementation_route.md](starmap_implementation_route.md) | 星图实现路线（存储、渲染、交互、迁移） |
+| [harmony_route.md](harmony_route.md) | 鸿蒙端技术路线（WIP 壳层） |
+| [harmony_bridge_contract.md](harmony_bridge_contract.md) | 鸿蒙桥接契约（接口清单与 DTO） |
+| [harmony_core_action_map.md](harmony_core_action_map.md) | 鸿蒙 Core Action 映射（页面能力到 Core API） |
+| [harmony_native_bridge_plan.md](harmony_native_bridge_plan.md) | 鸿蒙 Native Bridge 接入计划 |
 
 ## 归档文档 (Archived Documents)
 

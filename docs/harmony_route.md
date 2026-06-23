@@ -1,7 +1,7 @@
 # HarmonyOS NEXT 技术路线
 
-Status: wip
-Last verified: 2026-06-14
+Status: active
+Last verified: 2026-06-23
 Truth source: docs/TECHNICAL_ROUTE.md
 
 ---
@@ -82,17 +82,34 @@ Truth source: docs/TECHNICAL_ROUTE.md
 
 ```
 apps/harmony/
-  AppScope.ets                    应用级配置
+  AppScope/                        应用级配置
+    app.json5
   entry/src/main/ets/
     pages/
       Index.ets                   应用入口页面
       WorkspacePage.ets           工作区页面
       WritingPage.ets             写作页面
       StarMapPage.ets             星图页面
+      SettingsPage.ets            设置页面
+      MainWorkspace.ets           主工作区页面
     bridge/
-      WriterCoreBridge.ets        桥接层（当前为 mock）
+      IWriterCoreBridge.ets       桥接接口
+      MockWriterCoreBridge.ets    Mock 实现
+      NativeWriterCoreBridge.ets  Native 空壳
+      WriterCoreBridge.ets        桥接入口
     model/
       CoreDtos.ets                数据传输对象
+    system/
+      HarmonyLifecycle.ets        生命周期管理
+      HarmonyStyleAdapter.ets     样式适配器
+      HarmonyThemeAdapter.ets     主题适配器
+    common/
+      AppContext.ets              应用上下文
+      AdaptiveContext.ets         自适应上下文
+      LayoutPolicyHelper.ets      布局策略辅助
+      ScreenPolicyBridge.ets      屏幕策略桥接
+    utils/
+      MessageKeyMapper.ets        消息键映射
   README.md                       鸿蒙端说明
 ```
 
@@ -102,11 +119,11 @@ apps/harmony/
 
 | 维度 | Android | Desktop | Harmony |
 |------|---------|---------|---------|
-| UI 框架 | Jetpack Compose / XML | Qt/QML | ArkUI |
+| UI 框架 | XML/View | Qt/QML | ArkUI |
 | 语言 | Kotlin | Rust + QML | ArkTS |
 | 桥接 | UniFFI / JNI | qmetaobject | C-ABI/NAPI (未来) |
 | 业务逻辑 | writer_core | writer_core | writer_core |
-| 状态 | 稳定 | 抢修中 | 壳层搭建 |
+| 状态 | 稳定 | 稳定 | 壳层搭建 |
 
 ---
 

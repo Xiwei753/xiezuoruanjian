@@ -11,8 +11,8 @@ Supersedes: None
 - 保存 ≠ 同步。连续保存不会产生连续网络请求。
 
 ## 持续集成（CI）
-- 默认的 GitHub Actions 工作流严格用于构建 Android debug APK。
-- Linux 和桌面构建应由用户在本地机器上手动执行。
+- GitHub Actions 工作流覆盖 Android debug APK、Linux 和 Windows 构建。
+- 详见 `.github/workflows/` 目录。
 
 ## 同步规则
 - 数据同步遵循工作区中定义的严格白名单/黑名单配置。

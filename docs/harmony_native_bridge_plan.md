@@ -1,7 +1,7 @@
 # HarmonyOS Native Bridge 接入计划
 
-Status: draft
-Last verified: 2026-06-14
+Status: active
+Last verified: 2026-06-23
 Truth source: docs/harmony_bridge_contract.md
 
 ---
@@ -153,7 +153,7 @@ ar = "ohos-ar"
 ### C ABI 导出示例
 
 ```rust
-// core/writer_core/src/ffi.rs
+// core/writer_core/src/ffi/mod.rs (及 ffi/ 目录下各模块)
 #[no_mangle]
 pub extern "C" fn writer_core_open_workspace(
     path: *const c_char,

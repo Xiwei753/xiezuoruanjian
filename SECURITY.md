@@ -39,7 +39,7 @@
 | 版本 | 支持状态 |
 |------|---------|
 | main 分支最新 | ✅ 支持 |
-| 1.0.0 | ✅ 支持 |
+| 0.1.0 | ✅ 支持 |
 
 ## 致谢
 
@@ -90,7 +90,7 @@ Sujian Writer handles user-created content. Please pay special attention to:
 | Version | Supported |
 |---------|-----------|
 | Latest on main branch | ✅ Supported |
-| 1.0.0 | ✅ Supported |
+| 0.1.0 | ✅ Supported |
 
 ## Acknowledgments
 

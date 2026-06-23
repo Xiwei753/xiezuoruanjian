@@ -1,7 +1,7 @@
 # HarmonyOS Bridge 契约
 
-Status: draft
-Last verified: 2026-06-14
+Status: active
+Last verified: 2026-06-23
 Truth source: docs/TECHNICAL_ROUTE.md
 
 ---
