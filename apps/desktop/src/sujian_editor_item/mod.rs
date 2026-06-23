@@ -963,9 +963,9 @@ impl SujianEditorItem {
         };
         let line = &lines[line_idx];
         let (index, affinity) = if end {
-            (line.end, CaretAffinity::Upstream)
+            (line.byte_end, CaretAffinity::Upstream)
         } else {
-            (line.start, CaretAffinity::Downstream)
+            (line.byte_start, CaretAffinity::Downstream)
         };
         self.cursor_ctrl.affinity = affinity;
         self.buffer.move_cursor(index, extend);
@@ -1052,17 +1052,20 @@ impl SujianEditorItem {
                     let range_end = range_start + event.range_len;
                     let mut glyph_rects = Vec::new();
 
-                    let snapshot = self.layout_snapshot(width);
+                    // Use new_text layout for Insert events — the cached layout
+                    // may be stale because emit_content_changed() (which calls
+                    // invalidate_layout_cache) has not run yet at this point.
+                    let insert_snapshot = self.layout_snapshot_for_text(text, width);
 
-                    for line in &snapshot.lines {
-                        if line.end <= range_start || line.start >= range_end {
+                    for line in &insert_snapshot.lines {
+                        if line.byte_end <= range_start || line.byte_start >= range_end {
                             continue;
                         }
                         if line.para_text.is_empty() {
                             continue;
                         }
-                        let seg_start = range_start.max(line.start);
-                        let seg_end = range_end.min(line.end);
+                        let seg_start = range_start.max(line.byte_start);
+                        let seg_end = range_end.min(line.byte_end);
                         if seg_start >= seg_end {
                             continue;
                         }
@@ -1100,14 +1103,14 @@ impl SujianEditorItem {
                     let delete_snapshot = self.layout_snapshot_for_text(old_text, width);
 
                     for line in &delete_snapshot.lines {
-                        if line.end <= range_start || line.start >= range_end {
+                        if line.byte_end <= range_start || line.byte_start >= range_end {
                             continue;
                         }
                         if line.para_text.is_empty() {
                             continue;
                         }
-                        let seg_start = range_start.max(line.start);
-                        let seg_end = range_end.min(line.end);
+                        let seg_start = range_start.max(line.byte_start);
+                        let seg_end = range_end.min(line.byte_end);
                         if seg_start >= seg_end {
                             continue;
                         }
@@ -1217,7 +1220,7 @@ impl SujianEditorItem {
         let cursor = self.buffer.cursor;
 
         let is_wrap_boundary = lines.iter().enumerate().any(|(idx, line)| {
-            idx + 1 < lines.len() && line.end == cursor && lines[idx + 1].start == cursor
+            idx + 1 < lines.len() && line.byte_end == cursor && lines[idx + 1].byte_start == cursor
         });
 
         if is_wrap_boundary {
@@ -1260,7 +1263,7 @@ impl SujianEditorItem {
 
     fn index_at_line_x(&self, line: &VisualLine, x: f64) -> usize {
         let Some(snapshot) = self.editor_layout.cache() else {
-            return line.start;
+            return line.byte_start;
         };
         self.editor_layout.index_at_line_x(snapshot, line, x)
     }

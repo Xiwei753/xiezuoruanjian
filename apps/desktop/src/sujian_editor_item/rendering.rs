@@ -62,26 +62,9 @@ impl ScrollBuffer {
             }
         }
 
-        let phys_h = (self.image.size().height as f64).max(1.0);
-        let dpr = self.dpr;
-
-        let mut phys_src_y = src_y * dpr;
-        let mut phys_src_h = src_h * dpr;
-
-        if phys_src_y < 0.0 {
-            phys_src_y = 0.0;
-        }
-        if phys_src_y + phys_src_h > phys_h {
-            if phys_src_h > phys_h {
-                phys_src_h = phys_h;
-            }
-            if phys_src_y + phys_src_h > phys_h {
-                phys_src_y = phys_h - phys_src_h;
-            }
-        }
-
-        src_y = phys_src_y / dpr;
-        src_h = phys_src_h / dpr;
+        // Qt standard DPR model: all coordinates are logical.
+        // The QImage's devicePixelRatio handles the logical→physical mapping.
+        // No manual dpr multiplication needed for source rect.
 
         (src_y, src_h)
     }
@@ -184,9 +167,9 @@ impl SujianEditorItem {
 
         // ── Layer 1: Selection background ──
         for line in &lines[vis_start..vis_end] {
-            if self.buffer.has_selection() && selection.1 > line.start && selection.0 < line.end {
-                let sel_start = selection.0.max(line.start);
-                let sel_end = selection.1.min(line.end);
+            if self.buffer.has_selection() && selection.1 > line.byte_start && selection.0 < line.byte_end {
+                let sel_start = selection.0.max(line.byte_start);
+                let sel_end = selection.1.min(line.byte_end);
                 let x_start = self.editor_layout.cursor_x_for_line(
                     &snapshot,
                     line,
@@ -391,6 +374,16 @@ impl SujianEditorItem {
             },
             qmetaobject::ImageFormat::ARGB32_Premultiplied,
         );
+        // Qt standard DPR model: set devicePixelRatio on the image so that
+        // all painting and source-rect operations use logical coordinates.
+        // No manual painter->scale(dpr) or sourceRect*dpr needed.
+        {
+            let img_ptr = &mut image as *mut qmetaobject::QImage;
+            let dpr_val = dpr;
+            cpp!(unsafe [img_ptr as "QImage*", dpr_val as "double"] {
+                img_ptr->setDevicePixelRatio(dpr_val);
+            });
+        }
         image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
 
         let painter_ptr = renderer::sujian_create_painter_scaled(&mut image, dpr);

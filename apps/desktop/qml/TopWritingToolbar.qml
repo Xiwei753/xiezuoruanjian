@@ -41,6 +41,7 @@ Rectangle {
     signal formatOneClick()
     signal linkToStarMap()
     signal openStats()
+    signal openSettings()
 
     function syncFontSizeInput() {
         if (fontSizeInput) {
@@ -308,6 +309,37 @@ Rectangle {
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
                 onClicked: root.openStats()
+            }
+        }
+
+        // Settings button
+        Rectangle {
+            visible: true
+            width: settingsRow.implicitWidth + (dt ? dt.sp12 : 12)
+            height: 32
+            radius: dt ? dt.radiusPill : 999
+            color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+            border.color: dt ? dt.border : "#2A2E36"
+            border.width: 1
+
+            Row {
+                id: settingsRow
+                anchors.centerIn: parent
+                spacing: dt ? dt.sp4 : 4
+                AppText {
+                    text: qsTr("设置")
+                    color: dt ? dt.textSecondary : "#8C9198"
+                    font.pixelSize: dt ? dt.label : 13
+                    font.family: dt ? dt.fontFamily : "sans-serif"
+                }
+            }
+
+            MouseArea {
+                id: settingsHover
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: root.openSettings()
             }
         }
 

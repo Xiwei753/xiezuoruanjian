@@ -389,8 +389,14 @@ pub enum CaretAffinity {
 #[derive(Clone, Debug, PartialEq)]
 pub struct VisualLine {
     pub id: usize,
-    pub start: usize,
-    pub end: usize,
+    /// Byte offset of the line start in the full document text (UTF-8).
+    pub byte_start: usize,
+    /// Byte offset of the line end in the full document text (UTF-8).
+    pub byte_end: usize,
+    /// QChar (UTF-16 code unit) offset of the line start in the full document text.
+    pub qchar_start: usize,
+    /// QChar (UTF-16 code unit) offset of the line end in the full document text.
+    pub qchar_end: usize,
     pub hard_break: bool,
     pub x: f64,
     pub y: f64,
@@ -645,6 +651,7 @@ pub fn layout_lines(
     let mut result = Vec::new();
     let mut y = padding;
     let mut paragraph_start = 0;
+    let mut paragraph_qchar_start = 0;
     let mut line_id: usize = 0;
 
     for paragraph in text.split_inclusive('\n') {
@@ -657,8 +664,10 @@ pub fn layout_lines(
             let empty_descent = get_font_descent(font_family, font_size as f32);
             result.push(VisualLine {
                 id: line_id,
-                start: paragraph_start,
-                end: paragraph_start,
+                byte_start: paragraph_start,
+                byte_end: paragraph_start,
+                qchar_start: paragraph_qchar_start,
+                qchar_end: paragraph_qchar_start,
                 hard_break,
                 x: padding + indent,
                 y,
@@ -679,6 +688,7 @@ pub fn layout_lines(
             line_id += 1;
             y += line_height;
             paragraph_start += paragraph.len();
+            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
             continue;
         }
 
@@ -759,8 +769,10 @@ pub fn layout_lines(
 
             result.push(VisualLine {
                 id: line_id,
-                start: abs_start,
-                end: abs_end,
+                byte_start: abs_start,
+                byte_end: abs_end,
+                qchar_start: paragraph_qchar_start + qchar_off,
+                qchar_end: paragraph_qchar_start + qchar_end,
                 hard_break: hard_break && abs_end == paragraph_text_end,
                 x: padding + x_off,
                 y,
@@ -787,13 +799,17 @@ pub fn layout_lines(
         }
 
         paragraph_start += paragraph.len();
+        paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
     }
 
     if text.ends_with('\n') {
+        let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
         result.push(VisualLine {
             id: line_id,
-            start: text.len(),
-            end: text.len(),
+            byte_start: text.len(),
+            byte_end: text.len(),
+            qchar_start: text_qchar_len,
+            qchar_end: text_qchar_len,
             hard_break: false,
             x: padding + indent,
             y,
@@ -817,8 +833,10 @@ pub fn layout_lines(
     if text.is_empty() {
         result.push(VisualLine {
             id: line_id,
-            start: 0,
-            end: 0,
+            byte_start: 0,
+            byte_end: 0,
+            qchar_start: 0,
+            qchar_end: 0,
             hard_break: false,
             x: padding + indent,
             y,
@@ -867,20 +885,20 @@ pub fn hit_test(
         }
     };
     let raw_index = index_at_line_x(snapshot, line, x);
-    let index = raw_index.max(line.start).min(line.end);
+    let index = raw_index.max(line.byte_start).min(line.byte_end);
     debug_assert!(
-        index >= line.start && index <= line.end,
+        index >= line.byte_start && index <= line.byte_end,
         "hit_test: index {} out of line range {}..{}",
         index,
-        line.start,
-        line.end
+        line.byte_start,
+        line.byte_end
     );
     let affinity = affinity_for_index_on_line(line, index);
 
     if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
         eprintln!(
-            "[hit_test] cursor={}, affinity={:?}, hit_visual_line_id={}, line.start={}, line.end={}, line.x={:.1}, line.y={:.1}, line.width={:.1}, line.para_start={}, line.qtextline_idx={}, line.para_qchar_start={}, line.para_qchar_end={}, line.line_wrap_width={:.1}, line.line_indent_x={:.1}, line.para_indent={:.1}, x_end_trailing={:.1}",
-            index, affinity, line.id, line.start, line.end, line.x, line.y, line.width,
+            "[hit_test] cursor={}, affinity={:?}, hit_visual_line_id={}, line.byte_start={}, line.byte_end={}, line.x={:.1}, line.y={:.1}, line.width={:.1}, line.para_start={}, line.qtextline_idx={}, line.para_qchar_start={}, line.para_qchar_end={}, line.line_wrap_width={:.1}, line.line_indent_x={:.1}, line.para_indent={:.1}, x_end_trailing={:.1}",
+            index, affinity, line.id, line.byte_start, line.byte_end, line.x, line.y, line.width,
             line.para_start, line.qtextline_idx, line.para_qchar_start, line.para_qchar_end,
             line.line_wrap_width, line.line_indent_x, line.para_indent, line.x_end_trailing
         );
@@ -943,8 +961,10 @@ pub fn caret_rect(
         None => {
             fallback = VisualLine {
                 id: 0,
-                start: 0,
-                end: 0,
+                byte_start: 0,
+                byte_end: 0,
+                qchar_start: 0,
+                qchar_end: 0,
                 hard_break: true,
                 x: 0.0,
                 y: 0.0,
@@ -998,7 +1018,7 @@ pub fn caret_rect(
 pub fn index_at_line_x(snapshot: &LayoutSnapshot, line: &VisualLine, x: f64) -> usize {
     let relative = (x - line.x).max(0.0);
     if line.para_text.is_empty() {
-        return line.start;
+        return line.byte_start;
     }
     let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
     qtextlayout_x_to_cursor_on_line(
@@ -1066,7 +1086,7 @@ pub fn calculate_cursor_x_for_line(
     snapshot: &LayoutSnapshot,
 ) -> f64 {
     if line.para_text.is_empty() {
-        if line.width > 0.0 && cursor == line.end {
+        if line.width > 0.0 && cursor == line.byte_end {
             line.x + line.width
         } else {
             line.x
@@ -1075,7 +1095,7 @@ pub fn calculate_cursor_x_for_line(
         // Always use real-time QTextLine::cursorToX() for cursor position.
         // The cached x_end_trailing is only used as a fallback when the
         // real-time calculation fails (returns 0 for non-empty lines).
-        let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.end;
+        let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.byte_end;
         let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
         let x = line.x
             + qtextlayout_cursor_to_x_on_line(
@@ -1092,30 +1112,30 @@ pub fn calculate_cursor_x_for_line(
 
         // Fallback: if real-time cursorToX returns near-zero for a non-empty
         // line, use the cached x_end_trailing as a last resort.
-        if x <= line.x + 0.5 && line.start != line.end && affinity == CaretAffinity::Upstream && cursor == line.end && line.x_end_trailing > 0.0 {
+        if x <= line.x + 0.5 && line.byte_start != line.byte_end && affinity == CaretAffinity::Upstream && cursor == line.byte_end && line.x_end_trailing > 0.0 {
             let fallback_x = line.x + line.x_end_trailing;
             if sujian_editor_debug_enabled() {
                 eprintln!(
-                    "[calculate_cursor_x] fallback to cached x_end_trailing: cursor={}, line.end={}, x_end_trailing={:.4}, realtime_x={:.4}, fallback_x={:.4}",
-                    cursor, line.end, line.x_end_trailing, x, fallback_x
+                    "[calculate_cursor_x] fallback to cached x_end_trailing: cursor={}, line.byte_end={}, x_end_trailing={:.4}, realtime_x={:.4}, fallback_x={:.4}",
+                    cursor, line.byte_end, line.x_end_trailing, x, fallback_x
                 );
             }
             return fallback_x;
         }
 
-        if x <= 1.0 && line.start != line.end && std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
+        if x <= 1.0 && line.byte_start != line.byte_end && std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
             let cursor_in_para = cursor.saturating_sub(line.para_start);
             let cursor_qchar = byte_offset_to_qchar_offset(&line.para_text, cursor_in_para);
-            let line_end_byte_in_para = line.end.saturating_sub(line.para_start);
+            let line_end_byte_in_para = line.byte_end.saturating_sub(line.para_start);
             let line_end_qchar = byte_offset_to_qchar_offset(&line.para_text, line_end_byte_in_para);
             eprintln!(
                 "[INVARIANT] cursor_x <= 1.0 for non-empty line!\n\
                  VisualLine: para_qchar_start={}, para_qchar_end={}, start={}, end={}\n\
                  Qt helper: textStart=para_qchar_start ({}), lineEnd={} (from qcharEnd)\n\
                  input cursor_qchar={}, cursor_abs_byte={}, qtextline_idx={}\n\
-                 line.end byte -> qchar offset={}\n\
+                 line.byte_end byte -> qchar offset={}\n\
                  Qt cursorToX result={:.4}, line.x={:.4}",
-                line.para_qchar_start, line.para_qchar_end, line.start, line.end,
+                line.para_qchar_start, line.para_qchar_end, line.byte_start, line.byte_end,
                 line.para_qchar_start, line_end_qchar,
                 cursor_qchar, cursor, line.qtextline_idx,
                 line_end_qchar, x, line.x
@@ -1404,8 +1424,27 @@ pub fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> 
     line.y + top_padding + ascent
 }
 
+/// Determine the caret affinity for a given byte index on a visual line.
+///
+/// At a wrap boundary (where the cursor sits at the end of one line and the
+/// start of the next), we use QTextLine::cursorToX with Leading vs Trailing
+/// to decide: if the two positions differ, the cursor is at a wrap boundary
+/// and should use Upstream affinity so it renders at the end of the current
+/// line rather than the start of the next.
 pub fn affinity_for_index_on_line(line: &VisualLine, index: usize) -> CaretAffinity {
-    if index == line.end && line.start != line.end {
+    if line.byte_start == line.byte_end || line.para_text.is_empty() {
+        return CaretAffinity::Downstream;
+    }
+    // Only the line-end position can be a wrap boundary
+    if index != line.byte_end {
+        return CaretAffinity::Downstream;
+    }
+    // Convert byte index to qchar index within the paragraph.
+    let cursor_in_para = index.saturating_sub(line.para_start);
+    let cursor_qchar = byte_offset_to_qchar_offset(&line.para_text, cursor_in_para);
+    // If the qchar index equals para_qchar_end, the cursor is at the line end
+    // in qchar space, which means it's a wrap boundary candidate.
+    if cursor_qchar == line.para_qchar_end && line.para_qchar_start != line.para_qchar_end {
         CaretAffinity::Upstream
     } else {
         CaretAffinity::Downstream
@@ -1419,21 +1458,21 @@ pub fn line_contains_cursor_with_affinity(
     affinity: CaretAffinity,
 ) -> bool {
     let line = &lines[idx];
-    if line.start == line.end {
-        return cursor == line.start;
+    if line.byte_start == line.byte_end {
+        return cursor == line.byte_start;
     }
-    if cursor > line.start && cursor < line.end {
+    if cursor > line.byte_start && cursor < line.byte_end {
         return true;
     }
-    if cursor == line.start {
-        let has_prev_overlap = idx > 0 && lines[idx - 1].end == line.start;
+    if cursor == line.byte_start {
+        let has_prev_overlap = idx > 0 && lines[idx - 1].byte_end == line.byte_start;
         if has_prev_overlap {
             return affinity == CaretAffinity::Downstream;
         }
         return true;
     }
-    if cursor == line.end {
-        let has_next_overlap = idx + 1 < lines.len() && lines[idx + 1].start == line.end;
+    if cursor == line.byte_end {
+        let has_next_overlap = idx + 1 < lines.len() && lines[idx + 1].byte_start == line.byte_end;
         if has_next_overlap {
             return affinity == CaretAffinity::Upstream;
         }
@@ -1490,12 +1529,12 @@ mod tests {
 
     fn assert_line_end_roundtrip(snapshot: &LayoutSnapshot) {
         for line in &snapshot.lines {
-            if line.start == line.end || line.para_text.is_empty() {
+            if line.byte_start == line.byte_end || line.para_text.is_empty() {
                 continue;
             }
             let x = qtextlayout_cursor_to_x_on_line(
                 &line.para_text,
-                line.end,
+                line.byte_end,
                 line.para_start,
                 snapshot.font_size as f64,
                 &snapshot.font_family,
@@ -1508,20 +1547,20 @@ mod tests {
                 x > 0.01,
                 "line-end cursor x must not collapse to 0: line={}, range={}..{}",
                 line.id,
-                line.start,
-                line.end
+                line.byte_start,
+                line.byte_end
             );
-            let rect = caret_rect(snapshot, line.end, CaretAffinity::Upstream, 0.0, 800.0);
+            let rect = caret_rect(snapshot, line.byte_end, CaretAffinity::Upstream, 0.0, 800.0);
             assert_eq!(
                 rect.visual_line_id, line.id,
-                "caret_rect(line.end, Upstream) must stay on the source visual line"
+                "caret_rect(line.byte_end, Upstream) must stay on the source visual line"
             );
             assert!(
                 rect.x > 0.01,
-                "caret_rect(line.end, Upstream).x must not collapse to 0: line={}, range={}..{}",
+                "caret_rect(line.byte_end, Upstream).x must not collapse to 0: line={}, range={}..{}",
                 line.id,
-                line.start,
-                line.end
+                line.byte_start,
+                line.byte_end
             );
             let roundtrip = qtextlayout_x_to_cursor_on_line(
                 &line.para_text,
@@ -1534,8 +1573,8 @@ mod tests {
                 line.qtextline_idx,
             );
             assert_eq!(
-                roundtrip, line.end,
-                "xToCursor(cursorToX(line.end)) must return line.end for line {}",
+                roundtrip, line.byte_end,
+                "xToCursor(cursorToX(line.byte_end)) must return line.byte_end for line {}",
                 line.id
             );
         }
@@ -1590,7 +1629,7 @@ mod tests {
     fn wrapping_preserves_boundary_affinity() {
         let snapshot = snapshot_for("abcdefghijklmnopqrstuvwx yz", 96.0);
         assert!(snapshot.lines.len() > 1);
-        let boundary = snapshot.lines[0].end;
+        let boundary = snapshot.lines[0].byte_end;
         assert_eq!(
             caret_rect(&snapshot, boundary, CaretAffinity::Upstream, 0.0, 800.0).visual_line_id,
             snapshot.lines[0].id
@@ -1672,12 +1711,12 @@ mod tests {
         );
         assert_line_end_roundtrip(&snapshot);
         for (idx, line) in snapshot.lines.iter().enumerate() {
-            if line.start == line.end || line.para_text.is_empty() {
+            if line.byte_start == line.byte_end || line.para_text.is_empty() {
                 continue;
             }
             let x_end = qtextlayout_cursor_to_x_on_line(
                 &line.para_text,
-                line.end,
+                line.byte_end,
                 line.para_start,
                 snapshot.font_size as f64,
                 &snapshot.font_family,
@@ -1689,7 +1728,7 @@ mod tests {
             assert!(
                 x_end > 1.0,
                 "line {} end x must be > 1.0, got {:.4} (range {}..{})",
-                idx, x_end, line.start, line.end
+                idx, x_end, line.byte_start, line.byte_end
             );
             let roundtrip = qtextlayout_x_to_cursor_on_line(
                 &line.para_text,
@@ -1702,9 +1741,9 @@ mod tests {
                 line.qtextline_idx,
             );
             assert_eq!(
-                roundtrip, line.end,
-                "line {}: xToCursor(cursorToX(line.end={})) returned {}",
-                idx, line.end, roundtrip
+                roundtrip, line.byte_end,
+                "line {}: xToCursor(cursorToX(line.byte_end={})) returned {}",
+                idx, line.byte_end, roundtrip
             );
         }
     }
@@ -1756,12 +1795,12 @@ mod tests {
         let snapshot = layout.snapshot(text, params_large(600.0), 1).clone();
         assert!(snapshot.lines.len() >= 2, "must wrap at width=600 fontSize=45");
         for line in &snapshot.lines {
-            if line.start == line.end || line.para_text.is_empty() {
+            if line.byte_start == line.byte_end || line.para_text.is_empty() {
                 continue;
             }
             let x_end = qtextlayout_cursor_to_x_on_line(
                 &line.para_text,
-                line.end,
+                line.byte_end,
                 line.para_start,
                 snapshot.font_size as f64,
                 &snapshot.font_family,
@@ -1773,17 +1812,17 @@ mod tests {
             assert!(
                 x_end > 1.0,
                 "soft-wrap line end x must be > 1.0: line_id={}, range={}..{}, x_end={:.4}",
-                line.id, line.start, line.end, x_end
+                line.id, line.byte_start, line.byte_end, x_end
             );
-            let rect = caret_rect(&snapshot, line.end, CaretAffinity::Upstream, 0.0, 800.0);
+            let rect = caret_rect(&snapshot, line.byte_end, CaretAffinity::Upstream, 0.0, 800.0);
             assert!(
                 rect.x > 1.0,
-                "caret_rect(line.end, Upstream).x must be > 1.0: line_id={}, rect.x={:.4}",
+                "caret_rect(line.byte_end, Upstream).x must be > 1.0: line_id={}, rect.x={:.4}",
                 line.id, rect.x
             );
             assert_eq!(
                 rect.visual_line_id, line.id,
-                "caret_rect(line.end, Upstream) must stay on source line: line_id={}, got visual_line_id={}",
+                "caret_rect(line.byte_end, Upstream) must stay on source line: line_id={}, got visual_line_id={}",
                 line.id, rect.visual_line_id
             );
         }
@@ -1867,13 +1906,13 @@ mod tests {
         ).clone();
         assert!(snapshot.lines.len() >= 3);
         for line in &snapshot.lines {
-            if line.start == line.end || line.para_text.is_empty() {
+            if line.byte_start == line.byte_end || line.para_text.is_empty() {
                 continue;
             }
-            let mid_byte = line.start + (line.end - line.start) / 2;
+            let mid_byte = line.byte_start + (line.byte_end - line.byte_start) / 2;
             let mid_cursor = text.floor_char_boundary(mid_byte);
-            let mid_cursor = mid_cursor.max(line.start).min(line.end);
-            if mid_cursor == line.start || mid_cursor == line.end {
+            let mid_cursor = mid_cursor.max(line.byte_start).min(line.byte_end);
+            if mid_cursor == line.byte_start || mid_cursor == line.byte_end {
                 continue;
             }
             let mid_rect = caret_rect(&snapshot, mid_cursor, CaretAffinity::Downstream, 0.0, 800.0);
@@ -1884,7 +1923,7 @@ mod tests {
             );
             let x_end = qtextlayout_cursor_to_x_on_line(
                 &line.para_text,
-                line.end,
+                line.byte_end,
                 line.para_start,
                 snapshot.font_size as f64,
                 &snapshot.font_family,
@@ -1920,12 +1959,12 @@ mod tests {
         ).clone();
         assert!(snapshot.lines.len() >= 2);
         for line in &snapshot.lines {
-            if line.start == line.end || line.para_text.is_empty() {
+            if line.byte_start == line.byte_end || line.para_text.is_empty() {
                 continue;
             }
             let recomputed = qtextlayout_cursor_to_x_on_line(
                 &line.para_text,
-                line.end,
+                line.byte_end,
                 line.para_start,
                 snapshot.font_size as f64,
                 &snapshot.font_family,
@@ -2003,11 +2042,11 @@ mod tests {
         assert_line_end_roundtrip(&snapshot);
         // Verify hit_test and caret_rect agree for every position
         for line in &snapshot.lines {
-            if line.start == line.end || line.para_text.is_empty() {
+            if line.byte_start == line.byte_end || line.para_text.is_empty() {
                 continue;
             }
-            let mid_byte = line.start + (line.end - line.start) / 2;
-            let mid_cursor = text.floor_char_boundary(mid_byte).max(line.start).min(line.end);
+            let mid_byte = line.byte_start + (line.byte_end - line.byte_start) / 2;
+            let mid_cursor = text.floor_char_boundary(mid_byte).max(line.byte_start).min(line.byte_end);
             let rect = caret_rect(&snapshot, mid_cursor, CaretAffinity::Downstream, 0.0, 800.0);
             let (hit, _affinity) = hit_test(&snapshot, rect.x + 1.0, line.y + 2.0, 0.0);
             let hit_rect = caret_rect(&snapshot, hit, CaretAffinity::Downstream, 0.0, 800.0);

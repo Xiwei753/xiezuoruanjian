@@ -66,11 +66,17 @@ pub fn sujian_item_dpr(item_ptr: *mut std::ffi::c_void) -> f64 {
     })
 }
 
-pub fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, dpr: f64) -> *mut QPainter {
+/// Create a QPainter for the given QImage.
+///
+/// Uses the Qt standard DPR model: the image must have had
+/// `setDevicePixelRatio(dpr)` called before this function, so the painter
+/// works entirely in logical coordinates — no manual `scale(dpr, dpr)` needed.
+pub fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, _dpr: f64) -> *mut QPainter {
     let img_ptr = image as *mut qmetaobject::QImage;
-    cpp!(unsafe [img_ptr as "QImage*", dpr as "double"] -> *mut QPainter as "QPainter*" {
+    cpp!(unsafe [img_ptr as "QImage*"] -> *mut QPainter as "QPainter*" {
         auto *p = new QPainter(img_ptr);
-        p->scale(dpr, dpr);
+        // No manual scale — the image's devicePixelRatio handles the
+        // logical→physical mapping.  All painting uses logical coords.
         return p;
     })
 }
@@ -97,18 +103,18 @@ pub fn glyph_rects_for_range(
     let font_size = font_pixel_size as f64;
     let mut result = Vec::new();
 
-    let search_start = lines.partition_point(|l| l.end <= byte_start);
+    let search_start = lines.partition_point(|l| l.byte_end <= byte_start);
     let search_end = lines
         .len()
-        .min(search_start + lines[search_start..].partition_point(|l| l.start < byte_end) + 1);
+        .min(search_start + lines[search_start..].partition_point(|l| l.byte_start < byte_end) + 1);
 
     for line_idx in search_start..search_end {
         let line = &lines[line_idx];
-        if line.end <= byte_start || line.start >= byte_end {
+        if line.byte_end <= byte_start || line.byte_start >= byte_end {
             continue;
         }
-        let seg_start = byte_start.max(line.start);
-        let seg_end = byte_end.min(line.end);
+        let seg_start = byte_start.max(line.byte_start);
+        let seg_end = byte_end.min(line.byte_end);
         if seg_start >= seg_end {
             continue;
         }

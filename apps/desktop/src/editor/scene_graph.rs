@@ -79,7 +79,7 @@ pub fn update_texture_node(
     src_h: f64,
     dest_y: f64,
     dest_h: f64,
-    dpr: f64,
+    _dpr: f64,
 ) -> *mut std::ffi::c_void {
     let img_ptr = image as *const qmetaobject::QImage;
     cpp!(unsafe [
@@ -88,8 +88,7 @@ pub fn update_texture_node(
         img_ptr as "QImage*",
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double",
-        dest_y as "double", dest_h as "double",
-        dpr as "double"
+        dest_y as "double", dest_h as "double"
     ] -> *mut std::ffi::c_void as "QSGNode*" {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root) {
@@ -101,35 +100,40 @@ pub fn update_texture_node(
         }
         if (!imgNode) {
             imgNode = item_ptr->window()->createImageNode();
-            imgNode->setFiltering(QSGTexture::Nearest);
+            imgNode->setFiltering(QSGTexture::Linear);
             imgNode->setOwnsTexture(true);
             root->appendChildNode(imgNode);
         }
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
 
-        double tex_w = img_ptr->width();
-        double tex_h = img_ptr->height();
-        double final_src_x = src_x * dpr;
-        double final_src_y = src_y * dpr;
-        double final_src_w = src_w * dpr;
-        double final_src_h = src_h * dpr;
+        // Qt standard DPR model: the QImage has setDevicePixelRatio(dpr),
+        // so createTextureFromImage and setSourceRect both use logical coords.
+        // No manual dpr multiplication needed.
+        double final_src_x = src_x;
+        double final_src_y = src_y;
+        double final_src_w = src_w;
+        double final_src_h = src_h;
+
+        // Clamp source rect to image bounds (logical coords)
+        double logical_w = img_ptr->width() / img_ptr->devicePixelRatio();
+        double logical_h = img_ptr->height() / img_ptr->devicePixelRatio();
 
         if (final_src_y < 0.0) final_src_y = 0.0;
-        if (final_src_y + final_src_h > tex_h) {
-            if (final_src_h > tex_h) {
-                final_src_h = tex_h;
+        if (final_src_y + final_src_h > logical_h) {
+            if (final_src_h > logical_h) {
+                final_src_h = logical_h;
             }
-            if (final_src_y + final_src_h > tex_h) {
-                final_src_y = tex_h - final_src_h;
+            if (final_src_y + final_src_h > logical_h) {
+                final_src_y = logical_h - final_src_h;
             }
         }
         if (final_src_x < 0.0) final_src_x = 0.0;
-        if (final_src_x + final_src_w > tex_w) {
-            if (final_src_w > tex_w) {
-                final_src_w = tex_w;
+        if (final_src_x + final_src_w > logical_w) {
+            if (final_src_w > logical_w) {
+                final_src_w = logical_w;
             }
-            if (final_src_x + final_src_w > tex_w) {
-                final_src_x = tex_w - final_src_w;
+            if (final_src_x + final_src_w > logical_w) {
+                final_src_x = logical_w - final_src_w;
             }
         }
 
@@ -149,15 +153,14 @@ pub fn update_source_rect(
     src_h: f64,
     dest_y: f64,
     dest_h: f64,
-    dpr: f64,
+    _dpr: f64,
 ) {
     cpp!(unsafe [
         old_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double",
-        dest_y as "double", dest_h as "double",
-        dpr as "double"
+        dest_y as "double", dest_h as "double"
     ] {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root || root->childCount() == 0) return;
@@ -165,32 +168,35 @@ pub fn update_source_rect(
         if (!imgNode) return;
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
 
-        double final_src_x = src_x * dpr;
-        double final_src_y = src_y * dpr;
-        double final_src_w = src_w * dpr;
-        double final_src_h = src_h * dpr;
+        // Qt standard DPR model: source rect uses logical coordinates.
+        // The QImage's devicePixelRatio handles the logical→physical mapping.
+        double final_src_x = src_x;
+        double final_src_y = src_y;
+        double final_src_w = src_w;
+        double final_src_h = src_h;
 
         if (imgNode->texture()) {
             QSize texSize = imgNode->texture()->textureSize();
-            double tex_w = texSize.width();
-            double tex_h = texSize.height();
+            double dpr = imgNode->texture()->devicePixelRatio();
+            double logical_w = texSize.width() / dpr;
+            double logical_h = texSize.height() / dpr;
 
             if (final_src_y < 0.0) final_src_y = 0.0;
-            if (final_src_y + final_src_h > tex_h) {
-                if (final_src_h > tex_h) {
-                    final_src_h = tex_h;
+            if (final_src_y + final_src_h > logical_h) {
+                if (final_src_h > logical_h) {
+                    final_src_h = logical_h;
                 }
-                if (final_src_y + final_src_h > tex_h) {
-                    final_src_y = tex_h - final_src_h;
+                if (final_src_y + final_src_h > logical_h) {
+                    final_src_y = logical_h - final_src_h;
                 }
             }
             if (final_src_x < 0.0) final_src_x = 0.0;
-            if (final_src_x + final_src_w > tex_w) {
-                if (final_src_w > tex_w) {
-                    final_src_w = tex_w;
+            if (final_src_x + final_src_w > logical_w) {
+                if (final_src_w > logical_w) {
+                    final_src_w = logical_w;
                 }
-                if (final_src_x + final_src_w > tex_w) {
-                    final_src_x = tex_w - final_src_w;
+                if (final_src_x + final_src_w > logical_w) {
+                    final_src_x = logical_w - final_src_w;
                 }
             }
         }

@@ -63,7 +63,7 @@ Rectangle {
                                 tabs.push({ label: qsTr("AI"), idx: 1 });
                             }
                             tabs.push({ label: qsTr("统计"), idx: 2 });
-                            tabs.push({ label: qsTr("设定"), idx: 3 });
+                            // Settings tab removed — main entry is now in TopWritingToolbar
                             return tabs;
                         }
 
@@ -147,81 +147,6 @@ Rectangle {
                     backendRef: root.backendRef
                     visible: root.currentTab === 2
                     anchors.fill: parent
-                }
-
-                // Settings tab - opens full settings dialog
-                Rectangle {
-                    visible: root.currentTab === 3
-                    anchors.fill: parent
-                    color: "transparent"
-
-                    ColumnLayout {
-                        anchors.centerIn: parent
-                        spacing: dt ? dt.sp16 : 16
-
-                        Rectangle {
-                            width: 60; height: 60
-                            radius: dt ? dt.radiusMd : 12
-                            color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
-                            Layout.alignment: Qt.AlignHCenter
-
-                            AppText {
-                                anchors.centerIn: parent
-                                text: "\u2699"
-                                font.pixelSize: 28
-                            }
-                        }
-
-                        AppText {
-                            text: qsTr("写作设定")
-                            color: dt ? dt.textPrimary : "#E2E4E9"
-                            font.pixelSize: dt ? dt.fontLg : 16
-                            font.weight: Font.DemiBold
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-
-                        AppText {
-                            text: qsTr("字号、行距、主题等设置")
-                            color: dt ? dt.textMuted : "#606470"
-                            font.pixelSize: dt ? dt.fontSm : 12
-                            Layout.alignment: Qt.AlignHCenter
-                        }
-
-                        Rectangle {
-                            width: openSettingsBtn.implicitWidth + (dt ? dt.sp24 : 24)
-                            height: 36
-                            radius: dt ? dt.radiusSm : 8
-                            color: settingsBtnHover.containsMouse ? (dt ? dt.accentHover : "#8E9EE8") : (dt ? dt.accent : "#7B8CDE")
-                            Layout.alignment: Qt.AlignHCenter
-
-                            Row {
-                                id: openSettingsBtn
-                                anchors.centerIn: parent
-                                spacing: dt ? dt.sp6 : 6
-                                AppText {
-                                    text: "\u2699"
-                                    font.pixelSize: dt ? dt.fontSm : 12
-                                    color: "#FFFFFF"
-                                    Layout.alignment: Qt.AlignVCenter
-                                }
-                                AppText {
-                                    text: qsTr("打开设置")
-                                    color: "#FFFFFF"
-                                    font.pixelSize: dt ? dt.fontSm : 12
-                                    font.weight: Font.Medium
-                                    Layout.alignment: Qt.AlignVCenter
-                                }
-                            }
-
-                            MouseArea {
-                                id: settingsBtnHover
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.openSettings()
-                            }
-                        }
-                    }
                 }
 
                 // AI tab (placeholder, only shown when aiCapable && aiEnabled)
