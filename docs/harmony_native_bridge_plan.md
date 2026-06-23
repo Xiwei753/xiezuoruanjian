@@ -233,5 +233,6 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
 - [harmony_bridge_contract.md](harmony_bridge_contract.md) - 鸿蒙桥接契约
 - [harmony_route.md](harmony_route.md) - 鸿蒙技术路线
-- [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](CROSS_PLATFORM_CAPABILITY_CONTRACT.md) - 跨平台能力契约
-- [API_CONTRACTS.md](API_CONTRACTS.md) - 接口边界与交互契约
+- [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](archive/CROSS_PLATFORM_CAPABILITY_CONTRACT.md) - 跨平台能力契约（已归档）
+
+- [API_CONTRACTS.md](archive/API_CONTRACTS.md) - 接口边界与交互契约（已归档）

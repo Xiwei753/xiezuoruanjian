@@ -111,12 +111,12 @@ Requirements:
 ## Documentation
 
 - `docs/TECHNICAL_ROUTE.md`: Global technical route and architecture constraints
-- `docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md`: Cross-platform capability contract and Core-first architecture constraints
-- `docs/API_CONTRACTS.md`: Interface boundaries and interaction contracts (Bridge, Backend, QML)
-- `docs/PRODUCT_DESIGN.md`: Product design and visual contract (product positioning, Monet colors, StarMap, settings design)
+- `docs/archive/CROSS_PLATFORM_CAPABILITY_CONTRACT.md`: Cross-platform capability contract and Core-first architecture constraints (archived)
+- `docs/archive/API_CONTRACTS.md`: Interface boundaries and interaction contracts (archived)
+- `docs/archive/PRODUCT_DESIGN.md`: Product design and visual contract (archived)
 - `docs/workspace_format.md`: Single source of truth for document structure on disk
 - `docs/settings_schema.md`: Local and syncable settings definitions
 - `docs/sync_rules.md`: Sync rules
 - `docs/starmap_semantics.md`: StarMap semantic foundation (independent objects and reference safety)
 - `docs/editor_engine_route.md`: Custom editor engine and unified event layer route
-- `docs/desktop_ime_notes.md`: Desktop (Linux) IME notes
+- `docs/archive/desktop_ime_notes.md`: Desktop (Linux) IME notes (archived)

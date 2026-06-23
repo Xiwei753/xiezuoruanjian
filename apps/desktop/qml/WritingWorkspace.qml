@@ -955,20 +955,8 @@ Rectangle {
                         onScrollActivity: smoothCursorOverlay.snapNextCursorUpdate()
                     }
 
-                    EditorTypingAnimator {
-                        id: editorTypingAnimator
-                        anchors.fill: paperBg
-                        targetTextArea: root.useSujianEditorItem ? null : editorArea
-                        documentHandler: editorController.docHandler
-                        overlayItem: paperBg
-                        dt: root.dt
-                        // Disabled until the editor is backed by Core transactions
-                        // and a self-rendered SujianEditorItem. Do not mutate
-                        // QTextDocument char formats for typing effects.
-                        animationEnabled: false
-                        animationDuration: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 160
-                        suppressed: editorController.isLoadingChapter || editorController.isApplyingFormat || editorController.isApplyingSettings
-                    }
+                    // EditorTypingAnimator removed — animation唯一主路径是 EditorAnimationOverlay
+                    // (见 EditorAnimationOverlay.qml，消费 animation_events_json 信号)
 
                     SmoothCursor {
                         id: smoothCursorOverlay

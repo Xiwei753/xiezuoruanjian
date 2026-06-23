@@ -246,9 +246,9 @@ IWriterCoreBridge 定义了完整的接口：
 6. 本端为 WIP 壳层，不作为正式端发布
 
 ## 参考文档
+- [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](../../docs/archive/CROSS_PLATFORM_CAPABILITY_CONTRACT.md)（已归档）
 
-- [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](../../docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md)
-- [API_CONTRACTS.md](../../docs/API_CONTRACTS.md)
+- [API_CONTRACTS.md](../../docs/archive/API_CONTRACTS.md)（已归档）
 - [harmony_route.md](../../docs/harmony_route.md)
 - [harmony_bridge_contract.md](../../docs/harmony_bridge_contract.md)
 - [harmony_core_action_map.md](../../docs/harmony_core_action_map.md)

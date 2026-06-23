@@ -2,7 +2,7 @@
 
 Status: wip
 Last verified: 2026-06-14
-Truth source: docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md
+Truth source: docs/TECHNICAL_ROUTE.md
 
 ---
 
@@ -132,7 +132,7 @@ Harmony 当前为 WIP shell
 ---
 
 ## 八、参考文档
+- [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](archive/CROSS_PLATFORM_CAPABILITY_CONTRACT.md) - 跨平台能力契约（已归档）
 
-- [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](CROSS_PLATFORM_CAPABILITY_CONTRACT.md) - 跨平台能力契约
-- [API_CONTRACTS.md](API_CONTRACTS.md) - 接口边界与交互契约
+- [API_CONTRACTS.md](archive/API_CONTRACTS.md) - 接口边界与交互契约（已归档）
 - [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md) - 全局技术路线

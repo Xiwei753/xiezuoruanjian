@@ -7,11 +7,11 @@
 // 约束：
 //   - 不包含 UI 渲染，只管理编辑器状态
 //   - 通过 backendRef 调用 AppBackend (Rust QObject)
-//   - 通过 targetTextArea 绑定 QTextArea
-//   - 通过 documentHandler 调用 DocumentHandler (Rust QObject) 做排版
+//   - 自研编辑器主流程：SujianEditorItem + QTextLayout + EditorAnimationOverlay
+//   - TextArea / DocumentHandler 仅作为 fallback 兼容路径，不参与自研编辑器
 //
-// 关键流程：
-//   openChapter() → read_chapter → TextArea.text → apply_format
+// 关键流程（自研编辑器主路径）：
+//   openChapter() → read_chapter → SujianEditorItem setText
 //   saveCurrentChapter() → get_plain_text → sanitize → save_chapter
 //
 // 防死循环机制：

@@ -113,12 +113,12 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 ## 文档
 
 - `docs/TECHNICAL_ROUTE.md`: 全局技术路线与架构约束
-- `docs/CROSS_PLATFORM_CAPABILITY_CONTRACT.md`: 跨平台能力契约与 Core-first 架构约束
-- `docs/API_CONTRACTS.md`: 接口边界与交互契约 (Bridge, Backend, QML)
-- `docs/PRODUCT_DESIGN.md`: 素笺产品设计与视觉契约 (产品定位, 莫奈取色, 星图, 设置设计)
+- `docs/archive/CROSS_PLATFORM_CAPABILITY_CONTRACT.md`: 跨平台能力契约与 Core-first 架构约束（已归档）
+- `docs/archive/API_CONTRACTS.md`: 接口边界与交互契约（已归档）
+- `docs/archive/PRODUCT_DESIGN.md`: 素笺产品设计与视觉契约（已归档）
 - `docs/workspace_format.md`: 磁盘上文档结构的单一事实来源
 - `docs/settings_schema.md`: 本地和可同步设置定义
 - `docs/sync_rules.md`: 同步规则
 - `docs/starmap_semantics.md`: 星图语义地基 (独立对象与引用安全)
 - `docs/editor_engine_route.md`: 自绘编辑器与统一事件层路线
-- `docs/desktop_ime_notes.md`: Desktop (Linux) 输入法笔记
+- `docs/archive/desktop_ime_notes.md`: Desktop (Linux) 输入法笔记（已归档）

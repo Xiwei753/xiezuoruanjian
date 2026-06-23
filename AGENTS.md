@@ -59,8 +59,8 @@ apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 | 规则与约束 | 说明 |
 |-----------|------|
 | **唯一技术路线** | `docs/TECHNICAL_ROUTE.md` 是唯一的全局技术路线。 |
-| **自研写作区路线** | Desktop 自研写作区当前路线是 `SujianEditorItem + QTextLayout`。 |
-| **禁止旧路线排版修复** | **禁止**再按 `QTextDocument` / `DocumentHandler` 旧排版路线修自研写作区。 |
+| **自研写作区路线** | Desktop 自研写作区唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。 |
+| **禁止旧路线** | **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` / `QQuickPaintedItem` / QSG 三层 overlay 修自研写作区。这些全是旧路线或 experimental，不得复活。 |
 | **正式图谱路线** | `mind_map` 是 legacy（已废弃），正式图谱是 `starmap`。所有新增图谱能力必须走 StarMapCapability。 |
 | **淘汰 envelope_json** | `envelope_json` 是 legacy 兼容，新功能**绝对禁止**使用，必须完全采用 typed DTO。 |
 | **光标修复要求** | 修光标必须先保证 `QTextLine` `xToCursor/cursorToX` roundtrip。 |
@@ -76,18 +76,21 @@ apps/desktop/                Qt/QML Linux 客户端（薄客户端）
 ```
 apps/desktop/
   src/
-    main.rs              入口 + AppBackend QObject（业务绑定层）
-    document_handler.rs  QTextDocument 排版操作（独立 QObject）
-    starmap_bridge.rs    星图桥接
-    sync_bridge.rs       同步桥接
+    main.rs                      入口 + AppBackend QObject（业务绑定层）
+    sujian_editor_item/          自研编辑器核心（mod.rs, rendering.rs, cursor_controller.rs, buffer.rs）
+    editor/                      编辑器子模块（layout.rs, renderer.rs, scene_graph.rs, input.rs）
+    document_handler.rs          仅 legacy TextArea 兼容辅助，不得用于自研写作区
+    starmap_bridge.rs            星图桥接
+    sync_bridge.rs               同步桥接
   qml/
-    main.qml             应用入口
-    WritingWorkspace.qml 写作工作区（编辑区 + 侧栏）
-    EditorController.qml 编辑器逻辑控制器
-    TopWritingToolbar.qml 写作工具栏
-    StarMapPage.qml      星图页面
-    SyncPage.qml         同步页面
-    SettingsDialog.qml   设置对话框
+    main.qml                     应用入口
+    WritingWorkspace.qml         写作工作区（编辑区 + 侧栏）
+    EditorController.qml         编辑器逻辑控制器
+    EditorAnimationOverlay.qml   动画 overlay（唯一动画主路径）
+    TopWritingToolbar.qml        写作工具栏
+    StarMapPage.qml              星图页面
+    SyncPage.qml                 同步页面
+    SettingsDialog.qml           设置对话框
     ...其他 QML 组件
 ```
 
@@ -101,9 +104,10 @@ apps/desktop/
 
 ### 3.3 编辑器排版架构
 
-- Desktop 自研写作区当前主路径是 SujianEditorItem + QTextLayout。
-- DocumentHandler 只作为 legacy/stable TextArea 兼容辅助，不得用于修复自研写作区光标、命中、滚动、动画。
-- 修自研写作区必须只看 apps/desktop/src/sujian_editor_item/mod.rs 和 docs/editor_engine_route.md。
+- Desktop 自研写作区当前唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。
+- 排查入口：`apps/desktop/src/sujian_editor_item/*`、`apps/desktop/src/editor/layout.rs`、`apps/desktop/src/editor/renderer.rs`、`apps/desktop/src/editor/scene_graph.rs`、`apps/desktop/qml/WritingWorkspace.qml`、`apps/desktop/qml/EditorAnimationOverlay.qml`。
+- **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` 修自研写作区。这些是 fallback 路径，不得用于自研编辑器的光标、命中、滚动、动画修复。
+- 修自研写作区必须看 `apps/desktop/src/sujian_editor_item/` 和 `docs/editor_engine_route.md`。
 
 ### 3.4 openChapter 防死循环
 
