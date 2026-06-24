@@ -44,7 +44,7 @@ class WriterEditText @JvmOverloads constructor(
 
     private var typingAnimationController: TypingAnimationController? = null
     internal var renderLayer: EditorRenderLayer? = null
-    private var autoIndentController: AutoIndentController? = null
+    internal var autoIndentController: AutoIndentController? = null
 
     private var lastTypingEnabled: Boolean? = null
     private var lastTypingDuration: Long? = null
@@ -222,11 +222,16 @@ class WriterEditText @JvmOverloads constructor(
 
                 typingAnimationController?.afterTextChanged(editable)
 
-                autoIndentController?.updateParagraphIndentSpans(editable, updateStartPos = selectionStart)
                 val composingStart = BaseInputConnection.getComposingSpanStart(editable)
                 val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
-                if (needsDelayedIndentFullRebuild || (composingStart != -1 && composingEnd != -1)) {
+                val isComposing = composingStart != -1 && composingEnd != -1
+
+                autoIndentController?.updateParagraphIndentSpans(editable, updateStartPos = selectionStart)
+                if (needsDelayedIndentFullRebuild && !isComposing) {
                     autoIndentController?.requestDelayedFullRebuild()
+                }
+                if (autoIndentController?.pendingFullRebuildAfterComposition == true && !isComposing) {
+                    autoIndentController?.updateParagraphIndentSpans(editable, isFullRebuild = true)
                 }
                 needsDelayedIndentFullRebuild = false
             }
@@ -259,6 +264,9 @@ class WriterEditText @JvmOverloads constructor(
         super.onSelectionChanged(selStart, selEnd)
         if (!controllersReady) return
         renderLayer?.onSelectionChanged(selStart, selEnd)
+        if (autoIndentController?.pendingFullRebuildAfterComposition == true) {
+            text?.let { autoIndentController?.updateParagraphIndentSpans(it, isFullRebuild = true) }
+        }
     }
 
     override fun onScrollChanged(horiz: Int, vert: Int, oldHoriz: Int, oldVert: Int) {

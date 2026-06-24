@@ -34,6 +34,9 @@ class AutoIndentController(private val editText: EditText) {
 
     var isSuppressing = false
 
+    var pendingFullRebuildAfterComposition = false
+        private set
+
     private val delayedFullRebuildRunnable = Runnable {
         val editable = editText.text ?: return@Runnable
         updateParagraphIndentSpans(editable, isFullRebuild = true)
@@ -71,6 +74,24 @@ class AutoIndentController(private val editText: EditText) {
     fun updateParagraphIndentSpans(editable: Editable, updateStartPos: Int = -1, isFullRebuild: Boolean = false) {
         if (isSuppressing) return
 
+        val composingStart = BaseInputConnection.getComposingSpanStart(editable)
+        val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
+        val isComposing = composingStart != -1 && composingEnd != -1
+
+        if (isComposing) {
+            pendingFullRebuildAfterComposition = true
+            return
+        }
+
+        if (pendingFullRebuildAfterComposition && !isFullRebuild) {
+            updateParagraphIndentSpans(editable, isFullRebuild = true)
+            return
+        }
+
+        if (isFullRebuild) {
+            pendingFullRebuildAfterComposition = false
+        }
+
         if (!autoIndentEnabled || autoIndentPx <= 0) {
             val existingSpans = currentIndentSpans(editable)
             if (existingSpans.isNotEmpty()) {
@@ -106,10 +127,6 @@ class AutoIndentController(private val editText: EditText) {
                 }
             }
 
-            val composingStart = BaseInputConnection.getComposingSpanStart(editable)
-            val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
-            val isComposing = composingStart != -1 && composingEnd != -1
-
             while (paragraphStart <= textLength) {
                 var paragraphEnd = editable.indexOf('\n', paragraphStart)
                 if (paragraphEnd == -1) {
@@ -118,21 +135,16 @@ class AutoIndentController(private val editText: EditText) {
                     paragraphEnd += 1
                 }
 
-                val overlapsComposing = isComposing && paragraphEnd > composingStart && paragraphStart < composingEnd
                 val span = existingSpans.firstOrNull {
                     editable.getSpanStart(it) == paragraphStart &&
                         editable.getSpanEnd(it) == paragraphEnd &&
                         it.getLeadingMargin(true) == autoIndentPx
                 }
 
-                if (overlapsComposing) {
-                    if (span != null) spansToRemove.remove(span)
+                if (span != null) {
+                    spansToRemove.remove(span)
                 } else {
-                    if (span != null) {
-                        spansToRemove.remove(span)
-                    } else {
-                        editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_PARAGRAPH)
-                    }
+                    editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
 
                 if (paragraphEnd >= textLength) break

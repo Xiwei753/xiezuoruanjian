@@ -1,5 +1,8 @@
 package com.xiwei.sujian.ui
 
+import android.text.Spanned
+import android.text.style.LeadingMarginSpan
+import android.view.inputmethod.BaseInputConnection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
@@ -102,5 +105,85 @@ class WriterEditTextTest {
         }
 
         assertEquals("AB", editText.text.toString())
+    }
+
+    @Test
+    fun testAutoIndentComposingSkipsSpanRebuild() {
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
+        val editText = WriterEditText(appContext)
+        editText.layoutParams = android.widget.FrameLayout.LayoutParams(800, 400)
+        editText.layout(0, 0, 800, 400)
+
+        editText.setAutoIndent(true, 2f)
+        editText.setText("abc\n")
+        val editable = editText.text ?: return
+
+        val controller = editText.autoIndentController ?: return
+        assertTrue("autoIndent should be enabled", controller.autoIndentEnabled)
+        assertTrue("autoIndentPx should be > 0", controller.autoIndentPx > 0)
+
+        val spansBeforeComposing = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java).toList()
+        assertTrue("Should have at least one indent span", spansBeforeComposing.isNotEmpty())
+
+        BaseInputConnection.setComposingSpans(editable)
+        val composingStart = BaseInputConnection.getComposingSpanStart(editable)
+        val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
+        assertTrue("Should have composing span", composingStart != -1 && composingEnd != -1)
+
+        controller.updateParagraphIndentSpans(editable, updateStartPos = 4)
+        assertTrue("pendingFullRebuildAfterComposition should be set during composing", controller.pendingFullRebuildAfterComposition)
+
+        val spansDuringComposing = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java).toList()
+        assertEquals("No span changes during composing", spansBeforeComposing.size, spansDuringComposing.size)
+
+        BaseInputConnection.removeComposingSpans(editable)
+        controller.updateParagraphIndentSpans(editable, isFullRebuild = true)
+        assertFalse("pendingFullRebuildAfterComposition should be cleared after composing", controller.pendingFullRebuildAfterComposition)
+
+        val spansAfterComposing = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java).toList()
+        assertTrue("Should have indent spans after composing ends", spansAfterComposing.isNotEmpty())
+    }
+
+    @Test
+    fun testAutoIndentUsesExclusiveExclusiveFlag() {
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
+        val editText = WriterEditText(appContext)
+        editText.layoutParams = android.widget.FrameLayout.LayoutParams(800, 400)
+        editText.layout(0, 0, 800, 400)
+
+        editText.setAutoIndent(true, 2f)
+        editText.setText("abc\n")
+        val editable = editText.text ?: return
+
+        val spans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
+        for (span in spans) {
+            val flags = editable.getSpanFlags(span)
+            assertEquals("Span should use SPAN_EXCLUSIVE_EXCLUSIVE", Spanned.SPAN_EXCLUSIVE_EXCLUSIVE, flags and Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            assertNotEquals("Span should NOT use SPAN_PARAGRAPH", Spanned.SPAN_PARAGRAPH, flags and Spanned.SPAN_PARAGRAPH)
+        }
+    }
+
+    @Test
+    fun testEmptyLineCursorTargetWithAutoIndent() {
+        val appContext = InstrumentationRegistry.getInstrumentation().targetContext
+        val editText = WriterEditText(appContext)
+        editText.layoutParams = android.widget.FrameLayout.LayoutParams(800, 400)
+        editText.layout(0, 0, 800, 400)
+
+        editText.setAutoIndent(true, 2f)
+        editText.setSmoothCursorEnabled(true, 80L)
+        editText.setText("abc\n")
+        val editable = editText.text ?: return
+
+        editText.setSelection(4)
+        val layout = editText.layout ?: return
+        val line = layout.getLineForOffset(4)
+        val renderer = editText.renderLayer?.smoothCursorRenderer ?: return
+
+        val coords = renderer.computeCursorTarget(4)
+
+        val controller = editText.autoIndentController ?: return
+        val expectedX = layout.getLineLeft(line) + controller.autoIndentPx
+        assertEquals("Empty line cursor x should be at indent position", expectedX, coords.x, 2f)
     }
 }
