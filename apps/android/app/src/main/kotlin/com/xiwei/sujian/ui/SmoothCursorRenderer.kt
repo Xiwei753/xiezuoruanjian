@@ -84,7 +84,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
             val lineStart = layout.getLineStart(line)
             val lineEnd = layout.getLineEnd(line)
             val isLineStart = (pos == lineStart)
-            val isEmptyLine = (lineStart == lineEnd) || (lineEnd - lineStart == 1 && editText.text[lineStart] == '\n')
+            val isEmptyLine = (lineStart == lineEnd) || (lineEnd - lineStart == 1 && editText.text?.get(lineStart) == '\n')
             if (isLineStart && isEmptyLine) {
                 x = layout.getLineLeft(line) + autoIndentController.autoIndentPx
             }
