@@ -276,12 +276,15 @@ cd apps/desktop && cargo check && cargo test
 - 顺序执行用 `;`，条件执行用 `if ($?) { cmd2 }`。
 - 不要使用 `cd <dir> && <command>` 模式，改用 Bash 工具的 `workdir` 参数。
 
-### 11.3 查询 GitHub 信息必须用 GitHub API
+### 11.3 GitHub 操作必须走 GitHub API
 
 - **查询 GitHub Actions 构建状态、日志、PR、Issue 等信息时，必须使用 `webfetch` 调用 `https://api.github.com/...` REST API**。
+- **推送/更新 GitHub 仓库时也必须走 GitHub API + token**：本机的 SSH 和 HTTPS Git 默认端口都被转发/拦截，`git push` 可能卡住或不可靠；不要把 `git push` 当默认推送路径。
+- 推荐推送方式：读取项目根目录 `.github-token`，用 GitHub REST API（Contents API 或 Git Database API）更新 `Xiwei753/xiezuoruanjian` 的 `main` 分支。
 - **禁止使用 `gh` CLI 命令**：本机未安装 GitHub CLI（`gh.exe`），PATH 中的 `gh` 是一个无关的 Python 脚本，无法执行 GitHub 操作。
 - 本项目仓库：`Xiwei753/xiezuoruanjian`
 - 认证 token 在项目根目录 `.github-token` 文件（已加入 `.gitignore`，不会提交）。
+- 不要输出、提交或记录 token 原文。
 
 #### GitHub Actions 日志查询流程
 
