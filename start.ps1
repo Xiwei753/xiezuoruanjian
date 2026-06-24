@@ -15,7 +15,7 @@ param(
     [string]$Mode = "",
 
     [Parameter(ValueFromRemainingArguments)]
-    [string[]$ExtraArgs
+    [string[]]$ExtraArgs
 )
 
 $ErrorActionPreference = "Stop"

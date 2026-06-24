@@ -1,5 +1,6 @@
 [workspace]
 members = [
-    "core/writer_core"
-, "apps/desktop"]
+    "core/writer_core",
+    "apps/desktop",
+]
 resolver = "2"
