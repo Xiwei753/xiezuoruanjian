@@ -24,7 +24,6 @@ Item {
     property bool animationEnabled: true
     property bool suppressed: false
 
-    anchors.fill: parent
     visible: editorItem !== null
 
     property var _activeAnimations: []
@@ -115,7 +114,7 @@ Item {
         // ── Glyph Ghost path ──
         var component = root._glyphGhostComponent
         if (!component || component.status !== Component.Ready) {
-            console.log("[AnimOverlay] insert skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString : "no component"))
+            console.log("[AnimOverlay] insert skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
             return
         }
 
@@ -171,7 +170,7 @@ Item {
         // ── Glyph Ghost path ──
         var component = root._glyphGhostComponent
         if (!component || component.status !== Component.Ready) {
-            console.log("[AnimOverlay] delete skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString : "no component"))
+            console.log("[AnimOverlay] delete skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
             return
         }
 

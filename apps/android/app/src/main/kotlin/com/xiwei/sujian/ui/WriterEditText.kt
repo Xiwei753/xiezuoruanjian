@@ -73,9 +73,9 @@ class WriterEditText @JvmOverloads constructor(
     private var flingDragStarted = false
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
+        if (!controllersReady) return
         lastTypingEnabled = enabled
         lastTypingDuration = durationMs
-        if (!controllersReady) return
         typingAnimationController?.setTypingAnimationEnabled(enabled, durationMs)
     }
 
@@ -98,9 +98,9 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
+        if (!controllersReady) return
         lastSmoothEnabled = enabled
         lastSmoothDuration = durationMs
-        if (!controllersReady) return
         renderLayer?.smoothCursorRenderer?.setSmoothCursorEnabled(enabled, durationMs)
     }
 
@@ -112,8 +112,8 @@ class WriterEditText @JvmOverloads constructor(
         autoIndentController?.setAutoIndent(enabled, widthChars)
     }
 
-    fun typingAnimationDurationMs(): Long = if (controllersReady) { if (lastTypingEnabled == false) 0L else typingAnimationController?.typingAnimationDurationMs ?: 0L } else (if (lastTypingEnabled != false) lastTypingDuration ?: 100L else 0L)
-    fun cursorAnimationDurationMs(): Long = if (controllersReady) { if (lastSmoothEnabled == false) 0L else renderLayer?.smoothCursorRenderer?.smoothCursorDurationMs ?: 0L } else (if (lastSmoothEnabled != false) lastSmoothDuration ?: 80L else 0L)
+    fun typingAnimationDurationMs(): Long = typingAnimationController?.typingAnimationDurationMs ?: 0L
+    fun cursorAnimationDurationMs(): Long = renderLayer?.smoothCursorRenderer?.smoothCursorDurationMs ?: 0L
 
     private fun setEditorScrolling(scrolling: Boolean) {
         removeCallbacks(scrollIdleRunnable)
@@ -192,10 +192,6 @@ class WriterEditText @JvmOverloads constructor(
         typingAnimationController = TypingAnimationController(this, layer)
         autoIndentController = AutoIndentController(this)
         controllersReady = true
-
-        lastTypingEnabled?.let { setTypingAnimationEnabled(it, lastTypingDuration ?: 100L) }
-        lastSmoothEnabled?.let { setSmoothCursorEnabled(it, lastSmoothDuration ?: 80L) }
-        lastAutoIndentEnabled?.let { setAutoIndent(it, lastAutoIndentWidth ?: 0f) }
 
         addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
@@ -326,7 +322,8 @@ class WriterEditText @JvmOverloads constructor(
                     lastTouchY = event.y
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (event.actionMasked == MotionEvent.ACTION_UP && flingDragStarted) {
+                    val hasSelection = selectionStart != selectionEnd
+                    if (event.actionMasked == MotionEvent.ACTION_UP && flingDragStarted && !hasSelection) {
                         velocityTracker?.let { tracker ->
                             tracker.addMovement(event)
                             tracker.computeCurrentVelocity(1000, maximumFlingVelocity.toFloat())

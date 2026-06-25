@@ -5,6 +5,7 @@ cpp! {{
     #include <QtQuick/QSGTexture>
     #include <QtQuick/QSGTransformNode>
     #include <QtQuick/QSGImageNode>
+    #include <QDebug>
 
     // Qt 6.11 compatible helpers — QSGNode no longer has childAt() or
     // insertChildNode(node, index).  Use childAtIndex() and
