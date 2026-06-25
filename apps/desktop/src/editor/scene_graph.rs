@@ -153,14 +153,15 @@ pub fn update_source_rect(
     src_h: f64,
     dest_y: f64,
     dest_h: f64,
-    _dpr: f64,
+    dpr: f64,
 ) {
     cpp!(unsafe [
         old_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double",
-        dest_y as "double", dest_h as "double"
+        dest_y as "double", dest_h as "double",
+        dpr as "double"
     ] {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root || root->childCount() == 0) return;
@@ -168,8 +169,6 @@ pub fn update_source_rect(
         if (!imgNode) return;
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
 
-        // Qt standard DPR model: source rect uses logical coordinates.
-        // The QImage's devicePixelRatio handles the logical→physical mapping.
         double final_src_x = src_x;
         double final_src_y = src_y;
         double final_src_w = src_w;
@@ -177,7 +176,6 @@ pub fn update_source_rect(
 
         if (imgNode->texture()) {
             QSize texSize = imgNode->texture()->textureSize();
-            double dpr = imgNode->texture()->devicePixelRatio();
             double logical_w = texSize.width() / dpr;
             double logical_h = texSize.height() / dpr;
 
