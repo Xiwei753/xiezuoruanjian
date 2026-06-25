@@ -96,6 +96,7 @@ jobs:
           $qmldir = "apps/desktop/qml"
           $windeployqt = Join-Path $env:QT_ROOT_DIR "bin\windeployqt.exe"
           & $windeployqt --qmldir $qmldir "$buildDir\sujian-windows-${{ matrix.flavor }}.exe"
+          Copy-Item packaging/windows/start-debug.ps1 "$buildDir\start-debug.ps1"
 
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
