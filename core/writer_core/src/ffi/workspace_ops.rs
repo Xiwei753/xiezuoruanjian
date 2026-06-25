@@ -156,15 +156,13 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(chapter_id: *const
         for p in &projects {
             let volumes = core.list_volumes(&p.id).map_err(|e| format!("{}", e))?;
             for v in &volumes {
-                let chapters = core.list_chapters(&p.id, &v.id).unwrap_or_default();
-                for c in &chapters {
-                    if c.id == cid {
-                        return Ok(serde_json::json!({
-                            "projectId": p.id,
-                            "volumeId": v.id,
-                            "chapterId": cid
-                        }));
-                    }
+                let target_chap_dir = core.workspace_path.join("projects").join(&p.id).join("volumes").join(&v.id).join("chapters").join(cid);
+                if target_chap_dir.exists() {
+                    return Ok(serde_json::json!({
+                        "projectId": p.id,
+                        "volumeId": v.id,
+                        "chapterId": cid
+                    }));
                 }
             }
         }
@@ -186,14 +184,12 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(volume_id: *const c
     match with_core(|core| {
         let projects = core.list_projects().map_err(|e| format!("{}", e))?;
         for p in &projects {
-            let volumes = core.list_volumes(&p.id).map_err(|e| format!("{}", e))?;
-            for v in &volumes {
-                if v.id == vid {
-                    return Ok(serde_json::json!({
-                        "projectId": p.id,
-                        "volumeId": vid
-                    }));
-                }
+            let target_vol_dir = core.workspace_path.join("projects").join(&p.id).join("volumes").join(vid);
+            if target_vol_dir.exists() {
+                return Ok(serde_json::json!({
+                    "projectId": p.id,
+                    "volumeId": vid
+                }));
             }
         }
         Err(format!("volume {} not found in any project", vid))
