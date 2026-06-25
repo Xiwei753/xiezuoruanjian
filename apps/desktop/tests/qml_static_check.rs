@@ -320,14 +320,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: WritingWorkspace must not own editor wheel physics or hard flick tuning", file_name);
                     has_errors = true;
                 }
-                if !content.contains("EditorTypingAnimator {")
-                    || !content.contains("documentHandler: editorController.docHandler")
-                    || !content.contains("animationEnabled: false")
-                    || !content.contains("Do not mutate")
-                {
-                    eprintln!("{}: Desktop typing animation must stay disabled until SujianEditorItem consumes stable Core transactions", file_name);
-                    has_errors = true;
-                }
+
                 if !content.contains("SmoothCursor {")
                     || !content.contains("overlayItem: paperBg")
                     || !content.contains("isScrolling: editorScroll.editorIsScrolling")
@@ -464,27 +457,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
             }
 
-            if file_name == "EditorTypingAnimator.qml" {
-                if !content.contains("visible: false")
-                    || !content.contains("function clearHiddenRanges()")
-                    || !content.contains("function resetTextSnapshot()")
-                    || !content.contains("SujianEditorItem")
-                {
-                    eprintln!("{}: Typing animator must be an inert compatibility component until self-rendered editor lands", file_name);
-                    has_errors = true;
-                }
-                if content.contains("targetTextArea.text =")
-                    || content.contains("textFormat: TextEdit.RichText")
-                    || content.contains("cursorBirthAnimationsModel")
-                    || content.contains("hide_text_range")
-                    || content.contains("show_text_range")
-                    || content.contains("clear_hidden_text_ranges")
-                    || content.contains("NumberAnimation on progress")
-                {
-                    eprintln!("{}: Typing animation must not mutate QTextDocument formats or restore old overlay implementation", file_name);
-                    has_errors = true;
-                }
-            }
+
         }
     }
 

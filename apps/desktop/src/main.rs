@@ -99,7 +99,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/EditorController.qml" as "EditorController.qml",
     "qml/SmoothCursor.qml" as "SmoothCursor.qml",
     "qml/EditorWheelScroller.qml" as "EditorWheelScroller.qml",
-    "qml/EditorTypingAnimator.qml" as "EditorTypingAnimator.qml",
     "qml/EditorAnimationOverlay.qml" as "EditorAnimationOverlay.qml",
     "qml/EditorGlyphGhost.qml" as "EditorGlyphGhost.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
