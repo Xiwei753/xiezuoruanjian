@@ -463,7 +463,7 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        val ic = super.onCreateInputConnection(outAttrs) ?: return super.onCreateInputConnection(outAttrs)
+        val ic = super.onCreateInputConnection(outAttrs) ?: return BaseInputConnection(this, true)
         val wrapped = SujianInputConnection(ic, this)
         sujianInputConnection = wrapped
         return wrapped
