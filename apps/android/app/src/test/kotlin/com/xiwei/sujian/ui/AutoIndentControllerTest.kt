@@ -2,7 +2,6 @@ package com.xiwei.sujian.ui
 
 import android.text.Spanned
 import android.text.style.LeadingMarginSpan
-import android.view.inputmethod.BaseInputConnection
 import android.widget.EditText
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,7 +36,7 @@ class AutoIndentControllerTest {
         val before = indentSpans(editText)
         assertEquals(2, before.size)
 
-        BaseInputConnection(editText, true).setComposingRegion(0, editable.length)
+        controller.markComposingActive()
 
         controller.updateParagraphIndentSpans(editable, updateStartPos = editable.length)
 
@@ -53,11 +52,11 @@ class AutoIndentControllerTest {
         val (editText, controller) = newController("第一段\n第二段")
         val editable = editText.text
 
-        BaseInputConnection(editText, true).setComposingRegion(0, editable.length)
+        controller.markComposingActive()
         controller.updateParagraphIndentSpans(editable, updateStartPos = editable.length)
         assertTrue(controller.pendingFullRebuildAfterComposition)
 
-        BaseInputConnection.removeComposingSpans(editable)
+        controller.markComposingFinished()
         controller.updateParagraphIndentSpans(editable, updateStartPos = editable.length)
 
         assertFalse(controller.pendingFullRebuildAfterComposition)
