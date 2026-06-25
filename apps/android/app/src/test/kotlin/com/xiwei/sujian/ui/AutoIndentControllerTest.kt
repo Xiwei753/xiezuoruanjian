@@ -65,13 +65,16 @@ class AutoIndentControllerTest {
     }
 
     @Test
-    fun emptyDocumentDoesNotReceiveZeroLengthIndentSpan() {
+    fun emptyDocumentReceivesIndentSpanForStableLayout() {
         val (editText, controller) = newController("")
         val editable = editText.text
 
         controller.updateParagraphIndentSpans(editable, isFullRebuild = true)
 
-        assertEquals(0, indentSpans(editText).size)
+        val spans = indentSpans(editText)
+        assertEquals(1, spans.size)
+        assertEquals(0, editable.getSpanStart(spans[0]))
+        assertEquals(0, editable.getSpanEnd(spans[0]))
     }
 
     @Test

@@ -4,28 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.util.Log
 
-import com.xiwei.sujian.ui.span.InputRevealSpan
-import com.xiwei.sujian.ui.span.DeletingHoldSpan
 import java.util.concurrent.CopyOnWriteArrayList
-
-/**
- * TypingOverlayRenderer — 打字动画覆盖层渲染器
- *
- * 在文本上方绘制打字动画效果（字符弹出、渐变等），增强写作体验。
- *
- * ## 架构定位
- * - EditorRenderLayer → TypingOverlayRenderer → Canvas 绘制
- * - 实现 EditorAnimationRuntime.Animatable 接口
- *
- * ## 职责边界
- * - **做**：打字动画的计算和绘制
- * - **不做**：文本内容管理（由 EditText 负责）
- *
- * ## 动画参数
- * - Insert: opacity 0→0.75→0, scale 0.72→1.0, duration 80~180ms
- * - Delete: opacity 0.75→0, scale 1.0→0.45, duration 80~180ms
- * - 静态正文永远由系统完整绘制，动画只做 overlay（附加绘制）
- */
 
 data class OverlayAnim(
     val insertedStart: Int,
@@ -37,9 +16,7 @@ data class OverlayAnim(
     var progress: Float = 0f,
     var startTimeNanos: Long = -1L,
     val durationMs: Long,
-    val isDeletion: Boolean = false,
-    val revealSpan: InputRevealSpan? = null,
-    val deletingHoldSpan: DeletingHoldSpan? = null
+    val isDeletion: Boolean = false
 ) {
     val codePoints: List<Int> = buildList {
         var i = 0
@@ -88,7 +65,6 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
     }
 
     fun clear() {
-
         activeAnims.clear()
         editText.animationRuntime?.unregister(this)
     }
@@ -125,12 +101,6 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
             }
 
             if (anim.progress >= 1f) {
-                if (anim.revealSpan != null && !anim.revealSpan.isRevealed) {
-                    anim.revealSpan.reveal()
-                }
-                if (anim.deletingHoldSpan != null && !anim.deletingHoldSpan.isDeleted) {
-                    anim.deletingHoldSpan.performDelete()
-                }
                 activeAnims.remove(anim)
             } else {
                 hasMore = true

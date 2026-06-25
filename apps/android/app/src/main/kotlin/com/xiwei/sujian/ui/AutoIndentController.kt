@@ -130,16 +130,21 @@ class AutoIndentController(private val editText: EditText) {
                 }
             }
 
-            while (paragraphStart < textLength) {
-                var paragraphEnd = editable.indexOf('\n', paragraphStart)
-                if (paragraphEnd == -1) {
+            while (paragraphStart <= textLength) {
+                var newlinePos = editable.indexOf('\n', paragraphStart)
+                val paragraphEnd: Int
+                val isTrailingEmptyParagraph: Boolean
+
+                if (newlinePos == -1) {
                     paragraphEnd = textLength
+                    isTrailingEmptyParagraph = (paragraphStart == textLength)
                 } else {
-                    paragraphEnd += 1
+                    paragraphEnd = newlinePos + 1
+                    isTrailingEmptyParagraph = (paragraphStart == newlinePos)
                 }
 
-                val isEmptyParagraph = (paragraphEnd - paragraphStart <= 1) &&
-                    (paragraphStart >= textLength || editable[paragraphStart] == '\n')
+                val isEmptyParagraph = isTrailingEmptyParagraph ||
+                    (paragraphEnd - paragraphStart == 0)
 
                 if (isEmptyParagraph) {
                     val existingAtEmpty = existingSpans.firstOrNull {
@@ -155,9 +160,18 @@ class AutoIndentController(private val editText: EditText) {
                                 paragraphStart, paragraphEnd,
                                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                             )
+                            Log.d(TAG, "updateParagraphIndentSpans: updated empty span at [$paragraphStart, $paragraphEnd)")
                         }
+                    } else {
+                        editable.setSpan(
+                            LeadingMarginSpan.Standard(autoIndentPx, 0),
+                            paragraphStart, paragraphEnd,
+                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                        )
+                        Log.d(TAG, "updateParagraphIndentSpans: set empty span at [$paragraphStart, $paragraphEnd)")
                     }
-                    if (paragraphEnd >= textLength) break
+                    if (paragraphEnd >= textLength && !isTrailingEmptyParagraph) break
+                    if (isTrailingEmptyParagraph && paragraphEnd >= textLength) break
                     paragraphStart = paragraphEnd
                     continue
                 }

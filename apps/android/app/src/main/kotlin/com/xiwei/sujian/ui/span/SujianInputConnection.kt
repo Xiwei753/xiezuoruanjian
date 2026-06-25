@@ -16,9 +16,12 @@ class SujianInputConnection(
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text.isNullOrEmpty()) return super.commitText(text, newCursorPosition)
-        Log.d(TAG, "commitText: \"$text\", cursorPos=$newCursorPosition")
-        editText.onInputCommitText(text, newCursorPosition)
-        return super.commitText(text, newCursorPosition)
+        val pos = editText.selectionStart
+        val textLen = editText.text?.length ?: 0
+        Log.d(TAG, "commitText: \"$text\", cursorPos=$newCursorPosition, sel=$pos, textLen=$textLen")
+        editText.onInputBeforeCommit(pos, textLen)
+        val result = super.commitText(text, newCursorPosition)
+        return result
     }
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
@@ -38,9 +41,11 @@ class SujianInputConnection(
     }
 
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-        Log.d(TAG, "deleteSurroundingText: before=$beforeLength, after=$afterLength")
+        val pos = editText.selectionStart
+        val textLen = editText.text?.length ?: 0
+        Log.d(TAG, "deleteSurroundingText: before=$beforeLength, after=$afterLength, sel=$pos, textLen=$textLen")
         if (beforeLength > 0) {
-            editText.onInputDeleteChar(beforeLength)
+            editText.onInputBeforeDelete(pos, beforeLength)
         }
         return super.deleteSurroundingText(beforeLength, afterLength)
     }
@@ -50,7 +55,8 @@ class SujianInputConnection(
             when (event.keyCode) {
                 android.view.KeyEvent.KEYCODE_DEL -> {
                     Log.d(TAG, "sendKeyEvent: Backspace")
-                    editText.onInputBackspaceKeyEvent()
+                    val pos = editText.selectionStart
+                    editText.onInputBeforeDelete(pos, 1)
                 }
                 android.view.KeyEvent.KEYCODE_FORWARD_DEL -> {
                     Log.d(TAG, "sendKeyEvent: ForwardDelete")
