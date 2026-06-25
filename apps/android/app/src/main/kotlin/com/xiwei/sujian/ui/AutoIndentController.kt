@@ -25,6 +25,27 @@ class AutoIndentController(private val editText: EditText) {
     var pendingFullRebuildAfterComposition = false
         private set
 
+    private fun currentEmptyIndentSpans(editable: Editable): List<EmptyParagraphIndentSpan> {
+        val spans = mutableListOf<EmptyParagraphIndentSpan>()
+        spans.addAll(editable.getSpans(0, editable.length, EmptyParagraphIndentSpan::class.java))
+        for (span in editable.getSpans(editable.length, editable.length, EmptyParagraphIndentSpan::class.java)) {
+            if (!spans.contains(span)) spans.add(span)
+        }
+        return spans
+    }
+
+    private fun currentNormalIndentSpans(editable: Editable): List<LeadingMarginSpan.Standard> {
+        val spans = mutableListOf<LeadingMarginSpan.Standard>()
+        spans.addAll(
+            editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
+                .filter { it !is EmptyParagraphIndentSpan }
+        )
+        for (span in editable.getSpans(editable.length, editable.length, LeadingMarginSpan.Standard::class.java)) {
+            if (span !is EmptyParagraphIndentSpan && !spans.contains(span)) spans.add(span)
+        }
+        return spans
+    }
+
     var isComposingActive = false
         private set
 
@@ -88,9 +109,9 @@ class AutoIndentController(private val editText: EditText) {
         }
 
         if (!autoIndentEnabled || autoIndentPx <= 0) {
-            val emptySpans = editable.getSpans(0, editable.length, EmptyParagraphIndentSpan::class.java)
-            val normalSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
-            val allSpans = (emptySpans.toList() + normalSpans.toList()).distinct()
+            val emptySpans = currentEmptyIndentSpans(editable)
+            val normalSpans = currentNormalIndentSpans(editable)
+            val allSpans = (emptySpans + normalSpans).distinct()
             if (allSpans.isNotEmpty()) {
                 isUpdatingSpan = true
                 for (span in allSpans) {
@@ -105,10 +126,8 @@ class AutoIndentController(private val editText: EditText) {
 
         isUpdatingSpan = true
         try {
-            val existingEmptySpans = editable.getSpans(0, editable.length, EmptyParagraphIndentSpan::class.java).toList()
-            val existingNormalSpans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
-                .filter { it !is EmptyParagraphIndentSpan }
-                .toList()
+            val existingEmptySpans = currentEmptyIndentSpans(editable)
+            val existingNormalSpans = currentNormalIndentSpans(editable)
 
             var paragraphStart = 0
 
@@ -166,7 +185,7 @@ class AutoIndentController(private val editText: EditText) {
                             editable.setSpan(
                                 newMarker,
                                 paragraphStart, paragraphEnd,
-                                Spanned.SPAN_INCLUSIVE_INCLUSIVE
+                                Spanned.SPAN_PARAGRAPH
                             )
                             Log.d(TAG, "updateParagraphIndentSpans: updated empty marker span at [$paragraphStart, $paragraphEnd)")
                         }
@@ -182,7 +201,7 @@ class AutoIndentController(private val editText: EditText) {
                         editable.setSpan(
                             newMarker,
                             paragraphStart, paragraphEnd,
-                            Spanned.SPAN_INCLUSIVE_INCLUSIVE
+                            Spanned.SPAN_PARAGRAPH
                         )
                         Log.d(TAG, "updateParagraphIndentSpans: set empty marker span at [$paragraphStart, $paragraphEnd)")
                     }

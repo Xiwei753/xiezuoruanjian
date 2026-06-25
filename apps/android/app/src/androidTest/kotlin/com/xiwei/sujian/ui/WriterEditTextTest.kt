@@ -5,6 +5,7 @@ import android.text.style.LeadingMarginSpan
 import android.view.inputmethod.BaseInputConnection
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.xiwei.sujian.ui.span.EmptyParagraphIndentSpan
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -158,8 +159,12 @@ class WriterEditTextTest {
         val spans = editable.getSpans(0, editable.length, LeadingMarginSpan.Standard::class.java)
         for (span in spans) {
             val flags = editable.getSpanFlags(span)
-            assertEquals("Span should use SPAN_EXCLUSIVE_EXCLUSIVE", Spanned.SPAN_EXCLUSIVE_EXCLUSIVE, flags and Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            assertNotEquals("Span should NOT use SPAN_PARAGRAPH", Spanned.SPAN_PARAGRAPH, flags and Spanned.SPAN_PARAGRAPH)
+            if (span is EmptyParagraphIndentSpan) {
+                assertEquals("Empty paragraph span should use SPAN_PARAGRAPH", Spanned.SPAN_PARAGRAPH, flags and Spanned.SPAN_PARAGRAPH)
+            } else {
+                assertEquals("Normal span should use SPAN_EXCLUSIVE_EXCLUSIVE", Spanned.SPAN_EXCLUSIVE_EXCLUSIVE, flags and Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                assertNotEquals("Normal span should NOT use SPAN_PARAGRAPH", Spanned.SPAN_PARAGRAPH, flags and Spanned.SPAN_PARAGRAPH)
+            }
         }
     }
 
