@@ -496,15 +496,17 @@ impl StatsStore {
 
         let mut buckets = Vec::new();
         let mut bucket_start = first_ms;
+        let mut event_idx = 0;
 
         while bucket_start <= last_ms {
             let bucket_end = bucket_start + bucket_ms;
             let mut chars_in_bucket: u32 = 0;
 
-            for event in events {
-                if event.timestamp_ms >= bucket_start && event.timestamp_ms < bucket_end {
-                    chars_in_bucket += event.inserted_chars;
+            while event_idx < events.len() && events[event_idx].timestamp_ms < bucket_end {
+                if events[event_idx].timestamp_ms >= bucket_start {
+                    chars_in_bucket += events[event_idx].inserted_chars;
                 }
+                event_idx += 1;
             }
 
             let minutes = bucket_ms as f64 / 60_000.0;
