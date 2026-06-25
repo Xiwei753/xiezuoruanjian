@@ -1,6 +1,9 @@
 // =============================================================================
-// EditorPage.qml — 编辑器页面
+// EditorPage.qml — 编辑器页面 (TextArea / DocumentHandler FALLBACK)
 // =============================================================================
+//
+// ⚠️ LEGACY FALLBACK: 此页面中的 TextArea + DocumentHandler 路径仅作为兼容回退。
+// 写作体验问题只修 SujianEditorItem 路线。不在此 fallback 上修动画、光标、首行缩进。
 //
 // 层级：Desktop UI 层（QML UI 组件）
 // 职责：正文编辑区域、TextArea 绑定、DocumentHandler 排版绑定

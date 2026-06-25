@@ -1,8 +1,7 @@
 package com.xiwei.sujian.data
 
 import android.util.Log
-import com.google.gson.Gson
-import com.google.gson.reflect.TypeToken
+import com.xiwei.sujian.BuildConfig
 import com.xiwei.sujian.model.BackendType
 import com.xiwei.sujian.model.ChapterMeta
 import com.xiwei.sujian.model.ChapterOpenResult
@@ -64,7 +63,6 @@ import uniffi.writer_core.WritingStatsSummaryDto
 
 class AppServiceBridge(workspacePath: String) {
     private val service: WriterAppService by lazy { WriterAppService(workspacePath) }
-    private val gson = Gson()
 
     companion object {
         private const val TAG = "AppServiceBridge"
@@ -366,39 +364,41 @@ class AppServiceBridge(workspacePath: String) {
     /**
      * 获取星图动画策略参数。
      *
-     * 调用 UniFFI 的 getStarmapMotionPolicy()。
-     * 如果 UniFFI 绑定尚未暴露此方法，通过反射检测并返回本地默认值。
+     * 临时兼容：当前 UniFFI 生成绑定可能尚未暴露 getStarmapMotionPolicy()，所以这里仍保留
+     * 反射探测 fallback。后续新能力必须放到领域 Bridge，不再继续往 AppServiceBridge 增加领域方法。
+     * Debug 构建只要走 fallback 必须 Log.w，避免静默返回默认值掩盖绑定缺口。
      */
     fun getStarMapMotionPolicy(): BridgeResult<com.xiwei.sujian.model.StarMapMotionPolicyData> {
+        fun fallback(reason: String, throwable: Throwable? = null): BridgeResult<com.xiwei.sujian.model.StarMapMotionPolicyData> {
+            if (BuildConfig.DEBUG) {
+                Log.w(TAG, "Temporary compatibility fallback for getStarmapMotionPolicy: $reason", throwable)
+            }
+            return BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
+        }
+
         return try {
             val method = service.javaClass.getMethod("getStarmapMotionPolicy")
-            val dto = method.invoke(service)
-            if (dto != null) {
-                // 通过反射读取 DTO 字段，避免编译期依赖
-                val dtoClass = dto.javaClass
-                val result = com.xiwei.sujian.model.StarMapMotionPolicyData(
-                    enabled = dtoClass.getField("enabled").getBoolean(dto),
-                    idleWobbleEnabled = dtoClass.getField("idleWobbleEnabled").getBoolean(dto),
-                    idleAmplitudeVp = dtoClass.getField("idleAmplitudeVp").getFloat(dto),
-                    idlePeriodMs = dtoClass.getField("idlePeriodMs").getInt(dto),
-                    dragLiftScale = dtoClass.getField("dragLiftScale").getFloat(dto),
-                    dragShadowBoost = dtoClass.getField("dragShadowBoost").getFloat(dto),
-                    settleDurationMs = dtoClass.getField("settleDurationMs").getInt(dto),
-                    reduceMotion = dtoClass.getField("reduceMotion").getBoolean(dto)
-                )
-                BridgeResult.Success(result)
-            } else {
-                BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
-            }
-        } catch (_: NoSuchMethodException) {
-            // UniFFI 绑定尚未暴露 getStarmapMotionPolicy，返回默认值
-            BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
-        } catch (_: NoSuchFieldException) {
-            // DTO 字段名不匹配，返回默认值
-            BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
+            val dto = method.invoke(service) ?: return fallback("UniFFI method returned null")
+            // 通过反射读取 DTO 字段，避免编译期依赖旧绑定缺口。
+            val dtoClass = dto.javaClass
+            val result = com.xiwei.sujian.model.StarMapMotionPolicyData(
+                enabled = dtoClass.getField("enabled").getBoolean(dto),
+                idleWobbleEnabled = dtoClass.getField("idleWobbleEnabled").getBoolean(dto),
+                idleAmplitudeVp = dtoClass.getField("idleAmplitudeVp").getFloat(dto),
+                idlePeriodMs = dtoClass.getField("idlePeriodMs").getInt(dto),
+                dragLiftScale = dtoClass.getField("dragLiftScale").getFloat(dto),
+                dragShadowBoost = dtoClass.getField("dragShadowBoost").getFloat(dto),
+                settleDurationMs = dtoClass.getField("settleDurationMs").getInt(dto),
+                reduceMotion = dtoClass.getField("reduceMotion").getBoolean(dto)
+            )
+            BridgeResult.Success(result)
+        } catch (e: NoSuchMethodException) {
+            fallback("UniFFI binding has no getStarmapMotionPolicy", e)
+        } catch (e: NoSuchFieldException) {
+            fallback("DTO field mismatch", e)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to get motion policy: ${e.message}", e)
-            BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
+            fallback("reflection invocation failed", e)
         }
     }
 
@@ -429,16 +429,13 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     // ── Editor Animation ──
-
     /**
-     * 调用 Core 的 EditorEngine 计算动画事件。
+     * Internal UniFFI adapter for EditorAnimationBridge.
      *
-     * Core 负责 should_animate 判断和事件语义（Insert/Delete/Cursor），
-     * Android 端负责坐标计算和渲染。
-     *
-     * @return Core 返回的动画事件列表 JSON 字符串，失败时返回空数组 "[]"
+     * Keep Android on typed DTO/model flow. Desktop QML may continue to expose animation_events_json,
+     * but Android must not serialize typed DTOs to JSON and hand-parse them back.
      */
-    fun editorAnimationEvents(
+    internal fun editorAnimationEventDtos(
         oldText: String,
         newText: String,
         oldCursorIndex: UInt,
@@ -446,48 +443,23 @@ class AppServiceBridge(workspacePath: String) {
         cause: String,
         maxAnimatedChars: UInt,
         animationDurationMs: ULong
-    ): String {
-        return try {
-            val causeDto = when (cause) {
-                "Typing" -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
-                "Delete" -> uniffi.writer_core.EditorTransactionCauseDto.DELETE
-                "ImeComposition" -> uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION
-                "Paste" -> uniffi.writer_core.EditorTransactionCauseDto.PASTE
-                "Undo" -> uniffi.writer_core.EditorTransactionCauseDto.UNDO
-                "Redo" -> uniffi.writer_core.EditorTransactionCauseDto.REDO
-                "Load" -> uniffi.writer_core.EditorTransactionCauseDto.LOAD
-                "Format" -> uniffi.writer_core.EditorTransactionCauseDto.FORMAT
-                "Programmatic" -> uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
-                else -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
-            }
-            val events = service.editorAnimationEvents(
-                oldText, newText, oldCursorIndex, newCursorIndex,
-                causeDto, maxAnimatedChars, animationDurationMs
-            )
-            // 将 Core 返回的事件列表序列化为 JSON
-            gson.toJson(events.map { event ->
-                mapOf(
-                    "id" to event.id,
-                    "kind" to when (event.kind) {
-                        uniffi.writer_core.EditorAnimationKindDto.INSERT -> "insert"
-                        uniffi.writer_core.EditorAnimationKindDto.DELETE -> "delete"
-                        uniffi.writer_core.EditorAnimationKindDto.CURSOR -> "cursor"
-                    },
-                    "rangeStart" to event.rangeStart,
-                    "rangeLen" to event.rangeLen,
-                    "text" to event.text,
-                    "oldCursorIndex" to event.oldCursorIndex,
-                    "newCursorIndex" to event.newCursorIndex,
-                    "durationMs" to event.durationMs
-                )
-            })
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Native library is not loaded", e)
-            "[]"
-        } catch (e: Exception) {
-            Log.e(TAG, "editorAnimationEvents failed: ${e.message}", e)
-            "[]"
+    ): BridgeResult<List<uniffi.writer_core.EditorAnimationEventDto>> = wrapResult {
+        val causeDto = when (cause) {
+            "Typing" -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
+            "Delete" -> uniffi.writer_core.EditorTransactionCauseDto.DELETE
+            "ImeComposition" -> uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION
+            "Paste" -> uniffi.writer_core.EditorTransactionCauseDto.PASTE
+            "Undo" -> uniffi.writer_core.EditorTransactionCauseDto.UNDO
+            "Redo" -> uniffi.writer_core.EditorTransactionCauseDto.REDO
+            "Load" -> uniffi.writer_core.EditorTransactionCauseDto.LOAD
+            "Format" -> uniffi.writer_core.EditorTransactionCauseDto.FORMAT
+            "Programmatic" -> uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
+            else -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
         }
+        service.editorAnimationEvents(
+            oldText, newText, oldCursorIndex, newCursorIndex,
+            causeDto, maxAnimatedChars, animationDurationMs
+        )
     }
 }
 

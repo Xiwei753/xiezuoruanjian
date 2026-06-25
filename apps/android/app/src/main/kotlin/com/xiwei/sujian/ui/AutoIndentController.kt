@@ -127,7 +127,7 @@ class AutoIndentController(private val editText: EditText) {
                 }
             }
 
-            while (paragraphStart <= textLength) {
+            while (paragraphStart < textLength) {
                 var paragraphEnd = editable.indexOf('\n', paragraphStart)
                 if (paragraphEnd == -1) {
                     paragraphEnd = textLength

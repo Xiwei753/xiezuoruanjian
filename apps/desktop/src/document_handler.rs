@@ -1,6 +1,10 @@
 // =============================================================================
-// document_handler.rs — QTextDocument 视觉排版操作器
+// document_handler.rs — QTextDocument 视觉排版操作器 (LEGACY FALLBACK)
 // =============================================================================
+//
+// ⚠️ LEGACY: 此文件仅服务于 TextArea / QTextDocument fallback 路径。
+// 写作体验问题只修 SujianEditorItem 路线（sujian_editor_item/）。
+// 不在此 fallback 上修动画、光标、首行缩进。
 //
 // 引用了什么：
 // - qmetaobject：提供 QObject 宏定义，在 Rust 侧实现供 QML 直接调用的方法与属性。

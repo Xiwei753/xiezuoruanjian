@@ -2,6 +2,8 @@ package com.xiwei.sujian.ui
 
 import android.text.Editable
 import android.view.inputmethod.BaseInputConnection
+import com.xiwei.sujian.model.EditorAnimationEventData
+import com.xiwei.sujian.model.EditorAnimationKindData
 
 /**
  * TypingAnimationController — 打字动画控制器
@@ -38,7 +40,7 @@ class TypingAnimationController(
     /**
      * Core 动画事件提供者。调用 Core 的 `editorAnimationEvents` 方法，
      * 传入 oldText/newText/oldCursorIndex/newCursorIndex/cause/maxAnimatedChars/animationDurationMs，
-     * 返回 Core 计算出的动画事件列表（JSON 字符串）。
+     * 返回 Core 计算出的 typed 动画事件列表。
      *
      * 如果为 null，则回退到本地判断逻辑（兼容未初始化 Core 的场景）。
      * 通过 `setAnimationEventProvider()` 注入。
@@ -177,7 +179,7 @@ class TypingAnimationController(
             val cause = determineCause(oldTextBeforeChange, newText, lastAddedStart, lastAddedCount)
 
             try {
-                val eventsJson = _animationEventProvider!!.provide(
+                val events = _animationEventProvider!!.provide(
                     oldText = oldTextBeforeChange,
                     newText = newText,
                     oldCursorIndex = oldCursorIndexBeforeChange.toUInt(),
@@ -187,7 +189,6 @@ class TypingAnimationController(
                     animationDurationMs = typingAnimationDurationMs.toULong()
                 )
 
-                val events = parseAnimationEvents(eventsJson)
                 if (events.isEmpty()) {
                     clearPendingDelete()
                     lastAddedStart = -1
@@ -198,7 +199,7 @@ class TypingAnimationController(
                 // 遍历 Core 返回的事件，用 Android Layout 算坐标，提交到 renderLayer
                 for (event in events) {
                     when (event.kind) {
-                        "insert" -> {
+                        EditorAnimationKindData.Insert -> {
                             lastEditorAnimationEvent = AndroidEditorAnimationEvent(
                                 kind = "insert",
                                 start = event.rangeStart,
@@ -219,7 +220,7 @@ class TypingAnimationController(
                                 isDeletion = false
                             ))
                         }
-                        "delete" -> {
+                        EditorAnimationKindData.Delete -> {
                             lastEditorAnimationEvent = AndroidEditorAnimationEvent(
                                 kind = "delete",
                                 start = event.rangeStart,
@@ -244,7 +245,7 @@ class TypingAnimationController(
                                 ))
                             }
                         }
-                        "cursor" -> {
+                        EditorAnimationKindData.Cursor -> {
                             // Cursor 动画由 SmoothCursorRenderer 处理，此处不额外提交
                             // Core 返回 cursor 事件仅作为语义标记
                         }
@@ -428,7 +429,7 @@ fun interface AnimationEventProvider {
      * @param cause 变化原因（"Typing", "Delete", "ImeComposition", "Paste", "Load" 等）
      * @param maxAnimatedChars 最大动画字符数
      * @param animationDurationMs 动画时长（毫秒）
-     * @return Core 返回的动画事件 JSON 字符串
+     * @return Core 返回的 typed 动画事件列表
      */
     fun provide(
         oldText: String,
@@ -438,186 +439,8 @@ fun interface AnimationEventProvider {
         cause: String,
         maxAnimatedChars: UInt,
         animationDurationMs: ULong
-    ): String
+    ): List<EditorAnimationEventData>
 }
-
-/**
- * Core 返回的动画事件（解析后的结构）。
- */
-data class CoreAnimationEvent(
-    val id: ULong,
-    val kind: String,
-    val rangeStart: Int,
-    val rangeLen: Int,
-    val text: String,
-    val oldCursorIndex: Int,
-    val newCursorIndex: Int,
-    val durationMs: Long
-)
-
-/**
- * 解析 Core 返回的动画事件 JSON。
- *
- * Core 返回格式为 `EditorAnimationEventDto` 的 JSON 数组，
- * 字段名为 camelCase（id, kind, rangeStart, rangeLen, text,
- * oldCursorIndex, newCursorIndex, durationMs）。
- */
-private fun parseAnimationEvents(json: String): List<CoreAnimationEvent> {
-    if (json.isBlank() || json == "[]") return emptyList()
-
-    return try {
-        val events = mutableListOf<CoreAnimationEvent>()
-        // 简单的 JSON 解析，避免引入 Gson 依赖
-        // 格式：[{"id":1,"kind":"Insert","rangeStart":2,"rangeLen":1,"text":"c","oldCursorIndex":2,"newCursorIndex":3,"durationMs":120},...]
-        val trimmed = json.trim()
-        if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return emptyList()
-
-        val inner = trimmed.substring(1, trimmed.length - 1).trim()
-        if (inner.isEmpty()) return emptyList()
-
-        // 拆分顶层对象
-        val objects = splitTopLevelObjects(inner)
-        for (obj in objects) {
-            val fields = parseJsonObject(obj)
-            events.add(CoreAnimationEvent(
-                id = (fields["id"]?.toULongOrNull() ?: 0u),
-                kind = fields["kind"] ?: "Insert",
-                rangeStart = fields["rangeStart"]?.toIntOrNull() ?: 0,
-                rangeLen = fields["rangeLen"]?.toIntOrNull() ?: 0,
-                text = fields["text"]?.unescapeJson() ?: "",
-                oldCursorIndex = fields["oldCursorIndex"]?.toIntOrNull() ?: 0,
-                newCursorIndex = fields["newCursorIndex"]?.toIntOrNull() ?: 0,
-                durationMs = fields["durationMs"]?.toLongOrNull() ?: 0L
-            ))
-        }
-        events
-    } catch (e: Exception) {
-        // Fallback or ignore in release
-        android.util.Log.w("WriterEditorAnim", "Failed to parse animation events JSON", e)
-        emptyList()
-    }
-}
-
-/**
- * 拆分顶层 JSON 对象（以 },{ 分隔）。
- */
-private fun splitTopLevelObjects(json: String): List<String> {
-    val result = mutableListOf<String>()
-    var depth = 0
-    var start = 0
-    for (i in json.indices) {
-        when (json[i]) {
-            '{' -> depth++
-            '}' -> {
-                depth--
-                if (depth == 0) {
-                    result.add(json.substring(start, i + 1).trim())
-                    start = i + 1
-                    // 跳过逗号和空白
-                    while (start < json.length && (json[start] == ',' || json[start].isWhitespace())) {
-                        start++
-                    }
-                }
-            }
-        }
-    }
-    return result
-}
-
-/**
- * 简单的 JSON 对象解析器，返回 key→value 的 Map。
- * 只处理顶层字符串和数字值，不处理嵌套对象。
- */
-private fun parseJsonObject(json: String): Map<String, String> {
-    val result = mutableMapOf<String, String>()
-    val trimmed = json.trim()
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return result
-
-    val inner = trimmed.substring(1, trimmed.length - 1).trim()
-    if (inner.isEmpty()) return result
-
-    var i = 0
-    while (i < inner.length) {
-        // 跳过空白和逗号
-        while (i < inner.length && (inner[i].isWhitespace() || inner[i] == ',')) i++
-        if (i >= inner.length) break
-
-        // 解析 key（必须是字符串）
-        if (inner[i] != '"') break
-        val keyStart = i + 1
-        val keyEnd = findStringEnd(inner, keyStart)
-        if (keyEnd < 0) break
-        val key = inner.substring(keyStart, keyEnd).unescapeJson()
-        i = keyEnd + 1
-
-        // 跳过冒号和空白
-        while (i < inner.length && (inner[i].isWhitespace() || inner[i] == ':')) i++
-        if (i >= inner.length) break
-
-        // 解析 value
-        val value: String
-        if (inner[i] == '"') {
-            val valStart = i + 1
-            val valEnd = findStringEnd(inner, valStart)
-            if (valEnd < 0) break
-            value = inner.substring(valStart, valEnd)
-            i = valEnd + 1
-        } else {
-            // 数字或枚举值
-            val valStart = i
-            while (i < inner.length && inner[i] != ',' && inner[i] != '}') i++
-            value = inner.substring(valStart, i).trim()
-        }
-
-        result[key] = value
-    }
-
-    return result
-}
-
-/**
- * 找到 JSON 字符串的结束引号位置（处理转义）。
- * @param start 开始搜索的位置（引号后第一个字符）
- * @return 结束引号的位置，-1 表示未找到
- */
-private fun findStringEnd(s: String, start: Int): Int {
-    var i = start
-    while (i < s.length) {
-        when (s[i]) {
-            '\\' -> i += 2  // 跳过转义字符
-            '"' -> return i
-            else -> i++
-        }
-    }
-    return -1
-}
-
-/**
- * 简单的 JSON 字符串反转义。
- */
-private fun String.unescapeJson(): String {
-    val sb = StringBuilder(length)
-    var i = 0
-    while (i < length) {
-        if (this[i] == '\\' && i + 1 < length) {
-            when (this[i + 1]) {
-                '"' -> { sb.append('"'); i += 2 }
-                '\\' -> { sb.append('\\'); i += 2 }
-                'n' -> { sb.append('\n'); i += 2 }
-                'r' -> { sb.append('\r'); i += 2 }
-                't' -> { sb.append('\t'); i += 2 }
-                '/' -> { sb.append('/'); i += 2 }
-                else -> { sb.append(this[i]); i++ }
-            }
-        } else {
-            sb.append(this[i])
-            i++
-        }
-    }
-    return sb.toString()
-}
-
-private fun String.toULongOrNull(): ULong? = try { toULong() } catch (_: Exception) { null }
 
 data class AndroidEditorAnimationEvent(
     val kind: String,

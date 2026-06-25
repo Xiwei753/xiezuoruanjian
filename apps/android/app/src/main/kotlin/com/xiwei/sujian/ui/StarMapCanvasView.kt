@@ -14,6 +14,10 @@ import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
 import com.xiwei.sujian.model.StarMapData
+import com.xiwei.sujian.model.StarMapEdgeRenderData
+import com.xiwei.sujian.model.StarMapGraphEdge
+import com.xiwei.sujian.model.StarMapGraphNode
+import com.xiwei.sujian.model.StarMapLayoutNodeData
 import com.xiwei.sujian.model.StarMapMotionPolicyData
 import com.xiwei.sujian.model.StarMapNodeKind
 import com.xiwei.sujian.model.StarMapViewportData
@@ -48,6 +52,7 @@ class StarMapCanvasView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     private var data: StarMapData? = null
+    private var renderSnapshot: StarMapRenderSnapshot = StarMapRenderSnapshot.empty()
 
     private val paintNodeBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A1D23") }
     private val paintNodeBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -82,6 +87,8 @@ class StarMapCanvasView @JvmOverloads constructor(
     var lastTouchX = 0f
     var lastTouchY = 0f
     var draggingNodeId: String? = null
+    private var dragAccumulatedGraphDx = 0f
+    private var dragAccumulatedGraphDy = 0f
     var onNodeDragListener: ((String, Float, Float) -> Unit)? = null
     var onNodeHitTestListener: ((Float, Float) -> String?)? = null
     var onViewportChangedListener: ((StarMapViewportData) -> Unit)? = null
@@ -98,6 +105,9 @@ class StarMapCanvasView @JvmOverloads constructor(
     /** settle 动画期间记录的节点视觉偏移（dx, dy） */
     private var settleOffsetMap = mutableMapOf<String, VisualOffset>()
 
+    /** ACTION_MOVE 拖动期间仅本地维护视觉偏移；ACTION_UP 后再提交 layout 并刷新 Core 连线。 */
+    private val dragOffsetMap = mutableMapOf<String, VisualOffset>()
+
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             if (motionPolicy.enabled && data != null) {
@@ -109,6 +119,40 @@ class StarMapCanvasView @JvmOverloads constructor(
 
     /** 视觉偏移数据：idle wobble 的 dx/dy 和 scale */
     private data class VisualOffset(val dx: Float, val dy: Float, val scale: Float)
+
+    private data class StarMapRenderSnapshot(
+        val nodeById: Map<String, StarMapGraphNode>,
+        val layoutByNodeId: Map<String, StarMapLayoutNodeData>,
+        val edgeById: Map<String, StarMapGraphEdge>,
+        val edgesByNodeId: Map<String, List<StarMapGraphEdge>>,
+        val edgeRenders: List<StarMapEdgeRenderData>
+    ) {
+        companion object {
+            fun empty(): StarMapRenderSnapshot = StarMapRenderSnapshot(
+                nodeById = emptyMap(),
+                layoutByNodeId = emptyMap(),
+                edgeById = emptyMap(),
+                edgesByNodeId = emptyMap(),
+                edgeRenders = emptyList()
+            )
+
+            fun from(data: StarMapData): StarMapRenderSnapshot {
+                val edgeById = data.graph.edges.associateBy { it.id }
+                val edgesByNodeId = mutableMapOf<String, MutableList<StarMapGraphEdge>>()
+                for (edge in data.graph.edges) {
+                    edgesByNodeId.getOrPut(edge.from) { mutableListOf() }.add(edge)
+                    edgesByNodeId.getOrPut(edge.to) { mutableListOf() }.add(edge)
+                }
+                return StarMapRenderSnapshot(
+                    nodeById = data.graph.nodes.associateBy { it.id },
+                    layoutByNodeId = data.layout.nodes.associateBy { it.nodeId },
+                    edgeById = edgeById,
+                    edgesByNodeId = edgesByNodeId,
+                    edgeRenders = data.edgeRenders
+                )
+            }
+        }
+    }
 
     private val scaleGestureDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
         override fun onScale(detector: ScaleGestureDetector): Boolean {
@@ -137,6 +181,7 @@ class StarMapCanvasView @JvmOverloads constructor(
 
     fun setData(newData: StarMapData) {
         this.data = newData
+        this.renderSnapshot = StarMapRenderSnapshot.from(newData)
         invalidate()
     }
 
@@ -214,6 +259,12 @@ class StarMapCanvasView @JvmOverloads constructor(
         return VisualOffset(wobbleX, wobbleY, 1f)
     }
 
+    private fun visualOffsetForNode(nodeId: String): VisualOffset {
+        dragOffsetMap[nodeId]?.let { return it }
+        settleOffsetMap[nodeId]?.let { return it }
+        return computeVisualOffset(nodeId, draggingNodeId == nodeId)
+    }
+
     /**
      * 启动 settle 动画：拖动释放后从当前视觉偏移平滑归位到 layout.x/y。
      */
@@ -247,6 +298,7 @@ class StarMapCanvasView @JvmOverloads constructor(
         canvas.drawColor(Color.parseColor("#111318"))
 
         val currentData = data ?: return
+        val snapshot = renderSnapshot
 
         canvas.save()
         canvas.translate(panX, panY)
@@ -258,23 +310,14 @@ class StarMapCanvasView @JvmOverloads constructor(
         val visibleRight = visibleLeft + width / zoom + 200
         val visibleBottom = visibleTop + height / zoom + 200
 
-        for (edge in currentData.edgeRenders) {
-            // 通过 edgeId 找到 graph edge，获取 from/to nodeId，计算 visual offset
-            val graphEdge = currentData.graph.edges.find { it.id == edge.edgeId }
+        for (edge in snapshot.edgeRenders) {
+            // edgeId → graph edge 走 StarMapRenderSnapshot，onDraw 禁止线性 find。
+            val graphEdge = snapshot.edgeById[edge.edgeId]
             val fromNodeId = graphEdge?.from
             val toNodeId = graphEdge?.to
 
-            // source 端 visual offset
-            val fromVisual = fromNodeId?.let { nid ->
-                val isDragging = draggingNodeId == nid
-                settleOffsetMap[nid] ?: computeVisualOffset(nid, isDragging)
-            } ?: VisualOffset(0f, 0f, 1f)
-
-            // target 端 visual offset
-            val toVisual = toNodeId?.let { nid ->
-                val isDragging = draggingNodeId == nid
-                settleOffsetMap[nid] ?: computeVisualOffset(nid, isDragging)
-            } ?: VisualOffset(0f, 0f, 1f)
+            val fromVisual = fromNodeId?.let { visualOffsetForNode(it) } ?: VisualOffset(0f, 0f, 1f)
+            val toVisual = toNodeId?.let { visualOffsetForNode(it) } ?: VisualOffset(0f, 0f, 1f)
 
             // 修正坐标：edge 基础坐标 + 端点 visual offset
             val sx = edge.startX + fromVisual.dx
@@ -296,68 +339,61 @@ class StarMapCanvasView @JvmOverloads constructor(
             canvas.drawLine(atx, aty, arx, ary, paintEdge)
         }
 
-        for (node in currentData.graph.nodes) {
-            val layout = currentData.layout.nodes.find { it.nodeId == node.id }
-            if (layout != null) {
-                // 粗略裁剪：跳过不可见节点
-                if (layout.x + layout.width < visibleLeft || layout.x > visibleRight ||
-                    layout.y + layout.height < visibleTop || layout.y > visibleBottom) {
-                    continue
-                }
-
-                val isDragging = draggingNodeId == node.id
-
-                // settle 动画中的节点使用 settle 偏移，否则用 idle wobble
-                val settleOffset = settleOffsetMap[node.id]
-                val visual = if (settleOffset != null) {
-                    settleOffset
-                } else {
-                    computeVisualOffset(node.id, isDragging)
-                }
-
-                val scale = if (isDragging) motionPolicy.dragLiftScale else visual.scale
-
-                val vx = layout.x + visual.dx
-                val vy = layout.y + visual.dy
-                val vw = layout.width * scale
-                val vh = layout.height * scale
-
-                // 拖动时阴影加强
-                if (isDragging) {
-                    paintNodeBg.setShadowLayer(motionPolicy.dragShadowBoost, 0f, 4f, Color.parseColor("#66000000"))
-                } else {
-                    paintNodeBg.clearShadowLayer()
-                }
-
-                val rect = RectF(vx, vy, vx + vw, vy + vh)
-
-                // Draw node background
-                canvas.drawRoundRect(rect, 16f, 16f, paintNodeBg)
-
-                // Draw border
-                canvas.drawRoundRect(rect, 16f, 16f, paintNodeBorder)
-
-                // Draw header strip
-                paintHeader.color = getKindColor(node.kind)
-                val headerRect = RectF(vx + 16f, vy + 16f, vx + vw - 16f, vy + 16f + 48f)
-                canvas.drawRoundRect(headerRect, 8f, 8f, paintHeader)
-
-                // Draw kind text
-                canvas.drawText(
-                    getKindString(node.kind),
-                    vx + vw / 2,
-                    vy + 16f + 34f,
-                    paintKindText
-                )
-
-                // Draw title text
-                canvas.drawText(
-                    node.title,
-                    vx + vw / 2,
-                    vy + vh / 2 + 32f,
-                    paintTitleText
-                )
+        for (layout in currentData.layout.nodes) {
+            val node = snapshot.nodeById[layout.nodeId] ?: continue
+            // 粗略裁剪：跳过不可见节点
+            if (layout.x + layout.width < visibleLeft || layout.x > visibleRight ||
+                layout.y + layout.height < visibleTop || layout.y > visibleBottom) {
+                continue
             }
+
+            val isDragging = draggingNodeId == node.id
+
+            // 拖动 / settle / idle 的视觉偏移统一走本地视觉状态，不在 onDraw 线性查表。
+            val visual = visualOffsetForNode(node.id)
+
+            val scale = if (isDragging) motionPolicy.dragLiftScale else visual.scale
+
+            val vx = layout.x + visual.dx
+            val vy = layout.y + visual.dy
+            val vw = layout.width * scale
+            val vh = layout.height * scale
+
+            // 拖动时阴影加强
+            if (isDragging) {
+                paintNodeBg.setShadowLayer(motionPolicy.dragShadowBoost, 0f, 4f, Color.parseColor("#66000000"))
+            } else {
+                paintNodeBg.clearShadowLayer()
+            }
+
+            val rect = RectF(vx, vy, vx + vw, vy + vh)
+
+            // Draw node background
+            canvas.drawRoundRect(rect, 16f, 16f, paintNodeBg)
+
+            // Draw border
+            canvas.drawRoundRect(rect, 16f, 16f, paintNodeBorder)
+
+            // Draw header strip
+            paintHeader.color = getKindColor(node.kind)
+            val headerRect = RectF(vx + 16f, vy + 16f, vx + vw - 16f, vy + 16f + 48f)
+            canvas.drawRoundRect(headerRect, 8f, 8f, paintHeader)
+
+            // Draw kind text
+            canvas.drawText(
+                getKindString(node.kind),
+                vx + vw / 2,
+                vy + 16f + 34f,
+                paintKindText
+            )
+
+            // Draw title text
+            canvas.drawText(
+                node.title,
+                vx + vw / 2,
+                vy + vh / 2 + 32f,
+                paintTitleText
+            )
         }
 
         canvas.restore()
@@ -384,13 +420,24 @@ class StarMapCanvasView @JvmOverloads constructor(
                 val graphY = (y - panY) / zoom
 
                 draggingNodeId = onNodeHitTestListener?.invoke(graphX, graphY)
+                dragAccumulatedGraphDx = 0f
+                dragAccumulatedGraphDy = 0f
+                dragOffsetMap.clear()
             }
             MotionEvent.ACTION_MOVE -> {
                 val dx = x - lastTouchX
                 val dy = y - lastTouchY
 
                 if (draggingNodeId != null) {
-                    onNodeDragListener?.invoke(draggingNodeId!!, dx / zoom, dy / zoom)
+                    val graphDx = dx / zoom
+                    val graphDy = dy / zoom
+                    dragAccumulatedGraphDx += graphDx
+                    dragAccumulatedGraphDy += graphDy
+                    dragOffsetMap[draggingNodeId!!] = VisualOffset(
+                        dragAccumulatedGraphDx,
+                        dragAccumulatedGraphDy,
+                        motionPolicy.dragLiftScale
+                    )
                 } else {
                     panX += dx
                     panY += dy
@@ -403,15 +450,19 @@ class StarMapCanvasView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 if (draggingNodeId != null) {
+                    val releasedNodeId = draggingNodeId!!
+                    onNodeDragListener?.invoke(releasedNodeId, dragAccumulatedGraphDx, dragAccumulatedGraphDy)
+                    dragOffsetMap.clear()
                     onLayoutSavedListener?.invoke()
 
-                    // 启动 settle 动画：从当前视觉偏移归位
+                    // 启动 settle 动画：layout 已提交，归位到 Core 刷新后的连线坐标。
                     if (motionPolicy.enabled && !motionPolicy.reduceMotion) {
-                        val visual = computeVisualOffset(draggingNodeId!!, true)
-                        startSettleAnimation(draggingNodeId!!, visual.dx, visual.dy)
+                        startSettleAnimation(releasedNodeId, 0f, 0f)
                     }
                 }
                 draggingNodeId = null
+                dragAccumulatedGraphDx = 0f
+                dragAccumulatedGraphDy = 0f
                 notifyViewportChangedIfNeeded()
             }
         }

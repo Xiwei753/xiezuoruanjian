@@ -28,6 +28,7 @@ Item {
     visible: editorItem !== null
 
     property var _activeAnimations: []
+    property Component _glyphGhostComponent: Qt.createComponent("EditorGlyphGhost.qml")
 
     Connections {
         target: editorItem
@@ -94,8 +95,8 @@ Item {
         }
 
         // ── Glyph Ghost path ──
-        var component = Qt.createComponent("EditorGlyphGhost.qml")
-        if (component.status !== Component.Ready) return
+        var component = root._glyphGhostComponent
+        if (!component || component.status !== Component.Ready) return
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]
@@ -139,8 +140,8 @@ Item {
         }
 
         // ── Glyph Ghost path ──
-        var component = Qt.createComponent("EditorGlyphGhost.qml")
-        if (component.status !== Component.Ready) return
+        var component = root._glyphGhostComponent
+        if (!component || component.status !== Component.Ready) return
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]
