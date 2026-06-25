@@ -3,7 +3,6 @@ package com.xiwei.sujian.ui
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Rect
 import android.util.Log
 
 /**
@@ -62,45 +61,6 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
     }
 
     private var isCursorBlinkVisible = true
-
-    private var savedOldCursorRect: Rect? = null
-
-    fun saveOldCursorRect() {
-        if (currentCursorX < 0) return
-        savedOldCursorRect = Rect(
-            currentCursorX.toInt(),
-            currentCursorTop.toInt(),
-            currentCursorX.toInt() + 2,
-            currentCursorBottom.toInt()
-        )
-        Log.d(TAG, "saveOldCursorRect: x=${currentCursorX}, top=${currentCursorTop}, bottom=${currentCursorBottom}")
-    }
-
-    fun animateFromOldToNew() {
-        val old = savedOldCursorRect ?: return
-        savedOldCursorRect = null
-        val pos = editText.selectionStart
-        if (pos < 0 || pos != editText.selectionEnd) return
-        val coords = computeCursorTarget(pos)
-
-        startX = old.left.toFloat()
-        startY_top = old.top.toFloat()
-        startY_bottom = old.bottom.toFloat()
-
-        targetX = coords.x
-        targetTop = coords.top
-        targetBottom = coords.bottom
-
-        currentCursorX = old.left.toFloat()
-        currentCursorTop = old.top.toFloat()
-        currentCursorBottom = old.bottom.toFloat()
-
-        startTimeNanos = -1L
-        isAnimating = true
-        editText.animationRuntime?.register(this)
-        editText.postInvalidateOnAnimation()
-        Log.d(TAG, "animateFromOldToNew: from (${old.left},${old.top}) to (${coords.x},${coords.top})")
-    }
 
     private val cursorBlinkRunnable = object : Runnable {
         override fun run() {

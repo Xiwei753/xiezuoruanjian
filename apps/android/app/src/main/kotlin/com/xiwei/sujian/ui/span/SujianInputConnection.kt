@@ -18,9 +18,14 @@ class SujianInputConnection(
         if (text.isNullOrEmpty()) return super.commitText(text, newCursorPosition)
         val pos = editText.selectionStart
         val textLen = editText.text?.length ?: 0
-        Log.d(TAG, "commitText: \"$text\", cursorPos=$newCursorPosition, sel=$pos, textLen=$textLen")
+        val wasComposing = isComposing
+        Log.d(TAG, "commitText: \"$text\", cursorPos=$newCursorPosition, sel=$pos, textLen=$textLen, wasComposing=$wasComposing")
         editText.onInputBeforeCommit(pos, textLen)
         val result = super.commitText(text, newCursorPosition)
+        if (result && wasComposing) {
+            isComposing = false
+            editText.onInputFinishComposing(fromCommitText = true)
+        }
         return result
     }
 
@@ -32,10 +37,10 @@ class SujianInputConnection(
     }
 
     override fun finishComposingText(): Boolean {
-        Log.d(TAG, "finishComposingText")
+        Log.d(TAG, "finishComposingText, isComposing=$isComposing")
         if (isComposing) {
             isComposing = false
-            editText.onInputFinishComposing()
+            editText.onInputFinishComposing(fromCommitText = false)
         }
         return super.finishComposingText()
     }

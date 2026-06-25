@@ -45,6 +45,10 @@ class TypingAnimationController(
      * 通过 `setAnimationEventProvider()` 注入。
      */
     private var _animationEventProvider: AnimationEventProvider? = null
+    val hasProvider: Boolean get() = _animationEventProvider != null
+
+    var providerUnavailable: Boolean = false
+    var providerFailedLastTime: Boolean = false
 
     var typingAnimationEnabled = false
         private set
@@ -91,7 +95,14 @@ class TypingAnimationController(
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         typingAnimationEnabled = enabled
         typingAnimationDurationMs = durationMs.coerceIn(80L, 180L)
-        android.util.Log.d(TAG, "setTypingAnimationEnabled: enabled=$enabled, durationMs=${typingAnimationDurationMs}")
+        val providerAvailable = _animationEventProvider != null
+        val actualPath = when {
+            !enabled -> "disabled"
+            providerAvailable && !providerFailedLastTime -> "core"
+            providerAvailable && providerFailedLastTime -> "core(failed,skip)"
+            else -> "fallback"
+        }
+        android.util.Log.d(TAG, "setTypingAnimationEnabled: enabled=$enabled, durationMs=${typingAnimationDurationMs}, providerAvailable=$providerAvailable, providerFailed=$providerFailedLastTime, actualPath=$actualPath")
         if (!enabled) {
             clearPendingDelete()
             renderLayer.clear()
@@ -106,6 +117,8 @@ class TypingAnimationController(
      */
     fun setAnimationEventProvider(provider: AnimationEventProvider) {
         _animationEventProvider = provider
+        providerUnavailable = false
+        providerFailedLastTime = false
     }
 
     fun recordCursorBeforeChange(x: Float, y: Float) {
@@ -259,8 +272,8 @@ class TypingAnimationController(
                 lastAddedCount = 0
                 return
             } catch (e: Exception) {
-                // 硬边界：Core 调用失败时，不 fallback 到本地逻辑，只跳过动画并打日志
-                android.util.Log.w(TAG, "Core animation events failed, skipping animation (no local fallback)", e)
+                providerFailedLastTime = true
+                android.util.Log.w(TAG, "Core animation events failed: typingEnabled=$typingAnimationEnabled, providerInjected=true, providerFailed=true, skipping animation", e)
                 clearPendingDelete()
                 lastAddedStart = -1
                 lastAddedCount = 0

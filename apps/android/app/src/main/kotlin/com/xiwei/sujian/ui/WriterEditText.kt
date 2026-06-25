@@ -47,7 +47,7 @@ class WriterEditText @JvmOverloads constructor(
     var animationRuntime: EditorAnimationRuntime? = null
         private set
 
-    private var typingAnimationController: TypingAnimationController? = null
+    internal var typingAnimationController: TypingAnimationController? = null
     internal var renderLayer: EditorRenderLayer? = null
     internal var autoIndentController: AutoIndentController? = null
     internal var sujianInputConnection: SujianInputConnection? = null
@@ -477,14 +477,10 @@ class WriterEditText @JvmOverloads constructor(
         val x = layout.getPrimaryHorizontal(pos)
         val y = layout.getLineBaseline(line).toFloat()
         typingAnimationController?.recordCursorBeforeChange(x, y)
-        renderLayer?.smoothCursorRenderer?.saveOldCursorRect()
     }
 
     internal fun onInputBeforeDelete(pos: Int, beforeLength: Int) {
         if (!controllersReady) return
-        val layout = layout ?: return
-        if (pos < 0) return
-        renderLayer?.smoothCursorRenderer?.saveOldCursorRect()
     }
 
     internal fun onInputSetComposingText(text: CharSequence?, newCursorPosition: Int) {
@@ -492,11 +488,15 @@ class WriterEditText @JvmOverloads constructor(
         autoIndentController?.markComposingActive()
     }
 
-    internal fun onInputFinishComposing() {
+    internal fun onInputFinishComposing(fromCommitText: Boolean = false) {
         if (!controllersReady) return
         autoIndentController?.markComposingFinished()
         val editable = editableText ?: return
-        autoIndentController?.updateParagraphIndentSpans(editable, isFullRebuild = true)
+        post {
+            if (text === editable) {
+                autoIndentController?.updateParagraphIndentSpans(editable, isFullRebuild = true)
+            }
+        }
     }
 
 }

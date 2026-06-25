@@ -27,6 +27,8 @@ class AutoIndentController(private val editText: EditText) {
     private var isComposingActive = false
         private set
 
+    private val emptyParagraphMarkerSpans = mutableMapOf<Int, LeadingMarginSpan.Standard>()
+
     private val delayedFullRebuildRunnable = Runnable {
         val editable = editText.text ?: return@Runnable
         updateParagraphIndentSpans(editable, isFullRebuild = true)
@@ -106,6 +108,7 @@ class AutoIndentController(private val editText: EditText) {
                 }
                 isUpdatingSpan = false
             }
+            emptyParagraphMarkerSpans.clear()
             return
         }
 
@@ -130,6 +133,13 @@ class AutoIndentController(private val editText: EditText) {
                 }
             }
 
+            val markerKeysToRemove = mutableListOf<Int>()
+            for ((pos, _) in emptyParagraphMarkerSpans) {
+                if (pos >= paragraphStart) {
+                    markerKeysToRemove.add(pos)
+                }
+            }
+
             while (paragraphStart <= textLength) {
                 var newlinePos = editable.indexOf('\n', paragraphStart)
                 val paragraphEnd: Int
@@ -147,33 +157,51 @@ class AutoIndentController(private val editText: EditText) {
                     (paragraphEnd - paragraphStart == 0)
 
                 if (isEmptyParagraph) {
-                    val existingAtEmpty = existingSpans.firstOrNull {
-                        editable.getSpanStart(it) == paragraphStart
-                    }
-                    if (existingAtEmpty != null) {
-                        spansToRemove.remove(existingAtEmpty)
-                        if (editable.getSpanEnd(existingAtEmpty) != paragraphEnd ||
-                            existingAtEmpty.getLeadingMargin(true) != autoIndentPx) {
-                            editable.removeSpan(existingAtEmpty)
+                    val markerSpan = emptyParagraphMarkerSpans[paragraphStart]
+                    if (markerSpan != null) {
+                        markerKeysToRemove.remove(paragraphStart)
+                        spansToRemove.remove(markerSpan)
+                        if (editable.getSpanEnd(markerSpan) != paragraphEnd ||
+                            markerSpan.getLeadingMargin(true) != autoIndentPx) {
+                            editable.removeSpan(markerSpan)
+                            val newMarker = LeadingMarginSpan.Standard(autoIndentPx, 0)
+                            emptyParagraphMarkerSpans[paragraphStart] = newMarker
                             editable.setSpan(
-                                LeadingMarginSpan.Standard(autoIndentPx, 0),
+                                newMarker,
                                 paragraphStart, paragraphEnd,
-                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                                Spanned.SPAN_INCLUSIVE_INCLUSIVE
                             )
-                            Log.d(TAG, "updateParagraphIndentSpans: updated empty span at [$paragraphStart, $paragraphEnd)")
+                            Log.d(TAG, "updateParagraphIndentSpans: updated empty marker span at [$paragraphStart, $paragraphEnd)")
                         }
                     } else {
+                        val existingAtEmpty = existingSpans.firstOrNull {
+                            editable.getSpanStart(it) == paragraphStart
+                        }
+                        if (existingAtEmpty != null) {
+                            spansToRemove.remove(existingAtEmpty)
+                            editable.removeSpan(existingAtEmpty)
+                        }
+                        val newMarker = LeadingMarginSpan.Standard(autoIndentPx, 0)
+                        emptyParagraphMarkerSpans[paragraphStart] = newMarker
                         editable.setSpan(
-                            LeadingMarginSpan.Standard(autoIndentPx, 0),
+                            newMarker,
                             paragraphStart, paragraphEnd,
-                            Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            Spanned.SPAN_INCLUSIVE_INCLUSIVE
                         )
-                        Log.d(TAG, "updateParagraphIndentSpans: set empty span at [$paragraphStart, $paragraphEnd)")
+                        Log.d(TAG, "updateParagraphIndentSpans: set empty marker span at [$paragraphStart, $paragraphEnd)")
                     }
                     if (paragraphEnd >= textLength && !isTrailingEmptyParagraph) break
                     if (isTrailingEmptyParagraph && paragraphEnd >= textLength) break
                     paragraphStart = paragraphEnd
                     continue
+                }
+
+                val markerAtPos = emptyParagraphMarkerSpans.remove(paragraphStart)
+                if (markerAtPos != null) {
+                    val spanStart = editable.getSpanStart(markerAtPos)
+                    if (spanStart >= 0) {
+                        editable.removeSpan(markerAtPos)
+                    }
                 }
 
                 val span = existingSpans.firstOrNull {
@@ -195,6 +223,16 @@ class AutoIndentController(private val editText: EditText) {
 
                 if (paragraphEnd >= textLength) break
                 paragraphStart = paragraphEnd
+            }
+
+            for (key in markerKeysToRemove) {
+                val marker = emptyParagraphMarkerSpans.remove(key)
+                if (marker != null) {
+                    val spanStart = editable.getSpanStart(marker)
+                    if (spanStart >= 0) {
+                        editable.removeSpan(marker)
+                    }
+                }
             }
 
             for (span in spansToRemove) {

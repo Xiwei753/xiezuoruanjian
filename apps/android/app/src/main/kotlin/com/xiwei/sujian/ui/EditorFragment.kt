@@ -199,17 +199,29 @@ class EditorFragment : Fragment() {
             editorEditText.setAnimationEventProvider(AnimationEventProvider { oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs ->
                 try {
                     when (val result = animBridge.editorAnimationEvents(oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs)) {
-                        is com.xiwei.sujian.data.BridgeResult.Success -> result.data
-                        else -> emptyList()
+                        is com.xiwei.sujian.data.BridgeResult.Success -> {
+                            editorEditText.typingAnimationController?.providerFailedLastTime = false
+                            result.data
+                        }
+                        else -> {
+                            val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
+                            Log.w("WriterSettings", "AnimationEventProvider returned failure: typingEnabled=$typingEnabled, providerInjected=true")
+                            editorEditText.typingAnimationController?.providerFailedLastTime = true
+                            emptyList()
+                        }
                     }
                 } catch (e: Exception) {
-                    Log.w("WriterSettings", "AnimationEventProvider failed", e)
+                    val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
+                    Log.w("WriterSettings", "AnimationEventProvider threw exception: typingEnabled=$typingEnabled, providerInjected=true, exception=${e.message}", e)
+                    editorEditText.typingAnimationController?.providerFailedLastTime = true
                     emptyList()
                 }
             })
             Log.d("WriterSettings", "AnimationEventProvider injected from EditorAnimationBridge")
         } catch (e: Exception) {
-            Log.w("WriterSettings", "Failed to inject AnimationEventProvider", e)
+            val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
+            editorEditText.typingAnimationController?.providerUnavailable = true
+            Log.w("WriterSettings", "Failed to inject AnimationEventProvider: typingEnabled=$typingEnabled, providerUnavailable=true, will use local fallback if enabled", e)
         }
 
         setupSearchAndReplace()
@@ -434,7 +446,14 @@ class EditorFragment : Fragment() {
         editorEditText.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
         editorEditText.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
 
-        Log.d(tag, "applySettingsToEditor: all settings applied, indent/typing/smooth set")
+        val typingCtrl = editorEditText.typingAnimationController
+        val animActualPath = when {
+            !settings.typingAnimationEnabled -> "disabled"
+            typingCtrl?.hasProvider == true && !typingCtrl.providerFailedLastTime -> "core"
+            typingCtrl?.hasProvider == true && typingCtrl.providerFailedLastTime -> "core(failed,skip)"
+            else -> "fallback"
+        }
+        Log.d(tag, "applySettingsToEditor: all settings applied, settingEnabled=${settings.typingAnimationEnabled}, providerAvailable=${typingCtrl?.hasProvider == true}, actualAnimationPath=$animActualPath, smoothCursor=${settings.smoothCursorEnabled}")
     }
 
     // ── Text Watcher ──
