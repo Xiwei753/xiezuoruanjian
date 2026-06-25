@@ -62,10 +62,6 @@ impl ScrollBuffer {
             }
         }
 
-        // Qt standard DPR model: all coordinates are logical.
-        // The QImage's devicePixelRatio handles the logical→physical mapping.
-        // No manual dpr multiplication needed for source rect.
-
         (src_y, src_h)
     }
 }
@@ -374,14 +370,14 @@ impl SujianEditorItem {
             },
             qmetaobject::ImageFormat::ARGB32_Premultiplied,
         );
-        // Qt standard DPR model: set devicePixelRatio on the image so that
-        // all painting and source-rect operations use logical coordinates.
-        // No manual painter->scale(dpr) or sourceRect*dpr needed.
+        // DPR model: image is at physical pixel size with DPR=1.0.
+        // QPainter manually scales by dpr so paint_onto() uses logical coords.
+        // setSourceRect on QSGImageNode uses physical pixel coords (×dpr).
+        // destRect uses QML logical coords.
         {
             let img_ptr = &mut image as *mut qmetaobject::QImage;
-            let dpr_val = dpr;
-            cpp!(unsafe [img_ptr as "QImage*", dpr_val as "double"] {
-                img_ptr->setDevicePixelRatio(dpr_val);
+            cpp!(unsafe [img_ptr as "QImage*"] {
+                img_ptr->setDevicePixelRatio(1.0);
             });
         }
         image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));

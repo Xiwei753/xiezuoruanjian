@@ -79,7 +79,7 @@ pub fn update_texture_node(
     src_h: f64,
     dest_y: f64,
     dest_h: f64,
-    _dpr: f64,
+    dpr: f64,
 ) -> *mut std::ffi::c_void {
     let img_ptr = image as *const qmetaobject::QImage;
     cpp!(unsafe [
@@ -88,7 +88,8 @@ pub fn update_texture_node(
         img_ptr as "QImage*",
         src_x as "double", src_y as "double",
         src_w as "double", src_h as "double",
-        dest_y as "double", dest_h as "double"
+        dest_y as "double", dest_h as "double",
+        dpr as "double"
     ] -> *mut std::ffi::c_void as "QSGNode*" {
         auto *root = static_cast<QSGTransformNode*>(old_raw);
         if (!root) {
@@ -100,46 +101,59 @@ pub fn update_texture_node(
         }
         if (!imgNode) {
             imgNode = item_ptr->window()->createImageNode();
-            imgNode->setFiltering(QSGTexture::Linear);
+            imgNode->setFiltering(QSGTexture::Nearest);
             imgNode->setOwnsTexture(true);
             root->appendChildNode(imgNode);
         }
+        // destRect uses QML logical coordinates
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
 
-        // Qt standard DPR model: the QImage has setDevicePixelRatio(dpr),
-        // so createTextureFromImage and setSourceRect both use logical coords.
-        // No manual dpr multiplication needed.
-        double final_src_x = src_x;
-        double final_src_y = src_y;
-        double final_src_w = src_w;
-        double final_src_h = src_h;
+        // sourceRect uses physical pixel coordinates (multiply logical by dpr).
+        // The QImage has DPR=1.0, so textureSize == image pixel size.
+        double phys_src_x = src_x * dpr;
+        double phys_src_y = src_y * dpr;
+        double phys_src_w = src_w * dpr;
+        double phys_src_h = src_h * dpr;
 
-        // Clamp source rect to image bounds (logical coords)
-        double logical_w = img_ptr->width() / img_ptr->devicePixelRatio();
-        double logical_h = img_ptr->height() / img_ptr->devicePixelRatio();
+        // Clamp source rect to image bounds (physical pixel coords)
+        double phys_img_w = static_cast<double>(img_ptr->width());
+        double phys_img_h = static_cast<double>(img_ptr->height());
 
-        if (final_src_y < 0.0) final_src_y = 0.0;
-        if (final_src_y + final_src_h > logical_h) {
-            if (final_src_h > logical_h) {
-                final_src_h = logical_h;
+        if (phys_src_y < 0.0) phys_src_y = 0.0;
+        if (phys_src_y + phys_src_h > phys_img_h) {
+            if (phys_src_h > phys_img_h) {
+                phys_src_h = phys_img_h;
             }
-            if (final_src_y + final_src_h > logical_h) {
-                final_src_y = logical_h - final_src_h;
+            if (phys_src_y + phys_src_h > phys_img_h) {
+                phys_src_y = phys_img_h - phys_src_h;
             }
         }
-        if (final_src_x < 0.0) final_src_x = 0.0;
-        if (final_src_x + final_src_w > logical_w) {
-            if (final_src_w > logical_w) {
-                final_src_w = logical_w;
+        if (phys_src_x < 0.0) phys_src_x = 0.0;
+        if (phys_src_x + phys_src_w > phys_img_w) {
+            if (phys_src_w > phys_img_w) {
+                phys_src_w = phys_img_w;
             }
-            if (final_src_x + final_src_w > logical_w) {
-                final_src_x = logical_w - final_src_w;
+            if (phys_src_x + phys_src_w > phys_img_w) {
+                phys_src_x = phys_img_w - phys_src_w;
             }
         }
 
-        imgNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
-        imgNode->setTexture(item_ptr->window()->createTextureFromImage(*img_ptr));
+        imgNode->setSourceRect(phys_src_x, phys_src_y, phys_src_w, phys_src_h);
+        QSGTexture *tex = item_ptr->window()->createTextureFromImage(*img_ptr);
+        tex->setFiltering(QSGTexture::Nearest);
+        imgNode->setTexture(tex);
         imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+
+        static bool logged_once = false;
+        if (!logged_once) {
+            logged_once = true;
+            qDebug("update_texture_node: dpr=%.2f img=%dx%d texSize=%dx%d srcRect=(%.1f,%.1f %.1fx%.1f) destRect=(0,%.1f %.1fx%.1f)",
+                dpr, img_ptr->width(), img_ptr->height(),
+                tex->textureSize().width(), tex->textureSize().height(),
+                phys_src_x, phys_src_y, phys_src_w, phys_src_h,
+                dest_y, item_ptr->width(), dest_h);
+        }
+
         return root;
     })
 }
@@ -167,39 +181,41 @@ pub fn update_source_rect(
         if (!root || root->childCount() == 0) return;
         auto *imgNode = static_cast<QSGImageNode*>(root->firstChild());
         if (!imgNode) return;
+        // destRect uses QML logical coordinates
         imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
 
-        double final_src_x = src_x;
-        double final_src_y = src_y;
-        double final_src_w = src_w;
-        double final_src_h = src_h;
+        // sourceRect uses physical pixel coordinates (multiply logical by dpr)
+        double phys_src_x = src_x * dpr;
+        double phys_src_y = src_y * dpr;
+        double phys_src_w = src_w * dpr;
+        double phys_src_h = src_h * dpr;
 
         if (imgNode->texture()) {
             QSize texSize = imgNode->texture()->textureSize();
-            double logical_w = texSize.width() / dpr;
-            double logical_h = texSize.height() / dpr;
+            double phys_img_w = static_cast<double>(texSize.width());
+            double phys_img_h = static_cast<double>(texSize.height());
 
-            if (final_src_y < 0.0) final_src_y = 0.0;
-            if (final_src_y + final_src_h > logical_h) {
-                if (final_src_h > logical_h) {
-                    final_src_h = logical_h;
+            if (phys_src_y < 0.0) phys_src_y = 0.0;
+            if (phys_src_y + phys_src_h > phys_img_h) {
+                if (phys_src_h > phys_img_h) {
+                    phys_src_h = phys_img_h;
                 }
-                if (final_src_y + final_src_h > logical_h) {
-                    final_src_y = logical_h - final_src_h;
+                if (phys_src_y + phys_src_h > phys_img_h) {
+                    phys_src_y = phys_img_h - phys_src_h;
                 }
             }
-            if (final_src_x < 0.0) final_src_x = 0.0;
-            if (final_src_x + final_src_w > logical_w) {
-                if (final_src_w > logical_w) {
-                    final_src_w = logical_w;
+            if (phys_src_x < 0.0) phys_src_x = 0.0;
+            if (phys_src_x + phys_src_w > phys_img_w) {
+                if (phys_src_w > phys_img_w) {
+                    phys_src_w = phys_img_w;
                 }
-                if (final_src_x + final_src_w > logical_w) {
-                    final_src_x = logical_w - final_src_w;
+                if (phys_src_x + phys_src_w > phys_img_w) {
+                    phys_src_x = phys_img_w - phys_src_w;
                 }
             }
         }
 
-        imgNode->setSourceRect(final_src_x, final_src_y, final_src_w, final_src_h);
+        imgNode->setSourceRect(phys_src_x, phys_src_y, phys_src_w, phys_src_h);
         imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
     })
 }

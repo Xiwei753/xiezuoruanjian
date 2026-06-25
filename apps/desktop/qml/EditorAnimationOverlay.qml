@@ -33,16 +33,28 @@ Item {
     Connections {
         target: editorItem
         function onAnimationEventsChanged() {
-            if (!root.animationEnabled || root.suppressed) return
+            if (!root.animationEnabled || root.suppressed) {
+                console.log("[AnimOverlay] skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
+                return
+            }
             var jsonStr = editorItem.animation_events_json
-            if (!jsonStr || jsonStr === "[]") return
+            if (!jsonStr || jsonStr === "[]") {
+                console.log("[AnimOverlay] skipped: jsonStr empty or []")
+                return
+            }
+            console.log("[AnimOverlay] received: jsonLen=" + jsonStr.length)
             var events
             try {
                 events = JSON.parse(jsonStr)
             } catch (e) {
+                console.log("[AnimOverlay] JSON parse error: " + e)
                 return
             }
-            if (!Array.isArray(events)) return
+            if (!Array.isArray(events)) {
+                console.log("[AnimOverlay] skipped: events not array")
+                return
+            }
+            console.log("[AnimOverlay] events count=" + events.length)
             for (var i = 0; i < events.length; i++) {
                 root._handleEvent(events[i])
             }
@@ -82,21 +94,32 @@ Item {
         var duration = Math.max(80, Math.min(180, event.durationMs || 160))
 
         if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
-            // No glyph rects — skip animation entirely, no rectangle fallback
+            console.log("[AnimOverlay] insert skipped: glyphRects empty")
             return
         }
 
         // Multi-char limit: > 8 glyphs → no animation
-        if (event.glyphRects.length > 8) return
+        if (event.glyphRects.length > 8) {
+            console.log("[AnimOverlay] insert skipped: glyphRects count=" + event.glyphRects.length + " > 8")
+            return
+        }
 
         // Newline check: if any glyph char is newline, skip
         for (var ci = 0; ci < event.glyphRects.length; ci++) {
-            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") return
+            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") {
+                console.log("[AnimOverlay] insert skipped: contains newline at index=" + ci)
+                return
+            }
         }
 
         // ── Glyph Ghost path ──
         var component = root._glyphGhostComponent
-        if (!component || component.status !== Component.Ready) return
+        if (!component || component.status !== Component.Ready) {
+            console.log("[AnimOverlay] insert skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString : "no component"))
+            return
+        }
+
+        console.log("[AnimOverlay] insert creating " + event.glyphRects.length + " ghosts, cursorRect=(" + cursorRectX + "," + cursorRectY + ")")
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]
@@ -127,21 +150,32 @@ Item {
         var duration = Math.max(80, Math.min(180, event.durationMs || 160))
 
         if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
-            // No glyph rects — skip animation entirely, no rectangle fallback
+            console.log("[AnimOverlay] delete skipped: glyphRects empty")
             return
         }
 
         // Multi-char limit: > 8 glyphs → no animation
-        if (event.glyphRects.length > 8) return
+        if (event.glyphRects.length > 8) {
+            console.log("[AnimOverlay] delete skipped: glyphRects count=" + event.glyphRects.length + " > 8")
+            return
+        }
 
         // Newline check: if any glyph char is newline, skip
         for (var ci = 0; ci < event.glyphRects.length; ci++) {
-            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") return
+            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") {
+                console.log("[AnimOverlay] delete skipped: contains newline at index=" + ci)
+                return
+            }
         }
 
         // ── Glyph Ghost path ──
         var component = root._glyphGhostComponent
-        if (!component || component.status !== Component.Ready) return
+        if (!component || component.status !== Component.Ready) {
+            console.log("[AnimOverlay] delete skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString : "no component"))
+            return
+        }
+
+        console.log("[AnimOverlay] delete creating " + event.glyphRects.length + " ghosts, cursorRect=(" + cursorRectX + "," + cursorRectY + ")")
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]

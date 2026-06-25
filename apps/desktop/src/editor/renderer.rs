@@ -68,15 +68,15 @@ pub fn sujian_item_dpr(item_ptr: *mut std::ffi::c_void) -> f64 {
 
 /// Create a QPainter for the given QImage.
 ///
-/// Uses the Qt standard DPR model: the image must have had
-/// `setDevicePixelRatio(dpr)` called before this function, so the painter
-/// works entirely in logical coordinates — no manual `scale(dpr, dpr)` needed.
-pub fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, _dpr: f64) -> *mut QPainter {
+/// The image is at physical pixel size with DPR=1.0.
+/// The painter manually scales by dpr so that paint_onto() works
+/// entirely in logical coordinates. setSourceRect on QSGImageNode
+/// must use physical pixel coords (multiply by dpr).
+pub fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, dpr: f64) -> *mut QPainter {
     let img_ptr = image as *mut qmetaobject::QImage;
-    cpp!(unsafe [img_ptr as "QImage*"] -> *mut QPainter as "QPainter*" {
+    cpp!(unsafe [img_ptr as "QImage*", dpr as "double"] -> *mut QPainter as "QPainter*" {
         auto *p = new QPainter(img_ptr);
-        // No manual scale — the image's devicePixelRatio handles the
-        // logical→physical mapping.  All painting uses logical coords.
+        p->scale(dpr, dpr);
         return p;
     })
 }

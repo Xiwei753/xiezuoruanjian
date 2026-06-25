@@ -928,6 +928,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(next, extend);
         self.cursor_position_changed();
         self.selection_changed();
+        let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -952,6 +953,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
+        let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -971,6 +973,7 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, extend);
         self.cursor_position_changed();
         self.selection_changed();
+        let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
 
@@ -1470,6 +1473,8 @@ impl QQuickItem for SujianEditorItem {
                     } else {
                         (scroll_y - buf_scroll_y, vp_h)
                     };
+                    // Image has DPR=1.0, so logical width = physical width / dpr.
+                    // But we pass logical coords to update_texture_node which multiplies by dpr internally.
                     let logical_img_w = image.size().width as f64 / dpr;
                     final_root = scene_graph::update_texture_node(
                         root_raw, item_ptr, &image, 0.0, src_y, logical_img_w, src_h, 0.0, vp_h, dpr,

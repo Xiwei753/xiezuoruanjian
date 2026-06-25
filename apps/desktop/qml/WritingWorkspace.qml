@@ -686,7 +686,7 @@ Rectangle {
                             }
                         }
                     }
-                    
+
                     ScrollView {
                         id: editorScroll
                         readonly property bool editorIsScrolling: editorWheelScroller.active || ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
@@ -698,7 +698,7 @@ Rectangle {
                         contentHeight: root.useSujianEditorItem
                             ? Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
                             : editorCanvas.implicitHeight
-                        
+
                         function clampScroll() {
                             if (contentItem) {
                                 var maxScroll = Math.max(0, contentHeight - height);
@@ -726,7 +726,7 @@ Rectangle {
                             repeat: false
                             onTriggered: editorScroll.editorAnimationSuppressed = false
                         }
-                        
+
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                         ScrollBar.vertical: ScrollBar {
                             policy: ScrollBar.AsNeeded
@@ -827,7 +827,10 @@ Rectangle {
                     //   - updatePaintNode / QSG 渲染完全由 Rust 侧管理
                     SujianEditorItem {
                         id: sujianEditor
-                        anchors.fill: editorScroll
+                        x: editorScroll.x
+                        y: editorScroll.y
+                        width: editorScroll.availableWidth
+                        height: editorScroll.availableHeight
                         visible: root.useSujianEditorItem
                         focus: root.useSujianEditorItem
                         editor_enabled: editorController.chapterId !== ""
@@ -842,10 +845,10 @@ Rectangle {
                         cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
                         smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
                         cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
-                        typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : false
+                        typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
                         typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 160
                         scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
-                        viewport_height: editorScroll.availableHeight
+                        viewport_height: sujianEditor.height
                         is_scrolling: editorScroll.editorAnimationSuppressed
 
                         onWidthChanged: {
@@ -935,7 +938,10 @@ Rectangle {
                     // QML overlay 层 - 消费 Core animation events，叠加动画效果
                     EditorAnimationOverlay {
                         id: sujianAnimationOverlay
-                        anchors.fill: editorScroll
+                        x: sujianEditor.x
+                        y: sujianEditor.y
+                        width: sujianEditor.width
+                        height: sujianEditor.height
                         editorItem: sujianEditor
                         dt: root.dt
                         animationEnabled: sujianEditor.typing_animation_enabled
