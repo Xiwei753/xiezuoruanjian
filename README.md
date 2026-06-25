@@ -26,6 +26,8 @@
 - 云同步（Beta）
 - 跨平台：Android / Linux / HarmonyOS
 
+> **关于 Apple 平台**：目前没有适配 macOS / iOS 的打算。等什么时候搬砖凑够了 Apple Developer Program 的签名费用（688 元/年）再考虑适配。
+
 ## 架构
 
 ```

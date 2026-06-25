@@ -24,6 +24,8 @@ A cross-platform writing tool for novel creators, built with a Rust core + nativ
 - Cloud sync (Beta)
 - Cross-platform: Android / Linux / HarmonyOS
 
+> **Regarding Apple platforms**: There are currently no plans to support macOS / iOS. We'll consider it once we've saved up enough from our day jobs to cover the Apple Developer Program signing fee (¥688/year).
+
 ## Architecture
 
 ```
