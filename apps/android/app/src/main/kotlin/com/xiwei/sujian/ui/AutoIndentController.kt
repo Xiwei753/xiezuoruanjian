@@ -206,7 +206,13 @@ class AutoIndentController(private val editText: EditText) {
                         Log.d(TAG, "updateParagraphIndentSpans: set empty marker span at [$paragraphStart, $paragraphEnd)")
                     }
                     if (paragraphEnd >= textLength && !isTrailingEmptyParagraph) break
-                    if (isTrailingEmptyParagraph && paragraphEnd >= textLength) break
+                    if (isTrailingEmptyParagraph && paragraphEnd >= textLength) {
+                        if (paragraphEnd == textLength && textLength > 0 && editable[textLength - 1] == '\n' && paragraphStart < textLength) {
+                            paragraphStart = textLength
+                            continue
+                        }
+                        break
+                    }
                     paragraphStart = paragraphEnd
                     continue
                 }
@@ -239,7 +245,13 @@ class AutoIndentController(private val editText: EditText) {
                     Log.d(TAG, "updateParagraphIndentSpans: set span at [$paragraphStart, $paragraphEnd)")
                 }
 
-                if (paragraphEnd >= textLength) break
+                if (paragraphEnd >= textLength) {
+                    if (paragraphEnd == textLength && textLength > 0 && editable[textLength - 1] == '\n' && paragraphStart < textLength) {
+                        paragraphStart = textLength
+                        continue
+                    }
+                    break
+                }
                 paragraphStart = paragraphEnd
             }
 
