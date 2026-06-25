@@ -1581,6 +1581,32 @@ mod tests {
     }
 
     #[test]
+    fn test_qchar_offset_to_byte_offset() {
+        // Normal ASCII text
+        let text = "hello";
+        assert_eq!(qchar_offset_to_byte_offset(text, 0), 0);
+        assert_eq!(qchar_offset_to_byte_offset(text, 1), 1);
+        assert_eq!(qchar_offset_to_byte_offset(text, 4), 4);
+        assert_eq!(qchar_offset_to_byte_offset(text, 5), 5);
+
+        // Emoji (surrogate pair)
+        let emoji = "a😀b"; // a: 1 qchar (1 byte), 😀: 2 qchars (4 bytes), b: 1 qchar (1 byte)
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 0), 0); // 'a'
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 1), 1); // '😀'
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 2), 5); // Fallback inside surrogate -> next char 'b'
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 3), 5); // 'b'
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 4), 6); // End
+
+        // Out-of-bounds inputs
+        assert_eq!(qchar_offset_to_byte_offset(text, 100), 5); // Fallback to text.len()
+        assert_eq!(qchar_offset_to_byte_offset(emoji, 10), 6); // Fallback to emoji.len()
+
+        // Empty string
+        assert_eq!(qchar_offset_to_byte_offset("", 0), 0);
+        assert_eq!(qchar_offset_to_byte_offset("", 1), 0);
+    }
+
+    #[test]
     fn qchar_byte_roundtrip() {
         let texts = [
             "hello world",
