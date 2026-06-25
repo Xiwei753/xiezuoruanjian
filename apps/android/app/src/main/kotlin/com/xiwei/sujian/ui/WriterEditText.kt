@@ -479,10 +479,6 @@ class WriterEditText @JvmOverloads constructor(
         typingAnimationController?.recordCursorBeforeChange(x, y)
     }
 
-    internal fun onInputBeforeDelete(pos: Int, beforeLength: Int) {
-        if (!controllersReady) return
-    }
-
     internal fun onInputSetComposingText(text: CharSequence?, newCursorPosition: Int) {
         if (!controllersReady) return
         autoIndentController?.markComposingActive()

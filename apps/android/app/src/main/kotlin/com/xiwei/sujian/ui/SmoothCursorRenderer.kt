@@ -80,18 +80,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
             return CursorTargetCoords(-1f, -1f, -1f)
         }
         val line = layout.getLineForOffset(pos)
-        var x = layout.getPrimaryHorizontal(pos)
-
-        val autoIndentController = editText.autoIndentController
-        if (autoIndentController != null && autoIndentController.autoIndentEnabled && autoIndentController.autoIndentPx > 0) {
-            val lineStart = layout.getLineStart(line)
-            val lineEnd = layout.getLineEnd(line)
-            val isLineStart = (pos == lineStart)
-            val isEmptyLine = (lineStart == lineEnd) || (lineEnd - lineStart == 1 && editText.text?.get(lineStart) == '\n')
-            if (isLineStart && isEmptyLine) {
-                x = layout.getLineLeft(line) + autoIndentController.autoIndentPx
-            }
-        }
+        val x = layout.getPrimaryHorizontal(pos)
 
         val baseline = layout.getLineBaseline(line).toFloat()
         val fontMetrics = editText.paint.fontMetrics
