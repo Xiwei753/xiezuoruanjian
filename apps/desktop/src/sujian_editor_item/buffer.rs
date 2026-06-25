@@ -283,4 +283,32 @@ mod tests {
             line_end
         );
     }
+
+    #[test]
+    fn test_next_char_boundary_empty() {
+        assert_eq!(next_char_boundary("", 0), None);
+        assert_eq!(next_char_boundary("", 1), None);
+    }
+
+    #[test]
+    fn test_next_char_boundary_ascii() {
+        let text = "abc";
+        assert_eq!(next_char_boundary(text, 0), Some(1));
+        assert_eq!(next_char_boundary(text, 1), Some(2));
+        assert_eq!(next_char_boundary(text, 2), Some(3));
+        assert_eq!(next_char_boundary(text, 3), None);
+        assert_eq!(next_char_boundary(text, 10), None);
+    }
+
+    #[test]
+    fn test_next_char_boundary_utf8() {
+        let text = "你好"; // 3 bytes each
+        assert_eq!(next_char_boundary(text, 0), Some(3));
+        assert_eq!(next_char_boundary(text, 1), Some(3));
+        assert_eq!(next_char_boundary(text, 2), Some(3));
+        assert_eq!(next_char_boundary(text, 3), Some(6));
+        assert_eq!(next_char_boundary(text, 4), Some(6));
+        assert_eq!(next_char_boundary(text, 6), None);
+        assert_eq!(next_char_boundary(text, 10), None);
+    }
 }
