@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.Spannable
 import android.text.style.BackgroundColorSpan
+import android.util.Log
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuInflater
@@ -192,6 +193,24 @@ class EditorFragment : Fragment() {
 
         // ── Editor setup ──
         editorEditText.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
+
+        try {
+            val animBridge = com.xiwei.sujian.data.BridgeProvider.getEditorAnimationBridge(requireContext())
+            editorEditText.setAnimationEventProvider(AnimationEventProvider { oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs ->
+                try {
+                    when (val result = animBridge.editorAnimationEvents(oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs)) {
+                        is com.xiwei.sujian.data.BridgeResult.Success -> result.data
+                        else -> emptyList()
+                    }
+                } catch (e: Exception) {
+                    Log.w("WriterSettings", "AnimationEventProvider failed", e)
+                    emptyList()
+                }
+            })
+            Log.d("WriterSettings", "AnimationEventProvider injected from EditorAnimationBridge")
+        } catch (e: Exception) {
+            Log.w("WriterSettings", "Failed to inject AnimationEventProvider", e)
+        }
 
         setupSearchAndReplace()
         observeViewModel()
@@ -392,17 +411,30 @@ class EditorFragment : Fragment() {
     }
 
     private fun applySettingsToEditor(settings: EditorSettingsState) {
-        if (lastFontSize != settings.fontSize) {
-            lastFontSize = settings.fontSize
-            editorEditText.textSize = settings.fontSize
+        val tag = "WriterSettings"
+        Log.d(tag, "applySettingsToEditor: fontSize=${settings.fontSize}, lineSpacing=${settings.lineSpacingMultiplier}, " +
+            "autoIndent=${settings.autoIndentEnabled}/${settings.autoIndentWidth}, " +
+            "typingAnim=${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms, " +
+            "smoothCursor=${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
+
+        editorEditText.runWithoutTextAnimations {
+            if (lastFontSize != settings.fontSize) {
+                lastFontSize = settings.fontSize
+                editorEditText.textSize = settings.fontSize
+                Log.d(tag, "  → fontSize applied: ${settings.fontSize}")
+            }
+            if (lastLineSpacing != settings.lineSpacingMultiplier) {
+                lastLineSpacing = settings.lineSpacingMultiplier
+                editorEditText.setLineSpacing(0f, settings.lineSpacingMultiplier)
+                Log.d(tag, "  → lineSpacing applied: ${settings.lineSpacingMultiplier}")
+            }
         }
-        if (lastLineSpacing != settings.lineSpacingMultiplier) {
-            lastLineSpacing = settings.lineSpacingMultiplier
-            editorEditText.setLineSpacing(0f, settings.lineSpacingMultiplier)
-        }
+
         editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
         editorEditText.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
         editorEditText.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
+
+        Log.d(tag, "applySettingsToEditor: all settings applied, indent/typing/smooth set")
     }
 
     // ── Text Watcher ──

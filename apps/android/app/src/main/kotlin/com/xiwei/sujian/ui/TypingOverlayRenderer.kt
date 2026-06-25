@@ -2,9 +2,11 @@ package com.xiwei.sujian.ui
 
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.util.Log
 
+import com.xiwei.sujian.ui.span.InputRevealSpan
+import com.xiwei.sujian.ui.span.DeletingHoldSpan
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.sqrt
 
 /**
  * TypingOverlayRenderer — 打字动画覆盖层渲染器
@@ -35,8 +37,9 @@ data class OverlayAnim(
     var progress: Float = 0f,
     var startTimeNanos: Long = -1L,
     val durationMs: Long,
-
-    val isDeletion: Boolean = false
+    val isDeletion: Boolean = false,
+    val revealSpan: InputRevealSpan? = null,
+    val deletingHoldSpan: DeletingHoldSpan? = null
 ) {
     val codePoints: List<Int> = buildList {
         var i = 0
@@ -53,7 +56,6 @@ data class OverlayAnim(
 }
 
 class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimationRuntime.Animatable {
-    private val DEBUG_ANIM = false
     private val TAG = "WriterEditorAnim"
     private val activeAnims = CopyOnWriteArrayList<OverlayAnim>()
     private val MAX_ANIMATIONS = 24
@@ -123,13 +125,17 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
             }
 
             if (anim.progress >= 1f) {
+                if (anim.revealSpan != null && !anim.revealSpan.isRevealed) {
+                    anim.revealSpan.reveal()
+                }
+                if (anim.deletingHoldSpan != null && !anim.deletingHoldSpan.isDeleted) {
+                    anim.deletingHoldSpan.performDelete()
+                }
                 activeAnims.remove(anim)
             } else {
                 hasMore = true
             }
         }
-
-        // Static text is always fully drawn by the system; overlay is purely additive.
 
         return hasMore || activeAnims.isNotEmpty()
     }
@@ -138,32 +144,24 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
         if (pausedForScroll) return
         if (activeAnims.isEmpty()) return
 
-        val layout = editText.layout ?: return
         val paint = editText.paint
         val originalAlpha = paint.alpha
-        val textLength = editText.text?.length ?: 0
 
         val padX = editText.compoundPaddingLeft.toFloat()
         val padY = editText.compoundPaddingTop.toFloat()
+        val scrollX = editText.scrollX.toFloat()
+        val scrollY = editText.scrollY.toFloat()
 
         for (anim in activeAnims) {
-            var i = anim.insertedStart
-            var drawnCodepoints = 0
-
-            // Apply decelerate interpolation dynamically
             val interpolatedProgress = 1f - (1f - anim.progress) * (1f - anim.progress)
 
             if (anim.isDeletion) {
-                // ── Delete animation ──
-                // opacity: 0.75 → 0
-                // scale: 1.0 → 0.45
-                // position: glyph → cursor
                 val destX = if (anim.endX >= 0f) anim.endX else anim.startX
                 val destY = if (anim.endY >= 0f) anim.endY else anim.startY
 
                 val currentX = anim.startX + (destX - anim.startX) * interpolatedProgress
                 val currentY = anim.startY + (destY - anim.startY) * interpolatedProgress
-                val scale = 1f - 0.55f * interpolatedProgress  // 1.0 → 0.45
+                val scale = 1f - 0.55f * interpolatedProgress
                 paint.alpha = (originalAlpha * 0.75f * (1f - interpolatedProgress)).toInt().coerceIn(0, 255)
 
                 var offsetX = 0f
@@ -173,89 +171,48 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
                     if (isNewline) continue
 
                     val textToDraw = anim.cachedStrings[idx]
+                    val drawX = currentX + offsetX + padX - scrollX
+                    val drawY = currentY + padY - scrollY
                     canvas.save()
-                    canvas.scale(scale, scale, currentX + padX, currentY + padY)
-                    canvas.drawText(
-                        textToDraw,
-                        currentX + offsetX + padX,
-                        currentY + padY,
-                        paint
-                    )
+                    canvas.scale(scale, scale, drawX, drawY)
+                    canvas.drawText(textToDraw, drawX, drawY, paint)
                     canvas.restore()
                     offsetX += paint.measureText(textToDraw)
-                    drawnCodepoints++
                 }
             } else {
-                // ── Insert animation ──
-                // opacity: 0 → 0.75 → 0 (peak at midpoint)
-                // scale: 0.72 → 1.0
-                // position: cursor → glyph
+                val destX = if (anim.endX >= 0f) anim.endX else anim.startX
+                val destY = if (anim.endY >= 0f) anim.endY else anim.startY
+
+                val sX = anim.startX
+                val sY = anim.startY
+
+                val currentX = sX + (destX - sX) * interpolatedProgress
+                val currentY = sY + (destY - sY) * interpolatedProgress
+
+                val scale = 0.72f + 0.28f * interpolatedProgress
+
+                val opacity = if (interpolatedProgress < 0.5f) {
+                    interpolatedProgress * 2f * 0.75f
+                } else {
+                    (1f - interpolatedProgress) * 2f * 0.75f
+                }
+                paint.alpha = (originalAlpha * opacity).toInt().coerceIn(0, 255)
+
+                var offsetX = 0f
                 for (idx in anim.codePoints.indices) {
                     val cp = anim.codePoints[idx]
-                    val charCount = Character.charCount(cp)
-                    if (i + charCount > textLength) break
-
                     val isNewline = (cp == '\n'.code || cp == '\r'.code)
-
-                    if (isNewline) {
-                        i += charCount
-                        continue
-                    }
+                    if (isNewline) continue
 
                     val textToDraw = anim.cachedStrings[idx]
-                    val destX = layout.getPrimaryHorizontal(i)
-                    val line = layout.getLineForOffset(i)
-                    val destY = layout.getLineBaseline(line).toFloat()
-
-                    var sX = anim.startX
-                    var sY = anim.startY
-
-                    if (sX < 0 || sY < 0) {
-                        sX = destX
-                        sY = destY
-                    } else {
-                        val dx = destX - sX
-                        val dy = destY - sY
-                        val distSq = dx * dx + dy * dy
-                        val maxDist = 10f
-                        if (distSq > maxDist * maxDist) {
-                            val dist = sqrt(distSq.toDouble()).toFloat()
-                            sX = destX - (dx / dist) * maxDist
-                            sY = destY - (dy / dist) * maxDist
-                        }
-                    }
-
-                    val currentX = sX + (destX - sX) * interpolatedProgress
-                    val currentY = sY + (destY - sY) * interpolatedProgress
-
-                    // Scale: 0.72 → 1.0
-                    val scale = 0.72f + 0.28f * interpolatedProgress
-
-                    // Opacity: 0 → 0.75 → 0 (peak at midpoint)
-                    val opacity = if (interpolatedProgress < 0.5f) {
-                        interpolatedProgress * 2f * 0.75f
-                    } else {
-                        (1f - interpolatedProgress) * 2f * 0.75f
-                    }
-                    paint.alpha = (originalAlpha * opacity).toInt().coerceIn(0, 255)
-
+                    val drawX = currentX + offsetX + padX - scrollX
+                    val drawY = currentY + padY - scrollY
                     canvas.save()
-                    canvas.scale(scale, scale, currentX + padX, currentY + padY)
-                    canvas.drawText(
-                        textToDraw,
-                        currentX + padX,
-                        currentY + padY,
-                        paint
-                    )
+                    canvas.scale(scale, scale, drawX, drawY)
+                    canvas.drawText(textToDraw, drawX, drawY, paint)
                     canvas.restore()
-
-                    drawnCodepoints++
-                    i += charCount
+                    offsetX += paint.measureText(textToDraw)
                 }
-            }
-
-            if (DEBUG_ANIM) {
-                android.util.Log.d(TAG, "onDraw - insertedStart: ${anim.insertedStart}, visibleAnimatedCodepoints: $drawnCodepoints, overlayCount: ${activeAnims.size}")
             }
         }
 

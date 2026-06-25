@@ -34,7 +34,6 @@ class TypingAnimationController(
     private val editText: WriterEditText,
     private val renderLayer: EditorRenderLayer
 ) {
-    private val DEBUG_ANIM = false
     private val TAG = "WriterEditorAnim"
 
     /**
@@ -91,8 +90,8 @@ class TypingAnimationController(
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         typingAnimationEnabled = enabled
-        // Clamp duration to 80~180ms
         typingAnimationDurationMs = durationMs.coerceIn(80L, 180L)
+        android.util.Log.d(TAG, "setTypingAnimationEnabled: enabled=$enabled, durationMs=${typingAnimationDurationMs}")
         if (!enabled) {
             clearPendingDelete()
             renderLayer.clear()
@@ -109,6 +108,11 @@ class TypingAnimationController(
         _animationEventProvider = provider
     }
 
+    fun recordCursorBeforeChange(x: Float, y: Float) {
+        cursorBeforeX = x
+        cursorBeforeY = y
+    }
+
     fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {
         if (isScrollAnimationsSuppressed) {
             lastAddedStart = -1
@@ -118,13 +122,11 @@ class TypingAnimationController(
         if (isSuppressAnimations) {
             clearPendingDelete()
             renderLayer.clear()
-            if (DEBUG_ANIM) {
-                android.util.Log.d(TAG, "beforeTextChanged - suppressed animation")
-            }
             return
         }
 
-        // 保存旧文本和光标位置，供 afterTextChanged 调用 Core 时使用
+        android.util.Log.d(TAG, "beforeTextChanged: start=$start, count=$count, after=$after")
+
         oldTextBeforeChange = s?.toString() ?: ""
         oldCursorIndexBeforeChange = editText.selectionStart.coerceAtLeast(0)
 
@@ -146,9 +148,7 @@ class TypingAnimationController(
             }
         }
 
-        if (DEBUG_ANIM) {
-            android.util.Log.d(TAG, "beforeTextChanged - replaced: $count, after: $after, cursor: ($cursorBeforeX, $cursorBeforeY)")
-        }
+        android.util.Log.d(TAG, "beforeTextChanged: cursor=($cursorBeforeX, $cursorBeforeY)")
     }
 
     fun onTextChanged(start: Int, count: Int) {
@@ -169,6 +169,8 @@ class TypingAnimationController(
             clearPendingDelete()
             return
         }
+
+        android.util.Log.d(TAG, "afterTextChanged: lastStart=$lastAddedStart, lastCount=$lastAddedCount, typingEnabled=$typingAnimationEnabled")
 
         val newText = editable.toString()
         val newCursorIndex = editText.selectionStart.coerceAtLeast(0)
@@ -302,7 +304,7 @@ class TypingAnimationController(
         val isComposing = composingStart != -1 && composingEnd != -1
 
         if (isComposing && lastAddedStart >= composingStart && lastAddedStart + lastAddedCount <= composingEnd) {
-            if (DEBUG_ANIM) android.util.Log.d(TAG, "afterTextChanged - skipping animation for composing text.")
+            android.util.Log.d(TAG, "afterTextChanged: skipping composing text")
             lastAddedStart = -1
             lastAddedCount = 0
             return
@@ -346,9 +348,7 @@ class TypingAnimationController(
                     }
                 }
 
-                if (DEBUG_ANIM) {
-                    android.util.Log.d(TAG, "afterTextChanged - recorded event: start=$start, length=${insertedText.length}")
-                }
+                android.util.Log.d(TAG, "afterTextChanged: local fallback insert event: start=$start, length=${insertedText.length}")
             }
             lastAddedStart = -1
             lastAddedCount = 0

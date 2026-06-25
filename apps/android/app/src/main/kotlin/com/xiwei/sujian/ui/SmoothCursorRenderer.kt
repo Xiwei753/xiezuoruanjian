@@ -3,6 +3,8 @@ package com.xiwei.sujian.ui
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
+import android.util.Log
 
 /**
  * SmoothCursorRenderer — 平滑光标渲染器
@@ -21,6 +23,8 @@ import android.graphics.Paint
  * - 编辑器中光标移动时的平滑过渡动画
  */
 class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimationRuntime.Animatable {
+
+    private val TAG = "WriterSmoothCursor"
 
     /** 光标颜色，由外部设置。默认使用主题主色。 */
     var cursorColor: Int = Color.parseColor("#006497")
@@ -58,6 +62,45 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
     }
 
     private var isCursorBlinkVisible = true
+
+    private var savedOldCursorRect: Rect? = null
+
+    fun saveOldCursorRect() {
+        if (currentCursorX < 0) return
+        savedOldCursorRect = Rect(
+            currentCursorX.toInt(),
+            currentCursorTop.toInt(),
+            currentCursorX.toInt() + 2,
+            currentCursorBottom.toInt()
+        )
+        Log.d(TAG, "saveOldCursorRect: x=${currentCursorX}, top=${currentCursorTop}, bottom=${currentCursorBottom}")
+    }
+
+    fun animateFromOldToNew() {
+        val old = savedOldCursorRect ?: return
+        savedOldCursorRect = null
+        val pos = editText.selectionStart
+        if (pos < 0 || pos != editText.selectionEnd) return
+        val coords = computeCursorTarget(pos)
+
+        startX = old.left.toFloat()
+        startY_top = old.top.toFloat()
+        startY_bottom = old.bottom.toFloat()
+
+        targetX = coords.x
+        targetTop = coords.top
+        targetBottom = coords.bottom
+
+        currentCursorX = old.left.toFloat()
+        currentCursorTop = old.top.toFloat()
+        currentCursorBottom = old.bottom.toFloat()
+
+        startTimeNanos = -1L
+        isAnimating = true
+        editText.animationRuntime?.register(this)
+        editText.postInvalidateOnAnimation()
+        Log.d(TAG, "animateFromOldToNew: from (${old.left},${old.top}) to (${coords.x},${coords.top})")
+    }
 
     private val cursorBlinkRunnable = object : Runnable {
         override fun run() {
@@ -169,6 +212,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         val wasEnabled = smoothCursorEnabled
         smoothCursorEnabled = enabled
         smoothCursorDurationMs = durationMs
+        Log.d(TAG, "setSmoothCursorEnabled: enabled=$enabled, durationMs=$durationMs")
         editText.isCursorVisible = !enabled
         if (enabled && editText.isFocused) {
             startCursorBlink()
@@ -231,6 +275,8 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         val pos = editText.selectionStart
         val end = editText.selectionEnd
         if (pos < 0) return
+
+        Log.d(TAG, "updateCursorTarget: pos=$pos, animate=$animate, isAnimating=$isAnimating")
 
         if (pos != end) {
             isAnimating = false
@@ -333,9 +379,9 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         if (!cursorRuntimeReady) return
         if (smoothCursorEnabled && editText.isFocused && editText.selectionStart == editText.selectionEnd && isCursorBlinkVisible && currentCursorX >= 0) {
             cursorPaint.color = cursorColor
-            val drawX = currentCursorX + editText.compoundPaddingLeft
-            val drawTop = currentCursorTop + editText.compoundPaddingTop
-            val drawBottom = currentCursorBottom + editText.compoundPaddingTop
+            val drawX = currentCursorX + editText.compoundPaddingLeft - editText.scrollX
+            val drawTop = currentCursorTop + editText.compoundPaddingTop - editText.scrollY
+            val drawBottom = currentCursorBottom + editText.compoundPaddingTop - editText.scrollY
             canvas.drawLine(drawX, drawTop, drawX, drawBottom, cursorPaint)
         }
     }

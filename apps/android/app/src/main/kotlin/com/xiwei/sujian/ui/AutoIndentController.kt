@@ -3,26 +3,13 @@ package com.xiwei.sujian.ui
 import android.text.Editable
 import android.text.Spanned
 import android.text.style.LeadingMarginSpan
+import android.util.Log
 import android.view.inputmethod.BaseInputConnection
 import android.widget.EditText
 
-/**
- * AutoIndentController — 自动首行缩进控制器
- *
- * 使用 LeadingMarginSpan 实现段落的首行缩进效果。
- *
- * ## 架构定位
- * - WriterEditText → AutoIndentController → LeadingMarginSpan
- *
- * ## 职责边界
- * - **做**：首行缩进的 Span 管理、新段落自动缩进
- * - **不做**：文本内容管理（由 EditText 负责）
- *
- * ## 使用场景
- * - 用户输入时自动为新段落添加首行缩进
- * - 支持动态调整缩进宽度
- */
 class AutoIndentController(private val editText: EditText) {
+
+    private val TAG = "WriterAutoIndent"
 
     var autoIndentEnabled: Boolean = false
         private set
@@ -35,6 +22,9 @@ class AutoIndentController(private val editText: EditText) {
     var isSuppressing = false
 
     var pendingFullRebuildAfterComposition = false
+        private set
+
+    private var isComposingActive = false
         private set
 
     private val delayedFullRebuildRunnable = Runnable {
@@ -51,6 +41,17 @@ class AutoIndentController(private val editText: EditText) {
         return spans
     }
 
+    fun markComposingActive() {
+        isComposingActive = true
+        Log.d(TAG, "markComposingActive: composing started")
+    }
+
+    fun markComposingFinished() {
+        isComposingActive = false
+        pendingFullRebuildAfterComposition = true
+        Log.d(TAG, "markComposingFinished: composing ended, pending rebuild")
+    }
+
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
         val oldEnabled = this.autoIndentEnabled
         val oldPx = this.autoIndentPx
@@ -64,6 +65,7 @@ class AutoIndentController(private val editText: EditText) {
         }
 
         if (oldEnabled != this.autoIndentEnabled || oldPx != this.autoIndentPx) {
+            Log.d(TAG, "setAutoIndent: enabled=$enabled, px=${this.autoIndentPx}, triggering full rebuild")
             val editable = editText.text
             if (editable != null) {
                 updateParagraphIndentSpans(editable, isFullRebuild = true)
@@ -78,8 +80,9 @@ class AutoIndentController(private val editText: EditText) {
         val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
         val isComposing = composingStart != -1 && composingEnd != -1
 
-        if (isComposing) {
+        if (isComposing || isComposingActive) {
             pendingFullRebuildAfterComposition = true
+            Log.d(TAG, "updateParagraphIndentSpans: composing active, deferring")
             return
         }
 
@@ -135,6 +138,30 @@ class AutoIndentController(private val editText: EditText) {
                     paragraphEnd += 1
                 }
 
+                val isEmptyParagraph = (paragraphEnd - paragraphStart <= 1) &&
+                    (paragraphStart >= textLength || editable[paragraphStart] == '\n')
+
+                if (isEmptyParagraph) {
+                    val existingAtEmpty = existingSpans.firstOrNull {
+                        editable.getSpanStart(it) == paragraphStart
+                    }
+                    if (existingAtEmpty != null) {
+                        spansToRemove.remove(existingAtEmpty)
+                        if (editable.getSpanEnd(existingAtEmpty) != paragraphEnd ||
+                            existingAtEmpty.getLeadingMargin(true) != autoIndentPx) {
+                            editable.removeSpan(existingAtEmpty)
+                            editable.setSpan(
+                                LeadingMarginSpan.Standard(autoIndentPx, 0),
+                                paragraphStart, paragraphEnd,
+                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
+                    }
+                    if (paragraphEnd >= textLength) break
+                    paragraphStart = paragraphEnd
+                    continue
+                }
+
                 val span = existingSpans.firstOrNull {
                     editable.getSpanStart(it) == paragraphStart &&
                         editable.getSpanEnd(it) == paragraphEnd &&
@@ -144,7 +171,12 @@ class AutoIndentController(private val editText: EditText) {
                 if (span != null) {
                     spansToRemove.remove(span)
                 } else {
-                    editable.setSpan(LeadingMarginSpan.Standard(autoIndentPx, 0), paragraphStart, paragraphEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    editable.setSpan(
+                        LeadingMarginSpan.Standard(autoIndentPx, 0),
+                        paragraphStart, paragraphEnd,
+                        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    Log.d(TAG, "updateParagraphIndentSpans: set span at [$paragraphStart, $paragraphEnd)")
                 }
 
                 if (paragraphEnd >= textLength) break

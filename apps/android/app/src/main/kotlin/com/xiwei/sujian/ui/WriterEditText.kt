@@ -2,7 +2,9 @@ package com.xiwei.sujian.ui
 
 import android.content.Context
 import android.graphics.Canvas
+import android.os.Build
 import android.text.Editable
+import android.text.Layout
 import android.text.TextWatcher
 import android.util.AttributeSet
 import android.view.MotionEvent
@@ -10,8 +12,13 @@ import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
 import android.widget.OverScroller
 import androidx.appcompat.widget.AppCompatEditText
+import com.xiwei.sujian.ui.span.InputRevealSpan
+import com.xiwei.sujian.ui.span.DeletingHoldSpan
+import com.xiwei.sujian.ui.span.SujianInputConnection
 import kotlin.math.abs
 
 /**
@@ -45,6 +52,7 @@ class WriterEditText @JvmOverloads constructor(
     private var typingAnimationController: TypingAnimationController? = null
     internal var renderLayer: EditorRenderLayer? = null
     internal var autoIndentController: AutoIndentController? = null
+    internal var sujianInputConnection: SujianInputConnection? = null
 
     private var lastTypingEnabled: Boolean? = null
     private var lastTypingDuration: Long? = null
@@ -226,12 +234,17 @@ class WriterEditText @JvmOverloads constructor(
                 val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
                 val isComposing = composingStart != -1 && composingEnd != -1
 
-                autoIndentController?.updateParagraphIndentSpans(editable, updateStartPos = selectionStart)
-                if (needsDelayedIndentFullRebuild && !isComposing) {
-                    autoIndentController?.requestDelayedFullRebuild()
-                }
-                if (autoIndentController?.pendingFullRebuildAfterComposition == true && !isComposing) {
-                    autoIndentController?.updateParagraphIndentSpans(editable, isFullRebuild = true)
+                if (!isComposing && !autoIndentController?.isComposingActive ?: false) {
+                    if (needsDelayedIndentFullRebuild) {
+                        autoIndentController?.updateParagraphIndentSpans(editable, isFullRebuild = true)
+                    }
+                    if (autoIndentController?.pendingFullRebuildAfterComposition == true) {
+                        autoIndentController?.updateParagraphIndentSpans(editable, isFullRebuild = true)
+                    }
+                } else {
+                    if (needsDelayedIndentFullRebuild && !isComposing) {
+                        autoIndentController?.requestDelayedFullRebuild()
+                    }
                 }
                 needsDelayedIndentFullRebuild = false
             }
@@ -241,11 +254,20 @@ class WriterEditText @JvmOverloads constructor(
 
         viewTreeObserver.addOnGlobalLayoutListener {
             if (layer.smoothCursorRenderer.smoothCursorEnabled && isFocused) {
-                layer.smoothCursorRenderer.updateCursorTarget(false)
+                layer.smoothCursorRenderer.updateCursorTarget(true)
             }
         }
 
         typeface = android.graphics.Typeface.create("sans-serif", typeface?.style ?: android.graphics.Typeface.NORMAL)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+            hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            justificationMode = Layout.JUSTIFICATION_MODE_NONE
+        }
+        includeFontPadding = false
         contextMenuController = EditorContextMenuController(this)
         contextMenuController.installActionModeCallbacks()
     }
@@ -434,5 +456,110 @@ class WriterEditText @JvmOverloads constructor(
         renderLayer?.beforeTextDraw()
         super.onDraw(canvas)
         renderLayer?.drawAfterText(canvas)
+    }
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        val ic = super.onCreateInputConnection(outAttrs) ?: return super.onCreateInputConnection(outAttrs)
+        val wrapped = SujianInputConnection(ic, this)
+        sujianInputConnection = wrapped
+        return wrapped
+    }
+
+    internal fun onInputCommitText(inputText: CharSequence, newCursorPosition: Int) {
+        if (!controllersReady) return
+        if (!typingAnimationController?.typingAnimationEnabled ?: true) return
+        val layout = layout ?: return
+        val pos = selectionStart
+        if (pos < 0) return
+
+        val cursorLine = layout.getLineForOffset(pos)
+        val oldCursorX = layout.getPrimaryHorizontal(pos)
+        val oldCursorY = layout.getLineBaseline(cursorLine).toFloat()
+
+        val insertStart = pos
+        val insertEnd = pos + inputText.length
+        val destX = layout.getPrimaryHorizontal(insertStart)
+        val destLine = layout.getLineForOffset(insertStart)
+        val destY = layout.getLineBaseline(destLine).toFloat()
+
+        if (inputText.isNotEmpty() && !inputText.contains('\n') && !inputText.contains('\r')) {
+            val span = InputRevealSpan(editText = this, start = insertStart, end = insertEnd)
+            val editable = editableText ?: return
+            isUpdatingSpanWrapper = true
+            editable.setSpan(span, insertStart, insertEnd, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            isUpdatingSpanWrapper = false
+            span.freezeGlyphRect(destX, destY)
+
+            renderLayer?.addTypingAnim(OverlayAnim(
+                insertedStart = insertStart,
+                insertedText = inputText.toString(),
+                startX = oldCursorX,
+                startY = oldCursorY,
+                endX = destX,
+                endY = destY,
+                durationMs = typingAnimationController?.typingAnimationDurationMs ?: 100L,
+                isDeletion = false,
+                revealSpan = span
+            ))
+        }
+
+        typingAnimationController?.recordCursorBeforeChange(oldCursorX, oldCursorY)
+    }
+
+    internal fun onInputDeleteChar(beforeLength: Int) {
+        if (!controllersReady) return
+        if (!typingAnimationController?.typingAnimationEnabled ?: true) return
+        val layout = layout ?: return
+        val pos = selectionStart
+        val editable = editableText ?: return
+        if (pos < 0 || pos > editable.length) return
+
+        val deleteStart = (pos - beforeLength).coerceAtLeast(0)
+        val deleteEnd = pos
+        if (deleteStart >= deleteEnd) return
+
+        val deletedText = editable.subSequence(deleteStart, deleteEnd).toString()
+        if (deletedText.contains('\n') || deletedText.contains('\r')) return
+
+        val glyphX = layout.getPrimaryHorizontal(deleteStart)
+        val glyphLine = layout.getLineForOffset(deleteStart)
+        val glyphY = layout.getLineBaseline(glyphLine).toFloat()
+
+        val cursorX = layout.getPrimaryHorizontal(deleteEnd)
+        val cursorLine = layout.getLineForOffset(deleteEnd)
+        val cursorY = layout.getLineBaseline(cursorLine).toFloat()
+
+        val holdSpan = DeletingHoldSpan(editText = this, start = deleteStart, end = deleteEnd)
+        isUpdatingSpanWrapper = true
+        editable.setSpan(holdSpan, deleteStart, deleteEnd, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        isUpdatingSpanWrapper = false
+
+        renderLayer?.addTypingAnim(OverlayAnim(
+            insertedStart = deleteStart,
+            insertedText = deletedText,
+            startX = glyphX,
+            startY = glyphY,
+            endX = cursorX,
+            endY = cursorY,
+            durationMs = typingAnimationController?.typingAnimationDurationMs ?: 100L,
+            isDeletion = true,
+            deletingHoldSpan = holdSpan
+        ))
+    }
+
+    internal fun onInputSetComposingText(text: CharSequence?, newCursorPosition: Int) {
+        if (!controllersReady) return
+        autoIndentController?.markComposingActive()
+    }
+
+    internal fun onInputFinishComposing() {
+        if (!controllersReady) return
+        autoIndentController?.markComposingFinished()
+        val editable = editableText ?: return
+        autoIndentController?.updateParagraphIndentSpans(editable, isFullRebuild = true)
+    }
+
+    internal fun onInputBackspaceKeyEvent() {
+        onInputDeleteChar(1)
     }
 }
