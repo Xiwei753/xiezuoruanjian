@@ -11,6 +11,8 @@ cpp! {{
     #include <QRectF>
     #include <QString>
     #include <QDebug>
+    #include <QtGui/QInputMethod>
+    #include <QGuiApplication>
 
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
     extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
@@ -50,8 +52,8 @@ cpp! {{
                 auto* ime = static_cast<QInputMethodEvent*>(event);
                 QString commit = ime->commitString();
                 QString preedit = ime->preeditString();
-                qDebug("[sujian] InputMethodEvent: preedit_len=%d, commit_len=%d",
-                       preedit.length(), commit.length());
+                qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld",
+                       static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()));
                 if (!commit.isEmpty()) {
                     sujian_ime_commit(
                         rust_item,
@@ -76,9 +78,10 @@ cpp! {{
                 }
                 sujian_request_repaint(rust_item);
                 // Refresh IME candidate window position after cursor/preedit changes
-                QQuickItem* qi = qobject_cast<QQuickItem*>(obj);
-                if (qi) {
-                    qi->updateInputMethod(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImCursorPosition | Qt::ImSurroundingText | Qt::ImCurrentSelection);
+                // updateInputMethod() is protected on QQuickItem, so use QGuiApplication::inputMethod() instead
+                QInputMethod* im = QGuiApplication::inputMethod();
+                if (im) {
+                    im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImCursorPosition | Qt::ImSurroundingText | Qt::ImCurrentSelection);
                 }
                 event->accept();
                 return true;
@@ -147,7 +150,11 @@ cpp! {{
     void sujian_focus_item(QQuickItem* item) {
         if (!item) return;
         item->forceActiveFocus(Qt::MouseFocusReason);
-        item->updateInputMethod(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
+        // updateInputMethod() is protected on QQuickItem, use QGuiApplication::inputMethod() instead
+        QInputMethod* im = QGuiApplication::inputMethod();
+        if (im) {
+            im->update(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
+        }
         qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
     }
 }}
