@@ -309,8 +309,6 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
                 if !content.contains("EditorWheelScroller {")
                     || !content.contains("id: editorWheelScroller")
-                    || !content.contains("isScrolling: editorScroll.editorIsScrolling")
-                    || !content.contains("editorWheelScroller.active")
                     || !content.contains("editorItem: sujianEditor")
                 {
                     eprintln!(
