@@ -1,34 +1,17 @@
 package com.xiwei.sujian
 
-/**
- * SujianApp — Android 应用入口类
- *
- * 负责应用生命周期管理，监听前台切换以补充触发自动同步。
- *
- * ## 架构定位
- * - 继承 Application，实现 LifecycleObserver
- * - 监听应用前台切换事件，触发 AutoSyncScheduler 配置 WorkManager
- *
- * ## 职责边界
- * - **做**：初始化应用、管理自动同步调度器的生命周期
- * - **不做**：业务逻辑（由 AutoSyncScheduler 和 Rust Core 负责）
- *
- * ## 依赖关系
- * - AutoSyncScheduler：自动同步调度器
- * - ProcessLifecycleOwner：Android 生命周期监听
- *
- * ## 使用场景
- * - 应用启动时自动初始化
- * - 应用进入前台时调度一次即时检查
- * - 周期自动同步由 WorkManager 持久调度，退后台后不取消
- */
-
 import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.android.material.color.DynamicColors
 import com.xiwei.sujian.data.AutoSyncScheduler
+import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
+import java.io.File
+import java.io.PrintWriter
+import java.io.FileWriter
 
 class SujianApp : Application(), DefaultLifecycleObserver {
 
@@ -38,6 +21,34 @@ class SujianApp : Application(), DefaultLifecycleObserver {
         super<Application>.onCreate()
         DynamicColors.applyToActivitiesIfAvailable(this)
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
+        initDiagnostics()
+        installCrashHandler()
+    }
+
+    private fun initDiagnostics() {
+        val repo = SettingsRepository(this)
+        val settings = repo.getLocalSettings()
+        DiagnosticsLogger.init(this, settings.diagnosticsEnabled, settings.diagnosticsVerbose)
+        EditorEventRingBuffer.setEnabled(settings.diagnosticsEnabled)
+    }
+
+    private fun installCrashHandler() {
+        val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            try {
+                val crashFile = File(filesDir, "last_crash.txt")
+                val writer = PrintWriter(FileWriter(crashFile, false))
+                writer.println("Crash at ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}")
+                writer.println("Thread: ${thread.name}")
+                writer.println()
+                throwable.printStackTrace(writer)
+                writer.flush()
+                writer.close()
+                DiagnosticsLogger.e("SujianApp", "Uncaught exception", throwable)
+                DiagnosticsLogger.flush()
+            } catch (_: Exception) {}
+            defaultHandler?.uncaughtException(thread, throwable)
+        }
     }
 
     override fun onStart(owner: LifecycleOwner) {

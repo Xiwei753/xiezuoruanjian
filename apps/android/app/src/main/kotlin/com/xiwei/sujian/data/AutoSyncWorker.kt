@@ -1,7 +1,7 @@
 package com.xiwei.sujian.data
 
 import android.content.Context
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.xiwei.sujian.model.SyncStatus
@@ -15,13 +15,13 @@ class AutoSyncWorker(
         val config = try {
             settingsRepository.loadSyncConfig()
         } catch (e: Exception) {
-            Log.w(TAG, "Unable to load sync config", e)
+            DiagnosticsLogger.w(TAG, "Unable to load sync config", e)
             return Result.success()
         }
         val secrets = try {
             settingsRepository.loadSyncSecrets()
         } catch (e: Exception) {
-            Log.w(TAG, "Unable to load sync secrets", e)
+            DiagnosticsLogger.w(TAG, "Unable to load sync secrets", e)
             return Result.success()
         }
         if (!AutoSyncScheduler.shouldSync(config, secrets)) return Result.success()
@@ -29,7 +29,7 @@ class AutoSyncWorker(
         val state = try {
             settingsRepository.loadSyncState()
         } catch (e: Exception) {
-            Log.w(TAG, "Unable to load sync state", e)
+            DiagnosticsLogger.w(TAG, "Unable to load sync state", e)
             return Result.retry()
         }
 
@@ -49,11 +49,11 @@ class AutoSyncWorker(
         return try {
             when (val result = settingsRepository.performSync(config)) {
                 is BridgeResult.Error -> {
-                    Log.w(TAG, "AutoSync failed: ${result.message}")
+                    DiagnosticsLogger.w(TAG, "AutoSync failed: ${result.message}")
                     Result.retry()
                 }
                 BridgeResult.NotLoaded -> {
-                    Log.w(TAG, "AutoSync skipped: native core not loaded")
+                    DiagnosticsLogger.w(TAG, "AutoSync skipped: native core not loaded")
                     Result.retry()
                 }
                 is BridgeResult.Success -> {
@@ -65,7 +65,7 @@ class AutoSyncWorker(
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "AutoSync exception", e)
+            DiagnosticsLogger.w(TAG, "AutoSync exception", e)
             Result.retry()
         } finally {
             SyncSession.lock.set(false)

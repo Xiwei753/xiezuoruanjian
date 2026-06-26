@@ -1,6 +1,7 @@
 package com.xiwei.sujian.data
 
 import android.content.Context
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.*
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.SyncableSettings
@@ -26,6 +27,7 @@ class SettingsRepository(context: Context) {
     private val appContext = context.applicationContext
     private val settingsBridge = BridgeProvider.getSettingsBridge(context)
     private val syncBridge = BridgeProvider.getSyncBridge(context)
+    private val diagPrefs = appContext.getSharedPreferences("sujian_diagnostics", android.content.Context.MODE_PRIVATE)
 
     @Volatile
     var lastWarning: String? = null
@@ -39,11 +41,11 @@ class SettingsRepository(context: Context) {
 
     private fun warn(msg: String) {
         lastWarning = msg
-        android.util.Log.w("SettingsRepository", msg)
+        DiagnosticsLogger.w("SettingsRepository", msg)
     }
 
     fun getLocalSettings(): LocalSettings {
-        return when (val result = settingsBridge.getLocalSettings()) {
+        val fromCore = when (val result = settingsBridge.getLocalSettings()) {
             is BridgeResult.Success -> result.data ?: LocalSettings()
             is BridgeResult.Error -> {
                 warn("加载本地设置失败: ${result.message}")
@@ -51,10 +53,19 @@ class SettingsRepository(context: Context) {
             }
             BridgeResult.NotLoaded -> LocalSettings()
         }
+        return fromCore.copy(
+            diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", false),
+            diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", false)
+        )
     }
 
     fun saveLocalSettings(settings: LocalSettings): Boolean {
-        return when (val result = settingsBridge.saveLocalSettings(settings)) {
+        diagPrefs.edit()
+            .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
+            .putBoolean("diagnostics_verbose", settings.diagnosticsVerbose)
+            .apply()
+        val coreSettings = settings.copy(diagnosticsEnabled = false, diagnosticsVerbose = false)
+        return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
                 CoreSettingsEvents.record(result.envelope)
                 result.data

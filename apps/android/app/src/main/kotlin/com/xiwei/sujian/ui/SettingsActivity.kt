@@ -12,6 +12,8 @@ import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.CoreSettingsEvents
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.model.LocalSettings
 import com.google.android.material.button.MaterialButton
 
@@ -50,6 +52,12 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var cardAi: com.google.android.material.card.MaterialCardView
 
     private lateinit var btnActionRegistry: MaterialButton
+
+    private lateinit var switchDiagnosticsEnabled: MaterialSwitch
+    private lateinit var switchDiagnosticsVerbose: MaterialSwitch
+    private lateinit var btnExportDiagnostics: MaterialButton
+    private lateinit var btnClearLogs: MaterialButton
+    private lateinit var btnCopyDeviceInfo: MaterialButton
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -114,6 +122,12 @@ class SettingsActivity : AppCompatActivity() {
         tvVersionInfo = findViewById(R.id.tvVersionInfo)
 
         btnActionRegistry = findViewById(R.id.btnActionRegistry)
+
+        switchDiagnosticsEnabled = findViewById(R.id.switchDiagnosticsEnabled)
+        switchDiagnosticsVerbose = findViewById(R.id.switchDiagnosticsVerbose)
+        btnExportDiagnostics = findViewById(R.id.btnExportDiagnostics)
+        btnClearLogs = findViewById(R.id.btnClearLogs)
+        btnCopyDeviceInfo = findViewById(R.id.btnCopyDeviceInfo)
 
 
         // Live value update listeners
@@ -275,6 +289,50 @@ class SettingsActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
+        switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
+        switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
+        switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
+        DiagnosticsLogger.init(this, currentSettings.diagnosticsEnabled, currentSettings.diagnosticsVerbose)
+
+        switchDiagnosticsEnabled.setOnCheckedChangeListener { _, isChecked ->
+            currentSettings = currentSettings.copy(diagnosticsEnabled = isChecked)
+            switchDiagnosticsVerbose.isEnabled = isChecked
+            DiagnosticsLogger.setEnabled(isChecked)
+            if (!isChecked) {
+                currentSettings = currentSettings.copy(diagnosticsVerbose = false)
+                switchDiagnosticsVerbose.isChecked = false
+                DiagnosticsLogger.setVerbose(false)
+            }
+            saveAndFinish(false)
+        }
+        switchDiagnosticsVerbose.setOnCheckedChangeListener { _, isChecked ->
+            currentSettings = currentSettings.copy(diagnosticsVerbose = isChecked)
+            DiagnosticsLogger.setVerbose(isChecked)
+            saveAndFinish(false)
+        }
+
+        btnExportDiagnostics.setOnClickListener {
+            DiagnosticsLogger.flush()
+            val zipFile = DiagnosticsExporter.export(this)
+            if (zipFile != null) {
+                DiagnosticsExporter.shareZip(this, zipFile)
+            } else {
+                android.widget.Toast.makeText(this, getString(R.string.diagnostics_export_failed), android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        btnClearLogs.setOnClickListener {
+            DiagnosticsLogger.clearLogs()
+            android.widget.Toast.makeText(this, getString(R.string.diagnostics_cleared), android.widget.Toast.LENGTH_SHORT).show()
+        }
+
+        btnCopyDeviceInfo.setOnClickListener {
+            val deviceInfoJson = DiagnosticsExporter.getDeviceInfoJson(this)
+            val clipboard = getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText("device_info", deviceInfoJson))
+            android.widget.Toast.makeText(this, getString(R.string.diagnostics_device_info_copied), android.widget.Toast.LENGTH_SHORT).show()
+        }
+
         // Bind Sync Settings
         syncHelper.bindSyncSettings()
     }
@@ -312,6 +370,10 @@ class SettingsActivity : AppCompatActivity() {
         tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
         tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
         tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
+
+        switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
+        switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
+        switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
 
         val syncable = settingsRepository.getSyncableSettings()
         if (syncable.themeMode.isNotEmpty()) {
@@ -352,7 +414,9 @@ class SettingsActivity : AppCompatActivity() {
             editorSmoothCursorEnabled = switchSmoothCursor.isChecked,
             editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
             editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),
-            aiEnabled = switchAiEnabled.isChecked
+            aiEnabled = switchAiEnabled.isChecked,
+            diagnosticsEnabled = switchDiagnosticsEnabled.isChecked,
+            diagnosticsVerbose = switchDiagnosticsVerbose.isChecked
         )
 
         ErrorUtil.safeRun(this) {

@@ -1,7 +1,7 @@
 package com.xiwei.sujian.data
 
-import android.util.Log
 import com.xiwei.sujian.BuildConfig
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.BackendType
 import com.xiwei.sujian.model.ChapterMeta
 import com.xiwei.sujian.model.ChapterOpenResult
@@ -72,13 +72,13 @@ class AppServiceBridge(workspacePath: String) {
         return try {
             BridgeResult.Success(block())
         } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Native library is not loaded", e)
+            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
-            Log.e(TAG, "Native exception: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
         } catch (e: Exception) {
-            Log.e(TAG, "Exception: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
         }
     }
@@ -188,7 +188,7 @@ class AppServiceBridge(workspacePath: String) {
         return try {
             service.calculateWordCount(text).toInt()
         } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Native library is not loaded", e)
+            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
             text.length
         }
     }
@@ -202,13 +202,13 @@ class AppServiceBridge(workspacePath: String) {
             val res = service.saveLocalSettings(settings.toDto())
             BridgeResult.Success(res, ResultEnvelope(success = true, data = res, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
         } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Native library is not loaded", e)
+            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
-            Log.e(TAG, "Native exception: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
         } catch (e: Exception) {
-            Log.e(TAG, "Exception: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
         }
     }
@@ -222,13 +222,13 @@ class AppServiceBridge(workspacePath: String) {
             val res = service.saveSyncableSettings(settings.toDto())
             BridgeResult.Success(res, ResultEnvelope(success = true, data = res, changedEntities = listOf(ChangedEntity("SettingsSaved"))))
         } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "Native library is not loaded", e)
+            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
-            Log.e(TAG, "Native exception: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.error(e.toWireErrorCode(), e.message ?: "Unknown native exception"))
         } catch (e: Exception) {
-            Log.e(TAG, "Exception: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.error("UNKNOWN", e.message ?: "Unknown error"))
         }
     }
@@ -371,7 +371,7 @@ class AppServiceBridge(workspacePath: String) {
     fun getStarMapMotionPolicy(): BridgeResult<com.xiwei.sujian.model.StarMapMotionPolicyData> {
         fun fallback(reason: String, throwable: Throwable? = null): BridgeResult<com.xiwei.sujian.model.StarMapMotionPolicyData> {
             if (BuildConfig.DEBUG) {
-                Log.w(TAG, "Temporary compatibility fallback for getStarmapMotionPolicy: $reason", throwable)
+                DiagnosticsLogger.w(TAG, "Temporary compatibility fallback for getStarmapMotionPolicy: $reason", throwable)
             }
             return BridgeResult.Success(com.xiwei.sujian.model.StarMapMotionPolicyData())
         }
@@ -379,7 +379,6 @@ class AppServiceBridge(workspacePath: String) {
         return try {
             val method = service.javaClass.getMethod("getStarmapMotionPolicy")
             val dto = method.invoke(service) ?: return fallback("UniFFI method returned null")
-            // 通过反射读取 DTO 字段，避免编译期依赖旧绑定缺口。
             val dtoClass = dto.javaClass
             val result = com.xiwei.sujian.model.StarMapMotionPolicyData(
                 enabled = dtoClass.getField("enabled").getBoolean(dto),
@@ -397,7 +396,7 @@ class AppServiceBridge(workspacePath: String) {
         } catch (e: NoSuchFieldException) {
             fallback("DTO field mismatch", e)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to get motion policy: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "Failed to get motion policy: ${e.message}", e)
             fallback("reflection invocation failed", e)
         }
     }

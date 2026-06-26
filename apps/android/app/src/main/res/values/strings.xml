@@ -302,4 +302,16 @@
     <string name="stats_unnamed_project">未命名</string>
     <string name="stats_project_line">项目: %1$s</string>
     <string name="stats_input_chars">输入: %1$d 字</string>
+
+    <!-- Diagnostics -->
+    <string name="pref_category_diagnostics">诊断与日志</string>
+    <string name="pref_diagnostics_enabled">开启诊断日志</string>
+    <string name="pref_diagnostics_verbose">详细日志</string>
+    <string name="btn_export_diagnostics">导出诊断包</string>
+    <string name="btn_clear_logs">清空日志</string>
+    <string name="btn_copy_device_info">复制设备信息</string>
+    <string name="diagnostics_export_success">诊断包已生成，正在分享…</string>
+    <string name="diagnostics_export_failed">导出诊断包失败</string>
+    <string name="diagnostics_cleared">日志已清空</string>
+    <string name="diagnostics_device_info_copied">设备信息已复制</string>
 </resources>

@@ -17,6 +17,7 @@ import android.view.inputmethod.InputConnection
 import android.widget.OverScroller
 import androidx.appcompat.widget.AppCompatEditText
 import com.xiwei.sujian.ui.span.SujianInputConnection
+import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import kotlin.math.abs
 
 /**
@@ -119,6 +120,13 @@ class WriterEditText @JvmOverloads constructor(
         removeCallbacks(scrollIdleRunnable)
         if (isEditorScrolling != scrolling) {
             isEditorScrolling = scrolling
+            if (EditorEventRingBuffer.isEnabled()) {
+                EditorEventRingBuffer.record(mapOf(
+                    "event" to "animation_suppressed",
+                    "suppressed" to scrolling,
+                    "ts" to System.currentTimeMillis()
+                ))
+            }
             typingAnimationController?.isScrollAnimationsSuppressed = scrolling
             renderLayer?.setScrolling(scrolling)
         }
@@ -209,6 +217,16 @@ class WriterEditText @JvmOverloads constructor(
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 if (!controllersReady) return
                 if (isUpdatingSpanWrapper || autoIndentController?.isUpdatingSpan == true) return
+                if (EditorEventRingBuffer.isEnabled()) {
+                    EditorEventRingBuffer.record(mapOf(
+                        "event" to "text_change",
+                        "start" to start,
+                        "before" to before,
+                        "count" to count,
+                        "textLength" to (s?.length ?: 0),
+                        "ts" to System.currentTimeMillis()
+                    ))
+                }
                 if (count > 0 && s != null) {
                     val end = (start + count).coerceAtMost(s.length)
                     if (start in 0..end && s.subSequence(start, end).contains('\n')) {
@@ -286,8 +304,31 @@ class WriterEditText @JvmOverloads constructor(
         }
     }
 
+    private fun getCursorRect(outRect: android.graphics.Rect) {
+        val layout = layout
+        if (layout == null || selectionStart < 0) {
+            outRect.setEmpty()
+            return
+        }
+        val pos = selectionStart.coerceAtMost(text.length)
+        val line = layout.getLineForOffset(pos)
+        val x = layout.getPrimaryHorizontal(pos).toInt()
+        val baseline = layout.getLineBaseline(line)
+        val ascent = layout.getLineAscent(line)
+        val descent = layout.getLineDescent(line)
+        outRect.set(x - 1, baseline + ascent, x + 1, baseline + descent)
+    }
+
     override fun onSelectionChanged(selStart: Int, selEnd: Int) {
         super.onSelectionChanged(selStart, selEnd)
+        if (EditorEventRingBuffer.isEnabled()) {
+            EditorEventRingBuffer.record(mapOf(
+                "event" to "selection",
+                "selStart" to selStart,
+                "selEnd" to selEnd,
+                "ts" to System.currentTimeMillis()
+            ))
+        }
         if (!controllersReady) return
         renderLayer?.onSelectionChanged(selStart, selEnd)
         if (autoIndentController?.pendingFullRebuildAfterComposition == true) {
@@ -297,6 +338,13 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onScrollChanged(horiz: Int, vert: Int, oldHoriz: Int, oldVert: Int) {
         super.onScrollChanged(horiz, vert, oldHoriz, oldVert)
+        if (EditorEventRingBuffer.isEnabled() && (horiz != oldHoriz || vert != oldVert)) {
+            EditorEventRingBuffer.record(mapOf(
+                "event" to "scroll",
+                "scrollY" to vert,
+                "ts" to System.currentTimeMillis()
+            ))
+        }
         if (!controllersReady) return
         if (horiz != oldHoriz || vert != oldVert) {
             markEditorScrolling()
@@ -305,6 +353,21 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (controllersReady) {
+            if (EditorEventRingBuffer.isEnabled()) {
+                EditorEventRingBuffer.record(mapOf(
+                    "event" to "touch",
+                    "action" to when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> "DOWN"
+                        MotionEvent.ACTION_MOVE -> "MOVE"
+                        MotionEvent.ACTION_UP -> "UP"
+                        MotionEvent.ACTION_CANCEL -> "CANCEL"
+                        else -> event.actionMasked.toString()
+                    },
+                    "x" to event.x.toInt(),
+                    "y" to event.y.toInt(),
+                    "ts" to System.currentTimeMillis()
+                ))
+            }
             velocityTracker?.addMovement(event)
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
@@ -434,6 +497,21 @@ class WriterEditText @JvmOverloads constructor(
 
     override fun onFocusChanged(focused: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
         super.onFocusChanged(focused, direction, previouslyFocusedRect)
+        if (EditorEventRingBuffer.isEnabled()) {
+            val cursorRect = android.graphics.Rect()
+            if (focused) getCursorRect(cursorRect)
+            EditorEventRingBuffer.record(mapOf(
+                "event" to "focus",
+                "focused" to focused,
+                "cursorRect" to mapOf(
+                    "left" to cursorRect.left,
+                    "top" to cursorRect.top,
+                    "right" to cursorRect.right,
+                    "bottom" to cursorRect.bottom
+                ),
+                "ts" to System.currentTimeMillis()
+            ))
+        }
         if (!controllersReady) return
         renderLayer?.onFocusChanged(focused)
     }
@@ -464,6 +542,12 @@ class WriterEditText @JvmOverloads constructor(
     }
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+        if (EditorEventRingBuffer.isEnabled()) {
+            EditorEventRingBuffer.record(mapOf(
+                "event" to "ime_create",
+                "ts" to System.currentTimeMillis()
+            ))
+        }
         val ic = super.onCreateInputConnection(outAttrs) ?: return BaseInputConnection(this, true)
         val wrapped = SujianInputConnection(ic, this)
         sujianInputConnection = wrapped

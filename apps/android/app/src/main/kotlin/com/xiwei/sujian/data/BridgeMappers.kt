@@ -130,7 +130,9 @@ internal fun LocalSettingsDto.toModel() = LocalSettings(
     aiEnabled = aiEnabled,
     statsDeviceId = statsDeviceId,
     linuxSidebarWidth = desktopSidebarWidth,
-    linuxEditorWidth = desktopEditorWidth
+    linuxEditorWidth = desktopEditorWidth,
+    diagnosticsEnabled = false,
+    diagnosticsVerbose = false
 )
 
 internal fun LocalSettings.toDto() = LocalSettingsDto(

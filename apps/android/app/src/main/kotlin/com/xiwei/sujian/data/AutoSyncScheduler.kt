@@ -1,7 +1,7 @@
 package com.xiwei.sujian.data
 
 import android.content.Context
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
@@ -40,14 +40,14 @@ class AutoSyncScheduler(context: Context) {
             val config = try {
                 settingsRepository.loadSyncConfig()
             } catch (e: Exception) {
-                Log.w(TAG, "Unable to load sync config for scheduling", e)
+                DiagnosticsLogger.w(TAG, "Unable to load sync config for scheduling", e)
                 cancel(appContext)
                 return
             }
             val secrets = try {
                 settingsRepository.loadSyncSecrets()
             } catch (e: Exception) {
-                Log.w(TAG, "Unable to load sync secrets for scheduling", e)
+                DiagnosticsLogger.w(TAG, "Unable to load sync secrets for scheduling", e)
                 cancel(appContext)
                 return
             }

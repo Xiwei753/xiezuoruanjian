@@ -119,4 +119,16 @@
     <string name="error_sync_conflict">Sync conflict. Please resolve conflicting files and retry.</string>
     <string name="error_sync_failed">Sync failed. Check your network and configuration.</string>
     <string name="sync_unknown_error">Unknown sync error</string>
+
+    <!-- Diagnostics -->
+    <string name="pref_category_diagnostics">Diagnostics &amp; Logs</string>
+    <string name="pref_diagnostics_enabled">Enable diagnostic logs</string>
+    <string name="pref_diagnostics_verbose">Verbose logs</string>
+    <string name="btn_export_diagnostics">Export diagnostics package</string>
+    <string name="btn_clear_logs">Clear logs</string>
+    <string name="btn_copy_device_info">Copy device info</string>
+    <string name="diagnostics_export_success">Diagnostics package generated, sharing…</string>
+    <string name="diagnostics_export_failed">Failed to export diagnostics package</string>
+    <string name="diagnostics_cleared">Logs cleared</string>
+    <string name="diagnostics_device_info_copied">Device info copied</string>
 </resources>

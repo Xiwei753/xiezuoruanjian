@@ -43,7 +43,9 @@ data class LocalSettings(
     val aiEnabled: Boolean = false,
     val statsDeviceId: String? = null,
     val linuxSidebarWidth: Double = 240.0,
-    val linuxEditorWidth: Double = 0.0
+    val linuxEditorWidth: Double = 0.0,
+    @SerializedName("diagnostics_enabled") val diagnosticsEnabled: Boolean = false,
+    @SerializedName("diagnostics_verbose") val diagnosticsVerbose: Boolean = false
 )
 
 data class SyncableSettings(
