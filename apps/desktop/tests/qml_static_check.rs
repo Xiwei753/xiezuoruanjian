@@ -457,6 +457,44 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
             }
 
+            // 回归检查：SettingsDialog ScrollView 必须显式绑定 contentHeight
+            if file_name == "SettingsDialog.qml" {
+                // ScrollView 必须显式绑定 contentHeight: settingsColumn.implicitHeight
+                if !content.contains("contentHeight: settingsColumn.implicitHeight") {
+                    eprintln!("{}: SettingsDialog ScrollView 必须绑定 contentHeight: settingsColumn.implicitHeight", file_name);
+                    has_errors = true;
+                }
+                // SmoothWheelScroller 不能是 ScrollView 的直接子项，应作为外部 overlay
+                if let Some(sv_start) = content.find("ScrollView {") {
+                    // 查找匹配的右大括号
+                    let after_sv = &content[sv_start..];
+                    let mut brace_count = 0;
+                    let mut sv_end = 0;
+                    let mut found_smooth_in_sv = false;
+                    for (i, c) in after_sv.chars().enumerate() {
+                        if c == '{' {
+                            brace_count += 1;
+                        } else if c == '}' {
+                            brace_count -= 1;
+                            if brace_count == 0 {
+                                sv_end = i;
+                                break;
+                            }
+                        }
+                    }
+                    if sv_end > 0 {
+                        let sv_block = &after_sv[..sv_end];
+                        if sv_block.contains("SmoothWheelScroller") {
+                            found_smooth_in_sv = true;
+                        }
+                        if found_smooth_in_sv {
+                            eprintln!("{}: SmoothWheelScroller 不能是 ScrollView 的直接子项——应移到外部作为 overlay", file_name);
+                            has_errors = true;
+                        }
+                    }
+                }
+            }
+
 
         }
     }

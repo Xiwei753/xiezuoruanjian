@@ -117,13 +117,9 @@ cpp! {{
                     qe->setValue(Qt::ImCursorPosition, cursorPos);
                 }
                 if (qe->queries() & Qt::ImCurrentSelection) {
-                    QString selText;
-                    // Read selected_text via meta-object if available
-                    int selStart = obj->property("selection_start").toInt();
-                    int selEnd = obj->property("selection_end").toInt();
-                    if (selStart != selEnd) {
-                        selText = obj->property("selected_text").toString();
-                    }
+                    // Read selected_text property directly (SujianEditorItem has this method)
+                    // Do not depend on selection_start/selection_end (they do not exist)
+                    QString selText = obj->property("selected_text").toString();
                     qe->setValue(Qt::ImCurrentSelection, selText);
                 }
                 qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
