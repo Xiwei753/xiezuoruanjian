@@ -147,12 +147,14 @@ class UtfOffsetConverterTest {
     fun emojiSurrogatePair_utf8ByteOffsetRoundtrip() {
         // 😀 = U+1F600, surrogate pair in UTF-16, 4 bytes in UTF-8
         val text = "a😀b"
-        // UTF-16: a=0, 😀=1..2, b=3, end=4
+        // Kotlin UTF-16: a=0, 😀=1..2 (surrogate pair), b=3, end=4
         // UTF-8: a=0, 😀=1..4, b=5, end=6
-        val byteOffsetAtEmojiEnd = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(text, 2) // after emoji
+        // utf16Offset=2 points to low surrogate, clamps to 1 (high surrogate start)
+        // utf16Offset=3 points to 'b', which is after the emoji
+        val byteOffsetAtEmojiEnd = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(text, 3) // after emoji (at 'b')
         assertEquals(5, byteOffsetAtEmojiEnd)
         val roundtrip = UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(text, byteOffsetAtEmojiEnd)
-        assertEquals(2, roundtrip)
+        assertEquals(3, roundtrip) // 'b' is at UTF-16 offset 3
     }
 
     @Test
