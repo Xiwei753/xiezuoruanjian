@@ -111,14 +111,11 @@ Dialog {
         anchors.bottomMargin: dt ? dt.sp20 : 20
         anchors.topMargin: dt ? dt.sp8 : 8
         clip: true
-
-        SmoothWheelScroller {
-            scrollView: settingsScroll
-            lineHeight: 24
-            fontPixelSize: 14
-        }
+        contentWidth: availableWidth
+        contentHeight: settingsColumn.implicitHeight
 
         ColumnLayout {
+            id: settingsColumn
             width: settingsScroll.availableWidth
             spacing: dt ? dt.cardGap : 16
 
@@ -319,5 +316,12 @@ Dialog {
                 }
             }
         }
+    }
+
+    SmoothWheelScroller {
+        anchors.fill: settingsScroll
+        scrollView: settingsScroll
+        lineHeight: 24
+        fontPixelSize: 14
     }
 }

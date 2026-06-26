@@ -10,6 +10,7 @@ cpp! {{
     #include <QObject>
     #include <QRectF>
     #include <QString>
+    #include <QDebug>
 
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
     extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
@@ -29,13 +30,15 @@ cpp! {{
             switch (event->type()) {
             case QEvent::KeyPress: {
                 auto* ke = static_cast<QKeyEvent*>(event);
-                QString text = ke->text();
+                // Only handle navigation, deletion, and shortcut keys.
+                // Regular text input must go through InputMethodEvent (commitString/preeditString)
+                // to allow IME composition to work correctly on Windows.
                 bool accepted = sujian_handle_key_and_text(
                     rust_item,
                     ke->key(),
                     static_cast<int>(ke->modifiers()),
-                    reinterpret_cast<const ushort*>(text.utf16()),
-                    static_cast<int>(text.size())
+                    nullptr,
+                    0
                 );
                 if (accepted) {
                     event->accept();
@@ -47,6 +50,8 @@ cpp! {{
                 auto* ime = static_cast<QInputMethodEvent*>(event);
                 QString commit = ime->commitString();
                 QString preedit = ime->preeditString();
+                qDebug("[sujian] InputMethodEvent: preedit_len=%d, commit_len=%d",
+                       preedit.length(), commit.length());
                 if (!commit.isEmpty()) {
                     sujian_ime_commit(
                         rust_item,
@@ -70,23 +75,28 @@ cpp! {{
                     sujian_ime_cancel(rust_item);
                 }
                 sujian_request_repaint(rust_item);
+                // Refresh IME candidate window position after cursor/preedit changes
+                QQuickItem* qi = qobject_cast<QQuickItem*>(obj);
+                if (qi) {
+                    qi->updateInputMethod(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImCursorPosition | Qt::ImSurroundingText | Qt::ImCurrentSelection);
+                }
                 event->accept();
                 return true;
             }
             case QEvent::InputMethodQuery: {
                 auto* qe = static_cast<QInputMethodQueryEvent*>(event);
+                if (qe->queries() & Qt::ImEnabled) {
+                    qe->setValue(Qt::ImEnabled, true);
+                }
+                if (qe->queries() & Qt::ImHints) {
+                    qe->setValue(Qt::ImHints, static_cast<int>(Qt::ImhNoPredictiveText));
+                }
                 if (qe->queries() & Qt::ImCursorRectangle) {
                     double cx = obj->property("cursor_rect_x").toDouble();
                     double cy = obj->property("cursor_rect_y").toDouble();
                     double cw = obj->property("cursor_rect_width").toDouble();
                     double ch = obj->property("cursor_rect_height").toDouble();
                     qe->setValue(Qt::ImCursorRectangle, QRectF(cx, cy, cw, ch));
-                }
-                if (qe->queries() & Qt::ImEnabled) {
-                    qe->setValue(Qt::ImEnabled, true);
-                }
-                if (qe->queries() & Qt::ImHints) {
-                    qe->setValue(Qt::ImHints, static_cast<int>(Qt::ImhNoPredictiveText));
                 }
                 if (qe->queries() & Qt::ImAnchorRectangle) {
                     double cx = obj->property("cursor_rect_x").toDouble();
@@ -95,6 +105,25 @@ cpp! {{
                     double ch = obj->property("cursor_rect_height").toDouble();
                     qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy, cw, ch));
                 }
+                if (qe->queries() & Qt::ImSurroundingText) {
+                    QString surrounding = obj->property("plain_text").toString();
+                    qe->setValue(Qt::ImSurroundingText, surrounding);
+                }
+                if (qe->queries() & Qt::ImCursorPosition) {
+                    int cursorPos = obj->property("cursor_position").toInt();
+                    qe->setValue(Qt::ImCursorPosition, cursorPos);
+                }
+                if (qe->queries() & Qt::ImCurrentSelection) {
+                    QString selText;
+                    // Read selected_text via meta-object if available
+                    int selStart = obj->property("selection_start").toInt();
+                    int selEnd = obj->property("selection_end").toInt();
+                    if (selStart != selEnd) {
+                        selText = obj->property("selected_text").toString();
+                    }
+                    qe->setValue(Qt::ImCurrentSelection, selText);
+                }
+                qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
                 event->accept();
                 return true;
             }
@@ -110,12 +139,16 @@ cpp! {{
         item->installEventFilter(filter);
         item->setFlag(QQuickItem::ItemHasContents, true);
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
-        item->setFlag(QQuickItem::ItemIsFocusScope, true);
         item->setAcceptedMouseButtons(Qt::AllButtons);
+        item->setFocusPolicy(Qt::StrongFocus);
+        qDebug("[sujian] component_complete: ItemAcceptsInputMethod=%d", item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     }
 
     void sujian_focus_item(QQuickItem* item) {
-        if (item) item->setFocus(true);
+        if (!item) return;
+        item->forceActiveFocus(Qt::MouseFocusReason);
+        item->updateInputMethod(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
+        qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
     }
 }}
 
