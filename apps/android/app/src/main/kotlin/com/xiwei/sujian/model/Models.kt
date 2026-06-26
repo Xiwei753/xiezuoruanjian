@@ -261,6 +261,36 @@ data class NetworkProbeResult(
     @SerializedName("raw_error") val rawError: String? = null
 )
 
+data class SyncDiagnosticsResult(
+    val success: Boolean,
+    val backendType: String,
+    @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean,
+    @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean,
+    @SerializedName("android_network_state") val androidNetworkState: String,
+    @SerializedName("tcp_probe_ok") val tcpProbeOk: Boolean,
+    @SerializedName("tcp_probe_status") val tcpProbeStatus: String,
+    @SerializedName("http_connect_probe_ok") val httpConnectProbeOk: Boolean,
+    @SerializedName("http_connect_probe_status") val httpConnectProbeStatus: String,
+    @SerializedName("libgit2_probe_ok") val libgit2ProbeOk: Boolean,
+    @SerializedName("libgit2_probe_status") val libgit2ProbeStatus: String,
+    val networkOk: Boolean,
+    val authOk: Boolean,
+    val repoOk: Boolean,
+    val branchOk: Boolean,
+    @SerializedName("network_status") val networkStatus: String,
+    @SerializedName("auth_status") val authStatus: String,
+    @SerializedName("repo_status") val repoStatus: String,
+    @SerializedName("branch_status") val branchStatus: String,
+    @SerializedName("remote_url_sanitized") val remoteUrlSanitized: String,
+    val transport: String,
+    @SerializedName("error_category") val errorCategory: String,
+    @SerializedName("user_message") val userMessage: String,
+    @SerializedName("raw_error") val rawError: String?,
+    @SerializedName("chosen_network_mode") val chosenNetworkMode: String?,
+    @SerializedName("proxy_policy") val proxyPolicy: String,
+    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>
+)
+
 data class SyncResult(
     val status: SyncStatus,
     @SerializedName("uploaded_files") val uploadedFiles: List<String> = emptyList(),

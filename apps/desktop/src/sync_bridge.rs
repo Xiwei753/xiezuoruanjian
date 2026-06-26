@@ -133,7 +133,8 @@ pub fn sync_error_category(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sync_error_category, sync_error_category_from_code};
+    use super::{determine_diagnostics_status, sync_error_category, sync_error_category_from_code};
+    use writer_core::api::types::SyncDiagnosticsResultDto;
 
     #[test]
     fn test_sync_error_category_fallback_parsing() {
@@ -304,22 +305,90 @@ mod tests {
             );
         }
     }
+
+    /// Helper: 构造一个 success=true 的 SyncDiagnosticsResultDto，仅关键字段有值。
+    fn make_success_dto() -> SyncDiagnosticsResultDto {
+        SyncDiagnosticsResultDto {
+            success: true,
+            backend_type: "github".to_string(),
+            android_has_internet_permission: false,
+            android_has_access_network_state_permission: false,
+            android_network_state: String::new(),
+            tcp_probe_ok: false,
+            tcp_probe_status: String::new(),
+            http_connect_probe_ok: false,
+            http_connect_probe_status: String::new(),
+            libgit2_probe_ok: false,
+            libgit2_probe_status: String::new(),
+            network_ok: true,
+            auth_ok: true,
+            repo_ok: true,
+            branch_ok: true,
+            network_status: String::new(),
+            auth_status: String::new(),
+            repo_status: String::new(),
+            branch_status: String::new(),
+            remote_url_sanitized: String::new(),
+            transport: String::new(),
+            error_category: String::new(),
+            user_message: None,
+            raw_error: None,
+            chosen_network_mode: None,
+            proxy_policy: String::new(),
+            network_probe_summary: None,
+        }
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_auth_categories() {
+        let mut result = make_success_dto();
+        result.success = false;
+
+        result.error_category = "token_invalid".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "auth_failed");
+
+        result.error_category = "token_permission_denied".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "auth_failed");
+
+        result.error_category = "repo_not_found_or_no_permission".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "auth_failed");
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_branch_missing() {
+        let mut result = make_success_dto();
+        result.success = false;
+        result.error_category = "remote_branch_missing".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "branch_missing");
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_network_failed() {
+        let mut result = make_success_dto();
+        result.success = false;
+
+        result.error_category = "dns_failed".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "network_failed");
+
+        result.error_category = "tls_failed".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "network_failed");
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_success() {
+        let result = make_success_dto();
+        assert_eq!(determine_diagnostics_status(&result), "configured_untested");
+    }
 }
 
-pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> &'static str {
-    if !result.success {
-        match result.error_category.as_str() {
-            "token_missing" => "configured_untested",
-            "empty_url" => "not_configured",
-            cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
-            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => {
-                "network_failed"
-            }
-            "repo_not_found_or_no_permission" => "auth_failed",
-            _ => "error",
-        }
+pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> String {
+    if result.success {
+        "configured_untested".to_string()
     } else {
-        "configured_untested"
+        sync_error_category_from_code(
+            Some(result.error_category.as_str()),
+            result.raw_error.as_deref().unwrap_or(""),
+        )
     }
 }
 
