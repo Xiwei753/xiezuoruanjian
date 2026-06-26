@@ -306,11 +306,12 @@ class WriterEditText @JvmOverloads constructor(
 
     private fun getCursorRect(outRect: android.graphics.Rect) {
         val layout = layout
+        val editable = text ?: run { outRect.setEmpty(); return }
         if (layout == null || selectionStart < 0) {
             outRect.setEmpty()
             return
         }
-        val pos = selectionStart.coerceAtMost(text.length)
+        val pos = selectionStart.coerceAtMost(editable.length)
         val line = layout.getLineForOffset(pos)
         val x = layout.getPrimaryHorizontal(pos).toInt()
         val baseline = layout.getLineBaseline(line)

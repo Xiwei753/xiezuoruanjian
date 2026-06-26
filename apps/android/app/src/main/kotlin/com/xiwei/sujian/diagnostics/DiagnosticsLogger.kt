@@ -45,7 +45,7 @@ object DiagnosticsLogger {
                 val key = m.groupValues[1]
                 val rest = m.value.substringAfter(key)
                 val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
-                "$key$sepBearer [REDACTED]"
+                "${key}${sep}Bearer [REDACTED]"
             }
         ),
         Pair(
