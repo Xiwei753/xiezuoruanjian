@@ -248,67 +248,75 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     }
                 }
 
-                // Specific check for TextArea colors in WritingWorkspace.qml
-                if !content.contains("color: dt ? dt.editorText : \"#E2E2E5\"")
-                    && !content.contains("color: dt ? dt.editorText : '#E2E2E5'")
-                {
+                // After TextArea fallback removal, WritingWorkspace must use SujianEditorItem exclusively
+                if content.contains("TextArea {") {
                     eprintln!(
-                        "{}: TextArea missing proper color fallback to #E2E2E5",
+                        "{}: WritingWorkspace.qml must not contain TextArea {{ after fallback removal",
                         file_name
                     );
                     has_errors = true;
                 }
-                if !content.contains("selectedTextColor: dt ? dt.selectedText : \"#CCE5FF\"")
-                    && !content.contains("selectedTextColor: dt ? dt.selectedText : '#CCE5FF'")
-                {
-                    eprintln!("{}: TextArea missing selectedTextColor", file_name);
-                    has_errors = true;
-                }
-                if !content.contains("selectionColor: dt ? dt.primary : \"#006497\"")
-                    && !content.contains("selectionColor: dt ? dt.primary : '#006497'")
-                {
-                    eprintln!("{}: TextArea missing selectionColor", file_name);
-                    has_errors = true;
-                }
-                if !content.contains("emptyContentMinimumHeight")
-                    || !content.contains("topPadding: dt ? dt.sp16")
-                    || !content.contains("bottomPadding: dt ? dt.sp16")
-                {
+                if content.contains("useSujianEditorItem") {
                     eprintln!(
-                        "{}: TextArea missing empty-content minimum height/padding guard",
+                        "{}: WritingWorkspace.qml must not contain useSujianEditorItem after fallback removal",
                         file_name
                     );
                     has_errors = true;
                 }
-                if !content.contains("SujianEditorItem {")
-                    || !content.contains("id: sujianEditor")
-                    || !content.contains("property bool useSujianEditorItem:")
-                    || !content.contains("targetEditorItem: sujianEditor")
-                    || !content.contains("useSelfRenderedEditor: root.useSujianEditorItem")
-                {
-                    eprintln!("{}: WritingWorkspace must mount the experimental SujianEditorItem behind an explicit Desktop test switch", file_name);
+                if !content.contains("SujianEditorItem {") {
+                    eprintln!(
+                        "{}: WritingWorkspace.qml must contain SujianEditorItem {{",
+                        file_name
+                    );
                     has_errors = true;
                 }
-                if !content.contains("visible: !root.useSujianEditorItem")
-                    || !content.contains("enabled: !root.useSujianEditorItem && editorController.chapterId !== \"\"")
-                    || !content.contains("textFormat: TextEdit.PlainText")
-                {
-                    eprintln!("{}: Old TextArea must remain as a plain-text emergency fallback", file_name);
+                if !content.contains("id: sujianEditor") {
+                    eprintln!(
+                        "{}: WritingWorkspace.qml must contain id: sujianEditor",
+                        file_name
+                    );
+                    has_errors = true;
+                }
+                if !content.contains("targetEditorItem: sujianEditor") {
+                    eprintln!(
+                        "{}: WritingWorkspace.qml must contain targetEditorItem: sujianEditor",
+                        file_name
+                    );
+                    has_errors = true;
+                }
+                if content.contains("visible: !root.useSujianEditorItem") {
+                    eprintln!(
+                        "{}: WritingWorkspace.qml must not contain visible: !root.useSujianEditorItem after fallback removal",
+                        file_name
+                    );
+                    has_errors = true;
+                }
+                if content.contains("root.useSujianEditorItem") {
+                    eprintln!(
+                        "{}: WritingWorkspace.qml must not contain root.useSujianEditorItem after fallback removal",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("contentHeight:")
                     || !content.contains("sujianEditor.content_height")
                 {
-                    eprintln!("{}: ScrollView missing SujianEditorItem contentHeight guard", file_name);
+                    eprintln!(
+                        "{}: ScrollView missing SujianEditorItem contentHeight guard",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("EditorWheelScroller {")
                     || !content.contains("id: editorWheelScroller")
                     || !content.contains("isScrolling: editorScroll.editorIsScrolling")
                     || !content.contains("editorWheelScroller.active")
-                    || !content.contains("editorItem: root.useSujianEditorItem ? sujianEditor : null")
+                    || !content.contains("editorItem: sujianEditor")
                 {
-                    eprintln!("{}: Stable editor mode must delegate wheel physics to EditorWheelScroller", file_name);
+                    eprintln!(
+                        "{}: Stable editor mode must delegate wheel physics to EditorWheelScroller",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("id: smoothWheelAnim")
@@ -321,23 +329,9 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     has_errors = true;
                 }
 
-                if !content.contains("SmoothCursor {")
-                    || !content.contains("overlayItem: paperBg")
-                    || !content.contains("isScrolling: editorScroll.editorIsScrolling")
-                {
-                    eprintln!("{}: TextArea fallback must keep the isolated SmoothCursor overlay", file_name);
-                    has_errors = true;
-                }
-                if !content.contains("cursorDelegate: Item {}") {
-                    eprintln!("{}: Stable editor mode must hide the native Qt cursor behind SmoothCursor", file_name);
-                    has_errors = true;
-                }
-                if !content.contains("smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true")
-                    || !content.contains("cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160")
-                {
-                    eprintln!("{}: SmoothCursor settings must be driven by settingsBackend", file_name);
-                    has_errors = true;
-                }
+                // SmoothCursor was the TextArea fallback cursor overlay.
+                // After fallback removal, WritingWorkspace no longer needs SmoothCursor.
+                // SujianEditorItem has its own cursor rectangle (sujianCursorRect).
                 if content.contains("typingAnimationEnabled:")
                     || content.contains("typingAnimationDuration:")
                     || content.contains("textAnimationsSuppressed:")
@@ -371,7 +365,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     has_errors = true;
                 }
                 if !content.contains("Rectangle {") || !content.contains("id: cursorRect") {
-                    eprintln!("{}: SmoothCursor must draw the custom cursorRect", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must draw the custom cursorRect",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if !content.contains("targetTextArea.mapToItem(overlayItem || parent") {
@@ -383,18 +380,25 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("maxSmoothCursorDistance")
                     || !content.contains("snapNextUpdate")
                     || !content.contains("Math.abs(newY - cursorRect.y) > 2")
-                    || !content.contains("Math.abs(newX - cursorRect.x) > root.maxSmoothCursorDistance")
+                    || !content
+                        .contains("Math.abs(newX - cursorRect.x) > root.maxSmoothCursorDistance")
                     || !content.contains("xBehaviorEnabled = false")
                     || !content.contains("yBehaviorEnabled = false")
                 {
-                    eprintln!("{}: SmoothCursor must decide snap vs smooth from cursor geometry", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must decide snap vs smooth from cursor geometry",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("smoothUntilMs")
                     || content.contains("Date.now()")
                     || content.contains("allowSmoothCursorMotion")
                 {
-                    eprintln!("{}: SmoothCursor must not depend on keypress time windows", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must not depend on keypress time windows",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("id: typingLayer")
@@ -406,7 +410,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || content.contains("textAnimationsSuppressed")
                     || content.contains("suppressNextTextAnimation")
                 {
-                    eprintln!("{}: SmoothCursor must not own Linux ghost text animation overlay", file_name);
+                    eprintln!(
+                        "{}: SmoothCursor must not own Linux ghost text animation overlay",
+                        file_name
+                    );
                     has_errors = true;
                 }
             }
@@ -422,7 +429,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || !content.contains("applyWheelImpulse")
                     || !content.contains("Math.pow(root.decayPerSecond, dtSeconds)")
                 {
-                    eprintln!("{}: Editor wheel scrolling must use velocity-integrated kinetic scrolling", file_name);
+                    eprintln!(
+                        "{}: Editor wheel scrolling must use velocity-integrated kinetic scrolling",
+                        file_name
+                    );
                     has_errors = true;
                 }
                 if content.contains("id: smoothWheelAnim")
@@ -494,8 +504,6 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     }
                 }
             }
-
-
         }
     }
 
@@ -508,17 +516,21 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 #[test]
 fn test_editor_render_format_is_unified() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let document_handler = fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
+    let document_handler =
+        fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
     let main_rs = fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
-    let sujian_editor_item = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
-    let sujian_rendering = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
-    let editor_controller = fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
-    let writing_workspace = fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
+    let sujian_editor_item =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
+    let sujian_rendering =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
+    let editor_controller =
+        fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
+    let writing_workspace =
+        fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
     let design_tokens = fs::read_to_string(manifest_dir.join("qml/DesignTokens.qml")).unwrap();
 
     assert!(
-        main_rs.contains("mod sujian_editor_item;")
-            && main_rs.contains("SujianEditorItem"),
+        main_rs.contains("mod sujian_editor_item;") && main_rs.contains("SujianEditorItem"),
         "Desktop startup must register the Rust self-rendered SujianEditorItem QML type"
     );
 
@@ -569,41 +581,54 @@ fn test_editor_render_format_is_unified() {
 
     assert!(
         editor_controller.contains("targetEditorItem")
-            && editor_controller.contains("useSelfRenderedEditor")
             && editor_controller.contains("readEditorItemPlainText")
             && editor_controller.contains("targetEditorItem.set_plain_text(content)")
             && editor_controller.contains("targetEditorItem.reload_plain_text(plain)"),
         "EditorController must prefer SujianEditorItem for load/format/save plain text"
     );
+    // After DocumentHandler removal, EditorController no longer owns text_color binding.
+    // Color binding is now in WritingWorkspace.qml on SujianEditorItem directly.
     assert!(
-        editor_controller.contains("text_color: dt ? controller.colorToHex(dt.editorText, \"#E2E2E5\") : \"#E2E2E5\"")
-            && editor_controller.contains("theme_color_probe")
-            && editor_controller.contains("colorToHex(editorText)=")
-            && editor_controller.contains("docHandler.text_color="),
-        "EditorController must keep semantic fallback foreground formatting and log the QML color chain"
+        writing_workspace.contains("text_color: editorController.colorToHex"),
+        "WritingWorkspace must bind SujianEditorItem text_color via editorController.colorToHex"
+    );
+    assert!(
+        editor_controller.contains("colorToHex"),
+        "EditorController must keep colorToHex utility for SujianEditorItem color binding"
     );
 
     assert!(
         design_tokens.contains("property color onSurface: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
-            && design_tokens.contains("property color textPrimary: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
+            && design_tokens
+                .contains("property color textPrimary: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
             && design_tokens.contains("property color editorText: textPrimary"),
         "DesignTokens.editorText must remain the semantic editor foreground token"
     );
     assert!(
         writing_workspace.contains("SujianEditorItem {")
-            && writing_workspace.contains("text_color: editorController.colorToHex")
-            && writing_workspace.contains("visible: !root.useSujianEditorItem"),
-        "WritingWorkspace must make SujianEditorItem the main editor while keeping TextArea fallback"
+            && writing_workspace.contains("text_color: editorController.colorToHex"),
+        "WritingWorkspace must mount SujianEditorItem as the sole editor with semantic color binding"
+    );
+    // Reverse checks after TextArea fallback removal
+    assert!(
+        !writing_workspace.contains("TextArea {"),
+        "WritingWorkspace must not contain TextArea {{ after fallback removal"
     );
     assert!(
-        writing_workspace.contains("textFormat: TextEdit.PlainText"),
-        "WritingWorkspace TextArea must own plain text display in PlainText mode"
+        !writing_workspace.contains("useSujianEditorItem"),
+        "WritingWorkspace must not contain useSujianEditorItem after fallback removal"
     );
     assert!(
-        editor_controller.contains("targetTextArea.text = content")
-            && editor_controller.contains("targetTextArea.text = plain")
-            && editor_controller.contains("docHandler.apply_format()"),
-        "EditorController must keep TextArea fallback load/format path while SujianEditorItem remains explicitly gated"
+        !editor_controller.contains("targetTextArea"),
+        "EditorController must not reference targetTextArea after TextArea fallback removal"
+    );
+    assert!(
+        !editor_controller.contains("DocumentHandler"),
+        "EditorController must not reference DocumentHandler after fallback removal"
+    );
+    assert!(
+        !editor_controller.contains("useSelfRenderedEditor"),
+        "EditorController must not reference useSelfRenderedEditor after fallback removal"
     );
 
     // Viewport renderer pattern: SujianEditorItem must NOT be inside ScrollView contentItem (editorCanvas).
@@ -618,7 +643,9 @@ fn test_editor_render_format_is_unified() {
     // SujianEditorItem must NOT be between editorCanvas start and end
     let editor_canvas_section = &writing_workspace[editor_canvas_start..sujian_start];
     assert!(
-        !editor_canvas_section.contains("ScrollView {") || editor_canvas_section.contains("} //") || true,
+        !editor_canvas_section.contains("ScrollView {")
+            || editor_canvas_section.contains("} //")
+            || true,
         "SujianEditorItem must NOT be nested inside editorCanvas/Flickable contentItem"
     );
 }
@@ -674,7 +701,10 @@ fn test_no_mindmap_in_starmap_backend() {
     let lines: Vec<&str> = content.lines().collect();
     for (idx, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
-        if trimmed.starts_with("//") || trimmed.starts_with("#[path") || trimmed.starts_with("mod mind_map") {
+        if trimmed.starts_with("//")
+            || trimmed.starts_with("#[path")
+            || trimmed.starts_with("mod mind_map")
+        {
             continue;
         }
         assert!(
@@ -692,8 +722,10 @@ fn test_no_mindmap_in_android正式代码() {
         .parent()
         .and_then(|p| p.parent())
         .unwrap_or(manifest_dir);
-    let android_data = workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/data");
-    let android_model = workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/model");
+    let android_data =
+        workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/data");
+    let android_model =
+        workspace_root.join("apps/android/app/src/main/kotlin/com/xiwei/sujian/model");
 
     if android_data.exists() {
         for entry in fs::read_dir(&android_data).unwrap() {
@@ -719,7 +751,8 @@ fn test_no_mindmap_in_android正式代码() {
 fn test_sujian_editor_item_no_request_repaint() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mod_rs = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
-    let rendering_rs = fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
+    let rendering_rs =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
 
     assert!(
         !mod_rs.contains("fn request_repaint("),
@@ -731,7 +764,10 @@ fn test_sujian_editor_item_no_request_repaint() {
         if trimmed.starts_with("//") {
             continue;
         }
-        if trimmed.contains("request_frame_update") && trimmed.contains("render_dirty") && trimmed.contains("= true") {
+        if trimmed.contains("request_frame_update")
+            && trimmed.contains("render_dirty")
+            && trimmed.contains("= true")
+        {
             panic!(
                 "rendering.rs:{}: request_frame_update path must not set render_dirty = true — animation frames must not invalidate the static texture",
                 line_idx + 1
@@ -744,7 +780,10 @@ fn test_sujian_editor_item_no_request_repaint() {
         if trimmed.starts_with("//") {
             continue;
         }
-        if trimmed.contains("request_frame_update") && trimmed.contains("render_dirty") && trimmed.contains("= true") {
+        if trimmed.contains("request_frame_update")
+            && trimmed.contains("render_dirty")
+            && trimmed.contains("= true")
+        {
             panic!(
                 "sujian_editor_item/mod.rs:{}: request_frame_update path must not set render_dirty = true — animation frames must not invalidate the static texture",
                 line_idx + 1
@@ -807,5 +846,45 @@ fn test_desktop_no_envelope_json_calls() {
         violations.is_empty(),
         "Desktop must not call envelope_json — use typed DTO API + ResultEnvelope instead:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn test_no_textarea_fallback_in_writing_workspace() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let writing_workspace =
+        fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
+    let editor_controller =
+        fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
+    let main_qml = fs::read_to_string(manifest_dir.join("qml/main.qml")).unwrap();
+    let app_backend = fs::read_to_string(manifest_dir.join("src/backend/app_backend.rs")).unwrap();
+
+    assert!(
+        !writing_workspace.contains("TextArea {"),
+        "WritingWorkspace.qml must not contain TextArea {{ after fallback removal"
+    );
+    assert!(
+        !writing_workspace.contains("useSujianEditorItem"),
+        "WritingWorkspace.qml must not contain useSujianEditorItem after fallback removal"
+    );
+    assert!(
+        !editor_controller.contains("targetTextArea"),
+        "EditorController.qml must not contain targetTextArea after fallback removal"
+    );
+    assert!(
+        !editor_controller.contains("DocumentHandler"),
+        "EditorController.qml must not contain DocumentHandler after fallback removal"
+    );
+    assert!(
+        !editor_controller.contains("useSelfRenderedEditor"),
+        "EditorController.qml must not contain useSelfRenderedEditor after fallback removal"
+    );
+    assert!(
+        !main_qml.contains("sujian_editor_item_enabled"),
+        "main.qml must not contain sujian_editor_item_enabled after fallback removal"
+    );
+    assert!(
+        !app_backend.contains("SUJIAN_DESKTOP_USE_SUJIAN_EDITOR"),
+        "app_backend.rs must not contain SUJIAN_DESKTOP_USE_SUJIAN_EDITOR after fallback removal"
     );
 }

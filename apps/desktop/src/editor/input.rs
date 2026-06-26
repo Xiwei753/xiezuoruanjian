@@ -140,6 +140,11 @@ cpp! {{
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
         item->setAcceptedMouseButtons(Qt::AllButtons);
         item->setFocusPolicy(Qt::StrongFocus);
+        // Notify IME system that this item accepts input method
+        QInputMethod* im = QGuiApplication::inputMethod();
+        if (im) {
+            im->update(Qt::ImEnabled);
+        }
         qDebug("[sujian] component_complete: ItemAcceptsInputMethod=%d", item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     }
 
@@ -150,6 +155,7 @@ cpp! {{
         QInputMethod* im = QGuiApplication::inputMethod();
         if (im) {
             im->update(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
+            im->show();
         }
         qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
     }

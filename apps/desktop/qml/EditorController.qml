@@ -7,10 +7,9 @@
 // 约束：
 //   - 不包含 UI 渲染，只管理编辑器状态
 //   - 通过 backendRef 调用 AppBackend (Rust QObject)
-//   - 自研编辑器主流程：SujianEditorItem + QTextLayout + EditorAnimationOverlay
-//   - TextArea / DocumentHandler 仅作为 fallback 兼容路径，不参与自研编辑器
+//   - 唯一编辑器路径：SujianEditorItem + QTextLayout + EditorAnimationOverlay
 //
-// 关键流程（自研编辑器主路径）：
+// 关键流程：
 //   openChapter() → read_chapter → SujianEditorItem setText
 //   saveCurrentChapter() → get_plain_text → sanitize → save_chapter
 //
@@ -20,7 +19,6 @@
 
 import QtQuick
 import QtQuick.Controls
-import Sujian 1.0
 
 QtObject {
     id: controller
@@ -29,8 +27,6 @@ QtObject {
 
     // Target UI bindings
     property var targetEditorItem: null
-    property var targetTextArea: null
-    property bool useSelfRenderedEditor: false
     property var backendRef: null
     property var dt: null
 
@@ -112,22 +108,12 @@ QtObject {
         var isDark = dt ? dt.isDark : "<no-dt>";
         var editorText = dt ? String(dt.editorText) : "<no-dt>";
         var convertedEditorText = dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "<no-dt>";
-        var handlerColor = docHandler ? docHandler.text_color : "<no-docHandler>";
         backendRef.log_qml("info", "editor", "theme_color_probe",
                            "reason=" + reason
                            + " themeMode=" + themeMode
                            + " designTokens.isDark=" + isDark
                            + " designTokens.editorText=" + editorText
-                           + " colorToHex(editorText)=" + convertedEditorText
-                           + " docHandler.text_color=" + handlerColor);
-    }
-
-    property DocumentHandler docHandler: DocumentHandler {
-        id: docHandler
-        document: (!useSelfRenderedEditor && targetTextArea) ? targetTextArea.textDocument : null
-        line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.max(Math.round((settingsBackend.setting_font_size || 16) * 2), 28) : 0
-        text_color: dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "#E2E2E5"
+                           + " colorToHex(editorText)=" + convertedEditorText);
     }
 
     // Stats + word count debounce timer — batches per-keystroke FFI calls.
@@ -148,16 +134,8 @@ QtObject {
     // and foreground return only (see main.qml workspaceOpenAutoSyncTimer,
     // foregroundAutoSyncTimer). This is intentional: save ≠ sync.
 
-    // Connections to TextArea signals
-    property var textConnections: Connections {
-        target: (!controller.useSelfRenderedEditor && targetTextArea) ? targetTextArea : null
-        function onTextChanged() {
-            controller.handlePlainTextChanged("text_changed");
-        }
-    }
-
     property var editorItemConnections: Connections {
-        target: (controller.useSelfRenderedEditor && targetEditorItem) ? targetEditorItem : null
+        target: targetEditorItem ? targetEditorItem : null
         function onText_changed() {
             controller.handlePlainTextChanged("sujian_editor_text_changed");
             Qt.callLater(targetEditorItem.flush_content_height);
@@ -173,26 +151,6 @@ QtObject {
     function normalizePlainText(text) {
         if (text === undefined || text === null) return "";
         return String(text).replace(/\u2029/g, "\n").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    }
-
-    function readTextAreaPlainText() {
-        if (!targetTextArea) return "";
-
-        var text = "";
-        try {
-            var len = targetTextArea.length || 0;
-            if (len > 0 && targetTextArea.getText) {
-                text = targetTextArea.getText(0, len);
-            }
-        } catch (e) {
-            logWriterWarning("text_area_get_text_failed", "error=" + e);
-        }
-
-        if ((!text || text.length === 0) && targetTextArea.text && targetTextArea.text.length > 0) {
-            text = targetTextArea.text;
-        }
-
-        return normalizePlainText(text);
     }
 
     function readEditorItemPlainText() {
@@ -211,84 +169,34 @@ QtObject {
     }
 
     function readEditorPlainText() {
-        if (useSelfRenderedEditor && targetEditorItem) {
-            var editorItemText = readEditorItemPlainText();
-            // The guard protects persisted content. Transient text that was never
-            // saved must not make undo-back-to-empty look like a destructive save.
-            var hadKnownEditorItemContent = lastSavedEditorText.length > 0;
-            if (editorItemText.length === 0 && hadKnownEditorItemContent && hasRecentExplicitClearCandidate()) {
-                explicitEmptySavePending = true;
-            }
-            return {
-                "text": editorItemText,
-                "docLength": -1,
-                "textAreaLength": -1,
-                "editorItemLength": editorItemText.length,
-                "usedFallback": false,
-                "suspiciousEmpty": editorItemText.length === 0 && hadKnownEditorItemContent && !explicitEmptySavePending
-            };
-        }
-
-        var docText = "";
-        try {
-            docText = normalizePlainText(docHandler.get_plain_text());
-        } catch (e) {
-            logWriterWarning("doc_get_plain_text_failed", "error=" + e);
-        }
-
-        var textAreaText = readTextAreaPlainText();
-        var text = docText;
-        var usedFallback = false;
-        if (docText.length === 0 && textAreaText.length > 0) {
-            text = textAreaText;
-            usedFallback = true;
-            logWriterWarning("doc_empty_textarea_fallback", "textAreaLen=" + textAreaText.length);
-        }
-
-        // Only persisted non-empty content is dangerous to overwrite with an
-        // unexpected empty read. Unsaved transient text can legitimately undo to empty.
-        var hadKnownContent = lastSavedEditorText.length > 0;
-        if (text.length === 0 && hadKnownContent && hasRecentExplicitClearCandidate()) {
+        var editorItemText = readEditorItemPlainText();
+        // The guard protects persisted content. Transient text that was never
+        // saved must not make undo-back-to-empty look like a destructive save.
+        var hadKnownEditorItemContent = lastSavedEditorText.length > 0;
+        if (editorItemText.length === 0 && hadKnownEditorItemContent && hasRecentExplicitClearCandidate()) {
             explicitEmptySavePending = true;
         }
-
-        var suspiciousEmpty = text.length === 0 && hadKnownContent && !explicitEmptySavePending;
         return {
-            "text": text,
-            "docLength": docText.length,
-            "textAreaLength": textAreaText.length,
-            "editorItemLength": -1,
-            "usedFallback": usedFallback,
-            "suspiciousEmpty": suspiciousEmpty
+            "text": editorItemText,
+            "editorItemLength": editorItemText.length,
+            "suspiciousEmpty": editorItemText.length === 0 && hadKnownEditorItemContent && !explicitEmptySavePending
         };
     }
 
     function saveGuardActive() {
-        return isLoadingChapter || isApplyingFormat || isApplyingSettings || (!useSelfRenderedEditor && docHandler && docHandler.visual_format_mutating);
+        return isLoadingChapter || isApplyingFormat || isApplyingSettings;
     }
 
     function hasRecentExplicitClearCandidate() {
-        if (useSelfRenderedEditor && targetEditorItem) {
-            return readEditorItemPlainText().length === 0 && (Date.now() - lastPotentialExplicitClearAtMs) < 2000;
-        }
-        if (!targetTextArea || !targetTextArea.activeFocus || (targetTextArea.length || 0) !== 0) return false;
-        return (Date.now() - lastPotentialExplicitClearAtMs) < 2000;
+        if (!targetEditorItem) return false;
+        return readEditorItemPlainText().length === 0 && (Date.now() - lastPotentialExplicitClearAtMs) < 2000;
     }
 
     function markPotentialExplicitClear() {
-        if (useSelfRenderedEditor && targetEditorItem) {
-            if (saveGuardActive()) return;
-            var editorTextLen = readEditorItemPlainText().length;
-            var hasSelection = targetEditorItem.has_selection === true;
-            if (editorTextLen <= 1 || hasSelection) {
-                lastPotentialExplicitClearAtMs = Date.now();
-            }
-            return;
-        }
-        if (!targetTextArea || !targetTextArea.activeFocus || saveGuardActive()) return;
-        var currentLen = targetTextArea.length || 0;
-        var selectedLen = targetTextArea.selectedText ? targetTextArea.selectedText.length : 0;
-        if (currentLen <= 1 || (selectedLen > 0 && selectedLen >= currentLen)) {
+        if (!targetEditorItem || saveGuardActive()) return;
+        var editorTextLen = readEditorItemPlainText().length;
+        var hasSelection = targetEditorItem.has_selection === true;
+        if (editorTextLen <= 1 || hasSelection) {
             lastPotentialExplicitClearAtMs = Date.now();
         }
     }
@@ -305,8 +213,6 @@ QtObject {
         var details = "reason=" + reason
                 + ", previousLen=" + previousEditorText.length
                 + ", lastSavedLen=" + lastSavedEditorText.length
-                + ", docLen=" + (read ? read.docLength : -1)
-                + ", textAreaLen=" + (read ? read.textAreaLength : -1)
                 + ", editorItemLen=" + (read ? read.editorItemLength : -1);
         logWriterWarning("empty_save_blocked", details);
         if (backendRef) {
@@ -378,8 +284,7 @@ QtObject {
     // Returns the full result object so caller can update state.
     function loadChapterContentWithIds(pId, vId, cId) {
         if (!cId || !pId || !vId || !backendRef) return null;
-        if (useSelfRenderedEditor && !targetEditorItem) return null;
-        if (!useSelfRenderedEditor && !targetTextArea) return null;
+        if (!targetEditorItem) return null;
         if (isLoadingChapter) return null;
 
         isLoadingChapter = true;
@@ -394,21 +299,12 @@ QtObject {
 
         var content = normalizePlainText(result.data ? result.data.content || "" : "");
 
-        if (useSelfRenderedEditor && targetEditorItem) {
-            var isReload = (cId === controller.chapterId && pId === controller.projectId);
-            if (isReload) {
-                targetEditorItem.reload_plain_text(content);
-            } else {
-                targetEditorItem.set_plain_text(content);
-                targetEditorItem.clear_undo_stack();
-            }
+        var isReload = (cId === controller.chapterId && pId === controller.projectId);
+        if (isReload) {
+            targetEditorItem.reload_plain_text(content);
         } else {
-            // TextArea fallback owns plain text; DocumentHandler owns display format only.
-            targetTextArea.textFormat = TextEdit.PlainText;
-            targetTextArea.text = content;
-            logRenderColorProbe("open_chapter_before_apply_format");
-            docHandler.apply_format();
-            docHandler.clear_undo_stack();
+            targetEditorItem.set_plain_text(content);
+            targetEditorItem.clear_undo_stack();
         }
 
         previousEditorText = content;
@@ -437,16 +333,11 @@ QtObject {
             pendingAutoSaveAfterGuard = true;
             autoSaveTimer.stop();
         }
-        if (!useSelfRenderedEditor && docHandler) {
-            logRenderColorProbe("apply_settings_before_apply_format");
-            docHandler.apply_format();
-        }
         settingsGuardTimer.restart();
     }
 
     function formatText() {
-        if (useSelfRenderedEditor && !targetEditorItem) return;
-        if (!useSelfRenderedEditor && !targetTextArea) return;
+        if (!targetEditorItem) return;
         var read = readEditorPlainText();
         if (read.suspiciousEmpty) {
             blockUnsafeEmptySave("format_text_read", read);
@@ -473,17 +364,8 @@ QtObject {
         isApplyingFormat = true;
         autoSaveTimer.stop();
         try {
-            if (useSelfRenderedEditor && targetEditorItem) {
-                targetEditorItem.reload_plain_text(plain);
-                targetEditorItem.clear_undo_stack();
-            } else {
-                var cursor = targetTextArea.cursorPosition;
-                targetTextArea.textFormat = TextEdit.PlainText;
-                targetTextArea.text = plain;
-                logRenderColorProbe("format_text_before_apply_format");
-                docHandler.apply_format();
-                targetTextArea.cursorPosition = Math.min(cursor, targetTextArea.length);
-            }
+            targetEditorItem.reload_plain_text(plain);
+            targetEditorItem.clear_undo_stack();
         } finally {
             isApplyingFormat = false;
         }

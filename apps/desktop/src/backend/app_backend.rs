@@ -218,7 +218,6 @@ pub struct AppBackend {
     query_system_color_scheme: qt_method!(fn(&mut self)),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
-    sujian_editor_item_enabled: qt_property!(bool; READ sujian_editor_item_enabled),
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
     log_qml:
         qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
@@ -293,13 +292,6 @@ impl AppBackend {
 
     fn debug_qml_enabled(&self) -> bool {
         get_debug_config().qml_enabled
-    }
-
-    fn sujian_editor_item_enabled(&self) -> bool {
-        match std::env::var("SUJIAN_DESKTOP_USE_SUJIAN_EDITOR") {
-            Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"),
-            Err(_) => true,
-        }
     }
 
     fn debug_module_enabled_qml(&self, module: QString) -> bool {

@@ -315,12 +315,6 @@ fn main() {
         0,
         c"AppBackend",
     );
-    qmetaobject::qml_register_type::<document_handler::DocumentHandler>(
-        c"Sujian",
-        1,
-        0,
-        c"DocumentHandler",
-    );
     qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
         c"Sujian",
         1,
