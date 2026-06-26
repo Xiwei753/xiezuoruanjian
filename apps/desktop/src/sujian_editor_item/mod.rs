@@ -76,6 +76,7 @@ pub struct SujianEditorItem {
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
     cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
+    current_selection_text: qt_property!(QString; READ current_selection_text NOTIFY selection_changed),
 
     plain_text_changed: qt_signal!(),
     text_changed: qt_signal!(),
@@ -114,6 +115,7 @@ pub struct SujianEditorItem {
     tick_cursor_animation: qt_method!(fn(&mut self)),
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    request_text_input_focus: qt_method!(fn(&mut self)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -198,6 +200,7 @@ impl Default for SujianEditorItem {
             cursor_rect_width: Default::default(),
             cursor_rect_height: Default::default(),
             cursor_visible: Default::default(),
+            current_selection_text: Default::default(),
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
             reload_plain_text: Default::default(),
@@ -222,6 +225,7 @@ impl Default for SujianEditorItem {
             tick_cursor_animation: Default::default(),
             long_press_at: Default::default(),
             select_word_at: Default::default(),
+            request_text_input_focus: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -603,6 +607,18 @@ impl SujianEditorItem {
 
     fn cursor_visible(&self) -> bool {
         self.cursor_ctrl.visible
+    }
+
+    fn current_selection_text(&self) -> QString {
+        self.buffer.selected_text().into()
+    }
+
+    fn request_text_input_focus(&mut self) {
+        let obj_ptr = self.get_cpp_object();
+        if obj_ptr.is_null() {
+            return;
+        }
+        input::focus_item(obj_ptr);
     }
 
     fn visual_changed(&mut self) {

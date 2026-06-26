@@ -23,8 +23,9 @@ cpp! {{
     class SujianEventFilter : public QObject {
     public:
         void* rust_item;
+        bool ime_composing;
         SujianEventFilter(QObject* parent, void* item)
-            : QObject(parent), rust_item(item) {}
+            : QObject(parent), rust_item(item), ime_composing(false) {}
 
         bool eventFilter(QObject* obj, QEvent* event) override {
             if (!rust_item) return false;
@@ -32,9 +33,42 @@ cpp! {{
             switch (event->type()) {
             case QEvent::KeyPress: {
                 auto* ke = static_cast<QKeyEvent*>(event);
-                // Only handle navigation, deletion, and shortcut keys.
-                // Regular text input must go through InputMethodEvent (commitString/preeditString)
-                // to allow IME composition to work correctly on Windows.
+                // When IME is composing (preedit active), do NOT intercept
+                // QKeyEvent::text() — let the IME system own the composition.
+                // When NOT composing, forward printable text (English, digits,
+                // punctuation) directly to Rust for insertion, so that
+                // non-IME direct input works on all platforms.
+                if (!ime_composing
+                    && !(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))
+                    && !ke->text().isEmpty()
+                    && ke->key() != Qt::Key_Backspace
+                    && ke->key() != Qt::Key_Delete
+                    && ke->key() != Qt::Key_Return
+                    && ke->key() != Qt::Key_Enter
+                    && ke->key() != Qt::Key_Tab
+                    && ke->key() != Qt::Key_Escape
+                    && ke->key() != Qt::Key_Left
+                    && ke->key() != Qt::Key_Right
+                    && ke->key() != Qt::Key_Up
+                    && ke->key() != Qt::Key_Down
+                    && ke->key() != Qt::Key_Home
+                    && ke->key() != Qt::Key_End
+                    && ke->key() != Qt::Key_PageUp
+                    && ke->key() != Qt::Key_PageDown) {
+                    QString text = ke->text();
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item,
+                        ke->key(),
+                        static_cast<int>(ke->modifiers()),
+                        reinterpret_cast<const ushort*>(text.utf16()),
+                        static_cast<int>(text.size())
+                    );
+                    if (accepted) {
+                        event->accept();
+                        return true;
+                    }
+                }
+                // Handle navigation, deletion, and shortcut keys (no text).
                 bool accepted = sujian_handle_key_and_text(
                     rust_item,
                     ke->key(),
@@ -60,8 +94,10 @@ cpp! {{
                         reinterpret_cast<const ushort*>(commit.utf16()),
                         static_cast<int>(commit.size())
                     );
+                    ime_composing = false;
                 }
                 if (!preedit.isEmpty()) {
+                    ime_composing = true;
                     int cursor = preedit.length();
                     if (ime->replacementStart() >= 0) {
                         cursor = ime->replacementStart() + ime->replacementLength();
@@ -75,6 +111,7 @@ cpp! {{
                     );
                 } else if (commit.isEmpty()) {
                     sujian_ime_cancel(rust_item);
+                    ime_composing = false;
                 }
                 sujian_request_repaint(rust_item);
                 // Refresh IME candidate window position after cursor/preedit changes
@@ -117,9 +154,10 @@ cpp! {{
                     qe->setValue(Qt::ImCursorPosition, cursorPos);
                 }
                 if (qe->queries() & Qt::ImCurrentSelection) {
-                    // Read selected_text property directly (SujianEditorItem has this method)
-                    // Do not depend on selection_start/selection_end (they do not exist)
-                    QString selText = obj->property("selected_text").toString();
+                    // Read current_selection_text Q_PROPERTY (backed by selected_text method).
+                    // Do NOT use obj->property("selected_text") — that is a qt_method,
+                    // not a qt_property, so QObject::property() returns an invalid QVariant.
+                    QString selText = obj->property("current_selection_text").toString();
                     qe->setValue(Qt::ImCurrentSelection, selText);
                 }
                 qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));

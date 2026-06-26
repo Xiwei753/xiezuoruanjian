@@ -21,13 +21,13 @@
 //   - 自研 SujianEditorItem 的 QSG 渲染
 //   - 光标和选区的 IME 交互逻辑
 //   - QTextLayout 的排版细节
-//   - SmoothCursor / EditorAnimationOverlay 的动画参数
+//   - EditorAnimationOverlay 的动画参数
 //
 // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
 // 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
 //
 // 组成：
-//   WorkspaceTree (侧栏) + EditorPage (编辑区) + TopWritingToolbar (工具栏)
+//   WorkspaceTree (侧栏) + SujianEditorItem (编辑区) + TopWritingToolbar (工具栏)
 // =============================================================================
 
 import QtQuick
@@ -67,8 +67,8 @@ Rectangle {
     function requestEditorFocus() {
         Qt.callLater(function() {
             if (sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
-                console.log("[QML] editor_force_active_focus_self_rendered");
-                sujianEditor.forceActiveFocus();
+                console.log("[QML] editor_request_text_input_focus");
+                sujianEditor.request_text_input_focus();
             }
         });
     }

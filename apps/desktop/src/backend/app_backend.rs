@@ -409,7 +409,7 @@ impl AppBackend {
     //   - 不传递到 SujianEditorItem 的 QSG 渲染线程
     //   - 不影响光标位置、IME 输入、动画帧率
     //   - 不改变 QTextLayout 的排版计算
-    //   - 不驱动 SmoothCursor / EditorAnimationOverlay 的动画属性
+    //   - 不驱动 EditorAnimationOverlay 的动画属性
     //
     // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
     // 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。

@@ -350,72 +350,6 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
             }
 
-            if file_name == "SmoothCursor.qml" {
-                if !content.contains("fallbackCursorHeight")
-                    || !content.contains("targetTextArea.cursorRectangle")
-                    || !content.contains("Math.max(rawHeight, fallbackHeight * 0.85)")
-                    || !content.contains("fallbackHeight * 1.25")
-                {
-                    eprintln!(
-                        "{}: SmoothCursor missing empty cursorRectangle fallback",
-                        file_name
-                    );
-                    has_errors = true;
-                }
-                if !content.contains("Rectangle {") || !content.contains("id: cursorRect") {
-                    eprintln!(
-                        "{}: SmoothCursor must draw the custom cursorRect",
-                        file_name
-                    );
-                    has_errors = true;
-                }
-                if !content.contains("targetTextArea.mapToItem(overlayItem || parent") {
-                    eprintln!("{}: SmoothCursor must map TextArea cursor coordinates into overlay coordinates", file_name);
-                    has_errors = true;
-                }
-                if !content.contains("snapNextCursorUpdate")
-                    || !content.contains("shouldAnimateCursorMove")
-                    || !content.contains("maxSmoothCursorDistance")
-                    || !content.contains("snapNextUpdate")
-                    || !content.contains("Math.abs(newY - cursorRect.y) > 2")
-                    || !content
-                        .contains("Math.abs(newX - cursorRect.x) > root.maxSmoothCursorDistance")
-                    || !content.contains("xBehaviorEnabled = false")
-                    || !content.contains("yBehaviorEnabled = false")
-                {
-                    eprintln!(
-                        "{}: SmoothCursor must decide snap vs smooth from cursor geometry",
-                        file_name
-                    );
-                    has_errors = true;
-                }
-                if content.contains("smoothUntilMs")
-                    || content.contains("Date.now()")
-                    || content.contains("allowSmoothCursorMotion")
-                {
-                    eprintln!(
-                        "{}: SmoothCursor must not depend on keypress time windows",
-                        file_name
-                    );
-                    has_errors = true;
-                }
-                if content.contains("id: typingLayer")
-                    || content.contains("cursorBirthAnimationsModel")
-                    || content.contains("appendCursorBirthAnimation")
-                    || content.contains("inputMethodComposing")
-                    || content.contains("typingAnimationEnabled")
-                    || content.contains("typingAnimationDuration")
-                    || content.contains("textAnimationsSuppressed")
-                    || content.contains("suppressNextTextAnimation")
-                {
-                    eprintln!(
-                        "{}: SmoothCursor must not own Linux ghost text animation overlay",
-                        file_name
-                    );
-                    has_errors = true;
-                }
-            }
-
             if file_name == "EditorWheelScroller.qml" {
                 if !content.contains("WheelHandler {")
                     || !content.contains("pixelDelta")
@@ -514,8 +448,6 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 #[test]
 fn test_editor_render_format_is_unified() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let document_handler =
-        fs::read_to_string(manifest_dir.join("src/document_handler.rs")).unwrap();
     let main_rs = fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
     let sujian_editor_item =
         fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
@@ -543,26 +475,22 @@ fn test_editor_render_format_is_unified() {
         "SujianEditorItem must be a Rust self-rendered editor that consumes Core editor transactions"
     );
 
-    for token in [
-        ["set", "PlainText"].concat(),
-        ["set", "_plain", "_text"].concat(),
-        ["apply", "_current", "_text", "_color"].concat(),
-        ["hide", "_text", "_range"].concat(),
-        ["show", "_text", "_range"].concat(),
-        ["clear", "_hidden", "_text", "_ranges"].concat(),
-    ] {
-        assert!(
-            !document_handler.contains(&token),
-            "DocumentHandler must not own content loading, hidden ranges, or per-cursor text color refresh: {token}"
-        );
-    }
-
+    // document_handler.rs has been deleted — verify it is not referenced
     assert!(
-        document_handler.contains(["QText", "CharFormat"].concat().as_str())
-            && document_handler.contains(["set", "Foreground"].concat().as_str())
-            && document_handler.contains(["set", "CharFormat"].concat().as_str())
-            && document_handler.contains(["text", "_color"].concat().as_str()),
-        "DocumentHandler must apply theme foreground as part of unified render formatting"
+        !main_rs.contains("mod document_handler"),
+        "main.rs must not contain 'mod document_handler' after fallback removal"
+    );
+    assert!(
+        !main_rs.contains("DocumentHandler"),
+        "main.rs must not reference DocumentHandler after fallback removal"
+    );
+    assert!(
+        !main_rs.contains("EditorPage.qml"),
+        "main.rs qrc must not include EditorPage.qml after fallback removal"
+    );
+    assert!(
+        !main_rs.contains("SmoothCursor.qml"),
+        "main.rs qrc must not include SmoothCursor.qml after fallback removal"
     );
 
     for token in [
@@ -622,7 +550,7 @@ fn test_editor_render_format_is_unified() {
     );
     assert!(
         !editor_controller.contains("DocumentHandler"),
-        "EditorController must not reference DocumentHandler after fallback removal"
+        "EditorController must not reference DocumentHandler after TextArea fallback removal"
     );
     assert!(
         !editor_controller.contains("useSelfRenderedEditor"),
@@ -637,14 +565,6 @@ fn test_editor_render_format_is_unified() {
     assert!(
         sujian_start > editor_scroll_start && sujian_start > editor_canvas_start,
         "SujianEditorItem must be placed AFTER ScrollView and editorCanvas (as a fixed overlay sibling, not inside Flickable contentItem)"
-    );
-    // SujianEditorItem must NOT be between editorCanvas start and end
-    let editor_canvas_section = &writing_workspace[editor_canvas_start..sujian_start];
-    assert!(
-        !editor_canvas_section.contains("ScrollView {")
-            || editor_canvas_section.contains("} //")
-            || true,
-        "SujianEditorItem must NOT be nested inside editorCanvas/Flickable contentItem"
     );
 }
 
@@ -884,5 +804,70 @@ fn test_no_textarea_fallback_in_writing_workspace() {
     assert!(
         !app_backend.contains("SUJIAN_DESKTOP_USE_SUJIAN_EDITOR"),
         "app_backend.rs must not contain SUJIAN_DESKTOP_USE_SUJIAN_EDITOR after fallback removal"
+    );
+}
+
+#[test]
+fn test_no_textarea_document_handler_fallback_in_qml() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let qml_dir = manifest_dir.join("qml");
+    if !qml_dir.exists() {
+        return;
+    }
+
+    let mut has_errors = false;
+
+    for entry in fs::read_dir(&qml_dir).unwrap() {
+        let entry = entry.unwrap();
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("qml") {
+            continue;
+        }
+        let content = fs::read_to_string(&path).unwrap();
+        let file_name = path.file_name().unwrap().to_str().unwrap();
+
+        // No QML file should reference TextArea / DocumentHandler FALLBACK
+        for (idx, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if trimmed.contains("TextArea / DocumentHandler FALLBACK")
+                || trimmed.contains("TextArea FALLBACK")
+                || trimmed.contains("DocumentHandler FALLBACK")
+            {
+                eprintln!(
+                    "{}:{}: Found forbidden TextArea/DocumentHandler FALLBACK reference: {}",
+                    file_name,
+                    idx + 1,
+                    trimmed
+                );
+                has_errors = true;
+            }
+        }
+    }
+
+    assert!(
+        !has_errors,
+        "QML files must not contain TextArea / DocumentHandler FALLBACK references"
+    );
+}
+
+#[test]
+fn test_no_fallback_files_in_qrc() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let main_rs = fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
+
+    assert!(
+        !main_rs.contains("EditorPage.qml"),
+        "main.rs qrc must not include EditorPage.qml — it has been deleted as a fallback file"
+    );
+    assert!(
+        !main_rs.contains("SmoothCursor.qml"),
+        "main.rs qrc must not include SmoothCursor.qml — it has been deleted as a fallback file"
+    );
+    assert!(
+        !main_rs.contains("mod document_handler"),
+        "main.rs must not declare mod document_handler — it has been deleted as a fallback file"
     );
 }

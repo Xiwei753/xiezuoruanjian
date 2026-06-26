@@ -20,7 +20,7 @@ cpp! {{
     // Single-layer scene graph layout:
     //   child[0] = QSGImageNode  — static text texture
     // (Animation overlay is handled by QML EditorAnimationOverlay.
-    //  Cursor is handled by QML SmoothCursor.)
+    //  Cursor is handled by QML Rectangle sujianCursorRect.)
 
     void ensure_single_image_node(QSGTransformNode *root, QQuickItem *item) {
         if (!root || !item) return;
@@ -55,7 +55,7 @@ cpp! {{
 /// Default scene graph layout: only ensure a single QSGImageNode
 /// for the static text texture. No overlay or cursor nodes are created.
 /// Animation overlay is handled by QML EditorAnimationOverlay.
-/// Cursor is handled by QML SmoothCursor.
+/// Cursor is handled by QML Rectangle sujianCursorRect.
 pub fn ensure_single_image_node(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
