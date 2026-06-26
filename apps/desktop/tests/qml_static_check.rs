@@ -870,4 +870,15 @@ fn test_no_fallback_files_in_qrc() {
         !main_rs.contains("mod document_handler"),
         "main.rs must not declare mod document_handler — it has been deleted as a fallback file"
     );
+
+    // build.rs must not reference deleted fallback QML files in rerun-if-changed directives
+    let build_rs = fs::read_to_string(manifest_dir.join("build.rs")).unwrap();
+    assert!(
+        !build_rs.contains("EditorPage.qml"),
+        "build.rs must not reference EditorPage.qml — it has been deleted as a fallback file"
+    );
+    assert!(
+        !build_rs.contains("SmoothCursor.qml"),
+        "build.rs must not reference SmoothCursor.qml — it has been deleted as a fallback file"
+    );
 }
