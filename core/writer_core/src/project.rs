@@ -426,4 +426,46 @@ mod tests {
         let aggregated = get_project_updated_at_aggregated(workspace_path, &project.id).unwrap();
         assert_eq!(aggregated, project.created_at);
     }
+
+    #[test]
+    fn test_delete_project_success() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProjectToDelete").unwrap();
+
+        let project_dir = workspace_path.join("projects").join(&project.id);
+        assert!(project_dir.exists());
+
+        let result = delete_project(workspace_path, &project.id);
+        assert!(result.is_ok());
+
+        assert!(!project_dir.exists());
+
+        let trash_dir = workspace_path.join("app-meta/sync/trash");
+        assert!(trash_dir.exists());
+
+        // Trash should have something
+        let trash_contents: Vec<_> = std::fs::read_dir(&trash_dir).unwrap().collect();
+        assert!(!trash_contents.is_empty());
+
+        // Verify we can't find it
+        let list_res = list_projects(workspace_path).unwrap();
+        assert!(list_res.iter().find(|p| p.id == project.id).is_none());
+    }
+
+    #[test]
+    fn test_delete_project_not_found() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+        crate::workspace::create_workspace(workspace_path).unwrap();
+
+        let result = delete_project(workspace_path, "non_existent_id");
+        assert!(result.is_err());
+        match result {
+            Err(crate::error::Error::InvalidDeleteTarget(_)) => {}
+            _ => panic!("Expected InvalidDeleteTarget error for non-existent project"),
+        }
+    }
 }
