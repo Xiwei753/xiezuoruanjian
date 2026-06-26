@@ -18,6 +18,15 @@ data class OverlayAnim(
     val durationMs: Long,
     val isDeletion: Boolean = false
 ) {
+    /**
+     * 是否跳过 glyph 动画（ghost 文字绘制）。
+     * 复杂字符（ZWJ emoji、组合音标、变体选择符、surrogate pair）只保留光标动画。
+     */
+    val skipGlyphAnimation: Boolean = run {
+        if (insertedText.isEmpty()) false
+        else containsComplexGrapheme(insertedText)
+    }
+
     val codePoints: List<Int> = buildList {
         var i = 0
         while (i < insertedText.length) {
@@ -29,6 +38,32 @@ data class OverlayAnim(
 
     val cachedStrings: List<String> = codePoints.map { cp ->
         String(Character.toChars(cp))
+    }
+
+    private fun containsComplexGrapheme(text: String): Boolean {
+        var i = 0
+        while (i < text.length) {
+            val cp = text.codePointAt(i)
+            val charCount = Character.charCount(cp)
+
+            // Surrogate pair (non-BMP character like emoji)
+            if (charCount == 2) return true
+
+            // Zero Width Joiner
+            if (cp == 0x200D) return true
+
+            // Variation selectors (FE00-FE0F, E0100-E01EF)
+            if (cp in 0xFE00..0xFE0F || cp in 0xE0100..0xE01EF) return true
+
+            // Combining marks
+            val type = Character.getType(cp)
+            if (type == Character.NON_SPACING_MARK.toInt() ||
+                type == Character.COMBINING_SPACING_MARK.toInt() ||
+                type == Character.ENCLOSING_MARK.toInt()) return true
+
+            i += charCount
+        }
+        false
     }
 }
 
@@ -124,6 +159,11 @@ class TypingOverlayRenderer(private val editText: WriterEditText) : EditorAnimat
 
         for (anim in activeAnims) {
             val interpolatedProgress = 1f - (1f - anim.progress) * (1f - anim.progress)
+
+            if (anim.skipGlyphAnimation) {
+                // 复杂字符（ZWJ emoji、组合音标等）跳过 ghost 文字绘制，只保留光标动画
+                continue
+            }
 
             if (anim.isDeletion) {
                 val destX = if (anim.endX >= 0f) anim.endX else anim.startX

@@ -24,6 +24,14 @@ Item {
     property bool animationEnabled: true
     property bool suppressed: false
 
+    // 动画调试日志控制。默认关闭，避免正式包刷屏。
+    // 可通过设置 root.verboseLogging = true 或环境变量 SUJIAN_EDITOR_DEBUG 开启。
+    property bool verboseLogging: false
+
+    function _log(message) {
+        if (verboseLogging) console.log("[AnimOverlay] " + message)
+    }
+
     visible: editorItem !== null
 
     property var _activeAnimations: []
@@ -33,27 +41,27 @@ Item {
         target: editorItem
         function onAnimationEventsChanged() {
             if (!root.animationEnabled || root.suppressed) {
-                console.log("[AnimOverlay] skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
+                root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
                 return
             }
             var jsonStr = editorItem.animation_events_json
             if (!jsonStr || jsonStr === "[]") {
-                console.log("[AnimOverlay] skipped: jsonStr empty or []")
+                root._log("skipped: jsonStr empty or []")
                 return
             }
-            console.log("[AnimOverlay] received: jsonLen=" + jsonStr.length)
+            root._log("received: jsonLen=" + jsonStr.length)
             var events
             try {
                 events = JSON.parse(jsonStr)
             } catch (e) {
-                console.log("[AnimOverlay] JSON parse error: " + e)
+                root._log("JSON parse error: " + e)
                 return
             }
             if (!Array.isArray(events)) {
-                console.log("[AnimOverlay] skipped: events not array")
+                root._log("skipped: events not array")
                 return
             }
-            console.log("[AnimOverlay] events count=" + events.length)
+            root._log("events count=" + events.length)
             for (var i = 0; i < events.length; i++) {
                 root._handleEvent(events[i])
             }
@@ -64,6 +72,24 @@ Item {
         if (suppressed) {
             root.clearAll()
         }
+    }
+
+    function isComplexGrapheme(ch) {
+        if (!ch || ch.length === 0) return false
+        // Check for surrogate pairs (code point > 0xFFFF)
+        var cp = ch.codePointAt(0)
+        if (cp > 0xFFFF) return true
+        // Zero Width Joiner
+        if (cp === 0x200D) return true
+        // Variation selectors
+        if ((cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF)) return true
+        // Combining marks (general category Mn, Mc, Me)
+        if (cp >= 0x0300 && cp <= 0x036F) return true  // Combining Diacritical Marks
+        if (cp >= 0x1AB0 && cp <= 0x1AFF) return true  // Combining Diacritical Marks Extended
+        if (cp >= 0x1DC0 && cp <= 0x1DFF) return true  // Combining Diacritical Marks Supplement
+        if (cp >= 0x20D0 && cp <= 0x20FF) return true  // Combining Diacritical Marks for Symbols
+        if (cp >= 0xFE20 && cp <= 0xFE2F) return true  // Combining Half Marks
+        return false
     }
 
     function _handleEvent(event) {
@@ -93,20 +119,20 @@ Item {
         var duration = Math.max(80, Math.min(180, event.durationMs || 160))
 
         if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
-            console.log("[AnimOverlay] insert skipped: glyphRects empty")
+            root._log("insert skipped: glyphRects empty")
             return
         }
 
         // Multi-char limit: > 8 glyphs → no animation
         if (event.glyphRects.length > 8) {
-            console.log("[AnimOverlay] insert skipped: glyphRects count=" + event.glyphRects.length + " > 8")
+            root._log("insert skipped: glyphRects count=" + event.glyphRects.length + " > 8")
             return
         }
 
         // Newline check: if any glyph char is newline, skip
         for (var ci = 0; ci < event.glyphRects.length; ci++) {
             if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") {
-                console.log("[AnimOverlay] insert skipped: contains newline at index=" + ci)
+                root._log("insert skipped: contains newline at index=" + ci)
                 return
             }
         }
@@ -114,11 +140,11 @@ Item {
         // ── Glyph Ghost path ──
         var component = root._glyphGhostComponent
         if (!component || component.status !== Component.Ready) {
-            console.log("[AnimOverlay] insert skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
+            root._log("insert skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
             return
         }
 
-        console.log("[AnimOverlay] insert creating " + event.glyphRects.length + " ghosts, cursorRect=(" + cursorRectX + "," + cursorRectY + ")")
+        root._log("insert creating " + event.glyphRects.length + " ghosts, cursorRect=(" + cursorRectX + "," + cursorRectY + ")")
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]
@@ -134,7 +160,7 @@ Item {
                 "height": gr.h,
                 "duration": duration,
                 "ghostColor": editorItem.text_color || "#E2E2E5",
-                "glyphText": gr.char || "",
+                "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
                 "glyphFontFamily": editorItem.font_family || "",
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0
             })
@@ -149,20 +175,20 @@ Item {
         var duration = Math.max(80, Math.min(180, event.durationMs || 160))
 
         if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
-            console.log("[AnimOverlay] delete skipped: glyphRects empty")
+            root._log("delete skipped: glyphRects empty")
             return
         }
 
         // Multi-char limit: > 8 glyphs → no animation
         if (event.glyphRects.length > 8) {
-            console.log("[AnimOverlay] delete skipped: glyphRects count=" + event.glyphRects.length + " > 8")
+            root._log("delete skipped: glyphRects count=" + event.glyphRects.length + " > 8")
             return
         }
 
         // Newline check: if any glyph char is newline, skip
         for (var ci = 0; ci < event.glyphRects.length; ci++) {
             if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") {
-                console.log("[AnimOverlay] delete skipped: contains newline at index=" + ci)
+                root._log("delete skipped: contains newline at index=" + ci)
                 return
             }
         }
@@ -170,11 +196,11 @@ Item {
         // ── Glyph Ghost path ──
         var component = root._glyphGhostComponent
         if (!component || component.status !== Component.Ready) {
-            console.log("[AnimOverlay] delete skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
+            root._log("delete skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
             return
         }
 
-        console.log("[AnimOverlay] delete creating " + event.glyphRects.length + " ghosts, cursorRect=(" + cursorRectX + "," + cursorRectY + ")")
+        root._log("delete creating " + event.glyphRects.length + " ghosts, cursorRect=(" + cursorRectX + "," + cursorRectY + ")")
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]
@@ -190,7 +216,7 @@ Item {
                 "height": gr.h,
                 "duration": duration,
                 "ghostColor": editorItem.text_color || "#E2E2E5",
-                "glyphText": gr.char || "",
+                "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
                 "glyphFontFamily": editorItem.font_family || "",
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0
             })

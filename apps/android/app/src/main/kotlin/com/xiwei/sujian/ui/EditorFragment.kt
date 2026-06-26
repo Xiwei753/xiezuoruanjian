@@ -221,7 +221,11 @@ class EditorFragment : Fragment() {
         } catch (e: Exception) {
             val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
             editorEditText.typingAnimationController?.providerUnavailable = true
-            Log.w("WriterSettings", "Failed to inject AnimationEventProvider: typingEnabled=$typingEnabled, providerUnavailable=true, will use local fallback if enabled", e)
+            // Provider 注入失败时禁用 typing animation，不走本地 fallback
+            if (typingEnabled) {
+                editorEditText.setTypingAnimationEnabled(false)
+            }
+            Log.w("WriterSettings", "Failed to inject AnimationEventProvider: typingEnabled=$typingEnabled, providerUnavailable=true, typing animation disabled", e)
         }
 
         setupSearchAndReplace()
@@ -451,7 +455,8 @@ class EditorFragment : Fragment() {
             !settings.typingAnimationEnabled -> "disabled"
             typingCtrl?.hasProvider == true && !typingCtrl.providerFailedLastTime -> "core"
             typingCtrl?.hasProvider == true && typingCtrl.providerFailedLastTime -> "core(failed,skip)"
-            else -> "fallback"
+            typingCtrl?.providerUnavailable == true -> "no-provider(disabled)"
+            else -> "no-provider(disabled)"
         }
         Log.d(tag, "applySettingsToEditor: all settings applied, settingEnabled=${settings.typingAnimationEnabled}, providerAvailable=${typingCtrl?.hasProvider == true}, actualAnimationPath=$animActualPath, smoothCursor=${settings.smoothCursorEnabled}")
     }
