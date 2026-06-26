@@ -119,7 +119,7 @@ impl WriterError {
 
     /// 已废弃：UI 应使用 `code()` + `message_key()` 做本地化映射，不再直接展示此中文文案。
     /// 保留仅作为 fallback/debug 用途。
-    #[deprecated(note = "Use code() + message_key() for i18n, this returns hardcoded Chinese")]
+    #[deprecated(note = "Use error_category for i18n lookup")]
     #[allow(deprecated)]
     pub fn user_message(&self) -> &'static str {
         match self {
