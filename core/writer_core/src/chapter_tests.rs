@@ -218,8 +218,6 @@ mod tests {
         assert_eq!(content.content, "");
     }
 
-
-
     #[test]
     fn end_to_end_write_save_reopen_verify_hash_and_word_count() {
         let dir = tempdir().unwrap();

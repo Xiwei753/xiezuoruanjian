@@ -2,8 +2,8 @@
 
 use std::os::raw::c_char;
 
-use crate::ffi::{c_str_to_rust, ok_json, err_json};
-use crate::layout_policy::{WindowMetrics, resolve_layout};
+use crate::ffi::{c_str_to_rust, err_json, ok_json};
+use crate::layout_policy::{resolve_layout, WindowMetrics};
 
 /// # Safety
 /// `metrics_json` must be a valid null-terminated UTF-8 C string containing JSON WindowMetrics.
@@ -13,14 +13,20 @@ pub unsafe extern "C" fn writer_core_resolve_layout(metrics_json: *const c_char)
     let json_str = match c_str_to_rust(metrics_json) {
         Ok(s) => s,
         Err(e) => {
-            return err_json("INVALID_INPUT", &format!("metrics_json is null or invalid UTF-8: {}", e));
+            return err_json(
+                "INVALID_INPUT",
+                &format!("metrics_json is null or invalid UTF-8: {}", e),
+            );
         }
     };
 
     let metrics: WindowMetrics = match serde_json::from_str(&json_str) {
         Ok(m) => m,
         Err(e) => {
-            return err_json("PARSE_ERROR", &format!("Failed to parse WindowMetrics JSON: {}", e));
+            return err_json(
+                "PARSE_ERROR",
+                &format!("Failed to parse WindowMetrics JSON: {}", e),
+            );
         }
     };
 

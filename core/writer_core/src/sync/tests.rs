@@ -122,31 +122,16 @@ mod tests {
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "fatal: refusing to merge unrelated histories",
                 )))
             }
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -165,7 +150,6 @@ mod tests {
 
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -221,7 +205,6 @@ mod tests {
         std::fs::write(dir.path().join("some_file.txt"), "hello").unwrap();
 
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://github.com/test/test.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -240,23 +223,13 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -265,12 +238,7 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -323,7 +291,6 @@ mod tests {
     #[test]
     fn test_sync_config_state_no_token() {
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "url".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -386,7 +353,6 @@ mod tests {
     #[test]
     fn test_sync_config_no_token() {
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -499,7 +465,6 @@ mod tests {
     fn test_sync_dry_run_disabled_config() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: false,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -521,7 +486,6 @@ mod tests {
     fn test_sync_dry_run_enabled_config_scans() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -554,7 +518,6 @@ mod tests {
     fn test_perform_sync_empty_remote_url() {
         let dir = tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -586,7 +549,6 @@ mod tests {
     fn test_perform_sync_non_empty_remote() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -605,23 +567,13 @@ mod tests {
 
         struct MockInitNonEmptyBackend;
         impl GitBackend for MockInitNonEmptyBackend {
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "pull failed: unable to merge unrelated histories",
@@ -633,12 +585,7 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -678,7 +625,6 @@ mod tests {
         std::fs::write(state_dir.join("state.local.json"), "{}").unwrap();
 
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -697,23 +643,13 @@ mod tests {
 
         struct MockBackendOk;
         impl GitBackend for MockBackendOk {
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -722,12 +658,7 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -764,7 +695,6 @@ mod tests {
     fn test_first_sync_mode_clone_into_empty_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -783,23 +713,13 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -808,12 +728,7 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -845,7 +760,6 @@ mod tests {
     fn test_first_sync_mode_init_existing_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -864,23 +778,13 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -889,12 +793,7 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -926,7 +825,6 @@ mod tests {
     fn test_first_sync_mode_already_git_repo() {
         let dir = tempfile::tempdir().unwrap();
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://example.com/repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -945,23 +843,13 @@ mod tests {
 
         struct MockBackend;
         impl GitBackend for MockBackend {
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn stage_paths(&self, _: &Path, _: &[&str]) -> crate::Result<()> {
@@ -970,12 +858,7 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(None)
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -1050,7 +933,6 @@ mod tests {
         std::fs::write(dir.path().join("workspace_manifest.json"), "{}").unwrap();
 
         let config = SyncConfig {
-
             enabled: true,
             remote_url: "https://github.com/test/empty-repo.git".to_string(),
             transport: SyncTransport::HttpsToken,
@@ -1069,23 +951,13 @@ mod tests {
 
         struct MockEmptyRemoteBackend;
         impl GitBackend for MockEmptyRemoteBackend {
-            fn clone_repo(
-                &self,
-                _: &str,
-                _: &Path,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn clone_repo(&self, _: &str, _: &Path, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn open_repo(&self, _: &Path) -> crate::Result<()> {
                 Ok(())
             }
-            fn pull(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn pull(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Err(crate::Error::Io(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     "ref not found: refs/heads/main",
@@ -1097,12 +969,7 @@ mod tests {
             fn commit(&self, _: &Path, _: &str) -> crate::Result<Option<String>> {
                 Ok(Some("commit_hash".to_string()))
             }
-            fn push(
-                &self,
-                _: &Path,
-                _: &str,
-                _: Option<&GitAuth>,
-            ) -> crate::Result<()> {
+            fn push(&self, _: &Path, _: &str, _: Option<&GitAuth>) -> crate::Result<()> {
                 Ok(())
             }
             fn current_head(&self, _: &Path) -> crate::Result<Option<String>> {
@@ -2520,15 +2387,21 @@ mod tests {
         // Second sync: conflict must still be present (not auto-resolved)
         // The path is in conflicted_files, so it's skipped entirely.
         // No upload of local B over remote C, no download of remote C over local B.
-        assert!(!res2.uploaded_files.contains(&chapter_rel.to_string()),
-            "Second sync must NOT upload local version over remote");
-        assert!(!res2.downloaded_files.contains(&chapter_rel.to_string()),
-            "Second sync must NOT download remote version over local");
+        assert!(
+            !res2.uploaded_files.contains(&chapter_rel.to_string()),
+            "Second sync must NOT upload local version over remote"
+        );
+        assert!(
+            !res2.downloaded_files.contains(&chapter_rel.to_string()),
+            "Second sync must NOT download remote version over local"
+        );
 
         // Local file must still be the local version B
         let local_after_second = std::fs::read_to_string(&chapter_abs).unwrap();
-        assert_eq!(local_after_second, local_content,
-            "Local file must remain unchanged after second sync");
+        assert_eq!(
+            local_after_second, local_content,
+            "Local file must remain unchanged after second sync"
+        );
 
         // known_files must still be base_hash A
         let state_after_second = SyncService::load_sync_state(dir.path()).unwrap();
@@ -2800,10 +2673,14 @@ mod tests {
         };
 
         let res2 = SyncService::perform_lww_sync(dir.path(), &config2, &secrets).unwrap();
-        assert!(!res2.uploaded_files.contains(&chapter_rel.to_string()),
-            "Second sync must NOT upload before resolution");
-        assert!(!res2.downloaded_files.contains(&chapter_rel.to_string()),
-            "Second sync must NOT download before resolution");
+        assert!(
+            !res2.uploaded_files.contains(&chapter_rel.to_string()),
+            "Second sync must NOT upload before resolution"
+        );
+        assert!(
+            !res2.downloaded_files.contains(&chapter_rel.to_string()),
+            "Second sync must NOT download before resolution"
+        );
 
         let state_after_2 = SyncService::load_sync_state(dir.path()).unwrap();
         assert!(state_after_2.conflicted_files.contains(chapter_rel));
@@ -2815,8 +2692,10 @@ mod tests {
         SyncService::resolve_conflict_keep_local(dir.path(), chapter_rel).unwrap();
 
         let state_after_resolve = SyncService::load_sync_state(dir.path()).unwrap();
-        assert!(!state_after_resolve.conflicted_files.contains(chapter_rel),
-            "conflicted_files must be cleared after resolution");
+        assert!(
+            !state_after_resolve.conflicted_files.contains(chapter_rel),
+            "conflicted_files must be cleared after resolution"
+        );
         // After keep_local, known_files is set to remote_hash so that three-way
         // comparison sees: base=remote_hash, local≠base, remote=base → LocalChanged → upload
         assert_eq!(
@@ -2850,15 +2729,21 @@ mod tests {
         let res3 = SyncService::perform_lww_sync(dir.path(), &config3, &secrets).unwrap();
 
         // After resolve, three-way sees LocalChanged → uploads local version
-        assert!(res3.uploaded_files.contains(&chapter_rel.to_string()),
-            "After keep_local resolution, sync must upload the local version");
-        assert!(!res3.downloaded_files.contains(&chapter_rel.to_string()),
-            "After keep_local resolution, sync must NOT download remote over local");
+        assert!(
+            res3.uploaded_files.contains(&chapter_rel.to_string()),
+            "After keep_local resolution, sync must upload the local version"
+        );
+        assert!(
+            !res3.downloaded_files.contains(&chapter_rel.to_string()),
+            "After keep_local resolution, sync must NOT download remote over local"
+        );
 
         // Local file must still be the local version
         let local_after_3 = std::fs::read_to_string(&chapter_abs).unwrap();
-        assert_eq!(local_after_3, local_content,
-            "Local file must remain unchanged after post-resolve sync");
+        assert_eq!(
+            local_after_3, local_content,
+            "Local file must remain unchanged after post-resolve sync"
+        );
 
         // conflicted_files must remain empty
         let state_after_3 = SyncService::load_sync_state(dir.path()).unwrap();
@@ -2948,7 +2833,9 @@ mod tests {
 
         let state_after_resolve = SyncService::load_sync_state(dir.path()).unwrap();
         assert!(!state_after_resolve.conflicted_files.contains(chapter_rel));
-        assert!(state_after_resolve.pending_take_remote.contains(chapter_rel));
+        assert!(state_after_resolve
+            .pending_take_remote
+            .contains(chapter_rel));
         assert!(state_after_resolve.conflicts.is_empty());
 
         // === Step 3: Next sync should download remote content to local ===
@@ -2975,15 +2862,21 @@ mod tests {
         let res3 = SyncService::perform_lww_sync(dir.path(), &config3, &secrets).unwrap();
 
         // After take_remote resolution, sync must download the remote content
-        assert!(res3.downloaded_files.contains(&chapter_rel.to_string()),
-            "After take_remote resolution, sync must download the remote version");
-        assert!(!res3.uploaded_files.contains(&chapter_rel.to_string()),
-            "After take_remote resolution, sync must NOT upload the old local version");
+        assert!(
+            res3.downloaded_files.contains(&chapter_rel.to_string()),
+            "After take_remote resolution, sync must download the remote version"
+        );
+        assert!(
+            !res3.uploaded_files.contains(&chapter_rel.to_string()),
+            "After take_remote resolution, sync must NOT upload the old local version"
+        );
 
         // Local file must now be the remote version
         let local_after_3 = std::fs::read_to_string(&chapter_abs).unwrap();
-        assert_eq!(local_after_3, remote_content,
-            "Local file must be the remote version after take_remote + sync");
+        assert_eq!(
+            local_after_3, remote_content,
+            "Local file must be the remote version after take_remote + sync"
+        );
 
         // pending_take_remote must be cleared
         let state_after_3 = SyncService::load_sync_state(dir.path()).unwrap();
@@ -3022,15 +2915,21 @@ mod tests {
 
         let res4 = SyncService::perform_lww_sync(dir.path(), &config4, &secrets).unwrap();
 
-        assert!(!res4.uploaded_files.contains(&chapter_rel.to_string()),
-            "Subsequent sync must NOT upload after take_remote resolved");
-        assert!(!res4.downloaded_files.contains(&chapter_rel.to_string()),
-            "Subsequent sync must NOT download after take_remote resolved");
+        assert!(
+            !res4.uploaded_files.contains(&chapter_rel.to_string()),
+            "Subsequent sync must NOT upload after take_remote resolved"
+        );
+        assert!(
+            !res4.downloaded_files.contains(&chapter_rel.to_string()),
+            "Subsequent sync must NOT download after take_remote resolved"
+        );
 
         // Local file must still be the remote version
         let local_after_4 = std::fs::read_to_string(&chapter_abs).unwrap();
-        assert_eq!(local_after_4, remote_content,
-            "Local file must remain the remote version after subsequent sync");
+        assert_eq!(
+            local_after_4, remote_content,
+            "Local file must remain the remote version after subsequent sync"
+        );
 
         shutdown4.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread4.join();
@@ -3125,10 +3024,7 @@ mod tests {
                     msg
                 );
             }
-            other => panic!(
-                "Expected RecoverableError, got {:?}",
-                other
-            ),
+            other => panic!("Expected RecoverableError, got {:?}", other),
         }
 
         // pending_take_remote must still contain the path (not cleared)

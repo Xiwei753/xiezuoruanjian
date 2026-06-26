@@ -111,12 +111,24 @@ pub struct StarMapMotionPolicyDto {
     pub reduce_motion: bool,
 }
 
-fn default_true() -> bool { true }
-fn default_idle_amplitude_vp() -> f32 { 2.0 }
-fn default_idle_period_ms() -> u32 { 4200 }
-fn default_drag_lift_scale() -> f32 { 1.04 }
-fn default_drag_shadow_boost() -> f32 { 8.0 }
-fn default_settle_duration_ms() -> u32 { 220 }
+fn default_true() -> bool {
+    true
+}
+fn default_idle_amplitude_vp() -> f32 {
+    2.0
+}
+fn default_idle_period_ms() -> u32 {
+    4200
+}
+fn default_drag_lift_scale() -> f32 {
+    1.04
+}
+fn default_drag_shadow_boost() -> f32 {
+    8.0
+}
+fn default_settle_duration_ms() -> u32 {
+    220
+}
 
 impl Default for StarMapMotionPolicyDto {
     fn default() -> Self {

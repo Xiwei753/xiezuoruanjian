@@ -127,12 +127,27 @@ fn default_editor_smooth_cursor_duration_ms() -> u64 {
 impl LocalSettings {
     /// 将所有设置项 clamp 到安全范围内。
     pub fn validate(&mut self) {
-        self.editor_font_size = self.editor_font_size.clamp(ranges::FONT_SIZE_MIN, ranges::FONT_SIZE_MAX);
-        self.editor_line_spacing_multiplier = self.editor_line_spacing_multiplier.clamp(ranges::LINE_SPACING_MIN, ranges::LINE_SPACING_MAX);
-        self.auto_indent_width = self.auto_indent_width.clamp(ranges::INDENT_WIDTH_MIN, ranges::INDENT_WIDTH_MAX);
-        self.editor_typing_animation_duration_ms = self.editor_typing_animation_duration_ms.clamp(ranges::ANIMATION_DURATION_MIN_MS, ranges::ANIMATION_DURATION_MAX_MS);
-        self.editor_smooth_cursor_duration_ms = self.editor_smooth_cursor_duration_ms.clamp(ranges::ANIMATION_DURATION_MIN_MS, ranges::ANIMATION_DURATION_MAX_MS);
-        self.auto_save_delay_ms = self.auto_save_delay_ms.clamp(ranges::AUTO_SAVE_DELAY_MIN_MS, ranges::AUTO_SAVE_DELAY_MAX_MS);
+        self.editor_font_size = self
+            .editor_font_size
+            .clamp(ranges::FONT_SIZE_MIN, ranges::FONT_SIZE_MAX);
+        self.editor_line_spacing_multiplier = self
+            .editor_line_spacing_multiplier
+            .clamp(ranges::LINE_SPACING_MIN, ranges::LINE_SPACING_MAX);
+        self.auto_indent_width = self
+            .auto_indent_width
+            .clamp(ranges::INDENT_WIDTH_MIN, ranges::INDENT_WIDTH_MAX);
+        self.editor_typing_animation_duration_ms = self.editor_typing_animation_duration_ms.clamp(
+            ranges::ANIMATION_DURATION_MIN_MS,
+            ranges::ANIMATION_DURATION_MAX_MS,
+        );
+        self.editor_smooth_cursor_duration_ms = self.editor_smooth_cursor_duration_ms.clamp(
+            ranges::ANIMATION_DURATION_MIN_MS,
+            ranges::ANIMATION_DURATION_MAX_MS,
+        );
+        self.auto_save_delay_ms = self.auto_save_delay_ms.clamp(
+            ranges::AUTO_SAVE_DELAY_MIN_MS,
+            ranges::AUTO_SAVE_DELAY_MAX_MS,
+        );
     }
 }
 
@@ -331,10 +346,19 @@ mod tests {
         };
         settings.validate();
         assert_eq!(settings.editor_font_size, ranges::FONT_SIZE_MAX);
-        assert_eq!(settings.editor_line_spacing_multiplier, ranges::LINE_SPACING_MAX);
+        assert_eq!(
+            settings.editor_line_spacing_multiplier,
+            ranges::LINE_SPACING_MAX
+        );
         assert_eq!(settings.auto_indent_width, ranges::INDENT_WIDTH_MAX);
-        assert_eq!(settings.editor_typing_animation_duration_ms, ranges::ANIMATION_DURATION_MAX_MS);
-        assert_eq!(settings.editor_smooth_cursor_duration_ms, ranges::ANIMATION_DURATION_MIN_MS);
+        assert_eq!(
+            settings.editor_typing_animation_duration_ms,
+            ranges::ANIMATION_DURATION_MAX_MS
+        );
+        assert_eq!(
+            settings.editor_smooth_cursor_duration_ms,
+            ranges::ANIMATION_DURATION_MIN_MS
+        );
         assert_eq!(settings.auto_save_delay_ms, ranges::AUTO_SAVE_DELAY_MIN_MS);
 
         // 验证低于下限也被 clamp
@@ -347,8 +371,14 @@ mod tests {
         };
         settings_low.validate();
         assert_eq!(settings_low.editor_font_size, ranges::FONT_SIZE_MIN);
-        assert_eq!(settings_low.editor_line_spacing_multiplier, ranges::LINE_SPACING_MIN);
+        assert_eq!(
+            settings_low.editor_line_spacing_multiplier,
+            ranges::LINE_SPACING_MIN
+        );
         assert_eq!(settings_low.auto_indent_width, ranges::INDENT_WIDTH_MIN);
-        assert_eq!(settings_low.auto_save_delay_ms, ranges::AUTO_SAVE_DELAY_MIN_MS);
+        assert_eq!(
+            settings_low.auto_save_delay_ms,
+            ranges::AUTO_SAVE_DELAY_MIN_MS
+        );
     }
 }

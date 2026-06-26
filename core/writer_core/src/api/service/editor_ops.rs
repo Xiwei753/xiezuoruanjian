@@ -4,9 +4,8 @@
 //! and `should_animate` decisions. Platform clients consume the resulting
 //! `EditorAnimationEventDto` list to drive their own renderers.
 
-
-use crate::api::types::*;
 use crate::api::service::{ApiResult, WriterCoreApi};
+use crate::api::types::*;
 use crate::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
 
 impl WriterCoreApi {
@@ -41,11 +40,10 @@ impl WriterCoreApi {
         let new_sel = EditorSelection::collapsed(new_text, new_cursor_index as usize);
         let core_cause: EditorTransactionCause = cause.into();
 
-        let mut engine = EditorEngine::with_animation_limits(
-            max_animated_chars as usize,
-            animation_duration_ms,
-        );
-        let transaction = engine.create_transaction(old_text, new_text, old_sel, new_sel, core_cause);
+        let mut engine =
+            EditorEngine::with_animation_limits(max_animated_chars as usize, animation_duration_ms);
+        let transaction =
+            engine.create_transaction(old_text, new_text, old_sel, new_sel, core_cause);
         let events = engine.animation_events(&transaction);
 
         Ok(events.into_iter().map(Into::into).collect())
@@ -74,7 +72,15 @@ mod tests {
     fn paste_does_not_emit_text_animation() {
         let api = WriterCoreApi::new("");
         let events = api
-            .editor_animation_events("a", "a long pasted text", 1, 19, EditorTransactionCauseDto::Paste, 8, 120)
+            .editor_animation_events(
+                "a",
+                "a long pasted text",
+                1,
+                19,
+                EditorTransactionCauseDto::Paste,
+                8,
+                120,
+            )
             .unwrap();
 
         // Only cursor event, no text animation

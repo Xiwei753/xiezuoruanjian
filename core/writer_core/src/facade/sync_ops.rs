@@ -1,13 +1,9 @@
-
-
 impl super::WriterCore {
     pub fn scan_sync_files(&self) -> crate::error::Result<Vec<crate::sync::SyncFileEntry>> {
         crate::sync::SyncService::scan_workspace_for_sync(&self.workspace_path)
     }
 
-    pub fn build_sync_plan_from_workspace(
-        &self,
-    ) -> crate::error::Result<crate::sync::SyncPlan> {
+    pub fn build_sync_plan_from_workspace(&self) -> crate::error::Result<crate::sync::SyncPlan> {
         crate::sync::SyncService::build_sync_plan_from_workspace(&self.workspace_path)
     }
 
@@ -15,10 +11,7 @@ impl super::WriterCore {
         crate::sync::SyncService::load_sync_state(&self.workspace_path)
     }
 
-    pub fn save_sync_state(
-        &self,
-        state: &crate::sync::SyncState,
-    ) -> crate::error::Result<()> {
+    pub fn save_sync_state(&self, state: &crate::sync::SyncState) -> crate::error::Result<()> {
         crate::sync::SyncService::save_sync_state(&self.workspace_path, state)
     }
 
@@ -106,8 +99,8 @@ impl super::WriterCore {
 
         #[cfg(unix)]
         {
-            use std::os::unix::fs::OpenOptionsExt;
             use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
             let mut file = std::fs::OpenOptions::new()
                 .write(true)
                 .create(true)
@@ -161,10 +154,7 @@ impl super::WriterCore {
         Ok(config)
     }
 
-    pub fn save_sync_config(
-        &self,
-        config: &crate::sync::SyncConfig,
-    ) -> crate::error::Result<()> {
+    pub fn save_sync_config(&self, config: &crate::sync::SyncConfig) -> crate::error::Result<()> {
         let config_path = self.workspace_path.join("app-meta/sync/sync_config.json");
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)?;

@@ -198,10 +198,12 @@ pub struct StarMapEndpointPathSegmentDto {
 impl From<crate::starmap::types::StarMapEndpointPathSegment> for StarMapEndpointPathSegmentDto {
     fn from(s: crate::starmap::types::StarMapEndpointPathSegment) -> Self {
         match s {
-            crate::starmap::types::StarMapEndpointPathSegment::EnterChildMap { starmap_id } => Self {
-                kind: "enterChildMap".to_string(),
-                starmap_id: Some(starmap_id),
-            },
+            crate::starmap::types::StarMapEndpointPathSegment::EnterChildMap { starmap_id } => {
+                Self {
+                    kind: "enterChildMap".to_string(),
+                    starmap_id: Some(starmap_id),
+                }
+            }
         }
     }
 }

@@ -20,7 +20,10 @@ impl super::WriterCore {
         volume::create_volume(&self.workspace_path, project_id, title)
     }
 
-    pub fn list_valid_chapter_ids(&self, project_id: &str) -> Result<std::collections::HashSet<String>> {
+    pub fn list_valid_chapter_ids(
+        &self,
+        project_id: &str,
+    ) -> Result<std::collections::HashSet<String>> {
         chapter::list_valid_chapter_ids(&self.workspace_path, project_id)
     }
 
@@ -229,7 +232,11 @@ impl super::WriterCore {
         project_id: &str,
         volume_id: &str,
     ) -> crate::error::Result<String> {
-        crate::project::get_volume_updated_at_aggregated(&self.workspace_path, project_id, volume_id)
+        crate::project::get_volume_updated_at_aggregated(
+            &self.workspace_path,
+            project_id,
+            volume_id,
+        )
     }
 
     /// 从子章节聚合获取 project 的最近更新时间。

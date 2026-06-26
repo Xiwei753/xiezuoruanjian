@@ -621,7 +621,9 @@ mod tests {
         let mut proj_stats = ProjectStats::default();
         proj_stats.human_typed_chars = 100;
         proj_stats.active_seconds = 300;
-        existing.per_project.insert("proj_1".to_string(), proj_stats);
+        existing
+            .per_project
+            .insert("proj_1".to_string(), proj_stats);
 
         let incoming = DailyStats {
             date: "2023-10-26".to_string(),
@@ -677,9 +679,26 @@ mod tests {
 
         // Verify per_project
         assert_eq!(existing.per_project.len(), 2);
-        assert_eq!(existing.per_project.get("proj_1").unwrap().human_typed_chars, 150);
-        assert_eq!(existing.per_project.get("proj_1").unwrap().active_seconds, 400);
-        assert_eq!(existing.per_project.get("proj_2").unwrap().human_typed_chars, 20);
+        assert_eq!(
+            existing
+                .per_project
+                .get("proj_1")
+                .unwrap()
+                .human_typed_chars,
+            150
+        );
+        assert_eq!(
+            existing.per_project.get("proj_1").unwrap().active_seconds,
+            400
+        );
+        assert_eq!(
+            existing
+                .per_project
+                .get("proj_2")
+                .unwrap()
+                .human_typed_chars,
+            20
+        );
 
         // Verify per_volume
         assert_eq!(existing.per_volume.len(), 1);

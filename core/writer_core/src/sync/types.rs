@@ -59,8 +59,6 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
-
-
 pub(crate) fn default_branch() -> String {
     "main".to_string()
 }

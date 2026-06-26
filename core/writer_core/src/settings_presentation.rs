@@ -148,7 +148,6 @@ pub fn default_settings_presentation() -> SettingsPresentation {
                     },
                 ],
             },
-
             // ── editor (order: 20) ──
             SettingSectionDef {
                 id: "editor".into(),
@@ -248,7 +247,6 @@ pub fn default_settings_presentation() -> SettingsPresentation {
                     },
                 ],
             },
-
             // ── save (order: 30) ──
             SettingSectionDef {
                 id: "save".into(),
@@ -288,7 +286,6 @@ pub fn default_settings_presentation() -> SettingsPresentation {
                     },
                 ],
             },
-
             // ── sync (order: 40) ──
             SettingSectionDef {
                 id: "sync".into(),
@@ -433,32 +430,28 @@ pub fn default_settings_presentation() -> SettingsPresentation {
                     },
                 ],
             },
-
             // ── ai (order: 50) ──
             SettingSectionDef {
                 id: "ai".into(),
                 title_key: "settings.section.ai".into(),
                 order: 50,
                 platform_visibility: All,
-                items: vec![
-                    SettingItemDef {
-                        id: "ai_enabled".into(),
-                        title_key: "settings.item.ai_enabled".into(),
-                        description_key: None,
-                        kind: SettingControlKind::Switch,
-                        value_key: "ai_enabled".into(),
-                        order: 1,
-                        platform_visibility: All,
-                        min_value: None,
-                        max_value: None,
-                        step_value: None,
-                        select_options: None,
-                        requires_restart: false,
-                        is_experimental: true,
-                    },
-                ],
+                items: vec![SettingItemDef {
+                    id: "ai_enabled".into(),
+                    title_key: "settings.item.ai_enabled".into(),
+                    description_key: None,
+                    kind: SettingControlKind::Switch,
+                    value_key: "ai_enabled".into(),
+                    order: 1,
+                    platform_visibility: All,
+                    min_value: None,
+                    max_value: None,
+                    step_value: None,
+                    select_options: None,
+                    requires_restart: false,
+                    is_experimental: true,
+                }],
             },
-
             // ── stats (order: 60) ── 占位
             SettingSectionDef {
                 id: "stats".into(),
@@ -467,7 +460,6 @@ pub fn default_settings_presentation() -> SettingsPresentation {
                 platform_visibility: All,
                 items: vec![],
             },
-
             // ── about (order: 70) ──
             SettingSectionDef {
                 id: "about".into(),
@@ -535,10 +527,22 @@ mod tests {
     #[test]
     fn test_section_order() {
         let presentation = default_settings_presentation();
-        let section_ids: Vec<&str> = presentation.sections.iter().map(|s| s.id.as_str()).collect();
+        let section_ids: Vec<&str> = presentation
+            .sections
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect();
         assert_eq!(
             section_ids,
-            vec!["appearance", "editor", "save", "sync", "ai", "stats", "about"],
+            vec![
+                "appearance",
+                "editor",
+                "save",
+                "sync",
+                "ai",
+                "stats",
+                "about"
+            ],
             "section 顺序必须是 appearance→editor→save→sync→ai→stats→about"
         );
 
@@ -559,7 +563,10 @@ mod tests {
             .find(|i| i.id == "theme_mode")
             .expect("theme_mode item must exist");
 
-        let options = theme_item.select_options.as_ref().expect("theme_mode must have select options");
+        let options = theme_item
+            .select_options
+            .as_ref()
+            .expect("theme_mode must have select options");
         let values: Vec<&str> = options.iter().map(|o| o.value.as_str()).collect();
         assert_eq!(
             values,
@@ -580,10 +587,7 @@ mod tests {
             serde_json::from_str(&json).expect("deserialization must succeed");
 
         // 验证 roundtrip 一致
-        assert_eq!(
-            presentation.sections.len(),
-            deserialized.sections.len()
-        );
+        assert_eq!(presentation.sections.len(), deserialized.sections.len());
 
         // 验证 camelCase 序列化（struct 字段）
         assert!(
@@ -600,18 +604,9 @@ mod tests {
         );
 
         // 验证 enum 值保持 PascalCase
-        assert!(
-            json.contains("\"Switch\""),
-            "enum 值应保持 PascalCase"
-        );
-        assert!(
-            json.contains("\"Slider\""),
-            "enum 值应保持 PascalCase"
-        );
-        assert!(
-            json.contains("\"All\""),
-            "enum 值应保持 PascalCase"
-        );
+        assert!(json.contains("\"Switch\""), "enum 值应保持 PascalCase");
+        assert!(json.contains("\"Slider\""), "enum 值应保持 PascalCase");
+        assert!(json.contains("\"All\""), "enum 值应保持 PascalCase");
     }
 
     #[test]
@@ -620,10 +615,7 @@ mod tests {
         let mut seen_ids = std::collections::HashSet::new();
 
         for section in &presentation.sections {
-            assert!(
-                !section.id.is_empty(),
-                "section id must not be empty"
-            );
+            assert!(!section.id.is_empty(), "section id must not be empty");
 
             for item in &section.items {
                 assert!(
@@ -647,12 +639,29 @@ mod tests {
         // appearance section items
         let appearance = &presentation.sections[0];
         let item_ids: Vec<&str> = appearance.items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(item_ids, vec!["theme_mode", "editor_font_size", "editor_line_spacing_multiplier"]);
+        assert_eq!(
+            item_ids,
+            vec![
+                "theme_mode",
+                "editor_font_size",
+                "editor_line_spacing_multiplier"
+            ]
+        );
 
         // editor section items
         let editor = &presentation.sections[1];
         let item_ids: Vec<&str> = editor.items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(item_ids, vec!["auto_indent_enabled", "auto_indent_width", "typing_animation_enabled", "typing_animation_duration_ms", "smooth_cursor_enabled", "smooth_cursor_duration_ms"]);
+        assert_eq!(
+            item_ids,
+            vec![
+                "auto_indent_enabled",
+                "auto_indent_width",
+                "typing_animation_enabled",
+                "typing_animation_duration_ms",
+                "smooth_cursor_enabled",
+                "smooth_cursor_duration_ms"
+            ]
+        );
 
         // save section items
         let save = &presentation.sections[2];
@@ -662,7 +671,20 @@ mod tests {
         // sync section items
         let sync = &presentation.sections[3];
         let item_ids: Vec<&str> = sync.items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(item_ids, vec!["sync_enabled", "github_repo", "branch", "token", "auto_sync", "sync_interval_seconds", "sync_dry_run", "sync_test_connection", "sync_now"]);
+        assert_eq!(
+            item_ids,
+            vec![
+                "sync_enabled",
+                "github_repo",
+                "branch",
+                "token",
+                "auto_sync",
+                "sync_interval_seconds",
+                "sync_dry_run",
+                "sync_test_connection",
+                "sync_now"
+            ]
+        );
 
         // ai section items
         let ai = &presentation.sections[4];
@@ -676,7 +698,10 @@ mod tests {
         // about section items
         let about = &presentation.sections[6];
         let item_ids: Vec<&str> = about.items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(item_ids, vec!["workspace_path", "version", "action_registry"]);
+        assert_eq!(
+            item_ids,
+            vec!["workspace_path", "version", "action_registry"]
+        );
     }
 
     #[test]
