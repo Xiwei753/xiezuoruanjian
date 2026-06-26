@@ -34,6 +34,7 @@ impl GitHubApiBackend {
 
     pub(crate) fn build_direct_client() -> crate::Result<reqwest::blocking::Client> {
         reqwest::blocking::Client::builder()
+            .no_proxy()
             .user_agent("WriterApp/1.0")
             .timeout(std::time::Duration::from_secs(15))
             .build()
@@ -66,6 +67,8 @@ impl SyncBackend for GitHubApiBackend {
             .sanitized_url
             .clone();
         result.transport = "https".to_string();
+        result.chosen_network_mode = Some("direct".to_string());
+        result.proxy_policy = "no_proxy".to_string();
 
         if !config.android_has_internet_permission {
             result.user_message = None;
@@ -192,22 +195,12 @@ impl SyncBackend for GitHubApiBackend {
         Ok(result)
     }
 
-    fn pull(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            None,
-            "GitHub API pull not implemented".to_string(),
-        ))
+    fn pull(&self, workspace_path: &Path, config: &SyncConfig, secrets: &SyncSecrets) -> crate::Result<SyncResult> {
+        self.sync(workspace_path, config, secrets)
     }
 
-    fn push(&self, _: &Path, _: &SyncConfig, _: &SyncSecrets) -> crate::Result<SyncResult> {
-        Ok(SyncResult::error(
-            SyncStatus::Error("backend_not_implemented".to_string()),
-            FirstSyncMode::NotAttempted,
-            None,
-            "GitHub API push not implemented".to_string(),
-        ))
+    fn push(&self, workspace_path: &Path, config: &SyncConfig, secrets: &SyncSecrets) -> crate::Result<SyncResult> {
+        self.sync(workspace_path, config, secrets)
     }
 
     fn sync(
@@ -217,7 +210,7 @@ impl SyncBackend for GitHubApiBackend {
         secrets: &SyncSecrets,
     ) -> crate::Result<SyncResult> {
         eprintln!(
-            "[sync] backend_type=github_api sync_mode=lww_manifest entry=GitHubApiBackend::sync remote_url={}",
+            "[sync] backend_type=github_api sync_mode=lww_manifest chosen_network_mode=direct proxy_policy=no_proxy entry=GitHubApiBackend::sync remote_url={}",
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
         );
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -240,5 +233,32 @@ impl SyncBackend for GitHubApiBackend {
                 ))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_direct_client_source_contains_no_proxy() {
+        let source = include_str!("github_backend.rs");
+        assert!(
+            source.contains(".no_proxy()"),
+            "build_direct_client must call .no_proxy() to bypass system proxy on Windows"
+        );
+    }
+
+    #[test]
+    fn test_github_api_backend_pull_push_not_backend_not_implemented() {
+        let source = include_str!("github_backend.rs");
+        let impl_start = source.find("impl SyncBackend for GitHubApiBackend").expect("must have SyncBackend impl");
+        let impl_block = &source[impl_start..];
+        let impl_end = impl_block.find("\n}").unwrap_or(impl_block.len());
+        let impl_body = &impl_block[..impl_end];
+        assert!(
+            !impl_body.contains("backend_not_implemented"),
+            "GitHubApiBackend pull/push must not return backend_not_implemented — they should delegate to sync()"
+        );
     }
 }

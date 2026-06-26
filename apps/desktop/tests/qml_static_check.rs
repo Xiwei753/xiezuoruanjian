@@ -186,6 +186,15 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
             }
 
+            // Reverse check: no QML file should reference SmoothCursor / smoothCursorOverlay / snapNextCursorUpdate
+            if content.contains("SmoothCursor.qml") || content.contains("smoothCursorOverlay") || content.contains("snapNextCursorUpdate") {
+                eprintln!(
+                    "{}: QML must not reference SmoothCursor.qml / smoothCursorOverlay / snapNextCursorUpdate after deletion",
+                    file_name
+                );
+                has_errors = true;
+            }
+
             if brace_count != 0 {
                 eprintln!(
                     "{}: Brace imbalance detected! Count: {}",
@@ -344,6 +353,21 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 if content.contains("#606470") {
                     eprintln!(
                         "{}: Found low-contrast muted text fallback #606470 in writing workspace",
+                        file_name
+                    );
+                    has_errors = true;
+                }
+                // SmoothCursor / smoothCursorOverlay was deleted — WritingWorkspace must not reference it
+                if content.contains("smoothCursorOverlay") {
+                    eprintln!(
+                        "{}: WritingWorkspace must not reference smoothCursorOverlay after SmoothCursor deletion",
+                        file_name
+                    );
+                    has_errors = true;
+                }
+                if content.contains("snapNextCursorUpdate") {
+                    eprintln!(
+                        "{}: WritingWorkspace must not reference snapNextCursorUpdate after SmoothCursor deletion",
                         file_name
                     );
                     has_errors = true;

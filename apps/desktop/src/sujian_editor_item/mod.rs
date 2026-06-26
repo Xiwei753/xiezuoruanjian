@@ -140,6 +140,7 @@ pub struct SujianEditorItem {
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     request_text_input_focus: qt_method!(fn(&mut self)),
+    snap_next_cursor_update: qt_method!(fn(&mut self)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -250,6 +251,7 @@ impl Default for SujianEditorItem {
             long_press_at: Default::default(),
             select_word_at: Default::default(),
             request_text_input_focus: Default::default(),
+            snap_next_cursor_update: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -643,6 +645,12 @@ impl SujianEditorItem {
             return;
         }
         input::focus_item(obj_ptr);
+    }
+
+    fn snap_next_cursor_update(&mut self) {
+        self.cursor_ctrl.force_snap_next = true;
+        self.update_cursor_visual_position();
+        self.request_frame_update();
     }
 
     fn visual_changed(&mut self) {

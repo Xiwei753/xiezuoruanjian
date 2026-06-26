@@ -169,7 +169,7 @@ Rectangle {
             return;
         }
 
-        smoothCursorOverlay.snapNextCursorUpdate();
+        sujianEditor.snap_next_cursor_update();
         // loadChapterContentWithIds returns null on failure, result object on success.
         // State is only updated after content is successfully loaded.
         var result = editorController.loadChapterContentWithIds(pId, vId, cId);
@@ -179,7 +179,7 @@ Rectangle {
             editorController.volumeId = d.volumeId || vId;
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
-            smoothCursorOverlay.snapNextCursorUpdate();
+            sujianEditor.snap_next_cursor_update();
             console.log("[QML] chapter_loaded_focus_requested chapterId=" + (d.chapterId || cId));
             root.requestEditorFocus();
         }
@@ -187,7 +187,7 @@ Rectangle {
 
     function reloadActiveChapter() {
         if (editorController.projectId && editorController.volumeId && editorController.chapterId) {
-            smoothCursorOverlay.snapNextCursorUpdate();
+            sujianEditor.snap_next_cursor_update();
             editorController.loadChapterContentWithIds(
                 editorController.projectId,
                 editorController.volumeId,
