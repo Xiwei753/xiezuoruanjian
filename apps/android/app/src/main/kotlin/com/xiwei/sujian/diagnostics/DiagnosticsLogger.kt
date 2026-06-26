@@ -32,12 +32,12 @@ object DiagnosticsLogger {
 
     private val REDACT_RULES: List<Pair<Regex, (MatchResult) -> String>> = listOf(
         Pair(
-            Regex("""-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
-            { _ -> "[REDACTED_PEM]" }
-        ),
-        Pair(
             Regex("""(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
             { _ -> "ssh_private_key=[REDACTED]" }
+        ),
+        Pair(
+            Regex("""-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
+            { _ -> "[REDACTED_PEM]" }
         ),
         Pair(
             Regex("""(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+"""),

@@ -106,6 +106,8 @@ class DiagnosticsRedactionTest {
         val input = "ssh_private_key=-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBANz\n-----END OPENSSH PRIVATE KEY-----"
         val result = DiagnosticsLogger.redact(input)
         assertFalse(result.contains("MIIEvgIBADANBgkq"))
+        assertFalse(result.contains("-----BEGIN"))
+        assertFalse(result.contains("-----END"))
         assertTrue(result.contains("[REDACTED]"))
     }
 
@@ -120,23 +122,25 @@ class DiagnosticsRedactionTest {
 
     @Test
     fun redactGhpToken() {
-        val input = "Using ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678 for auth"
+        val token = "ghp_" + "A".repeat(36)
+        val input = "Using $token for auth"
         val result = DiagnosticsLogger.redact(input)
-        assertFalse(result.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678"))
+        assertFalse(result.contains(token))
         assertTrue(result.contains("[REDACTED]"))
     }
 
     @Test
     fun redactGhoToken() {
-        val input = "User gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678 logged in"
+        val token = "gho_" + "B".repeat(36)
+        val input = "User $token logged in"
         val result = DiagnosticsLogger.redact(input)
-        assertFalse(result.contains("gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345678"))
+        assertFalse(result.contains(token))
         assertTrue(result.contains("[REDACTED]"))
     }
 
     @Test
     fun redactGithubPat() {
-        val token = "github_pat_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghij0123456789ABCDEFGHIJ0123456789abcdefghij"
+        val token = "github_pat_" + "A".repeat(82)
         val input = "token is $token"
         val result = DiagnosticsLogger.redact(input)
         assertFalse(result.contains(token))
