@@ -63,7 +63,7 @@ data class OverlayAnim(
 
             i += charCount
         }
-        false
+        return false
     }
 }
 
