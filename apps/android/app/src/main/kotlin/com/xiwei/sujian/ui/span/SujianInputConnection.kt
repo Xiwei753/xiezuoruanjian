@@ -1,8 +1,8 @@
 package com.xiwei.sujian.ui.span
 
-import android.util.Log
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputConnectionWrapper
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.ui.WriterEditText
 
 class SujianInputConnection(
@@ -19,7 +19,7 @@ class SujianInputConnection(
         val pos = editText.selectionStart
         val textLen = editText.text?.length ?: 0
         val wasComposing = isComposing
-        Log.d(TAG, "commitText: \"$text\", cursorPos=$newCursorPosition, sel=$pos, textLen=$textLen, wasComposing=$wasComposing")
+        DiagnosticsLogger.d(TAG, "commitText: textLen=${text.length}, cursorPos=$newCursorPosition, sel=$pos, editorTextLen=$textLen, wasComposing=$wasComposing")
         editText.onInputBeforeCommit(pos, textLen)
         val result = super.commitText(text, newCursorPosition)
         if (result && wasComposing) {
@@ -30,8 +30,8 @@ class SujianInputConnection(
     }
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
-        Log.d(TAG, "setComposingText: \"$text\", cursorPos=$newCursorPosition")
         val clearing = text.isNullOrEmpty()
+        DiagnosticsLogger.d(TAG, "setComposingText: textLen=${text?.length ?: 0}, cursorPos=$newCursorPosition, clearing=$clearing")
         val result = super.setComposingText(text, newCursorPosition)
 
         if (clearing) {
@@ -48,7 +48,7 @@ class SujianInputConnection(
     }
 
     override fun finishComposingText(): Boolean {
-        Log.d(TAG, "finishComposingText, isComposing=$isComposing")
+        DiagnosticsLogger.d(TAG, "finishComposingText, isComposing=$isComposing")
         if (isComposing) {
             isComposing = false
             editText.onInputFinishComposing(fromCommitText = false)
@@ -59,7 +59,7 @@ class SujianInputConnection(
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
         val pos = editText.selectionStart
         val textLen = editText.text?.length ?: 0
-        Log.d(TAG, "deleteSurroundingText: before=$beforeLength, after=$afterLength, sel=$pos, textLen=$textLen")
+        DiagnosticsLogger.d(TAG, "deleteSurroundingText: before=$beforeLength, after=$afterLength, sel=$pos, textLen=$textLen")
         return super.deleteSurroundingText(beforeLength, afterLength)
     }
 
@@ -67,10 +67,10 @@ class SujianInputConnection(
         if (event.action == android.view.KeyEvent.ACTION_DOWN) {
             when (event.keyCode) {
                 android.view.KeyEvent.KEYCODE_DEL -> {
-                    Log.d(TAG, "sendKeyEvent: Backspace")
+                    DiagnosticsLogger.d(TAG, "sendKeyEvent: Backspace")
                 }
                 android.view.KeyEvent.KEYCODE_FORWARD_DEL -> {
-                    Log.d(TAG, "sendKeyEvent: ForwardDelete")
+                    DiagnosticsLogger.d(TAG, "sendKeyEvent: ForwardDelete")
                 }
             }
         }

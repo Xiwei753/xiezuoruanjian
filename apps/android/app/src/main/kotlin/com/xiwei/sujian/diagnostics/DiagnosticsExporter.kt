@@ -79,7 +79,9 @@ object DiagnosticsExporter {
         DiagnosticsLogger.flush()
         DiagnosticsLogger.getLogFiles().forEach { logFile ->
             try {
-                logFile.copyTo(File(logsDir, logFile.name))
+                val content = logFile.readText()
+                val redacted = DiagnosticsLogger.redact(content)
+                File(logsDir, logFile.name).writeText(redacted)
             } catch (_: Exception) {}
         }
     }
@@ -87,7 +89,9 @@ object DiagnosticsExporter {
     private fun writeCrashFile(context: Context, destDir: File) {
         val crashFile = DiagnosticsLogger.getCrashFile() ?: return
         try {
-            crashFile.copyTo(File(destDir, "last_crash.txt"))
+            val content = crashFile.readText()
+            val redacted = DiagnosticsLogger.redact(content)
+            File(destDir, "last_crash.txt").writeText(redacted)
         } catch (_: Exception) {}
     }
 
@@ -122,7 +126,9 @@ object DiagnosticsExporter {
             val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
             File(destDir, "app_settings_sanitized.json").writeText(json)
         } catch (e: Exception) {
-            File(destDir, "app_settings_sanitized.json").writeText("{\"error\":\"${e.message}\"}")
+            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            File(destDir, "app_settings_sanitized.json").writeText(errorJson)
         }
     }
 
@@ -142,7 +148,9 @@ object DiagnosticsExporter {
             val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
             File(destDir, "sync_state_sanitized.json").writeText(json)
         } catch (e: Exception) {
-            File(destDir, "sync_state_sanitized.json").writeText("{\"error\":\"${e.message}\"}")
+            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            File(destDir, "sync_state_sanitized.json").writeText(errorJson)
         }
     }
 
@@ -153,7 +161,9 @@ object DiagnosticsExporter {
             val json = DiagnosticsLogger.redact(gson.toJson(snapshot))
             File(destDir, "editor_snapshot.json").writeText(json)
         } catch (e: Exception) {
-            File(destDir, "editor_snapshot.json").writeText("{\"error\":\"${e.message}\"}")
+            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            File(destDir, "editor_snapshot.json").writeText(errorJson)
         }
     }
 

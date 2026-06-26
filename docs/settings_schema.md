@@ -21,6 +21,8 @@ Supersedes: None
 - `editorTypingAnimationDurationMs`（整数，毫秒）
 - `editorSmoothCursorDurationMs`（整数，毫秒）
 - `windowWidth`、`windowHeight`（浮点数）
+- `diagnosticsEnabled`（布尔值，Android 本地诊断开关，默认 false，不进入同步、不含敏感数据）
+- `diagnosticsVerbose`（布尔值，Android 本地诊断详细模式，默认 false，不进入同步、不含敏感数据）
 
 ### `app-meta/settings/settings.sync.json`
 存储**应该**在所有设备间同步的用户偏好。

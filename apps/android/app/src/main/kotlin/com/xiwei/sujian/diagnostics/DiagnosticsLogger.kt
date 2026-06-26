@@ -10,6 +10,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 object DiagnosticsLogger {
@@ -24,35 +25,88 @@ object DiagnosticsLogger {
     private val verbose = AtomicBoolean(false)
     private val contextRef = AtomicReference<Context>(null)
     private val buffer = ConcurrentLinkedQueue<String>()
-    private val bufferCount = java.util.concurrent.atomic.AtomicInteger(0)
+    private val bufferCount = AtomicInteger(0)
     private val lock = Any()
 
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
 
-    private val REDACT_PATTERNS = listOf(
-        Regex("""(?i)(token|access_token|refresh_token|authorization|bearer)\s*[:=]\s*\S+""", RegexOption.MULTILINE),
-        Regex("""(?i)(ssh_private_key|private_key)\s*[:=]\s*[\s\S]*?-----END[^\n]*""", RegexOption.MULTILINE),
-        Regex("""(?i)(password|passwd|secret)\s*[:=]\s*\S+""", RegexOption.MULTILINE),
-        Regex("""-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----""", RegexOption.MULTILINE),
-        Regex("""ghp_[A-Za-z0-9]{36}"""),
-        Regex("""gho_[A-Za-z0-9]{36}"""),
-        Regex("""github_pat_[A-Za-z0-9_]{82}"""),
-        Regex("""(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*"""),
-        Regex("""(?i)""content"""\s*:\s*"[^"]{50,}""""),
-        Regex("""(?i)""text"""\s*:\s*"[^"]{50,}""""),
-        Regex("""(?i)""body"""\s*:\s*"[^"]{50,}""""),
-        Regex("""(?i)""chapter"""\s*:\s*"[^"]{50,}"""")
+    private val REDACT_RULES: List<Pair<Regex, (MatchResult) -> String>> = listOf(
+        Pair(
+            Regex("""-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
+            { _ -> "[REDACTED_PEM]" }
+        ),
+        Pair(
+            Regex("""(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----"""),
+            { _ -> "ssh_private_key=[REDACTED]" }
+        ),
+        Pair(
+            Regex("""(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+"""),
+            { m ->
+                val key = m.groupValues[1]
+                val rest = m.value.substringAfter(key)
+                val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
+                "$key$sepBearer [REDACTED]"
+            }
+        ),
+        Pair(
+            Regex("""(?i)\b(token|access_token|refresh_token|authorization|password|passwd|secret|private_key)\s*[:=]\s*(?:"[^"]*"|\S+)"""),
+            { m ->
+                val key = m.groupValues[1]
+                val rest = m.value.substringAfter(key)
+                val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
+                "$key$sep[REDACTED]"
+            }
+        ),
+        Pair(
+            Regex("""(?i)\b(content|text|body|chapter|chapter_content|chapterContent)\s*[:=]\s*(?:"[^"]*"|[^,}\]\n]+)"""),
+            { m ->
+                val key = m.groupValues[1]
+                val rest = m.value.substringAfter(key)
+                val sep = rest.takeWhile { it in setOf(' ', ':', '=', '\t') }
+                "$key$sep[REDACTED]"
+            }
+        ),
+        Pair(
+            Regex("""(?i)["'](authorization)["']\s*:\s*["']Bearer\s+[^"\\]*(?:\\.[^"\\]*)*["']"""),
+            { m -> "\"${m.groupValues[1]}\": \"Bearer [REDACTED]\"" }
+        ),
+        Pair(
+            Regex("""(?i)["'](token|access_token|refresh_token|authorization|password|passwd|secret|private_key|ssh_private_key)["']\s*:\s*["'][^"\\]*(?:\\.[^"\\]*)*["']"""),
+            { m -> "\"${m.groupValues[1]}\": \"[REDACTED]\"" }
+        ),
+        Pair(
+            Regex("""(?i)["'](content|text|body|chapter|chapter_content|chapterContent)["']\s*:\s*["'][^"\\]*(?:\\.[^"\\]*)*["']"""),
+            { m -> "\"${m.groupValues[1]}\": \"[REDACTED]\"" }
+        ),
+        Pair(
+            Regex("""(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*"""),
+            { _ -> "Bearer [REDACTED]" }
+        ),
+        Pair(
+            Regex("""ghp_[A-Za-z0-9]{36}"""),
+            { _ -> "[REDACTED]" }
+        ),
+        Pair(
+            Regex("""gho_[A-Za-z0-9]{36}"""),
+            { _ -> "[REDACTED]" }
+        ),
+        Pair(
+            Regex("""github_pat_[A-Za-z0-9_]{82}"""),
+            { _ -> "[REDACTED]" }
+        )
     )
 
     fun redact(message: String): String {
         var result = message
-        for (pattern in REDACT_PATTERNS) {
-            result = result.replace(pattern) { match ->
-                val keyPart = match.value.substringBefore("=").substringBefore(":").trim()
-                if (keyPart.isNotEmpty()) "$keyPart=[REDACTED]" else "[REDACTED]"
-            }
+        for ((pattern, replacement) in REDACT_RULES) {
+            result = result.replace(pattern, replacement)
         }
         return result
+    }
+
+    fun redactStackTrace(throwable: Throwable): String {
+        val raw = Log.getStackTraceString(throwable)
+        return redact(raw)
     }
 
     fun init(context: Context, isEnabled: Boolean, isVerbose: Boolean) {
@@ -90,19 +144,33 @@ object DiagnosticsLogger {
 
     fun w(tag: String, message: String, throwable: Throwable? = null) {
         val redacted = redact(message)
-        Log.w(tag, redacted, throwable)
-        if (enabled.get()) {
-            val combined = if (throwable != null) "$redacted\n${Log.getStackTraceString(throwable)}" else redacted
-            enqueue("WARN", tag, combined)
+        if (throwable != null) {
+            val redactedTrace = redactStackTrace(throwable)
+            Log.w(tag, "$redacted\n$redactedTrace")
+            if (enabled.get()) {
+                enqueue("WARN", tag, "$redacted\n$redactedTrace")
+            }
+        } else {
+            Log.w(tag, redacted)
+            if (enabled.get()) {
+                enqueue("WARN", tag, redacted)
+            }
         }
     }
 
     fun e(tag: String, message: String, throwable: Throwable? = null) {
         val redacted = redact(message)
-        Log.e(tag, redacted, throwable)
-        if (enabled.get()) {
-            val combined = if (throwable != null) "$redacted\n${Log.getStackTraceString(throwable)}" else redacted
-            enqueue("ERROR", tag, combined)
+        if (throwable != null) {
+            val redactedTrace = redactStackTrace(throwable)
+            Log.e(tag, "$redacted\n$redactedTrace")
+            if (enabled.get()) {
+                enqueue("ERROR", tag, "$redacted\n$redactedTrace")
+            }
+        } else {
+            Log.e(tag, redacted)
+            if (enabled.get()) {
+                enqueue("ERROR", tag, redacted)
+            }
         }
     }
 
@@ -151,7 +219,7 @@ object DiagnosticsLogger {
         val logs = logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
             ?.sortedByDescending { it.lastModified() }
             ?: return
-        for (i in MAX_LOG_FILES until logs.size) {
+        for (i in (MAX_LOG_FILES - 1) until logs.size) {
             logs[i].delete()
         }
     }

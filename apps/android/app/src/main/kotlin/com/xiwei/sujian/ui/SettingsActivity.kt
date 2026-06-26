@@ -14,6 +14,7 @@ import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.CoreSettingsEvents
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.DiagnosticsExporter
+import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.model.LocalSettings
 import com.google.android.material.button.MaterialButton
 
@@ -293,11 +294,13 @@ class SettingsActivity : AppCompatActivity() {
         switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
         switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
         DiagnosticsLogger.init(this, currentSettings.diagnosticsEnabled, currentSettings.diagnosticsVerbose)
+        EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
 
         switchDiagnosticsEnabled.setOnCheckedChangeListener { _, isChecked ->
             currentSettings = currentSettings.copy(diagnosticsEnabled = isChecked)
             switchDiagnosticsVerbose.isEnabled = isChecked
             DiagnosticsLogger.setEnabled(isChecked)
+            EditorEventRingBuffer.setEnabled(isChecked)
             if (!isChecked) {
                 currentSettings = currentSettings.copy(diagnosticsVerbose = false)
                 switchDiagnosticsVerbose.isChecked = false
@@ -323,6 +326,7 @@ class SettingsActivity : AppCompatActivity() {
 
         btnClearLogs.setOnClickListener {
             DiagnosticsLogger.clearLogs()
+            EditorEventRingBuffer.clear()
             android.widget.Toast.makeText(this, getString(R.string.diagnostics_cleared), android.widget.Toast.LENGTH_SHORT).show()
         }
 
@@ -374,6 +378,9 @@ class SettingsActivity : AppCompatActivity() {
         switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
         switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
         switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
+        DiagnosticsLogger.setEnabled(currentSettings.diagnosticsEnabled)
+        DiagnosticsLogger.setVerbose(currentSettings.diagnosticsVerbose)
+        EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
 
         val syncable = settingsRepository.getSyncableSettings()
         if (syncable.themeMode.isNotEmpty()) {

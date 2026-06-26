@@ -60,9 +60,10 @@ class SettingsRepository(context: Context) {
     }
 
     fun saveLocalSettings(settings: LocalSettings): Boolean {
+        val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
         diagPrefs.edit()
             .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
-            .putBoolean("diagnostics_verbose", settings.diagnosticsVerbose)
+            .putBoolean("diagnostics_verbose", effectiveVerbose)
             .apply()
         val coreSettings = settings.copy(diagnosticsEnabled = false, diagnosticsVerbose = false)
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
