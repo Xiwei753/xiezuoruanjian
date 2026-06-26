@@ -94,7 +94,13 @@ Write-Host "Log file: $logFile"
 Write-Host "==========================="
 
 Write-Host "[debug] Launching $($exe.Name)..."
+$prevErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 & $exe.FullName 2>&1 | Tee-Object -FilePath $logFile
+$ErrorActionPreference = $prevErrorActionPreference
 
 Write-Host ""
 Write-Host "[debug] Exited. Log saved to: $logFile"
+Write-Host ""
+Write-Host "Press any key to exit..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

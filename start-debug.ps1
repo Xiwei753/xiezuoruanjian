@@ -175,3 +175,6 @@ $sb.ToString() | Out-File $summaryFile -Encoding utf8
 Write-Host ""
 Write-Host "[start-debug] Run completed. Logs saved to: $logFile"
 Write-Host "[start-debug] Summary generated at: $summaryFile"
+Write-Host ""
+Write-Host "Press any key to exit..."
+$null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
