@@ -8,7 +8,25 @@ pub(crate) fn github_api_error(
     let status_u16 = status.as_u16();
     let category = match status_u16 {
         401 | 403 => "auth_error",
-        404 => "not_found",
+        404 => {
+            // 404 语义取决于请求上下文：
+            // - get ref / get recursive tree → 仓库不存在或无权限，或分支不存在
+            // - get contents → 文件不存在（调用方可决定是否可忽略）
+            // - put contents / delete contents → 仓库不存在/无权限，或分支不存在
+            let ctx = context.to_lowercase();
+            if ctx.contains("get ref") || ctx.contains("get recursive tree") {
+                // 诊断接口已区分 repo 404 和 branch 404，此处统一为
+                // repo_not_found_or_no_permission，由调用方结合诊断结果细分
+                "repo_not_found_or_no_permission"
+            } else if ctx.contains("get contents") {
+                "file_not_found"
+            } else if ctx.contains("put contents") || ctx.contains("delete contents") {
+                // push/delete 404 意味着仓库/分支不可访问
+                "repo_not_found_or_no_permission"
+            } else {
+                "repo_not_found_or_no_permission"
+            }
+        }
         409 => "remote_sha_conflict",
         429 => "api_rate_limited",
         _ => {
@@ -230,4 +248,113 @@ pub(crate) fn github_delete_content_serial(
         status,
         body,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_github_api_error_404_get_ref_classified_as_repo_not_found() {
+        let err = github_api_error("get ref heads/main", reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+        let msg = err.to_string();
+        assert!(
+            msg.contains("repo_not_found_or_no_permission:"),
+            "get ref 404 should be repo_not_found_or_no_permission, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_404_get_recursive_tree_classified_as_repo_not_found() {
+        let err = github_api_error("get recursive tree", reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+        let msg = err.to_string();
+        assert!(
+            msg.contains("repo_not_found_or_no_permission:"),
+            "get recursive tree 404 should be repo_not_found_or_no_permission, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_404_get_contents_classified_as_file_not_found() {
+        let err = github_api_error("get contents chapter.md", reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+        let msg = err.to_string();
+        assert!(
+            msg.contains("file_not_found:"),
+            "get contents 404 should be file_not_found, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_404_put_contents_classified_as_repo_not_found() {
+        let err = github_api_error("put contents chapter.md", reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+        let msg = err.to_string();
+        assert!(
+            msg.contains("repo_not_found_or_no_permission:"),
+            "put contents 404 should be repo_not_found_or_no_permission, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_404_delete_contents_classified_as_repo_not_found() {
+        let err = github_api_error("delete contents chapter.md", reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+        let msg = err.to_string();
+        assert!(
+            msg.contains("repo_not_found_or_no_permission:"),
+            "delete contents 404 should be repo_not_found_or_no_permission, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_401_classified_as_auth_error() {
+        let err = github_api_error("get ref heads/main", reqwest::StatusCode::UNAUTHORIZED, "{}".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("auth_error:"), "401 should be auth_error, got: {}", msg);
+    }
+
+    #[test]
+    fn test_github_api_error_403_classified_as_auth_error() {
+        let err = github_api_error("get ref heads/main", reqwest::StatusCode::FORBIDDEN, "{}".to_string());
+        let msg = err.to_string();
+        assert!(msg.contains("auth_error:"), "403 should be auth_error, got: {}", msg);
+    }
+
+    #[test]
+    fn test_github_api_error_404_generic_context_classified_as_repo_not_found() {
+        let err = github_api_error("some unknown operation", reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+        let msg = err.to_string();
+        assert!(
+            msg.contains("repo_not_found_or_no_permission:"),
+            "generic 404 should default to repo_not_found_or_no_permission, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_404_not_found_category_not_used() {
+        // Ensure 404 never produces the old generic "not_found" category
+        let contexts = [
+            "get ref heads/main",
+            "get recursive tree",
+            "get contents chapter.md",
+            "put contents chapter.md",
+            "delete contents chapter.md",
+            "some unknown operation",
+        ];
+        for ctx in &contexts {
+            let err = github_api_error(ctx, reqwest::StatusCode::NOT_FOUND, "{}".to_string());
+            let msg = err.to_string();
+            // Must NOT contain the old generic "not_found:" category
+            // (it may contain "not_found" as part of "file_not_found" or "repo_not_found_or_no_permission")
+            assert!(
+                !msg.contains("not_found: ") || msg.contains("file_not_found:") || msg.contains("repo_not_found_or_no_permission:"),
+                "404 for '{}' must not produce generic 'not_found' category, got: {}",
+                ctx, msg
+            );
+        }
+    }
 }

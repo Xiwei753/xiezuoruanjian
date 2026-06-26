@@ -262,7 +262,61 @@ fn execute_lww_sync_attempt(
                 }
             }
         }
-    } else if tree_status.as_u16() != 404 {
+    } else if tree_status.as_u16() == 404 {
+        // tree 404 不能直接当空远端：可能是仓库不存在、Token 无权限、或分支不存在。
+        // 先调用 /git/ref/heads/{branch} 诊断接口来区分。
+        let ref_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
+        let ref_resp = client
+            .get(&ref_url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("User-Agent", "WriterApp/1.0")
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        let ref_status = ref_resp.status().as_u16();
+        if ref_status == 200 {
+            // 仓库和分支都存在，tree 404 说明是空仓库，remote_tree_files 保持为空
+            eprintln!(
+                "[sync] tree 404 but ref 200: branch {} exists with empty tree, treating as empty remote",
+                config.branch
+            );
+        } else if ref_status == 404 {
+            // ref 也 404：可能是仓库不存在或 Token 无权限，也可能是分支不存在
+            // 再尝试访问仓库本身来区分
+            let repo_resp = client
+                .get(api_base)
+                .header("Authorization", format!("Bearer {}", token))
+                .header("User-Agent", "WriterApp/1.0")
+                .header("Accept", "application/vnd.github+json")
+                .send()
+                .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+            let repo_status = repo_resp.status().as_u16();
+            if repo_status == 200 {
+                // 仓库可访问但分支不存在
+                return Err(crate::Error::Other(format!(
+                    "remote_branch_missing: branch '{}' not found in repository",
+                    config.branch
+                )));
+            } else if repo_status == 401 || repo_status == 403 {
+                return Err(crate::Error::Other(
+                    "repo_not_found_or_no_permission: token lacks access to repository".to_string(),
+                ));
+            } else {
+                return Err(crate::Error::Other(
+                    "repo_not_found_or_no_permission: repository not found or inaccessible".to_string(),
+                ));
+            }
+        } else if ref_status == 401 || ref_status == 403 {
+            return Err(crate::Error::Other(
+                "repo_not_found_or_no_permission: authentication failed or token lacks permission".to_string(),
+            ));
+        } else {
+            return Err(crate::Error::Other(format!(
+                "repo_not_found_or_no_permission: unexpected HTTP {} when checking ref",
+                ref_status
+            )));
+        }
+    } else {
         return Err(crate::sync::github_api_client::github_api_error(
             "get recursive tree",
             tree_status,

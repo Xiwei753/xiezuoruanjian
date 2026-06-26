@@ -276,53 +276,7 @@ data class SyncResult(
     @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
     @SerializedName("user_message") val userMessage: String? = null,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
-    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList(),
-    @SerializedName("conflict_summary") val conflictSummary: SyncConflictSummary? = null,
-    @SerializedName("settings_conflicts") val settingsConflicts: List<SettingConflictDetail>? = emptyList()
-)
-
-data class SettingConflictDetail(
-    val key: String,
-    @SerializedName("local_value") val localValue: JsonElement,
-    @SerializedName("remote_value") val remoteValue: JsonElement
-)
-
-data class SyncConflictSummary(
-    val status: String,
-    @SerializedName("local_dirty") val localDirty: Boolean,
-    @SerializedName("remote_changed") val remoteChanged: Boolean,
-    @SerializedName("conflicted_files") val conflictedFiles: List<String>,
-    @SerializedName("blocked_reason") val blockedReason: String,
-    @SerializedName("safe_next_steps") val safeNextSteps: List<String>
-)
-
-
-data class SyncDiagnosticsResult(
-    val success: Boolean,
-    @SerializedName("backend_type") val backendType: String,
-    @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean,
-    @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean,
-    @SerializedName("android_network_state") val androidNetworkState: String,
-    @SerializedName("tcp_probe_ok") val tcpProbeOk: Boolean,
-    @SerializedName("tcp_probe_status") val tcpProbeStatus: String,
-    @SerializedName("http_connect_probe_ok") val httpConnectProbeOk: Boolean,
-    @SerializedName("http_connect_probe_status") val httpConnectProbeStatus: String,
-    @SerializedName("libgit2_probe_ok") val libgit2ProbeOk: Boolean,
-    @SerializedName("libgit2_probe_status") val libgit2ProbeStatus: String,
-    @SerializedName("network_ok") val networkOk: Boolean,
-    @SerializedName("auth_ok") val authOk: Boolean,
-    @SerializedName("repo_ok") val repoOk: Boolean,
-    @SerializedName("branch_ok") val branchOk: Boolean,
-    @SerializedName("network_status") val networkStatus: String,
-    @SerializedName("auth_status") val authStatus: String,
-    @SerializedName("repo_status") val repoStatus: String,
-    @SerializedName("branch_status") val branchStatus: String,
-    @SerializedName("remote_url_sanitized") val remoteUrlSanitized: String,
-    val transport: String,
-    @SerializedName("error_category") val errorCategory: String,
-    @SerializedName("user_message") val userMessage: String,
-    @SerializedName("raw_error") val rawError: String?,
-    @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
+    @SerializedName("proxy_policy") val proxyPolicy: String = "",
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
 )
 

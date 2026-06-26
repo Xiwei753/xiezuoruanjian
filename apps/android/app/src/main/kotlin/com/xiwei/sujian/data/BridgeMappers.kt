@@ -232,6 +232,7 @@ internal fun SyncDiagnosticsResultDto.toModel() = SyncDiagnosticsResult(
     userMessage = userMessage ?: "",
     rawError = rawError,
     chosenNetworkMode = chosenNetworkMode,
+    proxyPolicy = proxyPolicy,
     networkProbeSummary = networkProbeSummary?.map { it.toModel() } ?: emptyList()
 )
 

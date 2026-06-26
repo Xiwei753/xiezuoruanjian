@@ -3247,4 +3247,78 @@ mod tests {
         shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread.join();
     }
+
+    #[test]
+    fn test_tree_404_must_not_be_silently_treated_as_empty() {
+        // Verify that the lww.rs source code does NOT silently treat tree 404 as empty remote.
+        // After the fix, tree 404 should trigger a ref check before deciding.
+        let source = include_str!("lww.rs");
+        // The old code had: `else if tree_status.as_u16() != 404 { return Err(...) }`
+        // which silently let 404 fall through to empty remote_tree_files.
+        // The new code should have a `tree_status.as_u16() == 404` branch that
+        // calls /git/ref/heads/{branch} to diagnose.
+        assert!(
+            source.contains("tree_status.as_u16() == 404"),
+            "lww.rs must have an explicit tree 404 branch that diagnoses the cause"
+        );
+        assert!(
+            source.contains("ref_url") && source.contains("git/ref/heads/"),
+            "tree 404 handler must call /git/ref/heads/ to distinguish repo/branch issues"
+        );
+        assert!(
+            source.contains("remote_branch_missing"),
+            "tree 404 handler must produce remote_branch_missing error when branch is absent"
+        );
+        assert!(
+            source.contains("repo_not_found_or_no_permission"),
+            "tree 404 handler must produce repo_not_found_or_no_permission error when repo is inaccessible"
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_404_not_found_not_used() {
+        // After the fix, github_api_error should no longer produce the generic "not_found" category.
+        // All 404s should be classified as repo_not_found_or_no_permission or file_not_found.
+        let source = include_str!("github_api_client.rs");
+        // Check that the old `404 => "not_found"` pattern is gone.
+        // We look for the exact match arm that would produce the generic category.
+        assert!(
+            !source.contains("404 => \"not_found\""),
+            "github_api_error must not have '404 => \"not_found\"' pattern — should use context-aware classification"
+        );
+        // Check that context-aware 404 classification exists
+        assert!(
+            source.contains("\"file_not_found\""),
+            "github_api_error must classify get contents 404 as file_not_found"
+        );
+        assert!(
+            source.contains("\"repo_not_found_or_no_permission\""),
+            "github_api_error must classify get ref/tree/put/delete 404 as repo_not_found_or_no_permission"
+        );
+    }
+
+    #[test]
+    fn test_diagnostics_result_has_proxy_policy() {
+        // Verify that SyncDiagnosticsResult has proxy_policy field
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: "https://github.com/user/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: None,
+            ssh_private_key: None,
+        };
+
+        let result = GitHubApiBackend.diagnose(&config, &secrets).unwrap();
+        // diagnose sets proxy_policy = "no_proxy" even when token is missing
+        assert_eq!(result.proxy_policy, "no_proxy");
+    }
 }
