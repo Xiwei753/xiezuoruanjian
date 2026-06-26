@@ -3620,6 +3620,7 @@ dependencies = [
  "git2",
  "md5",
  "once_cell",
+ "rayon",
  "reqwest",
  "serde",
  "serde_json",

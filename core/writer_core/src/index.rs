@@ -98,6 +98,7 @@ impl SearchIndex {
             return Ok(Self { entries });
         }
 
+        let mut chapter_paths = Vec::new();
         let projects = scan_projects(&projects_dir)?;
         for (project_id, project_path) in projects {
             let volumes_dir = project_path.join("volumes");
@@ -113,32 +114,43 @@ impl SearchIndex {
                 let chapters = scan_subdirs(&chapters_dir)?;
                 for (chapter_id, chapter_path) in chapters {
                     let md_path = chapter_path.join("chapter.md");
-                    if !md_path.exists() {
-                        continue;
+                    if md_path.exists() {
+                        chapter_paths.push((
+                            project_id.clone(),
+                            volume_id.clone(),
+                            chapter_id,
+                            chapter_path,
+                            md_path,
+                        ));
                     }
+                }
+            }
+        }
+
+        use rayon::prelude::*;
+        entries = chapter_paths
+            .into_par_iter()
+            .filter_map(
+                |(project_id, volume_id, chapter_id, chapter_path, md_path)| {
+                    let content = fs::read_to_string(&md_path).ok()?;
                     let chapter_title = load_chapter_title(&chapter_path, &chapter_id);
                     let relative_path = format!(
                         "projects/{}/volumes/{}/chapters/{}/chapter.md",
                         project_id, volume_id, chapter_id
                     );
-                    match fs::read_to_string(&md_path) {
-                        Ok(content) => {
-                            let lines: Vec<String> =
-                                content.lines().map(|l| l.to_string()).collect();
-                            entries.push(IndexEntry {
-                                project_id: project_id.clone(),
-                                volume_id: volume_id.clone(),
-                                chapter_id: chapter_id.clone(),
-                                chapter_title,
-                                relative_path,
-                                lines,
-                            });
-                        }
-                        Err(_) => continue,
-                    }
-                }
-            }
-        }
+                    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+
+                    Some(IndexEntry {
+                        project_id,
+                        volume_id,
+                        chapter_id,
+                        chapter_title,
+                        relative_path,
+                        lines,
+                    })
+                },
+            )
+            .collect();
 
         let _elapsed = start.elapsed().as_millis() as u64;
         Ok(Self { entries })
