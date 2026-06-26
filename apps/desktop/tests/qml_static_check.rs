@@ -374,6 +374,14 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     eprintln!("{}: Editor wheel scrolling must not fall back to fixed-duration tweening or Flickable hard tuning", file_name);
                     has_errors = true;
                 }
+                // After TextArea fallback removal, EditorWheelScroller must not reference textArea
+                if content.contains("textArea") {
+                    eprintln!(
+                        "{}: EditorWheelScroller must not contain 'textArea' after TextArea fallback removal",
+                        file_name
+                    );
+                    has_errors = true;
+                }
             }
 
             if file_name == "TopWritingToolbar.qml" || file_name == "WorkspaceTree.qml" {

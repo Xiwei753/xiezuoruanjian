@@ -8,7 +8,6 @@ Item {
     id: root
 
     property var scrollView: null
-    property var textArea: null
     property var editorItem: null
 
     // Tuned in one place so WritingWorkspace stays a layout container.
@@ -25,7 +24,7 @@ Item {
 
     signal scrollActivity()
 
-    enabled: scrollView && ((textArea && textArea.enabled) || (editorItem && editorItem.editor_enabled))
+    enabled: scrollView && editorItem && editorItem.editor_enabled
 
     property real wheelVelocityY: 0
     property real wheelLastTickMs: 0
@@ -52,14 +51,11 @@ Item {
 
     function wheelLineHeight() {
         if (editorItem) return Math.max(editorItem.font_pixel_size * 1.35, 18);
-        if (!textArea) return 18;
-        var rectHeight = textArea.cursorRectangle ? textArea.cursorRectangle.height : 0;
-        return Math.max(rectHeight || 0, textArea.font.pixelSize * 1.35, 18);
+        return 18;
     }
 
     function wheelFontPixelSize() {
         if (editorItem) return editorItem.font_pixel_size || 16;
-        if (textArea) return textArea.font.pixelSize || 16;
         return 16;
     }
 

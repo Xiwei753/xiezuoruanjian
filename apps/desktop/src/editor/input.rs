@@ -35,10 +35,17 @@ cpp! {{
                 auto* ke = static_cast<QKeyEvent*>(event);
                 // When IME is composing (preedit active), do NOT intercept
                 // QKeyEvent::text() — let the IME system own the composition.
-                // When NOT composing, forward printable text (English, digits,
-                // punctuation) directly to Rust for insertion, so that
-                // non-IME direct input works on all platforms.
-                if (!ime_composing
+                // Also check QInputMethod::isVisible() to prevent the first key
+                // of a CJK IME session from being inserted as plain text before
+                // the InputMethod event arrives. On Windows, when a CJK IME is
+                // active, the very first KeyPress (e.g. 'n') arrives before any
+                // InputMethod preedit event; without this guard, the raw Latin
+                // letter would be inserted into the document, causing the "first
+                // key leak" bug where typing "nihao" produces "n你好" instead of
+                // "你好".
+                QInputMethod* im = QGuiApplication::inputMethod();
+                bool ime_active = ime_composing || (im && im->isVisible());
+                if (!ime_active
                     && !(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))
                     && !ke->text().isEmpty()
                     && ke->key() != Qt::Key_Backspace
@@ -86,8 +93,10 @@ cpp! {{
                 auto* ime = static_cast<QInputMethodEvent*>(event);
                 QString commit = ime->commitString();
                 QString preedit = ime->preeditString();
-                qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld",
-                       static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()));
+                if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+                    qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld",
+                           static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()));
+                }
                 if (!commit.isEmpty()) {
                     sujian_ime_commit(
                         rust_item,
@@ -160,7 +169,9 @@ cpp! {{
                     QString selText = obj->property("current_selection_text").toString();
                     qe->setValue(Qt::ImCurrentSelection, selText);
                 }
-                qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
+                if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+                    qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
+                }
                 event->accept();
                 return true;
             }
@@ -183,7 +194,9 @@ cpp! {{
         if (im) {
             im->update(Qt::ImEnabled);
         }
-        qDebug("[sujian] component_complete: ItemAcceptsInputMethod=%d", item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
+        if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+            qDebug("[sujian] component_complete: ItemAcceptsInputMethod=%d", item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
+        }
     }
 
     void sujian_focus_item(QQuickItem* item) {
@@ -195,7 +208,9 @@ cpp! {{
             im->update(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
             im->show();
         }
-        qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
+        if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+            qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
+        }
     }
 }}
 

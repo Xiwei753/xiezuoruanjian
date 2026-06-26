@@ -886,7 +886,6 @@ Rectangle {
                         id: editorWheelScroller
                         anchors.fill: editorScroll
                         scrollView: editorScroll
-                        textArea: null
                         editorItem: sujianEditor
                     }
 
