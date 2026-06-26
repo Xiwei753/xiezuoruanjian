@@ -163,6 +163,7 @@ android {
 }
 dependencies {
     implementation("net.java.dev.jna:jna:5.13.0@aar")
+    testImplementation("net.java.dev.jna:jna:5.13.0")
 }
 
 android {
