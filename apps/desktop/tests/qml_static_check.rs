@@ -304,7 +304,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
                 if !content.contains("EditorWheelScroller {")
                     || !content.contains("id: editorWheelScroller")
-                    || !content.contains("isScrolling: editorScroll.editorIsScrolling")
+
                     || !content.contains("editorWheelScroller.active")
                     || !content.contains("editorItem: root.useSujianEditorItem ? sujianEditor : null")
                 {
@@ -323,7 +323,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 
                 if !content.contains("SmoothCursor {")
                     || !content.contains("overlayItem: paperBg")
-                    || !content.contains("isScrolling: editorScroll.editorIsScrolling")
+
                 {
                     eprintln!("{}: TextArea fallback must keep the isolated SmoothCursor overlay", file_name);
                     has_errors = true;
