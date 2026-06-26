@@ -148,6 +148,11 @@ Item {
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]
+            // 防御性检查：Rust 侧已过滤复杂字符，这里双重保险
+            if (isComplexGrapheme(gr.char)) {
+                root._log("insert skipped: complex grapheme at index=" + i)
+                continue
+            }
             var ghost = component.createObject(root, {
                 "animKind": "insert",
                 "startX": cursorRectX,
@@ -204,6 +209,11 @@ Item {
 
         for (var i = 0; i < event.glyphRects.length; i++) {
             var gr = event.glyphRects[i]
+            // 防御性检查：Rust 侧已过滤复杂字符，这里双重保险
+            if (isComplexGrapheme(gr.char)) {
+                root._log("delete skipped: complex grapheme at index=" + i)
+                continue
+            }
             var ghost = component.createObject(root, {
                 "animKind": "delete",
                 "startX": gr.x,

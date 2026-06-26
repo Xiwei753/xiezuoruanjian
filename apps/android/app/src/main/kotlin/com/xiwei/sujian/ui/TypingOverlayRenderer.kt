@@ -2,7 +2,6 @@ package com.xiwei.sujian.ui
 
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.util.Log
 
 import java.util.concurrent.CopyOnWriteArrayList
 

@@ -142,4 +142,57 @@ class UtfOffsetConverterTest {
         val endByteOffset = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(text, text.length)
         assertEquals(utf8Len, endByteOffset)
     }
+
+    @Test
+    fun emojiSurrogatePair_utf8ByteOffsetRoundtrip() {
+        // 😀 = U+1F600, surrogate pair in UTF-16, 4 bytes in UTF-8
+        val text = "a😀b"
+        // UTF-16: a=0, 😀=1..2, b=3, end=4
+        // UTF-8: a=0, 😀=1..4, b=5, end=6
+        val byteOffsetAtEmojiEnd = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(text, 2) // after emoji
+        assertEquals(5, byteOffsetAtEmojiEnd)
+        val roundtrip = UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(text, byteOffsetAtEmojiEnd)
+        assertEquals(2, roundtrip)
+    }
+
+    @Test
+    fun multipleEmoji_offsetsCorrect() {
+        val text = "😀😀"
+        // Each emoji: 2 UTF-16 code units, 4 UTF-8 bytes
+        assertEquals(4, UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(text, 2)) // after first emoji
+        assertEquals(8, UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(text, 4)) // after second emoji
+        assertEquals(2, UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(text, 4))
+        assertEquals(4, UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(text, 8))
+    }
+
+    @Test
+    fun chineseInsertDelete_coreByteOffsetRoundtrip() {
+        // Simulating Core byte offset ↔ Android UTF-16 offset for Chinese text editing
+        val oldText = "你好世界"
+        val newText = "你好"  // deleted "世界"
+        // UTF-16: 你=0, 好=1, 世=2, 界=3, end=4
+        // UTF-8: 你=0..2, 好=3..5, 世=6..8, 界=9..11, end=12
+        val oldCursorUtf16 = 4 // end of text
+        val newCursorUtf16 = 2 // after "好"
+        val oldCursorByte = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(oldText, oldCursorUtf16)
+        val newCursorByte = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(newText, newCursorUtf16)
+        assertEquals(12, oldCursorByte)
+        assertEquals(6, newCursorByte)
+        // Roundtrip back
+        assertEquals(4, UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(oldText, oldCursorByte))
+        assertEquals(2, UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(newText, newCursorByte))
+    }
+
+    @Test
+    fun illegalByteOffset_negativeClampsToZero() {
+        val text = "abc"
+        assertEquals(0, UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(text, -5))
+    }
+
+    @Test
+    fun illegalByteOffset_veryLargeClampsToEnd() {
+        val text = "你好"
+        val utf8Len = text.toByteArray(Charsets.UTF_8).size
+        assertEquals(text.length, UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(text, utf8Len + 100))
+    }
 }

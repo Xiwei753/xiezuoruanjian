@@ -4,7 +4,7 @@ import android.os.Bundle
 import android.text.Editable
 import android.text.Spannable
 import android.text.style.BackgroundColorSpan
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import android.view.LayoutInflater
 import android.view.Menu
 import android.view.MenuInflater
@@ -205,19 +205,19 @@ class EditorFragment : Fragment() {
                         }
                         else -> {
                             val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
-                            Log.w("WriterSettings", "AnimationEventProvider returned failure: typingEnabled=$typingEnabled, providerInjected=true")
+                            DiagnosticsLogger.w("WriterSettings", "AnimationEventProvider returned failure: typingEnabled=$typingEnabled, providerInjected=true")
                             editorEditText.typingAnimationController?.providerFailedLastTime = true
                             emptyList()
                         }
                     }
                 } catch (e: Exception) {
                     val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
-                    Log.w("WriterSettings", "AnimationEventProvider threw exception: typingEnabled=$typingEnabled, providerInjected=true, exception=${e.message}", e)
+                    DiagnosticsLogger.w("WriterSettings", "AnimationEventProvider threw exception: typingEnabled=$typingEnabled, providerInjected=true, exception=${e.message}", e)
                     editorEditText.typingAnimationController?.providerFailedLastTime = true
                     emptyList()
                 }
             })
-            Log.d("WriterSettings", "AnimationEventProvider injected from EditorAnimationBridge")
+            DiagnosticsLogger.d("WriterSettings", "AnimationEventProvider injected from EditorAnimationBridge")
         } catch (e: Exception) {
             val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
             editorEditText.typingAnimationController?.providerUnavailable = true
@@ -225,7 +225,7 @@ class EditorFragment : Fragment() {
             if (typingEnabled) {
                 editorEditText.setTypingAnimationEnabled(false)
             }
-            Log.w("WriterSettings", "Failed to inject AnimationEventProvider: typingEnabled=$typingEnabled, providerUnavailable=true, typing animation disabled", e)
+            DiagnosticsLogger.w("WriterSettings", "Failed to inject AnimationEventProvider: typingEnabled=$typingEnabled, providerUnavailable=true, typing animation disabled", e)
         }
 
         setupSearchAndReplace()
@@ -428,7 +428,7 @@ class EditorFragment : Fragment() {
 
     private fun applySettingsToEditor(settings: EditorSettingsState) {
         val tag = "WriterSettings"
-        Log.d(tag, "applySettingsToEditor: fontSize=${settings.fontSize}, lineSpacing=${settings.lineSpacingMultiplier}, " +
+        DiagnosticsLogger.d(tag, "applySettingsToEditor: fontSize=${settings.fontSize}, lineSpacing=${settings.lineSpacingMultiplier}, " +
             "autoIndent=${settings.autoIndentEnabled}/${settings.autoIndentWidth}, " +
             "typingAnim=${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms, " +
             "smoothCursor=${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
@@ -437,12 +437,12 @@ class EditorFragment : Fragment() {
             if (lastFontSize != settings.fontSize) {
                 lastFontSize = settings.fontSize
                 editorEditText.textSize = settings.fontSize
-                Log.d(tag, "  → fontSize applied: ${settings.fontSize}")
+                DiagnosticsLogger.d(tag, "  → fontSize applied: ${settings.fontSize}")
             }
             if (lastLineSpacing != settings.lineSpacingMultiplier) {
                 lastLineSpacing = settings.lineSpacingMultiplier
                 editorEditText.setLineSpacing(0f, settings.lineSpacingMultiplier)
-                Log.d(tag, "  → lineSpacing applied: ${settings.lineSpacingMultiplier}")
+                DiagnosticsLogger.d(tag, "  → lineSpacing applied: ${settings.lineSpacingMultiplier}")
             }
         }
 
@@ -458,7 +458,7 @@ class EditorFragment : Fragment() {
             typingCtrl?.providerUnavailable == true -> "no-provider(disabled)"
             else -> "no-provider(disabled)"
         }
-        Log.d(tag, "applySettingsToEditor: all settings applied, settingEnabled=${settings.typingAnimationEnabled}, providerAvailable=${typingCtrl?.hasProvider == true}, actualAnimationPath=$animActualPath, smoothCursor=${settings.smoothCursorEnabled}")
+        DiagnosticsLogger.d(tag, "applySettingsToEditor: all settings applied, settingEnabled=${settings.typingAnimationEnabled}, providerAvailable=${typingCtrl?.hasProvider == true}, actualAnimationPath=$animActualPath, smoothCursor=${settings.smoothCursorEnabled}")
     }
 
     // ── Text Watcher ──

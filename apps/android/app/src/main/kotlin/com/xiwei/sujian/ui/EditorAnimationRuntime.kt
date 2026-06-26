@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui
 
 import android.view.Choreographer
 import android.os.Build
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
  * EditorAnimationRuntime — 编辑器动画运行时
@@ -89,7 +90,7 @@ class EditorAnimationRuntime(private val editText: WriterEditText) {
                     val typingDuration = editText.typingAnimationDurationMs()
                     val cursorDuration = editText.cursorAnimationDurationMs()
                     val fps = (frameCount * 1000f) / (nowMs - lastLogTimeMs)
-                    android.util.Log.d(
+                    DiagnosticsLogger.d(
                         "WriterEditorRuntime",
                         "AnimationRuntime: running=$isRunning, typingDuration=${typingDuration}ms, cursorDuration=${cursorDuration}ms, FPS=${String.format("%.1f", fps)}, Dropped frames=${droppedFrameCount}"
                     )

@@ -3,9 +3,9 @@ package com.xiwei.sujian.ui
 import android.text.Editable
 import android.text.Spanned
 import android.text.style.LeadingMarginSpan
-import android.util.Log
 import android.view.inputmethod.BaseInputConnection
 import android.widget.EditText
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.ui.span.EmptyParagraphIndentSpan
 
 class AutoIndentController(private val editText: EditText) {
@@ -56,13 +56,13 @@ class AutoIndentController(private val editText: EditText) {
 
     fun markComposingActive() {
         isComposingActive = true
-        Log.d(TAG, "markComposingActive: composing started")
+        DiagnosticsLogger.d(TAG, "markComposingActive: composing started")
     }
 
     fun markComposingFinished() {
         isComposingActive = false
         pendingFullRebuildAfterComposition = true
-        Log.d(TAG, "markComposingFinished: composing ended, pending rebuild")
+        DiagnosticsLogger.d(TAG, "markComposingFinished: composing ended, pending rebuild")
     }
 
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
@@ -78,7 +78,7 @@ class AutoIndentController(private val editText: EditText) {
         }
 
         if (oldEnabled != this.autoIndentEnabled || oldPx != this.autoIndentPx) {
-            Log.d(TAG, "setAutoIndent: enabled=$enabled, px=${this.autoIndentPx}, triggering full rebuild")
+            DiagnosticsLogger.d(TAG, "setAutoIndent: enabled=$enabled, px=${this.autoIndentPx}, triggering full rebuild")
             val editable = editText.text
             if (editable != null) {
                 updateParagraphIndentSpans(editable, isFullRebuild = true)
@@ -95,7 +95,7 @@ class AutoIndentController(private val editText: EditText) {
 
         if (isComposing || isComposingActive) {
             pendingFullRebuildAfterComposition = true
-            Log.d(TAG, "updateParagraphIndentSpans: composing active, deferring")
+            DiagnosticsLogger.d(TAG, "updateParagraphIndentSpans: composing active, deferring")
             return
         }
 
@@ -187,7 +187,7 @@ class AutoIndentController(private val editText: EditText) {
                                 paragraphStart, paragraphEnd,
                                 Spanned.SPAN_PARAGRAPH
                             )
-                            Log.d(TAG, "updateParagraphIndentSpans: updated empty marker span at [$paragraphStart, $paragraphEnd)")
+                            DiagnosticsLogger.d(TAG, "updateParagraphIndentSpans: updated empty marker span at [$paragraphStart, $paragraphEnd)")
                         }
                     } else {
                         val existingNormal = existingNormalSpans.firstOrNull {
@@ -203,7 +203,7 @@ class AutoIndentController(private val editText: EditText) {
                             paragraphStart, paragraphEnd,
                             Spanned.SPAN_PARAGRAPH
                         )
-                        Log.d(TAG, "updateParagraphIndentSpans: set empty marker span at [$paragraphStart, $paragraphEnd)")
+                        DiagnosticsLogger.d(TAG, "updateParagraphIndentSpans: set empty marker span at [$paragraphStart, $paragraphEnd)")
                     }
                     if (paragraphEnd >= textLength && !isTrailingEmptyParagraph) break
                     if (isTrailingEmptyParagraph && paragraphEnd >= textLength) {
@@ -242,7 +242,7 @@ class AutoIndentController(private val editText: EditText) {
                         paragraphStart, paragraphEnd,
                         Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
                     )
-                    Log.d(TAG, "updateParagraphIndentSpans: set span at [$paragraphStart, $paragraphEnd)")
+                    DiagnosticsLogger.d(TAG, "updateParagraphIndentSpans: set span at [$paragraphStart, $paragraphEnd)")
                 }
 
                 if (paragraphEnd >= textLength) {
