@@ -48,7 +48,12 @@ class SujianApp : Application(), DefaultLifecycleObserver {
                 DiagnosticsLogger.e("SujianApp", "Uncaught exception", throwable)
                 DiagnosticsLogger.flush()
             } catch (_: Exception) {}
-            defaultHandler?.uncaughtException(thread, throwable)
+            if (defaultHandler != null) {
+                defaultHandler.uncaughtException(thread, throwable)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
         }
     }
 

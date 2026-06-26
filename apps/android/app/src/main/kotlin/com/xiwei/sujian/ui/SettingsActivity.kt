@@ -17,6 +17,10 @@ import com.xiwei.sujian.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.model.LocalSettings
 import com.google.android.material.button.MaterialButton
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class SettingsActivity : AppCompatActivity() {
 
@@ -315,12 +319,18 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         btnExportDiagnostics.setOnClickListener {
-            DiagnosticsLogger.flush()
-            val zipFile = DiagnosticsExporter.export(this)
-            if (zipFile != null) {
-                DiagnosticsExporter.shareZip(this, zipFile)
-            } else {
-                android.widget.Toast.makeText(this, getString(R.string.diagnostics_export_failed), android.widget.Toast.LENGTH_SHORT).show()
+            btnExportDiagnostics.isEnabled = false
+            lifecycleScope.launch {
+                val zipFile = withContext(Dispatchers.IO) {
+                    DiagnosticsLogger.flush()
+                    DiagnosticsExporter.export(applicationContext)
+                }
+                btnExportDiagnostics.isEnabled = true
+                if (zipFile != null) {
+                    DiagnosticsExporter.shareZip(this@SettingsActivity, zipFile)
+                } else {
+                    android.widget.Toast.makeText(this@SettingsActivity, getString(R.string.diagnostics_export_failed), android.widget.Toast.LENGTH_SHORT).show()
+                }
             }
         }
 

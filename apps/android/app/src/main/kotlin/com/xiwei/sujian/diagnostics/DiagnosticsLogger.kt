@@ -127,11 +127,10 @@ object DiagnosticsLogger {
     fun isVerbose(): Boolean = verbose.get()
 
     fun d(tag: String, message: String) {
+        if (!enabled.get() || !verbose.get()) return
         val redacted = redact(message)
         Log.d(tag, redacted)
-        if (enabled.get() && verbose.get()) {
-            enqueue("DEBUG", tag, redacted)
-        }
+        enqueue("DEBUG", tag, redacted)
     }
 
     fun i(tag: String, message: String) {
