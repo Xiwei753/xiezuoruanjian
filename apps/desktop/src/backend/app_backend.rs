@@ -29,6 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
 
+use super::desktop_layout_plan_dto::DesktopLayoutPlanDto;
 use super::json_utils::{
     bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
     serde_to_qjson_object,
@@ -459,7 +460,7 @@ impl AppBackend {
         };
 
         let plan = resolve_layout(&metrics);
-        let dto: writer_core::api::types::LayoutPlanDto = plan.into();
+        let dto = DesktopLayoutPlanDto::from_layout_plan(&plan);
         let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }

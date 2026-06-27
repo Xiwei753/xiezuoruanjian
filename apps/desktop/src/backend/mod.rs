@@ -18,6 +18,7 @@
 
 
 pub mod app_backend;
+pub mod desktop_layout_plan_dto;
 pub mod json_utils;
 pub(crate) mod message_key_mapper;
 

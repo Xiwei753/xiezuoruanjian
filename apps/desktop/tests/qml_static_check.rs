@@ -914,3 +914,37 @@ fn test_no_fallback_files_in_qrc() {
         "build.rs must not reference SmoothCursor.qml — it has been deleted as a fallback file"
     );
 }
+
+#[test]
+fn test_resolve_layout_output_uses_camel_case() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let app_backend = fs::read_to_string(manifest_dir.join("src/backend/app_backend.rs")).unwrap();
+
+    // app_backend.rs 必须使用 DesktopLayoutPlanDto（而非跨平台 LayoutPlanDto）
+    assert!(
+        app_backend.contains("DesktopLayoutPlanDto"),
+        "app_backend.rs resolve_layout must use DesktopLayoutPlanDto, not writer_core::api::types::LayoutPlanDto"
+    );
+    // 不应直接使用跨平台 LayoutPlanDto 做序列化
+    assert!(
+        !app_backend.contains("writer_core::api::types::LayoutPlanDto"),
+        "app_backend.rs must not directly use writer_core::api::types::LayoutPlanDto for resolve_layout"
+    );
+}
+
+#[test]
+fn test_writing_workspace_no_snake_case_layout_fallback() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let writing_workspace =
+        fs::read_to_string(manifest_dir.join("qml/WritingWorkspace.qml")).unwrap();
+
+    // QML 不应有 snake_case fallback
+    assert!(
+        !writing_workspace.contains("layoutPlan.shell_mode"),
+        "WritingWorkspace.qml must not read layoutPlan.shell_mode (snake_case fallback); use shellMode only"
+    );
+    assert!(
+        !writing_workspace.contains("layoutPlan.content_max_width_vp"),
+        "WritingWorkspace.qml must not read layoutPlan.content_max_width_vp (snake_case fallback); use contentMaxWidthVp only"
+    );
+}

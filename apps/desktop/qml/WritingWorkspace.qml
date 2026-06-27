@@ -541,7 +541,7 @@ Rectangle {
                 Layout.fillWidth: true
                 dt: root.dt
                 backendRef: root.backendRef
-                shellMode: root.layoutPlan ? (root.layoutPlan.shellMode || root.layoutPlan.shell_mode || "SinglePane") : "SinglePane"
+                shellMode: root.layoutPlan ? root.layoutPlan.shellMode : "SinglePane"
                 currentFontSize: settingsBackend ? settingsBackend.setting_font_size : 16
                 currentLineSpacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
                 firstLineIndent: settingsBackend ? settingsBackend.setting_auto_indent_enabled : false
@@ -589,8 +589,8 @@ Rectangle {
                         id: paperBg
                         width: {
                             // 用户拖拽宽度优先；未拖过才用布局策略默认宽度
-                            var planW = root.layoutPlan && (root.layoutPlan.contentMaxWidthVp || root.layoutPlan.content_max_width_vp || 0) > 0
-                                    ? (root.layoutPlan.contentMaxWidthVp || root.layoutPlan.content_max_width_vp)
+                            var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
+                                    ? root.layoutPlan.contentMaxWidthVp
                                     : 820
                             var userW = settingsBackend && settingsBackend.setting_desktop_editor_width > 0
                                     ? settingsBackend.setting_desktop_editor_width
