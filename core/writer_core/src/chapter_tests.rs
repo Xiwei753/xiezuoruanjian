@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
     use crate::chapter::{
-        calculate_word_count, clear_chapter_content, create_chapter, list_chapters, read_chapter,
-        save_chapter_verified, save_chapter_verified_with_allow_empty_overwrite, Chapter,
+        calculate_word_count, clear_chapter_content, create_chapter, delete_chapter, list_chapters,
+        read_chapter, save_chapter_verified, save_chapter_verified_with_allow_empty_overwrite,
+        Chapter,
     };
     use crate::error::Error;
     use crate::project::{create_project, Project};
@@ -356,5 +357,68 @@ mod tests {
         let content = read_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
         assert_eq!(content.content, "");
         assert_eq!(content.meta.word_count, 0);
+    }
+
+    #[test]
+    fn test_delete_chapter_moves_to_trash_and_updates_tombstone() {
+        let (dir, project, volume, chapter) = setup_chapter();
+        let workspace_path = dir.path();
+
+        // 1. Verify chapter exists
+        let chapters_before = list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+        assert_eq!(chapters_before.len(), 1);
+        assert_eq!(chapters_before[0].id, chapter.id);
+
+        let chapter_dir = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("volumes")
+            .join(&volume.id)
+            .join("chapters")
+            .join(&chapter.id);
+        assert!(chapter_dir.exists());
+
+        // 2. Perform deletion
+        delete_chapter(workspace_path, &project.id, &volume.id, &chapter.id).unwrap();
+
+        // 3. Verify chapter is removed from list and filesystem
+        let chapters_after = list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+        assert!(chapters_after.is_empty());
+        assert!(!chapter_dir.exists());
+
+        // 4. Verify trash directory contains the deleted chapter
+        let trash_dir = workspace_path.join("app-meta/sync/trash");
+        assert!(trash_dir.exists());
+
+        let trash_entries = std::fs::read_dir(&trash_dir).unwrap();
+        let mut trash_found = false;
+        let mut trash_path = None;
+        for entry in trash_entries {
+            let entry = entry.unwrap();
+            let file_name = entry.file_name().into_string().unwrap();
+            if file_name.ends_with(&chapter.id) {
+                trash_found = true;
+                trash_path = Some(entry.path());
+                break;
+            }
+        }
+        assert!(trash_found, "Deleted chapter not found in trash");
+
+        // 5. Verify tombstone in sync state
+        let state = crate::sync::SyncService::load_sync_state(workspace_path).unwrap();
+        let rel_chapter_dir = chapter_dir
+            .strip_prefix(workspace_path)
+            .unwrap()
+            .to_string_lossy()
+            .replace("\\", "/");
+
+        let mut tombstone_found = false;
+        for tombstone in &state.tombstones {
+            if tombstone.original_path == rel_chapter_dir || tombstone.original_path.contains(&chapter.id) {
+                tombstone_found = true;
+                break;
+            }
+        }
+        assert!(tombstone_found, "Tombstone for chapter not found in sync state");
     }
 }
