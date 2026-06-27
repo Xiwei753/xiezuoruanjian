@@ -459,7 +459,8 @@ impl AppBackend {
         };
 
         let plan = resolve_layout(&metrics);
-        let json = serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string());
+        let dto: writer_core::api::types::LayoutPlanDto = plan.into();
+        let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }
 
