@@ -28,13 +28,18 @@ WHITELIST_FILENAMES = {
     'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
 
     'settings.json', 'graph.json', 'migration.json',
-    'harmony_build.yml'
+    'harmony_build.yml',
+
+    # Legacy files referenced in AGENTS.md / docs as "deleted, must not restore"
+    'document_handler.rs', 'EditorPage.qml', 'SmoothCursor.qml',
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
 
+    # Legacy paths referenced in AGENTS.md as "deleted, must not restore"
+    'apps/desktop/src/document_handler.rs',
 }
 
 WHITELIST_LINKS = set()

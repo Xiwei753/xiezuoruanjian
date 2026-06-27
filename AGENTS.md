@@ -79,7 +79,7 @@ apps/desktop/
     main.rs                      入口 + AppBackend QObject（业务绑定层）
     sujian_editor_item/          自研编辑器核心（mod.rs, rendering.rs, cursor_controller.rs, buffer.rs）
     editor/                      编辑器子模块（layout.rs, renderer.rs, scene_graph.rs, input.rs）
-    document_handler.rs          仅 legacy TextArea 兼容辅助，不得用于自研写作区
+    document_handler.rs          已删除（legacy），不得恢复
     starmap_bridge.rs            星图桥接
     sync_bridge.rs               同步桥接
   qml/
@@ -248,7 +248,7 @@ cd apps/desktop && cargo check && cargo test
 |-----------|---------|---------|
 | `core/writer_core/` | Rust 核心逻辑 | — |
 | `apps/desktop/src/main.rs` | AppBackend 绑定 | 不要新增写作排版细节 |
-| `apps/desktop/src/document_handler.rs` | QTextDocument 操作 | 不要搬回 main.rs |
+| `apps/desktop/src/document_handler.rs` | — | 已删除（legacy），不得恢复 |
 | `apps/desktop/qml/*.qml` | UI 组件和状态绑定 | 不要写复杂业务逻辑 |
 | `apps/android/` | Android 客户端 | 不要硬编码输入法逻辑 |
 | `.github/` | CI/CD 配置 | — |
