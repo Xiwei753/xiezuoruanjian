@@ -23,8 +23,9 @@ cpp! {{
     class SujianEventFilter : public QObject {
     public:
         void* rust_item;
+        bool ime_composing;
         SujianEventFilter(QObject* parent, void* item)
-            : QObject(parent), rust_item(item) {}
+            : QObject(parent), rust_item(item), ime_composing(false) {}
 
         bool eventFilter(QObject* obj, QEvent* event) override {
             if (!rust_item) return false;
@@ -32,9 +33,49 @@ cpp! {{
             switch (event->type()) {
             case QEvent::KeyPress: {
                 auto* ke = static_cast<QKeyEvent*>(event);
-                // Only handle navigation, deletion, and shortcut keys.
-                // Regular text input must go through InputMethodEvent (commitString/preeditString)
-                // to allow IME composition to work correctly on Windows.
+                // When IME is composing (preedit active), do NOT intercept
+                // QKeyEvent::text() — let the IME system own the composition.
+                // Also check QInputMethod::isVisible() to prevent the first key
+                // of a CJK IME session from being inserted as plain text before
+                // the InputMethod event arrives. On Windows, when a CJK IME is
+                // active, the very first KeyPress (e.g. 'n') arrives before any
+                // InputMethod preedit event; without this guard, the raw Latin
+                // letter would be inserted into the document, causing the "first
+                // key leak" bug where typing "nihao" produces "n你好" instead of
+                // "你好".
+                QInputMethod* im = QGuiApplication::inputMethod();
+                bool ime_active = ime_composing || (im && im->isVisible());
+                if (!ime_active
+                    && !(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))
+                    && !ke->text().isEmpty()
+                    && ke->key() != Qt::Key_Backspace
+                    && ke->key() != Qt::Key_Delete
+                    && ke->key() != Qt::Key_Return
+                    && ke->key() != Qt::Key_Enter
+                    && ke->key() != Qt::Key_Tab
+                    && ke->key() != Qt::Key_Escape
+                    && ke->key() != Qt::Key_Left
+                    && ke->key() != Qt::Key_Right
+                    && ke->key() != Qt::Key_Up
+                    && ke->key() != Qt::Key_Down
+                    && ke->key() != Qt::Key_Home
+                    && ke->key() != Qt::Key_End
+                    && ke->key() != Qt::Key_PageUp
+                    && ke->key() != Qt::Key_PageDown) {
+                    QString text = ke->text();
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item,
+                        ke->key(),
+                        static_cast<int>(ke->modifiers()),
+                        reinterpret_cast<const ushort*>(text.utf16()),
+                        static_cast<int>(text.size())
+                    );
+                    if (accepted) {
+                        event->accept();
+                        return true;
+                    }
+                }
+                // Handle navigation, deletion, and shortcut keys (no text).
                 bool accepted = sujian_handle_key_and_text(
                     rust_item,
                     ke->key(),
@@ -52,16 +93,20 @@ cpp! {{
                 auto* ime = static_cast<QInputMethodEvent*>(event);
                 QString commit = ime->commitString();
                 QString preedit = ime->preeditString();
-                qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld",
-                       static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()));
+                if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+                    qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld",
+                           static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()));
+                }
                 if (!commit.isEmpty()) {
                     sujian_ime_commit(
                         rust_item,
                         reinterpret_cast<const ushort*>(commit.utf16()),
                         static_cast<int>(commit.size())
                     );
+                    ime_composing = false;
                 }
                 if (!preedit.isEmpty()) {
+                    ime_composing = true;
                     int cursor = preedit.length();
                     if (ime->replacementStart() >= 0) {
                         cursor = ime->replacementStart() + ime->replacementLength();
@@ -75,6 +120,7 @@ cpp! {{
                     );
                 } else if (commit.isEmpty()) {
                     sujian_ime_cancel(rust_item);
+                    ime_composing = false;
                 }
                 sujian_request_repaint(rust_item);
                 // Refresh IME candidate window position after cursor/preedit changes
@@ -117,12 +163,15 @@ cpp! {{
                     qe->setValue(Qt::ImCursorPosition, cursorPos);
                 }
                 if (qe->queries() & Qt::ImCurrentSelection) {
-                    // Read selected_text property directly (SujianEditorItem has this method)
-                    // Do not depend on selection_start/selection_end (they do not exist)
-                    QString selText = obj->property("selected_text").toString();
+                    // Read current_selection_text Q_PROPERTY (backed by selected_text method).
+                    // Do NOT use obj->property("selected_text") — that is a qt_method,
+                    // not a qt_property, so QObject::property() returns an invalid QVariant.
+                    QString selText = obj->property("current_selection_text").toString();
                     qe->setValue(Qt::ImCurrentSelection, selText);
                 }
-                qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
+                if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+                    qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
+                }
                 event->accept();
                 return true;
             }
@@ -140,7 +189,14 @@ cpp! {{
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
         item->setAcceptedMouseButtons(Qt::AllButtons);
         item->setFocusPolicy(Qt::StrongFocus);
-        qDebug("[sujian] component_complete: ItemAcceptsInputMethod=%d", item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
+        // Notify IME system that this item accepts input method
+        QInputMethod* im = QGuiApplication::inputMethod();
+        if (im) {
+            im->update(Qt::ImEnabled);
+        }
+        if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+            qDebug("[sujian] component_complete: ItemAcceptsInputMethod=%d", item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
+        }
     }
 
     void sujian_focus_item(QQuickItem* item) {
@@ -150,8 +206,11 @@ cpp! {{
         QInputMethod* im = QGuiApplication::inputMethod();
         if (im) {
             im->update(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
+            im->show();
         }
-        qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
+        if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
+            qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
+        }
     }
 }}
 

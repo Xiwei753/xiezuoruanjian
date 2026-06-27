@@ -21,13 +21,13 @@
 //   - 自研 SujianEditorItem 的 QSG 渲染
 //   - 光标和选区的 IME 交互逻辑
 //   - QTextLayout 的排版细节
-//   - SmoothCursor / EditorAnimationOverlay 的动画参数
+//   - EditorAnimationOverlay 的动画参数
 //
 // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
 // 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
 //
 // 组成：
-//   WorkspaceTree (侧栏) + EditorPage (编辑区) + TopWritingToolbar (工具栏)
+//   WorkspaceTree (侧栏) + SujianEditorItem (编辑区) + TopWritingToolbar (工具栏)
 // =============================================================================
 
 import QtQuick
@@ -47,10 +47,8 @@ Rectangle {
     property int drawerTab: 0
     property bool aiCapable: false
     property bool aiEnabled: false
-    property bool useSujianEditorItem: false
     // 关于 LayoutPlan 和布局策略
     // layoutPlan 是外部注入的布局策略（由上层根据屏幕尺寸和设置决定）
-    // 只有 layoutPlan 控制布局策略（SujianEditorItem / editorArea），
     // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
     // 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
     property var layoutPlan: null
@@ -68,12 +66,9 @@ Rectangle {
 
     function requestEditorFocus() {
         Qt.callLater(function() {
-            if (root.useSujianEditorItem && sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
-                console.log("[QML] editor_force_active_focus_self_rendered");
-                sujianEditor.forceActiveFocus();
-            } else if (editorArea && editorArea.visible && editorArea.enabled) {
-                console.log("[QML] editor_force_active_focus_textarea");
-                editorArea.forceActiveFocus();
+            if (sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
+                console.log("[QML] editor_request_text_input_focus");
+                sujianEditor.request_text_input_focus();
             }
         });
     }
@@ -102,8 +97,6 @@ Rectangle {
     EditorController {
         id: editorController
         targetEditorItem: sujianEditor
-        targetTextArea: editorArea
-        useSelfRenderedEditor: root.useSujianEditorItem
         backendRef: root.backendRef
         dt: root.dt
         onEmptySaveBlocked: function(msg) {
@@ -176,7 +169,7 @@ Rectangle {
             return;
         }
 
-        smoothCursorOverlay.snapNextCursorUpdate();
+        sujianEditor.snap_next_cursor_update();
         // loadChapterContentWithIds returns null on failure, result object on success.
         // State is only updated after content is successfully loaded.
         var result = editorController.loadChapterContentWithIds(pId, vId, cId);
@@ -186,7 +179,7 @@ Rectangle {
             editorController.volumeId = d.volumeId || vId;
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
-            smoothCursorOverlay.snapNextCursorUpdate();
+            sujianEditor.snap_next_cursor_update();
             console.log("[QML] chapter_loaded_focus_requested chapterId=" + (d.chapterId || cId));
             root.requestEditorFocus();
         }
@@ -194,7 +187,7 @@ Rectangle {
 
     function reloadActiveChapter() {
         if (editorController.projectId && editorController.volumeId && editorController.chapterId) {
-            smoothCursorOverlay.snapNextCursorUpdate();
+            sujianEditor.snap_next_cursor_update();
             editorController.loadChapterContentWithIds(
                 editorController.projectId,
                 editorController.volumeId,
@@ -590,7 +583,7 @@ Rectangle {
 
                     // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
                     // 关于 LayoutPlan：contentMaxWidthVp 控制 paperBg 最大宽度，
-                    // 编辑区组件（SujianEditorItem / editorArea）跟随 paperBg 宽度
+                    // 编辑区组件（SujianEditorItem）跟随 paperBg 宽度
                     // 编辑器交互由 EditorController + SujianEditorItem 直接管理
                     Rectangle {
                         id: paperBg
@@ -695,9 +688,7 @@ Rectangle {
                         anchors.margins: dt ? dt.sp20 : 20
                         clip: true
                         contentWidth: availableWidth
-                        contentHeight: root.useSujianEditorItem
-                            ? Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
-                            : editorCanvas.implicitHeight
+                        contentHeight: Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
 
                         function clampScroll() {
                             if (contentItem) {
@@ -741,70 +732,12 @@ Rectangle {
                             readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + (dt ? dt.sp16 : 16) * 2, editorScroll.availableHeight)
                             width: editorScroll.availableWidth
                             height: editorScroll.availableHeight
-                            implicitHeight: root.useSujianEditorItem
-                                    ? Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
-                                    : Math.max(editorArea.implicitHeight, editorArea.emptyContentMinimumHeight)
+                            implicitHeight: Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
 
                             // NOTE: SujianEditorItem is a "viewport renderer" - it must be
                             // a FIXED overlay on paperBg, NOT inside the Flickable contentItem.
                             // The Flickable only holds a transparent spacer for scrollbar / contentHeight.
                             // scroll_y is passed to the Rust renderer for viewport clipping.
-
-                            // 关于 LayoutPlan 和布局策略
-                            // editorArea (TextArea) 的字体和行距由 settingsBackend 控制
-                            // EditorController 管理编辑状态；LayoutPlan 只控制布局策略
-                            // 编辑器交互不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
-                            TextArea {
-                                id: editorArea
-                                property real emptyContentMinimumHeight: Math.max(font.pixelSize * 2.4 + topPadding + bottomPadding, editorScroll.availableHeight)
-                                width: editorScroll.availableWidth
-                                height: Math.max(implicitHeight, emptyContentMinimumHeight)
-                                visible: !root.useSujianEditorItem
-                                color: dt ? dt.editorText : "#E2E2E5"
-                                selectedTextColor: dt ? dt.selectedText : "#CCE5FF"
-                                selectionColor: dt ? dt.primary : "#006497"
-                                font.pixelSize: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
-                                font.family: "serif"
-                                textFormat: TextEdit.PlainText
-                                wrapMode: TextArea.Wrap
-                                verticalAlignment: TextInput.AlignTop
-                                background: Rectangle { color: "transparent" }
-                                enabled: !root.useSujianEditorItem && editorController.chapterId !== ""
-                                focus: !root.useSujianEditorItem
-                                activeFocusOnTab: true
-                                selectByMouse: true
-                                persistentSelection: true
-                                leftPadding: dt ? dt.sp16 : 16
-                                rightPadding: dt ? dt.sp16 : 16
-                                topPadding: dt ? dt.sp16 : 16
-                                bottomPadding: dt ? dt.sp16 : 16
-                                implicitHeight: Math.max(contentHeight + topPadding + bottomPadding, emptyContentMinimumHeight)
-
-                                cursorVisible: activeFocus && enabled
-                                cursorDelegate: Item {} // Hide native cursor; SmoothCursor owns the visible cursor in fallback mode.
-
-                                text: ""
-
-                                Keys.onPressed: function(event) {
-                                    if (event.key === Qt.Key_Backspace ||
-                                        event.key === Qt.Key_Delete ||
-                                        (event.key === Qt.Key_X && (event.modifiers & Qt.ControlModifier))) {
-                                        editorController.markPotentialExplicitClear();
-                                    }
-                                    if ((event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) ||
-                                        (event.key === Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier))) {
-                                        smoothCursorOverlay.snapNextCursorUpdate();
-                                    }
-                                }
-
-                                TapHandler {
-                                    acceptedButtons: Qt.LeftButton
-                                    gesturePolicy: TapHandler.WithinBounds
-                                    onPressedChanged: {
-                                        if (pressed) smoothCursorOverlay.snapNextCursorUpdate();
-                                    }
-                                }
-                            }
                         }
                     }
 
@@ -831,8 +764,8 @@ Rectangle {
                         y: editorScroll.y
                         width: editorScroll.availableWidth
                         height: editorScroll.availableHeight
-                        visible: root.useSujianEditorItem
-                        focus: root.useSujianEditorItem
+                        visible: true
+                        focus: true
                         editor_enabled: editorController.chapterId !== ""
                         font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
                         font_family: "serif"
@@ -886,8 +819,7 @@ Rectangle {
                             width: 2
                             height: sujianEditor.cursor_rect_height
                             color: sujianEditor.cursor_color
-                            visible: root.useSujianEditorItem
-                                     && sujianEditor.cursor_visible
+                            visible: sujianEditor.cursor_visible
                                      && sujianEditor.editor_enabled
                                      && !sujianEditor.has_selection
                                      && !editorScroll.editorAnimationSuppressed
@@ -902,8 +834,7 @@ Rectangle {
                         Timer {
                             id: cursorBlinkTimer
                             interval: 530
-                            running: root.useSujianEditorItem
-                                     && sujianEditor.cursor_visible
+                            running: sujianEditor.cursor_visible
                                      && sujianEditor.editor_enabled
                                      && !sujianEditor.has_selection
                                      && !editorScroll.editorAnimationSuppressed
@@ -926,8 +857,7 @@ Rectangle {
                     Timer {
                         id: cursorAnimationTick
                         interval: 16
-                        running: root.useSujianEditorItem
-                                 && sujianEditor.smooth_cursor_enabled
+                        running: sujianEditor.smooth_cursor_enabled
                                  && sujianEditor.editor_enabled
                         repeat: true
                         onTriggered: {
@@ -949,32 +879,20 @@ Rectangle {
                                     || editorController.isApplyingFormat
                                     || editorController.isApplyingSettings
                                     || editorScroll.editorAnimationSuppressed
-                        visible: root.useSujianEditorItem
+                        visible: true
                     }
 
                     EditorWheelScroller {
                         id: editorWheelScroller
                         anchors.fill: editorScroll
                         scrollView: editorScroll
-                        textArea: root.useSujianEditorItem ? null : editorArea
-                        editorItem: root.useSujianEditorItem ? sujianEditor : null
-                        onScrollActivity: smoothCursorOverlay.snapNextCursorUpdate()
+                        editorItem: sujianEditor
                     }
 
                     // EditorTypingAnimator removed — animation唯一主路径是 EditorAnimationOverlay
                     // (见 EditorAnimationOverlay.qml，消费 animation_events_json 信号)
 
-                    SmoothCursor {
-                        id: smoothCursorOverlay
-                        anchors.fill: paperBg
-                        visible: !root.useSujianEditorItem
-                        targetTextArea: root.useSujianEditorItem ? null : editorArea
-                        overlayItem: paperBg
-                        dt: root.dt
-                        isScrolling: editorScroll.editorIsScrolling
-                        smoothCursorEnabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
-                        cursorAnimationDuration: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 160
-                    }
+
                 }
 
                 // Empty state
@@ -1088,8 +1006,4 @@ Rectangle {
         }
     }
 
-    onUseSujianEditorItemChanged: {
-        console.log("[QML] use_sujian_editor_item_changed focus_requested val=" + useSujianEditorItem);
-        root.requestEditorFocus();
-    }
 }

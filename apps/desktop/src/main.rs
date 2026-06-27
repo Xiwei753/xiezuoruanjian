@@ -6,7 +6,6 @@
 // - qmetaobject：用于提供 Rust 与 Qt/QML 引擎的高性能双向桥接。
 // - cpp：允许 Rust 内部嵌入内联 C++ 代码调用 Qt 平台 API。
 // - backend：引入 BackendRuntime 和 AppBackend，实现多领域薄后端的聚合管理。
-// - document_handler::DocumentHandler：提供 QTextDocument 排版显示的底层适配器。
 //
 // 干什么的：
 // - 初始化日志并拦截 Qt 级别的调试/警示日志信息（QMessageLogContext）。
@@ -30,7 +29,7 @@
 //   - 不传递到 SujianEditorItem 的 QSG 渲染线程
 //   - 不影响光标位置、IME 输入、动画帧率
 //   - 不改变 QTextLayout 的排版计算
-//   - 不驱动 SmoothCursor / EditorAnimationOverlay 的动画属性
+//   - 不驱动 EditorAnimationOverlay 的动画属性
 //
 // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
 // 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
@@ -49,7 +48,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 mod backend;
-mod document_handler;
 mod editor;
 mod starmap_bridge;
 mod sujian_editor_item;
@@ -97,7 +95,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
     "qml/WritingTreeController.qml" as "WritingTreeController.qml",
     "qml/EditorController.qml" as "EditorController.qml",
-    "qml/SmoothCursor.qml" as "SmoothCursor.qml",
     "qml/EditorWheelScroller.qml" as "EditorWheelScroller.qml",
     "qml/SmoothWheelScroller.qml" as "SmoothWheelScroller.qml",
     "qml/EditorAnimationOverlay.qml" as "EditorAnimationOverlay.qml",
@@ -113,7 +110,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/ModernComboBox.qml" as "ModernComboBox.qml",
     "qml/DashboardGrid.qml" as "DashboardGrid.qml",
     "qml/DashboardSection.qml" as "DashboardSection.qml",
-    "qml/EditorPage.qml" as "EditorPage.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
     "qml/SyncPage.qml" as "SyncPage.qml",
     "qml/EmptyWorkspace.qml" as "EmptyWorkspace.qml",
@@ -314,12 +310,6 @@ fn main() {
         1,
         0,
         c"AppBackend",
-    );
-    qmetaobject::qml_register_type::<document_handler::DocumentHandler>(
-        c"Sujian",
-        1,
-        0,
-        c"DocumentHandler",
     );
     qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
         c"Sujian",

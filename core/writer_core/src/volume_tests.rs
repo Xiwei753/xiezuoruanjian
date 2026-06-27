@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::project::create_project;
-    use crate::volume::{create_volume, delete_volume, list_volumes, normalize_rel_path, reorder_volumes};
+    use crate::volume::{create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume, reorder_volumes};
     use crate::workspace::create_workspace;
     use tempfile::tempdir;
 
@@ -21,6 +21,37 @@ mod tests {
 
         let volumes = list_volumes(workspace_path, &project.id).unwrap();
         assert_eq!(volumes.len(), 2);
+    }
+
+    #[test]
+    fn test_rename_volume_success() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "Test Project").unwrap();
+        let volume = create_volume(workspace_path, &project.id, "Old Title").unwrap();
+
+        rename_volume(workspace_path, &project.id, &volume.id, "New Title").unwrap();
+
+        let volumes = list_volumes(workspace_path, &project.id).unwrap();
+        let updated_volume = volumes.iter().find(|v| v.id == volume.id).unwrap();
+        assert_eq!(updated_volume.title, "New Title");
+    }
+
+    #[test]
+    fn test_rename_volume_not_found() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "Test Project").unwrap();
+
+        let result = rename_volume(workspace_path, &project.id, "non-existent-volume-id", "New Title");
+        match result {
+            Err(crate::error::Error::VolumeNotFound) => (),
+            _ => panic!("Expected Error::VolumeNotFound, got {:?}", result),
+        }
     }
 
     #[test]

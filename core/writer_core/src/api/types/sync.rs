@@ -188,6 +188,7 @@ pub struct SyncDiagnosticsResultDto {
     pub user_message: Option<String>,
     pub raw_error: Option<String>,
     pub chosen_network_mode: Option<String>,
+    pub proxy_policy: String,
     pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
 }
 
@@ -220,6 +221,7 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
             user_message: d.user_message,
             raw_error: d.raw_error,
             chosen_network_mode: d.chosen_network_mode,
+            proxy_policy: d.proxy_policy,
             network_probe_summary: Some(
                 d.network_probe_summary
                     .into_iter()

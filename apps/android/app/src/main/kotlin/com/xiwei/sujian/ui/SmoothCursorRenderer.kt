@@ -3,7 +3,7 @@ package com.xiwei.sujian.ui
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
  * SmoothCursorRenderer — 平滑光标渲染器
@@ -161,7 +161,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         val wasEnabled = smoothCursorEnabled
         smoothCursorEnabled = enabled
         smoothCursorDurationMs = durationMs
-        Log.d(TAG, "setSmoothCursorEnabled: enabled=$enabled, durationMs=$durationMs")
+        DiagnosticsLogger.d(TAG, "setSmoothCursorEnabled: enabled=$enabled, durationMs=$durationMs")
         editText.isCursorVisible = !enabled
         if (enabled && editText.isFocused) {
             startCursorBlink()
@@ -225,7 +225,7 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
         val end = editText.selectionEnd
         if (pos < 0) return
 
-        Log.d(TAG, "updateCursorTarget: pos=$pos, animate=$animate, isAnimating=$isAnimating")
+        DiagnosticsLogger.d(TAG, "updateCursorTarget: pos=$pos, animate=$animate, isAnimating=$isAnimating")
 
         if (pos != end) {
             isAnimating = false

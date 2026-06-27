@@ -399,7 +399,6 @@ ApplicationWindow {
                 projectTitle: appController.writingProjectTitle
                 aiCapable: settingsBackend.ai_available
                 aiEnabled: settingsBackend.ai_enabled
-                useSujianEditorItem: appBackend !== null && appBackend.sujian_editor_item_enabled
                 layoutPlan: window.layoutPlan
 
                 onBackToProjects: {

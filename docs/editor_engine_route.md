@@ -45,7 +45,6 @@ Rust Core EditorTransaction
 | `apps/desktop/src/editor/input.rs` | 输入事件处理 |
 | `apps/desktop/qml/WritingWorkspace.qml` | 写作工作区，直接使用 SujianEditorItem |
 | `apps/desktop/qml/EditorAnimationOverlay.qml` | 动画 overlay，唯一动画主路径 |
-| `apps/desktop/src/document_handler.rs` | 仅 legacy TextArea 兼容辅助 |
 
 ### text_revision 机制
 
@@ -72,8 +71,8 @@ QML 侧负责：把 ghost 动画画出来。
 
 | 禁止行为 | 原因 |
 |---------|------|
-| 用 DocumentHandler / QTextDocument 修自研写作区 | 旧路线，已被取代 |
-| 用 TextArea 排版逻辑驱动自研编辑器 | TextArea 是 fallback，不是主路径 |
+| 用 DocumentHandler / QTextDocument 修自研写作区 | 旧路线，已删除（document_handler.rs 已清理） |
+| 用 TextArea 排版逻辑驱动自研编辑器 | 旧路线，已删除（EditorPage.qml 已清理） |
 | QSG 三层 overlay（paint_animation_overlay / update_animation_overlay）当主路径 | experimental，不是当前验收路径 |
 | 静态正文层为动画隐藏文字 | 正文永远完整绘制 |
 | 正文透明 span / hidden range / ForegroundColorSpan | 破坏纯文本 |

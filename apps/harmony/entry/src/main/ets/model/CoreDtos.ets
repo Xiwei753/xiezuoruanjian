@@ -211,6 +211,7 @@ export interface SyncDiagnosticsResult {
   userMessage?: string
   rawError?: string
   chosenNetworkMode?: string
+  proxyPolicy: string
   networkProbeSummary?: NetworkProbeResult[]
 }
 

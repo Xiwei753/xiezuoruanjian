@@ -4,6 +4,8 @@ import android.text.Editable
 import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.model.EditorAnimationEventData
 import com.xiwei.sujian.model.EditorAnimationKindData
+import com.xiwei.sujian.ui.UtfOffsetConverter
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
  * TypingAnimationController — 打字动画控制器
@@ -77,7 +79,8 @@ class TypingAnimationController(
 
     // 保存 beforeTextChanged 时的旧文本和光标位置，供 afterTextChanged 使用
     private var oldTextBeforeChange: String = ""
-    private var oldCursorIndexBeforeChange: Int = 0
+    private var oldCursorIndexBeforeChange: Int = 0  // UTF-8 byte offset
+    private var oldCursorIndexBeforeChangeUtf16: Int = 0  // UTF-16 code unit offset，供本地 Layout 使用
 
     // 删除动画待提交信息：在 beforeTextChanged 记录起始位置，在 afterTextChanged 提交完整动画
     private var pendingDeleteStartX = -1f
@@ -100,12 +103,20 @@ class TypingAnimationController(
             !enabled -> "disabled"
             providerAvailable && !providerFailedLastTime -> "core"
             providerAvailable && providerFailedLastTime -> "core(failed,skip)"
-            else -> "fallback"
+            else -> "no-provider(disabled)"
         }
-        android.util.Log.d(TAG, "setTypingAnimationEnabled: enabled=$enabled, durationMs=${typingAnimationDurationMs}, providerAvailable=$providerAvailable, providerFailed=$providerFailedLastTime, actualPath=$actualPath")
+        DiagnosticsLogger.d(TAG, "setTypingAnimationEnabled: enabled=$enabled, durationMs=${typingAnimationDurationMs}, providerAvailable=$providerAvailable, providerFailed=$providerFailedLastTime, actualPath=$actualPath")
         if (!enabled) {
             clearPendingDelete()
             renderLayer.clear()
+        }
+        // 如果 provider 不存在且 enabled=true，记录警告
+        if (enabled && _animationEventProvider == null) {
+            com.xiwei.sujian.diagnostics.DiagnosticsLogger.w(
+                TAG,
+                "setTypingAnimationEnabled: enabled=true but no provider injected. " +
+                "Animation will be disabled until provider is set."
+            )
         }
     }
 
@@ -138,10 +149,12 @@ class TypingAnimationController(
             return
         }
 
-        android.util.Log.d(TAG, "beforeTextChanged: start=$start, count=$count, after=$after")
+        DiagnosticsLogger.d(TAG, "beforeTextChanged: start=$start, count=$count, after=$after")
 
         oldTextBeforeChange = s?.toString() ?: ""
-        oldCursorIndexBeforeChange = editText.selectionStart.coerceAtLeast(0)
+        val oldCursorIndexUtf16 = editText.selectionStart.coerceAtLeast(0)
+        oldCursorIndexBeforeChange = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(s?.toString() ?: "", oldCursorIndexUtf16)
+        oldCursorIndexBeforeChangeUtf16 = oldCursorIndexUtf16
 
         if ((after > 0 || count > 0) && editText.layout != null) {
             val line = editText.layout.getLineForOffset(start)
@@ -161,7 +174,7 @@ class TypingAnimationController(
             }
         }
 
-        android.util.Log.d(TAG, "beforeTextChanged: cursor=($cursorBeforeX, $cursorBeforeY)")
+        DiagnosticsLogger.d(TAG, "beforeTextChanged: cursor=($cursorBeforeX, $cursorBeforeY)")
     }
 
     fun onTextChanged(start: Int, count: Int) {
@@ -183,10 +196,11 @@ class TypingAnimationController(
             return
         }
 
-        android.util.Log.d(TAG, "afterTextChanged: lastStart=$lastAddedStart, lastCount=$lastAddedCount, typingEnabled=$typingAnimationEnabled")
+        DiagnosticsLogger.d(TAG, "afterTextChanged: lastStart=$lastAddedStart, lastCount=$lastAddedCount, typingEnabled=$typingAnimationEnabled")
 
         val newText = editable.toString()
-        val newCursorIndex = editText.selectionStart.coerceAtLeast(0)
+        val newCursorIndexUtf16 = editText.selectionStart.coerceAtLeast(0)
+        val newCursorIndexByte = UtfOffsetConverter.utf16OffsetToUtf8ByteOffset(newText, newCursorIndexUtf16)
 
         // ── Core 驱动路径 ──
         // 如果有 animationEventProvider，Core 是唯一裁判
@@ -197,8 +211,8 @@ class TypingAnimationController(
                 val events = _animationEventProvider!!.provide(
                     oldText = oldTextBeforeChange,
                     newText = newText,
-                    oldCursorIndex = oldCursorIndexBeforeChange.toUInt(),
-                    newCursorIndex = newCursorIndex.toUInt(),
+                    oldCursorIndex = oldCursorIndexBeforeChange.toUInt(),  // UTF-8 byte offset
+                    newCursorIndex = newCursorIndexByte.toUInt(),           // UTF-8 byte offset
                     cause = cause,
                     maxAnimatedChars = MAX_ANIMATED_CHARS.toUInt(),
                     animationDurationMs = typingAnimationDurationMs.toULong()
@@ -215,17 +229,18 @@ class TypingAnimationController(
                 for (event in events) {
                     when (event.kind) {
                         EditorAnimationKindData.Insert -> {
+                            val rangeStartUtf16 = UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(newText, event.rangeStart)
                             lastEditorAnimationEvent = AndroidEditorAnimationEvent(
                                 kind = "insert",
-                                start = event.rangeStart,
+                                start = rangeStartUtf16,
                                 text = event.text,
                                 durationMs = event.durationMs
                             )
-                            val destX = editText.layout.getPrimaryHorizontal(event.rangeStart)
-                            val line = editText.layout.getLineForOffset(event.rangeStart)
+                            val destX = editText.layout.getPrimaryHorizontal(rangeStartUtf16)
+                            val line = editText.layout.getLineForOffset(rangeStartUtf16)
                             val destY = editText.layout.getLineBaseline(line).toFloat()
                             renderLayer.addTypingAnim(OverlayAnim(
-                                insertedStart = event.rangeStart,
+                                insertedStart = rangeStartUtf16,
                                 insertedText = event.text,
                                 startX = cursorBeforeX,
                                 startY = cursorBeforeY,
@@ -236,17 +251,18 @@ class TypingAnimationController(
                             ))
                         }
                         EditorAnimationKindData.Delete -> {
+                            val rangeStartUtf16 = UtfOffsetConverter.utf8ByteOffsetToUtf16Offset(newText, event.rangeStart)
                             lastEditorAnimationEvent = AndroidEditorAnimationEvent(
                                 kind = "delete",
-                                start = event.rangeStart,
+                                start = rangeStartUtf16,
                                 text = event.text,
                                 durationMs = event.durationMs
                             )
                             // 删除动画：起始位置是被删字符位置（在 beforeTextChanged 中记录），
                             // 目标位置是删除后的光标位置
                             if (pendingDeleteStart >= 0) {
-                                val destX = editText.layout.getPrimaryHorizontal(newCursorIndex)
-                                val destLine = editText.layout.getLineForOffset(newCursorIndex)
+                                val destX = editText.layout.getPrimaryHorizontal(newCursorIndexUtf16)
+                                val destLine = editText.layout.getLineForOffset(newCursorIndexUtf16)
                                 val destY = editText.layout.getLineBaseline(destLine).toFloat()
                                 renderLayer.addTypingAnim(OverlayAnim(
                                     insertedStart = pendingDeleteStart,
@@ -273,7 +289,7 @@ class TypingAnimationController(
                 return
             } catch (e: Exception) {
                 providerFailedLastTime = true
-                android.util.Log.w(TAG, "Core animation events failed: typingEnabled=$typingAnimationEnabled, providerInjected=true, providerFailed=true, skipping animation", e)
+                DiagnosticsLogger.w(TAG, "Core animation events failed: typingEnabled=$typingAnimationEnabled, providerInjected=true, providerFailed=true, skipping animation", e)
                 clearPendingDelete()
                 lastAddedStart = -1
                 lastAddedCount = 0
@@ -281,91 +297,20 @@ class TypingAnimationController(
             }
         }
 
-        // ── 本地回退路径（临时降级，仅 Core 未初始化时使用）──
-        // ⚠️ 边界约束：
-        // 1. 仅当 animationEventProvider 为 null 时使用（Core 未初始化的场景）
-        // 2. Core provider 存在时，上面已经 return，不会走到这里
-        // 3. Core 调用失败时，上面也已 return（跳过动画），不会走到这里
-        // 4. 正式编辑页初始化后必须注入 provider；如果没注入，typing animation 应禁用
-        // 5. 此路径将在 Core 初始化流程稳定后移除
-        // 6. 如果 provider 仍为 null 但 typingAnimationEnabled 为 true，说明初始化未完成，
-        //    此路径仅作为过渡，不应长期依赖
-
-        // 提交待处理的删除动画
-        if (pendingDeleteStart >= 0 && typingAnimationEnabled && editText.layout != null) {
-            val newCursorOffset = editText.selectionStart
-            if (newCursorOffset >= 0) {
-                val newLine = editText.layout.getLineForOffset(newCursorOffset)
-                val destX = editText.layout.getPrimaryHorizontal(newCursorOffset)
-                val destY = editText.layout.getLineBaseline(newLine).toFloat()
-                renderLayer.addTypingAnim(OverlayAnim(
-                    insertedStart = pendingDeleteStart,
-                    insertedText = pendingDeleteText,
-                    startX = pendingDeleteStartX,
-                    startY = pendingDeleteStartY,
-                    endX = destX,
-                    endY = destY,
-                    durationMs = typingAnimationDurationMs,
-                    isDeletion = true
-                ))
-            }
-            clearPendingDelete()
+        // ── 无 Core provider 路径 ──
+        // Core provider 为 null：正式编辑页不应走到这里。
+        // 如果走到，说明 provider 未注入，typing animation 应禁用。
+        // 记录 diagnostics，不执行本地 fallback 动画。
+        if (typingAnimationEnabled && _animationEventProvider == null) {
+            com.xiwei.sujian.diagnostics.DiagnosticsLogger.w(
+                TAG,
+                "afterTextChanged: provider is null, typing animation disabled. " +
+                "EditorFragment must inject AnimationEventProvider before enabling typing animation."
+            )
         }
-
-        val composingStart = BaseInputConnection.getComposingSpanStart(editable)
-        val composingEnd = BaseInputConnection.getComposingSpanEnd(editable)
-        val isComposing = composingStart != -1 && composingEnd != -1
-
-        if (isComposing && lastAddedStart >= composingStart && lastAddedStart + lastAddedCount <= composingEnd) {
-            android.util.Log.d(TAG, "afterTextChanged: skipping composing text")
-            lastAddedStart = -1
-            lastAddedCount = 0
-            return
-        }
-
-        if (lastAddedCount in 1..3 && lastAddedStart >= 0) {
-            val start = lastAddedStart
-            val end = kotlin.math.min(start + lastAddedCount, editable.length)
-
-            if (end > start && typingAnimationDurationMs > 0) {
-                val insertedText = editable.subSequence(start, end).toString()
-                if (insertedText.contains('\n') || insertedText.contains('\r')) {
-                    lastAddedStart = -1
-                    lastAddedCount = 0
-                    return
-                }
-
-                lastEditorAnimationEvent = AndroidEditorAnimationEvent(
-                    kind = "insert",
-                    start = start,
-                    text = insertedText,
-                    durationMs = typingAnimationDurationMs
-                )
-
-                if (typingAnimationEnabled && editText.layout != null) {
-                    val animEnd = kotlin.math.min(start + lastAddedCount, editable.length)
-                    if (animEnd > start) {
-                        val destX = editText.layout.getPrimaryHorizontal(start)
-                        val line = editText.layout.getLineForOffset(start)
-                        val destY = editText.layout.getLineBaseline(line).toFloat()
-                        renderLayer.addTypingAnim(OverlayAnim(
-                            insertedStart = start,
-                            insertedText = insertedText,
-                            startX = cursorBeforeX,
-                            startY = cursorBeforeY,
-                            endX = destX,
-                            endY = destY,
-                            durationMs = typingAnimationDurationMs,
-                            isDeletion = false
-                        ))
-                    }
-                }
-
-                android.util.Log.d(TAG, "afterTextChanged: local fallback insert event: start=$start, length=${insertedText.length}")
-            }
-            lastAddedStart = -1
-            lastAddedCount = 0
-        }
+        clearPendingDelete()
+        lastAddedStart = -1
+        lastAddedCount = 0
     }
 
     fun onDetachedFromWindow() {
@@ -437,8 +382,8 @@ fun interface AnimationEventProvider {
      *
      * @param oldText 变化前的文本
      * @param newText 变化后的文本
-     * @param oldCursorIndex 变化前的光标位置（UTF-8 byte offset，Android 端为 char offset）
-     * @param newCursorIndex 变化后的光标位置
+     * @param oldCursorIndex 变化前的光标位置（UTF-8 byte offset，调用方需从 UTF-16 转换）
+     * @param newCursorIndex 变化后的光标位置（UTF-8 byte offset，调用方需从 UTF-16 转换）
      * @param cause 变化原因（"Typing", "Delete", "ImeComposition", "Paste", "Load" 等）
      * @param maxAnimatedChars 最大动画字符数
      * @param animationDurationMs 动画时长（毫秒）

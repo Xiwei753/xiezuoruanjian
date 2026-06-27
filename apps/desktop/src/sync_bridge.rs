@@ -42,13 +42,21 @@ pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str)
         "token_missing" => "configured_untested".to_string(),
         "empty_url" => "not_configured".to_string(),
         "missing_permission" => "permission_missing".to_string(),
-        "repo_not_found_or_no_permission" | "github_unauthorized" | "github_forbidden" => {
-            "auth_failed".to_string()
-        }
+        "repo_not_found_or_no_permission" | "github_unauthorized" | "github_forbidden"
+        | "token_invalid" | "token_permission_denied" => "auth_failed".to_string(),
         "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => {
             "network_failed".to_string()
         }
         "branch_missing" | "remote_branch_missing" => "branch_missing".to_string(),
+        "not_found" | "file_not_found" => {
+            // 404 含义需结合 fallback 消息判断：可能是仓库/权限问题，也可能是分支不存在
+            let lower = fallback_msg.to_lowercase();
+            if lower.contains("branch") || lower.contains("ref") {
+                "branch_missing".to_string()
+            } else {
+                "auth_failed".to_string()
+            }
+        }
         "non_fast_forward" => "non_fast_forward".to_string(),
         "conflict" | "checkout_conflict" | "local_blocking_file" => "conflict".to_string(),
         "unrelated_histories" => "unrelated_histories".to_string(),
@@ -125,7 +133,8 @@ pub fn sync_error_category(msg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{sync_error_category, sync_error_category_from_code};
+    use super::{determine_diagnostics_status, sync_error_category, sync_error_category_from_code};
+    use writer_core::api::types::SyncDiagnosticsResultDto;
 
     #[test]
     fn test_sync_error_category_fallback_parsing() {
@@ -216,22 +225,170 @@ mod tests {
             "network_failed"
         );
     }
+
+    #[test]
+    fn test_not_found_404_mapped_to_auth_failed_or_branch_missing() {
+        // not_found without branch/ref context → auth_failed
+        assert_eq!(
+            sync_error_category_from_code(Some("not_found"), "some error occurred"),
+            "auth_failed"
+        );
+        // not_found with branch context → branch_missing
+        assert_eq!(
+            sync_error_category_from_code(Some("not_found"), "branch main not found"),
+            "branch_missing"
+        );
+        // not_found with ref context → branch_missing
+        assert_eq!(
+            sync_error_category_from_code(Some("not_found"), "ref not found on remote"),
+            "branch_missing"
+        );
+    }
+
+    #[test]
+    fn test_file_not_found_mapped_to_auth_failed_or_branch_missing() {
+        // file_not_found without branch/ref context → auth_failed
+        assert_eq!(
+            sync_error_category_from_code(Some("file_not_found"), "some error"),
+            "auth_failed"
+        );
+        // file_not_found with branch context → branch_missing
+        assert_eq!(
+            sync_error_category_from_code(Some("file_not_found"), "branch does not exist"),
+            "branch_missing"
+        );
+    }
+
+    #[test]
+    fn test_repo_not_found_mapped_to_auth_failed() {
+        assert_eq!(
+            sync_error_category_from_code(Some("repo_not_found_or_no_permission"), "any message"),
+            "auth_failed"
+        );
+    }
+
+    #[test]
+    fn test_remote_branch_missing_mapped_to_branch_missing() {
+        assert_eq!(
+            sync_error_category_from_code(Some("remote_branch_missing"), "any message"),
+            "branch_missing"
+        );
+    }
+
+    #[test]
+    fn test_token_invalid_and_permission_denied_mapped_to_auth_failed() {
+        assert_eq!(
+            sync_error_category_from_code(Some("token_invalid"), "any message"),
+            "auth_failed"
+        );
+        assert_eq!(
+            sync_error_category_from_code(Some("token_permission_denied"), "any message"),
+            "auth_failed"
+        );
+    }
+
+    #[test]
+    fn test_404_never_maps_to_generic_error() {
+        // Ensure 404-related categories never fall through to "error"
+        let categories_404 = ["not_found", "file_not_found", "repo_not_found_or_no_permission"];
+        for cat in &categories_404 {
+            let result = sync_error_category_from_code(Some(cat), "generic message");
+            assert_ne!(
+                result, "error",
+                "category '{}' should not map to generic 'error'",
+                cat
+            );
+            assert_ne!(
+                result, "api_error",
+                "category '{}' should not map to 'api_error'",
+                cat
+            );
+        }
+    }
+
+    /// Helper: 构造一个 success=true 的 SyncDiagnosticsResultDto，仅关键字段有值。
+    fn make_success_dto() -> SyncDiagnosticsResultDto {
+        SyncDiagnosticsResultDto {
+            success: true,
+            backend_type: "github".to_string(),
+            android_has_internet_permission: false,
+            android_has_access_network_state_permission: false,
+            android_network_state: String::new(),
+            tcp_probe_ok: false,
+            tcp_probe_status: String::new(),
+            http_connect_probe_ok: false,
+            http_connect_probe_status: String::new(),
+            libgit2_probe_ok: false,
+            libgit2_probe_status: String::new(),
+            network_ok: true,
+            auth_ok: true,
+            repo_ok: true,
+            branch_ok: true,
+            network_status: String::new(),
+            auth_status: String::new(),
+            repo_status: String::new(),
+            branch_status: String::new(),
+            remote_url_sanitized: String::new(),
+            transport: String::new(),
+            error_category: String::new(),
+            user_message: None,
+            raw_error: None,
+            chosen_network_mode: None,
+            proxy_policy: String::new(),
+            network_probe_summary: None,
+        }
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_auth_categories() {
+        let mut result = make_success_dto();
+        result.success = false;
+
+        result.error_category = "token_invalid".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "auth_failed");
+
+        result.error_category = "token_permission_denied".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "auth_failed");
+
+        result.error_category = "repo_not_found_or_no_permission".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "auth_failed");
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_branch_missing() {
+        let mut result = make_success_dto();
+        result.success = false;
+        result.error_category = "remote_branch_missing".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "branch_missing");
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_network_failed() {
+        let mut result = make_success_dto();
+        result.success = false;
+
+        result.error_category = "dns_failed".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "network_failed");
+
+        result.error_category = "tls_failed".to_string();
+        assert_eq!(determine_diagnostics_status(&result), "network_failed");
+    }
+
+    #[test]
+    fn test_determine_diagnostics_status_success() {
+        let result = make_success_dto();
+        assert_eq!(determine_diagnostics_status(&result), "configured_untested");
+    }
 }
 
-pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> &'static str {
-    if !result.success {
-        match result.error_category.as_str() {
-            "token_missing" => "configured_untested",
-            "empty_url" => "not_configured",
-            cat if cat.contains("auth") || cat == "token_missing" => "configured_untested",
-            cat if cat.contains("network") || cat.contains("proxy") || cat.contains("connect") => {
-                "network_failed"
-            }
-            "repo_not_found_or_no_permission" => "auth_failed",
-            _ => "error",
-        }
+pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> String {
+    if result.success {
+        "configured_untested".to_string()
     } else {
-        "configured_untested"
+        sync_error_category_from_code(
+            Some(result.error_category.as_str()),
+            result.raw_error.as_deref().unwrap_or(""),
+        )
     }
 }
 
@@ -247,6 +404,9 @@ pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
     msg.push_str(&format!("\nTransport: {}", result.transport));
     if let Some(mode) = result.chosen_network_mode.as_ref() {
         msg.push_str(&format!("\n网络模式: {}", mode));
+    }
+    if !result.proxy_policy.is_empty() {
+        msg.push_str(&format!("\n代理策略: {}", result.proxy_policy));
     }
 
     msg.push_str(&format!(
