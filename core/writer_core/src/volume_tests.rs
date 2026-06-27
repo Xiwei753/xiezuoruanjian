@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use crate::project::create_project;
-    use crate::volume::{create_volume, list_volumes, normalize_rel_path, rename_volume, reorder_volumes};
+    use crate::volume::{create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume, reorder_volumes};
     use crate::workspace::create_workspace;
     use tempfile::tempdir;
 
@@ -85,6 +85,30 @@ mod tests {
             Err(crate::error::Error::Other(msg)) => assert_eq!(msg, "Invalid ordered_ids for reorder"),
             _ => panic!("Expected Error::Other for extra non-existent IDs"),
         }
+    }
+
+    #[test]
+    fn test_delete_volume() {
+        let dir = tempdir().unwrap();
+        let workspace_path = dir.path();
+        create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "Test Project").unwrap();
+        let volume = create_volume(workspace_path, &project.id, "Test Volume").unwrap();
+
+        let volumes_before = list_volumes(workspace_path, &project.id).unwrap();
+        let count_before = volumes_before.len();
+
+        delete_volume(workspace_path, &project.id, &volume.id).unwrap();
+
+        let volumes_after = list_volumes(workspace_path, &project.id).unwrap();
+        assert_eq!(volumes_after.len(), count_before - 1);
+
+        let trash_dir = workspace_path.join("app-meta/sync/trash");
+        assert!(std::fs::read_dir(trash_dir).unwrap().count() > 0);
+
+        let state = crate::sync::SyncService::load_sync_state(workspace_path).unwrap();
+        assert!(!state.tombstones.is_empty());
     }
 
     #[test]
