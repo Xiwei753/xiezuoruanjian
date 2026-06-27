@@ -243,6 +243,21 @@ enum class FirstSyncMode {
     @SerializedName("none") None
 }
 
+data class SyncConflictSummary(
+    val status: String,
+    @SerializedName("local_dirty") val localDirty: Boolean,
+    @SerializedName("remote_changed") val remoteChanged: Boolean,
+    @SerializedName("conflicted_files") val conflictedFiles: List<String> = emptyList(),
+    @SerializedName("blocked_reason") val blockedReason: String,
+    @SerializedName("safe_next_steps") val safeNextSteps: List<String> = emptyList()
+)
+
+data class SettingConflictDetail(
+    val key: String,
+    @SerializedName("local_value") val localValue: String,
+    @SerializedName("remote_value") val remoteValue: String
+)
+
 data class SyncConflict(
     @SerializedName("local_path") val localPath: String,
     @SerializedName("remote_path") val remotePath: String,
@@ -300,6 +315,8 @@ data class SyncResult(
     @SerializedName("overwritten_files") val overwrittenFiles: List<String> = emptyList(),
     @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList(),
     val conflicts: List<SyncConflict> = emptyList(),
+    @SerializedName("conflict_summary") val conflictSummary: SyncConflictSummary? = null,
+    @SerializedName("settings_conflicts") val settingsConflicts: List<SettingConflictDetail>? = null,
     @SerializedName("commit_hash") val commitHash: String? = null,
     val error: String? = null,
     @SerializedName("error_category") val errorCategory: String? = null,

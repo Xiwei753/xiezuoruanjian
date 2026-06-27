@@ -301,7 +301,7 @@ internal class SyncSettingsHelper(
                                     if (summary.conflictedFiles.isNotEmpty()) {
                                         msgBuilder.append(activity.getString(R.string.sync_conflict_files)).append("\n")
                                         for (file in summary.conflictedFiles) {
-                                            msgBuilder.append("  - ").append(file).append("\n")
+                                            msgBuilder.append("  - ").append(file as CharSequence).append("\n")
                                         }
                                         msgBuilder.append("\n")
                                     }
@@ -327,7 +327,7 @@ internal class SyncSettingsHelper(
                                 if (summary != null && summary.safeNextSteps.isNotEmpty()) {
                                     msgBuilder.append(activity.getString(R.string.sync_safe_suggestions)).append("\n")
                                     for (step in summary.safeNextSteps) {
-                                        msgBuilder.append("• ").append(step).append("\n")
+                                        msgBuilder.append("• ").append(step as CharSequence).append("\n")
                                     }
                                 } else {
                                     msgBuilder.append(activity.getString(R.string.sync_safe_suggestions)).append("\n")
