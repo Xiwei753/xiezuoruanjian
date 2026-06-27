@@ -34,10 +34,7 @@ fn map_git_error(e: crate::Error) -> crate::Error {
     if let crate::Error::Io(io_err) = &e {
         let msg = io_err.to_string();
         if msg.contains("failed to resolve address") {
-            return crate::Error::Io(std::io::Error::other(format!(
-                "DNS 解析失败: {}",
-                msg
-            )));
+            return crate::Error::Io(std::io::Error::other(format!("DNS 解析失败: {}", msg)));
         }
     }
     e
@@ -640,7 +637,8 @@ impl SyncService {
             let mut succeeded: std::collections::HashSet<String> = std::collections::HashSet::new();
             if let Ok(repo) = git2::Repository::open(workspace_path) {
                 let remote_branch_ref = format!("refs/remotes/origin/{}", config.branch);
-                if let Ok(remote_commit) = repo.find_reference(&remote_branch_ref)
+                if let Ok(remote_commit) = repo
+                    .find_reference(&remote_branch_ref)
                     .and_then(|r| r.peel_to_commit())
                 {
                     let remote_tree = remote_commit.tree();
@@ -653,10 +651,8 @@ impl SyncService {
                                         let _ = std::fs::create_dir_all(parent);
                                     }
                                     let content = blob.content();
-                                    let tmp_path = full_path.with_extension(format!(
-                                        "tmp.{}",
-                                        uuid::Uuid::new_v4()
-                                    ));
+                                    let tmp_path = full_path
+                                        .with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                                     if let Err(e) = std::fs::write(&tmp_path, content) {
                                         eprintln!(
                                             "[sync] pending_take_remote: write failed path={} err={}",
@@ -673,16 +669,17 @@ impl SyncService {
                                     }
                                     // Update known_files to the hash of the newly written content
                                     let hash = format!("{:x}", md5::compute(content));
-                                    state_for_pending
-                                        .known_files
-                                        .insert(path.clone(), hash);
+                                    state_for_pending.known_files.insert(path.clone(), hash);
                                     let now_ts = chrono::Utc::now().timestamp_millis();
                                     state_for_pending
                                         .known_files_updated_at
                                         .insert(path.clone(), now_ts);
                                     result.downloaded_files.push(path.clone());
                                     succeeded.insert(path.clone());
-                                    eprintln!("[sync] pending_take_remote checked out path={}", path);
+                                    eprintln!(
+                                        "[sync] pending_take_remote checked out path={}",
+                                        path
+                                    );
                                 }
                             } else {
                                 eprintln!(

@@ -196,7 +196,10 @@ mod tests {
         assert!(!envelope.success);
         assert_eq!(envelope.data, None);
         assert_eq!(envelope.error_code, Some(expected_error_code));
-        assert_eq!(envelope.message_key, Some("error.project_not_found".to_string()));
+        assert_eq!(
+            envelope.message_key,
+            Some("error.project_not_found".to_string())
+        );
         assert!(envelope.message_args.unwrap().is_empty());
         // user_message 不再填充
         assert_eq!(envelope.user_message, None);
@@ -210,7 +213,10 @@ mod tests {
 
         assert!(!envelope.success);
         assert_eq!(envelope.error_code.as_deref(), Some("PROJECT_NOT_FOUND"));
-        assert_eq!(envelope.message_key.as_deref(), Some("error.project_not_found"));
+        assert_eq!(
+            envelope.message_key.as_deref(),
+            Some("error.project_not_found")
+        );
         assert!(envelope.message_args.as_ref().unwrap().is_empty());
         // user_message 不再填充
         assert_eq!(envelope.user_message, None);
@@ -230,7 +236,10 @@ mod tests {
         };
         let envelope = ResultEnvelope::<()>::error(error);
 
-        assert_eq!(envelope.message_key.as_deref(), Some("error.empty_overwrite_blocked"));
+        assert_eq!(
+            envelope.message_key.as_deref(),
+            Some("error.empty_overwrite_blocked")
+        );
         let args = envelope.message_args.unwrap();
         assert_eq!(args.get("chapter_id").unwrap(), "ch1");
         assert_eq!(args.get("old_len").unwrap(), "100");

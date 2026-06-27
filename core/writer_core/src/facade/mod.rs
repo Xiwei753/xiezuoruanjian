@@ -191,7 +191,6 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path());
 
-
         assert!(core.move_chapter_to_trash("c1").is_err());
     }
 
@@ -203,10 +202,7 @@ mod tests {
 
         let config = core.load_sync_config().unwrap();
         assert!(!config.enabled);
-        assert_eq!(
-            config.backend_type,
-            crate::sync::BackendType::GithubApi
-        );
+        assert_eq!(config.backend_type, crate::sync::BackendType::GithubApi);
 
         let mut new_config = config.clone();
         new_config.enabled = true;
@@ -258,16 +254,10 @@ mod tests {
         .unwrap();
 
         let loaded = core.load_sync_config().unwrap();
-        assert_eq!(
-            loaded.backend_type,
-            crate::sync::BackendType::GithubApi
-        );
+        assert_eq!(loaded.backend_type, crate::sync::BackendType::GithubApi);
 
         let persisted = core.load_sync_config().unwrap();
-        assert_eq!(
-            persisted.backend_type,
-            crate::sync::BackendType::GithubApi
-        );
+        assert_eq!(persisted.backend_type, crate::sync::BackendType::GithubApi);
     }
 
     #[test]
@@ -287,27 +277,51 @@ mod tests {
         let core = WriterCore::new(temp_dir.path());
         core.create_workspace().unwrap();
 
-        let result_empty = core.execute_action("settings.editor.font_size.set", "", "").unwrap();
+        let result_empty = core
+            .execute_action("settings.editor.font_size.set", "", "")
+            .unwrap();
         assert!(!result_empty.success);
-        assert_eq!(result_empty.message.unwrap(), "Missing or invalid fontSize parameter");
+        assert_eq!(
+            result_empty.message.unwrap(),
+            "Missing or invalid fontSize parameter"
+        );
 
-        let result_ws = core.execute_action("settings.editor.font_size.set", "   ", "").unwrap();
+        let result_ws = core
+            .execute_action("settings.editor.font_size.set", "   ", "")
+            .unwrap();
         assert!(!result_ws.success);
-        assert_eq!(result_ws.message.unwrap(), "Missing or invalid fontSize parameter");
+        assert_eq!(
+            result_ws.message.unwrap(),
+            "Missing or invalid fontSize parameter"
+        );
 
-        let result_null = core.execute_action("settings.editor.font_size.set", "null", "").unwrap();
+        let result_null = core
+            .execute_action("settings.editor.font_size.set", "null", "")
+            .unwrap();
         assert!(!result_null.success);
-        assert_eq!(result_null.message.unwrap(), "Missing or invalid fontSize parameter");
+        assert_eq!(
+            result_null.message.unwrap(),
+            "Missing or invalid fontSize parameter"
+        );
 
-        let result_invalid = core.execute_action("settings.editor.font_size.set", "{ invalid }", "").unwrap();
+        let result_invalid = core
+            .execute_action("settings.editor.font_size.set", "{ invalid }", "")
+            .unwrap();
         assert!(!result_invalid.success);
         assert_eq!(result_invalid.message.unwrap(), "invalid args json");
 
-        let result_valid_json = core.execute_action("settings.editor.font_size.set", "{}", "").unwrap();
+        let result_valid_json = core
+            .execute_action("settings.editor.font_size.set", "{}", "")
+            .unwrap();
         assert!(!result_valid_json.success);
-        assert_eq!(result_valid_json.message.unwrap(), "Missing or invalid fontSize parameter");
+        assert_eq!(
+            result_valid_json.message.unwrap(),
+            "Missing or invalid fontSize parameter"
+        );
 
-        let result_valid = core.execute_action("settings.editor.font_size.set", "{\"fontSize\": 14.0}", "").unwrap();
+        let result_valid = core
+            .execute_action("settings.editor.font_size.set", "{\"fontSize\": 14.0}", "")
+            .unwrap();
         assert!(result_valid.success);
         assert_eq!(result_valid.message.unwrap(), "Font size updated");
     }

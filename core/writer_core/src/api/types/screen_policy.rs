@@ -298,16 +298,44 @@ mod tests {
         assert!(json.contains("\"visibleIn\""));
 
         // PascalCase 枚举值（enum 已去掉 rename_all，serde 默认输出标识符名）
-        assert!(json.contains("\"Writing\""), "enum ScreenRoleDto 应输出 PascalCase \"Writing\"，实际 JSON: {}", json);
-        assert!(json.contains("\"Back\""), "enum ActionRoleDto 应输出 PascalCase \"Back\"，实际 JSON: {}", json);
-        assert!(json.contains("\"TopLeading\""), "enum ActionPlacementDto 应输出 PascalCase \"TopLeading\"，实际 JSON: {}", json);
-        assert!(json.contains("\"SinglePane\""), "enum ShellModeDto 应输出 PascalCase \"SinglePane\"，实际 JSON: {}", json);
+        assert!(
+            json.contains("\"Writing\""),
+            "enum ScreenRoleDto 应输出 PascalCase \"Writing\"，实际 JSON: {}",
+            json
+        );
+        assert!(
+            json.contains("\"Back\""),
+            "enum ActionRoleDto 应输出 PascalCase \"Back\"，实际 JSON: {}",
+            json
+        );
+        assert!(
+            json.contains("\"TopLeading\""),
+            "enum ActionPlacementDto 应输出 PascalCase \"TopLeading\"，实际 JSON: {}",
+            json
+        );
+        assert!(
+            json.contains("\"SinglePane\""),
+            "enum ShellModeDto 应输出 PascalCase \"SinglePane\"，实际 JSON: {}",
+            json
+        );
 
         // 确保枚举值不是 camelCase（检查 enum 字段上下文）
-        assert!(!json.contains("\"screenRole\":\"writing\""), "enum ScreenRoleDto 不应输出 camelCase \"writing\"");
-        assert!(!json.contains("\"role\":\"back\""), "enum ActionRoleDto 不应输出 camelCase \"back\"");
-        assert!(!json.contains("\"placement\":\"topLeading\""), "enum ActionPlacementDto 不应输出 camelCase \"topLeading\"");
-        assert!(!json.contains("\"visibleIn\":[\"singlePane\"]"), "enum ShellModeDto 不应输出 camelCase \"singlePane\"");
+        assert!(
+            !json.contains("\"screenRole\":\"writing\""),
+            "enum ScreenRoleDto 不应输出 camelCase \"writing\""
+        );
+        assert!(
+            !json.contains("\"role\":\"back\""),
+            "enum ActionRoleDto 不应输出 camelCase \"back\""
+        );
+        assert!(
+            !json.contains("\"placement\":\"topLeading\""),
+            "enum ActionPlacementDto 不应输出 camelCase \"topLeading\""
+        );
+        assert!(
+            !json.contains("\"visibleIn\":[\"singlePane\"]"),
+            "enum ShellModeDto 不应输出 camelCase \"singlePane\""
+        );
 
         // 反序列化
         let deserialized: ScreenPolicyDto = serde_json::from_str(&json).unwrap();

@@ -51,7 +51,6 @@ impl WriterAppService {
         self.api.create_project(&title)
     }
 
-
     pub fn get_project_stats(&self, project_id: String) -> Result<ProjectStatsDto, WriterError> {
         self.api.get_project_stats(&project_id)
     }
@@ -64,7 +63,6 @@ impl WriterAppService {
         self.api.rename_project(&project_id, &new_title)
     }
 
-
     pub fn delete_project(&self, project_id: String) -> Result<bool, WriterError> {
         self.api.delete_project(&project_id)
     }
@@ -72,7 +70,6 @@ impl WriterAppService {
     pub fn reorder_projects(&self, ordered_project_ids: Vec<String>) -> Result<bool, WriterError> {
         self.api.reorder_projects(&ordered_project_ids)
     }
-
 
     pub fn list_volumes(&self, project_id: String) -> Result<Vec<VolumeDto>, WriterError> {
         self.api.list_volumes(&project_id)
@@ -86,7 +83,6 @@ impl WriterAppService {
         self.api.create_volume(&project_id, &title)
     }
 
-
     pub fn rename_volume(
         &self,
         project_id: String,
@@ -95,7 +91,6 @@ impl WriterAppService {
     ) -> Result<bool, WriterError> {
         self.api.rename_volume(&project_id, &volume_id, &new_title)
     }
-
 
     pub fn delete_volume(
         &self,
@@ -113,7 +108,6 @@ impl WriterAppService {
         self.api.reorder_volumes(&project_id, &ordered_volume_ids)
     }
 
-
     pub fn list_chapters(
         &self,
         project_id: String,
@@ -130,7 +124,6 @@ impl WriterAppService {
     ) -> Result<ChapterMetaDto, WriterError> {
         self.api.create_chapter(&project_id, &volume_id, &title)
     }
-
 
     pub fn create_chapter_in_project(
         &self,
@@ -151,7 +144,6 @@ impl WriterAppService {
             .rename_chapter(&project_id, &volume_id, &chapter_id, &new_title)
     }
 
-
     pub fn delete_chapter(
         &self,
         project_id: String,
@@ -171,7 +163,6 @@ impl WriterAppService {
         self.api
             .reorder_chapters(&project_id, &volume_id, &ordered_chapter_ids)
     }
-
 
     pub fn open_chapter(
         &self,
@@ -220,7 +211,6 @@ impl WriterAppService {
             .clear_chapter_content(&project_id, &volume_id, &chapter_id)
     }
 
-
     pub fn update_chapter_note(
         &self,
         project_id: String,
@@ -232,7 +222,6 @@ impl WriterAppService {
             .update_chapter_note(&project_id, &volume_id, &chapter_id, &note)
     }
 
-
     pub fn load_local_settings(&self) -> Result<LocalSettingsDto, WriterError> {
         self.api.load_local_settings()
     }
@@ -240,7 +229,6 @@ impl WriterAppService {
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> Result<bool, WriterError> {
         self.api.save_local_settings(settings)
     }
-
 
     pub fn load_syncable_settings(&self) -> Result<SyncableSettingsDto, WriterError> {
         self.api.load_syncable_settings()
@@ -252,7 +240,6 @@ impl WriterAppService {
     ) -> Result<bool, WriterError> {
         self.api.save_syncable_settings(settings)
     }
-
 
     pub fn load_sync_config(&self) -> Result<SyncConfigDto, WriterError> {
         self.api.load_sync_config()
@@ -300,7 +287,6 @@ impl WriterAppService {
     pub fn resolve_conflict_mark_merged(&self, path: String) -> Result<bool, WriterError> {
         self.api.resolve_conflict_mark_merged(&path)
     }
-
 
     pub fn get_writing_stats_summary(
         &self,
@@ -560,7 +546,10 @@ impl WriterAppService {
 
     // ── Layout Policy ──
 
-    pub fn resolve_layout(&self, metrics: crate::api::WindowMetricsDto) -> crate::api::LayoutPlanDto {
+    pub fn resolve_layout(
+        &self,
+        metrics: crate::api::WindowMetricsDto,
+    ) -> crate::api::LayoutPlanDto {
         let core_metrics: crate::layout_policy::WindowMetrics = metrics.into();
         let plan = crate::layout_policy::resolve_layout(&core_metrics);
         plan.into()

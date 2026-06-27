@@ -160,8 +160,13 @@ pub fn create_project(workspace_path: &Path, title: &str) -> Result<Project> {
 
 pub fn rename_project(workspace_path: &Path, project_id: &str, new_title: &str) -> Result<()> {
     let projects = list_projects(workspace_path)?;
-    if projects.iter().any(|p| p.title == new_title && p.id != project_id) {
-        return Err(crate::error::Error::Other("Project title already exists".to_string()));
+    if projects
+        .iter()
+        .any(|p| p.title == new_title && p.id != project_id)
+    {
+        return Err(crate::error::Error::Other(
+            "Project title already exists".to_string(),
+        ));
     }
 
     let project_dir = workspace_path.join("projects").join(project_id);
@@ -354,21 +359,37 @@ mod tests {
         let volume = &volumes[0];
 
         // Create two chapters
-        let ch1 = crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
-        let _ch2 = crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch2").unwrap();
+        let ch1 =
+            crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+        let _ch2 =
+            crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch2").unwrap();
 
         // Save ch1 with content (updates its updated_at)
         crate::chapter::save_chapter_verified(
-            workspace_path, &project.id, &volume.id, &ch1.id, "Some content",
-        ).unwrap();
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &ch1.id,
+            "Some content",
+        )
+        .unwrap();
 
         // The aggregated updated_at should be the max of all chapter updated_at values
-        let aggregated = get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
-        assert!(!aggregated.is_empty(), "aggregated updated_at should not be empty");
+        let aggregated =
+            get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
+        assert!(
+            !aggregated.is_empty(),
+            "aggregated updated_at should not be empty"
+        );
 
         // Verify it matches the latest chapter's updated_at
-        let chapters = crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
-        let max_updated = chapters.iter().map(|c| c.updated_at.as_str()).max().unwrap();
+        let chapters =
+            crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+        let max_updated = chapters
+            .iter()
+            .map(|c| c.updated_at.as_str())
+            .max()
+            .unwrap();
         assert_eq!(aggregated, max_updated);
     }
 
@@ -384,7 +405,8 @@ mod tests {
         let volume = &volumes[0];
 
         // No chapters created — should fallback to volume's created_at
-        let aggregated = get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
+        let aggregated =
+            get_volume_updated_at_aggregated(workspace_path, &project.id, &volume.id).unwrap();
         assert_eq!(aggregated, volume.created_at);
     }
 
@@ -399,17 +421,28 @@ mod tests {
         let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
         let volume = &volumes[0];
 
-        let ch1 = crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
+        let ch1 =
+            crate::chapter::create_chapter(workspace_path, &project.id, &volume.id, "Ch1").unwrap();
         crate::chapter::save_chapter_verified(
-            workspace_path, &project.id, &volume.id, &ch1.id, "Project level content",
-        ).unwrap();
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &ch1.id,
+            "Project level content",
+        )
+        .unwrap();
 
         let aggregated = get_project_updated_at_aggregated(workspace_path, &project.id).unwrap();
         assert!(!aggregated.is_empty());
 
         // Verify it matches the latest chapter's updated_at across all volumes
-        let chapters = crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
-        let max_updated = chapters.iter().map(|c| c.updated_at.as_str()).max().unwrap();
+        let chapters =
+            crate::chapter::list_chapters(workspace_path, &project.id, &volume.id).unwrap();
+        let max_updated = chapters
+            .iter()
+            .map(|c| c.updated_at.as_str())
+            .max()
+            .unwrap();
         assert_eq!(aggregated, max_updated);
     }
 

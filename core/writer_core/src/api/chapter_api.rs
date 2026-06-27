@@ -176,7 +176,6 @@ impl WriterCoreApi {
         }
     }
 
-
     fn delete_envelope(
         result: ApiResult<bool>,
         entity_type: &str,
@@ -194,6 +193,4 @@ impl WriterCoreApi {
             Err(error) => ResultEnvelope::error(error),
         }
     }
-
-
 }

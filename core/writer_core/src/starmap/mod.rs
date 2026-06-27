@@ -400,7 +400,9 @@ pub fn unbind_starmap_from_project(workspace: &Path, starmap_id: &str) -> Result
     Ok(())
 }
 
-pub fn get_motion_policy(_workspace: &Path) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
+pub fn get_motion_policy(
+    _workspace: &Path,
+) -> Result<crate::starmap::types::StarMapMotionPolicyDto> {
     Ok(crate::starmap::types::StarMapMotionPolicyDto::default())
 }
 
@@ -583,7 +585,9 @@ mod tests {
 
         let path = starmap_graph_path(workspace, starmap_id);
 
-        let expected = std::path::PathBuf::from("/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json");
+        let expected = std::path::PathBuf::from(
+            "/dummy/workspace/app-meta/starmaps/test_starmap_id/graph.json",
+        );
         assert_eq!(path, expected);
     }
 

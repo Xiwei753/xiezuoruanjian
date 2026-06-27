@@ -490,9 +490,27 @@ mod tests {
             new_cursor: EditorCursor { index: 3 },
             duration_ms: 160,
             glyph_rects: vec![
-                GlyphRect { x: 0.0, y: 0.0, w: 10.0, h: 20.0, char_: "a".to_string() },
-                GlyphRect { x: 10.0, y: 0.0, w: 10.0, h: 20.0, char_: "b".to_string() },
-                GlyphRect { x: 20.0, y: 0.0, w: 10.0, h: 20.0, char_: "c".to_string() },
+                GlyphRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 10.0,
+                    h: 20.0,
+                    char_: "a".to_string(),
+                },
+                GlyphRect {
+                    x: 10.0,
+                    y: 0.0,
+                    w: 10.0,
+                    h: 20.0,
+                    char_: "b".to_string(),
+                },
+                GlyphRect {
+                    x: 20.0,
+                    y: 0.0,
+                    w: 10.0,
+                    h: 20.0,
+                    char_: "c".to_string(),
+                },
             ],
         };
         let json = serde_json::to_string(&event).unwrap();

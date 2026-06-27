@@ -382,7 +382,10 @@ mod tests {
         // serde 的 #[serde(tag = "type")] 会拒绝未知变体
         let old_enter_node_json = r#"{"type": "enterNode", "nodeId": "n1"}"#;
         let result: Result<StarMapPathSegment, _> = serde_json::from_str(old_enter_node_json);
-        assert!(result.is_err(), "enterNode should not deserialize as a valid StarMapPathSegment");
+        assert!(
+            result.is_err(),
+            "enterNode should not deserialize as a valid StarMapPathSegment"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -451,11 +454,9 @@ mod tests {
         // 多层 child starmap -> anchor 合法
         let dt = StarMapDeepTarget {
             starmap_id: "sm_root".to_string(),
-            path: vec![
-                StarMapPathSegment::EnterChild {
-                    starmap_id: "sm_child".to_string(),
-                },
-            ],
+            path: vec![StarMapPathSegment::EnterChild {
+                starmap_id: "sm_child".to_string(),
+            }],
             target: StarMapTargetDetail::Anchor {
                 node_id: "n1".to_string(),
                 anchor_id: "a1".to_string(),

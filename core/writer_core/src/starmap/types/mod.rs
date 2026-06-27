@@ -5,7 +5,6 @@ mod link;
 
 use serde::{Deserialize, Serialize};
 
-
 pub use embed::*;
 pub use graph::*;
 pub use layout::*;
@@ -238,10 +237,7 @@ mod tests {
 
         assert!(doc.graph.nodes.is_empty());
         assert_eq!(doc.child_map_placements.len(), 1);
-        assert_eq!(
-            doc.child_map_placements[0].target_starmap_id,
-            "sm_child"
-        );
+        assert_eq!(doc.child_map_placements[0].target_starmap_id, "sm_child");
 
         let json = serde_json::to_string(&placement).unwrap();
         let deserialized: StarMapChildMapPlacement = serde_json::from_str(&json).unwrap();

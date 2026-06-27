@@ -36,10 +36,7 @@ use std::path::{Path, PathBuf};
 // ---------------------------------------------------------------------------
 
 fn starmap_pkg_dir(workspace: &Path, starmap_id: &str) -> PathBuf {
-    workspace
-        .join("app-meta")
-        .join("starmaps")
-        .join(starmap_id)
+    workspace.join("app-meta").join("starmaps").join(starmap_id)
 }
 
 fn graph_meta_path(dir: &Path) -> PathBuf {
@@ -67,7 +64,8 @@ fn child_starmaps_dir(dir: &Path) -> PathBuf {
 }
 
 fn child_starmap_path(dir: &Path, instance_id: &str) -> PathBuf {
-    dir.join("child_starmaps").join(format!("{}.json", instance_id))
+    dir.join("child_starmaps")
+        .join(format!("{}.json", instance_id))
 }
 
 fn links_dir(dir: &Path) -> PathBuf {
@@ -83,7 +81,8 @@ fn hyperlinks_dir(dir: &Path) -> PathBuf {
 }
 
 fn hyperlink_path(dir: &Path, hyperlink_id: &str) -> PathBuf {
-    dir.join("hyperlinks").join(format!("{}.json", hyperlink_id))
+    dir.join("hyperlinks")
+        .join(format!("{}.json", hyperlink_id))
 }
 
 fn layout_path(dir: &Path) -> PathBuf {
@@ -341,7 +340,10 @@ pub fn save_starmap_document(workspace: &Path, doc: &StarMapDocument) -> Result<
         atomic_write_string(&node_path(&dir, &node.id), &json)?;
     }
     // 清理已删除的节点文件
-    cleanup_removed_files(&nodes_dir(&dir), doc.graph.nodes.iter().map(|n| n.id.as_str()))?;
+    cleanup_removed_files(
+        &nodes_dir(&dir),
+        doc.graph.nodes.iter().map(|n| n.id.as_str()),
+    )?;
 
     // 3. 写入边
     fs::create_dir_all(edges_dir(&dir))?;
@@ -349,7 +351,10 @@ pub fn save_starmap_document(workspace: &Path, doc: &StarMapDocument) -> Result<
         let json = serde_json::to_string_pretty(edge)?;
         atomic_write_string(&edge_path(&dir, &edge.id), &json)?;
     }
-    cleanup_removed_files(&edges_dir(&dir), doc.graph.edges.iter().map(|e| e.id.as_str()))?;
+    cleanup_removed_files(
+        &edges_dir(&dir),
+        doc.graph.edges.iter().map(|e| e.id.as_str()),
+    )?;
 
     // 4. 写入 embeds（子星图放置）
     fs::create_dir_all(child_starmaps_dir(&dir))?;
@@ -486,11 +491,7 @@ pub fn save_hyperlink(workspace: &Path, starmap_id: &str, hl: &StarMapHyperlink)
 }
 
 /// 删除单个超链接（只删 `hyperlinks/<hyperlink_id>.json`）
-pub fn delete_hyperlink_file(
-    workspace: &Path,
-    starmap_id: &str,
-    hyperlink_id: &str,
-) -> Result<()> {
+pub fn delete_hyperlink_file(workspace: &Path, starmap_id: &str, hyperlink_id: &str) -> Result<()> {
     let dir = starmap_pkg_dir(workspace, starmap_id);
     let path = hyperlink_path(&dir, hyperlink_id);
     if path.exists() {
@@ -561,10 +562,7 @@ fn migrate_from_legacy(workspace: &Path, starmap_id: &str) -> Result<()> {
 
 /// 清理目录中不属于当前 ID 集合的 JSON 文件。
 /// 用于删除已从文档中移除的元素对应的文件。
-fn cleanup_removed_files<'a>(
-    dir: &Path,
-    current_ids: impl Iterator<Item = &'a str>,
-) -> Result<()> {
+fn cleanup_removed_files<'a>(dir: &Path, current_ids: impl Iterator<Item = &'a str>) -> Result<()> {
     if !dir.exists() {
         return Ok(());
     }
@@ -806,9 +804,10 @@ mod tests {
         assert_eq!(edge_modified_before, edge_modified_after);
 
         // 节点文件应该已更新
-        let loaded_node_json = fs::read_to_string(
-            node_path(&starmap_pkg_dir(dir.path(), &meta.starmap_id), "n1"),
-        )
+        let loaded_node_json = fs::read_to_string(node_path(
+            &starmap_pkg_dir(dir.path(), &meta.starmap_id),
+            "n1",
+        ))
         .unwrap();
         let loaded_node: StarMapNode = serde_json::from_str(&loaded_node_json).unwrap();
         assert_eq!(loaded_node.title, "Updated Node 1");
@@ -838,9 +837,10 @@ mod tests {
         assert_eq!(node_modified_before, node_modified_after);
 
         // 边文件应该已更新
-        let loaded_edge_json = fs::read_to_string(
-            edge_path(&starmap_pkg_dir(dir.path(), &meta.starmap_id), "e1"),
-        )
+        let loaded_edge_json = fs::read_to_string(edge_path(
+            &starmap_pkg_dir(dir.path(), &meta.starmap_id),
+            "e1",
+        ))
         .unwrap();
         let loaded_edge: StarMapEdge = serde_json::from_str(&loaded_edge_json).unwrap();
         assert_eq!(loaded_edge.label, Some("updated label".to_string()));
@@ -870,11 +870,9 @@ mod tests {
         assert_eq!(node_modified_before, node_modified_after);
 
         // 布局文件应该已更新
-        let loaded_layout_json = fs::read_to_string(layout_path(&starmap_pkg_dir(
-            dir.path(),
-            &meta.starmap_id,
-        )))
-        .unwrap();
+        let loaded_layout_json =
+            fs::read_to_string(layout_path(&starmap_pkg_dir(dir.path(), &meta.starmap_id)))
+                .unwrap();
         let loaded_layout: StarMapLayout = serde_json::from_str(&loaded_layout_json).unwrap();
         assert_eq!(loaded_layout.nodes[0].x, 500.0);
     }

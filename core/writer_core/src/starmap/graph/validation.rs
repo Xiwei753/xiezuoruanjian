@@ -106,82 +106,81 @@ fn validate_edges(
     node_ids: &std::collections::HashSet<String>,
 ) -> Result<()> {
     for edge in &graph.edges {
-        let validate_edge_endpoint = |ep: &Option<StarMapEdgeEndpoint>,
-                                      legacy_id: &Option<String>,
-                                      legacy_target: &Option<
-            crate::starmap::semantic::StarMapDeepTarget,
-        >,
-                                      endpoint_name: &str|
-         -> Result<()> {
-            if let Some(endpoint) = ep {
-                match endpoint {
-                    StarMapEdgeEndpoint::Node { node_id } => {
-                        if !node_ids.contains(node_id) {
-                            return Err(Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!(
-                                    "Edge {} endpoint references non-existent node",
-                                    endpoint_name
-                                ),
-                            )));
-                        }
-                    }
-                    StarMapEdgeEndpoint::Anchor { node_id, anchor_id } => {
-                        let mut anchor_found = false;
-                        if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
-                            if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
-                                anchor_found = true;
-                            }
-                        }
-                        if !anchor_found {
-                            return Err(Error::Io(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!(
-                                    "Edge {} endpoint references non-existent anchor",
-                                    endpoint_name
-                                ),
-                            )));
-                        }
-                    }
-                    StarMapEdgeEndpoint::Starmap => {}
-                    StarMapEdgeEndpoint::DeepTarget { target } => {
-                        let status = super::resolve::resolve_deep_target(workspace, target);
-                        use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-                        match status {
-                            CycleDetected | TooDeep | MissingStarmap | MissingNode
-                            | MissingAnchor | InvalidRange => {
+        let validate_edge_endpoint =
+            |ep: &Option<StarMapEdgeEndpoint>,
+             legacy_id: &Option<String>,
+             legacy_target: &Option<crate::starmap::semantic::StarMapDeepTarget>,
+             endpoint_name: &str|
+             -> Result<()> {
+                if let Some(endpoint) = ep {
+                    match endpoint {
+                        StarMapEdgeEndpoint::Node { node_id } => {
+                            if !node_ids.contains(node_id) {
                                 return Err(Error::Io(std::io::Error::new(
                                     std::io::ErrorKind::InvalidData,
-                                    format!("Edge deep target resolve failed: {:?}", status),
+                                    format!(
+                                        "Edge {} endpoint references non-existent node",
+                                        endpoint_name
+                                    ),
                                 )));
                             }
-                            _ => {}
+                        }
+                        StarMapEdgeEndpoint::Anchor { node_id, anchor_id } => {
+                            let mut anchor_found = false;
+                            if let Some(node) = graph.nodes.iter().find(|n| &n.id == node_id) {
+                                if node.anchors.iter().any(|a| &a.anchor_id == anchor_id) {
+                                    anchor_found = true;
+                                }
+                            }
+                            if !anchor_found {
+                                return Err(Error::Io(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    format!(
+                                        "Edge {} endpoint references non-existent anchor",
+                                        endpoint_name
+                                    ),
+                                )));
+                            }
+                        }
+                        StarMapEdgeEndpoint::Starmap => {}
+                        StarMapEdgeEndpoint::DeepTarget { target } => {
+                            let status = super::resolve::resolve_deep_target(workspace, target);
+                            use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+                            match status {
+                                CycleDetected | TooDeep | MissingStarmap | MissingNode
+                                | MissingAnchor | InvalidRange => {
+                                    return Err(Error::Io(std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        format!("Edge deep target resolve failed: {:?}", status),
+                                    )));
+                                }
+                                _ => {}
+                            }
                         }
                     }
-                }
-            } else if let Some(target) = legacy_target {
-                let status = super::resolve::resolve_deep_target(workspace, target);
-                use crate::starmap::semantic::StarMapTargetResolveStatus::*;
-                match status {
-                    CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
-                    | InvalidRange => {
+                } else if let Some(target) = legacy_target {
+                    let status = super::resolve::resolve_deep_target(workspace, target);
+                    use crate::starmap::semantic::StarMapTargetResolveStatus::*;
+                    match status {
+                        CycleDetected | TooDeep | MissingStarmap | MissingNode | MissingAnchor
+                        | InvalidRange => {
+                            return Err(Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("Edge deep target resolve failed: {:?}", status),
+                            )));
+                        }
+                        _ => {}
+                    }
+                } else if let Some(id) = legacy_id {
+                    if !node_ids.contains(id) {
                         return Err(Error::Io(std::io::Error::new(
                             std::io::ErrorKind::InvalidData,
-                            format!("Edge deep target resolve failed: {:?}", status),
+                            format!("Edge {} references non-existent node", endpoint_name),
                         )));
                     }
-                    _ => {}
                 }
-            } else if let Some(id) = legacy_id {
-                if !node_ids.contains(id) {
-                    return Err(Error::Io(std::io::Error::new(
-                        std::io::ErrorKind::InvalidData,
-                        format!("Edge {} references non-existent node", endpoint_name),
-                    )));
-                }
-            }
-            Ok(())
-        };
+                Ok(())
+            };
 
         validate_edge_endpoint(&edge.from_endpoint, &edge.from, &edge.from_target, "from")?;
         validate_edge_endpoint(&edge.to_endpoint, &edge.to, &edge.to_target, "to")?;

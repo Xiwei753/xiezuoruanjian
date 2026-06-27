@@ -485,10 +485,16 @@ fn execute_lww_sync_attempt(
                 }
                 let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                 std::fs::write(&tmp_path, &content).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: write pending_take_remote {}: {}", path, e))
+                    crate::Error::Other(format!(
+                        "local_io_error: write pending_take_remote {}: {}",
+                        path, e
+                    ))
                 })?;
                 std::fs::rename(&tmp_path, &full_path).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: rename pending_take_remote {}: {}", path, e))
+                    crate::Error::Other(format!(
+                        "local_io_error: rename pending_take_remote {}: {}",
+                        path, e
+                    ))
                 })?;
                 // Update known_files to the hash of the newly written content
                 let hash = format!("{:x}", md5::compute(&content));
@@ -890,7 +896,12 @@ fn execute_lww_sync_attempt(
     let conflicted_known_files_updated_at: std::collections::HashMap<String, i64> = state
         .conflicted_files
         .iter()
-        .filter_map(|p| state.known_files_updated_at.get(p).map(|v| (p.clone(), v.clone())))
+        .filter_map(|p| {
+            state
+                .known_files_updated_at
+                .get(p)
+                .map(|v| (p.clone(), v.clone()))
+        })
         .collect();
 
     state.known_files.clear();

@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
-use crate::starmap::types::*;
 use crate::starmap::now_epoch;
+use crate::starmap::types::*;
 
 pub fn add_starmap_link(
     workspace: &std::path::Path,
@@ -50,7 +50,11 @@ pub fn update_starmap_link(
     }
 }
 
-pub fn delete_starmap_link(workspace: &std::path::Path, starmap_id: &str, link_id: &str) -> Result<()> {
+pub fn delete_starmap_link(
+    workspace: &std::path::Path,
+    starmap_id: &str,
+    link_id: &str,
+) -> Result<()> {
     let mut graph = super::ops::get_starmap_graph(workspace, starmap_id)?;
     let initial_count = graph.links.len();
     graph.links.retain(|l| l.link_id != link_id);

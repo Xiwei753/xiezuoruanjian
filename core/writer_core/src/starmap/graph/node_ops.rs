@@ -1,6 +1,6 @@
 use crate::error::{Error, Result};
-use crate::starmap::types::*;
 use crate::starmap::now_epoch;
+use crate::starmap::types::*;
 
 pub fn add_starmap_node(
     workspace: &std::path::Path,
@@ -87,7 +87,11 @@ pub fn update_starmap_node(
     }
 }
 
-pub fn delete_starmap_node(workspace: &std::path::Path, starmap_id: &str, node_id: &str) -> Result<()> {
+pub fn delete_starmap_node(
+    workspace: &std::path::Path,
+    starmap_id: &str,
+    node_id: &str,
+) -> Result<()> {
     let mut graph = super::ops::get_starmap_graph(workspace, starmap_id)?;
     let initial_count = graph.nodes.len();
     graph.nodes.retain(|n| n.id != node_id);
