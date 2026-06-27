@@ -6051,6 +6051,7 @@ data class SyncDiagnosticsResultDto (
     var `userMessage`: kotlin.String?, 
     var `rawError`: kotlin.String?, 
     var `chosenNetworkMode`: kotlin.String?, 
+    var `proxyPolicy`: kotlin.String, 
     var `networkProbeSummary`: List<NetworkProbeResultDto>?
 ) {
     
@@ -6088,6 +6089,7 @@ public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<S
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterString.read(buf),
             FfiConverterOptionalSequenceTypeNetworkProbeResultDto.read(buf),
         )
     }
@@ -6118,6 +6120,7 @@ public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<S
             FfiConverterOptionalString.allocationSize(value.`userMessage`) +
             FfiConverterOptionalString.allocationSize(value.`rawError`) +
             FfiConverterOptionalString.allocationSize(value.`chosenNetworkMode`) +
+            FfiConverterString.allocationSize(value.`proxyPolicy`) +
             FfiConverterOptionalSequenceTypeNetworkProbeResultDto.allocationSize(value.`networkProbeSummary`)
     )
 
@@ -6147,6 +6150,7 @@ public object FfiConverterTypeSyncDiagnosticsResultDto: FfiConverterRustBuffer<S
             FfiConverterOptionalString.write(value.`userMessage`, buf)
             FfiConverterOptionalString.write(value.`rawError`, buf)
             FfiConverterOptionalString.write(value.`chosenNetworkMode`, buf)
+            FfiConverterString.write(value.`proxyPolicy`, buf)
             FfiConverterOptionalSequenceTypeNetworkProbeResultDto.write(value.`networkProbeSummary`, buf)
     }
 }

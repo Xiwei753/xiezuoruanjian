@@ -28,14 +28,41 @@ WHITELIST_FILENAMES = {
     'SyncController.qml', 'schema.rs', 'chapter_store.rs', 'analyzer.rs',
 
     'settings.json', 'graph.json', 'migration.json',
-    'harmony_build.yml'
+    'harmony_build.yml',
 }
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
     'bindings/android',
-
 }
+
+# Legacy files that are only allowed in specific contexts (AGENTS.md or lines with
+# legacy/deleted keywords). In all other contexts they are treated as broken references.
+LEGACY_CONTEXT_FILENAMES = {
+    'document_handler.rs', 'EditorPage.qml', 'SmoothCursor.qml',
+}
+
+LEGACY_CONTEXT_PATHS = {
+    'apps/desktop/src/document_handler.rs',
+}
+
+LEGACY_CONTEXT_KEYWORDS = [
+    '已删除', 'deleted', 'legacy', '不得恢复', 'must not restore', '废弃', 'deprecated',
+]
+
+def is_legacy_context(md_filename, line_text):
+    """Check if the context allows legacy file references.
+
+    Condition A: the markdown file is AGENTS.md.
+    Condition B: the same line contains a legacy/deleted keyword (case-insensitive).
+    """
+    if os.path.basename(md_filename) == 'AGENTS.md':
+        return True
+    line_lower = line_text.lower()
+    for kw in LEGACY_CONTEXT_KEYWORDS:
+        if kw.lower() in line_lower:
+            return True
+    return False
 
 WHITELIST_LINKS = set()
 
@@ -132,50 +159,65 @@ def check_links():
                             print()
                             broken_count += 1
             
-            # 2. Scan for plain text paths (e.g. apps/desktop)
-            path_matches = PATH_PATTERN.findall(content_no_code)
-            for p_match in path_matches:
-                p_match = clean_extracted_path(p_match)
-                # Ignore files/folders that don't match the regex after cleaning
-                if not p_match or '/' not in p_match:
-                    continue
-                
-                # Check whitelist
-                if p_match in WHITELIST_PATHS or p_match.rstrip('/') in WHITELIST_PATHS:
-                    continue
-                
-                checked_paths_count += 1
-                # Check if it exists in our pre-built set
-                normalized_path = p_match.replace('\\', '/').rstrip('/')
-                if normalized_path not in all_repo_paths:
-                    print(f"Broken path reference in {rel_md_path}:")
-                    print(f"  Reference: '{p_match}'")
-                    print(f"  Expected repo path: {normalized_path}")
-                    print()
-                    broken_count += 1
+            # 2. Scan for plain text paths (e.g. apps/desktop) — line-by-line for context
+            for line in content_no_code.split('\n'):
+                path_matches = PATH_PATTERN.findall(line)
+                for p_match in path_matches:
+                    p_match = clean_extracted_path(p_match)
+                    # Ignore files/folders that don't match the regex after cleaning
+                    if not p_match or '/' not in p_match:
+                        continue
                     
-            # 3. Scan for filenames (e.g. desktop_ime_notes.md)
-            file_matches = FILE_PATTERN.findall(content_no_code)
-            for f_match in file_matches:
-                f_match = clean_extracted_path(f_match)
-                if not f_match:
-                    continue
-                
-                # If it's a full path, it was already handled by PATH_PATTERN
-                if '/' in f_match or '\\' in f_match:
-                    continue
-                
-                # Check whitelist
-                if f_match in WHITELIST_FILENAMES:
-                    continue
+                    # Check whitelist
+                    if p_match in WHITELIST_PATHS or p_match.rstrip('/') in WHITELIST_PATHS:
+                        continue
                     
-                checked_files_count += 1
-                # Check if this filename exists anywhere in the repository
-                if f_match not in all_repo_basenames:
-                    print(f"Broken filename reference in {rel_md_path}:")
-                    print(f"  Reference: '{f_match}'")
-                    print()
-                    broken_count += 1
+                    # Legacy context check
+                    if (p_match in LEGACY_CONTEXT_PATHS
+                            or p_match.rstrip('/') in LEGACY_CONTEXT_PATHS):
+                        if is_legacy_context(rel_md_path, line):
+                            continue
+                        # else: fall through to report error
+                    
+                    checked_paths_count += 1
+                    # Check if it exists in our pre-built set
+                    normalized_path = p_match.replace('\\', '/').rstrip('/')
+                    if normalized_path not in all_repo_paths:
+                        print(f"Broken path reference in {rel_md_path}:")
+                        print(f"  Reference: '{p_match}'")
+                        print(f"  Expected repo path: {normalized_path}")
+                        print()
+                        broken_count += 1
+                    
+            # 3. Scan for filenames (e.g. desktop_ime_notes.md) — line-by-line for context
+            for line in content_no_code.split('\n'):
+                file_matches = FILE_PATTERN.findall(line)
+                for f_match in file_matches:
+                    f_match = clean_extracted_path(f_match)
+                    if not f_match:
+                        continue
+                    
+                    # If it's a full path, it was already handled by PATH_PATTERN
+                    if '/' in f_match or '\\' in f_match:
+                        continue
+                    
+                    # Check whitelist
+                    if f_match in WHITELIST_FILENAMES:
+                        continue
+                    
+                    # Legacy context check
+                    if f_match in LEGACY_CONTEXT_FILENAMES:
+                        if is_legacy_context(rel_md_path, line):
+                            continue
+                        # else: fall through to report error
+                    
+                    checked_files_count += 1
+                    # Check if this filename exists anywhere in the repository
+                    if f_match not in all_repo_basenames:
+                        print(f"Broken filename reference in {rel_md_path}:")
+                        print(f"  Reference: '{f_match}'")
+                        print()
+                        broken_count += 1
 
     print(f"Scan complete:")
     print(f"  - Standard markdown links checked: {checked_links_count}")

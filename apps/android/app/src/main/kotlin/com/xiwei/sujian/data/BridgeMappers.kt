@@ -232,6 +232,7 @@ internal fun SyncDiagnosticsResultDto.toModel() = SyncDiagnosticsResult(
     userMessage = userMessage ?: "",
     rawError = rawError,
     chosenNetworkMode = chosenNetworkMode,
+    proxyPolicy = proxyPolicy,
     networkProbeSummary = networkProbeSummary?.map { it.toModel() } ?: emptyList()
 )
 
@@ -253,6 +254,8 @@ internal fun SyncResultDto.toModel() = SyncResult(
     overwrittenFiles = overwrittenFiles,
     ignoredFiles = ignoredFiles,
     conflicts = conflicts.map { it.toModel() },
+    conflictSummary = null,
+    settingsConflicts = null,
     commitHash = commitHash,
     error = error,
     errorCategory = errorCategory,

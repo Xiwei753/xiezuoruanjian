@@ -190,6 +190,7 @@ dictionary SyncDiagnosticsResultDto {
     string? user_message;
     string? raw_error;
     string? chosen_network_mode;
+    string proxy_policy;
     sequence<NetworkProbeResultDto>? network_probe_summary;
 };
 

@@ -41,6 +41,30 @@ pub fn sujian_editor_debug_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
 }
 
+/// 判断字符是否为复杂 grapheme（emoji / ZWJ / variation selector / combining mark）。
+/// 与 Android `OverlayAnim.containsComplexGrapheme` 和 QML `isComplexGrapheme` 对齐。
+/// 复杂字符不参与 glyph ghost 动画，避免渲染异常和资源浪费。
+fn is_complex_grapheme(ch: char) -> bool {
+    let cp = ch as u32;
+    // Surrogate pairs: code point > 0xFFFF (non-BMP, e.g. emoji)
+    if cp > 0xFFFF { return true; }
+    // Zero Width Joiner
+    if cp == 0x200D { return true; }
+    // Variation selectors (FE00-FE0F, E0100-E01EF)
+    if (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF) { return true; }
+    // Combining Diacritical Marks (0300-036F)
+    if cp >= 0x0300 && cp <= 0x036F { return true; }
+    // Combining Diacritical Marks Extended (1AB0-1AFF)
+    if cp >= 0x1AB0 && cp <= 0x1AFF { return true; }
+    // Combining Diacritical Marks Supplement (1DC0-1DFF)
+    if cp >= 0x1DC0 && cp <= 0x1DFF { return true; }
+    // Combining Diacritical Marks for Symbols (20D0-20FF)
+    if cp >= 0x20D0 && cp <= 0x20FF { return true; }
+    // Combining Half Marks (FE20-FE2F)
+    if cp >= 0xFE20 && cp <= 0xFE2F { return true; }
+    false
+}
+
 
 #[allow(dead_code)]
 #[derive(QObject)]
@@ -76,6 +100,7 @@ pub struct SujianEditorItem {
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
     cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
+    current_selection_text: qt_property!(QString; READ current_selection_text NOTIFY selection_changed),
 
     plain_text_changed: qt_signal!(),
     text_changed: qt_signal!(),
@@ -114,6 +139,8 @@ pub struct SujianEditorItem {
     tick_cursor_animation: qt_method!(fn(&mut self)),
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    request_text_input_focus: qt_method!(fn(&mut self)),
+    snap_next_cursor_update: qt_method!(fn(&mut self)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -198,6 +225,7 @@ impl Default for SujianEditorItem {
             cursor_rect_width: Default::default(),
             cursor_rect_height: Default::default(),
             cursor_visible: Default::default(),
+            current_selection_text: Default::default(),
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
             reload_plain_text: Default::default(),
@@ -222,6 +250,8 @@ impl Default for SujianEditorItem {
             tick_cursor_animation: Default::default(),
             long_press_at: Default::default(),
             select_word_at: Default::default(),
+            request_text_input_focus: Default::default(),
+            snap_next_cursor_update: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -603,6 +633,24 @@ impl SujianEditorItem {
 
     fn cursor_visible(&self) -> bool {
         self.cursor_ctrl.visible
+    }
+
+    fn current_selection_text(&self) -> QString {
+        self.buffer.selected_text().into()
+    }
+
+    fn request_text_input_focus(&mut self) {
+        let obj_ptr = self.get_cpp_object();
+        if obj_ptr.is_null() {
+            return;
+        }
+        input::focus_item(obj_ptr);
+    }
+
+    fn snap_next_cursor_update(&mut self) {
+        self.cursor_ctrl.force_snap_next = true;
+        self.update_cursor_visual_position();
+        self.request_frame_update();
     }
 
     fn visual_changed(&mut self) {
@@ -1085,6 +1133,11 @@ impl SujianEditorItem {
                                 continue;
                             }
                             let ch = text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
+                            // 复杂字符（emoji / ZWJ / variation selector / combining mark）
+                            // 不参与 glyph ghost 动画，跳过以避免渲染异常和资源浪费
+                            if is_complex_grapheme(ch) {
+                                continue;
+                            }
                             glyph_rects.push(GlyphRect {
                                 x: line.x + x_pos,
                                 y: line.y - self.current_scroll_y as f64,
@@ -1130,6 +1183,11 @@ impl SujianEditorItem {
                                 continue;
                             }
                             let ch = old_text.get(abs_byte..).and_then(|s| s.chars().next()).unwrap_or(' ');
+                            // 复杂字符（emoji / ZWJ / variation selector / combining mark）
+                            // 不参与 glyph ghost 动画，跳过以避免渲染异常和资源浪费
+                            if is_complex_grapheme(ch) {
+                                continue;
+                            }
                             glyph_rects.push(GlyphRect {
                                 x: line.x + x_pos,
                                 y: line.y - self.current_scroll_y as f64,
@@ -1371,6 +1429,55 @@ impl EditorInputHost for SujianEditorItem {
 
     fn input_request_repaint(&mut self) {
         self.request_static_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_complex_grapheme_emoji() {
+        assert!(is_complex_grapheme('😀'));
+    }
+
+    #[test]
+    fn test_is_complex_grapheme_zwj() {
+        assert!(is_complex_grapheme('\u{200D}'));
+    }
+
+    #[test]
+    fn test_is_complex_grapheme_variation_selector() {
+        assert!(is_complex_grapheme('\u{FE0F}'));
+    }
+
+    #[test]
+    fn test_is_complex_grapheme_combining_mark() {
+        assert!(is_complex_grapheme('\u{0301}')); // combining acute accent
+    }
+
+    #[test]
+    fn test_is_complex_grapheme_chinese_char() {
+        assert!(!is_complex_grapheme('你'));
+    }
+
+    #[test]
+    fn test_is_complex_grapheme_ascii() {
+        assert!(!is_complex_grapheme('a'));
+        assert!(!is_complex_grapheme('Z'));
+        assert!(!is_complex_grapheme('0'));
+    }
+
+    #[test]
+    fn test_is_complex_grapheme_chinese_punctuation() {
+        assert!(!is_complex_grapheme('，'));
+        assert!(!is_complex_grapheme('。'));
+        assert!(!is_complex_grapheme('！'));
+    }
+
+    #[test]
+    fn test_is_complex_grapheme_combining_half_mark() {
+        assert!(is_complex_grapheme('\u{FE20}'));
     }
 }
 

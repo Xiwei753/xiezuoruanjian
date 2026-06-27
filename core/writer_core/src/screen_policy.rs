@@ -93,14 +93,22 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 action_id: "settings".to_string(),
                 role: ActionRole::Settings,
                 placement: ActionPlacement::TopTrailing,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: false,
             },
             ActionSlot {
                 action_id: "search".to_string(),
                 role: ActionRole::Search,
                 placement: ActionPlacement::TopTrailing,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: false,
             },
         ],
@@ -125,14 +133,22 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 action_id: "delete".to_string(),
                 role: ActionRole::Delete,
                 placement: ActionPlacement::ContextMenu,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: true,
             },
             ActionSlot {
                 action_id: "rename".to_string(),
                 role: ActionRole::Rename,
                 placement: ActionPlacement::ContextMenu,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: false,
             },
         ],
@@ -141,39 +157,57 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 action_id: "back".to_string(),
                 role: ActionRole::Back,
                 placement: ActionPlacement::TopLeading,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: false,
             },
             ActionSlot {
                 action_id: "save".to_string(),
                 role: ActionRole::Save,
                 placement: ActionPlacement::TopTrailing,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: false,
             },
         ],
-        ScreenRole::Settings => vec![
-            ActionSlot {
-                action_id: "back".to_string(),
-                role: ActionRole::Back,
-                placement: ActionPlacement::TopLeading,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
-                requires_confirmation: false,
-            },
-        ],
+        ScreenRole::Settings => vec![ActionSlot {
+            action_id: "back".to_string(),
+            role: ActionRole::Back,
+            placement: ActionPlacement::TopLeading,
+            visible_in: vec![
+                ShellMode::SinglePane,
+                ShellMode::SupportingPane,
+                ShellMode::TwoPane,
+            ],
+            requires_confirmation: false,
+        }],
         ScreenRole::Sync => vec![
             ActionSlot {
                 action_id: "back".to_string(),
                 role: ActionRole::Back,
                 placement: ActionPlacement::TopLeading,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: false,
             },
             ActionSlot {
                 action_id: "sync".to_string(),
                 role: ActionRole::Sync,
                 placement: ActionPlacement::Floating,
-                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![
+                    ShellMode::SinglePane,
+                    ShellMode::SupportingPane,
+                    ShellMode::TwoPane,
+                ],
                 requires_confirmation: false,
             },
         ],
@@ -262,7 +296,10 @@ mod tests {
         // SinglePane 下应该有: CreateProject(Floating), Delete(ContextMenu), Rename(ContextMenu)
         assert_eq!(slots.len(), 3);
 
-        let create_project = slots.iter().find(|s| s.role == ActionRole::CreateProject).unwrap();
+        let create_project = slots
+            .iter()
+            .find(|s| s.role == ActionRole::CreateProject)
+            .unwrap();
         assert_eq!(create_project.placement, ActionPlacement::Floating);
     }
 
@@ -272,7 +309,10 @@ mod tests {
         // TwoPane 下应该有: CreateProject(TopTrailing), Delete(ContextMenu), Rename(ContextMenu)
         assert_eq!(slots.len(), 3);
 
-        let create_project = slots.iter().find(|s| s.role == ActionRole::CreateProject).unwrap();
+        let create_project = slots
+            .iter()
+            .find(|s| s.role == ActionRole::CreateProject)
+            .unwrap();
         assert_eq!(create_project.placement, ActionPlacement::TopTrailing);
 
         // 不含 Floating 放置的 CreateProject
@@ -337,19 +377,31 @@ mod tests {
         // Workspace 的 base_slots 有两个 CreateProject：一个 visible_in=[SinglePane]，一个 visible_in=[SupportingPane, TwoPane]
         // 在 SinglePane 下，只应出现 Floating 的 CreateProject
         let single_slots = resolve_screen_policy(ScreenRole::Workspace, ShellMode::SinglePane);
-        let single_create = single_slots.iter().find(|s| s.role == ActionRole::CreateProject).unwrap();
+        let single_create = single_slots
+            .iter()
+            .find(|s| s.role == ActionRole::CreateProject)
+            .unwrap();
         assert_eq!(single_create.placement, ActionPlacement::Floating);
 
         // 在 TwoPane 下，只应出现 TopTrailing 的 CreateProject
         let two_slots = resolve_screen_policy(ScreenRole::Workspace, ShellMode::TwoPane);
-        let two_create = two_slots.iter().find(|s| s.role == ActionRole::CreateProject).unwrap();
+        let two_create = two_slots
+            .iter()
+            .find(|s| s.role == ActionRole::CreateProject)
+            .unwrap();
         assert_eq!(two_create.placement, ActionPlacement::TopTrailing);
 
         // 验证 visible_in 不包含当前 ShellMode 的被过滤
         // SinglePane 结果中不应有 TopTrailing 的 CreateProject
-        assert!(single_slots.iter().all(|s| !(s.role == ActionRole::CreateProject && s.placement == ActionPlacement::TopTrailing)));
+        assert!(single_slots
+            .iter()
+            .all(|s| !(s.role == ActionRole::CreateProject
+                && s.placement == ActionPlacement::TopTrailing)));
         // TwoPane 结果中不应有 Floating 的 CreateProject
-        assert!(two_slots.iter().all(|s| !(s.role == ActionRole::CreateProject && s.placement == ActionPlacement::Floating)));
+        assert!(two_slots
+            .iter()
+            .all(|s| !(s.role == ActionRole::CreateProject
+                && s.placement == ActionPlacement::Floating)));
     }
 
     #[test]

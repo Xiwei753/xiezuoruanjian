@@ -304,7 +304,11 @@ impl crate::sync::SyncService {
             state
                 .known_files
                 .insert(path.to_string(), conflict.remote_hash.clone());
-            if let Some(t) = state.known_files_updated_at.get(&conflict.remote_path).cloned() {
+            if let Some(t) = state
+                .known_files_updated_at
+                .get(&conflict.remote_path)
+                .cloned()
+            {
                 state.known_files_updated_at.insert(path.to_string(), t);
             }
         } else {
@@ -317,7 +321,9 @@ impl crate::sync::SyncService {
             }
         }
         // Remove the conflict record from state.conflicts
-        state.conflicts.retain(|c| c.local_path != path && c.remote_path != path);
+        state
+            .conflicts
+            .retain(|c| c.local_path != path && c.remote_path != path);
         Self::remove_conflict_from_json(workspace_path, path);
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())
@@ -341,7 +347,9 @@ impl crate::sync::SyncService {
         // the remote content to the local file.
         state.pending_take_remote.insert(path.to_string());
         // Remove the conflict record from state.conflicts
-        state.conflicts.retain(|c| c.local_path != path && c.remote_path != path);
+        state
+            .conflicts
+            .retain(|c| c.local_path != path && c.remote_path != path);
         Self::remove_conflict_from_json(workspace_path, path);
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())
@@ -368,7 +376,11 @@ impl crate::sync::SyncService {
             state
                 .known_files
                 .insert(path.to_string(), conflict.remote_hash.clone());
-            if let Some(t) = state.known_files_updated_at.get(&conflict.remote_path).cloned() {
+            if let Some(t) = state
+                .known_files_updated_at
+                .get(&conflict.remote_path)
+                .cloned()
+            {
                 state.known_files_updated_at.insert(path.to_string(), t);
             }
         } else {
@@ -381,7 +393,9 @@ impl crate::sync::SyncService {
             }
         }
         // Remove the conflict record from state.conflicts
-        state.conflicts.retain(|c| c.local_path != path && c.remote_path != path);
+        state
+            .conflicts
+            .retain(|c| c.local_path != path && c.remote_path != path);
         Self::remove_conflict_from_json(workspace_path, path);
         Self::save_sync_state(workspace_path, &state)?;
         Ok(())

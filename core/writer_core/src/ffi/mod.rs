@@ -10,8 +10,8 @@
 //! - 错误通过负数返回码或 JSON ResultEnvelope 传递
 //! - 所有函数要求先调用 `writer_core_init` 初始化全局单例
 
-mod project_ops;
 mod layout_ops;
+mod project_ops;
 mod screen_policy_ops;
 mod settings_ops;
 mod starmap_ops;
@@ -56,7 +56,8 @@ pub(crate) fn ok_json<T: serde::Serialize>(data: T) -> *mut c_char {
         "success": true,
         "data": data
     });
-    let s = serde_json::to_string(&envelope).unwrap_or_else(|_| r#"{"success":false,"errorCode":"SERDE_ERROR"}"#.to_string());
+    let s = serde_json::to_string(&envelope)
+        .unwrap_or_else(|_| r#"{"success":false,"errorCode":"SERDE_ERROR"}"#.to_string());
     CString::new(s).unwrap_or_default().into_raw()
 }
 
@@ -66,7 +67,12 @@ pub(crate) fn err_json(code: &str, msg: &str) -> *mut c_char {
         "errorCode": code,
         "userMessage": msg
     });
-    let s = serde_json::to_string(&envelope).unwrap_or_else(|_| format!(r#"{{"success":false,"errorCode":"{}","userMessage":"{}"}}"#, code, msg));
+    let s = serde_json::to_string(&envelope).unwrap_or_else(|_| {
+        format!(
+            r#"{{"success":false,"errorCode":"{}","userMessage":"{}"}}"#,
+            code, msg
+        )
+    });
     CString::new(s).unwrap_or_default().into_raw()
 }
 

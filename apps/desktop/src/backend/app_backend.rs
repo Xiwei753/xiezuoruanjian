@@ -29,6 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
 
+use super::desktop_layout_plan_dto::DesktopLayoutPlanDto;
 use super::json_utils::{
     bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
     serde_to_qjson_object,
@@ -218,7 +219,6 @@ pub struct AppBackend {
     query_system_color_scheme: qt_method!(fn(&mut self)),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
-    sujian_editor_item_enabled: qt_property!(bool; READ sujian_editor_item_enabled),
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
     log_qml:
         qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
@@ -293,13 +293,6 @@ impl AppBackend {
 
     fn debug_qml_enabled(&self) -> bool {
         get_debug_config().qml_enabled
-    }
-
-    fn sujian_editor_item_enabled(&self) -> bool {
-        match std::env::var("SUJIAN_DESKTOP_USE_SUJIAN_EDITOR") {
-            Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off"),
-            Err(_) => true,
-        }
     }
 
     fn debug_module_enabled_qml(&self, module: QString) -> bool {
@@ -417,7 +410,7 @@ impl AppBackend {
     //   - 不传递到 SujianEditorItem 的 QSG 渲染线程
     //   - 不影响光标位置、IME 输入、动画帧率
     //   - 不改变 QTextLayout 的排版计算
-    //   - 不驱动 SmoothCursor / EditorAnimationOverlay 的动画属性
+    //   - 不驱动 EditorAnimationOverlay 的动画属性
     //
     // 编辑器渲染由 EditorController + SujianEditorItem 独立管理，
     // 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
@@ -467,7 +460,8 @@ impl AppBackend {
         };
 
         let plan = resolve_layout(&metrics);
-        let json = serde_json::to_string(&plan).unwrap_or_else(|_| "{}".to_string());
+        let dto = DesktopLayoutPlanDto::from_layout_plan(&plan);
+        let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }
 

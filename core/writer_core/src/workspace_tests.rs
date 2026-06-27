@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use crate::workspace::{create_workspace, validate_workspace, record_recent_edit, get_recent_edits, flush_recent_edits};
+    use crate::workspace::{
+        create_workspace, flush_recent_edits, get_recent_edits, record_recent_edit,
+        validate_workspace,
+    };
     use std::fs;
     use tempfile::tempdir;
 
@@ -48,7 +51,10 @@ mod tests {
         // Initially no cache, flushing shouldn't create file
         flush_recent_edits(workspace_path).unwrap();
         let recent_path = workspace_path.join("app-meta/settings/recent_edits.json");
-        assert!(!recent_path.exists(), "Should not create file if no cached edits");
+        assert!(
+            !recent_path.exists(),
+            "Should not create file if no cached edits"
+        );
 
         // Record edit (this populates cache and may write file depending on global debounce)
         record_recent_edit(workspace_path, "p1", "v1", "c1").unwrap();
@@ -61,7 +67,10 @@ mod tests {
 
         // Flush edits to write cache back to file
         flush_recent_edits(workspace_path).unwrap();
-        assert!(recent_path.exists(), "File should be re-created by flush_recent_edits");
+        assert!(
+            recent_path.exists(),
+            "File should be re-created by flush_recent_edits"
+        );
 
         // Verify content
         let content = fs::read_to_string(&recent_path).unwrap();
@@ -241,7 +250,8 @@ mod tests {
         assert_eq!(service_projects.len(), 1);
 
         // 4. create_project_in_workspace should succeed
-        let new_proj = crate::create_project_in_workspace(path_str.clone(), "我的新作品".to_string()).unwrap();
+        let new_proj =
+            crate::create_project_in_workspace(path_str.clone(), "我的新作品".to_string()).unwrap();
         assert_eq!(new_proj.title, "我的新作品");
 
         let service_projects_after = service.list_projects().unwrap();
@@ -260,11 +270,15 @@ mod tests {
         let project = crate::project::create_project(dir.path(), "测试作品").unwrap();
 
         let service = crate::open_workspace(path_str.clone()).unwrap();
-        let chapter = service.create_chapter_in_project(project.id.clone(), "新章：起锚".to_string()).unwrap();
+        let chapter = service
+            .create_chapter_in_project(project.id.clone(), "新章：起锚".to_string())
+            .unwrap();
         assert_eq!(chapter.title, "新章：起锚");
 
         let volumes = service.list_volumes(project.id.clone()).unwrap();
-        let chapters = service.list_chapters(project.id.clone(), volumes[0].id.clone()).unwrap();
+        let chapters = service
+            .list_chapters(project.id.clone(), volumes[0].id.clone())
+            .unwrap();
         assert_eq!(chapters.len(), 1);
         assert_eq!(chapters[0].title, "新章：起锚");
     }

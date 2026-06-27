@@ -185,19 +185,31 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
     let height_class = resolve_height_class(metrics.height_vp);
 
     // 基础策略（按宽度断点）
-    let (shell_mode, navigation_mode, editor_mode, content_max_width_vp, page_padding_vp, grid_columns, show_side_panel, show_bottom_bar, side_panel_width_vp, primary_pane_weight, detail_panel_max_width_vp) = match width_class {
+    let (
+        shell_mode,
+        navigation_mode,
+        editor_mode,
+        content_max_width_vp,
+        page_padding_vp,
+        grid_columns,
+        show_side_panel,
+        show_bottom_bar,
+        side_panel_width_vp,
+        primary_pane_weight,
+        detail_panel_max_width_vp,
+    ) = match width_class {
         WidthClass::Compact => (
             ShellMode::SinglePane,
             NavigationMode::Stack,
             EditorMode::FullWidth,
-            0.0,    // content_max_width_vp
-            16.0,   // page_padding_vp
-            2,      // grid_columns
-            false,  // show_side_panel
-            true,   // show_bottom_bar
-            0.0,    // side_panel_width_vp
-            1.0,    // primary_pane_weight
-            0.0,    // detail_panel_max_width_vp
+            0.0,   // content_max_width_vp
+            16.0,  // page_padding_vp
+            2,     // grid_columns
+            false, // show_side_panel
+            true,  // show_bottom_bar
+            0.0,   // side_panel_width_vp
+            1.0,   // primary_pane_weight
+            0.0,   // detail_panel_max_width_vp
         ),
         WidthClass::Medium => (
             ShellMode::SupportingPane,
@@ -208,9 +220,9 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             3,
             false,
             true,
-            0.0,    // side_panel_width_vp
-            1.0,    // primary_pane_weight
-            0.0,    // detail_panel_max_width_vp
+            0.0, // side_panel_width_vp
+            1.0, // primary_pane_weight
+            0.0, // detail_panel_max_width_vp
         ),
         WidthClass::Expanded => (
             ShellMode::TwoPane,
@@ -221,9 +233,9 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
             4,
             true,
             false,
-            0.0,    // side_panel_width_vp
-            2.0,    // primary_pane_weight — 替代 Android 硬编码的 2f
-            960.0,  // detail_panel_max_width_vp
+            0.0,   // side_panel_width_vp
+            2.0,   // primary_pane_weight — 替代 Android 硬编码的 2f
+            960.0, // detail_panel_max_width_vp
         ),
     };
 

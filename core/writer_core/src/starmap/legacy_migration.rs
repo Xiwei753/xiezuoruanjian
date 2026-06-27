@@ -12,10 +12,7 @@ fn backup_path(p: &Path) -> PathBuf {
 /// It only prevents old MindMap files from being read at runtime.
 /// Old files are preserved as backups, never deleted.
 pub fn quarantine_project_mind_map(workspace: &Path, project_id: &str) -> Result<Option<String>> {
-    let mm_dir = workspace
-        .join("projects")
-        .join(project_id)
-        .join("mind_map");
+    let mm_dir = workspace.join("projects").join(project_id).join("mind_map");
 
     if !mm_dir.exists() {
         return Ok(None);
@@ -27,8 +24,7 @@ pub fn quarantine_project_mind_map(workspace: &Path, project_id: &str) -> Result
     }
 
     let index_content = fs::read_to_string(&index_path).map_err(Error::Io)?;
-    let _index: serde_json::Value =
-        serde_json::from_str(&index_content).map_err(Error::Json)?;
+    let _index: serde_json::Value = serde_json::from_str(&index_content).map_err(Error::Json)?;
 
     let graphs_dir = mm_dir.join("graphs");
     if graphs_dir.exists() {
@@ -84,10 +80,7 @@ pub fn quarantine_project_mind_map(workspace: &Path, project_id: &str) -> Result
 
 pub fn list_legacy_mind_map_paths(workspace: &Path, project_id: &str) -> Vec<String> {
     let mut paths = Vec::new();
-    let mm_dir = workspace
-        .join("projects")
-        .join(project_id)
-        .join("mind_map");
+    let mm_dir = workspace.join("projects").join(project_id).join("mind_map");
     if mm_dir.exists() {
         paths.push(format!("projects/{}/mind_map/index.json", project_id));
         if mm_dir.join("graphs").exists() {
@@ -129,11 +122,7 @@ mod tests {
     #[test]
     fn test_quarantine_renames_old_files() {
         let tmp = tempfile::tempdir().unwrap();
-        let mm_dir = tmp
-            .path()
-            .join("projects")
-            .join("proj1")
-            .join("mind_map");
+        let mm_dir = tmp.path().join("projects").join("proj1").join("mind_map");
         fs::create_dir_all(mm_dir.join("graphs")).unwrap();
         fs::write(mm_dir.join("index.json"), r#"{"graphs":[]}"#).unwrap();
         fs::write(mm_dir.join("graphs").join("g1.json"), "{}").unwrap();

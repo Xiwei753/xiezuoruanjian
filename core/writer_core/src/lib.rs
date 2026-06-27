@@ -47,15 +47,19 @@ pub mod graph_service;
 pub mod proofreading_service;
 pub mod settings_registry;
 
-
 pub mod chapter;
 pub mod editor;
 pub mod error;
 pub mod history;
 pub mod index;
 
+#[cfg(feature = "harmony-ffi")]
+pub mod ffi;
+pub mod layout_policy;
 pub mod project;
+pub mod screen_policy;
 pub mod settings;
+pub mod settings_presentation;
 pub mod starmap;
 pub mod storage;
 pub mod sync;
@@ -63,18 +67,14 @@ pub mod trash;
 pub mod volume;
 pub mod workspace;
 pub mod writing_stats;
-pub mod layout_policy;
-pub mod screen_policy;
-pub mod settings_presentation;
-#[cfg(feature = "harmony-ffi")]
-pub mod ffi;
 
 pub use api::*;
 pub use error::{Error, Result};
 
 #[cfg(test)]
-
 pub mod chapter_tests;
+#[cfg(test)]
+pub mod dto_contract_tests;
 pub mod facade;
 #[cfg(test)]
 pub mod fixture_tests;
@@ -90,8 +90,6 @@ pub mod volume_tests;
 pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
-#[cfg(test)]
-pub mod dto_contract_tests;
 
 /// UniFFI 占位函数，用于跨平台绑定测试。
 pub fn perform_dummy_action() -> String {
@@ -107,7 +105,9 @@ pub fn init_workspace(path: String) -> std::result::Result<bool, WriterError> {
     Ok(true)
 }
 
-pub fn open_workspace(path: String) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
+pub fn open_workspace(
+    path: String,
+) -> std::result::Result<std::sync::Arc<WriterAppService>, WriterError> {
     let p = Path::new(&path);
     if !crate::workspace::validate_workspace(p).map_err(WriterError::from)? {
         return Err(WriterError::InvalidWorkspace);
@@ -130,10 +130,12 @@ pub fn create_project_in_workspace(
     Ok(project.into())
 }
 
-pub fn load_workspace_summary(path: String) -> std::result::Result<WorkspaceSummaryDto, WriterError> {
+pub fn load_workspace_summary(
+    path: String,
+) -> std::result::Result<WorkspaceSummaryDto, WriterError> {
     let p = Path::new(&path);
     let is_valid = crate::workspace::validate_workspace(p).unwrap_or(false);
-    
+
     let projects = if is_valid {
         crate::project::list_projects(p)
             .map(|v| v.into_iter().map(Into::into).collect())
@@ -141,7 +143,7 @@ pub fn load_workspace_summary(path: String) -> std::result::Result<WorkspaceSumm
     } else {
         Vec::new()
     };
-    
+
     let recent_edits = if is_valid {
         crate::workspace::get_recent_edits(p)
             .map(|v| v.into_iter().map(Into::into).collect())
@@ -149,7 +151,7 @@ pub fn load_workspace_summary(path: String) -> std::result::Result<WorkspaceSumm
     } else {
         Vec::new()
     };
-    
+
     Ok(WorkspaceSummaryDto {
         path,
         is_valid,

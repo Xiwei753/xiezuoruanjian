@@ -40,7 +40,10 @@ fn project_dto_fields_match_harmony() {
         "volumeCount",
     ];
     let actual_keys = sorted_keys(&ffi_project);
-    assert_eq!(actual_keys, expected_keys, "Project DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "Project DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -65,7 +68,10 @@ fn volume_dto_fields_match_harmony() {
         "updatedAt",
     ];
     let actual_keys = sorted_keys(&ffi_volume);
-    assert_eq!(actual_keys, expected_keys, "Volume DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "Volume DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -90,7 +96,10 @@ fn chapter_dto_fields_match_harmony() {
         "wordCount",
     ];
     let actual_keys = sorted_keys(&ffi_chapter);
-    assert_eq!(actual_keys, expected_keys, "Chapter DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "Chapter DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -117,7 +126,10 @@ fn chapter_data_dto_fields_match_harmony() {
         "wordCount",
     ];
     let actual_keys = sorted_keys(&ffi_chapter_data);
-    assert_eq!(actual_keys, expected_keys, "ChapterData DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "ChapterData DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -128,13 +140,12 @@ fn save_receipt_dto_fields_match_harmony() {
         "savedAt": "2024-01-01"
     });
 
-    let expected_keys = vec![
-        "savedAt",
-        "success",
-        "wordCount",
-    ];
+    let expected_keys = vec!["savedAt", "success", "wordCount"];
     let actual_keys = sorted_keys(&ffi_receipt);
-    assert_eq!(actual_keys, expected_keys, "SaveReceipt DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "SaveReceipt DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -167,7 +178,10 @@ fn local_settings_dto_fields_match_harmony() {
         "wordWrap",
     ];
     let actual_keys = sorted_keys(&ffi_settings);
-    assert_eq!(actual_keys, expected_keys, "LocalSettings DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "LocalSettings DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -179,14 +193,12 @@ fn result_envelope_fields_match_harmony() {
         "userMessage": null
     });
 
-    let expected_keys = vec![
-        "data",
-        "errorCode",
-        "success",
-        "userMessage",
-    ];
+    let expected_keys = vec!["data", "errorCode", "success", "userMessage"];
     let actual_keys = sorted_keys(&envelope);
-    assert_eq!(actual_keys, expected_keys, "ResultEnvelope field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "ResultEnvelope field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -196,12 +208,12 @@ fn project_tree_dto_fields_match_harmony() {
         "volumes": []
     });
 
-    let expected_keys = vec![
-        "project",
-        "volumes",
-    ];
+    let expected_keys = vec!["project", "volumes"];
     let actual_keys = sorted_keys(&ffi_tree);
-    assert_eq!(actual_keys, expected_keys, "ProjectTree DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "ProjectTree DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -211,12 +223,12 @@ fn volume_tree_dto_fields_match_harmony() {
         "chapters": []
     });
 
-    let expected_keys = vec![
-        "chapters",
-        "volume",
-    ];
+    let expected_keys = vec!["chapters", "volume"];
     let actual_keys = sorted_keys(&ffi_vol_tree);
-    assert_eq!(actual_keys, expected_keys, "VolumeTree DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "VolumeTree DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -227,13 +239,12 @@ fn project_stats_dto_fields_match_harmony() {
         "chapterCount": 2
     });
 
-    let expected_keys = vec![
-        "chapterCount",
-        "totalWordCount",
-        "volumeCount",
-    ];
+    let expected_keys = vec!["chapterCount", "totalWordCount", "volumeCount"];
     let actual_keys = sorted_keys(&ffi_stats);
-    assert_eq!(actual_keys, expected_keys, "ProjectStats DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "ProjectStats DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -262,7 +273,10 @@ fn starmap_meta_dto_fields_match_harmony() {
         "updatedAt",
     ];
     let actual_keys = sorted_keys(&ffi_starmap_meta);
-    assert_eq!(actual_keys, expected_keys, "StarMapMeta DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "StarMapMeta DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -299,7 +313,10 @@ fn starmap_node_dto_fields_match_harmony() {
         "y",
     ];
     let actual_keys = sorted_keys(&ffi_starmap_node);
-    assert_eq!(actual_keys, expected_keys, "StarMapNode DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "StarMapNode DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -316,17 +333,13 @@ fn starmap_edge_dto_fields_match_harmony() {
     });
 
     let expected_keys = vec![
-        "color",
-        "id",
-        "label",
-        "metadata",
-        "sourceId",
-        "style",
-        "targetId",
-        "type",
+        "color", "id", "label", "metadata", "sourceId", "style", "targetId", "type",
     ];
     let actual_keys = sorted_keys(&ffi_starmap_edge);
-    assert_eq!(actual_keys, expected_keys, "StarMapEdge DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "StarMapEdge DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -359,7 +372,10 @@ fn writing_stats_dto_fields_match_harmony() {
         "weeklyStats",
     ];
     let actual_keys = sorted_keys(&ffi_writing_stats);
-    assert_eq!(actual_keys, expected_keys, "WritingStats DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "WritingStats DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -388,7 +404,10 @@ fn sync_config_dto_fields_match_harmony() {
         "syncPath",
     ];
     let actual_keys = sorted_keys(&ffi_sync_config);
-    assert_eq!(actual_keys, expected_keys, "SyncConfig DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "SyncConfig DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -413,7 +432,10 @@ fn recent_edit_dto_fields_match_harmony() {
         "wordCount",
     ];
     let actual_keys = sorted_keys(&ffi_recent_edit);
-    assert_eq!(actual_keys, expected_keys, "RecentEdit DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "RecentEdit DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -426,9 +448,15 @@ fn core_internal_project_serializes_with_snake_case() {
         order: 0,
     };
     let json = serde_json::to_value(&project).unwrap();
-    assert!(json.get("title").is_some(), "Core internal Project uses 'title', not 'name'");
+    assert!(
+        json.get("title").is_some(),
+        "Core internal Project uses 'title', not 'name'"
+    );
     assert!(json.get("id").is_some());
-    assert!(json.get("created_at").is_some(), "Core internal uses snake_case");
+    assert!(
+        json.get("created_at").is_some(),
+        "Core internal uses snake_case"
+    );
 }
 
 #[test]
@@ -446,8 +474,14 @@ fn ffi_project_maps_title_to_title() {
         "createdAt": project.created_at,
         "updatedAt": project.updated_at
     });
-    assert_eq!(ffi_json["title"], "My Novel", "FFI must output 'title' to match Core DTO");
-    assert!(ffi_json.get("name").is_none(), "FFI should NOT output 'name' key — use 'title'");
+    assert_eq!(
+        ffi_json["title"], "My Novel",
+        "FFI must output 'title' to match Core DTO"
+    );
+    assert!(
+        ffi_json.get("name").is_none(),
+        "FFI should NOT output 'name' key — use 'title'"
+    );
 }
 
 // ── Layout Policy DTO contract tests ──
@@ -479,7 +513,10 @@ fn window_metrics_dto_fields_match_harmony() {
         "widthVp",
     ];
     let actual_keys = sorted_keys(&ffi_json);
-    assert_eq!(actual_keys, expected_keys, "WindowMetrics DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "WindowMetrics DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -488,9 +525,18 @@ fn layout_plan_dto_fields_match_harmony() {
     let plan = crate::layout_policy::resolve_layout(&metrics);
     let json = serde_json::to_value(&plan).unwrap();
     // Verify Core internal serialization uses snake_case
-    assert!(json.get("width_class").is_some(), "Core internal LayoutPlan uses snake_case 'width_class'");
-    assert!(json.get("shell_mode").is_some(), "Core internal LayoutPlan uses snake_case 'shell_mode'");
-    assert!(json.get("content_max_width_vp").is_some(), "Core internal LayoutPlan uses snake_case 'content_max_width_vp'");
+    assert!(
+        json.get("width_class").is_some(),
+        "Core internal LayoutPlan uses snake_case 'width_class'"
+    );
+    assert!(
+        json.get("shell_mode").is_some(),
+        "Core internal LayoutPlan uses snake_case 'shell_mode'"
+    );
+    assert!(
+        json.get("content_max_width_vp").is_some(),
+        "Core internal LayoutPlan uses snake_case 'content_max_width_vp'"
+    );
 
     // Verify FFI output uses camelCase
     let ffi_json = json!({
@@ -518,7 +564,10 @@ fn layout_plan_dto_fields_match_harmony() {
         "widthClass",
     ];
     let actual_keys = sorted_keys(&ffi_json);
-    assert_eq!(actual_keys, expected_keys, "LayoutPlan DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "LayoutPlan DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -529,14 +578,12 @@ fn workspace_summary_dto_fields_match_harmony() {
         "projects": [],
         "recentEdits": []
     });
-    let expected_keys = vec![
-        "isValid",
-        "path",
-        "projects",
-        "recentEdits",
-    ];
+    let expected_keys = vec!["isValid", "path", "projects", "recentEdits"];
     let actual_keys = sorted_keys(&ffi_workspace);
-    assert_eq!(actual_keys, expected_keys, "WorkspaceSummary DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "WorkspaceSummary DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -546,13 +593,12 @@ fn chapter_location_dto_fields_match_harmony() {
         "volumeId": "v1",
         "chapterId": "c1"
     });
-    let expected_keys = vec![
-        "chapterId",
-        "projectId",
-        "volumeId",
-    ];
+    let expected_keys = vec!["chapterId", "projectId", "volumeId"];
     let actual_keys = sorted_keys(&ffi_location);
-    assert_eq!(actual_keys, expected_keys, "ChapterLocation DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "ChapterLocation DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -581,7 +627,10 @@ fn writing_event_dto_fields_match_harmony() {
         "volumeId",
     ];
     let actual_keys = sorted_keys(&ffi_event);
-    assert_eq!(actual_keys, expected_keys, "WritingEvent DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "WritingEvent DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 // ── StarMap Motion Policy / Layout / Graph / Viewport DTO contract tests ──
@@ -602,7 +651,10 @@ fn starmap_motion_policy_dto_fields_match_harmony() {
         "settleDurationMs",
     ];
     let actual_keys = sorted_keys(&json);
-    assert_eq!(actual_keys, expected_keys, "StarMapMotionPolicyDto DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "StarMapMotionPolicyDto DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -611,7 +663,10 @@ fn starmap_layout_dto_fields_match_harmony() {
     let json = serde_json::to_value(&layout).unwrap();
     let expected_keys = vec!["kind", "nodes"];
     let actual_keys = sorted_keys(&json);
-    assert_eq!(actual_keys, expected_keys, "StarMapLayout DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "StarMapLayout DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -645,7 +700,10 @@ fn starmap_layout_node_dto_fields_match_harmony() {
         "zIndex",
     ];
     let actual_keys = sorted_keys(&ffi_node);
-    assert_eq!(actual_keys, expected_keys, "StarMapLayoutNode DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "StarMapLayoutNode DTO field names must match Harmony CoreDtos.ets"
+    );
 }
 
 #[test]
@@ -653,7 +711,10 @@ fn starmap_graph_dto_serialization_contract() {
     let graph = crate::starmap::types::StarMapGraph::default();
     let json = serde_json::to_value(&graph).unwrap();
     // Core 内部使用 camelCase (因为 #[serde(rename_all = "camelCase")])
-    assert!(json.get("schemaVersion").is_some(), "StarMapGraph must serialize schemaVersion in camelCase");
+    assert!(
+        json.get("schemaVersion").is_some(),
+        "StarMapGraph must serialize schemaVersion in camelCase"
+    );
     assert!(json.get("starmapId").is_some());
     assert!(json.get("nodes").is_some());
     assert!(json.get("edges").is_some());
@@ -667,13 +728,10 @@ fn starmap_graph_dto_serialization_contract() {
 fn starmap_viewport_dto_fields_match_harmony() {
     let viewport = crate::starmap::types::StarMapViewport::default();
     let json = serde_json::to_value(&viewport).unwrap();
-    let expected_keys = vec![
-        "height",
-        "offsetX",
-        "offsetY",
-        "scale",
-        "width",
-    ];
+    let expected_keys = vec!["height", "offsetX", "offsetY", "scale", "width"];
     let actual_keys = sorted_keys(&json);
-    assert_eq!(actual_keys, expected_keys, "StarMapViewport DTO field names must match Harmony CoreDtos.ets");
+    assert_eq!(
+        actual_keys, expected_keys,
+        "StarMapViewport DTO field names must match Harmony CoreDtos.ets"
+    );
 }

@@ -59,8 +59,6 @@ pub(crate) fn default_true() -> bool {
     true
 }
 
-
-
 pub(crate) fn default_branch() -> String {
     "main".to_string()
 }
@@ -163,6 +161,7 @@ pub struct SyncDiagnosticsResult {
     pub user_message: Option<String>,
     pub raw_error: Option<String>,
     pub chosen_network_mode: Option<String>,
+    pub proxy_policy: String,
     pub network_probe_summary: Vec<NetworkProbeResult>,
 }
 
@@ -194,6 +193,7 @@ impl SyncDiagnosticsResult {
             user_message: None,
             raw_error: None,
             chosen_network_mode: None,
+            proxy_policy: "".to_string(),
             network_probe_summary: Vec::new(),
         }
     }

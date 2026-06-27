@@ -442,7 +442,6 @@ fn main() {
     // Pages
     println!("cargo:rerun-if-changed=qml/main.qml");
     println!("cargo:rerun-if-changed=qml/SettingsDialog.qml");
-    println!("cargo:rerun-if-changed=qml/EditorPage.qml");
     println!("cargo:rerun-if-changed=qml/ActionRegistryPage.qml");
     println!("cargo:rerun-if-changed=qml/SyncPage.qml");
     println!("cargo:rerun-if-changed=qml/AppController.qml");
@@ -459,7 +458,6 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/WritingWorkspace.qml");
     println!("cargo:rerun-if-changed=qml/WritingTreeController.qml");
     println!("cargo:rerun-if-changed=qml/EditorController.qml");
-    println!("cargo:rerun-if-changed=qml/SmoothCursor.qml");
     println!("cargo:rerun-if-changed=qml/EditorWheelScroller.qml");
     println!("cargo:rerun-if-changed=qml/SmoothWheelScroller.qml");
     println!("cargo:rerun-if-changed=qml/EditorAnimationOverlay.qml");

@@ -771,7 +771,10 @@ mod tests {
             path: vec![],
             target: crate::starmap::semantic::StarMapTargetDetail::Starmap,
         };
-        assert_eq!(resolve_deep_target(dir.path(), &dt_missing_sm), MissingStarmap);
+        assert_eq!(
+            resolve_deep_target(dir.path(), &dt_missing_sm),
+            MissingStarmap
+        );
 
         let dt_missing_node = crate::starmap::semantic::StarMapDeepTarget {
             starmap_id: meta_a.starmap_id.clone(),
@@ -780,7 +783,10 @@ mod tests {
                 node_id: "non-existent".to_string(),
             },
         };
-        assert_eq!(resolve_deep_target(dir.path(), &dt_missing_node), MissingNode);
+        assert_eq!(
+            resolve_deep_target(dir.path(), &dt_missing_node),
+            MissingNode
+        );
 
         let mut g = get_starmap_graph(dir.path(), &meta_a.starmap_id).unwrap();
         g.nodes.push(StarMapNode {
@@ -824,7 +830,10 @@ mod tests {
                 anchor_id: "missing".to_string(),
             },
         };
-        assert_eq!(resolve_deep_target(dir.path(), &dt_missing_anchor), MissingAnchor);
+        assert_eq!(
+            resolve_deep_target(dir.path(), &dt_missing_anchor),
+            MissingAnchor
+        );
 
         let dt_anchor_exists = crate::starmap::semantic::StarMapDeepTarget {
             starmap_id: meta_a.starmap_id.clone(),

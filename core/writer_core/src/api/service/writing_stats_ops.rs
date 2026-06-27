@@ -80,8 +80,15 @@ impl WriterCoreApi {
     ) -> ApiResult<bool> {
         self.core()
             .process_writing_event(
-                device_id, platform, project_id, volume_id, chapter_id, old_text, new_text,
-                duration_seconds, session_id,
+                device_id,
+                platform,
+                project_id,
+                volume_id,
+                chapter_id,
+                old_text,
+                new_text,
+                duration_seconds,
+                session_id,
             )
             .map(|_| true)
             .map_err(WriterError::from)

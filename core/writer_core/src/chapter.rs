@@ -32,7 +32,6 @@ use std::fs;
 use std::path::Path;
 use uuid::Uuid;
 
-
 /// 章节元数据结构体。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Chapter {
@@ -66,8 +65,10 @@ pub struct ChapterSaveReceipt {
     pub word_count: u32,
 }
 
-
-pub fn list_valid_chapter_ids(workspace_path: &Path, project_id: &str) -> Result<std::collections::HashSet<String>> {
+pub fn list_valid_chapter_ids(
+    workspace_path: &Path,
+    project_id: &str,
+) -> Result<std::collections::HashSet<String>> {
     let mut chapter_ids = std::collections::HashSet::new();
     let volumes_dir = workspace_path
         .join("projects")
@@ -319,7 +320,6 @@ fn save_chapter_verified_with_options(
         });
     }
 
-
     let meta_str = fs::read_to_string(&meta_path)?;
     let mut meta: Chapter = serde_json::from_str(&meta_str)?;
 
@@ -348,7 +348,6 @@ fn save_chapter_verified_with_options(
     tx.add_file(&md_relative, content)?;
     tx.add_file(&meta_relative, &updated_meta_str)?;
 
-
     tx.commit()?;
 
     let read_back = fs::read_to_string(&md_path)?;
@@ -375,7 +374,6 @@ fn save_chapter_verified_with_options(
         word_count: meta.word_count,
     })
 }
-
 
 pub fn update_chapter_note(
     workspace_path: &Path,
@@ -690,5 +688,70 @@ mod tests {
         let proj_content_after = fs::read_to_string(&proj_json_path).unwrap();
         assert_eq!(vol_content_before, vol_content_after);
         assert_eq!(proj_content_before, proj_content_after);
+    }
+
+    #[test]
+    fn test_rename_chapter_success() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0];
+
+        let chapter = create_chapter(workspace_path, &project.id, &volume.id, "Old Title").unwrap();
+
+        let meta_path = workspace_path
+            .join("projects")
+            .join(&project.id)
+            .join("volumes")
+            .join(&volume.id)
+            .join("chapters")
+            .join(&chapter.id)
+            .join("chapter.meta.json");
+
+        let meta_before: Chapter =
+            serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+        assert_eq!(meta_before.title, "Old Title");
+
+        rename_chapter(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            &chapter.id,
+            "New Title",
+        )
+        .unwrap();
+
+        let meta_after: Chapter =
+            serde_json::from_str(&fs::read_to_string(&meta_path).unwrap()).unwrap();
+        assert_eq!(meta_after.title, "New Title");
+        assert_eq!(meta_after.id, chapter.id);
+        assert!(
+            meta_after.updated_at > meta_before.updated_at
+                || meta_after.updated_at == meta_before.updated_at
+        );
+    }
+
+    #[test]
+    fn test_rename_chapter_not_found() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0];
+
+        let result = rename_chapter(
+            workspace_path,
+            &project.id,
+            &volume.id,
+            "nonexistent-chapter-id",
+            "New Title",
+        );
+
+        assert!(matches!(result, Err(crate::error::Error::ChapterNotFound)));
     }
 }

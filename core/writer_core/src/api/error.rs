@@ -119,7 +119,7 @@ impl WriterError {
 
     /// 已废弃：UI 应使用 `code()` + `message_key()` 做本地化映射，不再直接展示此中文文案。
     /// 保留仅作为 fallback/debug 用途。
-    #[deprecated(note = "Use code() + message_key() for i18n, this returns hardcoded Chinese")]
+    #[deprecated(note = "Use error_category for i18n lookup")]
     #[allow(deprecated)]
     pub fn user_message(&self) -> &'static str {
         match self {
@@ -226,10 +226,22 @@ mod tests {
     fn test_message_key_stable() {
         assert_eq!(WriterError::Io("test".into()).message_key(), "error.io");
         assert_eq!(WriterError::Json("test".into()).message_key(), "error.json");
-        assert_eq!(WriterError::InvalidWorkspace.message_key(), "error.invalid_workspace");
-        assert_eq!(WriterError::ProjectNotFound.message_key(), "error.project_not_found");
-        assert_eq!(WriterError::VolumeNotFound.message_key(), "error.volume_not_found");
-        assert_eq!(WriterError::ChapterNotFound.message_key(), "error.chapter_not_found");
+        assert_eq!(
+            WriterError::InvalidWorkspace.message_key(),
+            "error.invalid_workspace"
+        );
+        assert_eq!(
+            WriterError::ProjectNotFound.message_key(),
+            "error.project_not_found"
+        );
+        assert_eq!(
+            WriterError::VolumeNotFound.message_key(),
+            "error.volume_not_found"
+        );
+        assert_eq!(
+            WriterError::ChapterNotFound.message_key(),
+            "error.chapter_not_found"
+        );
         assert_eq!(
             WriterError::EmptyOverwriteBlocked {
                 chapter_id: "ch1".into(),
@@ -240,7 +252,10 @@ mod tests {
             .message_key(),
             "error.empty_overwrite_blocked"
         );
-        assert_eq!(WriterError::NotImplemented.message_key(), "error.not_implemented");
+        assert_eq!(
+            WriterError::NotImplemented.message_key(),
+            "error.not_implemented"
+        );
         assert_eq!(
             WriterError::RefuseToDeleteWorkspaceRoot.message_key(),
             "error.refuse_delete_workspace_root"
@@ -257,7 +272,10 @@ mod tests {
             WriterError::SyncFailed("detail".into()).message_key(),
             "error.sync_failed"
         );
-        assert_eq!(WriterError::Other("test".into()).message_key(), "error.other");
+        assert_eq!(
+            WriterError::Other("test".into()).message_key(),
+            "error.other"
+        );
     }
 
     #[test]

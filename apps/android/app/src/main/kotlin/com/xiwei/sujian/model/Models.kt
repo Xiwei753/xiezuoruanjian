@@ -243,6 +243,21 @@ enum class FirstSyncMode {
     @SerializedName("none") None
 }
 
+data class SyncConflictSummary(
+    val status: String,
+    @SerializedName("local_dirty") val localDirty: Boolean,
+    @SerializedName("remote_changed") val remoteChanged: Boolean,
+    @SerializedName("conflicted_files") val conflictedFiles: List<String> = emptyList(),
+    @SerializedName("blocked_reason") val blockedReason: String,
+    @SerializedName("safe_next_steps") val safeNextSteps: List<String> = emptyList()
+)
+
+data class SettingConflictDetail(
+    val key: String,
+    @SerializedName("local_value") val localValue: String,
+    @SerializedName("remote_value") val remoteValue: String
+)
+
 data class SyncConflict(
     @SerializedName("local_path") val localPath: String,
     @SerializedName("remote_path") val remotePath: String,
@@ -261,45 +276,9 @@ data class NetworkProbeResult(
     @SerializedName("raw_error") val rawError: String? = null
 )
 
-data class SyncResult(
-    val status: SyncStatus,
-    @SerializedName("uploaded_files") val uploadedFiles: List<String> = emptyList(),
-    @SerializedName("downloaded_files") val downloadedFiles: List<String> = emptyList(),
-    @SerializedName("local_deletes") val localDeletes: List<String> = emptyList(),
-    @SerializedName("remote_deletes") val remoteDeletes: List<String> = emptyList(),
-    @SerializedName("overwritten_files") val overwrittenFiles: List<String> = emptyList(),
-    @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList(),
-    val conflicts: List<SyncConflict> = emptyList(),
-    @SerializedName("commit_hash") val commitHash: String? = null,
-    val error: String? = null,
-    @SerializedName("error_category") val errorCategory: String? = null,
-    @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
-    @SerializedName("user_message") val userMessage: String? = null,
-    @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
-    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList(),
-    @SerializedName("conflict_summary") val conflictSummary: SyncConflictSummary? = null,
-    @SerializedName("settings_conflicts") val settingsConflicts: List<SettingConflictDetail>? = emptyList()
-)
-
-data class SettingConflictDetail(
-    val key: String,
-    @SerializedName("local_value") val localValue: JsonElement,
-    @SerializedName("remote_value") val remoteValue: JsonElement
-)
-
-data class SyncConflictSummary(
-    val status: String,
-    @SerializedName("local_dirty") val localDirty: Boolean,
-    @SerializedName("remote_changed") val remoteChanged: Boolean,
-    @SerializedName("conflicted_files") val conflictedFiles: List<String>,
-    @SerializedName("blocked_reason") val blockedReason: String,
-    @SerializedName("safe_next_steps") val safeNextSteps: List<String>
-)
-
-
 data class SyncDiagnosticsResult(
     val success: Boolean,
-    @SerializedName("backend_type") val backendType: String,
+    val backendType: String,
     @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean,
     @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean,
     @SerializedName("android_network_state") val androidNetworkState: String,
@@ -309,10 +288,10 @@ data class SyncDiagnosticsResult(
     @SerializedName("http_connect_probe_status") val httpConnectProbeStatus: String,
     @SerializedName("libgit2_probe_ok") val libgit2ProbeOk: Boolean,
     @SerializedName("libgit2_probe_status") val libgit2ProbeStatus: String,
-    @SerializedName("network_ok") val networkOk: Boolean,
-    @SerializedName("auth_ok") val authOk: Boolean,
-    @SerializedName("repo_ok") val repoOk: Boolean,
-    @SerializedName("branch_ok") val branchOk: Boolean,
+    val networkOk: Boolean,
+    val authOk: Boolean,
+    val repoOk: Boolean,
+    val branchOk: Boolean,
     @SerializedName("network_status") val networkStatus: String,
     @SerializedName("auth_status") val authStatus: String,
     @SerializedName("repo_status") val repoStatus: String,
@@ -322,7 +301,29 @@ data class SyncDiagnosticsResult(
     @SerializedName("error_category") val errorCategory: String,
     @SerializedName("user_message") val userMessage: String,
     @SerializedName("raw_error") val rawError: String?,
+    @SerializedName("chosen_network_mode") val chosenNetworkMode: String?,
+    @SerializedName("proxy_policy") val proxyPolicy: String,
+    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>
+)
+
+data class SyncResult(
+    val status: SyncStatus,
+    @SerializedName("uploaded_files") val uploadedFiles: List<String> = emptyList(),
+    @SerializedName("downloaded_files") val downloadedFiles: List<String> = emptyList(),
+    @SerializedName("local_deletes") val localDeletes: List<String> = emptyList(),
+    @SerializedName("remote_deletes") val remoteDeletes: List<String> = emptyList(),
+    @SerializedName("overwritten_files") val overwrittenFiles: List<String> = emptyList(),
+    @SerializedName("ignored_files") val ignoredFiles: List<String> = emptyList(),
+    val conflicts: List<SyncConflict> = emptyList(),
+    @SerializedName("conflict_summary") val conflictSummary: SyncConflictSummary? = null,
+    @SerializedName("settings_conflicts") val settingsConflicts: List<SettingConflictDetail>? = null,
+    @SerializedName("commit_hash") val commitHash: String? = null,
+    val error: String? = null,
+    @SerializedName("error_category") val errorCategory: String? = null,
+    @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
+    @SerializedName("user_message") val userMessage: String? = null,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
+    @SerializedName("proxy_policy") val proxyPolicy: String = "",
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
 )
 
