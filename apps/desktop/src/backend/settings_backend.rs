@@ -212,10 +212,14 @@ impl SettingsBackend {
     }
     fn set_setting_diagnostics_verbose(&mut self, val: bool) {
         self.with_app_mut((), |app| app.set_setting_diagnostics_verbose(val));
+        crate::backend::diagnostics::set_verbose_enabled(val);
         self.settings_changed();
     }
     fn load_local_settings(&mut self) {
         self.with_app_mut((), |app| app.load_local_settings());
+        // 同步 verbose 状态到 diagnostics 全局变量
+        let verbose = self.with_app(true, |app| app.setting_diagnostics_verbose());
+        crate::backend::diagnostics::set_verbose_enabled(verbose);
         self.settings_changed();
     }
     fn save_local_settings(&mut self) -> bool {

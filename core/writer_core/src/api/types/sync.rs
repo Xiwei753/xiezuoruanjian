@@ -179,7 +179,13 @@ pub struct SyncDiagnosticsResultDto {
     pub error_category: String,
     pub raw_error: Option<String>,
     pub chosen_network_mode: Option<String>,
+    /// [DEPRECATED] proxy_policy — 代理功能已移除，此字段固定为 "no_proxy"。
+    /// 保留仅为向后兼容，不应作为正式契约继续传播。
+    /// 后续版本可移除此字段。
     pub proxy_policy: String,
+    /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
+    /// 保留仅为向后兼容，不应作为正式契约继续传播。
+    /// 后续版本可移除此字段。
     pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
 }
 
@@ -254,6 +260,9 @@ pub struct SyncResultDto {
     pub error_category: Option<String>,
     pub first_sync_mode: String,
     pub chosen_network_mode: Option<String>,
+    /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
+    /// 保留仅为向后兼容，不应作为正式契约继续传播。
+    /// 后续版本可移除此字段。
     pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
 }
 

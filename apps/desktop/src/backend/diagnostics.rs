@@ -22,6 +22,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 日志文件最大大小（1 MiB），超过则轮转
 const MAX_FILE_SIZE: u64 = 1024 * 1024;
@@ -32,6 +33,10 @@ const LOG_PREFIX: &str = "sujian-current";
 
 /// 全局日志目录路径，在 main() 最早期通过 init_global_log_dir() 或 ensure_early_log_dir() 设置
 static GLOBAL_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// 全局 verbose 开关状态，由 SettingsBackend 在设置变更时同步更新
+/// 默认 true（alpha 阶段），稳定版应改为 false
+static VERBOSE_ENABLED: AtomicBool = AtomicBool::new(true);
 
 /// 初始化全局日志目录（使用 workspace 路径）
 ///
@@ -128,12 +133,16 @@ pub fn log_to_file(level: &str, module: &str, event: &str, message: &str) {
 
 /// 检查 diagnostics_verbose 是否开启
 ///
-/// 默认 alpha 阶段为 true
+/// 读取全局 AtomicBool 状态，由 SettingsBackend 在设置变更时通过 set_verbose_enabled() 同步更新
 fn is_verbose_enabled() -> bool {
-    // alpha 阶段默认 verbose=true
-    // 后续可以从设置中读取，但最早期可能还没有 workspace
-    // 所以默认 true
-    true
+    VERBOSE_ENABLED.load(Ordering::Relaxed)
+}
+
+/// 设置 diagnostics_verbose 开关状态
+///
+/// 由 SettingsBackend 在读取/更新设置时调用，同步全局 AtomicBool 状态
+pub fn set_verbose_enabled(enabled: bool) {
+    VERBOSE_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 /// 安装 panic hook，将 panic 信息写入日志文件
@@ -750,5 +759,67 @@ mod tests {
         assert!(content.contains("PANIC: test panic message"));
         assert!(content.contains("[ERROR]"));
         assert!(content.contains("[panic::hook]"));
+    }
+
+    #[test]
+    fn test_verbose_disabled_filters_info() {
+        // 保存原始状态
+        let prev = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        VERBOSE_ENABLED.store(false, Ordering::Relaxed);
+
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path();
+
+        // verbose=false 时，INFO 级别不应写入
+        append_log_line(log_dir, "[INFO] some info message", false);
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        if current_file.exists() {
+            let content = fs::read_to_string(&current_file).unwrap();
+            assert!(!content.contains("some info message"), "INFO should be filtered when verbose is disabled");
+        }
+
+        // verbose=false 时，WARN/ERROR 仍应写入
+        append_log_line(log_dir, "[WARN] some warning", false);
+        append_log_line(log_dir, "[ERROR] some error", false);
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let content = fs::read_to_string(&current_file).unwrap();
+        assert!(content.contains("some warning"), "WARN should always be written");
+        assert!(content.contains("some error"), "ERROR should always be written");
+
+        // 恢复原始状态
+        VERBOSE_ENABLED.store(prev, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_verbose_enabled_writes_all() {
+        let prev = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        VERBOSE_ENABLED.store(true, Ordering::Relaxed);
+
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path();
+
+        append_log_line(log_dir, "[INFO] some info message", true);
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        assert!(current_file.exists());
+        let content = fs::read_to_string(&current_file).unwrap();
+        assert!(content.contains("some info message"), "INFO should be written when verbose is enabled");
+
+        VERBOSE_ENABLED.store(prev, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_set_verbose_enabled_updates_global() {
+        let prev = VERBOSE_ENABLED.load(Ordering::Relaxed);
+
+        set_verbose_enabled(false);
+        assert!(!is_verbose_enabled());
+
+        set_verbose_enabled(true);
+        assert!(is_verbose_enabled());
+
+        VERBOSE_ENABLED.store(prev, Ordering::Relaxed);
     }
 }

@@ -45,8 +45,15 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 - Desktop 因 Qt/QML TextArea 路线已多次踩坑，继续推进 SujianEditorItem。
 - Desktop 动画允许开启，但只能走 Core transaction + animation_events_json + QML overlay 路线：
   Core EditorTransaction / EditorAnimationEvent → SujianEditorItem.animation_events_json → QML EditorAnimationOverlay / EditorGlyphGhost。
-  禁止恢复：hidden range、QTextDocument 字符格式隐藏、正文透明 span、TextArea 补丁动画。
+  Insert 动画期间，静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），动画 overlay 渲染 ghost glyph。
+  Delete 动画使用旧 glyph snapshot（删除前的字形位置），overlay 渲染吞回动画。
+  overlay 是动画层，不是完整正文 overlay 冒充真吐字。
+  禁止恢复：TextArea fallback、QTextDocument 字符格式隐藏、正文透明 span/透明颜色污染正文数据、正文完整绘制+overlay冒充真吐字。
+  自研渲染层自己的 hidden range 是允许的内部渲染状态，不是正文数据污染。
   QSG 三层 overlay（paint_animation_overlay / update_animation_overlay）标记为 future/experimental，不是当前验收路径。
+- Android SujianEditorView 已进入自绘阶段，分层绘制：静态正文层 → 选区高亮层 → preedit 层 → 动画层 → 光标层。
+  动画期间静态层跳过 animated insert range 避免重影，删除动画使用删除前 snapshot glyph rect。
+  WriterEditText 仍作为兼容 fallback 存在。
 
 ## Android 图谱技术路线
 - 图谱不是普通页面，而是大画布图形系统。**图谱最终是与正文并列的创作知识图谱，不仅限于章节树结构。**

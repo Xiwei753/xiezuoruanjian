@@ -22,9 +22,13 @@ $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
-$exe = Get-ChildItem -Path $scriptDir -Filter "sujian-windows-*.exe" | Select-Object -First 1
+# 先找安装包命名 sujian.exe，再 fallback 找 portable 命名 sujian-windows-*.exe
+$exe = Get-ChildItem -Path $scriptDir -Filter "sujian.exe" | Select-Object -First 1
 if (-not $exe) {
-    Write-Host "Error: sujian-windows-*.exe not found in $scriptDir" -ForegroundColor Red
+    $exe = Get-ChildItem -Path $scriptDir -Filter "sujian-windows-*.exe" | Select-Object -First 1
+}
+if (-not $exe) {
+    Write-Host "Error: sujian.exe or sujian-windows-*.exe not found in $scriptDir" -ForegroundColor Red
     exit 1
 }
 

@@ -450,9 +450,7 @@ pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
     if let Some(mode) = result.chosen_network_mode.as_ref() {
         msg.push_str(&format!("\n网络模式: {}", mode));
     }
-    if !result.proxy_policy.is_empty() {
-        msg.push_str(&format!("\n代理策略: {}", result.proxy_policy));
-    }
+    // proxy_policy 已 deprecated，固定为 "no_proxy"，不再展示
 
     msg.push_str(&format!(
         "\n网络连接: {}",

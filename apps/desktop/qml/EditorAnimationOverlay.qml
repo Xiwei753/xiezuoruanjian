@@ -13,6 +13,16 @@
 // - paste: no animation (Core already filters this)
 // - scroll/settings/load/chapter switch: clearAll()
 // - No rectangle highlight fallback — if glyphRects is empty, skip animation
+//
+// Animation mechanism:
+// - Insert: during animation, the static text layer (Layer 0) temporarily skips the inserted range.
+//   This is an internal rendering state of the self-rendered editor, NOT text data pollution.
+//   The overlay renders ghost glyphs that fly from the cursor to their final positions.
+//   When animation finishes, insertAnimationFinished signal notifies Rust to clear the hidden range
+//   and restore full text rendering.
+// - Delete: the overlay holds old glyph snapshots (pre-deletion positions) and renders them
+//   flying back toward the cursor. The static text layer already reflects the post-deletion state.
+// - The overlay is an animation layer, NOT a full text overlay masquerading as real text rendering.
 
 import QtQuick
 
@@ -29,7 +39,8 @@ Item {
     property bool verboseLogging: false
 
     // ── 真吐字/吞字动画信号 ──
-    // Insert 动画完成时通知 Rust 侧清除 hidden range，恢复正文完整绘制
+    // Insert 动画完成时通知 Rust 侧清除 hidden range（临时渲染状态），恢复正文完整绘制
+    // hidden range 是自研渲染层的内部渲染状态，不是正文数据污染
     signal insertAnimationFinished(int byteStart, int byteEnd)
 
     function _log(message) {
@@ -45,10 +56,12 @@ Item {
     Connections {
         target: editorItem
         function onAnimationEventsChanged() {
-            if (!root.animationEnabled || root.suppressed) {
-                root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
-                return
-            }
+        if (!root.animationEnabled || root.suppressed) {
+            root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
+            // 当动画被跳过时，不会有 insert 动画创建，因此不会有 hidden range 需要清理
+            // Rust 侧在 suppressed/animationDisabled 场景下不应创建 hidden range
+            return
+        }
             var jsonStr = editorItem.animation_events_json
             if (!jsonStr || jsonStr === "[]") {
                 root._log("skipped: jsonStr empty or []")
@@ -75,6 +88,10 @@ Item {
 
     onSuppressedChanged: {
         if (suppressed) {
+            // suppressed 时必须立即清理所有动画和 pending 状态
+            // 确保 Rust 侧的 hidden range 也被清除（通过 clearAll → 不发射 insertAnimationFinished）
+            // 注意：clearAll 不会发射 insertAnimationFinished，所以 Rust 侧的 hidden range
+            // 需要在 suppressed 场景下由 Rust 侧自行清理
             root.clearAll()
         }
     }
@@ -280,6 +297,10 @@ Item {
     }
 
     function clearAll() {
+        // 销毁所有活跃动画
+        // 注意：此函数不发射 insertAnimationFinished 信号
+        // Rust 侧需要在 suppressed/component not ready/animation disabled 场景下
+        // 自行确保不创建或立即清理 hidden range
         for (var i = 0; i < root._activeAnimations.length; i++) {
             if (root._activeAnimations[i]) root._activeAnimations[i].destroy()
         }

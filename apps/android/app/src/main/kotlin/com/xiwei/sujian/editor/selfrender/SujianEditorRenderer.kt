@@ -190,14 +190,23 @@ class SujianEditorRenderer(
             .coerceAtMost(layout.lineCount - 1)
 
         if (excludeRange == null) {
-            // 快速路径：只绘制可视行范围
-            for (lineIdx in firstVisLine..lastVisLine) {
-                drawLineFull(canvas, layout, lineIdx)
-            }
+            // 快速路径：一次 layout.draw() + clipRect 限制到可视区域
+            // 相比逐行 clipRect + layout.draw()，只调用一次 layout.draw() 显著减少重复绘制
+            val visTop = layout.getLineTop(firstVisLine).toFloat()
+            val visBottom = layout.getLineBottom(lastVisLine).toFloat()
+            val visLeft = 0f
+            val visRight = layout.width.toFloat()
+            canvas.save()
+            canvas.clipRect(visLeft, visTop, visRight, visBottom)
+            layout.draw(canvas)
+            canvas.restore()
             return
         }
 
         // 有 excludeRange：只对可视行做拆分
+        // TODO(mid-term): 当前 drawLineFull 仍使用 clipRect + layout.draw() 逐行绘制
+        // 长期应改为真正只绘制受影响行的文本段（drawText），避免每行重复 draw 完整 layout
+        // 但 Layout.drawLine() 是 @hide API 不可用，当前 clipRect 限制是可行方案
         for (lineIdx in firstVisLine..lastVisLine) {
             val lineStart = layout.getLineStart(lineIdx)
             val lineEnd = layout.getLineEnd(lineIdx)
@@ -227,7 +236,12 @@ class SujianEditorRenderer(
      * 绘制完整的一行（无裁剪）
      * 使用 clipRect + layout.draw() 限制绘制范围到当前行。
      * 注意：Layout.drawLine() 是 @hide API 不可用，只能用 clip 限制。
-     * 相比遍历全文所有行，只对可视行做 clip + draw 仍然有显著性能提升。
+     *
+     * 性能说明：
+     * - 无 excludeRange 时，drawStaticText 已改用单次 layout.draw() + 可视区域 clip，
+     *   不会再调用此方法。
+     * - 有 excludeRange 时，此方法仍用于不与 excludeRange 相交的行。
+     * - 长期应改为 drawText 逐字符/逐段绘制，避免每行重复 draw 完整 layout。
      */
     private fun drawLineFull(canvas: Canvas, layout: Layout, lineIdx: Int) {
         val lineTop = layout.getLineTop(lineIdx)

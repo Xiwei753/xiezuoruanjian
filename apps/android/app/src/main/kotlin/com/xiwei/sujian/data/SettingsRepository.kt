@@ -54,8 +54,8 @@ class SettingsRepository(context: Context) {
             BridgeResult.NotLoaded -> LocalSettings()
         }
         return fromCore.copy(
-            diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", false),
-            diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", false),
+            diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true),
+            diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true),
             useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", false)
         )
     }
