@@ -1,0 +1,1127 @@
+namespace writer_core {
+    [Throws=WriterError]
+    boolean init_workspace(string path);
+
+    [Throws=WriterError]
+    WriterAppService open_workspace(string path);
+
+    [Throws=WriterError]
+    boolean repair_workspace(string path);
+
+    [Throws=WriterError]
+    ProjectDto create_project_in_workspace(string workspace, string title);
+
+    [Throws=WriterError]
+    WorkspaceSummaryDto load_workspace_summary(string path);
+};
+
+dictionary AiActionResponse {
+    string display_text;
+    sequence<AiAction> actions;
+};
+
+dictionary AiAction {
+    string label;
+    AiActionType action_type;
+    string payload;
+};
+
+enum AiActionType {
+    "Navigate",
+    "ApplySetting",
+    "InsertText",
+    "ReplaceText",
+    "RunCommand",
+    "Custom",
+};
+
+dictionary ProjectDto {
+    string id;
+    string title;
+    string created_at;
+    string updated_at;
+};
+
+dictionary ProjectStatsDto {
+    u32 total_word_count;
+    u32 volume_count;
+    u32 chapter_count;
+};
+
+dictionary VolumeDto {
+    string id;
+    string title;
+    string created_at;
+    string updated_at;
+    i32 order;
+};
+
+dictionary ChapterMetaDto {
+    string id;
+    string title;
+    string created_at;
+    string updated_at;
+    i32 order;
+    u32 word_count;
+    string hash;
+    string? note;
+};
+
+dictionary ChapterContentDto {
+    ChapterMetaDto meta;
+    string content;
+};
+
+dictionary ChapterSaveReceiptDto {
+    string chapter_relative_path;
+    u32 content_len;
+    string content_hash;
+    string meta_hash;
+    string updated_at;
+    u32 word_count;
+};
+
+dictionary RecentEditDto {
+    string project_id;
+    string volume_id;
+    string chapter_id;
+    string timestamp;
+};
+
+dictionary LocalSettingsDto {
+    string? theme_mode;
+    string? locale;
+    boolean auto_save_enabled;
+    f32 editor_font_size;
+    f32 editor_line_spacing_multiplier;
+    f32 window_width;
+    f32 window_height;
+    u64 auto_save_delay_ms;
+    boolean auto_indent_enabled;
+    f32 auto_indent_width;
+    boolean editor_typing_animation_enabled;
+    boolean editor_smooth_cursor_enabled;
+    u64 editor_typing_animation_duration_ms;
+    u64 editor_smooth_cursor_duration_ms;
+    boolean ai_enabled;
+    string? stats_device_id;
+    f64 desktop_sidebar_width;
+    f64 desktop_editor_width;
+    boolean diagnostics_enabled;
+    boolean diagnostics_verbose;
+};
+
+dictionary SyncableSettingsDto {
+    f64 font_size;
+    string theme_mode;
+    string monet_color;
+};
+
+dictionary SyncConfigDto {
+    boolean enabled;
+    string backend_type;
+    string remote_url;
+    string transport;
+    string branch;
+    boolean auto_sync;
+    u32 sync_interval_seconds;
+    string username;
+    boolean android_has_internet_permission;
+    boolean android_has_access_network_state_permission;
+};
+
+dictionary SyncSecretsDto {
+    string? token;
+};
+
+dictionary SyncConflictDto {
+    string local_path;
+    string remote_path;
+    string local_hash;
+    string remote_hash;
+    string base_hash;
+    i64 created_at;
+    string description;
+};
+
+dictionary SyncStateDto {
+    string status;
+    string? remote_url;
+    string? backend_type;
+    string? transport;
+    string? last_synced_commit;
+    i64? last_sync_time;
+    string? last_error;
+    string? last_successful_network_mode;
+    sequence<SyncConflictDto>? conflicts;
+};
+
+dictionary NetworkProbeResultDto {
+    string mode;
+    boolean success;
+    string status;
+    string message;
+    string? raw_error;
+};
+
+dictionary SyncDiagnosticsResultDto {
+    boolean success;
+    string backend_type;
+    boolean android_has_internet_permission;
+    boolean android_has_access_network_state_permission;
+    string android_network_state;
+    boolean network_ok;
+    boolean auth_ok;
+    boolean repo_ok;
+    boolean branch_ok;
+    string network_status;
+    string auth_status;
+    string repo_status;
+    string branch_status;
+    string remote_url_sanitized;
+    string transport;
+    string error_category;
+    string? raw_error;
+    string? chosen_network_mode;
+    string proxy_policy;
+    sequence<NetworkProbeResultDto>? network_probe_summary;
+};
+
+dictionary SyncPlanDto {
+    sequence<string> files_to_upload;
+    sequence<string> files_to_download;
+    sequence<string> files_to_delete_local;
+    sequence<string> files_to_delete_remote;
+    sequence<string> ignored_files;
+    sequence<string> conflicts;
+};
+
+dictionary SyncResultDto {
+    string status;
+    sequence<string> uploaded_files;
+    sequence<string> downloaded_files;
+    sequence<string> local_deletes;
+    sequence<string> remote_deletes;
+    sequence<string> overwritten_files;
+    sequence<string> ignored_files;
+    sequence<SyncConflictDto> conflicts;
+    string? commit_hash;
+    string? error;
+    string? error_category;
+    string first_sync_mode;
+    string? chosen_network_mode;
+    sequence<NetworkProbeResultDto>? network_probe_summary;
+};
+
+[Error]
+enum WriterError {
+    "Io",
+    "Json",
+    "InvalidWorkspace",
+    "ProjectNotFound",
+    "VolumeNotFound",
+    "ChapterNotFound",
+    "EmptyOverwriteBlocked",
+    "NotImplemented",
+    "RefuseToDeleteWorkspaceRoot",
+    "InvalidDeleteTarget",
+    "SyncConflict",
+    "SyncFailed",
+    "Other"
+};
+
+enum PlatformDto {
+    "Linux",
+    "Android",
+};
+
+dictionary WorkspaceSummaryDto {
+    string path;
+    boolean is_valid;
+    sequence<ProjectDto> projects;
+    sequence<RecentEditDto> recent_edits;
+};
+
+dictionary DateRangeDto {
+    string start_date;
+    string end_date;
+};
+
+dictionary WritingStatsSummaryDto {
+    DateRangeDto range;
+    u64 total_human_typed_chars;
+    u64 total_pasted_chars;
+    u64 total_deleted_chars;
+    u64 total_ai_inserted_chars;
+    i64 total_net_delta_chars;
+    u64 total_active_seconds;
+    u32 total_sessions;
+    u32 days_count;
+};
+
+dictionary ProjectStatsRecordDto {
+    string project_id;
+    u64 human_typed_chars;
+    u64 pasted_chars;
+    u64 deleted_chars;
+    u64 ai_inserted_chars;
+    i64 net_delta_chars;
+    u64 active_seconds;
+};
+
+dictionary ProjectStatsSummaryDto {
+    DateRangeDto range;
+    sequence<ProjectStatsRecordDto> projects;
+};
+
+dictionary ChapterStatsRecordDto {
+    string chapter_id;
+    u64 human_typed_chars;
+    u64 pasted_chars;
+    u64 deleted_chars;
+    u64 ai_inserted_chars;
+    i64 net_delta_chars;
+    u64 active_seconds;
+};
+
+dictionary ChapterStatsSummaryDto {
+    DateRangeDto range;
+    sequence<ChapterStatsRecordDto> chapters;
+};
+
+dictionary DeviceStatsRecordDto {
+    string device_id;
+    PlatformDto platform;
+    u64 human_typed_chars;
+    u64 pasted_chars;
+    u64 deleted_chars;
+    u64 ai_inserted_chars;
+    i64 net_delta_chars;
+    u64 active_seconds;
+    u32 sessions_count;
+};
+
+dictionary DeviceStatsSummaryDto {
+    DateRangeDto range;
+    sequence<DeviceStatsRecordDto> devices;
+};
+
+dictionary SpeedCurvePointDto {
+    i64 start_ms;
+    i64 end_ms;
+    u32 chars_typed;
+    float chars_per_minute;
+};
+
+dictionary SpeedCurveSummaryDto {
+    DateRangeDto range;
+    u32 bucket_minutes;
+    sequence<SpeedCurvePointDto> buckets;
+};
+
+// ============================================================
+// StarMap types
+// ============================================================
+
+dictionary StarMapMetaDto {
+    string starmap_id;
+    string title;
+    string description;
+    string? project_id;
+    string? parent_starmap_id;
+    boolean is_main_for_project;
+    string accent_color;
+    u64 created_at;
+    u64 updated_at;
+    u32 node_count;
+    u32 edge_count;
+    u32 linked_chapter_count;
+    u32 child_starmap_count;
+};
+
+dictionary StarMapGraphDto {
+    u32 schema_version;
+    string id;
+    string starmap_id;
+    string title;
+    sequence<StarMapNodeDto> nodes;
+    sequence<StarMapEdgeDto> edges;
+    sequence<StarMapEmbedDto> embeds;
+    sequence<StarMapLinkDto> links;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapNodeDto {
+    string id;
+    string title;
+    StarMapNodeKindDto kind;
+    string? payload;
+    sequence<string> tags;
+    StarMapNodeContentDto content;
+    sequence<StarMapAnchorDto> anchors;
+    StarMapPortalDto? portal;
+    StarMapDisplayPolicyDto display_policy;
+    StarMapOpenBehaviorDto open_behavior;
+    StarMapProvenanceDto provenance;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapNodeContentDto {
+    string kind;
+    string? summary;
+    string? body;
+    string? project_id;
+    string? volume_id;
+    string? chapter_id;
+    u32? range_start;
+    u32? range_end;
+    string? entity_type;
+    string? entity_id;
+    string? uri;
+    string? label;
+};
+
+dictionary StarMapAnchorDto {
+    string anchor_id;
+    StarMapAnchorTargetDto target;
+    string? label;
+    StarMapAnchorRoleDto role;
+};
+
+dictionary StarMapAnchorTargetDto {
+    string kind;
+    string? project_id;
+    string? volume_id;
+    string? chapter_id;
+    u32? range_start;
+    u32? range_end;
+    string? entity_id;
+    string? entity_type;
+    string? starmap_id;
+    string? uri;
+    string? payload;
+};
+
+dictionary StarMapPortalDto {
+    string target_starmap_id;
+    StarMapDeepTargetDto? deep_target;
+    StarMapPortalModeDto mode;
+    StarMapPortalPreviewPolicyDto preview_policy;
+};
+
+dictionary StarMapDisplayPolicyDto {
+    float importance;
+    float min_visible_scale;
+    float title_scale;
+    float summary_scale;
+    float detail_scale;
+    u32 max_preview_chars;
+    float min_readable_px;
+};
+
+dictionary StarMapProvenanceDto {
+    StarMapSourceKindDto source;
+    string? source_id;
+    string? generated_by;
+    string? prompt_id;
+    StarMapReviewStatusDto review_status;
+    string? created_from_anchor;
+};
+
+dictionary StarMapDeepTargetDto {
+    string starmap_id;
+    sequence<StarMapPathSegmentDto> path;
+    StarMapTargetDetailDto target;
+};
+
+dictionary StarMapPathSegmentDto {
+    string kind;
+    string? starmap_id;
+};
+
+dictionary StarMapEdgeEndpointDto {
+    string kind;
+    string? node_id;
+    string? anchor_id;
+    StarMapDeepTargetDto? target;
+};
+
+dictionary StarMapEndpointPathSegmentDto {
+    string kind;
+    string? starmap_id;
+};
+
+dictionary StarMapEndpointPathDto {
+    sequence<StarMapEndpointPathSegmentDto> segments;
+    StarMapEdgeEndpointDto endpoint;
+};
+
+dictionary StarMapEdgeDto {
+    string id;
+    string? from;
+    string? to;
+    StarMapEdgeKindDto kind;
+    string? label;
+    string? payload;
+    StarMapDeepTargetDto? from_target;
+    StarMapDeepTargetDto? to_target;
+    StarMapEdgeEndpointDto? from_endpoint;
+    StarMapEdgeEndpointDto? to_endpoint;
+    StarMapEndpointPathDto? from_endpoint_path;
+    StarMapEndpointPathDto? to_endpoint_path;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapEmbedPlacementDto {
+    float x;
+    float y;
+    float width;
+    float height;
+    float scale;
+    i32 z_index;
+    boolean collapsed;
+};
+
+dictionary StarMapEmbedViewportDto {
+    float scale;
+    float offset_x;
+    float offset_y;
+};
+
+dictionary StarMapEmbedDto {
+    string instance_id;
+    string target_starmap_id;
+    string? label;
+    StarMapDisplayPolicyDto display_policy;
+    StarMapOpenBehaviorDto open_behavior;
+    StarMapEmbedPlacementDto placement;
+    StarMapEmbedViewportDto target_viewport;
+    string? source_node_id;
+    StarMapEndpointDto? host_endpoint;
+    StarMapProvenanceDto provenance;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapLinkDto {
+    string link_id;
+    StarMapEndpointDto source;
+    StarMapDeepTargetDto target;
+    string? label;
+    u64 created_at;
+    u64 updated_at;
+};
+
+dictionary StarMapLayoutDto {
+    StarMapLayoutKindDto kind;
+    sequence<StarMapLayoutNodeDto> nodes;
+};
+
+dictionary StarMapLayoutNodeDto {
+    string node_id;
+    float x;
+    float y;
+    float width;
+    float height;
+    float radius;
+    boolean collapsed;
+    i32 z_index;
+    float scale;
+    float depth;
+    float focus_weight;
+    string? orbit_group;
+};
+
+dictionary StarMapEdgeRenderDto {
+    string edge_id;
+    float from_cx;
+    float from_cy;
+    float to_cx;
+    float to_cy;
+    float start_x;
+    float start_y;
+    float end_x;
+    float end_y;
+    float offset_x;
+    float offset_y;
+    float arrow_tip_x;
+    float arrow_tip_y;
+    float arrow_left_x;
+    float arrow_left_y;
+    float arrow_right_x;
+    float arrow_right_y;
+    float label_x;
+    float label_y;
+    boolean has_bidirectional;
+};
+
+dictionary StarMapReferenceDto {
+    string host_starmap_id;
+    string host_title;
+    string ref_type;
+    string ref_id;
+    string target_starmap_id;
+};
+
+dictionary StarMapTargetDetailDto {
+    string kind;
+    string? node_id;
+    string? anchor_id;
+    string? project_id;
+    string? volume_id;
+    string? chapter_id;
+    u32? range_start;
+    u32? range_end;
+    string? entity_type;
+    string? entity_id;
+    string? uri;
+};
+
+dictionary StarMapEndpointDto {
+    string kind;
+    string? node_id;
+    string? anchor_id;
+};
+
+dictionary StarMapViewportDto {
+    float scale;
+    float offset_x;
+    float offset_y;
+    float width;
+    float height;
+};
+
+dictionary StarMapEmbedPatchInputDto {
+    string? label;
+    boolean clear_label;
+    StarMapDisplayPolicyDto? display_policy;
+    StarMapOpenBehaviorDto? open_behavior;
+    StarMapViewportDto? viewport;
+    boolean clear_viewport;
+    StarMapEmbedPlacementDto? placement;
+    boolean clear_placement;
+    StarMapEmbedViewportDto? target_viewport;
+    boolean clear_target_viewport;
+    string? source_node_id;
+    boolean clear_source_node_id;
+    string? host_anchor;
+    boolean clear_host_anchor;
+    StarMapEndpointDto? host_endpoint;
+    boolean clear_host_endpoint;
+};
+
+dictionary StarMapLinkPatchInputDto {
+    StarMapEndpointDto? source;
+    StarMapDeepTargetDto? target;
+    string? label;
+    boolean clear_label;
+};
+
+enum StarMapNodeKindDto {
+    "Character",
+    "Event",
+    "Location",
+    "Item",
+    "Concept",
+    "Theme",
+    "Note",
+    "Organization",
+    "Timeline",
+    "Plot",
+    "Foreshadowing",
+    "Chapter",
+    "Custom",
+};
+
+enum StarMapEdgeKindDto {
+    "Contains",
+    "References",
+    "AppearsIn",
+    "Causes",
+    "RelatedTo",
+    "LocatedAt",
+    "CharacterRelation",
+    "Timeline",
+    "Foreshadows",
+    "Resolves",
+    "DependsOn",
+    "ConflictsWith",
+    "Custom",
+};
+
+enum StarMapLayoutKindDto {
+    "Freeform",
+    "AutoRadial",
+    "Custom",
+};
+
+enum StarMapAnchorRoleDto {
+    "Source",
+    "Destination",
+    "Reference",
+    "Custom",
+};
+
+enum StarMapPortalModeDto {
+    "EnterChild",
+    "PreviewInline",
+    "ReferenceOnly",
+};
+
+enum StarMapPortalPreviewPolicyDto {
+    "Auto",
+    "Always",
+    "Never",
+};
+
+enum StarMapOpenBehaviorDto {
+    "Inspector",
+    "ExpandCard",
+    "WritingMode",
+    "JumpToAnchor",
+    "EnterPortal",
+    "Custom",
+};
+
+enum StarMapSourceKindDto {
+    "Human",
+    "Import",
+    "Plugin",
+    "Ai",
+    "System",
+    "Unknown",
+};
+
+enum StarMapReviewStatusDto {
+    "Accepted",
+    "Draft",
+    "NeedsReview",
+    "Rejected",
+    "Unknown",
+};
+
+// ============================================================
+// Action types
+// ============================================================
+
+enum ActionKindDto {
+    "Query",
+    "Preview",
+    "Mutation",
+};
+
+enum ActionRiskLevelDto {
+    "SafeRead",
+    "SafeWrite",
+    "ContentWrite",
+    "Dangerous",
+};
+
+dictionary ActionDescriptorDto {
+    string id;
+    string title;
+    string description;
+    string category;
+    ActionKindDto kind;
+    ActionRiskLevelDto risk_level;
+    boolean confirm_required;
+    boolean undoable;
+    sequence<string> platforms;
+    string? input_schema;
+    string? ui_schema;
+};
+
+dictionary ActionResultDto {
+    boolean success;
+    string? message;
+    string? data;
+    string? proposed_ui;
+    boolean? requires_confirmation;
+};
+
+interface WriterAppService {
+    constructor(string workspace_path);
+
+    [Throws=WriterError]
+    sequence<ProjectDto> list_projects();
+
+    [Throws=WriterError]
+    boolean create_workspace_if_needed();
+
+    [Throws=WriterError]
+    boolean validate_workspace();
+
+    [Throws=WriterError]
+    sequence<RecentEditDto> get_recent_edits();
+
+    [Throws=WriterError]
+    boolean record_recent_edit(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    boolean flush_recent_edits();
+
+    [Throws=WriterError]
+    ProjectDto create_project(string title);
+
+    [Throws=WriterError]
+    ProjectStatsDto get_project_stats(string project_id);
+
+    [Throws=WriterError]
+    boolean rename_project(string project_id, string new_title);
+
+    [Throws=WriterError]
+    boolean delete_project(string project_id);
+
+    [Throws=WriterError]
+    boolean reorder_projects(sequence<string> ordered_project_ids);
+
+    [Throws=WriterError]
+    sequence<VolumeDto> list_volumes(string project_id);
+
+    [Throws=WriterError]
+    VolumeDto create_volume(string project_id, string title);
+
+    [Throws=WriterError]
+    boolean rename_volume(string project_id, string volume_id, string new_title);
+
+    [Throws=WriterError]
+    boolean delete_volume(string project_id, string volume_id);
+
+    [Throws=WriterError]
+    boolean reorder_volumes(string project_id, sequence<string> ordered_volume_ids);
+
+    [Throws=WriterError]
+    sequence<ChapterMetaDto> list_chapters(string project_id, string volume_id);
+
+    [Throws=WriterError]
+    ChapterMetaDto create_chapter(string project_id, string volume_id, string title);
+
+    [Throws=WriterError]
+    ChapterMetaDto create_chapter_in_project(string project_id, string title);
+
+    [Throws=WriterError]
+    boolean rename_chapter(string project_id, string volume_id, string chapter_id, string new_title);
+
+    [Throws=WriterError]
+    boolean delete_chapter(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    boolean reorder_chapters(string project_id, string volume_id, sequence<string> ordered_chapter_ids);
+
+    [Throws=WriterError]
+    ChapterContentDto open_chapter(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    ChapterSaveReceiptDto save_chapter_content(string project_id, string volume_id, string chapter_id, string content);
+
+    [Throws=WriterError]
+    ChapterSaveReceiptDto clear_chapter_content(string project_id, string volume_id, string chapter_id);
+
+    [Throws=WriterError]
+    boolean update_chapter_note(string project_id, string volume_id, string chapter_id, string note);
+
+    [Throws=WriterError]
+    LocalSettingsDto load_local_settings();
+
+    [Throws=WriterError]
+    boolean save_local_settings(LocalSettingsDto settings);
+
+    [Throws=WriterError]
+    SyncableSettingsDto load_syncable_settings();
+
+    [Throws=WriterError]
+    boolean save_syncable_settings(SyncableSettingsDto settings);
+
+    [Throws=WriterError]
+    SyncConfigDto load_sync_config();
+
+    [Throws=WriterError]
+    boolean save_sync_config(SyncConfigDto config);
+
+    [Throws=WriterError]
+    SyncSecretsDto load_sync_secrets();
+
+    [Throws=WriterError]
+    boolean save_sync_secrets(SyncSecretsDto secrets);
+
+    [Throws=WriterError]
+    SyncStateDto load_sync_state();
+
+    [Throws=WriterError]
+    SyncDiagnosticsResultDto perform_sync_diagnostics(SyncConfigDto config);
+
+    [Throws=WriterError]
+    SyncPlanDto perform_sync_dry_run(SyncConfigDto config);
+
+    [Throws=WriterError]
+    SyncResultDto perform_sync(SyncConfigDto config);
+
+    [Throws=WriterError]
+    boolean resolve_conflict_keep_local(string path);
+
+    [Throws=WriterError]
+    boolean resolve_conflict_take_remote(string path);
+
+    [Throws=WriterError]
+    boolean resolve_conflict_mark_merged(string path);
+
+    [Throws=WriterError]
+    WritingStatsSummaryDto get_writing_stats_summary(string start_date, string end_date);
+
+    [Throws=WriterError]
+    ProjectStatsSummaryDto get_writing_stats_by_project(string start_date, string end_date);
+
+    [Throws=WriterError]
+    ChapterStatsSummaryDto get_writing_stats_by_chapter(string start_date, string end_date);
+
+    [Throws=WriterError]
+    DeviceStatsSummaryDto get_writing_stats_by_device(string start_date, string end_date);
+
+    [Throws=WriterError]
+    SpeedCurveSummaryDto get_writing_speed_curve(string start_date, string end_date, u32 bucket_minutes);
+
+    u32 calculate_word_count(string text);
+
+    [Throws=WriterError]
+    boolean process_writing_event(string device_id, string platform, string project_id, string volume_id, string chapter_id, string old_text, string new_text, u32 duration_seconds, string session_id);
+
+    [Throws=WriterError]
+    boolean record_writing_event(string device_id, string project_id, string volume_id, string chapter_id, string source, i32 inserted_chars, i32 deleted_chars, i32 pasted_chars, i32 ai_inserted_chars, i32 duration_seconds, string session_id);
+
+    [Throws=WriterError]
+    boolean flush_writing_stats();
+
+    // StarMap typed methods
+    [Throws=WriterError]
+    sequence<StarMapMetaDto> list_starmaps();
+
+    [Throws=WriterError]
+    StarMapMetaDto create_starmap(string title, string desc);
+
+    [Throws=WriterError]
+    StarMapGraphDto get_starmap_graph(string starmap_id);
+
+    [Throws=WriterError]
+    StarMapNodeDto add_starmap_node(string starmap_id, StarMapNodeDto node, float x, float y);
+
+    [Throws=WriterError]
+    boolean save_starmap_layout(string starmap_id, StarMapLayoutDto layout);
+
+    [Throws=WriterError]
+    StarMapViewportDto get_starmap_viewport(string starmap_id);
+
+    [Throws=WriterError]
+    boolean save_starmap_viewport(string starmap_id, StarMapViewportDto viewport);
+
+    [Throws=WriterError]
+    sequence<StarMapEdgeRenderDto> compute_starmap_edge_renders(StarMapGraphDto graph, StarMapLayoutDto layout);
+
+    [Throws=WriterError]
+    string? hit_test_starmap_node(StarMapLayoutDto layout, float x, float y);
+
+    [Throws=WriterError]
+    StarMapEmbedDto add_starmap_embed(string starmap_id, StarMapEmbedDto embed);
+
+    [Throws=WriterError]
+    StarMapEmbedDto update_starmap_embed(string starmap_id, string instance_id, StarMapEmbedPatchInputDto patch);
+
+    [Throws=WriterError]
+    boolean delete_starmap_embed(string starmap_id, string instance_id);
+
+    [Throws=WriterError]
+    StarMapLinkDto add_starmap_link(string starmap_id, StarMapLinkDto link);
+
+    [Throws=WriterError]
+    StarMapLinkDto update_starmap_link(string starmap_id, string link_id, StarMapLinkPatchInputDto patch);
+
+    [Throws=WriterError]
+    boolean delete_starmap_link(string starmap_id, string link_id);
+
+    [Throws=WriterError]
+    sequence<StarMapReferenceDto> find_starmap_references(string target_starmap_id);
+
+    [Throws=WriterError]
+    sequence<ActionDescriptorDto> list_registered_actions();
+
+    [Throws=WriterError]
+    ActionResultDto execute_action(string action_id, string args_json, string context_json);
+
+    boolean ai_available();
+
+    // ── Layout Policy ──
+
+    LayoutPlanDto resolve_layout(WindowMetricsDto metrics);
+
+    // ── Screen Policy ──
+
+    ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role, ShellModeDto shell_mode);
+
+    // ── Editor Animation ──
+
+    sequence<EditorAnimationEventDto> editor_animation_events(string old_text, string new_text, u32 old_cursor_index, u32 new_cursor_index, EditorTransactionCauseDto cause, u32 max_animated_chars, u64 animation_duration_ms);
+};
+
+// ── Layout Policy DTOs ──
+
+enum FoldPostureDto {
+    "Unknown",
+    "FullyOpened",
+    "HalfOpened",
+    "Closed",
+};
+
+enum OrientationDto {
+    "Unknown",
+    "Portrait",
+    "Landscape",
+};
+
+enum PointerKindDto {
+    "Unknown",
+    "Touch",
+    "Stylus",
+    "Mouse",
+};
+
+enum WidthClassDto {
+    "Compact",
+    "Medium",
+    "Expanded",
+};
+
+enum HeightClassDto {
+    "Compact",
+    "Medium",
+    "Expanded",
+};
+
+enum ShellModeDto {
+    "SinglePane",
+    "SupportingPane",
+    "TwoPane",
+};
+
+enum EditorModeDto {
+    "FullWidth",
+    "CenteredPaper",
+};
+
+enum NavigationModeDto {
+    "Stack",
+    "ListDetail",
+};
+
+dictionary WindowMetricsDto {
+    float width_vp;
+    float height_vp;
+    float safe_top_vp;
+    float safe_bottom_vp;
+    boolean keyboard_visible;
+    FoldPostureDto fold_posture;
+    OrientationDto orientation;
+    PointerKindDto pointer;
+};
+
+dictionary LayoutPlanDto {
+    WidthClassDto width_class;
+    HeightClassDto height_class;
+    ShellModeDto shell_mode;
+    EditorModeDto editor_mode;
+    NavigationModeDto navigation_mode;
+    float content_max_width_vp;
+    float page_padding_vp;
+    u8 grid_columns;
+    boolean show_side_panel;
+    boolean show_bottom_bar;
+    float side_panel_width_vp;
+    float primary_pane_weight;
+    float detail_panel_max_width_vp;
+};
+
+// ── Screen Policy DTOs ──
+
+enum ScreenRoleDto {
+    "Home",
+    "Workspace",
+    "Writing",
+    "Settings",
+    "Sync"
+};
+
+enum PaneRoleDto {
+    "PrimaryList",
+    "Detail",
+    "Editor",
+    "Inspector",
+    "Drawer"
+};
+
+enum ActionRoleDto {
+    "Back",
+    "Save",
+    "CreateProject",
+    "CreateVolume",
+    "CreateChapter",
+    "Delete",
+    "Rename",
+    "Settings",
+    "Sync",
+    "Search"
+};
+
+enum ActionPlacementDto {
+    "TopLeading",
+    "TopTrailing",
+    "Floating",
+    "BottomBar",
+    "ContextMenu",
+    "SidePanel"
+};
+
+dictionary ActionSlotDto {
+    string action_id;
+    ActionRoleDto role;
+    ActionPlacementDto placement;
+    sequence<ShellModeDto> visible_in;
+    boolean requires_confirmation;
+};
+
+dictionary ScreenPolicyDto {
+    ScreenRoleDto screen_role;
+    sequence<ActionSlotDto> action_slots;
+};
+
+// ── Editor Animation DTOs ──
+
+enum EditorAnimationKindDto {
+    "Insert",
+    "Delete",
+    "Cursor",
+};
+
+enum EditorTransactionCauseDto {
+    "Typing",
+    "Delete",
+    "ImeComposition",
+    "TypingCommit",
+    "Paste",
+    "Undo",
+    "Redo",
+    "Load",
+    "Format",
+    "Programmatic",
+};
+
+dictionary EditorAnimationEventDto {
+    u64 id;
+    EditorAnimationKindDto kind;
+    u32 range_start;
+    u32 range_len;
+    string text;
+    u32 old_cursor_index;
+    u32 new_cursor_index;
+    u64 duration_ms;
+};

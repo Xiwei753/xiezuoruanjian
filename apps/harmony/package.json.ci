@@ -1,0 +1,10 @@
+{
+  "name": "writer-harmony-ci",
+  "version": "1.0.0",
+  "private": true,
+  "description": "CI-only package.json for installing hvigor dependencies via npm",
+  "devDependencies": {
+    "@ohos/hvigor": "6.26.1",
+    "@ohos/hvigor-ohos-plugin": "6.26.1"
+  }
+}

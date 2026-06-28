@@ -1,0 +1,48 @@
+# Auto detect text files and perform LF normalization
+* text=auto eol=lf
+
+# Source code
+*.py text eol=lf
+*.rs text eol=lf
+*.toml text eol=lf
+*.qml text eol=lf
+*.js text eol=lf
+*.kt text eol=lf
+*.kts text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.xml text eol=lf
+*.html text eol=lf
+*.css text eol=lf
+*.udl text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.cfg text eol=lf
+*.gradle text eol=lf
+*.properties text eol=lf
+
+# Windows scripts
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text eol=lf
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.so binary
+*.dll binary
+*.dylib binary
+*.a binary
+*.o binary
+*.jks binary
+*.keystore binary

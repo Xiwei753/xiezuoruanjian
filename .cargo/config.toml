@@ -1,0 +1,14 @@
+[env]
+QT_VERSION_MAJOR = { value = "6", force = false }
+
+# Do not hard-code machine-local Qt or linker paths in repository Cargo config.
+# Flatpak/Fedora host paths should be set by start.sh or by an untracked local config.
+
+# HarmonyOS / OHOS cross-compile target
+# Set OHOS_NDK_HOME to your OHOS NDK path before building.
+# Example: export OHOS_NDK_HOME=/path/to/openharmony/sdk/linux/native/llvm
+# The tools below must be provided by your OHOS SDK environment; they are not
+# assumed to be present on every developer machine's PATH.
+[target.aarch64-unknown-linux-ohos]
+linker = "ohos-clang"
+ar = "llvm-ar"

@@ -1,0 +1,1276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE TS>
+<TS version="2.1" language="zh_CN" sourcelanguage="zh_CN">
+<context>
+    <name>ActionRegistryPage</name>
+    <message>
+        <source>Action 调试</source>
+        <translation>Action 调试</translation>
+    </message>
+    <message>
+        <source>列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。</source>
+        <translation>列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。</translation>
+    </message>
+    <message>
+        <source>列出所有 Action</source>
+        <translation>列出所有 Action</translation>
+    </message>
+    <message>
+        <source>共加载 </source>
+        <translation>共加载 </translation>
+    </message>
+    <message>
+        <source> 个 Action</source>
+        <translation> 个 Action</translation>
+    </message>
+    <message>
+        <source>解析 Action 列表失败: </source>
+        <translation>解析 Action 列表失败: </translation>
+    </message>
+    <message>
+        <source>清空结果</source>
+        <translation>清空结果</translation>
+    </message>
+    <message>
+        <source>危险</source>
+        <translation>危险</translation>
+    </message>
+    <message>
+        <source>内容写入</source>
+        <translation>内容写入</translation>
+    </message>
+    <message>
+        <source>写入</source>
+        <translation>写入</translation>
+    </message>
+    <message>
+        <source>只读</source>
+        <translation>只读</translation>
+    </message>
+    <message>
+        <source>执行</source>
+        <translation>执行</translation>
+    </message>
+    <message>
+        <source>执行成功: </source>
+        <translation>执行成功: </translation>
+    </message>
+    <message>
+        <source>
+数据: </source>
+        <translation>
+数据: </translation>
+    </message>
+    <message>
+        <source>执行失败: </source>
+        <translation>执行失败: </translation>
+    </message>
+    <message>
+        <source>未知错误</source>
+        <translation>未知错误</translation>
+    </message>
+    <message>
+        <source>解析结果失败: </source>
+        <translation>解析结果失败: </translation>
+    </message>
+    <message>
+        <source>应用 (Mutation)</source>
+        <translation>应用 (Mutation)</translation>
+    </message>
+    <message>
+        <source>应用成功: </source>
+        <translation>应用成功: </translation>
+    </message>
+    <message>
+        <source>应用失败: </source>
+        <translation>应用失败: </translation>
+    </message>
+    <message>
+        <source>危险操作已阻断</source>
+        <translation>危险操作已阻断</translation>
+    </message>
+    <message>
+        <source>执行结果将显示在此处...</source>
+        <translation>执行结果将显示在此处...</translation>
+    </message>
+    <message>
+        <source>工作区诊断</source>
+        <translation>工作区诊断</translation>
+    </message>
+    <message>
+        <source>获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。</source>
+        <translation>获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。</translation>
+    </message>
+    <message>
+        <source>获取工作区诊断</source>
+        <translation>获取工作区诊断</translation>
+    </message>
+    <message>
+        <source>诊断失败: </source>
+        <translation>诊断失败: </translation>
+    </message>
+    <message>
+        <source>解析诊断失败: </source>
+        <translation>解析诊断失败: </translation>
+    </message>
+    <message>
+        <source>复制诊断</source>
+        <translation>复制诊断</translation>
+    </message>
+    <message>
+        <source>诊断已复制</source>
+        <translation>诊断已复制</translation>
+    </message>
+    <message>
+        <source>复制失败: </source>
+        <translation>复制失败: </translation>
+    </message>
+    <message>
+        <source>点击「获取工作区诊断」查看详情...</source>
+        <translation>点击「获取工作区诊断」查看详情...</translation>
+    </message>
+</context>
+<context>
+    <name>AppController</name>
+    <message>
+        <source>操作失败</source>
+        <translation>操作失败</translation>
+    </message>
+    <message>
+        <source>解析后端返回数据失败</source>
+        <translation>解析后端返回数据失败</translation>
+    </message>
+    <message>
+        <source>恢复工作区失败</source>
+        <translation>恢复工作区失败</translation>
+    </message>
+    <message>
+        <source>作品</source>
+        <translation>作品</translation>
+    </message>
+    <message>
+        <source>星图编辑器</source>
+        <translation>星图编辑器</translation>
+    </message>
+    <message>
+        <source>返回工作台失败</source>
+        <translation>返回工作台失败</translation>
+    </message>
+    <message>
+        <source>切换工作区失败</source>
+        <translation>切换工作区失败</translation>
+    </message>
+    <message>
+        <source>解析结果失败</source>
+        <translation>解析结果失败</translation>
+    </message>
+    <message>
+        <source>打开工作区成功</source>
+        <translation>打开工作区成功</translation>
+    </message>
+    <message>
+        <source>打开工作区失败</source>
+        <translation>打开工作区失败</translation>
+    </message>
+    <message>
+        <source>刷新操作结果失败</source>
+        <translation>刷新操作结果失败</translation>
+    </message>
+</context>
+<context>
+    <name>CardCollectionPage</name>
+    <message>
+        <source>暂无数据</source>
+        <translation>暂无数据</translation>
+    </message>
+</context>
+<context>
+    <name>CreateProjectDialog</name>
+    <message>
+        <source>新建作品</source>
+        <translation>新建作品</translation>
+    </message>
+    <message>
+        <source>请输入作品名称：</source>
+        <translation>请输入作品名称：</translation>
+    </message>
+    <message>
+        <source>作品名称</source>
+        <translation>作品名称</translation>
+    </message>
+    <message>
+        <source>取消</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>创建</source>
+        <translation>创建</translation>
+    </message>
+</context>
+<context>
+    <name>CreativeHub</name>
+    <message>
+        <source>素笺写作</source>
+        <translation>素笺写作</translation>
+    </message>
+    <message>
+        <source>作品</source>
+        <translation>作品</translation>
+    </message>
+    <message>
+        <source>星图</source>
+        <translation>星图</translation>
+    </message>
+    <message>
+        <source>统计</source>
+        <translation>统计</translation>
+    </message>
+    <message>
+        <source>已同步</source>
+        <translation>已同步</translation>
+    </message>
+    <message>
+        <source>同步中</source>
+        <translation>同步中</translation>
+    </message>
+    <message>
+        <source>同步失败</source>
+        <translation>同步失败</translation>
+    </message>
+    <message>
+        <source>冲突</source>
+        <translation>冲突</translation>
+    </message>
+    <message>
+        <source>正文冲突</source>
+        <translation>正文冲突</translation>
+    </message>
+    <message>
+        <source>已配置</source>
+        <translation>已配置</translation>
+    </message>
+    <message>
+        <source>设置</source>
+        <translation>设置</translation>
+    </message>
+    <message>
+        <source>切换工作区</source>
+        <translation>切换工作区</translation>
+    </message>
+</context>
+<context>
+    <name>EditorContextMenu</name>
+    <message>
+        <source>复制</source>
+        <translation>复制</translation>
+    </message>
+    <message>
+        <source>粘贴</source>
+        <translation>粘贴</translation>
+    </message>
+    <message>
+        <source>全选</source>
+        <translation>全选</translation>
+    </message>
+    <message>
+        <source>删除</source>
+        <translation>删除</translation>
+    </message>
+</context>
+<context>
+    <name>EditorController</name>
+    <message>
+        <source>已阻止空内容保存</source>
+        <translation>已阻止空内容保存</translation>
+    </message>
+    <message>
+        <source>检测到异常空内容覆盖，已阻止保存。</source>
+        <translation>检测到异常空内容覆盖，已阻止保存。</translation>
+    </message>
+</context>
+<context>
+    <name>EditorPage</name>
+    <message>
+        <source>请在左侧选择或创建一个章节</source>
+        <translation>请在左侧选择或创建一个章节</translation>
+    </message>
+</context>
+<context>
+    <name>EmptyWorkspace</name>
+    <message>
+        <source>选择或创建空文件夹作为新工作区</source>
+        <translation>选择或创建空文件夹作为新工作区</translation>
+    </message>
+    <message>
+        <source>选择已有工作区文件夹</source>
+        <translation>选择已有工作区文件夹</translation>
+    </message>
+    <message>
+        <source>未打开工作区</source>
+        <translation>未打开工作区</translation>
+    </message>
+    <message>
+        <source>选择或创建工作区后开始写作</source>
+        <translation>选择或创建工作区后开始写作</translation>
+    </message>
+    <message>
+        <source>新建工作区</source>
+        <translation>新建工作区</translation>
+    </message>
+    <message>
+        <source>打开工作区</source>
+        <translation>打开工作区</translation>
+    </message>
+</context>
+<context>
+    <name>HubContentGrid</name>
+    <message>
+        <source>暂无数据</source>
+        <translation>暂无数据</translation>
+    </message>
+</context>
+<context>
+    <name>main</name>
+    <message>
+        <source>素笺写作</source>
+        <translation>素笺写作</translation>
+    </message>
+    <message>
+        <source>刷新作品列表失败</source>
+        <translation>刷新作品列表失败</translation>
+    </message>
+    <message>
+        <source>刷新工作区状态失败</source>
+        <translation>刷新工作区状态失败</translation>
+    </message>
+    <message>
+        <source>刷新工作区内容失败</source>
+        <translation>刷新工作区内容失败</translation>
+    </message>
+    <message>
+        <source>刷新设置失败</source>
+        <translation>刷新设置失败</translation>
+    </message>
+    <message>
+        <source>新建卷</source>
+        <translation>新建卷</translation>
+    </message>
+    <message>
+        <source>新建章节</source>
+        <translation>新建章节</translation>
+    </message>
+    <message>
+        <source>重命名</source>
+        <translation>重命名</translation>
+    </message>
+    <message>
+        <source>确认删除</source>
+        <translation>确认删除</translation>
+    </message>
+    <message>
+        <source>您确定要删除作品「%1」及其所有分卷、章节吗？</source>
+        <translation>您确定要删除作品「%1」及其所有分卷、章节吗？</translation>
+    </message>
+    <message>
+        <source>您确定要删除分卷「%1」及包含的所有章节吗？</source>
+        <translation>您确定要删除分卷「%1」及包含的所有章节吗？</translation>
+    </message>
+    <message>
+        <source>您确定要删除章节「%1」吗？</source>
+        <translation>您确定要删除章节「%1」吗？</translation>
+    </message>
+    <message>
+        <source>确定要删除吗？</source>
+        <translation>确定要删除吗？</translation>
+    </message>
+    <message>
+        <source>取消</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>删除</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>提示</source>
+        <translation>提示</translation>
+    </message>
+    <message>
+        <source>确定</source>
+        <translation>确定</translation>
+    </message>
+    <message>
+        <source>请输入</source>
+        <translation>请输入</translation>
+    </message>
+    <message>
+        <source>卷名称</source>
+        <translation>卷名称</translation>
+    </message>
+    <message>
+        <source>章节名称</source>
+        <translation>章节名称</translation>
+    </message>
+    <message>
+        <source>新名称</source>
+        <translation>新名称</translation>
+    </message>
+    <message>
+        <source>例如：第一卷</source>
+        <translation>例如：第一卷</translation>
+    </message>
+    <message>
+        <source>例如：第一章</source>
+        <translation>例如：第一章</translation>
+    </message>
+    <message>
+        <source>请输入新名称</source>
+        <translation>请输入新名称</translation>
+    </message>
+</context>
+<context>
+    <name>ProjectCard</name>
+    <message>
+        <source>未命名作品</source>
+        <translation>未命名作品</translation>
+    </message>
+    <message>
+        <source>总字数</source>
+        <translation>总字数</translation>
+    </message>
+    <message>
+        <source>今日</source>
+        <translation>今日</translation>
+    </message>
+</context>
+<context>
+    <name>ProjectController</name>
+    <message>
+        <source>创建作品失败</source>
+        <translation>创建作品失败</translation>
+    </message>
+    <message>
+        <source>后端调用失败: </source>
+        <translation>后端调用失败: </translation>
+    </message>
+    <message>
+        <source>重命名作品失败</source>
+        <translation>重命名作品失败</translation>
+    </message>
+    <message>
+        <source>重命名卷失败</source>
+        <translation>重命名卷失败</translation>
+    </message>
+    <message>
+        <source>重命名章节失败</source>
+        <translation>重命名章节失败</translation>
+    </message>
+    <message>
+        <source>创建卷失败</source>
+        <translation>创建卷失败</translation>
+    </message>
+    <message>
+        <source>创建章节失败</source>
+        <translation>创建章节失败</translation>
+    </message>
+    <message>
+        <source>删除失败</source>
+        <translation>删除失败</translation>
+    </message>
+</context>
+<context>
+    <name>ProjectHomePage</name>
+    <message>
+        <source>作品</source>
+        <translation>作品</translation>
+    </message>
+    <message>
+        <source>%1 部作品</source>
+        <translation>%1 部作品</translation>
+    </message>
+    <message>
+        <source>开始你的创作之旅</source>
+        <translation>开始你的创作之旅</translation>
+    </message>
+    <message>
+        <source>+ 新建作品</source>
+        <translation>+ 新建作品</translation>
+    </message>
+    <message>
+        <source>暂无作品</source>
+        <translation>暂无作品</translation>
+    </message>
+    <message>
+        <source>点击「新建作品」开始创作</source>
+        <translation>点击「新建作品」开始创作</translation>
+    </message>
+    <message>
+        <source>打开</source>
+        <translation>打开</translation>
+    </message>
+    <message>
+        <source>重命名</source>
+        <translation>重命名</translation>
+    </message>
+    <message>
+        <source>删除</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>重命名作品</source>
+        <translation>重命名作品</translation>
+    </message>
+    <message>
+        <source>作品名称</source>
+        <translation>作品名称</translation>
+    </message>
+    <message>
+        <source>取消</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>确定</source>
+        <translation>确定</translation>
+    </message>
+    <message>
+        <source>未命名作品</source>
+        <translation>未命名作品</translation>
+    </message>
+</context>
+<context>
+    <name>RightDrawer</name>
+    <message>
+        <source>星图</source>
+        <translation>星图</translation>
+    </message>
+    <message>
+        <source>AI</source>
+        <translation>AI</translation>
+    </message>
+    <message>
+        <source>统计</source>
+        <translation>统计</translation>
+    </message>
+    <message>
+        <source>设定</source>
+        <translation>设定</translation>
+    </message>
+    <message>
+        <source>写作设定</source>
+        <translation>写作设定</translation>
+    </message>
+    <message>
+        <source>字号、行距、主题等设置</source>
+        <translation>字号、行距、主题等设置</translation>
+    </message>
+    <message>
+        <source>打开设置</source>
+        <translation>打开设置</translation>
+    </message>
+    <message>
+        <source>AI 助手</source>
+        <translation>AI 助手</translation>
+    </message>
+    <message>
+        <source>AI 功能将在后续版本实现</source>
+        <translation>AI 功能将在后续版本实现</translation>
+    </message>
+</context>
+<context>
+    <name>SettingsDialog</name>
+    <message>
+        <source>设置</source>
+        <translation>设置</translation>
+    </message>
+    <message>
+        <source>关闭</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>外观</source>
+        <translation>外观</translation>
+    </message>
+    <message>
+        <source>主题模式</source>
+        <translation>主题模式</translation>
+    </message>
+    <message>
+        <source>切换系统、浅色或深色</source>
+        <translation>切换系统、浅色或深色</translation>
+    </message>
+    <message>
+        <source>跟随系统</source>
+        <translation>跟随系统</translation>
+    </message>
+    <message>
+        <source>浅色</source>
+        <translation>浅色</translation>
+    </message>
+    <message>
+        <source>深色</source>
+        <translation>深色</translation>
+    </message>
+    <message>
+        <source>字体大小</source>
+        <translation>字体大小</translation>
+    </message>
+    <message>
+        <source>行距倍数</source>
+        <translation>行距倍数</translation>
+    </message>
+    <message>
+        <source>编辑器</source>
+        <translation>编辑器</translation>
+    </message>
+    <message>
+        <source>自动首行缩进</source>
+        <translation>自动首行缩进</translation>
+    </message>
+    <message>
+        <source>回车时自动添加缩进</source>
+        <translation>回车时自动添加缩进</translation>
+    </message>
+    <message>
+        <source>首行缩进宽度</source>
+        <translation>首行缩进宽度</translation>
+    </message>
+    <message>
+        <source> 字符</source>
+        <translation> 字符</translation>
+    </message>
+    <message>
+        <source>打字动画</source>
+        <translation>打字动画</translation>
+    </message>
+    <message>
+        <source>输入时字符从光标处吐出</source>
+        <translation>输入时字符从光标处吐出</translation>
+    </message>
+    <message>
+        <source>打字动画持续时间</source>
+        <translation>打字动画持续时间</translation>
+    </message>
+    <message>
+        <source>平滑光标</source>
+        <translation>平滑光标</translation>
+    </message>
+    <message>
+        <source>光标移动更顺滑</source>
+        <translation>光标移动更顺滑</translation>
+    </message>
+    <message>
+        <source>平滑光标持续时间</source>
+        <translation>平滑光标持续时间</translation>
+    </message>
+    <message>
+        <source>保存</source>
+        <translation>保存</translation>
+    </message>
+    <message>
+        <source>自动保存</source>
+        <translation>自动保存</translation>
+    </message>
+    <message>
+        <source>编辑时自动保存到本地</source>
+        <translation>编辑时自动保存到本地</translation>
+    </message>
+    <message>
+        <source>自动保存延迟</source>
+        <translation>自动保存延迟</translation>
+    </message>
+    <message>
+        <source> 秒</source>
+        <translation> 秒</translation>
+    </message>
+    <message>
+        <source>同步</source>
+        <translation>同步</translation>
+    </message>
+    <message>
+        <source>AI</source>
+        <translation>AI</translation>
+    </message>
+    <message>
+        <source>启用 AI 功能</source>
+        <translation>启用 AI 功能</translation>
+    </message>
+    <message>
+        <source>控制 AI 功能入口显示</source>
+        <translation>控制 AI 功能入口显示</translation>
+    </message>
+    <message>
+        <source>关于/高级</source>
+        <translation>关于/高级</translation>
+    </message>
+    <message>
+        <source>工作区路径</source>
+        <translation>工作区路径</translation>
+    </message>
+    <message>
+        <source>未加载</source>
+        <translation>未加载</translation>
+    </message>
+    <message>
+        <source>版本信息</source>
+        <translation>版本信息</translation>
+    </message>
+    <message>
+        <source>Qt 桌面客户端</source>
+        <translation>Qt 桌面客户端</translation>
+    </message>
+    <message>
+        <source>动作注册表</source>
+        <translation>动作注册表</translation>
+    </message>
+    <message>
+        <source>查看已注册的动作</source>
+        <translation>查看已注册的动作</translation>
+    </message>
+</context>
+<context>
+    <name>StarMapGraphController</name>
+    <message>
+        <source>星图后端未初始化</source>
+        <translation>星图后端未初始化</translation>
+    </message>
+    <message>
+        <source>加载星图数据失败</source>
+        <translation>加载星图数据失败</translation>
+    </message>
+    <message>
+        <source>自动布局失败</source>
+        <translation>自动布局失败</translation>
+    </message>
+    <message>
+        <source>新节点</source>
+        <translation>新节点</translation>
+    </message>
+    <message>
+        <source>创建节点失败</source>
+        <translation>创建节点失败</translation>
+    </message>
+    <message>
+        <source>创建连线失败</source>
+        <translation>创建连线失败</translation>
+    </message>
+    <message>
+        <source>保存布局失败</source>
+        <translation>保存布局失败</translation>
+    </message>
+    <message>
+        <source>更新节点失败</source>
+        <translation>更新节点失败</translation>
+    </message>
+    <message>
+        <source>删除节点失败</source>
+        <translation>删除节点失败</translation>
+    </message>
+    <message>
+        <source>更新连线失败</source>
+        <translation>更新连线失败</translation>
+    </message>
+    <message>
+        <source>删除连线失败</source>
+        <translation>删除连线失败</translation>
+    </message>
+</context>
+<context>
+    <name>StarMapInspector</name>
+    <message>
+        <source>属性</source>
+        <translation>属性</translation>
+    </message>
+    <message>
+        <source>请在左侧选择节点或连线</source>
+        <translation>请在左侧选择节点或连线</translation>
+    </message>
+    <message>
+        <source>标题</source>
+        <translation>标题</translation>
+    </message>
+    <message>
+        <source>删除节点</source>
+        <translation>删除节点</translation>
+    </message>
+    <message>
+        <source>标签</source>
+        <translation>标签</translation>
+    </message>
+    <message>
+        <source>删除连线</source>
+        <translation>删除连线</translation>
+    </message>
+</context>
+<context>
+    <name>StarMapPage</name>
+    <message>
+        <source>星图</source>
+        <translation>星图</translation>
+    </message>
+    <message>
+        <source>%1 个星图</source>
+        <translation>%1 个星图</translation>
+    </message>
+    <message>
+        <source>构建你的创作宇宙</source>
+        <translation>构建你的创作宇宙</translation>
+    </message>
+    <message>
+        <source>+ 新建星图</source>
+        <translation>+ 新建星图</translation>
+    </message>
+    <message>
+        <source>还没有星图</source>
+        <translation>还没有星图</translation>
+    </message>
+    <message>
+        <source>创建你的第一个星图，构建角色关系与故事脉络</source>
+        <translation>创建你的第一个星图，构建角色关系与故事脉络</translation>
+    </message>
+    <message>
+        <source>新建星图</source>
+        <translation>新建星图</translation>
+    </message>
+    <message>
+        <source>星图名称</source>
+        <translation>星图名称</translation>
+    </message>
+    <message>
+        <source>例如：人物关系图</source>
+        <translation>例如：人物关系图</translation>
+    </message>
+    <message>
+        <source>描述（可选）</source>
+        <translation>描述（可选）</translation>
+    </message>
+    <message>
+        <source>简要描述这个星图的内容</source>
+        <translation>简要描述这个星图的内容</translation>
+    </message>
+    <message>
+        <source>取消</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>创建</source>
+        <translation>创建</translation>
+    </message>
+    <message>
+        <source>打开</source>
+        <translation>打开</translation>
+    </message>
+    <message>
+        <source>新建子星图</source>
+        <translation>新建子星图</translation>
+    </message>
+    <message>
+        <source>重命名</source>
+        <translation>重命名</translation>
+    </message>
+    <message>
+        <source>删除</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>重命名星图</source>
+        <translation>重命名星图</translation>
+    </message>
+    <message>
+        <source>确定</source>
+        <translation>确定</translation>
+    </message>
+    <message>
+        <source>子星图名称</source>
+        <translation>子星图名称</translation>
+    </message>
+</context>
+<context>
+    <name>StarMapPreviewPage</name>
+    <message>
+        <source>星图</source>
+        <translation>星图</translation>
+    </message>
+    <message>
+        <source>构建你的创作宇宙，可视化人物关系与故事脉络</source>
+        <translation>构建你的创作宇宙，可视化人物关系与故事脉络</translation>
+    </message>
+    <message>
+        <source>作品宇宙</source>
+        <translation>作品宇宙</translation>
+    </message>
+    <message>
+        <source>整体世界观与核心设定</source>
+        <translation>整体世界观与核心设定</translation>
+    </message>
+    <message>
+        <source>人物关系</source>
+        <translation>人物关系</translation>
+    </message>
+    <message>
+        <source>角色之间的关联与冲突</source>
+        <translation>角色之间的关联与冲突</translation>
+    </message>
+    <message>
+        <source>地点</source>
+        <translation>地点</translation>
+    </message>
+    <message>
+        <source>故事发生的场景与空间</source>
+        <translation>故事发生的场景与空间</translation>
+    </message>
+    <message>
+        <source>事件</source>
+        <translation>事件</translation>
+    </message>
+    <message>
+        <source>推动剧情的关键事件链</source>
+        <translation>推动剧情的关键事件链</translation>
+    </message>
+    <message>
+        <source>伏笔</source>
+        <translation>伏笔</translation>
+    </message>
+    <message>
+        <source>埋设与回收的叙事线索</source>
+        <translation>埋设与回收的叙事线索</translation>
+    </message>
+    <message>
+        <source>完整星图渲染将在后续版本实现</source>
+        <translation>完整星图渲染将在后续版本实现</translation>
+    </message>
+</context>
+<context>
+    <name>StarMapWorkspace</name>
+    <message>
+        <source>星图编辑器</source>
+        <translation>星图编辑器</translation>
+    </message>
+    <message>
+        <source>← 返回</source>
+        <translation>← 返回</translation>
+    </message>
+</context>
+<context>
+    <name>StatsPreviewPage</name>
+    <message>
+        <source>时</source>
+        <translation>时</translation>
+    </message>
+    <message>
+        <source>分</source>
+        <translation>分</translation>
+    </message>
+    <message>
+        <source>统计</source>
+        <translation>统计</translation>
+    </message>
+    <message>
+        <source>追踪你的写作节奏与习惯</source>
+        <translation>追踪你的写作节奏与习惯</translation>
+    </message>
+    <message>
+        <source>今日纯输入</source>
+        <translation>今日纯输入</translation>
+    </message>
+    <message>
+        <source>字</source>
+        <translation>字</translation>
+    </message>
+    <message>
+        <source>本周纯输入</source>
+        <translation>本周纯输入</translation>
+    </message>
+    <message>
+        <source>本月纯输入</source>
+        <translation>本月纯输入</translation>
+    </message>
+    <message>
+        <source>本周活跃时长</source>
+        <translation>本周活跃时长</translation>
+    </message>
+    <message>
+        <source>活跃写作</source>
+        <translation>活跃写作</translation>
+    </message>
+    <message>
+        <source>速度曲线</source>
+        <translation>速度曲线</translation>
+    </message>
+    <message>
+        <source>已记录 %1 段</source>
+        <translation>已记录 %1 段</translation>
+    </message>
+    <message>
+        <source>暂无数据</source>
+        <translation>暂无数据</translation>
+    </message>
+    <message>
+        <source>设备统计</source>
+        <translation>设备统计</translation>
+    </message>
+    <message>
+        <source>未知设备</source>
+        <translation>未知设备</translation>
+    </message>
+    <message>
+        <source>作品排行</source>
+        <translation>作品排行</translation>
+    </message>
+    <message>
+        <source>未命名</source>
+        <translation>未命名</translation>
+    </message>
+    <message>
+        <source>章节排行</source>
+        <translation>章节排行</translation>
+    </message>
+</context>
+<context>
+    <name>SyncPage</name>
+    <message>
+        <source>已同步</source>
+        <translation>已同步</translation>
+    </message>
+    <message>
+        <source>同步中</source>
+        <translation>同步中</translation>
+    </message>
+    <message>
+        <source>存在冲突</source>
+        <translation>存在冲突</translation>
+    </message>
+    <message>
+        <source>部分同步，存在正文冲突</source>
+        <translation>部分同步，存在正文冲突</translation>
+    </message>
+    <message>
+        <source>同步失败</source>
+        <translation>同步失败</translation>
+    </message>
+    <message>
+        <source>已配置</source>
+        <translation>已配置</translation>
+    </message>
+    <message>
+        <source>未配置</source>
+        <translation>未配置</translation>
+    </message>
+    <message>
+        <source>同步设置</source>
+        <translation>同步设置</translation>
+    </message>
+    <message>
+        <source>配置远端仓库并查看同步状态</source>
+        <translation>配置远端仓库并查看同步状态</translation>
+    </message>
+    <message>
+        <source>远程仓库地址</source>
+        <translation>远程仓库地址</translation>
+    </message>
+    <message>
+        <source>分支名</source>
+        <translation>分支名</translation>
+    </message>
+    <message>
+        <source>访问 Token</source>
+        <translation>访问 Token</translation>
+    </message>
+    <message>
+        <source>已设置（输入新 Token 以覆盖）</source>
+        <translation>已设置（输入新 Token 以覆盖）</translation>
+    </message>
+    <message>
+        <source>请输入 GitHub Personal Access Token</source>
+        <translation>请输入 GitHub Personal Access Token</translation>
+    </message>
+    <message>
+        <source>保存配置</source>
+        <translation>保存配置</translation>
+    </message>
+    <message>
+        <source>执行同步</source>
+        <translation>执行同步</translation>
+    </message>
+    <message>
+        <source>正在同步...
+正在拉取远端清单
+正在比较本地和远端
+正在下载远端较新文件
+正在上传本地较新文件</source>
+        <translation>正在同步...
+正在拉取远端清单
+正在比较本地和远端
+正在下载远端较新文件
+正在上传本地较新文件</translation>
+    </message>
+    <message>
+        <source>运行诊断</source>
+        <translation>运行诊断</translation>
+    </message>
+    <message>
+        <source>正在诊断...</source>
+        <translation>正在诊断...</translation>
+    </message>
+    <message>
+        <source>打开工作区目录</source>
+        <translation>打开工作区目录</translation>
+    </message>
+    <message>
+        <source>复制冲突信息</source>
+        <translation>复制冲突信息</translation>
+    </message>
+</context>
+<context>
+    <name>TopWritingToolbar</name>
+    <message>
+        <source>段落</source>
+        <translation>段落</translation>
+    </message>
+    <message>
+        <source>一键排版</source>
+        <translation>一键排版</translation>
+    </message>
+    <message>
+        <source>星图</source>
+        <translation>星图</translation>
+    </message>
+    <message>
+        <source>统计</source>
+        <translation>统计</translation>
+    </message>
+    <message>
+        <source>字号</source>
+        <translation>字号</translation>
+    </message>
+    <message>
+        <source>行距倍数</source>
+        <translation>行距倍数</translation>
+    </message>
+    <message>
+        <source>段落设置</source>
+        <translation>段落设置</translation>
+    </message>
+    <message>
+        <source>正文宽度</source>
+        <translation>正文宽度</translation>
+    </message>
+    <message>
+        <source>首行缩进</source>
+        <translation>首行缩进</translation>
+    </message>
+    <message>
+        <source>段落开头缩进两个字符</source>
+        <translation>段落开头缩进两个字符</translation>
+    </message>
+</context>
+<context>
+    <name>WritingWorkspace</name>
+    <message>
+        <source>保存被阻止</source>
+        <translation>保存被阻止</translation>
+    </message>
+    <message>
+        <source>空内容保存被阻止，请输入内容后重试</source>
+        <translation>空内容保存被阻止，请输入内容后重试</translation>
+    </message>
+    <message>
+        <source>确定</source>
+        <translation>确定</translation>
+    </message>
+    <message>
+        <source>作品</source>
+        <translation>作品</translation>
+    </message>
+    <message>
+        <source>新卷</source>
+        <translation>新卷</translation>
+    </message>
+    <message>
+        <source>新建卷</source>
+        <translation>新建卷</translation>
+    </message>
+    <message>
+        <source>新建章节</source>
+        <translation>新建章节</translation>
+    </message>
+    <message>
+        <source>重命名</source>
+        <translation>重命名</translation>
+    </message>
+    <message>
+        <source>删除</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>请选择或新建章节</source>
+        <translation>请选择或新建章节</translation>
+    </message>
+</context>
+<context>
+    <name>ErrorMessages</name>
+    <message>
+        <source>文件读写失败，请检查工作区权限和磁盘状态</source>
+        <translation>文件读写失败，请检查工作区权限和磁盘状态</translation>
+    </message>
+    <message>
+        <source>数据文件格式异常，请检查工作区文件是否损坏</source>
+        <translation>数据文件格式异常，请检查工作区文件是否损坏</translation>
+    </message>
+    <message>
+        <source>不是有效的工作区</source>
+        <translation>不是有效的工作区</translation>
+    </message>
+    <message>
+        <source>作品不存在或已被删除</source>
+        <translation>作品不存在或已被删除</translation>
+    </message>
+    <message>
+        <source>卷不存在或已被删除</source>
+        <translation>卷不存在或已被删除</translation>
+    </message>
+    <message>
+        <source>章节不存在或已被删除</source>
+        <translation>章节不存在或已被删除</translation>
+    </message>
+    <message>
+        <source>已阻止空内容覆盖现有章节</source>
+        <translation>已阻止空内容覆盖现有章节</translation>
+    </message>
+    <message>
+        <source>该功能尚未实现</source>
+        <translation>该功能尚未实现</translation>
+    </message>
+    <message>
+        <source>拒绝删除工作区根目录</source>
+        <translation>拒绝删除工作区根目录</translation>
+    </message>
+    <message>
+        <source>删除目标无效</source>
+        <translation>删除目标无效</translation>
+    </message>
+    <message>
+        <source>同步冲突，请手动处理冲突文件后重试</source>
+        <translation>同步冲突，请手动处理冲突文件后重试</translation>
+    </message>
+    <message>
+        <source>同步失败，请检查网络和配置</source>
+        <translation>同步失败，请检查网络和配置</translation>
+    </message>
+    <message>
+        <source>操作失败</source>
+        <translation>操作失败</translation>
+    </message>
+    <message>
+        <source>核心模块错误</source>
+        <translation>核心模块错误</translation>
+    </message>
+    <message>
+        <source>复制失败：未找到可用的剪贴板后端</source>
+        <translation>复制失败：未找到可用的剪贴板后端</translation>
+    </message>
+    <message>
+        <source>数据解析失败</source>
+        <translation>数据解析失败</translation>
+    </message>
+</context>
+</TS>
