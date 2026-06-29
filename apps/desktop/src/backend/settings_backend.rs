@@ -34,6 +34,7 @@ pub struct SettingsBackend {
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
     setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms WRITE set_setting_smooth_cursor_duration_ms NOTIFY settings_changed),
+    setting_coordinated_text_cursor_animation_enabled: qt_property!(bool; READ setting_coordinated_text_cursor_animation_enabled WRITE set_setting_coordinated_text_cursor_animation_enabled NOTIFY settings_changed),
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
     setting_desktop_sidebar_width: qt_property!(f64; READ setting_desktop_sidebar_width WRITE set_setting_desktop_sidebar_width NOTIFY settings_changed),
@@ -173,6 +174,13 @@ impl SettingsBackend {
     }
     fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) {
         self.with_app_mut((), |app| app.set_setting_smooth_cursor_duration_ms(val));
+        self.settings_changed();
+    }
+    fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
+        self.with_app(true, |app| app.setting_coordinated_text_cursor_animation_enabled())
+    }
+    fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
+        self.with_app_mut((), |app| app.set_setting_coordinated_text_cursor_animation_enabled(val));
         self.settings_changed();
     }
     fn ai_available(&self) -> bool {
@@ -428,6 +436,17 @@ impl AppBackend {
         self.settings_changed();
     }
 
+    // AppBackend::setting_coordinated_text_cursor_animation_enabled
+    pub(crate) fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
+        self.current_setting_coordinated_text_cursor_animation_enabled
+    }
+
+    // AppBackend::set_setting_coordinated_text_cursor_animation_enabled
+    pub(crate) fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
+        self.current_setting_coordinated_text_cursor_animation_enabled = val;
+        self.settings_changed();
+    }
+
     // AppBackend::setting_diagnostics_enabled
     pub(crate) fn setting_diagnostics_enabled(&self) -> bool {
         self.current_setting_diagnostics_enabled
@@ -504,6 +523,8 @@ impl AppBackend {
                     settings.editor_typing_animation_duration_ms as u32;
                 self.current_setting_smooth_cursor_duration_ms =
                     settings.editor_smooth_cursor_duration_ms as u32;
+                self.current_setting_coordinated_text_cursor_animation_enabled =
+                    settings.editor_coordinated_text_cursor_animation_enabled;
                 self.current_ai_enabled = settings.ai_enabled;
                 if let Some(ref device_id) = settings.stats_device_id {
                     if !device_id.is_empty() {
@@ -585,6 +606,8 @@ impl AppBackend {
                 self.current_setting_typing_animation_duration_ms as u64;
             local.editor_smooth_cursor_duration_ms =
                 self.current_setting_smooth_cursor_duration_ms as u64;
+            local.editor_coordinated_text_cursor_animation_enabled =
+                self.current_setting_coordinated_text_cursor_animation_enabled;
             local.ai_enabled = self.current_ai_enabled;
             local.desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
             local.desktop_editor_width = self.current_setting_desktop_editor_width;

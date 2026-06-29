@@ -69,6 +69,7 @@ Dialog {
         autoSave.checked = backendRef.setting_auto_save_enabled
         typingAnim.checked = backendRef.setting_typing_animation_enabled
         smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
+        coordinatedCursorAnim.checked = backendRef.setting_coordinated_text_cursor_animation_enabled
         aiSwitch.checked = backendRef.ai_enabled
         autoSaveDelay.value = backendRef.setting_auto_save_delay_ms / 1000.0
         fontSizeSlider.value = backendRef.setting_font_size || 16.0
@@ -233,6 +234,14 @@ Dialog {
                     to: 1000
                     stepSize: 10
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("协同光标动画")
+                    description: qsTr("光标与吐字动画协同移动")
+                    clickable: true
+                    onClicked: root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", !coordinatedCursorAnim.checked)
+                    ModernSwitch { id: coordinatedCursorAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", v) } }
                 }
             }
 

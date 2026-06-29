@@ -1,3 +1,10 @@
+//! Desktop 自研写作区 — 唯一主路径
+//!
+//! 路线：SujianEditorItem(QQuickItem) + QTextLayout/QTextLine + QImage static texture
+//!       + QSGImageNode + QML Rectangle cursor + QML EditorAnimationOverlay
+//!
+//! 禁止旧路线：DocumentHandler / TextArea / QTextDocument / QQuickPaintedItem / QSG 三层 overlay
+
 // =============================================================================
 // sujian_editor_item - Desktop self-rendered editor item
 // =============================================================================
@@ -10,6 +17,7 @@ pub(crate) mod text_animation_state;
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
     CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot, VisualLine,
+    text_baseline_y,
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
@@ -110,6 +118,7 @@ pub struct SujianEditorItem {
     cursor_animation_duration_ms: qt_property!(u32; READ cursor_animation_duration_ms WRITE set_cursor_animation_duration_ms NOTIFY visual_settings_changed),
     typing_animation_enabled: qt_property!(bool; READ typing_animation_enabled WRITE set_typing_animation_enabled NOTIFY visual_settings_changed),
     typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
+    coordinated_text_cursor_animation_enabled: qt_property!(bool; READ coordinated_text_cursor_animation_enabled WRITE set_coordinated_text_cursor_animation_enabled NOTIFY visual_settings_changed),
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
     animation_events_json: qt_property!(QString; READ animation_events_json NOTIFY animation_events_changed),
@@ -182,6 +191,7 @@ pub struct SujianEditorItem {
     current_cursor_animation_duration_ms: u32,
     current_typing_animation_enabled: bool,
     current_typing_animation_duration_ms: u32,
+    current_coordinated_text_cursor_animation_enabled: bool,
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
@@ -297,6 +307,7 @@ impl Default for SujianEditorItem {
             current_cursor_animation_duration_ms: 80,
             current_typing_animation_enabled: true,
             current_typing_animation_duration_ms: 100,
+            current_coordinated_text_cursor_animation_enabled: true,
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,
@@ -615,6 +626,18 @@ impl SujianEditorItem {
         if editor_animation_debug_enabled() {
             eprintln!("typing_animation_duration_ms_changed: {}", clamped);
         }
+        self.visual_settings_changed();
+    }
+
+    fn coordinated_text_cursor_animation_enabled(&self) -> bool {
+        self.current_coordinated_text_cursor_animation_enabled
+    }
+
+    fn set_coordinated_text_cursor_animation_enabled(&mut self, value: bool) {
+        if self.current_coordinated_text_cursor_animation_enabled == value {
+            return;
+        }
+        self.current_coordinated_text_cursor_animation_enabled = value;
         self.visual_settings_changed();
     }
 
@@ -1261,6 +1284,26 @@ impl SujianEditorItem {
         let scroll_y = self.current_scroll_y as f64;
         let viewport_h = self.current_viewport_height.max(1.0) as f64;
 
+        /// 从 CaretRect 和对应的 LayoutSnapshot 构建 CursorRect（含 baseline_y）
+        fn make_cursor_rect(
+            caret: &CursorLayoutRect,
+            snapshot: &LayoutSnapshot,
+            font_family: &str,
+            scroll_y: f64,
+        ) -> CursorRect {
+            let line = snapshot.lines.iter().find(|l| l.id == caret.visual_line_id);
+            let baseline_y = match line {
+                Some(l) => text_baseline_y(l, snapshot.font_size as f64, font_family) - scroll_y,
+                None => caret.y + caret.h * 0.8, // fallback: approximate baseline
+            };
+            CursorRect {
+                x: caret.x,
+                top: caret.y,
+                bottom: caret.y + caret.h,
+                baseline_y,
+            }
+        }
+
         for event in events.iter_mut() {
             match event.kind {
                 EditorAnimationKind::Insert => {
@@ -1282,10 +1325,9 @@ impl SujianEditorItem {
                         scroll_y,
                         viewport_h,
                     );
-                    event.old_cursor_rect = Some(CursorRect {
-                        x: old_caret.x,
-                        y: old_caret.y,
-                    });
+                    event.old_cursor_rect = Some(make_cursor_rect(
+                        &old_caret, &old_snapshot, font_family, scroll_y,
+                    ));
 
                     // 计算 new_cursor_rect：使用 new_text 布局
                     let new_caret = self.editor_layout.caret_rect(
@@ -1295,10 +1337,9 @@ impl SujianEditorItem {
                         scroll_y,
                         viewport_h,
                     );
-                    event.new_cursor_rect = Some(CursorRect {
-                        x: new_caret.x,
-                        y: new_caret.y,
-                    });
+                    event.new_cursor_rect = Some(make_cursor_rect(
+                        &new_caret, &insert_snapshot, font_family, scroll_y,
+                    ));
 
                     for line in &insert_snapshot.lines {
                         if line.byte_end <= range_start || line.byte_start >= range_end {
@@ -1320,6 +1361,7 @@ impl SujianEditorItem {
                             font_size,
                             font_family,
                         );
+                        let line_baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
                         for (abs_byte, x_pos, ch_w) in glyph_data {
                             if abs_byte >= text.len() {
                                 continue;
@@ -1335,10 +1377,11 @@ impl SujianEditorItem {
                             }
                             glyph_rects.push(GlyphRect {
                                 x: line.x + x_pos,
-                                y: line.y - self.current_scroll_y as f64,
+                                y: line.y - scroll_y,
                                 w: ch_w,
                                 h: line.height,
                                 char_: ch.to_string(),
+                                baseline_y: line_baseline_y,
                             });
                         }
                     }
@@ -1361,10 +1404,9 @@ impl SujianEditorItem {
                         scroll_y,
                         viewport_h,
                     );
-                    event.old_cursor_rect = Some(CursorRect {
-                        x: old_caret.x,
-                        y: old_caret.y,
-                    });
+                    event.old_cursor_rect = Some(make_cursor_rect(
+                        &old_caret, &delete_snapshot, font_family, scroll_y,
+                    ));
 
                     // 计算 new_cursor_rect：使用 new_text 布局
                     let new_snapshot = self.layout_snapshot_for_text(text, width);
@@ -1375,10 +1417,9 @@ impl SujianEditorItem {
                         scroll_y,
                         viewport_h,
                     );
-                    event.new_cursor_rect = Some(CursorRect {
-                        x: new_caret.x,
-                        y: new_caret.y,
-                    });
+                    event.new_cursor_rect = Some(make_cursor_rect(
+                        &new_caret, &new_snapshot, font_family, scroll_y,
+                    ));
 
                     for line in &delete_snapshot.lines {
                         if line.byte_end <= range_start || line.byte_start >= range_end {
@@ -1400,6 +1441,7 @@ impl SujianEditorItem {
                             font_size,
                             font_family,
                         );
+                        let line_baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
                         for (abs_byte, x_pos, ch_w) in glyph_data {
                             if abs_byte >= old_text.len() {
                                 continue;
@@ -1415,10 +1457,11 @@ impl SujianEditorItem {
                             }
                             glyph_rects.push(GlyphRect {
                                 x: line.x + x_pos,
-                                y: line.y - self.current_scroll_y as f64,
+                                y: line.y - scroll_y,
                                 w: ch_w,
                                 h: line.height,
                                 char_: ch.to_string(),
+                                baseline_y: line_baseline_y,
                             });
                         }
                     }

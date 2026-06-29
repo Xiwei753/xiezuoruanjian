@@ -63,6 +63,7 @@ data class EditorSettingsState(
     val typingAnimationDurationMs: Long = 100L,
     val smoothCursorEnabled: Boolean = true,
     val smoothCursorDurationMs: Long = 80L,
+    val coordinatedTextCursorAnimationEnabled: Boolean = true,
     val autoSaveEnabled: Boolean = true,
     val autoSaveDelayMs: Long = 1500L
 )
@@ -167,6 +168,7 @@ class EditorViewModel(
                     typingAnimationDurationMs = settings.editorTypingAnimationDurationMs.toLong(),
                     smoothCursorEnabled = settings.editorSmoothCursorEnabled,
                     smoothCursorDurationMs = settings.editorSmoothCursorDurationMs.toLong(),
+                    coordinatedTextCursorAnimationEnabled = settings.editorCoordinatedTextCursorAnimationEnabled,
                     autoSaveEnabled = settings.autoSaveEnabled,
                     autoSaveDelayMs = settings.autoSaveDelayMs
                 )

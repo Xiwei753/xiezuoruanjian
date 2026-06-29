@@ -95,14 +95,17 @@ pub enum EditorAnimationKind {
 
 /// 光标矩形信息，供平台端动画 overlay 使用。
 ///
-/// Core 层默认为 None，由 Desktop 端在 `fill_glyph_rects_for_events` 中
-/// 根据布局计算后填充，确保 QML 动画 overlay 使用正确的光标位置，
-/// 而不是依赖可能过时的 `editorItem.cursor_rect_x/y`。
+/// coordinate_mode=Baseline 时：
+/// - baseline_y 是文字基线 Y 坐标
+/// - top 是光标顶部 Y 坐标（baseline + ascent）
+/// - bottom 是光标底部 Y 坐标（baseline + descent）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CursorRect {
     pub x: f64,
-    pub y: f64,
+    pub top: f64,
+    pub bottom: f64,
+    pub baseline_y: f64,
 }
 
 /// 单个 glyph 的精确矩形信息，供平台端动画 overlay 使用。
@@ -123,6 +126,9 @@ pub struct GlyphRect {
     /// 该 glyph 对应的字符（可能是多字节 UTF-8）
     #[serde(rename = "char")]
     pub char_: String,
+    /// 文字基线 Y 坐标（coordinate_mode=Baseline 时必须使用此字段而非 y+h）
+    #[serde(default)]
+    pub baseline_y: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -146,6 +152,60 @@ pub struct EditorAnimationEvent {
     /// 变更后光标的视口矩形位置（由 Desktop 端填充，Core 层默认为 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_cursor_rect: Option<CursorRect>,
+}
+
+/// 视觉坐标模式。
+/// Baseline 表示所有 y 坐标使用 baselineY，
+/// Canvas.drawText 永远用 baselineY，不能用 top + height 拼 baseline。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VisualCoordinateMode {
+    Baseline,
+}
+
+/// 统一编辑器视觉事务契约。
+///
+/// Core 层只裁判事件语义和范围（UTF-8 byte offset），
+/// 平台层只负责 layout 坐标转换和绘制。
+/// Desktop SujianEditorItem 和 Android SujianEditorView 都吃同一份契约。
+///
+/// coordinate_mode 固定为 Baseline：所有 y 坐标使用 baselineY，
+/// 不使用 top+height 拼接 baseline。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorVisualTransaction {
+    /// 事务唯一 ID
+    pub id: u64,
+    /// 动画类型
+    pub kind: EditorAnimationKind,
+    /// 变更原因
+    pub cause: EditorTransactionCause,
+    /// 旧文本
+    pub old_text: String,
+    /// 新文本
+    pub new_text: String,
+    /// 旧选区（UTF-8 byte offset）
+    pub old_selection: EditorSelection,
+    /// 新选区（UTF-8 byte offset）
+    pub new_selection: EditorSelection,
+    /// 插入范围（UTF-8 byte offset），Insert 动画时平台层应跳过此范围
+    pub inserted_range: Option<(usize, usize)>,
+    /// 删除前 glyph 矩形快照（由平台层填充，Core 默认 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_glyph_rects: Option<Vec<GlyphRect>>,
+    /// 插入后 glyph 矩形（由平台层填充，Core 默认 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub insert_glyph_rects: Option<Vec<GlyphRect>>,
+    /// 变更前光标矩形（由平台层填充，Core 默认 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_cursor_rect: Option<CursorRect>,
+    /// 变更后光标矩形（由平台层填充，Core 默认 None）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_cursor_rect: Option<CursorRect>,
+    /// 动画时长（毫秒）
+    pub duration_ms: u64,
+    /// 坐标模式：固定为 Baseline
+    pub coordinate_mode: VisualCoordinateMode,
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +318,47 @@ impl EditorEngine {
         let id = self.next_animation_id;
         self.next_animation_id = self.next_animation_id.saturating_add(1);
         id
+    }
+
+    /// 从 transaction 生成 EditorVisualTransaction。
+    /// 
+    /// Core 只填充语义字段（id, kind, cause, old/new text, selection, inserted_range, duration, coordinate_mode）。
+    /// 平台层负责填充坐标字段（glyph_rects, cursor_rect）。
+    pub fn visual_transaction(
+        &mut self,
+        transaction: &EditorTransaction,
+    ) -> Option<EditorVisualTransaction> {
+        if !transaction.should_animate {
+            return None;
+        }
+        if transaction.changes.len() != 1 {
+            return None;
+        }
+        let change = &transaction.changes[0];
+        let kind = match change {
+            EditorChange::Insert { .. } => EditorAnimationKind::Insert,
+            EditorChange::Delete { .. } => EditorAnimationKind::Delete,
+        };
+        let inserted_range = match change {
+            EditorChange::Insert { index, text } => Some((*index, *index + text.len())),
+            EditorChange::Delete { .. } => None,
+        };
+        Some(EditorVisualTransaction {
+            id: self.take_animation_id(),
+            kind,
+            cause: transaction.cause,
+            old_text: transaction.old_text.clone(),
+            new_text: transaction.new_text.clone(),
+            old_selection: transaction.old_selection,
+            new_selection: transaction.new_selection,
+            inserted_range,
+            deleted_glyph_rects: None,
+            insert_glyph_rects: None,
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            duration_ms: self.animation_duration_ms,
+            coordinate_mode: VisualCoordinateMode::Baseline,
+        })
     }
 }
 
@@ -474,6 +575,7 @@ mod tests {
             w: 16.0,
             h: 24.0,
             char_: "你".to_string(),
+            baseline_y: 36.0,
         };
         let json = serde_json::to_string(&gr).unwrap();
         // 字段名必须是 camelCase，char_ → "char"
@@ -483,6 +585,7 @@ mod tests {
         assert!(json.contains("\"h\":"));
         assert!(json.contains("\"char\":"));
         assert!(!json.contains("\"char_\":"));
+        assert!(json.contains("\"baselineY\":"));
     }
 
     #[test]
@@ -523,6 +626,7 @@ mod tests {
                     w: 10.0,
                     h: 20.0,
                     char_: "a".to_string(),
+                    baseline_y: 16.0,
                 },
                 GlyphRect {
                     x: 10.0,
@@ -530,6 +634,7 @@ mod tests {
                     w: 10.0,
                     h: 20.0,
                     char_: "b".to_string(),
+                    baseline_y: 16.0,
                 },
                 GlyphRect {
                     x: 20.0,
@@ -537,6 +642,7 @@ mod tests {
                     w: 10.0,
                     h: 20.0,
                     char_: "c".to_string(),
+                    baseline_y: 16.0,
                 },
             ],
             old_cursor_rect: None,
@@ -616,10 +722,12 @@ mod tests {
 
     #[test]
     fn cursor_rect_serializes_camel_case() {
-        let cr = CursorRect { x: 10.5, y: 20.0 };
+        let cr = CursorRect { x: 10.5, top: 5.0, bottom: 25.0, baseline_y: 20.0 };
         let json = serde_json::to_string(&cr).unwrap();
         assert!(json.contains("\"x\":"));
-        assert!(json.contains("\"y\":"));
+        assert!(json.contains("\"top\":"));
+        assert!(json.contains("\"bottom\":"));
+        assert!(json.contains("\"baselineY\":"));
     }
 
     #[test]
@@ -634,8 +742,8 @@ mod tests {
             new_cursor: EditorCursor { index: 1 },
             duration_ms: 160,
             glyph_rects: Vec::new(),
-            old_cursor_rect: Some(CursorRect { x: 10.0, y: 20.0 }),
-            new_cursor_rect: Some(CursorRect { x: 30.0, y: 20.0 }),
+            old_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            new_cursor_rect: Some(CursorRect { x: 30.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("oldCursorRect"));
@@ -1021,5 +1129,72 @@ mod tests {
         );
         assert!(!tx2.should_animate);
         assert!(engine.animation_events(&tx2).is_empty());
+    }
+
+    #[test]
+    fn visual_transaction_insert_has_inserted_range() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "ab",
+            "abc",
+            EditorSelection::collapsed("ab", 2),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Typing,
+        );
+        let vt = engine.visual_transaction(&tx).unwrap();
+        assert_eq!(vt.kind, EditorAnimationKind::Insert);
+        assert_eq!(vt.inserted_range, Some((2, 3)));
+        assert_eq!(vt.coordinate_mode, VisualCoordinateMode::Baseline);
+        assert!(vt.deleted_glyph_rects.is_none());
+        assert!(vt.insert_glyph_rects.is_none());
+        assert!(vt.old_cursor_rect.is_none());
+        assert!(vt.new_cursor_rect.is_none());
+    }
+
+    #[test]
+    fn visual_transaction_delete_has_no_inserted_range() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "abc",
+            "ab",
+            EditorSelection::collapsed("abc", 3),
+            EditorSelection::collapsed("ab", 2),
+            EditorTransactionCause::Delete,
+        );
+        let vt = engine.visual_transaction(&tx).unwrap();
+        assert_eq!(vt.kind, EditorAnimationKind::Delete);
+        assert!(vt.inserted_range.is_none());
+    }
+
+    #[test]
+    fn visual_transaction_paste_returns_none() {
+        let mut engine = EditorEngine::new();
+        let tx = engine.create_transaction(
+            "a",
+            "a long pasted text",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("a long pasted text", "a long pasted text".len()),
+            EditorTransactionCause::Paste,
+        );
+        assert!(engine.visual_transaction(&tx).is_none());
+    }
+
+    #[test]
+    fn cursor_rect_has_baseline_y() {
+        let cr = CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 };
+        let json = serde_json::to_string(&cr).unwrap();
+        assert!(json.contains("\"baselineY\":"));
+        assert!(json.contains("\"top\":"));
+        assert!(json.contains("\"bottom\":"));
+    }
+
+    #[test]
+    fn glyph_rect_has_baseline_y() {
+        let gr = GlyphRect {
+            x: 10.5, y: 20.0, w: 16.0, h: 24.0,
+            char_: "你".to_string(), baseline_y: 40.0,
+        };
+        let json = serde_json::to_string(&gr).unwrap();
+        assert!(json.contains("\"baselineY\":"));
     }
 }

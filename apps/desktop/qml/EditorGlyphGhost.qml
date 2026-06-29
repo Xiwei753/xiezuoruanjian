@@ -34,6 +34,9 @@ Item {
     property real glyphWidth: 0
     property real glyphHeight: 0
 
+    // glyph 基线 Y 坐标（由 Rust 侧填充，用于 baseline 对齐动画）
+    property real glyphBaselineY: 0
+
     // 动画时长（由外部传入，默认 100ms，范围 30~1000ms）
     property int duration: 100
 
@@ -76,6 +79,7 @@ Item {
     y: root.animKind === "insert" ? root.insertMoveAnim.y : root.deleteMoveAnim.y
 
     // 用 Text 渲染真实 glyph 文字
+    // 当 startY/endY 使用 baselineY 坐标时，Text 需要调整 y 偏移使 baseline 对齐
     Text {
         id: ghostText
         text: root.glyphText
@@ -83,6 +87,9 @@ Item {
         font.family: root.glyphFontFamily || "serif"
         font.pixelSize: root.glyphFontPixelSize > 0 ? root.glyphFontPixelSize : root.glyphHeight * 0.85
         opacity: root.animKind === "insert" ? root.insertOpacityAnim.currentOpacity : root.deleteOpacityAnim.currentOpacity
+        // baselineY 定位：如果 glyphBaselineY > 0，说明 Y 坐标是 baseline，
+        // Text 默认 top-left 定位，需要向上偏移 ascent 使 baseline 对齐
+        y: root.glyphBaselineY > 0 ? -(root.glyphFontPixelSize > 0 ? root.glyphFontPixelSize * 0.8 : 0) : 0
     }
 
     // ── Insert 并行动画组 ──

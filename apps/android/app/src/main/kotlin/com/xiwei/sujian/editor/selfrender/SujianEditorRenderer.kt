@@ -16,8 +16,10 @@ data class SujianOverlayAnim(
     val text: String,
     val startX: Float,
     val startY: Float,
+    val startBaselineY: Float,  // 新增：起始基线 Y
     val endX: Float,
     val endY: Float,
+    val endBaselineY: Float,    // 新增：目标基线 Y
     val durationMs: Long,
     val startTimeMs: Long,
     val glyphRects: List<SujianGlyphRect>
@@ -33,9 +35,14 @@ data class SujianOverlayAnim(
 }
 
 /**
- * SujianEditorRenderer — 自研写作区渲染器
+ * SujianEditorRenderer — 自研写作区渲染器（唯一主路径）
  *
  * 分层绘制：静态正文层 → 选区高亮层 → preedit 层 → 动画层 → 光标层
+ *
+ * ## 动画路线
+ * - 真吞吐：静态层跳过 inserted range + overlay 层绘制
+ * - 禁止：ghost overlay（正文完整绘制后叠 ghost 必然重影）
+ * - 禁止：透明 span 污染 Editable
  *
  * ## 渲染规则
  * - 静态正文使用 StaticLayout 绘制
@@ -45,7 +52,8 @@ data class SujianOverlayAnim(
  * - 滚动中暂停/清理文字动画
  */
 class SujianEditorRenderer(
-    private val textPaint: TextPaint
+    private val textPaint: TextPaint,
+    private val density: Float  // resources.displayMetrics.density
 ) {
     // ── 绘制工具 ──
     private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -56,7 +64,7 @@ class SujianEditorRenderer(
     internal val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.argb(255, 50, 50, 50)
         style = Paint.Style.FILL
-        strokeWidth = 2.5f * textPaint.textSize / 16f
+        strokeWidth = 1.5f * density  // 固定 1.5dp
     }
 
     private val composingUnderlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -77,6 +85,16 @@ class SujianEditorRenderer(
     // ── 光标状态 ──
     var cursorVisible: Boolean = true
     var cursorBlinkOn: Boolean = true
+
+    // ── 光标视觉状态（由 CursorController 驱动）──
+    var cursorVisualX: Float = 0f
+    var cursorVisualTop: Float = 0f
+    var cursorVisualBottom: Float = 0f
+    var cursorTargetX: Float = 0f
+    var cursorTargetTop: Float = 0f
+    var cursorTargetBottom: Float = 0f
+    var smoothCursorEnabled: Boolean = false
+    var isCursorAnimating: Boolean = false  // 由 CursorController 设置
 
     /**
      * 添加动画 overlay
@@ -303,19 +321,33 @@ class SujianEditorRenderer(
             canvas.drawRect(0f, 0f, cursorPaint.strokeWidth, textPaint.textSize, cursorPaint)
             return
         }
-
-        val safeOffset = offset.coerceIn(0, text.length)
-        val line = layout.getLineForOffset(safeOffset)
-        val x = layout.getPrimaryHorizontal(safeOffset)
-        val baseline = layout.getLineBaseline(line).toFloat()
-        val ascent = layout.getLineAscent(line).toFloat()
-        val descent = layout.getLineDescent(line).toFloat()
-
+        
+        // 使用 CursorController 驱动的视觉位置
+        val drawX: Float
+        val drawTop: Float
+        val drawBottom: Float
+        
+        if (smoothCursorEnabled && isCursorAnimating) {
+            drawX = cursorVisualX
+            drawTop = cursorVisualTop
+            drawBottom = cursorVisualBottom
+        } else {
+            // 非动画时直接用 layout 计算
+            val safeOffset = offset.coerceIn(0, text.length)
+            val line = layout.getLineForOffset(safeOffset)
+            drawX = layout.getPrimaryHorizontal(safeOffset)
+            val baseline = layout.getLineBaseline(line).toFloat()
+            val ascent = layout.getLineAscent(line).toFloat()
+            val descent = layout.getLineDescent(line).toFloat()
+            drawTop = baseline + ascent
+            drawBottom = baseline + descent
+        }
+        
         canvas.drawRect(
-            x - cursorPaint.strokeWidth / 2f,
-            baseline + ascent,
-            x + cursorPaint.strokeWidth / 2f,
-            baseline + descent,
+            drawX - cursorPaint.strokeWidth / 2f,
+            drawTop,
+            drawX + cursorPaint.strokeWidth / 2f,
+            drawBottom,
             cursorPaint
         )
     }
@@ -368,25 +400,28 @@ class SujianEditorRenderer(
                     // 插入动画：从 oldCursorRect 吐到 glyphRect
                     for (glyphRect in anim.glyphRects) {
                         val currentX = anim.startX + (glyphRect.x - anim.startX) * easedProgress
-                        val currentY = anim.startY + (glyphRect.y - anim.startY) * easedProgress
+                        // 使用 baselineY 做插值，而非 y
+                        val currentBaselineY = anim.startBaselineY + (glyphRect.baselineY - anim.startBaselineY) * easedProgress
                         val currentAlpha = (255 * easedProgress).toInt()
 
                         animTextPaint.alpha = currentAlpha
-                        canvas.drawText(glyphRect.char, currentX, currentY + glyphRect.h, animTextPaint)
+                        // Canvas.drawText 永远用 baselineY
+                        canvas.drawText(glyphRect.char, currentX, currentBaselineY, animTextPaint)
                     }
                 }
                 "delete" -> {
                     // 删除动画：从 glyphRects 吞向 newCursorRect
                     for (glyphRect in anim.glyphRects) {
                         val currentX = glyphRect.x + (anim.endX - glyphRect.x) * easedProgress
-                        val currentY = glyphRect.y + (anim.endY - glyphRect.y) * easedProgress
+                        // 使用 baselineY 做插值
+                        val currentBaselineY = glyphRect.baselineY + (anim.endBaselineY - glyphRect.baselineY) * easedProgress
                         val currentAlpha = (255 * (1f - easedProgress)).toInt()
                         val currentScale = 1f - easedProgress * 0.5f
 
                         animTextPaint.alpha = currentAlpha
                         canvas.save()
-                        canvas.scale(currentScale, currentScale, currentX, currentY + glyphRect.h)
-                        canvas.drawText(glyphRect.char, currentX, currentY + glyphRect.h, animTextPaint)
+                        canvas.scale(currentScale, currentScale, currentX, currentBaselineY)
+                        canvas.drawText(glyphRect.char, currentX, currentBaselineY, animTextPaint)
                         canvas.restore()
                     }
                 }

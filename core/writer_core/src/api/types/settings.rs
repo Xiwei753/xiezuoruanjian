@@ -18,6 +18,7 @@ pub struct LocalSettingsDto {
     pub stats_device_id: Option<String>,
     pub desktop_sidebar_width: f64,
     pub desktop_editor_width: f64,
+    pub editor_coordinated_text_cursor_animation_enabled: bool,
     pub diagnostics_enabled: bool,
     pub diagnostics_verbose: bool,
 }
@@ -43,6 +44,7 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
             stats_device_id: s.stats_device_id,
             desktop_sidebar_width: s.desktop_sidebar_width,
             desktop_editor_width: s.desktop_editor_width,
+            editor_coordinated_text_cursor_animation_enabled: s.editor_coordinated_text_cursor_animation_enabled,
             diagnostics_enabled: s.diagnostics_enabled,
             diagnostics_verbose: s.diagnostics_verbose,
         }
@@ -70,6 +72,7 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             stats_device_id: s.stats_device_id,
             desktop_sidebar_width: s.desktop_sidebar_width,
             desktop_editor_width: s.desktop_editor_width,
+            editor_coordinated_text_cursor_animation_enabled: s.editor_coordinated_text_cursor_animation_enabled,
             diagnostics_enabled: s.diagnostics_enabled,
             diagnostics_verbose: s.diagnostics_verbose,
         }

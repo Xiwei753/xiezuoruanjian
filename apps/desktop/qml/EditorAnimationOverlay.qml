@@ -150,9 +150,9 @@ Item {
 
     function _createInsertAnimation(event) {
         // 使用 event 中的 oldCursorRect 作为起点（插入前的光标位置）
-        // 回退到 editorItem.cursor_rect_x/y（兼容旧数据）
+        // 使用 baselineY 作为 Y 坐标（文字基线），回退到 top（兼容旧数据）
         var startX = event.oldCursorRect ? event.oldCursorRect.x : editorItem.cursor_rect_x
-        var startY = event.oldCursorRect ? event.oldCursorRect.y : editorItem.cursor_rect_y
+        var startY = event.oldCursorRect ? (event.oldCursorRect.baselineY || event.oldCursorRect.top) : editorItem.cursor_rect_y
         var duration = Math.max(30, Math.min(1000, event.durationMs || 100))
 
         if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
@@ -217,9 +217,10 @@ Item {
                 "startX": startX,
                 "startY": startY,
                 "endX": gr.x,
-                "endY": gr.y,
+                "endY": gr.baselineY || gr.y,
                 "glyphWidth": gr.w,
                 "glyphHeight": gr.h,
+                "glyphBaselineY": gr.baselineY || 0,
                 "width": gr.w,
                 "height": gr.h,
                 "duration": duration,
@@ -235,9 +236,9 @@ Item {
 
     function _createDeleteAnimation(event) {
         // 使用 event 中的 newCursorRect 作为终点（删除后的新光标位置）
-        // 回退到 editorItem.cursor_rect_x/y（兼容旧数据）
+        // 使用 baselineY 作为 Y 坐标（文字基线），回退到 top（兼容旧数据）
         var endX = event.newCursorRect ? event.newCursorRect.x : editorItem.cursor_rect_x
-        var endY = event.newCursorRect ? event.newCursorRect.y : editorItem.cursor_rect_y
+        var endY = event.newCursorRect ? (event.newCursorRect.baselineY || event.newCursorRect.top) : editorItem.cursor_rect_y
         var duration = Math.max(30, Math.min(1000, event.durationMs || 100))
 
         if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
@@ -278,9 +279,12 @@ Item {
             var ghost = component.createObject(root, {
                 "animKind": "delete",
                 "startX": gr.x,
-                "startY": gr.y,
+                "startY": gr.baselineY || gr.y,
                 "endX": endX,
                 "endY": endY,
+                "glyphWidth": gr.w,
+                "glyphHeight": gr.h,
+                "glyphBaselineY": gr.baselineY || 0,
                 "glyphWidth": gr.w,
                 "glyphHeight": gr.h,
                 "width": gr.w,

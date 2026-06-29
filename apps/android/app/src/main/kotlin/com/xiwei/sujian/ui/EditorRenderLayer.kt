@@ -3,7 +3,12 @@ package com.xiwei.sujian.ui
 import android.graphics.Canvas
 
 /**
- * EditorRenderLayer v1
+ * EditorRenderLayer v1（旧版路线）
+ *
+ * **已废弃**：ghost overlay 路线已废弃。
+ * 正文完整绘制后叠 ghost 必然重影，这是架构缺陷。
+ * 真吞吐只在 SujianEditorView 上实现（静态层跳过 range + overlay 层绘制）。
+ * 此类只作为旧版编辑器无动画兜底使用，不再新增功能。
  *
  * 统一管理 WriterEditText 上的视觉绘制层，收拢原本散落在 WriterEditText 里的各类 renderer。
  *

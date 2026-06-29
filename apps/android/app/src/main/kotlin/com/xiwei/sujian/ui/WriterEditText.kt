@@ -21,7 +21,11 @@ import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import kotlin.math.abs
 
 /**
- * WriterEditText - 素笺写作编辑器
+ * WriterEditText - 素笺写作编辑器（旧版路线）
+ *
+ * **已废弃**：ghost overlay 路线已废弃。旧版编辑器只保留无动画兜底。
+ * 真吞吐只在 SujianEditorView 上实现。
+ * 新功能请走 SujianEditorView 路线，不要在此类上继续补 ghost overlay。
  *
  * 基于 AppCompatEditText，添加打字动画、平滑光标、自动缩进和滚动增强
  *
@@ -73,12 +77,21 @@ class WriterEditText @JvmOverloads constructor(
     private var lastTouchY = 0f
     private var flingDragStarted = false
 
+    /**
+     * 设置打字动画启用/禁用。
+     *
+     * **已废弃**：WriterEditText 的 ghost overlay 路线已废弃。
+     * 旧版编辑器只保留无动画兜底，真吞吐只在 SujianEditorView 上实现。
+     * 此方法仍然保留以避免编译错误，但不再实际启用 ghost overlay 文字动画。
+     */
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 100L) {
         if (!controllersReady) return
         if (lastTypingEnabled == enabled && lastTypingDuration == durationMs) return
         lastTypingEnabled = enabled
         lastTypingDuration = durationMs
-        typingAnimationController?.setTypingAnimationEnabled(enabled, durationMs)
+        // 旧版路线：不再启用文字动画，只保留光标动画
+        // 强制禁用文字动画
+        typingAnimationController?.setTypingAnimationEnabled(false, durationMs)
     }
 
     /**

@@ -3,7 +3,6 @@ package com.xiwei.sujian.editor.selfrender
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.RectF
 import android.view.View
 import android.view.inputmethod.CursorAnchorInfo
 import android.view.inputmethod.InputMethodManager
@@ -188,7 +187,7 @@ class SujianImeController(
         
         builder.setSelectionRange(buffer.selection.start, buffer.selection.end)
         builder.setInsertionMarkerLocation(
-            cursorRect.left,
+            cursorRect.x,
             cursorRect.top,
             cursorRect.bottom,
             cursorRect.bottom,

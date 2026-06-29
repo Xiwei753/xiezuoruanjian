@@ -5,7 +5,12 @@ import android.os.Build
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
- * EditorAnimationRuntime — 编辑器动画运行时
+ * EditorAnimationRuntime — 编辑器动画运行时（旧版路线）
+ *
+ * **已废弃**：ghost overlay 路线已废弃。
+ * 正文完整绘制后叠 ghost 必然重影，这是架构缺陷。
+ * 真吞吐只在 SujianEditorView 上实现（静态层跳过 range + overlay 层绘制）。
+ * 此类只作为旧版编辑器无动画兜底使用，不再新增功能。
  *
  * 使用 Choreographer 管理编辑器的帧动画，统一调度平滑光标和打字动画。
  *

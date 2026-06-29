@@ -51,9 +51,9 @@ class SujianSelectionController(
         val cursorRect = layout.getCursorRect(text, start)
         val endCursorRect = layout.getCursorRect(text, end)
         rects.add(RectF(
-            cursorRect.left,
+            cursorRect.x,
             cursorRect.top,
-            endCursorRect.right,
+            endCursorRect.x,
             endCursorRect.bottom
         ))
         

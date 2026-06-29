@@ -5,9 +5,14 @@ import com.xiwei.sujian.model.EditorAnimationKindData
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
- * SujianAnimationController — 自研写作区动画控制器
+ * SujianAnimationController — 自研写作区动画控制器（唯一主路径）
  *
  * 管理 EditorAnimationEvent 的接收、分发、生命周期。
+ *
+ * ## 动画路线
+ * - 真吞吐：静态层跳过 inserted range + overlay 层绘制
+ * - 禁止：ghost overlay（正文完整绘制后叠 ghost 必然重影）
+ * - 禁止：透明 span 污染 Editable
  *
  * ## 动画规则
  * - 插入成功后生成 transaction，Core 返回 Insert 事件，layout 计算新 glyph rect，
@@ -29,13 +34,14 @@ class SujianAnimationController(
     
     var animationEnabled: Boolean = false
     var animationDurationMs: Long = 160L
+    var coordinatedAnimationEnabled: Boolean = true
     
     // ── 删除前快照 ──
     // 每次删除操作独立记录，不允许 pendingDelete 覆盖丢动画
     data class DeleteSnapshot(
         val deletedText: String,
         val deletedGlyphRects: List<SujianGlyphRect>,
-        val oldCursorRect: android.graphics.RectF,
+        val oldCursorRect: SujianCursorRect,
         val animationId: ULong
     )
     private val deleteSnapshots = mutableListOf<DeleteSnapshot>()
@@ -50,7 +56,7 @@ class SujianAnimationController(
     fun recordDeleteSnapshot(
         deletedText: String,
         deletedGlyphRects: List<SujianGlyphRect>,
-        oldCursorRect: android.graphics.RectF
+        oldCursorRect: SujianCursorRect
     ): ULong {
         val id = nextAnimationId()
         deleteSnapshots.add(DeleteSnapshot(deletedText, deletedGlyphRects, oldCursorRect, id))
@@ -147,10 +153,12 @@ class SujianAnimationController(
             id = event.id,
             kind = "insert",
             text = event.text,
-            startX = oldCursorRect.left,
+            startX = oldCursorRect.x,
             startY = oldCursorRect.top,
-            endX = if (glyphRects.isNotEmpty()) glyphRects.first().x else oldCursorRect.left,
+            startBaselineY = oldCursorRect.baselineY,  // 使用 baselineY
+            endX = if (glyphRects.isNotEmpty()) glyphRects.first().x else oldCursorRect.x,
             endY = if (glyphRects.isNotEmpty()) glyphRects.first().y else oldCursorRect.top,
+            endBaselineY = if (glyphRects.isNotEmpty()) glyphRects.first().baselineY else oldCursorRect.baselineY,  // 使用 baselineY
             durationMs = event.durationMs,
             startTimeMs = System.currentTimeMillis(),
             glyphRects = glyphRects
@@ -167,10 +175,12 @@ class SujianAnimationController(
                 id = event.id,
                 kind = "delete",
                 text = event.text,
-                startX = snapshot.oldCursorRect.left,
+                startX = snapshot.oldCursorRect.x,
                 startY = snapshot.oldCursorRect.top,
-                endX = newCursorRect.left,
+                startBaselineY = snapshot.oldCursorRect.baselineY,  // 使用 baselineY
+                endX = newCursorRect.x,
                 endY = newCursorRect.top,
+                endBaselineY = newCursorRect.baselineY,  // 使用 baselineY
                 durationMs = event.durationMs,
                 startTimeMs = System.currentTimeMillis(),
                 glyphRects = snapshot.deletedGlyphRects
@@ -184,10 +194,12 @@ class SujianAnimationController(
                     id = event.id,
                     kind = "delete",
                     text = event.text,
-                    startX = fallbackSnapshot.oldCursorRect.left,
+                    startX = fallbackSnapshot.oldCursorRect.x,
                     startY = fallbackSnapshot.oldCursorRect.top,
-                    endX = newCursorRect.left,
+                    startBaselineY = fallbackSnapshot.oldCursorRect.baselineY,
+                    endX = newCursorRect.x,
                     endY = newCursorRect.top,
+                    endBaselineY = newCursorRect.baselineY,
                     durationMs = event.durationMs,
                     startTimeMs = System.currentTimeMillis(),
                     glyphRects = fallbackSnapshot.deletedGlyphRects
@@ -199,10 +211,12 @@ class SujianAnimationController(
                     id = event.id,
                     kind = "delete",
                     text = event.text,
-                    startX = newCursorRect.left,
+                    startX = newCursorRect.x,
                     startY = newCursorRect.top,
-                    endX = newCursorRect.left,
+                    startBaselineY = newCursorRect.baselineY,
+                    endX = newCursorRect.x,
                     endY = newCursorRect.top,
+                    endBaselineY = newCursorRect.baselineY,
                     durationMs = event.durationMs,
                     startTimeMs = System.currentTimeMillis(),
                     glyphRects = emptyList()

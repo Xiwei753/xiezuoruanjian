@@ -131,6 +131,7 @@ internal fun LocalSettingsDto.toModel() = LocalSettings(
     statsDeviceId = statsDeviceId,
     linuxSidebarWidth = desktopSidebarWidth,
     linuxEditorWidth = desktopEditorWidth,
+    editorCoordinatedTextCursorAnimationEnabled = editorCoordinatedTextCursorAnimationEnabled,
     diagnosticsEnabled = diagnosticsEnabled,
     diagnosticsVerbose = diagnosticsVerbose,
     useSelfRenderEditorOnAndroid = true  // 默认开启自研写作区；保留"回退到系统 EditText"的开发开关，不给普通用户暴露
@@ -155,6 +156,7 @@ internal fun LocalSettings.toDto() = LocalSettingsDto(
     statsDeviceId = statsDeviceId,
     desktopSidebarWidth = linuxSidebarWidth,
     desktopEditorWidth = linuxEditorWidth,
+    editorCoordinatedTextCursorAnimationEnabled = editorCoordinatedTextCursorAnimationEnabled,
     diagnosticsEnabled = diagnosticsEnabled,
     diagnosticsVerbose = diagnosticsVerbose
 )

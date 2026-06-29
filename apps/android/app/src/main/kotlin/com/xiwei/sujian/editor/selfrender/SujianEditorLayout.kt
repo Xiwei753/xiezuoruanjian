@@ -11,10 +11,21 @@ import android.os.Build
  */
 data class SujianGlyphRect(
     val x: Float,
-    val y: Float,
+    val y: Float,        // top 坐标（baseline + ascent）
     val w: Float,
     val h: Float,
-    val char: String
+    val char: String,
+    val baselineY: Float  // 文字基线 Y 坐标
+)
+
+/**
+ * 光标矩形信息，包含 baselineY
+ */
+data class SujianCursorRect(
+    val x: Float,
+    val top: Float,
+    val bottom: Float,
+    val baselineY: Float
 )
 
 /**
@@ -188,16 +199,19 @@ class SujianEditorLayout(
     /**
      * 获取指定偏移量处的光标矩形
      */
-    fun getCursorRect(text: String, offset: Int): android.graphics.RectF {
+    fun getCursorRect(text: String, offset: Int): SujianCursorRect {
         val layout = getLayout(text)
         val safeOffset = offset.coerceIn(0, text.length)
-        if (layout.lineCount == 0) return android.graphics.RectF()
+        if (layout.lineCount == 0) {
+            // 空文本：baselineY = textSize（第一行基线位置）
+            return SujianCursorRect(0f, 0f, textPaint.textSize, textPaint.textSize)
+        }
         val line = layout.getLineForOffset(safeOffset)
         val x = layout.getPrimaryHorizontal(safeOffset)
-        val baseline = layout.getLineBaseline(line)
-        val ascent = layout.getLineAscent(line)
-        val descent = layout.getLineDescent(line)
-        return android.graphics.RectF(x - 1f, (baseline + ascent).toFloat(), x + 1f, (baseline + descent).toFloat())
+        val baseline = layout.getLineBaseline(line).toFloat()
+        val ascent = layout.getLineAscent(line).toFloat()
+        val descent = layout.getLineDescent(line).toFloat()
+        return SujianCursorRect(x, baseline + ascent, baseline + descent, baseline)
     }
 
     /**
@@ -237,7 +251,8 @@ class SujianEditorLayout(
                 y = baseline + ascent,
                 w = width.coerceAtLeast(0f),
                 h = descent - ascent,
-                char = charStr
+                char = charStr,
+                baselineY = baseline  // 新增
             ))
 
             currentOffset += charCount
@@ -262,10 +277,14 @@ class SujianEditorLayout(
             builder.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
         }
 
-        // 首行缩进：通过添加前导空格实现
-        // 注意：StaticLayout 不直接支持首行缩进，这里用 indentSpan 或者在文本前加空格
-        // 第一阶段先用简单方式：如果 firstLineIndentPx > 0，在第一行前添加空格
-        // TODO: 更精确的首行缩进实现
+        // 首行缩进：使用 LeadingMarginSpan.Standard
+        if (firstLineIndentPx > 0f && text.isNotEmpty()) {
+            val span = android.text.style.LeadingMarginSpan.Standard(firstLineIndentPx.toInt())
+            val spannedString = android.text.SpannableString(text)
+            val firstLineEnd = text.indexOf('\n').let { if (it < 0) text.length else it }
+            spannedString.setSpan(span, 0, firstLineEnd, android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE)
+            builder.setText(spannedString)
+        }
 
         val layout = builder.build()
         cachedLayout = layout

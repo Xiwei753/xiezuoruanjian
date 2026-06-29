@@ -6,7 +6,12 @@ import android.graphics.Paint
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
- * SmoothCursorRenderer — 平滑光标渲染器
+ * SmoothCursorRenderer — 平滑光标渲染器（旧版路线）
+ *
+ * **已废弃**：ghost overlay 路线已废弃。
+ * 正文完整绘制后叠 ghost 必然重影，这是架构缺陷。
+ * 真吞吐只在 SujianEditorView 上实现（静态层跳过 range + overlay 层绘制）。
+ * 此类只作为旧版编辑器无动画兜底使用，不再新增功能。
  *
  * 使用插值动画实现光标的平滑移动效果，替代系统默认的跳跃式光标。
  *
@@ -52,8 +57,10 @@ class SmoothCursorRenderer(private val editText: WriterEditText) : EditorAnimati
 
     private val interpolator = androidx.core.view.animation.PathInterpolatorCompat.create(0.4f, 0.0f, 0.2f, 1.0f) // FastOutSlowIn
 
+    private val density = editText.resources.displayMetrics.density
+
     private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        strokeWidth = 4f
+        strokeWidth = 1.5f * density  // 固定 1.5dp，替代原来的 4f
     }
 
     init {

@@ -67,9 +67,14 @@ data class OverlayAnim(
 }
 
 /**
- * TypingOverlayRenderer — 打字动画 ghost overlay 渲染器
+ * TypingOverlayRenderer — 旧版 ghost overlay 动画渲染器
  *
- * 当前路线：ghost overlay（路线 B）
+ * **已废弃**：ghost overlay 路线（路线 B）已废弃。
+ * 正文完整绘制后叠 ghost 必然重影，这是架构缺陷。
+ * 真吞吐只在 SujianEditorView 上实现（静态层跳过 range + overlay 层绘制）。
+ * 此类只作为旧版编辑器无动画兜底使用，不再新增功能。
+ *
+ * 原路线说明：ghost overlay（路线 B）
  * - 插入动画：正文已完整绘制，overlay 从旧光标位置飞到目标位置（ghost 飞入效果）
  * - 删除动画：正文已删除，overlay 显示被删字符收缩/淡出（ghost 消失效果）
  * - 这不是真吐字/吞字：真吐字/吞字需要临时隐藏正文中的刚插入字符（路线 A），

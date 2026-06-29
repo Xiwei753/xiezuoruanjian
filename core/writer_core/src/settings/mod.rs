@@ -71,6 +71,8 @@ pub struct LocalSettings {
     pub editor_typing_animation_duration_ms: u64,
     #[serde(default = "default_editor_smooth_cursor_duration_ms")]
     pub editor_smooth_cursor_duration_ms: u64,
+    #[serde(default = "default_editor_coordinated_text_cursor_animation_enabled")]
+    pub editor_coordinated_text_cursor_animation_enabled: bool,
     #[serde(default)]
     pub ai_enabled: bool,
     #[serde(default)]
@@ -138,6 +140,9 @@ fn default_editor_typing_animation_duration_ms() -> u64 {
 fn default_editor_smooth_cursor_duration_ms() -> u64 {
     80
 }
+fn default_editor_coordinated_text_cursor_animation_enabled() -> bool {
+    true
+}
 
 impl LocalSettings {
     /// 将所有设置项 clamp 到安全范围内。
@@ -183,6 +188,7 @@ impl Default for LocalSettings {
             editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
             editor_typing_animation_duration_ms: default_editor_typing_animation_duration_ms(),
             editor_smooth_cursor_duration_ms: default_editor_smooth_cursor_duration_ms(),
+            editor_coordinated_text_cursor_animation_enabled: default_editor_coordinated_text_cursor_animation_enabled(),
             ai_enabled: false,
             stats_device_id: None,
             desktop_sidebar_width: default_desktop_sidebar_width(),

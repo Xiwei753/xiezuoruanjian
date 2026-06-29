@@ -8,7 +8,12 @@ import com.xiwei.sujian.ui.UtfOffsetConverter
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
- * TypingAnimationController — 打字动画控制器
+ * TypingAnimationController — 打字动画控制器（旧版路线）
+ *
+ * **已废弃**：ghost overlay 路线已废弃。
+ * 正文完整绘制后叠 ghost 必然重影，这是架构缺陷。
+ * 真吞吐只在 SujianEditorView 上实现（静态层跳过 range + overlay 层绘制）。
+ * 此类只作为旧版编辑器无动画兜底使用，不再新增功能。
  *
  * 监听 EditText 的文本变化，通过 Core EditorEngine 判断是否播放动画，
  * 然后用 Android Layout 算坐标，提交到 EditorRenderLayer。

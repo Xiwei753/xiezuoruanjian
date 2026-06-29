@@ -15,10 +15,15 @@ import android.view.inputmethod.InputConnection
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
 /**
- * SujianEditorView — Android 自研写作区核心 View
+ * SujianEditorView — Android 自研写作区核心 View（唯一主路径）
  *
  * 继承 View（不继承 EditText），整合所有控制器。
  * 只替换写作正文区域，不重写整个 Android UI。
+ *
+ * ## 动画路线
+ * - 真吞吐：静态层跳过 inserted range + overlay 层绘制
+ * - 禁止：ghost overlay（正文完整绘制后叠 ghost 必然重影）
+ * - 禁止：透明 span 污染 Editable
  *
  * ## 架构原则
  * - Core 仍唯一业务语义来源
@@ -58,7 +63,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     val buffer = SujianEditorBuffer()
     val layoutEngine = SujianEditorLayout(textPaint)
-    val renderer = SujianEditorRenderer(textPaint)
+    val renderer = SujianEditorRenderer(textPaint, resources.displayMetrics.density)
     val animationController = SujianAnimationController(buffer, layoutEngine, renderer)
     val imeController = SujianImeController(this, buffer, layoutEngine, renderer, animationController)
     val cursorController = SujianCursorController(this, buffer, renderer)
@@ -82,6 +87,9 @@ class SujianEditorView @JvmOverloads constructor(
             layoutEngine.invalidate()
             // 通知动画控制器处理事件
             animationController.handleAnimationEvents(result.animationEvents, result.cause)
+            // 更新光标位置
+            val cursorRect = layoutEngine.getCursorRect(result.newText, buffer.selection.head)
+            cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, true)
             // 确保光标可见
             touchController.ensureCursorVisible()
             // 通知外部内容变更
@@ -147,6 +155,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun setText(text: String) {
         buffer.loadText(text)
         layoutEngine.invalidate()
+        cursorController.onChapterLoaded()
         touchController.scrollTo(0, 0)
         invalidate()
     }
@@ -159,6 +168,9 @@ class SujianEditorView @JvmOverloads constructor(
         if (lastFontSize != sizePx) {
             lastFontSize = sizePx
             textPaint.textSize = sizePx
+            // 字号变化时：清动画、snap 光标
+            renderer.clearAnimations()
+            cursorController.onFontSizeChanged()
             layoutEngine.invalidate()
             invalidate()
         }
@@ -200,10 +212,15 @@ class SujianEditorView @JvmOverloads constructor(
      * 设置打字动画启用/禁用
      */
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long = 160L) {
+        val wasEnabled = animationController.animationEnabled
         animationController.animationEnabled = enabled
         animationController.animationDurationMs = durationMs
         buffer.maxAnimatedChars = 8
         buffer.animationDurationMs = durationMs
+        // 关闭 typingAnimation 时清除 hidden range
+        if (!enabled && wasEnabled) {
+            renderer.clearAnimations()
+        }
     }
 
     /**
@@ -211,6 +228,26 @@ class SujianEditorView @JvmOverloads constructor(
      */
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         cursorController.setSmoothCursorEnabled(enabled, durationMs)
+        renderer.smoothCursorEnabled = enabled
+    }
+
+    /**
+     * 设置自动缩进
+     */
+    fun setAutoIndent(enabled: Boolean, widthChars: Float) {
+        val indentPx = if (enabled && widthChars > 0) {
+            textPaint.measureText("中") * widthChars
+        } else {
+            0f
+        }
+        setFirstLineIndentPx(indentPx)
+    }
+
+    /**
+     * 设置光标配合文字吞吐动画
+     */
+    fun setCoordinatedAnimationEnabled(enabled: Boolean) {
+        animationController.coordinatedAnimationEnabled = enabled
     }
 
     /**
@@ -240,12 +277,13 @@ class SujianEditorView @JvmOverloads constructor(
 
         val text = buffer.text
         if (text.isEmpty() && !buffer.hasComposing) {
-            // 空文本时只画光标
+            // 空文本时只画光标（固定 1.5dp 宽度）
             if (cursorController.isCursorVisible) {
+                val cursorWidth = 1.5f * resources.displayMetrics.density
                 canvas.drawRect(
                     paddingLeft.toFloat(),
                     paddingTop.toFloat(),
-                    paddingLeft + 2.5f,
+                    paddingLeft + cursorWidth,
                     paddingTop + textPaint.textSize,
                     renderer.cursorPaint
                 )

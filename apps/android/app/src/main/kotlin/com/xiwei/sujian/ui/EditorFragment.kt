@@ -131,6 +131,9 @@ class EditorFragment : Fragment() {
     private var lastTypingAnimDuration: Long? = null
     private var lastSmoothCursorEnabled: Boolean? = null
     private var lastSmoothCursorDuration: Long? = null
+    private var lastAutoIndentEnabled: Boolean? = null
+    private var lastAutoIndentWidth: Float? = null
+    private var lastCoordinatedAnimEnabled: Boolean? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -541,6 +544,19 @@ class EditorFragment : Fragment() {
                 lastSmoothCursorDuration = settings.smoothCursorDurationMs
                 sujianEditorView.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
                 DiagnosticsLogger.d(tag, "  → smoothCursor applied to SujianEditorView: ${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
+            }
+            // autoIndent 同步到自研写作区
+            if (lastAutoIndentEnabled != settings.autoIndentEnabled || lastAutoIndentWidth != settings.autoIndentWidth) {
+                lastAutoIndentEnabled = settings.autoIndentEnabled
+                lastAutoIndentWidth = settings.autoIndentWidth
+                sujianEditorView.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
+                DiagnosticsLogger.d(tag, "  → autoIndent applied to SujianEditorView: ${settings.autoIndentEnabled}/${settings.autoIndentWidth}")
+            }
+            // 协调动画同步
+            if (lastCoordinatedAnimEnabled != settings.coordinatedTextCursorAnimationEnabled) {
+                lastCoordinatedAnimEnabled = settings.coordinatedTextCursorAnimationEnabled
+                sujianEditorView.setCoordinatedAnimationEnabled(settings.coordinatedTextCursorAnimationEnabled)
+                DiagnosticsLogger.d(tag, "  → coordinatedAnim applied to SujianEditorView: ${settings.coordinatedTextCursorAnimationEnabled}")
             }
             DiagnosticsLogger.d(tag, "applySettingsToEditor: SujianEditorView settings applied, typingAnim=${settings.typingAnimationEnabled}, smoothCursor=${settings.smoothCursorEnabled}")
         } else {

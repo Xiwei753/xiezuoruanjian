@@ -780,6 +780,7 @@ Rectangle {
                         cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                         typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
                         typing_animation_duration_ms: settingsBackend ? settingsBackend.setting_typing_animation_duration_ms : 100
+                        coordinated_text_cursor_animation_enabled: settingsBackend ? settingsBackend.setting_coordinated_text_cursor_animation_enabled : true
                         scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                         viewport_height: sujianEditor.height
                         is_scrolling: editorScroll.editorAnimationSuppressed

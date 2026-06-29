@@ -275,6 +275,7 @@ pub struct AppBackend {
     current_setting_smooth_cursor_enabled: bool,
     current_setting_typing_animation_duration_ms: u32,
     current_setting_smooth_cursor_duration_ms: u32,
+    current_setting_coordinated_text_cursor_animation_enabled: bool,
     current_setting_diagnostics_enabled: bool,
     current_setting_diagnostics_verbose: bool,
 
