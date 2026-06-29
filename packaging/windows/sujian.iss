@@ -39,7 +39,7 @@ CloseApplications=yes
 CloseApplicationsFilter=*.exe,sujian.exe
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinese"; MessagesFile: "compiler:Default.isl"
 
 [InstallDelete]
 Type: filesandordirs; Name: "{app}\platforms"

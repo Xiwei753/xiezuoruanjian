@@ -297,7 +297,8 @@ data class SyncDiagnosticsResult(
     @SerializedName("raw_error") val rawError: String?,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String?,
     @SerializedName("proxy_policy") val proxyPolicy: String,
-    // TODO(破坏性版本): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
+    // [DEPRECATED] proxy_policy — 代理功能已移除。禁止扩展代理探测逻辑。
+    // TODO(破坏性版本 v2): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>
 )
 
@@ -318,7 +319,8 @@ data class SyncResult(
     @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
     @SerializedName("proxy_policy") val proxyPolicy: String = "",
-    // TODO(破坏性版本): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
+    // [DEPRECATED] proxy_policy — 代理功能已移除。禁止扩展代理探测逻辑。
+    // TODO(破坏性版本 v2): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
 )
 

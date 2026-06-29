@@ -110,9 +110,17 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
   - 禁止继续新增手写 `Java_com_xiwei_...` JNI 主业务函数。
 
 ## 网络同步路线
-- **核心原则：** 拥抱基于 Token 的标准 API，对容易失败的底层代理探测进行“断舍离”。
-- **当前后端支持事实：**
-  - 同步后端当前事实只写 Git / GithubApi。所有业务流程与多端同步仅在此两个后端上运行和保证。
+- **核心原则：** 拥抱基于 Token 的标准 API，对容易失败的底层代理探测进行"断舍离"。
+- **主路线：GitHub API 同步**
+  - **唯一正式用户路线**是 `BackendType::GithubApi`，即基于 GitHub REST API + Token 的同步。
+  - 所有业务流程、多端同步、诊断、UI 入口均围绕 GitHub API 设计和保证。
+  - 文档和 UI 必须明确主路线只支持 GitHub API 同步。
+- **Git/libgit2 标记为 legacy**
+  - `BackendType::Git`（基于 libgit2 的同步）是 **legacy 后端**，不承诺独立诊断，不再当正式用户路线。
+  - Git 后端不支持独立 diagnose（返回 `unsupported_git_backend`），不保证在所有网络环境下可用。
+  - 不再为 Git 后端新增功能、修复或诊断能力。
+  - **禁止**在 UI 中将 Git 后端作为推荐选项或默认选项展示。
+  - 未来破坏性版本可能完全移除 Git 后端。
 - **Android 与多端演进：**
   - 由于移动端（Android）和部分受限网络环境（Linux）下，底层 C 语言库（`libgit2`）对系统 VPN 和代理透明转发的支持极差，导致频繁出现 `Certificate (-17)` 和 TCP 阻断问题。
   - **当前确立**：彻底拥抱基于 Token 的 HTTP/REST API（如 GitHub API）。精简乃至删除内核中对底层 22 端口、443 端口的暴力 TCP 探测和 HTTP CONNECT 代理探针。

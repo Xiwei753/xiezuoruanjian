@@ -261,7 +261,13 @@ class SujianEditorRenderer(
 
     /**
      * 绘制一行中的文本段 [segStart, segEnd)（UTF-16 offset）
-     * 使用 Canvas.drawText 配合 Layout 的水平坐标
+     * 
+     * 使用 clipRect + Layout.draw() 分段绘制，复用 Layout 的 TextShaper 整形数据，
+     * 避免逐 code point 硬画导致复杂 grapheme（emoji、ZWJ、组合字符、RTL）错位。
+     * 
+     * 长期路线：完全迁移到 grapheme cluster / StaticLayout / TextShaper 分段绘制，
+     * 消除手动分段逻辑。当前实现通过 clipRect 复用 Layout 整形，等价于
+     * StaticLayout 分段绘制的正确性。
      */
     private fun drawLineSegment(
         canvas: Canvas,
@@ -274,19 +280,24 @@ class SujianEditorRenderer(
         if (segStart >= segEnd || segStart >= text.length) return
         val safeEnd = minOf(segEnd, text.length)
 
-        // 逐字符绘制，处理 RTL/LTR 混合和 surrogate pair
-        var offset = segStart
-        while (offset < safeEnd) {
-            val codePoint = text.codePointAt(offset)
-            val charCount = Character.charCount(codePoint)
-            val charStr = text.substring(offset, minOf(offset + charCount, safeEnd))
-
-            val x = layout.getPrimaryHorizontal(offset)
-            val baseline = layout.getLineBaseline(lineIdx).toFloat()
-
-            canvas.drawText(charStr, x, baseline, textPaint)
-            offset += charCount
+        val lineTop = layout.getLineTop(lineIdx).toFloat()
+        val lineBottom = layout.getLineBottom(lineIdx).toFloat()
+        val xStart = layout.getPrimaryHorizontal(segStart)
+        // safeEnd 可能等于行尾或文本末尾，需要安全处理
+        val xEnd = if (safeEnd >= text.length) {
+            layout.getLineRight(lineIdx)
+        } else {
+            layout.getPrimaryHorizontal(safeEnd)
         }
+
+        if (xEnd <= xStart) return
+
+        canvas.save()
+        canvas.clipRect(xStart, lineTop, xEnd, lineBottom)
+        // Layout.draw() 绘制整个 layout，clipRect 限制只显示目标范围
+        // Layout 内部使用 TextShaper，正确处理 emoji/ZWJ/组合字符/RTL
+        layout.draw(canvas)
+        canvas.restore()
     }
 
     private fun drawSelection(canvas: Canvas, layout: Layout, text: String, selection: SujianSelection) {

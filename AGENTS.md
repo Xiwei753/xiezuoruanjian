@@ -66,6 +66,7 @@ apps/harmony/              ArkTS HarmonyOS NEXT 客户端（薄客户端）
 | **光标修复要求** | 修光标必须先保证 `QTextLine` `xToCursor/cursorToX` roundtrip。 |
 | **工作区格式神圣不可侵犯** | 不要仅仅为了迁就 UI 需求而修改 `workspace_format.md` 或改变文件在磁盘上的存储方式。工作区格式是唯一的事实来源。 |
 | **保持核心纯净** | 不要将平台特定的 UI 逻辑、动画循环、窗口管理或输入法（IME）处理注入 `writer_core`。核心严格用于数据、逻辑和文件 I/O。 |
+| **动画/hidden range 生命周期守卫** | `active_text_animations`、`animatedInsertRange`、光标动画是编辑器内部渲染状态，不是正文数据。**禁止**将 hidden range、动画 overlay、光标动画重新拆成旧路线（TextArea fallback、QTextDocument 字符格式隐藏、正文透明 span/透明颜色污染正文数据、正文完整绘制+overlay冒充真吐字）。关闭动画设置时必须立即清除 hidden range，不依赖 timeout 恢复文字。 |
 
 ---
 
