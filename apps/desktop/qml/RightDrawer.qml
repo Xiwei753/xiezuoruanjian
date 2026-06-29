@@ -18,8 +18,20 @@ Rectangle {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _sidebar: dt ? dt.sidebar : "#F3F7FC"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _accentSoft: dt ? dt.accentSoft : "#CCE5FF"
+    readonly property color _accentText: dt ? dt.accentText : "#001E31"
+    readonly property color _card: dt ? dt.card : "#F6F8FC"
+    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
+    readonly property color _textSecondary: dt ? dt.textSecondary : "#42474E"
+    readonly property color _textMuted: dt ? dt.textMuted : "#747880"
+    readonly property int _sp4: dt ? dt.sp4 : 4
+    readonly property int _sp8: dt ? dt.sp8 : 8
+    readonly property int _sp16: dt ? dt.sp16 : 16
+    readonly property int _radiusSm: dt ? dt.radiusSm : 8
+    readonly property int _fontSm: dt ? dt.fontSm : 12
+    readonly property int _fontLg: dt ? dt.fontLg : 16
 
     property var backendRef: null
     property var starMapController: null
@@ -39,8 +51,8 @@ Rectangle {
     Rectangle {
         id: drawerPanel
         anchors.fill: parent
-        color: _dt.sidebar
-        border.color: _dt.border
+        color: _sidebar
+        border.color: _border
         border.width: 1
 
         ColumnLayout {
@@ -55,9 +67,9 @@ Rectangle {
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: _dt.sp8
-                    anchors.rightMargin: _dt.sp8
-                    spacing: _dt.sp4
+                    anchors.leftMargin: _sp8
+                    anchors.rightMargin: _sp8
+                    spacing: _sp4
 
                     Repeater {
                         model: {
@@ -73,21 +85,21 @@ Rectangle {
                         }
 
                         Rectangle {
-                            width: tabLabel.implicitWidth + _dt.sp16
+                            width: tabLabel.implicitWidth + _sp16
                             height: 30
-                            radius: _dt.radiusSm
+                            radius: _radiusSm
                             color: root.currentTab === modelData.idx ?
-                                   _dt.accentSoft :
-                                   hoverArea.containsMouse ? _dt.card : "transparent"
+                                   _accentSoft :
+                                   hoverArea.containsMouse ? _card : "transparent"
 
                             AppText {
                                 id: tabLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
-                                       _dt.accentText :
-                                       _dt.textSecondary
-                                font.pixelSize: _dt.fontSm
+                                       _accentText :
+                                       _textSecondary
+                                font.pixelSize: _fontSm
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
                             }
 
@@ -107,13 +119,13 @@ Rectangle {
                     Rectangle {
                         width: 24; height: 24
                         radius: 12
-                        color: closeHover.containsMouse ? _dt.card : "transparent"
+                        color: closeHover.containsMouse ? _card : "transparent"
 
                         AppText {
                             anchors.centerIn: parent
                             text: "\u2715"
-                            color: _dt.textMuted
-                            font.pixelSize: _dt.fontSm
+                            color: _textMuted
+                            font.pixelSize: _fontSm
                         }
 
                         MouseArea {
@@ -128,7 +140,7 @@ Rectangle {
             }
 
             // Divider
-            Rectangle { Layout.fillWidth: true; height: 1; color: _dt.border }
+            Rectangle { Layout.fillWidth: true; height: 1; color: _border }
 
             // Content area
             Item {
@@ -162,7 +174,7 @@ Rectangle {
 
                     ColumnLayout {
                         anchors.centerIn: parent
-                        spacing: _dt.sp16
+                        spacing: _sp16
 
                         AppText {
                             text: "\uD83E\uDD16"
@@ -171,15 +183,15 @@ Rectangle {
                         }
                         AppText {
                             text: qsTr("AI 助手")
-                            color: _dt.textPrimary
-                            font.pixelSize: _dt.fontLg
+                            color: _textPrimary
+                            font.pixelSize: _fontLg
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
                         AppText {
                             text: qsTr("AI 功能将在后续版本实现")
-                            color: _dt.textMuted
-                            font.pixelSize: _dt.fontSm
+                            color: _textMuted
+                            font.pixelSize: _fontSm
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
