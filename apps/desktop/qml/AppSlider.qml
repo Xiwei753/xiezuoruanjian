@@ -16,6 +16,11 @@ import QtQuick.Layouts
 Item {
     id: root
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property string label: ""
     property string valueText: ""
     property string description: ""
@@ -32,27 +37,27 @@ Item {
     ColumnLayout {
         id: content
         anchors.fill: parent
-        spacing: dt ? dt.sp6 : 6
+        spacing: _dt.sp6
 
         RowLayout {
             Layout.fillWidth: true
             visible: root.label.length > 0 || root.valueText.length > 0
-            spacing: dt ? dt.sp12 : 12
+            spacing: _dt.sp12
 
             AppText {
                 Layout.fillWidth: true
                 text: root.label
-                color: dt.textPrimary
-                font.pixelSize: dt ? dt.body : 14
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: _dt.textPrimary
+                font.pixelSize: _dt.body
+                font.family: _dt.fontFamily
                 wrapMode: Text.Wrap
             }
 
             AppText {
                 text: root.valueText
-                color: dt.textSecondary
-                font.pixelSize: dt ? dt.caption : 12
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: _dt.textSecondary
+                font.pixelSize: _dt.caption
+                font.family: _dt.fontFamily
                 horizontalAlignment: Text.AlignRight
                 visible: root.valueText.length > 0
             }
@@ -73,12 +78,12 @@ Item {
                 width: slider.availableWidth
                 height: 6
                 radius: 3
-                color: dt.surfaceVariant
+                color: _dt.surfaceVariant
 
                 Rectangle {
                     width: slider.visualPosition * parent.width
                     height: parent.height
-                    color: slider.enabled ? dt.primary : dt.border
+                    color: slider.enabled ? _dt.primary : _dt.border
                     radius: 3
                 }
             }
@@ -90,9 +95,9 @@ Item {
                 height: width
                 radius: width / 2
                 color: slider.pressed
-                    ? dt.accentHover
-                    : (slider.enabled ? dt.primary : dt.border)
-                border.color: dt.surface
+                    ? _dt.accentHover
+                    : (slider.enabled ? _dt.primary : _dt.border)
+                border.color: _dt.surface
                 border.width: 3
             }
         }
@@ -100,9 +105,9 @@ Item {
         AppText {
             Layout.fillWidth: true
             text: root.description
-            color: dt.textSecondary
-            font.pixelSize: dt ? dt.caption : 12
-            font.family: dt ? dt.fontFamily : "sans-serif"
+            color: _dt.textSecondary
+            font.pixelSize: _dt.caption
+            font.family: _dt.fontFamily
             wrapMode: Text.Wrap
             visible: root.description.length > 0
         }

@@ -20,6 +20,11 @@ Item {
 
     property string starmapId: ""
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property var backendRef: null
     property string errorMessage: graphController.errorMessage
 
@@ -82,7 +87,7 @@ Item {
             onPaint: {
                 var ctx = getContext("2d")
                 ctx.clearRect(0, 0, width, height)
-                ctx.fillStyle = dt.textMuted
+                ctx.fillStyle = _dt.textMuted
 
                 var gridSpacing = 50 * zoomLevel
                 var startX = (panX % gridSpacing)
@@ -218,7 +223,7 @@ Item {
                 }
                 if (!edge) continue
 
-                var color = edge.isSelected ? dt.accent : dt.border
+                var color = edge.isSelected ? _dt.accent : _dt.border
 
                 // Draw line
                 ctx.beginPath()
@@ -238,11 +243,11 @@ Item {
 
                 // Label
                 if (edge.label) {
-                    ctx.fillStyle = dt.surfaceContainer
+                    ctx.fillStyle = _dt.surfaceContainer
                     var tw = ctx.measureText(edge.label).width
                     ctx.fillRect(r.labelX - tw/2 - 4, r.labelY - 10, tw + 8, 20)
 
-                    ctx.fillStyle = dt.textPrimary
+                    ctx.fillStyle = _dt.textPrimary
                     ctx.font = "12px sans-serif"
                     ctx.textAlign = "center"
                     ctx.textBaseline = "middle"
@@ -389,7 +394,7 @@ Item {
     AppText {
         anchors.centerIn: parent
         text: qsTr("还没有节点，点击新增节点开始构建星图")
-        color: dt ? dt.textSecondary : "#9CA0AB"
+        color: _dt.textSecondary
         font.pixelSize: 16
         visible: nodesModel.length === 0
     }
@@ -401,8 +406,8 @@ Item {
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 16
         anchors.horizontalCenter: parent.horizontalCenter
-        color: dt.error
-        radius: dt ? dt.radiusSm : 8
+        color: _dt.error
+        radius: _dt.radiusSm
         visible: errorMessage.length > 0
         z: 100
 
@@ -499,10 +504,10 @@ Item {
         
         background: Rectangle {
             implicitWidth: 150
-            color: dt.card
-            border.color: dt.border
+            color: _dt.card
+            border.color: _dt.border
             border.width: 1
-            radius: dt ? dt.radiusSm : 8
+            radius: _dt.radiusSm
         }
 
         MenuItem {
@@ -510,15 +515,15 @@ Item {
             text: qsTr("新建节点")
             contentItem: AppText {
                 text: bgMenuItem1.text
-                color: bgMenuItem1.hovered ? dt.accent : dt.textPrimary
+                color: bgMenuItem1.hovered ? _dt.accent : _dt.textPrimary
                 font.pixelSize: 13
                 font.bold: true
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: bgMenuItem1.hovered ? dt.accentSoft : "transparent"
-                radius: dt ? dt.radiusXs : 4
+                color: bgMenuItem1.hovered ? _dt.accentSoft : "transparent"
+                radius: _dt.radiusXs
             }
             onTriggered: createNodeAtWorld(contextMenuWorldX, contextMenuWorldY)
         }
@@ -529,10 +534,10 @@ Item {
         
         background: Rectangle {
             implicitWidth: 150
-            color: dt.card
-            border.color: dt.border
+            color: _dt.card
+            border.color: _dt.border
             border.width: 1
-            radius: dt ? dt.radiusSm : 8
+            radius: _dt.radiusSm
         }
 
         MenuItem {
@@ -540,14 +545,14 @@ Item {
             text: qsTr("重命名")
             contentItem: AppText {
                 text: nodeMenuItem1.text
-                color: nodeMenuItem1.hovered ? dt.accent : dt.textPrimary
+                color: nodeMenuItem1.hovered ? _dt.accent : _dt.textPrimary
                 font.pixelSize: 13
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: nodeMenuItem1.hovered ? dt.accentSoft : "transparent"
-                radius: dt ? dt.radiusXs : 4
+                color: nodeMenuItem1.hovered ? _dt.accentSoft : "transparent"
+                radius: _dt.radiusXs
             }
             onTriggered: {
                 if (selectedNodeForMenu) {
@@ -561,14 +566,14 @@ Item {
             text: qsTr("删除节点")
             contentItem: AppText {
                 text: nodeMenuItem2.text
-                color: nodeMenuItem2.hovered ? dt.danger : dt.textPrimary
+                color: nodeMenuItem2.hovered ? _dt.danger : _dt.textPrimary
                 font.pixelSize: 13
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: nodeMenuItem2.hovered ? dt.dangerContainer : "transparent"
-                radius: dt ? dt.radiusXs : 4
+                color: nodeMenuItem2.hovered ? _dt.dangerContainer : "transparent"
+                radius: _dt.radiusXs
             }
             onTriggered: {
                 if (selectedNodeForMenu) {
@@ -583,10 +588,10 @@ Item {
         
         background: Rectangle {
             implicitWidth: 150
-            color: dt.card
-            border.color: dt.border
+            color: _dt.card
+            border.color: _dt.border
             border.width: 1
-            radius: dt ? dt.radiusSm : 8
+            radius: _dt.radiusSm
         }
 
         MenuItem {
@@ -594,14 +599,14 @@ Item {
             text: qsTr("重命名连线")
             contentItem: AppText {
                 text: edgeMenuItem1.text
-                color: edgeMenuItem1.hovered ? dt.accent : dt.textPrimary
+                color: edgeMenuItem1.hovered ? _dt.accent : _dt.textPrimary
                 font.pixelSize: 13
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: edgeMenuItem1.hovered ? dt.accentSoft : "transparent"
-                radius: dt ? dt.radiusXs : 4
+                color: edgeMenuItem1.hovered ? _dt.accentSoft : "transparent"
+                radius: _dt.radiusXs
             }
             onTriggered: {
                 if (selectedEdgeForMenu) {
@@ -615,14 +620,14 @@ Item {
             text: qsTr("删除连线")
             contentItem: AppText {
                 text: edgeMenuItem2.text
-                color: edgeMenuItem2.hovered ? dt.danger : dt.textPrimary
+                color: edgeMenuItem2.hovered ? _dt.danger : _dt.textPrimary
                 font.pixelSize: 13
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
             background: Rectangle {
-                color: edgeMenuItem2.hovered ? dt.dangerContainer : "transparent"
-                radius: dt ? dt.radiusXs : 4
+                color: edgeMenuItem2.hovered ? _dt.dangerContainer : "transparent"
+                radius: _dt.radiusXs
             }
             onTriggered: {
                 if (selectedEdgeForMenu) {
@@ -636,7 +641,7 @@ Item {
     Rectangle {
         id: renameDialog
         anchors.fill: parent
-        color: dt.scrim
+        color: _dt.scrim
         visible: false
         z: 9999
 
@@ -650,10 +655,10 @@ Item {
         Rectangle {
             width: 300
             height: 160
-            color: dt.card
-            border.color: dt.border
+            color: _dt.card
+            border.color: _dt.border
             border.width: 1.5
-            radius: dt ? dt.dialogRadius : dt.radiusXl
+            radius: _dt.dialogRadius
             anchors.centerIn: parent
 
             ColumnLayout {
@@ -665,23 +670,23 @@ Item {
                     text: renameDialog.targetType === "node" ? qsTr("修改节点标题") : qsTr("修改连线标签")
                     font.pixelSize: 16
                     font.bold: true
-                    color: dt.textPrimary
+                    color: _dt.textPrimary
                 }
 
                 TextField {
                     id: renameInput
                     Layout.fillWidth: true
                     height: 36
-                    color: dt.textPrimary
+                    color: _dt.textPrimary
                     font.pixelSize: 14
                     focus: renameDialog.visible
                     text: renameDialog.initialText
 
                     background: Rectangle {
-                        color: dt.surfaceContainer
-                        border.color: renameInput.activeFocus ? dt.accent : dt.border
+                        color: _dt.surfaceContainer
+                        border.color: renameInput.activeFocus ? _dt.accent : _dt.border
                         border.width: 1.5
-                        radius: dt ? dt.radiusXs : 4
+                        radius: _dt.radiusXs
                     }
 
                     Keys.onReturnPressed: renameDialog.confirm()
@@ -698,13 +703,13 @@ Item {
                         onClicked: renameDialog.close()
                         contentItem: AppText {
                             text: cancelBtn.text
-                            color: dt.textSecondary
+                            color: _dt.textSecondary
                             font.pixelSize: 13
                         }
                         background: Rectangle {
-                            color: cancelBtn.hovered ? dt.surfaceContainer : "transparent"
-                            border.color: dt.border
-                            radius: dt ? dt.radiusXs : 4
+                            color: cancelBtn.hovered ? _dt.surfaceContainer : "transparent"
+                            border.color: _dt.border
+                            radius: _dt.radiusXs
                         }
                     }
 
@@ -714,13 +719,13 @@ Item {
                         onClicked: renameDialog.confirm()
                         contentItem: AppText {
                             text: confirmBtn.text
-                            color: dt.onPrimary
+                            color: _dt.onPrimary
                             font.bold: true
                             font.pixelSize: 13
                         }
                         background: Rectangle {
-                            color: confirmBtn.hovered ? dt.accentHover : dt.accent
-                            radius: dt ? dt.radiusXs : 4
+                            color: confirmBtn.hovered ? _dt.accentHover : _dt.accent
+                            radius: _dt.radiusXs
                         }
                     }
                 }

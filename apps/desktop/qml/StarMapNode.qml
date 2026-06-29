@@ -18,6 +18,11 @@ Rectangle {
     id: root
 
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property string title: "Node"
     property string kind: "Note"
     property bool isSelected: false
@@ -26,9 +31,9 @@ Rectangle {
     signal positionChangeFinished()
     signal clicked()
 
-    radius: dt ? dt.radiusSm : 8
-    color: dt.surfaceContainer
-    border.color: isSelected ? dt.accent : dt.border
+    radius: _dt.radiusSm
+    color: _dt.surfaceContainer
+    border.color: isSelected ? _dt.accent : _dt.border
     border.width: isSelected ? 2 : 1
 
     // Shadow effect approximation
@@ -37,7 +42,7 @@ Rectangle {
         anchors.margins: -1
         z: -1
         color: "transparent"
-        border.color: dt.shadowLight
+        border.color: _dt.shadowLight
         radius: root.radius + 1
         visible: !isSelected
     }
@@ -51,12 +56,12 @@ Rectangle {
             Layout.fillWidth: true
             height: 16
             color: getKindColor(root.kind)
-            radius: dt.radiusXs
+            radius: _dt.radiusXs
 
             AppText {
                 anchors.centerIn: parent
                 text: root.kind
-                color: dt.onPrimary
+                color: _dt.onPrimary
                 font.pixelSize: 10
                 font.bold: true
             }
@@ -66,7 +71,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             text: root.title
-            color: dt.textPrimary
+            color: _dt.textPrimary
             font.pixelSize: 12
             wrapMode: Text.Wrap
             elide: Text.ElideRight
@@ -126,7 +131,7 @@ Rectangle {
             case "Location": return "#FF9800"
             case "Event": return "#F44336"
             case "Concept": return "#9C27B0"
-            default: return dt.textMuted
+            default: return _dt.textMuted
         }
     }
 

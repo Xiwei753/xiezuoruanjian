@@ -17,6 +17,11 @@ import Qt.labs.platform as Platform
 Item {
     id: root
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property var backendRef: null
 
     signal createWorkspaceWithPath(string path)
@@ -48,11 +53,11 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: dt.bg
+        color: _dt.bg
     }
 
     ColumnLayout {
-        spacing: dt ? dt.sp24 : 24
+        spacing: _dt.sp24
         width: Math.min(parent.width - 80, 480)
         height: implicitHeight
         x: Math.max(0, Math.floor((parent.width - width) / 2))
@@ -63,16 +68,16 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             width: 64; height: 64
             radius: 32
-            color: dt.primaryContainer
-            border.color: dt.border
+            color: _dt.primaryContainer
+            border.color: _dt.border
             border.width: 1
 
             Rectangle {
                 anchors.centerIn: parent
                 width: 24; height: 24
-                radius: dt.radiusXs
+                radius: _dt.radiusXs
                 color: "transparent"
-                border.color: dt.primary
+                border.color: _dt.primary
                 border.width: 2
             }
         }
@@ -81,19 +86,19 @@ Item {
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("未打开工作区")
-            font.pixelSize: dt ? dt.title : 24
-            font.family: dt ? dt.fontFamily : "sans-serif"
+            font.pixelSize: _dt.title
+            font.family: _dt.fontFamily
             font.bold: true
-            color: dt.textPrimary
+            color: _dt.textPrimary
         }
 
         // Description
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("选择或创建工作区后开始写作")
-            font.pixelSize: dt ? dt.body : 14
-            font.family: dt ? dt.fontFamily : "sans-serif"
-            color: dt.textSecondary
+            font.pixelSize: _dt.body
+            font.family: _dt.fontFamily
+            color: _dt.textSecondary
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -102,8 +107,8 @@ Item {
         // Actions
         ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: dt ? dt.sp8 : 8
-            spacing: dt ? dt.sp12 : 12
+            Layout.topMargin: _dt.sp8
+            spacing: _dt.sp12
             width: 280
 
             AppButton {

@@ -15,25 +15,30 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property string title: ""
     default property alias contentData: contentColumn.data
-    radius: dt ? dt.cardRadius : dt.radiusCard
-    color: dt.surfaceContainerLow
-    border.color: dt.border
+    radius: _dt.cardRadius
+    color: _dt.surfaceContainerLow
+    border.color: _dt.border
     border.width: 1
 
-    implicitHeight: contentColumn.implicitHeight + (dt ? dt.sp32 : 32)
+    implicitHeight: contentColumn.implicitHeight + _dt.sp32
 
     ColumnLayout {
         id: contentColumn
         anchors.fill: parent
-        anchors.margins: dt ? dt.sp20 : 20
-        spacing: dt ? dt.sp16 : 16
+        anchors.margins: _dt.sp20
+        spacing: _dt.sp16
 
         AppText {
             text: root.title
-            color: dt.accent
-            font.pixelSize: dt ? dt.fontMd : 14
+            color: _dt.accent
+            font.pixelSize: _dt.fontMd
             font.weight: Font.Bold
         }
     }

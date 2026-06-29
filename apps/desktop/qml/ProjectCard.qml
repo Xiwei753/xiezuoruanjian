@@ -17,28 +17,33 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property string projectId: ""
     property string title: ""
     property int wordCount: 0
     property int todayInput: 0
     property string lastEdited: ""
     property string syncStatus: "none"
-    property string accentColor: dt ? dt.primary.toString() : "#7B8CDE"
+    property string accentColor: _dt.primary.toString()
 
     signal clicked()
     signal rightClicked()
 
     width: 220
     height: 180
-    radius: dt ? dt.cardRadius : dt.radiusLg
-    color: hovered ? dt.cardHover : dt.card
-    border.color: hovered ? dt.primary : dt.border
+    radius: _dt.cardRadius
+    color: hovered ? _dt.cardHover : _dt.card
+    border.color: hovered ? _dt.primary : _dt.border
     border.width: 1
 
     property bool hovered: false
 
-    Behavior on color { ColorAnimation { duration: dt ? dt.animFast : 120 } }
-    Behavior on border.color { ColorAnimation { duration: dt ? dt.animFast : 120 } }
+    Behavior on color { ColorAnimation { duration: _dt.animFast } }
+    Behavior on border.color { ColorAnimation { duration: _dt.animFast } }
 
     MouseArea {
         anchors.fill: parent
@@ -53,7 +58,7 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: dt ? dt.sp20 : 20
+        anchors.margins: _dt.sp20
         spacing: 0
 
         // Accent dot + sync status
@@ -71,7 +76,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
 
             StatusPill {
-                dt: dt
+                dt: root.dt
                 status: root.syncStatus === "success" ? "success" : (root.syncStatus === "syncing" ? "warning" : (root.syncStatus === "error" ? "error" : "info"))
                 text: ""
                 visible: root.syncStatus !== "none"
@@ -81,11 +86,11 @@ Rectangle {
         // Title
         AppText {
             Layout.fillWidth: true
-            Layout.topMargin: dt ? dt.sp12 : 12
+            Layout.topMargin: _dt.sp12
             text: root.title || qsTr("未命名作品")
-            color: dt.textPrimary
-            font.pixelSize: dt ? dt.subtitle : 18
-            font.family: dt ? dt.fontFamily : "sans-serif"
+            color: _dt.textPrimary
+            font.pixelSize: _dt.subtitle
+            font.family: _dt.fontFamily
             font.weight: Font.DemiBold
             elide: Text.ElideRight
             maximumLineCount: 2
@@ -97,22 +102,22 @@ Rectangle {
         // Stats row
         RowLayout {
             Layout.fillWidth: true
-            spacing: dt ? dt.sp16 : 16
+            spacing: _dt.sp16
 
             Column {
                 spacing: 2
                 AppText {
                     text: root.wordCount >= 10000 ? (root.wordCount / 10000).toFixed(1) + "w" : root.wordCount.toLocaleString()
-                    color: dt.textPrimary
-                    font.pixelSize: dt ? dt.body : 14
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: _dt.textPrimary
+                    font.pixelSize: _dt.body
+                    font.family: _dt.fontFamily
                     font.weight: Font.Medium
                 }
                 AppText {
                     text: qsTr("总字数")
-                    color: dt.textMuted
-                    font.pixelSize: dt ? dt.caption : 12
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: _dt.textMuted
+                    font.pixelSize: _dt.caption
+                    font.family: _dt.fontFamily
                 }
             }
 
@@ -121,16 +126,16 @@ Rectangle {
                 visible: root.todayInput > 0
                 AppText {
                     text: "+" + (root.todayInput >= 1000 ? (root.todayInput / 1000).toFixed(1) + "k" : root.todayInput.toLocaleString())
-                    color: dt.primary
-                    font.pixelSize: dt ? dt.body : 14
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: _dt.primary
+                    font.pixelSize: _dt.body
+                    font.family: _dt.fontFamily
                     font.weight: Font.Medium
                 }
                 AppText {
                     text: qsTr("今日")
-                    color: dt.textMuted
-                    font.pixelSize: dt ? dt.caption : 12
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: _dt.textMuted
+                    font.pixelSize: _dt.caption
+                    font.family: _dt.fontFamily
                 }
             }
 
@@ -138,9 +143,9 @@ Rectangle {
 
             AppText {
                 text: root.lastEdited || ""
-                color: dt.textMuted
-                font.pixelSize: dt ? dt.caption : 12
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: _dt.textMuted
+                font.pixelSize: _dt.caption
+                font.family: _dt.fontFamily
                 visible: text !== ""
             }
         }

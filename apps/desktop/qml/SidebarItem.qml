@@ -16,6 +16,11 @@ import QtQuick.Layouts
 Item {
     id: control
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property string text: ""
     property string icon: ""
     property bool active: false
@@ -27,24 +32,24 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        anchors.leftMargin: dt ? dt.sp8 : 8
-        anchors.rightMargin: dt ? dt.sp8 : 8
-        radius: dt ? dt.radiusPill : 999
+        anchors.leftMargin: _dt.sp8
+        anchors.rightMargin: _dt.sp8
+        radius: _dt.radiusPill
         color: {
-            if (control.active) return dt.primaryContainer
-            return ma.containsMouse ? dt.surfaceVariant : "transparent"
+            if (control.active) return _dt.primaryContainer
+            return ma.containsMouse ? _dt.surfaceVariant : "transparent"
         }
     }
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: dt ? dt.sp12 : 12
-        anchors.rightMargin: dt ? dt.sp8 : 8
-        spacing: dt ? dt.sp8 : 8
+        anchors.leftMargin: _dt.sp12
+        anchors.rightMargin: _dt.sp8
+        spacing: _dt.sp8
 
         AppText {
             text: control.icon
-            font.pixelSize: dt ? dt.fontMd : 13
+            font.pixelSize: _dt.fontMd
             Layout.preferredWidth: 20
             horizontalAlignment: Text.AlignHCenter
             visible: !control.compact
@@ -53,11 +58,11 @@ Item {
         AppText {
             text: control.text
             color: {
-                if (control.active) return dt.onPrimaryContainer
-                return dt.onSurfaceVariant
+                if (control.active) return _dt.onPrimaryContainer
+                return _dt.onSurfaceVariant
             }
-            font.pixelSize: dt ? dt.label : 13
-            font.family: dt ? dt.fontFamily : "sans-serif"
+            font.pixelSize: _dt.label
+            font.family: _dt.fontFamily
             font.weight: control.active ? Font.Medium : Font.Normal
             Layout.fillWidth: true
             elide: Text.ElideRight

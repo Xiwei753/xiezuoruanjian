@@ -15,9 +15,14 @@ import QtQuick.Layouts
 Item {
     id: control
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property alias spacing: col.spacing
     property string variant: "surface"
-    property int padding: dt ? dt.sp16 : 16
+    property int padding: _dt.sp16
     property bool outlined: true
 
     implicitWidth: 200
@@ -25,9 +30,9 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: dt ? dt.cardRadius : dt.radiusLg
-        color: control.variant === "surfaceVariant" ? dt.surfaceContainer : dt.card
-        border.color: dt.border
+        radius: _dt.cardRadius
+        color: control.variant === "surfaceVariant" ? _dt.surfaceContainer : _dt.card
+        border.color: _dt.border
         border.width: control.outlined ? 1 : 0
     }
 
@@ -37,6 +42,6 @@ Item {
         id: col
         anchors.fill: parent
         anchors.margins: control.padding
-        spacing: dt ? dt.sp12 : 12
+        spacing: _dt.sp12
     }
 }

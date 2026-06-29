@@ -16,6 +16,11 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property var backendRef: null
     property var starMapController: null
     property bool isOpen: false
@@ -34,8 +39,8 @@ Rectangle {
     Rectangle {
         id: drawerPanel
         anchors.fill: parent
-        color: dt.sidebar
-        border.color: dt.border
+        color: _dt.sidebar
+        border.color: _dt.border
         border.width: 1
 
         ColumnLayout {
@@ -50,9 +55,9 @@ Rectangle {
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.leftMargin: dt ? dt.sp8 : 8
-                    anchors.rightMargin: dt ? dt.sp8 : 8
-                    spacing: dt ? dt.sp4 : 4
+                    anchors.leftMargin: _dt.sp8
+                    anchors.rightMargin: _dt.sp8
+                    spacing: _dt.sp4
 
                     Repeater {
                         model: {
@@ -68,21 +73,21 @@ Rectangle {
                         }
 
                         Rectangle {
-                            width: tabLabel.implicitWidth + (dt ? dt.sp16 : 16)
+                            width: tabLabel.implicitWidth + _dt.sp16
                             height: 30
-                            radius: dt ? dt.radiusSm : 8
+                            radius: _dt.radiusSm
                             color: root.currentTab === modelData.idx ?
-                                   dt.accentSoft :
-                                   hoverArea.containsMouse ? dt.card : "transparent"
+                                   _dt.accentSoft :
+                                   hoverArea.containsMouse ? _dt.card : "transparent"
 
                             AppText {
                                 id: tabLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
-                                       dt.accentText :
-                                       dt.textSecondary
-                                font.pixelSize: dt ? dt.fontSm : 12
+                                       _dt.accentText :
+                                       _dt.textSecondary
+                                font.pixelSize: _dt.fontSm
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
                             }
 
@@ -102,13 +107,13 @@ Rectangle {
                     Rectangle {
                         width: 24; height: 24
                         radius: 12
-                        color: closeHover.containsMouse ? dt.card : "transparent"
+                        color: closeHover.containsMouse ? _dt.card : "transparent"
 
                         AppText {
                             anchors.centerIn: parent
                             text: "\u2715"
-                            color: dt.textMuted
-                            font.pixelSize: dt ? dt.fontSm : 12
+                            color: _dt.textMuted
+                            font.pixelSize: _dt.fontSm
                         }
 
                         MouseArea {
@@ -123,7 +128,7 @@ Rectangle {
             }
 
             // Divider
-            Rectangle { Layout.fillWidth: true; height: 1; color: dt.border }
+            Rectangle { Layout.fillWidth: true; height: 1; color: _dt.border }
 
             // Content area
             Item {
@@ -157,7 +162,7 @@ Rectangle {
 
                     ColumnLayout {
                         anchors.centerIn: parent
-                        spacing: dt ? dt.sp16 : 16
+                        spacing: _dt.sp16
 
                         AppText {
                             text: "\uD83E\uDD16"
@@ -166,15 +171,15 @@ Rectangle {
                         }
                         AppText {
                             text: qsTr("AI 助手")
-                            color: dt.textPrimary
-                            font.pixelSize: dt ? dt.fontLg : 16
+                            color: _dt.textPrimary
+                            font.pixelSize: _dt.fontLg
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
                         AppText {
                             text: qsTr("AI 功能将在后续版本实现")
-                            color: dt.textMuted
-                            font.pixelSize: dt ? dt.fontSm : 12
+                            color: _dt.textMuted
+                            font.pixelSize: _dt.fontSm
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }

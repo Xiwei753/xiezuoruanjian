@@ -14,36 +14,41 @@ import QtQuick.Layouts
 Dialog {
     id: root
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property string heading: title
     default property alias bodyData: bodyColumn.data
 
     modal: true
     padding: 0
     background: Rectangle {
-        color: dt.surfaceContainerHigh
-        border.color: dt.border
+        color: _dt.surfaceContainerHigh
+        border.color: _dt.border
         border.width: 1
-        radius: dt ? dt.dialogRadius : dt.radiusXl
+        radius: _dt.dialogRadius
     }
     header: null
 
     contentItem: Item {
-        implicitWidth: bodyColumn.implicitWidth + (dt ? dt.sp48 : 48)
-        implicitHeight: bodyColumn.implicitHeight + (dt ? dt.sp48 : 48)
+        implicitWidth: bodyColumn.implicitWidth + _dt.sp48
+        implicitHeight: bodyColumn.implicitHeight + _dt.sp48
 
         ColumnLayout {
             id: bodyColumn
             anchors.fill: parent
-            anchors.margins: dt ? dt.sp24 : 24
-            spacing: dt ? dt.sp16 : 16
+            anchors.margins: _dt.sp24
+            spacing: _dt.sp16
 
             AppText {
                 Layout.fillWidth: true
                 text: root.heading
                 visible: text.length > 0
-                color: dt.onSurface
-                font.pixelSize: dt ? dt.subtitle : 18
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: _dt.onSurface
+                font.pixelSize: _dt.subtitle
+                font.family: _dt.fontFamily
                 font.weight: Font.DemiBold
             }
         }

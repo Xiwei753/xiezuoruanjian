@@ -16,25 +16,30 @@ Button {
     id: control
     flat: true
     property var dt: null
+
+    // Safe access: fallback to light-theme defaults when dt is null
+    FallbackTokens { id: _fallback }
+    readonly property var _dt: dt ?? _fallback
+
     property bool active: false
 
     implicitHeight: 36
     implicitWidth: Math.max(tm.width + 24, 52)
 
-    TextMetrics { id: tm; text: control.text; font.pixelSize: dt ? dt.fontSm : 12 }
+    TextMetrics { id: tm; text: control.text; font.pixelSize: _dt.fontSm }
 
     contentItem: AppText {
         text: control.text
-        color: control.active ? dt.onPrimaryContainer : (control.hovered ? dt.primary : dt.onSurfaceVariant)
-        font.pixelSize: dt ? dt.label : 13
-        font.family: dt ? dt.fontFamily : "sans-serif"
+        color: control.active ? _dt.onPrimaryContainer : (control.hovered ? _dt.primary : _dt.onSurfaceVariant)
+        font.pixelSize: _dt.label
+        font.family: _dt.fontFamily
         font.weight: control.active ? Font.Medium : Font.Normal
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
     }
 
     background: Rectangle {
-        color: control.active ? dt.primaryContainer : (control.hovered ? dt.surfaceVariant : "transparent")
-        radius: dt ? dt.radiusPill : 999
+        color: control.active ? _dt.primaryContainer : (control.hovered ? _dt.surfaceVariant : "transparent")
+        radius: _dt.radiusPill
     }
 }
