@@ -1,9 +1,7 @@
 package com.xiwei.sujian.ui
 
 import android.os.Bundle
-import android.text.Editable
-import android.text.Spannable
-import android.text.style.BackgroundColorSpan
+
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import android.view.LayoutInflater
 import android.view.Menu
@@ -43,11 +41,11 @@ import kotlinx.coroutines.launch
  *
  * ## 架构定位
  * - EditorFragment → EditorViewModel → WorkspaceRepository → 领域 Bridge → Rust Core
- * - EditorFragment → WriterEditText → EditorAnimationRuntime
+ * - EditorFragment → SujianEditorView（自研写作区唯一主路径）
  *
  * ## 职责边界
  * - **做**：文本编辑、自动保存、搜索/替换、工具栏交互
- * - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 WriterEditText 负责）
+ * - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 SujianEditorView 负责）
  *
  * ## 宿主通信
  * - 通过 `EditorFragmentCallback` 回调宿主（如 back 请求）

@@ -281,20 +281,25 @@ class SujianAnimationController(
      * 从 Core 获取视觉事务。
      *
      * 通过 SujianEditorView 的 visualTransactionProvider 调用 Core API。
+     * 必须使用 context 中的快照，不许再用当前 buffer 同时当 old/new，
+     * 否则 Core 无法算出真实的 Insert/Delete。
      */
     private fun fetchVisualTransaction(
         context: SujianVisualEditContext,
         view: SujianEditorView
     ): EditorVisualTransactionData? {
         val provider = view.visualTransactionProvider ?: return null
-        
-        val oldText = context.oldCursorRect?.let { buffer.text } ?: buffer.text
-        val newText = buffer.text
-        val oldCursorUtf8 = buffer.utf16ToUtf8(buffer.selection.head)
-        val newCursorUtf8 = buffer.utf16ToUtf8(buffer.selection.head)
-        
+
+        // 使用 context 中的快照，不再从 buffer 取
+        val oldText = context.oldText
+        val newText = context.newText
+
+        // UTF-8 offset 用对应文本转换：oldSelection 用 oldText，newSelection 用 newText
+        val oldCursorUtf8 = SujianEditorBuffer.utf16ToUtf8(oldText, context.oldSelectionHead)
+        val newCursorUtf8 = SujianEditorBuffer.utf16ToUtf8(newText, context.newSelectionHead)
+
         val causeStr = context.cause.toCoreCauseString()
-        
+
         return try {
             provider.provide(
                 oldText = oldText,

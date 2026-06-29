@@ -85,6 +85,12 @@ class SujianEditorView @JvmOverloads constructor(
     // runVisualEdit(Delete) 时优先使用此字段，避免重复查询 layout
     internal var preDeleteOldCursorRect: SujianCursorRectData? = null
 
+    // ── 视觉事务标志 ──
+    // 当 insideVisualEdit=true 时，buffer.onTextChanged 只做必要内容通知，
+    // 不移动光标、不分发动画；光标和动画统一由 runVisualEdit → handleVisualEdit 收口
+    internal var insideVisualEdit: Boolean = false
+        private set
+
     // ── 方向键上下移动时记忆的 X 坐标 ──
     // 用于上下移动时保持水平位置不变
     private var rememberedCursorX: Float? = null
@@ -98,17 +104,20 @@ class SujianEditorView @JvmOverloads constructor(
         buffer.onTextChanged = { result ->
             // 通知布局引擎文本已变
             layoutEngine.invalidate()
-            // 动画分发已迁移到 runVisualEdit → animationController.handleVisualEdit()
-            // onTextChanged 不再分发动画
-            // 更新光标位置
-            val cursorRect = layoutEngine.getCursorRect(result.newText, buffer.selection.head)
-            cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, true)
-            // 确保光标可见
-            touchController.ensureCursorVisible()
-            // 通知外部内容变更
-            onContentChanged?.invoke(result.newText)
-            // 重绘
-            invalidate()
+
+            if (insideVisualEdit) {
+                // 视觉事务期间：只做必要内容通知，不移动光标、不分发动画
+                // 光标、文字动画、ensureCursorVisible 统一由 runVisualEdit → handleVisualEdit 收口
+                onContentChanged?.invoke(result.newText)
+                invalidate()
+            } else {
+                // 非视觉事务（如 loadText）：正常更新光标
+                val cursorRect = layoutEngine.getCursorRect(result.newText, buffer.selection.head)
+                cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, true)
+                touchController.ensureCursorVisible()
+                onContentChanged?.invoke(result.newText)
+                invalidate()
+            }
         }
 
         // 设置动画事件提供者桥接
@@ -169,24 +178,28 @@ class SujianEditorView @JvmOverloads constructor(
      * 视觉事务编辑包装器。
      *
      * 步骤：
-     * 1. 捕获 oldCursorRect（Delete 场景复用 onBeforeDelete 已捕获的）
-     * 2. 执行 edit() lambda
-     * 3. 捕获 newCursorRect
-     * 4. 分发动画 animationController.handleVisualEdit(context)
+     * 1. 捕获编辑前快照（oldText/oldSelection/oldCursorRect）
+     * 2. 设置 insideVisualEdit=true，执行 edit() lambda
+     * 3. 捕获编辑后快照（newText/newSelection/newCursorRect）
+     * 4. 构造完整 SujianVisualEditContext 并分发动画
+     *
+     * insideVisualEdit 期间，buffer.onTextChanged 只做内容通知，不移动光标，
+     * 光标和动画统一由本方法 → handleVisualEdit 收口。
      *
      * @param cause 编辑原因
      * @param edit 实际编辑操作（修改 buffer）
      * @return edit lambda 的返回值
      */
     fun <T> runVisualEdit(cause: SujianEditCauseData, edit: () -> T): T {
-        // 步骤 1：捕获 oldCursorRect
-        // Delete 场景复用 onBeforeDelete 已捕获的 preDeleteOldCursorRect
+        // 步骤 1：捕获编辑前快照
+        val oldText = buffer.text
+        val oldSelection = buffer.selection  // SujianSelection(anchor, head)
+
         val oldCursorRect: SujianCursorRectData? = if (cause == SujianEditCauseData.Delete) {
             preDeleteOldCursorRect?.also { preDeleteOldCursorRect = null }
         } else {
-            val text = buffer.text
-            if (text.isNotEmpty()) {
-                val cr = layoutEngine.getCursorRect(text, buffer.selection.head)
+            if (oldText.isNotEmpty()) {
+                val cr = layoutEngine.getCursorRect(oldText, oldSelection.head)
                 SujianCursorRectData(cr.x.toDouble(), cr.top.toDouble(), cr.bottom.toDouble(), cr.baselineY.toDouble())
             } else {
                 null
@@ -194,27 +207,44 @@ class SujianEditorView @JvmOverloads constructor(
         }
 
         // 步骤 2：执行编辑
-        val result = edit()
+        insideVisualEdit = true
+        try {
+            val result = edit()
 
-        // 步骤 3：捕获 newCursorRect
-        val newCursorRect: SujianCursorRectData? = try {
+            // 步骤 3：捕获编辑后快照
             val newText = buffer.text
-            if (newText.isNotEmpty()) {
-                val cr = layoutEngine.getCursorRect(newText, buffer.selection.head)
-                SujianCursorRectData(cr.x.toDouble(), cr.top.toDouble(), cr.bottom.toDouble(), cr.baselineY.toDouble())
-            } else {
+            val newSelection = buffer.selection
+
+            val newCursorRect: SujianCursorRectData? = try {
+                if (newText.isNotEmpty()) {
+                    val cr = layoutEngine.getCursorRect(newText, newSelection.head)
+                    SujianCursorRectData(cr.x.toDouble(), cr.top.toDouble(), cr.bottom.toDouble(), cr.baselineY.toDouble())
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                DiagnosticsLogger.d(TAG, "Failed to capture newCursorRect: ${e.message}")
                 null
             }
-        } catch (e: Exception) {
-            DiagnosticsLogger.d(TAG, "Failed to capture newCursorRect: ${e.message}")
-            null
+
+            // 步骤 4：构造完整快照并分发动画
+            val context = SujianVisualEditContext(
+                oldText = oldText,
+                newText = newText,
+                oldSelectionAnchor = oldSelection.anchor,
+                oldSelectionHead = oldSelection.head,
+                newSelectionAnchor = newSelection.anchor,
+                newSelectionHead = newSelection.head,
+                oldCursorRect = oldCursorRect,
+                newCursorRect = newCursorRect,
+                cause = cause
+            )
+            animationController.handleVisualEdit(context, this)
+
+            return result
+        } finally {
+            insideVisualEdit = false
         }
-
-        // 步骤 4：分发动画
-        val context = SujianVisualEditContext(oldCursorRect, newCursorRect, cause)
-        animationController.handleVisualEdit(context, this)
-
-        return result
     }
 
     // ── 公共 API ──

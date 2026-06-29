@@ -115,8 +115,18 @@ data class SujianGlyphRectData(
 
 /**
  * 视觉编辑上下文，由 runVisualEdit 生成并传给 AnimationController。
+ *
+ * 包含编辑前后的完整快照：文本内容、选区位置（UTF-16 offset）、光标矩形。
+ * fetchVisualTransaction 必须使用此快照，不许再从当前 buffer 取 old/new，
+ * 否则 Core 无法算出真实的 Insert/Delete。
  */
 data class SujianVisualEditContext(
+    val oldText: String,
+    val newText: String,
+    val oldSelectionAnchor: Int,  // UTF-16 offset in oldText
+    val oldSelectionHead: Int,    // UTF-16 offset in oldText
+    val newSelectionAnchor: Int,  // UTF-16 offset in newText
+    val newSelectionHead: Int,    // UTF-16 offset in newText
     val oldCursorRect: SujianCursorRectData?,
     val newCursorRect: SujianCursorRectData?,
     val cause: SujianEditCauseData

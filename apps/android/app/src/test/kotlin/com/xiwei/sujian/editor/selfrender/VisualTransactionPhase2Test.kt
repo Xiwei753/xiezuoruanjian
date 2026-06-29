@@ -402,8 +402,22 @@ class VisualTransactionPhase2Test {
     fun visualEditContext_holdsAllFields() {
         val oldRect = SujianCursorRectData(10.0, 20.0, 40.0, 35.0)
         val newRect = SujianCursorRectData(25.0, 20.0, 40.0, 35.0)
-        val context = SujianVisualEditContext(oldRect, newRect, SujianEditCauseData.Typing)
+        val context = SujianVisualEditContext(
+            oldText = "hello",
+            newText = "hello world",
+            oldSelectionAnchor = 5,
+            oldSelectionHead = 5,
+            newSelectionAnchor = 11,
+            newSelectionHead = 11,
+            oldCursorRect = oldRect,
+            newCursorRect = newRect,
+            cause = SujianEditCauseData.Typing
+        )
 
+        assertEquals("hello", context.oldText)
+        assertEquals("hello world", context.newText)
+        assertEquals(5, context.oldSelectionHead)
+        assertEquals(11, context.newSelectionHead)
         assertEquals(10.0, context.oldCursorRect!!.x, 0.01)
         assertEquals(25.0, context.newCursorRect!!.x, 0.01)
         assertEquals(SujianEditCauseData.Typing, context.cause)
@@ -411,10 +425,22 @@ class VisualTransactionPhase2Test {
 
     @Test
     fun visualEditContext_nullRectsAllowed() {
-        val context = SujianVisualEditContext(null, null, SujianEditCauseData.Delete)
+        val context = SujianVisualEditContext(
+            oldText = "abc",
+            newText = "ac",
+            oldSelectionAnchor = 2,
+            oldSelectionHead = 2,
+            newSelectionAnchor = 1,
+            newSelectionHead = 1,
+            oldCursorRect = null,
+            newCursorRect = null,
+            cause = SujianEditCauseData.Delete
+        )
 
         assertNull(context.oldCursorRect)
         assertNull(context.newCursorRect)
+        assertEquals("abc", context.oldText)
+        assertEquals("ac", context.newText)
         assertEquals(SujianEditCauseData.Delete, context.cause)
     }
 

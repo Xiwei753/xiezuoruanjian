@@ -103,34 +103,14 @@
             app:cardElevation="0dp"
             app:cardCornerRadius="0dp">
 
-            <!-- Legacy WriterEditText (fallback) -->
-            <com.xiwei.sujian.ui.WriterEditText
-                android:id="@+id/editorEditText"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:paddingHorizontal="24dp"
-                android:paddingTop="24dp"
-                android:paddingBottom="80dp"
-                android:gravity="top|start"
-                android:inputType="textMultiLine|textNoSuggestions"
-                android:background="@null"
-                android:hint="@string/hint_editor_content"
-                android:textColor="?attr/colorOnSurface"
-                android:textColorHint="?attr/colorOnSurfaceVariant"
-                android:breakStrategy="simple"
-                android:hyphenationFrequency="none"
-                android:justificationMode="none"
-                android:includeFontPadding="false" />
-
-            <!-- Self-render editor (SujianEditorView) -->
+            <!-- Self-render editor (SujianEditorView) — 唯一主路径 -->
             <com.xiwei.sujian.editor.selfrender.SujianEditorView
                 android:id="@+id/sujianEditorView"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:paddingHorizontal="24dp"
                 android:paddingTop="24dp"
-                android:paddingBottom="80dp"
-                android:visibility="gone" />
+                android:paddingBottom="80dp" />
 
         </com.google.android.material.card.MaterialCardView>
 
