@@ -19,8 +19,21 @@ Rectangle {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _primary: dt ? dt.primary : "#006497"
+    readonly property color _card: dt ? dt.card : "#F6F8FC"
+    readonly property color _cardHover: dt ? dt.cardHover : "#F0F3F8"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
+    readonly property color _textMuted: dt ? dt.textMuted : "#747880"
+    readonly property int _cardRadius: dt ? dt.cardRadius : 16
+    readonly property int _sp12: dt ? dt.sp12 : 12
+    readonly property int _sp16: dt ? dt.sp16 : 16
+    readonly property int _sp20: dt ? dt.sp20 : 20
+    readonly property int _subtitle: dt ? dt.subtitle : 18
+    readonly property int _body: dt ? dt.body : 14
+    readonly property int _caption: dt ? dt.caption : 12
+    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
+    readonly property int _animFast: dt ? dt.animFast : 120
 
     property string projectId: ""
     property string title: ""
@@ -28,22 +41,22 @@ Rectangle {
     property int todayInput: 0
     property string lastEdited: ""
     property string syncStatus: "none"
-    property string accentColor: _dt.primary.toString()
+    property string accentColor: _primary.toString()
 
     signal clicked()
     signal rightClicked()
 
     width: 220
     height: 180
-    radius: _dt.cardRadius
-    color: hovered ? _dt.cardHover : _dt.card
-    border.color: hovered ? _dt.primary : _dt.border
+    radius: _cardRadius
+    color: hovered ? _cardHover : _card
+    border.color: hovered ? _primary : _border
     border.width: 1
 
     property bool hovered: false
 
-    Behavior on color { ColorAnimation { duration: _dt.animFast } }
-    Behavior on border.color { ColorAnimation { duration: _dt.animFast } }
+    Behavior on color { ColorAnimation { duration: _animFast } }
+    Behavior on border.color { ColorAnimation { duration: _animFast } }
 
     MouseArea {
         anchors.fill: parent
@@ -58,7 +71,7 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: _dt.sp20
+        anchors.margins: _sp20
         spacing: 0
 
         // Accent dot + sync status
@@ -86,11 +99,11 @@ Rectangle {
         // Title
         AppText {
             Layout.fillWidth: true
-            Layout.topMargin: _dt.sp12
+            Layout.topMargin: _sp12
             text: root.title || qsTr("未命名作品")
-            color: _dt.textPrimary
-            font.pixelSize: _dt.subtitle
-            font.family: _dt.fontFamily
+            color: _textPrimary
+            font.pixelSize: _subtitle
+            font.family: _fontFamily
             font.weight: Font.DemiBold
             elide: Text.ElideRight
             maximumLineCount: 2
@@ -102,22 +115,22 @@ Rectangle {
         // Stats row
         RowLayout {
             Layout.fillWidth: true
-            spacing: _dt.sp16
+            spacing: _sp16
 
             Column {
                 spacing: 2
                 AppText {
                     text: root.wordCount >= 10000 ? (root.wordCount / 10000).toFixed(1) + "w" : root.wordCount.toLocaleString()
-                    color: _dt.textPrimary
-                    font.pixelSize: _dt.body
-                    font.family: _dt.fontFamily
+                    color: _textPrimary
+                    font.pixelSize: _body
+                    font.family: _fontFamily
                     font.weight: Font.Medium
                 }
                 AppText {
                     text: qsTr("总字数")
-                    color: _dt.textMuted
-                    font.pixelSize: _dt.caption
-                    font.family: _dt.fontFamily
+                    color: _textMuted
+                    font.pixelSize: _caption
+                    font.family: _fontFamily
                 }
             }
 
@@ -126,16 +139,16 @@ Rectangle {
                 visible: root.todayInput > 0
                 AppText {
                     text: "+" + (root.todayInput >= 1000 ? (root.todayInput / 1000).toFixed(1) + "k" : root.todayInput.toLocaleString())
-                    color: _dt.primary
-                    font.pixelSize: _dt.body
-                    font.family: _dt.fontFamily
+                    color: _primary
+                    font.pixelSize: _body
+                    font.family: _fontFamily
                     font.weight: Font.Medium
                 }
                 AppText {
                     text: qsTr("今日")
-                    color: _dt.textMuted
-                    font.pixelSize: _dt.caption
-                    font.family: _dt.fontFamily
+                    color: _textMuted
+                    font.pixelSize: _caption
+                    font.family: _fontFamily
                 }
             }
 
@@ -143,9 +156,9 @@ Rectangle {
 
             AppText {
                 text: root.lastEdited || ""
-                color: _dt.textMuted
-                font.pixelSize: _dt.caption
-                font.family: _dt.fontFamily
+                color: _textMuted
+                font.pixelSize: _caption
+                font.family: _fontFamily
                 visible: text !== ""
             }
         }
