@@ -17,12 +17,16 @@ Item {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _surfaceContainer: dt ? dt.surfaceContainer : "#F0F3F8"
+    readonly property color _card: dt ? dt.card : "#F6F8FC"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property int _cardRadius: dt ? dt.cardRadius : 16
+    readonly property int _sp12: dt ? dt.sp12 : 12
+    readonly property int _sp16: dt ? dt.sp16 : 16
 
     property alias spacing: col.spacing
     property string variant: "surface"
-    property int padding: _dt.sp16
+    property int padding: _sp16
     property bool outlined: true
 
     implicitWidth: 200
@@ -30,9 +34,9 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: _dt.cardRadius
-        color: control.variant === "surfaceVariant" ? _dt.surfaceContainer : _dt.card
-        border.color: _dt.border
+        radius: _cardRadius
+        color: control.variant === "surfaceVariant" ? _surfaceContainer : _card
+        border.color: _border
         border.width: control.outlined ? 1 : 0
     }
 
@@ -42,6 +46,6 @@ Item {
         id: col
         anchors.fill: parent
         anchors.margins: control.padding
-        spacing: _dt.sp12
+        spacing: _sp12
     }
 }
