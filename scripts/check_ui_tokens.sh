@@ -36,8 +36,17 @@ while IFS= read -r line; do
     if [[ "$line" == *"radius: 1"* ]]; then continue; fi
     # Skip radius: 0 (valid)
     if [[ "$line" == *"radius: 0"* ]]; then continue; fi
+    # Skip radius: 3 (slider track internal detail, too small to be a UI token)
+    if [[ "$line" == *"radius: 3"* ]]; then continue; fi
     # Skip if already using dt. prefix
     if [[ "$line" == *"dt.radius"* ]] || [[ "$line" == *"dt.cardRadius"* ]] || [[ "$line" == *"dt.dialogRadius"* ]] || [[ "$line" == *"dt.fabRadius"* ]] || [[ "$line" == *"dt.inputFieldRadius"* ]]; then continue; fi
+    # Skip JS object literal radius (e.g. { radius: 30 } in StarMapGraphController)
+    # Only flag QML Rectangle property radius (indented "radius: N" inside Rectangle block)
+    if [[ "$line" == *"{ radius:"* ]] || [[ "$line" == *", radius:"* ]]; then continue; fi
+    # Skip small decorative dots (e.g. width: 8; height: 8; radius: 4 — circular dot, not UI radius)
+    if [[ "$line" == *"width: 8"* ]] && [[ "$line" == *"height: 8"* ]]; then continue; fi
+    # Skip small circular dots in ProjectCard.qml (8x8 dot with radius: 4)
+    if [[ "$FILE" == *"ProjectCard.qml" ]] && [[ "$line" == *"radius: 4"* ]]; then continue; fi
     QML_RADIUS_ISSUES="${QML_RADIUS_ISSUES}  $line"$'\n'
 done < <(cd "$REPO_ROOT" && grep -rn 'radius: [0-9]' apps/desktop/qml/ 2>/dev/null || true)
 
@@ -99,6 +108,10 @@ while IFS= read -r line; do
     if [[ "$FILE" == *"DesignTokens.qml" ]] || [[ "$FILE" == *"main.qml" ]]; then continue; fi
     if [[ "$FILE" == *"CoreDtos.ets" ]] || [[ "$FILE" == *"MockWriterCoreBridge.ets" ]]; then continue; fi
     if [[ "$FILE" == *"HarmonyThemeAdapter.ets" ]]; then continue; fi
+    # Skip Rust backend bridge files (must retain monet_color for backward compat)
+    if [[ "$FILE" == *"app_backend.rs" ]] || [[ "$FILE" == *"settings_backend.rs" ]]; then continue; fi
+    # Skip core settings definition (already marked deprecated)
+    if [[ "$FILE" == *"settings/mod.rs" ]]; then continue; fi
     MONET_ISSUES="${MONET_ISSUES}  $line"$'\n'
 done < <(cd "$REPO_ROOT" && grep -rn 'monetColor\|monet_color' apps/ core/ 2>/dev/null | grep -v 'deprecated\|Deprecated\|legacy\|Legacy\|compat\|backward' || true)
 

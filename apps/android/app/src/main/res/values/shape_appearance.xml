@@ -13,7 +13,7 @@
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/radius_lg</item>
     </style>
-    <style name="ShapeAppearance.Sujian.Dialog" parent="ShapeAppearance.Material3.ExtraLargeComponent">
+    <style name="ShapeAppearance.Sujian.Dialog" parent="ShapeAppearance.Material3.LargeComponent">
         <item name="cornerFamily">rounded</item>
         <item name="cornerSize">@dimen/radius_xl</item>
     </style>
