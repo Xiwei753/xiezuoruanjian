@@ -18,8 +18,18 @@ Item {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _primary: dt ? dt.primary : "#006497"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _surfaceVariant: dt ? dt.surfaceVariant : "#DFE3EB"
+    readonly property color _surface: dt ? dt.surface : "#FCFCFF"
+    readonly property color _accentHover: dt ? dt.accentHover : "#005079"
+    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
+    readonly property color _textSecondary: dt ? dt.textSecondary : "#42474E"
+    readonly property int _sp6: dt ? dt.sp6 : 6
+    readonly property int _sp12: dt ? dt.sp12 : 12
+    readonly property int _body: dt ? dt.body : 14
+    readonly property int _caption: dt ? dt.caption : 12
+    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
 
     property string label: ""
     property string valueText: ""
@@ -37,27 +47,27 @@ Item {
     ColumnLayout {
         id: content
         anchors.fill: parent
-        spacing: _dt.sp6
+        spacing: _sp6
 
         RowLayout {
             Layout.fillWidth: true
             visible: root.label.length > 0 || root.valueText.length > 0
-            spacing: _dt.sp12
+            spacing: _sp12
 
             AppText {
                 Layout.fillWidth: true
                 text: root.label
-                color: _dt.textPrimary
-                font.pixelSize: _dt.body
-                font.family: _dt.fontFamily
+                color: _textPrimary
+                font.pixelSize: _body
+                font.family: _fontFamily
                 wrapMode: Text.Wrap
             }
 
             AppText {
                 text: root.valueText
-                color: _dt.textSecondary
-                font.pixelSize: _dt.caption
-                font.family: _dt.fontFamily
+                color: _textSecondary
+                font.pixelSize: _caption
+                font.family: _fontFamily
                 horizontalAlignment: Text.AlignRight
                 visible: root.valueText.length > 0
             }
@@ -78,12 +88,12 @@ Item {
                 width: slider.availableWidth
                 height: 6
                 radius: 3
-                color: _dt.surfaceVariant
+                color: _surfaceVariant
 
                 Rectangle {
                     width: slider.visualPosition * parent.width
                     height: parent.height
-                    color: slider.enabled ? _dt.primary : _dt.border
+                    color: slider.enabled ? _primary : _border
                     radius: 3
                 }
             }
@@ -95,9 +105,9 @@ Item {
                 height: width
                 radius: width / 2
                 color: slider.pressed
-                    ? _dt.accentHover
-                    : (slider.enabled ? _dt.primary : _dt.border)
-                border.color: _dt.surface
+                    ? _accentHover
+                    : (slider.enabled ? _primary : _border)
+                border.color: _surface
                 border.width: 3
             }
         }
@@ -105,9 +115,9 @@ Item {
         AppText {
             Layout.fillWidth: true
             text: root.description
-            color: _dt.textSecondary
-            font.pixelSize: _dt.caption
-            font.family: _dt.fontFamily
+            color: _textSecondary
+            font.pixelSize: _caption
+            font.family: _fontFamily
             wrapMode: Text.Wrap
             visible: root.description.length > 0
         }
