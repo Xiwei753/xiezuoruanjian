@@ -327,45 +327,31 @@ class SujianEditorRenderer(
         composingStart: Int,
         composingEnd: Int
     ) {
-        // 使用 getSelectionPath 获取精确的 visual run bounds，
-        // 按 Path 的 bounds 分段绘制下划线，避免 RTL/Bidi 场景下 left/right 反向。
-        val path = Path()
-        layout.getSelectionPath(composingStart, composingEnd, path)
-        if (path.isEmpty) return
-
-        val rect = android.graphics.RectF()
-        path.computeBounds(rect, true)
-
-        // 如果 composing 跨多行，按行分段绘制下划线
+        // 使用 getSelectionPath + clipPath 绘制下划线，
+        // 确保 Bidi 不连续 visual run 的空隙不会被画上线。
         val startLine = layout.getLineForOffset(composingStart)
         val endLine = layout.getLineForOffset(composingEnd)
 
-        if (startLine == endLine) {
-            // 单行：直接用 path bounds 画下划线
-            val baseline = layout.getLineBaseline(startLine).toFloat()
-            val descent = layout.getLineDescent(startLine).toFloat()
-            canvas.drawLine(rect.left, baseline + descent + 2f, rect.right, baseline + descent + 2f, composingUnderlinePaint)
-        } else {
-            // 多行：每行用 getSelectionPath 获取该行的 bounds
-            for (line in startLine..endLine) {
-                val lineStart = layout.getLineStart(line)
-                val lineEnd = layout.getLineEnd(line)
-                val cStart = if (line == startLine) composingStart else lineStart
-                val cEnd = if (line == endLine) composingEnd else lineEnd
+        for (line in startLine..endLine) {
+            val lineStart = layout.getLineStart(line)
+            val lineEnd = layout.getLineEnd(line)
+            val cStart = if (line == startLine) composingStart else lineStart
+            val cEnd = if (line == endLine) composingEnd else lineEnd
 
-                if (cStart >= cEnd) continue
+            if (cStart >= cEnd) continue
 
-                val linePath = Path()
-                layout.getSelectionPath(cStart, cEnd, linePath)
-                if (linePath.isEmpty) continue
+            val linePath = Path()
+            layout.getSelectionPath(cStart, cEnd, linePath)
+            if (linePath.isEmpty) continue
 
-                val lineRect = android.graphics.RectF()
-                linePath.computeBounds(lineRect, true)
+            val baseline = layout.getLineBaseline(line).toFloat()
+            val descent = layout.getLineDescent(line).toFloat()
+            val underlineY = baseline + descent + 2f
 
-                val baseline = layout.getLineBaseline(line).toFloat()
-                val descent = layout.getLineDescent(line).toFloat()
-                canvas.drawLine(lineRect.left, baseline + descent + 2f, lineRect.right, baseline + descent + 2f, composingUnderlinePaint)
-            }
+            canvas.save()
+            canvas.clipPath(linePath)
+            canvas.drawLine(0f, underlineY, layout.width.toFloat(), underlineY, composingUnderlinePaint)
+            canvas.restore()
         }
     }
 

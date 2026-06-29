@@ -44,7 +44,7 @@ pub fn editor_animation_debug_enabled() -> bool {
 }
 
 pub fn sujian_editor_debug_enabled() -> bool {
-    cfg!(debug_assertions) || std::env_os("SUJIAN_EDITOR_DEBUG").is_some()
+    cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
 }
 
 /// 判断字符是否为复杂 grapheme（emoji / ZWJ / variation selector / combining mark）。
@@ -337,17 +337,18 @@ impl SujianEditorItem {
         }
     }
 
-    /// QML 动画 overlay 通知 Insert 动画完成，清除对应的隐藏 range
+    /// QML 动画 overlay 通知 Insert 动画完成，清除对应的隐藏 range。
+    /// 只要真的移除了匹配的 Insert 动画就立刻 request_static_repaint，
+    /// 不必等 has_active_insert 变成 false，避免多 Insert 动画时漏重绘。
     fn on_insert_animation_finished(&mut self, byte_start: i32, byte_end: i32) {
         let bs = byte_start as usize;
         let be = byte_end as usize;
-        let had_active = self.text_anim_state.has_active_insert();
-        self.text_anim_state.on_insert_animation_finished(bs, be);
-        if had_active && !self.text_anim_state.has_active_insert() {
+        let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
+        if removed {
             if editor_animation_debug_enabled() {
                 eprintln!(
-                    "on_insert_animation_finished: byte_range=({},{}), cleared",
-                    bs, be
+                    "on_insert_animation_finished: byte_range=({},{}), removed, has_active_insert={}",
+                    bs, be, self.text_anim_state.has_active_insert()
                 );
             }
             self.request_static_repaint();

@@ -80,11 +80,14 @@ impl TextAnimationState {
         self.clear();
     }
 
-    /// QML 动画 overlay 通知 Insert 动画完成，清除对应的隐藏 range
-    pub fn on_insert_animation_finished(&mut self, byte_start: usize, byte_end: usize) {
+    /// QML 动画 overlay 通知 Insert 动画完成，清除对应的隐藏 range。
+    /// 返回 true 表示确实移除了匹配的 Insert 动画（需要触发重绘）。
+    pub fn on_insert_animation_finished(&mut self, byte_start: usize, byte_end: usize) -> bool {
+        let before = self.animations.len();
         self.animations.retain(|anim| {
             !(anim.kind == TextAnimationKind::Insert && anim.byte_range == (byte_start, byte_end))
         });
+        self.animations.len() < before
     }
 
     /// 超时安全机制：检查活跃文本动画是否超时，超时则清除。
@@ -246,5 +249,40 @@ mod tests {
         assert!(!state.is_empty());
         assert_eq!(state.active_insert_byte_range(), None);
         assert!(!state.has_active_insert());
+    }
+
+    #[test]
+    fn test_on_insert_animation_finished_returns_true_when_removed() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), 100);
+        let removed = state.on_insert_animation_finished(10, 20);
+        assert!(removed);
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_on_insert_animation_finished_returns_false_when_no_match() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), 100);
+        let removed = state.on_insert_animation_finished(30, 40);
+        assert!(!removed);
+        assert!(!state.is_empty());
+        assert!(state.has_active_insert());
+    }
+
+    #[test]
+    fn test_on_insert_animation_finished_multiple_inserts_repaints_each() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), 100);
+        state.start_insert((30, 40), 100);
+        // 完成第一个 Insert — removed=true，但还有另一个 Insert 活跃
+        let removed1 = state.on_insert_animation_finished(10, 20);
+        assert!(removed1);
+        assert!(state.has_active_insert());
+        // 完成第二个 Insert — removed=true，现在没有活跃 Insert 了
+        let removed2 = state.on_insert_animation_finished(30, 40);
+        assert!(removed2);
+        assert!(!state.has_active_insert());
+        assert!(state.is_empty());
     }
 }
