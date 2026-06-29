@@ -178,7 +178,7 @@ class SujianEditorView @JvmOverloads constructor(
      * @param edit 实际编辑操作（修改 buffer）
      * @return edit lambda 的返回值
      */
-    inline fun <T> runVisualEdit(cause: SujianEditCauseData, edit: () -> T): T {
+    fun <T> runVisualEdit(cause: SujianEditCauseData, edit: () -> T): T {
         // 步骤 1：捕获 oldCursorRect
         // Delete 场景复用 onBeforeDelete 已捕获的 preDeleteOldCursorRect
         val oldCursorRect: SujianCursorRectData? = if (cause == SujianEditCauseData.Delete) {
