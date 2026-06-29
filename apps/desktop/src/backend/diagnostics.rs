@@ -855,7 +855,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_dir = dir.path();
 
-        log_to_file("ERROR", "test", "always", "error message when disabled");
+        // 使用 append_log_line（接受 log_dir 参数）而非 log_to_file（使用全局目录）
+        append_log_line(log_dir, "[ERROR] error message when disabled", false);
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         let content = fs::read_to_string(&current_file).unwrap();
@@ -875,7 +876,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_dir = dir.path();
 
-        log_to_file("WARN", "test", "always", "warn message when disabled");
+        append_log_line(log_dir, "[WARN] warn message when disabled", false);
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         let content = fs::read_to_string(&current_file).unwrap();
@@ -895,7 +896,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_dir = dir.path();
 
-        log_to_file("INFO", "test", "both", "info message with both enabled");
+        append_log_line(log_dir, "[INFO] info message with both enabled", true);
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         let content = fs::read_to_string(&current_file).unwrap();
@@ -915,7 +916,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_dir = dir.path();
 
-        log_to_file("INFO", "test", "blocked", "info message when disabled");
+        append_log_line(log_dir, "[INFO] info message when disabled", true);
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         if current_file.exists() {
@@ -937,7 +938,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_dir = dir.path();
 
-        log_to_file("INFO", "test", "blocked", "info message when not verbose");
+        append_log_line(log_dir, "[INFO] info message when not verbose", false);
 
         let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
         if current_file.exists() {
