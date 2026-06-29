@@ -32,10 +32,9 @@
         <item name="colorSurfaceContainerHighest">@color/md_theme_dark_surfaceContainerHighest</item>
         <item name="colorOutline">@color/md_theme_dark_outline</item>
         <item name="colorOutlineVariant">@color/md_theme_dark_outlineVariant</item>
-        <item name="colorInverseSurface">@color/md_theme_dark_inverseSurface</item>
-        <item name="colorInverseOnSurface">@color/md_theme_dark_inverseOnSurface</item>
-        <item name="colorInversePrimary">@color/md_theme_dark_inversePrimary</item>
-        <item name="android:colorScrim">@color/md_theme_dark_scrim</item>
+
+        <!-- Inverse/scrim colors: not exposed as Material3 style attrs in 1.12.0.
+             Access via @color/md_theme_dark_inverseSurface etc. in code/layouts. -->
 
         <item name="android:statusBarColor">?attr/colorSurface</item>
         <item name="android:windowLightStatusBar" tools:targetApi="m">false</item>

@@ -65,7 +65,7 @@ QtObject {
     property color background: _paletteColor("lightBackground", "darkBackground") ?? (isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
     property color onBackground: _paletteColor("lightOnBackground", "darkOnBackground") ?? (isDark ? "#E2E2E5" : "#1A1C1E")
     property color surface: _paletteColor("lightSurface", "darkSurface") ?? (isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
-    property color onSurface: _paletteColor("lightOnSurface", "darkOnSurface") ?? (isDark ? "#E2E2E5" : "#1A1C1E")
+    property color onSurface: isDark ? "#E2E2E5" : "#1A1C1E"
     property color surfaceVariant: _paletteColor("lightSurfaceVariant", "darkSurfaceVariant") ?? (isDark ? Qt.rgba(0.259, 0.278, 0.306, 1) : Qt.rgba(0.875, 0.890, 0.922, 1))
     property color onSurfaceVariant: _paletteColor("lightOnSurfaceVariant", "darkOnSurfaceVariant") ?? (isDark ? "#C3C6CF" : "#42474E")
     property color outline: _paletteColor("lightOutline", "darkOutline") ?? (isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.447, 0.471, 0.494, 1))
