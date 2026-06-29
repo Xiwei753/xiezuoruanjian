@@ -444,10 +444,40 @@ class AppServiceBridge(workspacePath: String) {
         maxAnimatedChars: UInt,
         animationDurationMs: ULong
     ): BridgeResult<List<uniffi.writer_core.EditorAnimationEventDto>> = wrapResult {
-        val causeDto = when (cause) {
+        val causeDto = causeStringToDto(cause)
+        service.editorAnimationEvents(
+            oldText, newText, oldCursorIndex, newCursorIndex,
+            causeDto, maxAnimatedChars, animationDurationMs
+        )
+    }
+
+    /**
+     * Internal UniFFI adapter for EditorAnimationBridge — visual transaction API.
+     *
+     * Returns an EditorVisualTransactionDto if animation is warranted, or null otherwise.
+     */
+    internal fun editorVisualTransactionDto(
+        oldText: String,
+        newText: String,
+        oldCursorIndex: UInt,
+        newCursorIndex: UInt,
+        cause: String,
+        maxAnimatedChars: UInt,
+        animationDurationMs: ULong
+    ): BridgeResult<uniffi.writer_core.EditorVisualTransactionDto?> = wrapResult {
+        val causeDto = causeStringToDto(cause)
+        service.editorVisualTransaction(
+            oldText, newText, oldCursorIndex, newCursorIndex,
+            causeDto, maxAnimatedChars, animationDurationMs
+        )
+    }
+
+    private fun causeStringToDto(cause: String): uniffi.writer_core.EditorTransactionCauseDto {
+        return when (cause) {
             "Typing" -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
             "Delete" -> uniffi.writer_core.EditorTransactionCauseDto.DELETE
             "ImeComposition" -> uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION
+            "TypingCommit" -> uniffi.writer_core.EditorTransactionCauseDto.TYPING_COMMIT
             "Paste" -> uniffi.writer_core.EditorTransactionCauseDto.PASTE
             "Undo" -> uniffi.writer_core.EditorTransactionCauseDto.UNDO
             "Redo" -> uniffi.writer_core.EditorTransactionCauseDto.REDO
@@ -456,10 +486,6 @@ class AppServiceBridge(workspacePath: String) {
             "Programmatic" -> uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
             else -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
         }
-        service.editorAnimationEvents(
-            oldText, newText, oldCursorIndex, newCursorIndex,
-            causeDto, maxAnimatedChars, animationDurationMs
-        )
     }
 }
 

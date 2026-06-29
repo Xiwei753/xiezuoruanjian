@@ -963,6 +963,10 @@ interface WriterAppService {
     // ── Editor Animation ──
 
     sequence<EditorAnimationEventDto> editor_animation_events(string old_text, string new_text, u32 old_cursor_index, u32 new_cursor_index, EditorTransactionCauseDto cause, u32 max_animated_chars, u64 animation_duration_ms);
+
+    // ── Editor Visual Transaction ──
+
+    EditorVisualTransactionDto? editor_visual_transaction(string old_text, string new_text, u32 old_cursor_index, u32 new_cursor_index, EditorTransactionCauseDto cause, u32 max_animated_chars, u64 animation_duration_ms);
 };
 
 // ── Layout Policy DTOs ──
@@ -1125,4 +1129,42 @@ dictionary EditorAnimationEventDto {
     u32 old_cursor_index;
     u32 new_cursor_index;
     u64 duration_ms;
+};
+
+// ── Editor Visual Transaction DTOs ──
+
+enum VisualCoordinateModeDto {
+    "Baseline",
+};
+
+dictionary CursorRectDto {
+    f64 x;
+    f64 top;
+    f64 bottom;
+    f64 baseline_y;
+};
+
+dictionary GlyphRectDto {
+    f64 x;
+    f64 y;
+    f64 w;
+    f64 h;
+    string char_;
+    f64 baseline_y;
+};
+
+dictionary EditorVisualTransactionDto {
+    u64 id;
+    EditorAnimationKindDto kind;
+    EditorTransactionCauseDto cause;
+    string old_text;
+    string new_text;
+    u32 old_selection_anchor;
+    u32 old_selection_head;
+    u32 new_selection_anchor;
+    u32 new_selection_head;
+    u32 inserted_range_start;
+    u32 inserted_range_end;
+    u64 duration_ms;
+    VisualCoordinateModeDto coordinate_mode;
 };

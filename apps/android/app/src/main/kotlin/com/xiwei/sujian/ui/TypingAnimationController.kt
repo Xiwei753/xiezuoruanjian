@@ -412,3 +412,33 @@ data class AndroidEditorAnimationEvent(
     val text: String,
     val durationMs: Long
 )
+
+/**
+ * Core 视觉事务提供者接口（Phase 2）。
+ *
+ * Android 端通过此接口调用 Core 的 `editor_visual_transaction` 方法。
+ * 实现类通常包装 `EditorAnimationBridge.editorVisualTransaction()`。
+ */
+fun interface VisualTransactionProvider {
+    /**
+     * 调用 Core 的 EditorEngine 计算视觉事务。
+     *
+     * @param oldText 变化前的文本
+     * @param newText 变化后的文本
+     * @param oldCursorIndex 变化前的光标位置（UTF-8 byte offset）
+     * @param newCursorIndex 变化后的光标位置（UTF-8 byte offset）
+     * @param cause 变化原因（"Typing", "Delete", "TypingCommit" 等）
+     * @param maxAnimatedChars 最大动画字符数
+     * @param animationDurationMs 动画时长（毫秒）
+     * @return Core 返回的视觉事务数据，或 null（不需要动画时）
+     */
+    fun provide(
+        oldText: String,
+        newText: String,
+        oldCursorIndex: UInt,
+        newCursorIndex: UInt,
+        cause: String,
+        maxAnimatedChars: UInt,
+        animationDurationMs: ULong
+    ): com.xiwei.sujian.model.EditorVisualTransactionData?
+}

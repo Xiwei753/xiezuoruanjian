@@ -1,9 +1,9 @@
 // =============================================================================
 // EditorAnimationOverlay.qml — QML overlay animation layer for SujianEditorItem
 // =============================================================================
-// Consumes EditorAnimationEvent JSON from Rust core and renders short-lived
+// Consumes EditorVisualTransaction JSON from Rust core and renders short-lived
 // insert/delete animations as QML items. This is the only animation route:
-// Core transaction → animation_events_json signal → QML overlay rendering.
+// Core transaction → visual_transaction_json signal → QML overlay rendering.
 // The static text texture (Layer 0) and QML cursor remain unchanged.
 //
 // Rules:
@@ -50,39 +50,38 @@ Item {
     visible: editorItem !== null
 
     property var _activeAnimations: []
-    property var _pendingInsertEvents: ({})
+    // 当前活跃事务（替换旧的 _pendingInsertEvents）
+    property var _activeTransaction: null
     property Component _glyphGhostComponent: Qt.createComponent("EditorGlyphGhost.qml")
 
     Connections {
         target: editorItem
-        function onAnimationEventsChanged() {
+        function onVisualTransactionChanged() {
             if (!root.animationEnabled || root.suppressed) {
                 root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
                 // 当动画被跳过时，不会有 insert 动画创建，因此不会有 hidden range 需要清理
                 // Rust 侧在 suppressed/animationDisabled 场景下不应创建 hidden range
                 return
             }
-            var jsonStr = editorItem.animation_events_json
-            if (!jsonStr || jsonStr === "[]") {
-                root._log("skipped: jsonStr empty or []")
+            var jsonStr = editorItem.visual_transaction_json
+            if (!jsonStr || jsonStr === "{}") {
+                root._log("skipped: jsonStr empty or {}")
                 return
             }
             root._log("received: jsonLen=" + jsonStr.length)
-            var events
+            var vt
             try {
-                events = JSON.parse(jsonStr)
+                vt = JSON.parse(jsonStr)
             } catch (e) {
                 root._log("JSON parse error: " + e)
                 return
             }
-            if (!Array.isArray(events)) {
-                root._log("skipped: events not array")
+            if (!vt || !vt.kind) {
+                root._log("skipped: vt missing kind field")
                 return
             }
-            root._log("events count=" + events.length)
-            for (var i = 0; i < events.length; i++) {
-                root._handleEvent(events[i])
-            }
+            root._log("vt kind=" + vt.kind + " durationMs=" + vt.durationMs)
+            root._handleTransaction(vt)
         }
     }
 
@@ -114,33 +113,32 @@ Item {
         return false
     }
 
-    function _handleEvent(event) {
-        if (!event) return
-        var kind = event.kind
+    function _handleTransaction(vt) {
+        if (!vt) return
+        var kind = vt.kind
         if (kind === "insert") {
-            _createInsertAnimation(event)
+            _createInsertAnimation(vt)
         } else if (kind === "delete") {
-            _createDeleteAnimation(event)
+            _createDeleteAnimation(vt)
         }
+        // Cursor kind: 不需要动画
     }
 
-    function _trackGhost(ghost, animKind, byteStart, byteEnd, eventKey) {
+    function _trackGhost(ghost, animKind, byteStart, byteEnd) {
         if (!ghost) return
         root._activeAnimations.push(ghost)
         ghost.animationFinished.connect(function() {
             var idx = root._activeAnimations.indexOf(ghost)
             if (idx >= 0) root._activeAnimations.splice(idx, 1)
-            
-            if (animKind === "insert" && eventKey) {
-                // 递减该 event 的 pending ghost 计数
-                if (_pendingInsertEvents[eventKey] !== undefined) {
-                    _pendingInsertEvents[eventKey]--
-                    root._log("insert ghost finished, eventKey=" + eventKey + " remaining=" + _pendingInsertEvents[eventKey])
-                    if (_pendingInsertEvents[eventKey] <= 0) {
-                        delete _pendingInsertEvents[eventKey]
-                        root._log("insert event finished, notifying Rust: byteStart=" + byteStart + " byteEnd=" + byteEnd)
-                        root.insertAnimationFinished(byteStart, byteEnd)
-                    }
+
+            if (animKind === "insert" && root._activeTransaction) {
+                var tx = root._activeTransaction
+                tx.pendingCount--
+                root._log("insert ghost finished, pendingCount=" + tx.pendingCount)
+                if (tx.pendingCount <= 0) {
+                    root._log("insert transaction finished, notifying Rust: byteStart=" + byteStart + " byteEnd=" + byteEnd)
+                    root.insertAnimationFinished(byteStart, byteEnd)
+                    root._activeTransaction = null
                 }
             }
             ghost.destroy()
@@ -148,27 +146,29 @@ Item {
         ghost.startAnimation()
     }
 
-    function _createInsertAnimation(event) {
-        // 使用 event 中的 oldCursorRect 作为起点（插入前的光标位置）
+    function _createInsertAnimation(vt) {
+        // 使用 vt.oldCursorRect 作为起点（插入前的光标位置）
         // 使用 baselineY 作为 Y 坐标（文字基线），回退到 top（兼容旧数据）
-        var startX = event.oldCursorRect ? event.oldCursorRect.x : editorItem.cursor_rect_x
-        var startY = event.oldCursorRect ? (event.oldCursorRect.baselineY || event.oldCursorRect.top) : editorItem.cursor_rect_y
-        var duration = Math.max(30, Math.min(1000, event.durationMs || 100))
+        var startX = vt.oldCursorRect ? vt.oldCursorRect.x : editorItem.cursor_rect_x
+        var startY = vt.oldCursorRect ? (vt.oldCursorRect.baselineY || vt.oldCursorRect.top) : editorItem.cursor_rect_y
+        var duration = Math.max(30, Math.min(1000, vt.durationMs || 100))
 
-        if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
-            root._log("insert skipped: glyphRects empty")
+        // 从 vt.insertGlyphRects 读取 glyph 位置
+        var glyphRects = vt.insertGlyphRects
+        if (!glyphRects || !Array.isArray(glyphRects) || glyphRects.length === 0) {
+            root._log("insert skipped: insertGlyphRects empty")
             return
         }
 
         // Multi-char limit: > 8 glyphs → no animation
-        if (event.glyphRects.length > 8) {
-            root._log("insert skipped: glyphRects count=" + event.glyphRects.length + " > 8")
+        if (glyphRects.length > 8) {
+            root._log("insert skipped: insertGlyphRects count=" + glyphRects.length + " > 8")
             return
         }
 
         // Newline check: if any glyph char is newline, skip
-        for (var ci = 0; ci < event.glyphRects.length; ci++) {
-            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") {
+        for (var ci = 0; ci < glyphRects.length; ci++) {
+            if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
                 root._log("insert skipped: contains newline at index=" + ci)
                 return
             }
@@ -182,14 +182,18 @@ Item {
         }
 
         // byte range for insert animation — used to notify Rust when animation finishes
-        var insertByteStart = event.rangeStart || 0
-        var insertByteEnd = insertByteStart + (event.rangeLen || 0)
-        var eventKey = insertByteStart + "-" + insertByteEnd
+        // 从 vt.insertedRange 读取 hidden range
+        var insertByteStart = 0
+        var insertByteEnd = 0
+        if (vt.insertedRange && Array.isArray(vt.insertedRange) && vt.insertedRange.length === 2) {
+            insertByteStart = vt.insertedRange[0]
+            insertByteEnd = vt.insertedRange[1]
+        }
 
         // 统计实际会创建的 ghost 数量（排除复杂 grapheme）
         var ghostCount = 0
-        for (var i = 0; i < event.glyphRects.length; i++) {
-            var gr = event.glyphRects[i]
+        for (var i = 0; i < glyphRects.length; i++) {
+            var gr = glyphRects[i]
             if (!isComplexGrapheme(gr.char)) {
                 ghostCount++
             }
@@ -200,13 +204,13 @@ Item {
             return
         }
 
-        // 记录该 event 的 pending ghost 数量
-        _pendingInsertEvents[eventKey] = (_pendingInsertEvents[eventKey] || 0) + ghostCount
+        // 记录当前事务的 pending ghost 数量
+        root._activeTransaction = { pendingCount: ghostCount }
 
-        root._log("insert creating " + ghostCount + " ghosts, cursorRect=(" + startX + "," + startY + ") eventKey=" + eventKey)
+        root._log("insert creating " + ghostCount + " ghosts, cursorRect=(" + startX + "," + startY + ") byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
 
-        for (var i = 0; i < event.glyphRects.length; i++) {
-            var gr = event.glyphRects[i]
+        for (var i = 0; i < glyphRects.length; i++) {
+            var gr = glyphRects[i]
             // 防御性检查：Rust 侧已过滤复杂字符，这里双重保险
             if (isComplexGrapheme(gr.char)) {
                 root._log("insert skipped: complex grapheme at index=" + i)
@@ -230,31 +234,33 @@ Item {
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0
             })
 
-            _trackGhost(ghost, "insert", insertByteStart, insertByteEnd, eventKey)
+            _trackGhost(ghost, "insert", insertByteStart, insertByteEnd)
         }
     }
 
-    function _createDeleteAnimation(event) {
-        // 使用 event 中的 newCursorRect 作为终点（删除后的新光标位置）
+    function _createDeleteAnimation(vt) {
+        // 使用 vt.newCursorRect 作为终点（删除后的新光标位置）
         // 使用 baselineY 作为 Y 坐标（文字基线），回退到 top（兼容旧数据）
-        var endX = event.newCursorRect ? event.newCursorRect.x : editorItem.cursor_rect_x
-        var endY = event.newCursorRect ? (event.newCursorRect.baselineY || event.newCursorRect.top) : editorItem.cursor_rect_y
-        var duration = Math.max(30, Math.min(1000, event.durationMs || 100))
+        var endX = vt.newCursorRect ? vt.newCursorRect.x : editorItem.cursor_rect_x
+        var endY = vt.newCursorRect ? (vt.newCursorRect.baselineY || vt.newCursorRect.top) : editorItem.cursor_rect_y
+        var duration = Math.max(30, Math.min(1000, vt.durationMs || 100))
 
-        if (!event.glyphRects || !Array.isArray(event.glyphRects) || event.glyphRects.length === 0) {
-            root._log("delete skipped: glyphRects empty")
+        // 从 vt.deletedGlyphRects 读取被删 glyph 位置
+        var glyphRects = vt.deletedGlyphRects
+        if (!glyphRects || !Array.isArray(glyphRects) || glyphRects.length === 0) {
+            root._log("delete skipped: deletedGlyphRects empty")
             return
         }
 
         // Multi-char limit: > 8 glyphs → no animation
-        if (event.glyphRects.length > 8) {
-            root._log("delete skipped: glyphRects count=" + event.glyphRects.length + " > 8")
+        if (glyphRects.length > 8) {
+            root._log("delete skipped: deletedGlyphRects count=" + glyphRects.length + " > 8")
             return
         }
 
         // Newline check: if any glyph char is newline, skip
-        for (var ci = 0; ci < event.glyphRects.length; ci++) {
-            if (event.glyphRects[ci].char === "\n" || event.glyphRects[ci].char === "\r") {
+        for (var ci = 0; ci < glyphRects.length; ci++) {
+            if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
                 root._log("delete skipped: contains newline at index=" + ci)
                 return
             }
@@ -267,10 +273,10 @@ Item {
             return
         }
 
-        root._log("delete creating " + event.glyphRects.length + " ghosts, cursorRect=(" + endX + "," + endY + ")")
+        root._log("delete creating " + glyphRects.length + " ghosts, cursorRect=(" + endX + "," + endY + ")")
 
-        for (var i = 0; i < event.glyphRects.length; i++) {
-            var gr = event.glyphRects[i]
+        for (var i = 0; i < glyphRects.length; i++) {
+            var gr = glyphRects[i]
             // 防御性检查：Rust 侧已过滤复杂字符，这里双重保险
             if (isComplexGrapheme(gr.char)) {
                 root._log("delete skipped: complex grapheme at index=" + i)
@@ -296,7 +302,7 @@ Item {
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0
             })
 
-            _trackGhost(ghost, "delete", 0, 0, null)
+            _trackGhost(ghost, "delete", 0, 0)
         }
     }
 
@@ -309,6 +315,6 @@ Item {
             if (root._activeAnimations[i]) root._activeAnimations[i].destroy()
         }
         root._activeAnimations = []
-        root._pendingInsertEvents = ({})
+        root._activeTransaction = null
     }
 }

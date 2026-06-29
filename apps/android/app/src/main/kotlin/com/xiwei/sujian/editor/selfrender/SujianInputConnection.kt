@@ -8,6 +8,7 @@ import android.view.inputmethod.ExtractedText
 import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.View
+import com.xiwei.sujian.model.SujianEditCauseData
 
 /**
  * SujianInputConnection — 自研写作区的 InputConnection
@@ -56,16 +57,27 @@ class SujianInputConnection(
         // 判断是 Typing 还是 TypingCommit
         val wasComposing = buffer.hasComposing
         val cause = if (wasComposing) {
-            SujianEditCause.TypingCommit
+            SujianEditCauseData.TypingCommit
         } else if (textStr.length == 1) {
-            SujianEditCause.Typing
+            SujianEditCauseData.Typing
         } else {
-            SujianEditCause.TypingCommit
+            SujianEditCauseData.TypingCommit
         }
 
-        val result = buffer.commitText(textStr, cause)
-        imeController.onEditResult(result)
-        imeController.updateSelection()
+        // 使用 runVisualEdit 包装编辑操作
+        val editorView = view as? SujianEditorView
+        if (editorView != null) {
+            editorView.runVisualEdit(cause) {
+                val result = buffer.commitText(textStr, cause.toLegacyCause())
+                imeController.onEditResult(result)
+                imeController.updateSelection()
+            }
+        } else {
+            // fallback：旧版 WriterEditText 不修改
+            val result = buffer.commitText(textStr, cause.toLegacyCause())
+            imeController.onEditResult(result)
+            imeController.updateSelection()
+        }
 
         return true
     }
@@ -113,12 +125,23 @@ class SujianInputConnection(
         if (isClosed) return false
         if (beforeLength < 0 || afterLength < 0) return false
 
-        // 先记录删除前 glyph rect（用于动画）
-        imeController.onBeforeDelete(beforeLength, afterLength)
-
-        val result = buffer.deleteSurrounding(beforeLength, afterLength)
-        imeController.onEditResult(result)
-        imeController.updateSelection()
+        // 使用 runVisualEdit 包装删除操作
+        val editorView = view as? SujianEditorView
+        if (editorView != null) {
+            // 先记录删除前 glyph rect（用于动画）
+            imeController.onBeforeDelete(beforeLength, afterLength)
+            editorView.runVisualEdit(SujianEditCauseData.Delete) {
+                val result = buffer.deleteSurrounding(beforeLength, afterLength)
+                imeController.onEditResult(result)
+                imeController.updateSelection()
+            }
+        } else {
+            // fallback
+            imeController.onBeforeDelete(beforeLength, afterLength)
+            val result = buffer.deleteSurrounding(beforeLength, afterLength)
+            imeController.onEditResult(result)
+            imeController.updateSelection()
+        }
 
         return true
     }
@@ -224,9 +247,18 @@ class SujianInputConnection(
                         deleteSurroundingText(1, 0)
                     } else {
                         imeController.onBeforeDeleteSelection()
-                        val result = buffer.commitText("", SujianEditCause.Delete)
-                        imeController.onEditResult(result)
-                        imeController.updateSelection()
+                        val editorView = view as? SujianEditorView
+                        if (editorView != null) {
+                            editorView.runVisualEdit(SujianEditCauseData.Delete) {
+                                val result = buffer.commitText("", SujianEditCause.Delete)
+                                imeController.onEditResult(result)
+                                imeController.updateSelection()
+                            }
+                        } else {
+                            val result = buffer.commitText("", SujianEditCause.Delete)
+                            imeController.onEditResult(result)
+                            imeController.updateSelection()
+                        }
                     }
                     return true
                 }
@@ -236,14 +268,34 @@ class SujianInputConnection(
                         deleteSurroundingText(0, 1)
                     } else {
                         imeController.onBeforeDeleteSelection()
-                        val result = buffer.commitText("", SujianEditCause.Delete)
-                        imeController.onEditResult(result)
-                        imeController.updateSelection()
+                        val editorView = view as? SujianEditorView
+                        if (editorView != null) {
+                            editorView.runVisualEdit(SujianEditCauseData.Delete) {
+                                val result = buffer.commitText("", SujianEditCause.Delete)
+                                imeController.onEditResult(result)
+                                imeController.updateSelection()
+                            }
+                        } else {
+                            val result = buffer.commitText("", SujianEditCause.Delete)
+                            imeController.onEditResult(result)
+                            imeController.updateSelection()
+                        }
                     }
                     return true
                 }
                 KeyEvent.KEYCODE_ENTER -> {
-                    commitText("\n", 1)
+                    val editorView = view as? SujianEditorView
+                    if (editorView != null) {
+                        editorView.runVisualEdit(SujianEditCauseData.Typing) {
+                            val result = buffer.commitText("\n", SujianEditCause.Typing)
+                            imeController.onEditResult(result)
+                            imeController.updateSelection()
+                        }
+                    } else {
+                        val result = buffer.commitText("\n", SujianEditCause.Typing)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
                     return true
                 }
             }
@@ -266,9 +318,18 @@ class SujianInputConnection(
                 if (selected != null) {
                     imeController.onClipboardCopy(selected, isCut = true)
                     imeController.onBeforeDeleteSelection()
-                    val result = buffer.commitText("", SujianEditCause.Delete)
-                    imeController.onEditResult(result)
-                    imeController.updateSelection()
+                    val editorView = view as? SujianEditorView
+                    if (editorView != null) {
+                        editorView.runVisualEdit(SujianEditCauseData.Delete) {
+                            val result = buffer.commitText("", SujianEditCause.Delete)
+                            imeController.onEditResult(result)
+                            imeController.updateSelection()
+                        }
+                    } else {
+                        val result = buffer.commitText("", SujianEditCause.Delete)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
                 }
                 return true
             }
@@ -282,9 +343,18 @@ class SujianInputConnection(
             android.R.id.paste -> {
                 val pasteText = imeController.onClipboardPaste()
                 if (pasteText != null) {
-                    val result = buffer.commitText(pasteText, SujianEditCause.Paste)
-                    imeController.onEditResult(result)
-                    imeController.updateSelection()
+                    val editorView = view as? SujianEditorView
+                    if (editorView != null) {
+                        editorView.runVisualEdit(SujianEditCauseData.Paste) {
+                            val result = buffer.commitText(pasteText, SujianEditCause.Paste)
+                            imeController.onEditResult(result)
+                            imeController.updateSelection()
+                        }
+                    } else {
+                        val result = buffer.commitText(pasteText, SujianEditCause.Paste)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
                 }
                 return true
             }
@@ -307,4 +377,21 @@ class SujianInputConnection(
         buffer.finishComposing()
         super.closeConnection()
     }
+}
+
+/**
+ * SujianEditCauseData → SujianEditCause 转换
+ * 用于将新的 Phase 2 cause 枚举映射到 buffer 层的 legacy cause
+ */
+private fun SujianEditCauseData.toLegacyCause(): SujianEditCause = when (this) {
+    SujianEditCauseData.Typing -> SujianEditCause.Typing
+    SujianEditCauseData.Delete -> SujianEditCause.Delete
+    SujianEditCauseData.ImeComposition -> SujianEditCause.ImeComposition
+    SujianEditCauseData.TypingCommit -> SujianEditCause.TypingCommit
+    SujianEditCauseData.Paste -> SujianEditCause.Paste
+    SujianEditCauseData.Undo -> SujianEditCause.Programmatic
+    SujianEditCauseData.Redo -> SujianEditCause.Programmatic
+    SujianEditCauseData.Load -> SujianEditCause.Load
+    SujianEditCauseData.Format -> SujianEditCause.Format
+    SujianEditCauseData.Programmatic -> SujianEditCause.Programmatic
 }

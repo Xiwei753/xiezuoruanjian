@@ -130,6 +130,13 @@ class SujianCursorController(
     }
     
     /**
+     * 强制下次光标更新 snap 到目标位置
+     */
+    fun requestForceSnap() {
+        forceSnapNext = true
+    }
+    
+    /**
      * 加载章节时 snap 光标
      */
     fun onChapterLoaded() {

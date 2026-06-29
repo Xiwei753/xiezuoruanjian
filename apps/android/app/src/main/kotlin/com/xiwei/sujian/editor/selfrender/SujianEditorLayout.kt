@@ -141,6 +141,26 @@ class SujianEditorLayout(
     }
 
     /**
+     * 根据 offset 获取行号（安全处理越界）
+     */
+    fun getLineForOffset(text: String, offset: Int): Int {
+        val layout = getLayout(text)
+        val safeOffset = offset.coerceIn(0, text.length)
+        if (layout.lineCount == 0) return 0
+        return layout.getLineForOffset(safeOffset).coerceIn(0, layout.lineCount - 1)
+    }
+
+    /**
+     * 根据行号和 x 坐标获取 offset（安全处理越界）
+     */
+    fun getOffsetForHorizontal(text: String, line: Int, x: Float): Int {
+        val layout = getLayout(text)
+        if (layout.lineCount == 0) return 0
+        val safeLine = line.coerceIn(0, layout.lineCount - 1)
+        return layout.getOffsetForHorizontal(safeLine, x).coerceIn(0, text.length)
+    }
+
+    /**
      * 获取指定行的信息
      */
     fun getLineInfo(text: String, line: Int): SujianLineInfo? {
@@ -277,12 +297,19 @@ class SujianEditorLayout(
             builder.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
         }
 
-        // 首行缩进：使用 LeadingMarginSpan.Standard
+        // 首行缩进：对每个段落独立应用 LeadingMarginSpan.Standard(indentPx, 0)
+        // 空段落也应用缩进，确保换行后的空行首行也有缩进
         if (firstLineIndentPx > 0f && text.isNotEmpty()) {
-            val span = android.text.style.LeadingMarginSpan.Standard(firstLineIndentPx.toInt())
+            val indentPx = firstLineIndentPx.toInt()
             val spannedString = android.text.SpannableString(text)
-            val firstLineEnd = text.indexOf('\n').let { if (it < 0) text.length else it }
-            spannedString.setSpan(span, 0, firstLineEnd, android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE)
+            var start = 0
+            while (start <= text.length) {
+                val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
+                val span = android.text.style.LeadingMarginSpan.Standard(indentPx, 0)
+                spannedString.setSpan(span, start, end.coerceAtLeast(start), android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE)
+                start = end + 1
+                if (end == text.length) break
+            }
             builder.setText(spannedString)
         }
 

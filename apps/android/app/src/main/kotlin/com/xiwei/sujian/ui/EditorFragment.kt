@@ -300,6 +300,19 @@ class EditorFragment : Fragment() {
                 }
             })
             DiagnosticsLogger.d("SujianEditor", "AnimationEventProvider injected for SujianEditorView")
+
+            // 注入 Core 视觉事务提供者（Phase 2）
+            sujianEditorView.setVisualTransactionProvider(VisualTransactionProvider { oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs ->
+                try {
+                    when (val result = animBridge.editorVisualTransaction(oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs)) {
+                        is com.xiwei.sujian.data.BridgeResult.Success -> result.data
+                        else -> null
+                    }
+                } catch (_: Exception) {
+                    null
+                }
+            })
+            DiagnosticsLogger.d("SujianEditor", "VisualTransactionProvider injected for SujianEditorView")
         } catch (e: Exception) {
             DiagnosticsLogger.w("SujianEditor", "Failed to inject AnimationEventProvider for SujianEditorView", e)
         }

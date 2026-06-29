@@ -13,6 +13,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.model.SujianCursorRectData
+import com.xiwei.sujian.model.SujianEditCauseData
+import com.xiwei.sujian.model.SujianVisualEditContext
 
 /**
  * SujianEditorView — Android 自研写作区核心 View（唯一主路径）
@@ -64,17 +67,27 @@ class SujianEditorView @JvmOverloads constructor(
     val buffer = SujianEditorBuffer()
     val layoutEngine = SujianEditorLayout(textPaint)
     val renderer = SujianEditorRenderer(textPaint, resources.displayMetrics.density)
-    val animationController = SujianAnimationController(buffer, layoutEngine, renderer)
-    val imeController = SujianImeController(this, buffer, layoutEngine, renderer, animationController)
     val cursorController = SujianCursorController(this, buffer, renderer)
+    val animationController = SujianAnimationController(buffer, layoutEngine, renderer, cursorController)
+    val imeController = SujianImeController(this, buffer, layoutEngine, renderer, animationController)
     val selectionController = SujianSelectionController(buffer, layoutEngine)
     val touchController = SujianTouchController(this, buffer, layoutEngine, selectionController, cursorController, animationController)
-    val clipboardController = SujianClipboardController(context, buffer, animationController, layoutEngine)
+    val clipboardController = SujianClipboardController(context, buffer, animationController, layoutEngine, this)
 
     // ── 设置缓存 ──
     private var lastFontSize: Float = textPaint.textSize
     private var lastLineSpacingMultiplier: Float = 1.0f
     private var lastFirstLineIndentPx: Float = 0f
+    private var autoIndentEnabled: Boolean = false
+    private var autoIndentWidthChars: Float = 0f
+
+    // ── Delete 场景复用 onBeforeDelete 已捕获的 oldCursorRect ──
+    // runVisualEdit(Delete) 时优先使用此字段，避免重复查询 layout
+    internal var preDeleteOldCursorRect: SujianCursorRectData? = null
+
+    // ── 方向键上下移动时记忆的 X 坐标 ──
+    // 用于上下移动时保持水平位置不变
+    private var rememberedCursorX: Float? = null
 
     // ── 内容变更监听 ──
     var onContentChanged: ((String) -> Unit)? = null
@@ -85,8 +98,8 @@ class SujianEditorView @JvmOverloads constructor(
         buffer.onTextChanged = { result ->
             // 通知布局引擎文本已变
             layoutEngine.invalidate()
-            // 通知动画控制器处理事件
-            animationController.handleAnimationEvents(result.animationEvents, result.cause)
+            // 动画分发已迁移到 runVisualEdit → animationController.handleVisualEdit()
+            // onTextChanged 不再分发动画
             // 更新光标位置
             val cursorRect = layoutEngine.getCursorRect(result.newText, buffer.selection.head)
             cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, true)
@@ -142,6 +155,68 @@ class SujianEditorView @JvmOverloads constructor(
         animationEventProvider = provider
     }
 
+    // ── 视觉事务提供者（Phase 2） ──
+    internal var visualTransactionProvider: com.xiwei.sujian.ui.VisualTransactionProvider? = null
+
+    /**
+     * 注入 Core 视觉事务提供者（由 EditorFragment 调用）
+     */
+    fun setVisualTransactionProvider(provider: com.xiwei.sujian.ui.VisualTransactionProvider) {
+        visualTransactionProvider = provider
+    }
+
+    /**
+     * 视觉事务编辑包装器。
+     *
+     * 步骤：
+     * 1. 捕获 oldCursorRect（Delete 场景复用 onBeforeDelete 已捕获的）
+     * 2. 执行 edit() lambda
+     * 3. 捕获 newCursorRect
+     * 4. 分发动画 animationController.handleVisualEdit(context)
+     *
+     * @param cause 编辑原因
+     * @param edit 实际编辑操作（修改 buffer）
+     * @return edit lambda 的返回值
+     */
+    inline fun <T> runVisualEdit(cause: SujianEditCauseData, edit: () -> T): T {
+        // 步骤 1：捕获 oldCursorRect
+        // Delete 场景复用 onBeforeDelete 已捕获的 preDeleteOldCursorRect
+        val oldCursorRect: SujianCursorRectData? = if (cause == SujianEditCauseData.Delete) {
+            preDeleteOldCursorRect?.also { preDeleteOldCursorRect = null }
+        } else {
+            val text = buffer.text
+            if (text.isNotEmpty()) {
+                val cr = layoutEngine.getCursorRect(text, buffer.selection.head)
+                SujianCursorRectData(cr.x.toDouble(), cr.top.toDouble(), cr.bottom.toDouble(), cr.baselineY.toDouble())
+            } else {
+                null
+            }
+        }
+
+        // 步骤 2：执行编辑
+        val result = edit()
+
+        // 步骤 3：捕获 newCursorRect
+        val newCursorRect: SujianCursorRectData? = try {
+            val newText = buffer.text
+            if (newText.isNotEmpty()) {
+                val cr = layoutEngine.getCursorRect(newText, buffer.selection.head)
+                SujianCursorRectData(cr.x.toDouble(), cr.top.toDouble(), cr.bottom.toDouble(), cr.baselineY.toDouble())
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            DiagnosticsLogger.d(TAG, "Failed to capture newCursorRect: ${e.message}")
+            null
+        }
+
+        // 步骤 4：分发动画
+        val context = SujianVisualEditContext(oldCursorRect, newCursorRect, cause)
+        animationController.handleVisualEdit(context, this)
+
+        return result
+    }
+
     // ── 公共 API ──
 
     /**
@@ -167,11 +242,27 @@ class SujianEditorView @JvmOverloads constructor(
         val sizePx = sizeSp * resources.displayMetrics.scaledDensity
         if (lastFontSize != sizePx) {
             lastFontSize = sizePx
-            textPaint.textSize = sizePx
-            // 字号变化时：清动画、snap 光标
+            // 字号变化时：清动画、清 hidden range、snap 光标
+            animationController.tick() // 先 tick 确保动画状态一致
             renderer.clearAnimations()
+            renderer.setAnimatedInsertRange(null)
+            textPaint.textSize = sizePx
+            // 重算首行缩进像素值（字号变化后字符宽度变了）
+            if (autoIndentEnabled && autoIndentWidthChars > 0) {
+                val newIndentPx = textPaint.measureText("中") * autoIndentWidthChars
+                lastFirstLineIndentPx = newIndentPx
+            }
+            // 更新 layout 参数
+            layoutEngine.updateParams(
+                width = width - paddingLeft - paddingRight,
+                spacingMultiplier = lastLineSpacingMultiplier,
+                spacingExtra = 0f,
+                firstLineIndentPx = lastFirstLineIndentPx
+            )
             cursorController.onFontSizeChanged()
-            layoutEngine.invalidate()
+            // 重算光标位置并 snap
+            val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
+            cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
             invalidate()
         }
     }
@@ -188,6 +279,9 @@ class SujianEditorView @JvmOverloads constructor(
                 spacingExtra = 0f,
                 firstLineIndentPx = lastFirstLineIndentPx
             )
+            // 重算光标位置并 snap
+            val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
+            cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
             invalidate()
         }
     }
@@ -204,6 +298,9 @@ class SujianEditorView @JvmOverloads constructor(
                 spacingExtra = 0f,
                 firstLineIndentPx = px
             )
+            // 重算光标位置并 snap
+            val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
+            cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
             invalidate()
         }
     }
@@ -217,9 +314,10 @@ class SujianEditorView @JvmOverloads constructor(
         animationController.animationDurationMs = durationMs
         buffer.maxAnimatedChars = 8
         buffer.animationDurationMs = durationMs
-        // 关闭 typingAnimation 时清除 hidden range
+        // 关闭 typingAnimation 时清除 hidden range 和动画
         if (!enabled && wasEnabled) {
             renderer.clearAnimations()
+            renderer.setAnimatedInsertRange(null)
         }
     }
 
@@ -229,12 +327,19 @@ class SujianEditorView @JvmOverloads constructor(
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long = 80L) {
         cursorController.setSmoothCursorEnabled(enabled, durationMs)
         renderer.smoothCursorEnabled = enabled
+        // 关闭 smoothCursor 时恢复静态光标位置
+        if (!enabled) {
+            val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
+            cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
+        }
     }
 
     /**
      * 设置自动缩进
      */
     fun setAutoIndent(enabled: Boolean, widthChars: Float) {
+        autoIndentEnabled = enabled
+        autoIndentWidthChars = widthChars
         val indentPx = if (enabled && widthChars > 0) {
             textPaint.measureText("中") * widthChars
         } else {
@@ -322,6 +427,164 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    // ── 方向键处理 ──
+
+    /**
+     * 获取 text 中 offset 前一个 grapheme boundary 的位置。
+     * 使用 android.icu.text.BreakIterator.getCharacterInstance() 确保正确处理
+     * surrogate pair、combining mark、ZWJ emoji 等复杂 grapheme。
+     */
+    fun prevGraphemeBoundary(text: String, offset: Int): Int {
+        if (offset <= 0) return 0
+        val bi = android.icu.text.BreakIterator.getCharacterInstance()
+        bi.setText(text)
+        return bi.preceding(offset.coerceIn(0, text.length)).coerceAtLeast(0)
+    }
+
+    /**
+     * 获取 text 中 offset 后一个 grapheme boundary 的位置。
+     * 使用 android.icu.text.BreakIterator.getCharacterInstance() 确保正确处理
+     * surrogate pair、combining mark、ZWJ emoji 等复杂 grapheme。
+     */
+    fun nextGraphemeBoundary(text: String, offset: Int): Int {
+        if (offset >= text.length) return text.length
+        val bi = android.icu.text.BreakIterator.getCharacterInstance()
+        bi.setText(text)
+        return bi.following(offset.coerceIn(0, text.length)).coerceAtMost(text.length)
+    }
+
+    /**
+     * 方向键移动后更新光标位置和选区。
+     * 不触发 runVisualEdit（方向键不改变 buffer 内容）。
+     */
+    private fun updateCursorAfterMove(newOffset: Int, extendSelection: Boolean) {
+        val clampedOffset = newOffset.coerceIn(0, buffer.text.length)
+        if (extendSelection) {
+            // Shift+方向键：扩展选区，anchor 不变，head 移动
+            buffer.setSelection(buffer.selection.anchor, clampedOffset)
+        } else {
+            // 无 Shift：如果有选区，先折叠到 head 方向
+            if (!buffer.selection.isCollapsed) {
+                // 折叠到移动方向（左/上折叠到 start，右/下折叠到 end）
+                // 但这里统一折叠到 newOffset
+                buffer.setSelection(clampedOffset, clampedOffset)
+            } else {
+                buffer.setSelection(clampedOffset, clampedOffset)
+            }
+        }
+        // 更新光标视觉位置
+        val text = buffer.text
+        val cursorRect = layoutEngine.getCursorRect(text, buffer.selection.head)
+        cursorController.requestForceSnap()
+        cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
+        cursorController.onSelectionChanged()
+        touchController.ensureCursorVisible()
+        imeController.updateSelection()
+        invalidate()
+    }
+
+    private fun handleDpadLeft(extendSelection: Boolean) {
+        val text = buffer.text
+        val currentHead = buffer.selection.head
+
+        // 无 Shift 且有选区时：折叠到选区 start
+        if (!extendSelection && !buffer.selection.isCollapsed) {
+            updateCursorAfterMove(buffer.selection.start, false)
+            return
+        }
+
+        val newOffset = prevGraphemeBoundary(text, currentHead)
+        // 清除上下移动的 X 记忆
+        rememberedCursorX = null
+        updateCursorAfterMove(newOffset, extendSelection)
+    }
+
+    private fun handleDpadRight(extendSelection: Boolean) {
+        val text = buffer.text
+        val currentHead = buffer.selection.head
+
+        // 无 Shift 且有选区时：折叠到选区 end
+        if (!extendSelection && !buffer.selection.isCollapsed) {
+            updateCursorAfterMove(buffer.selection.end, false)
+            return
+        }
+
+        val newOffset = nextGraphemeBoundary(text, currentHead)
+        // 清除上下移动的 X 记忆
+        rememberedCursorX = null
+        updateCursorAfterMove(newOffset, extendSelection)
+    }
+
+    private fun handleDpadUp(extendSelection: Boolean) {
+        val text = buffer.text
+        if (text.isEmpty()) return
+
+        val currentHead = buffer.selection.head
+
+        // 无 Shift 且有选区时：折叠到选区 start 所在行
+        if (!extendSelection && !buffer.selection.isCollapsed) {
+            val startLine = layoutEngine.getLineForOffset(text, buffer.selection.start)
+            val currentLine = layoutEngine.getLineForOffset(text, currentHead)
+            if (startLine < currentLine) {
+                // 选区跨越多行，折叠到选区 start
+                updateCursorAfterMove(buffer.selection.start, false)
+                return
+            }
+        }
+
+        val currentLine = layoutEngine.getLineForOffset(text, currentHead)
+        if (currentLine <= 0) {
+            // 已在第一行，移动到文本开头
+            rememberedCursorX = null
+            updateCursorAfterMove(0, extendSelection)
+            return
+        }
+
+        // 记忆或使用 X 坐标
+        val targetX = rememberedCursorX ?: layoutEngine.getCursorX(text, currentHead)
+        rememberedCursorX = targetX
+
+        val targetLine = currentLine - 1
+        val newOffset = layoutEngine.getOffsetForHorizontal(text, targetLine, targetX)
+        updateCursorAfterMove(newOffset, extendSelection)
+    }
+
+    private fun handleDpadDown(extendSelection: Boolean) {
+        val text = buffer.text
+        if (text.isEmpty()) return
+
+        val currentHead = buffer.selection.head
+
+        // 无 Shift 且有选区时：折叠到选区 end 所在行
+        if (!extendSelection && !buffer.selection.isCollapsed) {
+            val endLine = layoutEngine.getLineForOffset(text, buffer.selection.end)
+            val currentLine = layoutEngine.getLineForOffset(text, currentHead)
+            val lastLine = layoutEngine.getLineCount(text) - 1
+            if (endLine > currentLine) {
+                // 选区跨越多行，折叠到选区 end
+                updateCursorAfterMove(buffer.selection.end, false)
+                return
+            }
+        }
+
+        val currentLine = layoutEngine.getLineForOffset(text, currentHead)
+        val lastLine = layoutEngine.getLineCount(text) - 1
+        if (currentLine >= lastLine) {
+            // 已在最后一行，移动到文本末尾
+            rememberedCursorX = null
+            updateCursorAfterMove(text.length, extendSelection)
+            return
+        }
+
+        // 记忆或使用 X 坐标
+        val targetX = rememberedCursorX ?: layoutEngine.getCursorX(text, currentHead)
+        rememberedCursorX = targetX
+
+        val targetLine = currentLine + 1
+        val newOffset = layoutEngine.getOffsetForHorizontal(text, targetLine, targetX)
+        updateCursorAfterMove(newOffset, extendSelection)
+    }
+
     // ── IME ──
 
     override fun onCheckIsTextEditor(): Boolean = true
@@ -344,43 +607,62 @@ class SujianEditorView @JvmOverloads constructor(
             KeyEvent.KEYCODE_DEL -> {
                 if (buffer.selection.isCollapsed) {
                     imeController.onBeforeDelete(1, 0)
-                    val result = buffer.deleteSurrounding(1, 0)
-                    imeController.onEditResult(result)
-                    imeController.updateSelection()
+                    runVisualEdit(SujianEditCauseData.Delete) {
+                        val result = buffer.deleteSurrounding(1, 0)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
                 } else {
                     imeController.onBeforeDeleteSelection()
-                    val result = buffer.commitText("", SujianEditCause.Delete)
-                    imeController.onEditResult(result)
-                    imeController.updateSelection()
+                    runVisualEdit(SujianEditCauseData.Delete) {
+                        val result = buffer.commitText("", SujianEditCause.Delete)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
                 }
                 return true
             }
             KeyEvent.KEYCODE_FORWARD_DEL -> {
                 if (buffer.selection.isCollapsed) {
                     imeController.onBeforeDelete(0, 1)
-                    val result = buffer.deleteSurrounding(0, 1)
-                    imeController.onEditResult(result)
-                    imeController.updateSelection()
+                    runVisualEdit(SujianEditCauseData.Delete) {
+                        val result = buffer.deleteSurrounding(0, 1)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
                 } else {
                     imeController.onBeforeDeleteSelection()
-                    val result = buffer.commitText("", SujianEditCause.Delete)
+                    runVisualEdit(SujianEditCauseData.Delete) {
+                        val result = buffer.commitText("", SujianEditCause.Delete)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
+                }
+                return true
+            }
+            KeyEvent.KEYCODE_ENTER -> {
+                runVisualEdit(SujianEditCauseData.Typing) {
+                    val result = buffer.commitText("\n", SujianEditCause.Typing)
                     imeController.onEditResult(result)
                     imeController.updateSelection()
                 }
                 return true
             }
-            KeyEvent.KEYCODE_ENTER -> {
-                val result = buffer.commitText("\n", SujianEditCause.Typing)
-                imeController.onEditResult(result)
-                imeController.updateSelection()
+            KeyEvent.KEYCODE_DPAD_LEFT -> {
+                handleDpadLeft(event.isShiftPressed)
                 return true
             }
-            KeyEvent.KEYCODE_DPAD_LEFT,
-            KeyEvent.KEYCODE_DPAD_RIGHT,
-            KeyEvent.KEYCODE_DPAD_UP,
+            KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                handleDpadRight(event.isShiftPressed)
+                return true
+            }
+            KeyEvent.KEYCODE_DPAD_UP -> {
+                handleDpadUp(event.isShiftPressed)
+                return true
+            }
             KeyEvent.KEYCODE_DPAD_DOWN -> {
-                // TODO: 光标移动
-                return super.onKeyDown(keyCode, event)
+                handleDpadDown(event.isShiftPressed)
+                return true
             }
         }
         return super.onKeyDown(keyCode, event)

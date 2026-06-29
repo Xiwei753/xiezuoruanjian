@@ -133,6 +133,10 @@ pub struct GlyphRect {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[deprecated(
+    since = "0.12.0",
+    note = "Use EditorVisualTransaction instead. This will be removed in a future version."
+)]
 pub struct EditorAnimationEvent {
     pub id: u64,
     pub kind: EditorAnimationKind,
@@ -171,6 +175,14 @@ pub enum VisualCoordinateMode {
 ///
 /// coordinate_mode 固定为 Baseline：所有 y 坐标使用 baselineY，
 /// 不使用 top+height 拼接 baseline。
+///
+/// 这是 `EditorAnimationEvent` 的替代方案（Phase 1 视觉事务收敛）。
+/// 旧 API `animation_events()` 返回多个事件（Insert + Cursor 等），
+/// 新 API `visual_transaction()` 返回单个统一事务，平台层自行决定
+/// 如何渲染动画和光标移动。
+///
+/// 坐标字段（deleted_glyph_rects, insert_glyph_rects, old_cursor_rect,
+/// new_cursor_rect）由平台层填充，Core 默认为 None。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorVisualTransaction {
@@ -266,6 +278,11 @@ impl EditorEngine {
         }
     }
 
+    #[deprecated(
+        since = "0.12.0",
+        note = "Use visual_transaction() instead. This will be removed in a future version."
+    )]
+    #[allow(deprecated)]
     pub fn animation_events(
         &mut self,
         transaction: &EditorTransaction,
@@ -450,6 +467,7 @@ fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

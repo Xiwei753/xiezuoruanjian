@@ -88,6 +88,8 @@ class SujianImeController(
     /**
      * 删除前记录 glyph rect（委托给 AnimationController）
      * 返回 animationId，用于精确匹配删除动画
+     *
+     * 同时设置 SujianEditorView.preDeleteOldCursorRect，供 runVisualEdit(Delete) 复用
      */
     fun onBeforeDelete(beforeLength: Int, afterLength: Int): ULong {
         val text = buffer.text
@@ -101,6 +103,18 @@ class SujianImeController(
             val deletedGlyphRects = layout.getGlyphRects(text, deleteStart, deleteEnd)
             val oldCursorRect = layout.getCursorRect(text, cursorPos)
             val deletedText = text.substring(deleteStart, deleteEnd)
+
+            // 设置 preDeleteOldCursorRect 供 runVisualEdit 复用
+            val editorView = view as? SujianEditorView
+            if (editorView != null) {
+                editorView.preDeleteOldCursorRect = com.xiwei.sujian.model.SujianCursorRectData(
+                    oldCursorRect.x.toDouble(),
+                    oldCursorRect.top.toDouble(),
+                    oldCursorRect.bottom.toDouble(),
+                    oldCursorRect.baselineY.toDouble()
+                )
+            }
+
             return animationController.recordDeleteSnapshot(deletedText, deletedGlyphRects, oldCursorRect)
         }
         return 0u
@@ -109,6 +123,8 @@ class SujianImeController(
     /**
      * 选区删除前记录 glyph rect（委托给 AnimationController）
      * 用于有选区时的删除操作
+     *
+     * 同时设置 SujianEditorView.preDeleteOldCursorRect，供 runVisualEdit 复用
      */
     fun onBeforeDeleteSelection(): ULong {
         val text = buffer.text
@@ -120,6 +136,18 @@ class SujianImeController(
             val deletedGlyphRects = layout.getGlyphRects(text, selStart, selEnd)
             val oldCursorRect = layout.getCursorRect(text, buffer.selection.head)
             val deletedText = text.substring(selStart, selEnd)
+
+            // 设置 preDeleteOldCursorRect 供 runVisualEdit 复用
+            val editorView = view as? SujianEditorView
+            if (editorView != null) {
+                editorView.preDeleteOldCursorRect = com.xiwei.sujian.model.SujianCursorRectData(
+                    oldCursorRect.x.toDouble(),
+                    oldCursorRect.top.toDouble(),
+                    oldCursorRect.bottom.toDouble(),
+                    oldCursorRect.baselineY.toDouble()
+                )
+            }
+
             return animationController.recordDeleteSnapshot(deletedText, deletedGlyphRects, oldCursorRect)
         }
         return 0u

@@ -4,9 +4,11 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * 自研写作区 Buffer UTF-8/UTF-16 偏移转换测试
+ * 自研写作区 Buffer UTF-8/UTF-16 偏移转换测试 + clampToCharBoundary 测试
  *
  * 验证 Core 动画事件（UTF-8 byte offset）与 Android Layout（UTF-16 offset）之间的转换正确性。
+ * 验证 clampToCharBoundary 对 surrogate pair 的安全处理。
+ *
  * 这对真吐字/吞字动画至关重要，因为：
  * - Core 返回的 rangeStart/oldCursorIndex/newCursorIndex 是 UTF-8 byte offset
  * - Android Layout 的 getGlyphRects/getCursorRect 需要 UTF-16 offset
@@ -14,39 +16,18 @@ import org.junit.Test
  */
 class SujianBufferOffsetTest {
 
-    // ── 模拟 SujianEditorBuffer 的 UTF-8/UTF-16 转换 ──
-    // 这些方法与 SujianEditorBuffer 中的实现相同
+    // ── 使用 SujianEditorBuffer 的静态方法 ──
 
     private fun utf16ToUtf8(text: String, utf16Offset: Int): Int {
-        var byteOffset = 0
-        var charIdx = 0
-        for (char in text) {
-            if (charIdx >= utf16Offset) break
-            byteOffset += when {
-                char.code <= 0x7F -> 1
-                char.code <= 0x7FF -> 2
-                char.code <= 0xFFFF -> 3
-                else -> 4
-            }
-            charIdx++
-        }
-        return byteOffset
+        return SujianEditorBuffer.utf16ToUtf8(text, utf16Offset)
     }
 
     private fun utf8ToUtf16(text: String, utf8Offset: Int): Int {
-        var byteCount = 0
-        var charIdx = 0
-        for (char in text) {
-            if (byteCount >= utf8Offset) break
-            byteCount += when {
-                char.code <= 0x7F -> 1
-                char.code <= 0x7FF -> 2
-                char.code <= 0xFFFF -> 3
-                else -> 4
-            }
-            charIdx++
-        }
-        return charIdx
+        return SujianEditorBuffer.utf8ToUtf16(text, utf8Offset)
+    }
+
+    private fun clampToCharBoundary(text: String, offset: Int): Int {
+        return SujianEditorBuffer.clampToCharBoundary(text, offset)
     }
 
     // ── 插入动画场景 ──
@@ -96,7 +77,6 @@ class SujianBufferOffsetTest {
         val rangeStartUtf16 = utf8ToUtf16(newText, rangeStartUtf8)
         assertEquals(1, rangeStartUtf16) // emoji 在 UTF-16 offset 1
         // emoji 在 UTF-16 中占 2 code units，animatedInsertRange = IntRange(1, 3)
-        // 注意：event.text.length 在 Kotlin 中是 UTF-16 code units 数量
         val emojiUtf16Length = "😀".length // = 2
         assertEquals(IntRange(1, 3), IntRange(rangeStartUtf16, rangeStartUtf16 + emojiUtf16Length))
     }
@@ -134,37 +114,25 @@ class SujianBufferOffsetTest {
     }
 
     // ── oldCursorRect 计算 ──
-    // 验证 rangeStartUtf16 作为 oldCursorRect 的位置是正确的
 
     @Test
     fun insertAnimation_rangeStartEqualsOldCursor_simpleInsert() {
-        // 简单插入：oldCursor 在插入点，rangeStart = 插入点
-        // 旧文本 "ab"，光标在 1，插入 "X" → 新文本 "aXb"
-        // Core 返回 rangeStart = 1 (UTF-8)
         val newText = "aXb"
         val rangeStartUtf8 = 1
         val rangeStartUtf16 = utf8ToUtf16(newText, rangeStartUtf8)
-        // 插入前光标在 offset 1，新文本中 offset 1 的位置对应旧光标位置
-        // 因为 offset 1 之前的文本 "a" 没有变
         assertEquals(1, rangeStartUtf16)
     }
 
     @Test
     fun insertAnimation_rangeStartEqualsOldCursor_chineseInsert() {
-        // 旧文本 "你"，光标在 1，插入 "好" → 新文本 "你好"
-        // Core 返回 rangeStart = 3 (UTF-8: "你" = 3 bytes)
         val newText = "你好"
         val rangeStartUtf8 = 3
         val rangeStartUtf16 = utf8ToUtf16(newText, rangeStartUtf8)
-        // 插入前光标在 UTF-16 offset 1，新文本中 UTF-16 offset 1 对应旧光标位置
         assertEquals(1, rangeStartUtf16)
     }
 
     @Test
     fun insertAnimation_rangeStartEqualsOldCursor_afterDeleteSelection() {
-        // 选区删除后插入：旧文本 "abcde"，选中 "bcd" 删除，然后插入 "X" → "aXe"
-        // 删除后文本 "ae"，光标在 1，插入 "X" → "aXe"
-        // Core 返回 rangeStart = 1 (UTF-8)
         val newText = "aXe"
         val rangeStartUtf8 = 1
         val rangeStartUtf16 = utf8ToUtf16(newText, rangeStartUtf8)
@@ -182,12 +150,8 @@ class SujianBufferOffsetTest {
     @Test
     fun animatedInsertRange_setOnInsert_clearedOnFinish() {
         var animatedInsertRange: IntRange? = null
-
-        // 开始插入动画
         animatedInsertRange = IntRange(1, 3)
         assertEquals(IntRange(1, 3), animatedInsertRange)
-
-        // 动画结束
         animatedInsertRange = null
         assertNull(animatedInsertRange)
     }
@@ -195,8 +159,6 @@ class SujianBufferOffsetTest {
     @Test
     fun animatedInsertRange_clearedOnScroll() {
         var animatedInsertRange: IntRange? = IntRange(1, 3)
-
-        // 开始滚动
         animatedInsertRange = null
         assertNull(animatedInsertRange)
     }
@@ -204,24 +166,199 @@ class SujianBufferOffsetTest {
     @Test
     fun animatedInsertRange_clearedOnComposing() {
         var animatedInsertRange: IntRange? = IntRange(1, 3)
-
-        // composing 开始
         animatedInsertRange = null
         assertNull(animatedInsertRange)
     }
 
-    // ── 连续插入的 animatedInsertRange ──
-
     @Test
     fun animatedInsertRange_replacedOnNewInsert() {
         var animatedInsertRange: IntRange? = null
-
-        // 第一次插入
         animatedInsertRange = IntRange(1, 2)
         assertEquals(IntRange(1, 2), animatedInsertRange)
-
-        // 第二次插入（新的 range 覆盖旧的）
         animatedInsertRange = IntRange(2, 3)
         assertEquals(IntRange(2, 3), animatedInsertRange)
+    }
+
+    // ── UTF-16 → UTF-8 转换（静态方法）──
+
+    @Test
+    fun utf16ToUtf8_ascii() {
+        assertEquals(0, utf16ToUtf8("abc", 0))
+        assertEquals(1, utf16ToUtf8("abc", 1))
+        assertEquals(3, utf16ToUtf8("abc", 3))
+    }
+
+    @Test
+    fun utf16ToUtf8_chinese() {
+        // "你好" = 6 UTF-8 bytes
+        assertEquals(0, utf16ToUtf8("你好", 0))
+        assertEquals(3, utf16ToUtf8("你好", 1))
+        assertEquals(6, utf16ToUtf8("你好", 2))
+    }
+
+    @Test
+    fun utf16ToUtf8_emoji() {
+        // "😀" = 4 UTF-8 bytes, 2 UTF-16 code units
+        assertEquals(0, utf16ToUtf8("😀", 0))
+        assertEquals(4, utf16ToUtf8("😀", 2)) // emoji 完整后
+    }
+
+    @Test
+    fun utf16ToUtf8_mixed() {
+        // "a你😀b" = 1+3+4+1 = 9 UTF-8 bytes
+        assertEquals(0, utf16ToUtf8("a你😀b", 0))
+        assertEquals(1, utf16ToUtf8("a你😀b", 1))  // after 'a'
+        assertEquals(4, utf16ToUtf8("a你😀b", 2))  // after '你'
+        assertEquals(8, utf16ToUtf8("a你😀b", 4))  // after emoji (2 UTF-16 units)
+        assertEquals(9, utf16ToUtf8("a你😀b", 5))  // after 'b'
+    }
+
+    @Test
+    fun utf16ToUtf8_outOfBounds() {
+        assertEquals(3, utf16ToUtf8("abc", 10)) // 超出范围，返回全文 UTF-8 长度
+        assertEquals(0, utf16ToUtf8("abc", -1))  // 负数，返回 0
+    }
+
+    // ── UTF-8 → UTF-16 转换（静态方法）──
+
+    @Test
+    fun utf8ToUtf16_ascii() {
+        assertEquals(0, utf8ToUtf16("abc", 0))
+        assertEquals(1, utf8ToUtf16("abc", 1))
+        assertEquals(3, utf8ToUtf16("abc", 3))
+    }
+
+    @Test
+    fun utf8ToUtf16_chinese() {
+        assertEquals(0, utf8ToUtf16("你好", 0))
+        assertEquals(1, utf8ToUtf16("你好", 3))
+        assertEquals(2, utf8ToUtf16("你好", 6))
+    }
+
+    @Test
+    fun utf8ToUtf16_emoji() {
+        assertEquals(0, utf8ToUtf16("😀", 0))
+        assertEquals(2, utf8ToUtf16("😀", 4)) // emoji 完整后
+    }
+
+    @Test
+    fun utf8ToUtf16_midCodePoint_stopsBefore() {
+        // UTF-8 offset 落在 code point 中间时，停在当前 code point 之前
+        // "你" = 3 UTF-8 bytes，offset 1 和 2 都在 "你" 中间
+        assertEquals(0, utf8ToUtf16("你好", 1)) // "你" 还没结束
+        assertEquals(0, utf8ToUtf16("你好", 2)) // "你" 还没结束
+        assertEquals(1, utf8ToUtf16("你好", 3)) // "你" 结束
+    }
+
+    @Test
+    fun utf8ToUtf16_emoji_midCodePoint() {
+        // "😀" = 4 UTF-8 bytes
+        assertEquals(0, utf8ToUtf16("😀", 1)) // emoji 还没结束
+        assertEquals(0, utf8ToUtf16("😀", 2)) // emoji 还没结束
+        assertEquals(0, utf8ToUtf16("😀", 3)) // emoji 还没结束
+        assertEquals(2, utf8ToUtf16("😀", 4)) // emoji 结束
+    }
+
+    @Test
+    fun utf8ToUtf16_outOfBounds() {
+        assertEquals(3, utf8ToUtf16("abc", 100)) // 超出范围，返回文本长度
+        assertEquals(0, utf8ToUtf16("abc", -1))   // 负数，返回 0
+    }
+
+    // ── clampToCharBoundary ──
+
+    @Test
+    fun clampToCharBoundary_ascii_noChange() {
+        assertEquals(0, clampToCharBoundary("abc", 0))
+        assertEquals(1, clampToCharBoundary("abc", 1))
+        assertEquals(2, clampToCharBoundary("abc", 2))
+        assertEquals(3, clampToCharBoundary("abc", 3))
+    }
+
+    @Test
+    fun clampToCharBoundary_chinese_noChange() {
+        assertEquals(0, clampToCharBoundary("你好", 0))
+        assertEquals(1, clampToCharBoundary("你好", 1))
+        assertEquals(2, clampToCharBoundary("你好", 2))
+    }
+
+    @Test
+    fun clampToCharBoundary_surrogatePair_clampsBack() {
+        // "a😀b" → indices: 0='a', 1=high surrogate, 2=low surrogate, 3='b'
+        val text = "a😀b"
+        // offset 2 指向低代理，应该回退到 1（高代理）
+        assertEquals(1, clampToCharBoundary(text, 2))
+        // offset 1 指向高代理，不需要回退
+        assertEquals(1, clampToCharBoundary(text, 1))
+        // offset 3 指向 'b'，不需要回退
+        assertEquals(3, clampToCharBoundary(text, 3))
+    }
+
+    @Test
+    fun clampToCharBoundary_multipleEmoji() {
+        // "😀😀" → indices: 0=high, 1=low, 2=high, 3=low
+        val text = "😀😀"
+        // offset 1 指向第一个 emoji 的低代理
+        assertEquals(0, clampToCharBoundary(text, 1))
+        // offset 3 指向第二个 emoji 的低代理
+        assertEquals(2, clampToCharBoundary(text, 3))
+    }
+
+    @Test
+    fun clampToCharBoundary_boundaryConditions() {
+        assertEquals(0, clampToCharBoundary("abc", 0))
+        assertEquals(0, clampToCharBoundary("abc", -1))
+        assertEquals(3, clampToCharBoundary("abc", 3))
+        assertEquals(3, clampToCharBoundary("abc", 10))
+    }
+
+    @Test
+    fun clampToCharBoundary_emptyString() {
+        assertEquals(0, clampToCharBoundary("", 0))
+        assertEquals(0, clampToCharBoundary("", 1))
+    }
+
+    // ── 往返转换验证 ──
+
+    @Test
+    fun roundTrip_ascii() {
+        val text = "hello world"
+        for (i in 0..text.length) {
+            val utf8 = utf16ToUtf8(text, i)
+            val utf16 = utf8ToUtf16(text, utf8)
+            assertEquals("Round trip failed at offset $i", i, utf16)
+        }
+    }
+
+    @Test
+    fun roundTrip_chinese() {
+        val text = "你好世界"
+        for (i in 0..text.length) {
+            val utf8 = utf16ToUtf8(text, i)
+            val utf16 = utf8ToUtf16(text, utf8)
+            assertEquals("Round trip failed at offset $i", i, utf16)
+        }
+    }
+
+    @Test
+    fun roundTrip_mixed() {
+        val text = "a你b好c"
+        for (i in 0..text.length) {
+            val utf8 = utf16ToUtf8(text, i)
+            val utf16 = utf8ToUtf16(text, utf8)
+            assertEquals("Round trip failed at offset $i", i, utf16)
+        }
+    }
+
+    @Test
+    fun roundTrip_emoji() {
+        val text = "a😀b"
+        // 注意：emoji 在 UTF-16 中占 2 code units
+        val validOffsets = listOf(0, 1, 3, 4) // 0='a'前, 1='a'后/emoji前, 3=emoji后/'b'前, 4='b'后
+        for (i in validOffsets) {
+            val utf8 = utf16ToUtf8(text, i)
+            val utf16 = utf8ToUtf16(text, utf8)
+            assertEquals("Round trip failed at offset $i", i, utf16)
+        }
     }
 }

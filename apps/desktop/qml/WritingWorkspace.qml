@@ -896,7 +896,7 @@ Rectangle {
                     }
 
                     // EditorTypingAnimator removed — animation唯一主路径是 EditorAnimationOverlay
-                    // (见 EditorAnimationOverlay.qml，消费 animation_events_json 信号)
+                    // (见 EditorAnimationOverlay.qml，消费 visual_transaction_json 信号)
 
 
                 }

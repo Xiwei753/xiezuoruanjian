@@ -253,40 +253,89 @@ class SujianEditorBuffer {
 
     // ── UTF-8 转换辅助 ──
 
+    /**
+     * UTF-16 offset → UTF-8 byte offset（基于当前 buffer.text）
+     * 正确处理 surrogate pair：高/低代理各算 3 字节（BMP supplementary 按 4 字节算 code point）。
+     */
     fun utf16ToUtf8(utf16Offset: Int): Int {
-        var byteOffset = 0
-        var charIdx = 0
-        for (char in text) {
-            if (charIdx >= utf16Offset) break
-            byteOffset += char.toChar().let { c ->
-                when {
-                    c.code <= 0x7F -> 1
-                    c.code <= 0x7FF -> 2
-                    c.code <= 0xFFFF -> 3
-                    else -> 4
-                }
-            }
-            charIdx++
-        }
-        return byteOffset
+        return utf16ToUtf8(text, utf16Offset)
     }
 
+    /**
+     * UTF-8 byte offset → UTF-16 offset（基于当前 buffer.text）
+     */
     fun utf8ToUtf16(utf8Offset: Int): Int {
-        var byteCount = 0
-        var charIdx = 0
-        for (char in text) {
-            if (byteCount >= utf8Offset) break
-            byteCount += char.toChar().let { c ->
-                when {
-                    c.code <= 0x7F -> 1
-                    c.code <= 0x7FF -> 2
-                    c.code <= 0xFFFF -> 3
+        return utf8ToUtf16(text, utf8Offset)
+    }
+
+    companion object {
+        /**
+         * UTF-16 offset → UTF-8 byte offset（静态方法，接受 text 参数）
+         *
+         * 按 code point 遍历 text，累加每个 code point 的 UTF-8 字节数。
+         * 正确处理 surrogate pair：高代理+低代理作为一个 code point 计算。
+         */
+        @JvmStatic
+        fun utf16ToUtf8(text: String, utf16Offset: Int): Int {
+            var byteOffset = 0
+            var charIdx = 0
+            val safeOffset = utf16Offset.coerceIn(0, text.length)
+            while (charIdx < safeOffset) {
+                val codePoint = text.codePointAt(charIdx)
+                byteOffset += when {
+                    codePoint <= 0x7F -> 1
+                    codePoint <= 0x7FF -> 2
+                    codePoint <= 0xFFFF -> 3
                     else -> 4
                 }
+                charIdx += Character.charCount(codePoint)
             }
-            charIdx++
+            return byteOffset
         }
-        return charIdx
+
+        /**
+         * UTF-8 byte offset → UTF-16 offset（静态方法，接受 text 参数）
+         *
+         * 按 code point 遍历 text，累加 UTF-8 字节数，直到达到目标 byte offset。
+         * 返回对应的 UTF-16 offset（code unit 索引）。
+         * 如果 utf8Offset 落在某个 code point 的 UTF-8 序列中间，停在当前 code point 之前。
+         */
+        @JvmStatic
+        fun utf8ToUtf16(text: String, utf8Offset: Int): Int {
+            var byteCount = 0
+            var charIdx = 0
+            while (charIdx < text.length) {
+                if (byteCount >= utf8Offset) break
+                val codePoint = text.codePointAt(charIdx)
+                val utf8Len = when {
+                    codePoint <= 0x7F -> 1
+                    codePoint <= 0x7FF -> 2
+                    codePoint <= 0xFFFF -> 3
+                    else -> 4
+                }
+                if (byteCount + utf8Len > utf8Offset) break // 不拆分 code point
+                byteCount += utf8Len
+                charIdx += Character.charCount(codePoint)
+            }
+            return charIdx
+        }
+
+        /**
+         * 将 offset 钳位到合法的字符边界。
+         *
+         * 如果 offset 落在 surrogate pair 中间（低代理位置），
+         * 回退到高代理位置，确保 offset 对齐到 code point 边界。
+         */
+        @JvmStatic
+        fun clampToCharBoundary(text: String, offset: Int): Int {
+            if (offset <= 0) return 0
+            if (offset >= text.length) return text.length
+            // 如果 offset 指向低代理，回退到高代理
+            if (Character.isLowSurrogate(text[offset]) && offset > 0 && Character.isHighSurrogate(text[offset - 1])) {
+                return offset - 1
+            }
+            return offset
+        }
     }
 
     // ── 内部方法 ──

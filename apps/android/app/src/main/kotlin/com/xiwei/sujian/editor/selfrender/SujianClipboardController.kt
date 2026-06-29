@@ -3,6 +3,7 @@ package com.xiwei.sujian.editor.selfrender
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import com.xiwei.sujian.model.SujianEditCauseData
 
 /**
  * SujianClipboardController — 自研写作区剪贴板控制器
@@ -13,7 +14,8 @@ class SujianClipboardController(
     private val context: Context,
     private val buffer: SujianEditorBuffer,
     private val animationController: SujianAnimationController? = null,
-    private val layout: SujianEditorLayout? = null
+    private val layout: SujianEditorLayout? = null,
+    private val editorView: SujianEditorView? = null
 ) {
     private val clipboardManager: ClipboardManager by lazy {
         context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -44,10 +46,26 @@ class SujianClipboardController(
                 val deletedGlyphRects = layout.getGlyphRects(buffer.text, selStart, selEnd)
                 val oldCursorRect = layout.getCursorRect(buffer.text, buffer.selection.head)
                 animationController.recordDeleteSnapshot(selected, deletedGlyphRects, oldCursorRect)
+
+                // 设置 preDeleteOldCursorRect 供 runVisualEdit 复用
+                if (editorView != null) {
+                    editorView.preDeleteOldCursorRect = com.xiwei.sujian.model.SujianCursorRectData(
+                        oldCursorRect.x.toDouble(),
+                        oldCursorRect.top.toDouble(),
+                        oldCursorRect.bottom.toDouble(),
+                        oldCursorRect.baselineY.toDouble()
+                    )
+                }
             }
         }
-        // 删除选中文本
-        buffer.commitText("", SujianEditCause.Delete)
+        // 删除选中文本 — 使用 runVisualEdit 包装
+        if (editorView != null) {
+            editorView.runVisualEdit(SujianEditCauseData.Delete) {
+                buffer.commitText("", SujianEditCause.Delete)
+            }
+        } else {
+            buffer.commitText("", SujianEditCause.Delete)
+        }
         return true
     }
     
@@ -58,7 +76,14 @@ class SujianClipboardController(
         val clip = clipboardManager.primaryClip ?: return false
         if (clip.itemCount == 0) return false
         val pasteText = clip.getItemAt(0)?.text?.toString() ?: return false
-        buffer.commitText(pasteText, SujianEditCause.Paste)
+        // 使用 runVisualEdit 包装粘贴操作
+        if (editorView != null) {
+            editorView.runVisualEdit(SujianEditCauseData.Paste) {
+                buffer.commitText(pasteText, SujianEditCause.Paste)
+            }
+        } else {
+            buffer.commitText(pasteText, SujianEditCause.Paste)
+        }
         return true
     }
     

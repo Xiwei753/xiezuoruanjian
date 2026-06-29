@@ -35,8 +35,8 @@ use text_animation_state::TextAnimationState;
 
 pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
-    CursorRect, EditorAnimationEvent, EditorAnimationKind, EditorCursor, EditorEngine,
-    EditorSelection, EditorTransactionCause, GlyphRect,
+    CursorRect, EditorAnimationKind, EditorCursor, EditorEngine,
+    EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect,
 };
 
 cpp! {{
@@ -121,7 +121,7 @@ pub struct SujianEditorItem {
     coordinated_text_cursor_animation_enabled: qt_property!(bool; READ coordinated_text_cursor_animation_enabled WRITE set_coordinated_text_cursor_animation_enabled NOTIFY visual_settings_changed),
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
-    animation_events_json: qt_property!(QString; READ animation_events_json NOTIFY animation_events_changed),
+    visual_transaction_json: qt_property!(QString; READ visual_transaction_json NOTIFY visual_transaction_changed),
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
@@ -142,7 +142,7 @@ pub struct SujianEditorItem {
     transaction_created: qt_signal!(),
     cursor_rect_changed: qt_signal!(),
     explicit_clear_requested: qt_signal!(),
-    animation_events_changed: qt_signal!(),
+    visual_transaction_changed: qt_signal!(),
     context_menu_requested: qt_signal!(x: f32, y: f32),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -197,7 +197,7 @@ pub struct SujianEditorItem {
     current_is_scrolling: bool,
     last_summary: QString,
     last_event_count: u32,
-    last_animation_events_json: QString,
+    last_visual_transaction_json: QString,
     preedit_text: String,
     preedit_cursor: usize,
     suppress_next_ime_commit: bool,
@@ -241,7 +241,7 @@ impl Default for SujianEditorItem {
             coordinated_text_cursor_animation_enabled: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
-            animation_events_json: Default::default(),
+            visual_transaction_json: Default::default(),
             scroll_y: Default::default(),
             viewport_height: Default::default(),
             is_scrolling: Default::default(),
@@ -255,7 +255,7 @@ impl Default for SujianEditorItem {
             transaction_created: Default::default(),
             cursor_rect_changed: Default::default(),
             explicit_clear_requested: Default::default(),
-            animation_events_changed: Default::default(),
+            visual_transaction_changed: Default::default(),
             context_menu_requested: Default::default(),
             cursor_rect_x: Default::default(),
             cursor_rect_y: Default::default(),
@@ -314,7 +314,7 @@ impl Default for SujianEditorItem {
             current_is_scrolling: false,
             last_summary: "".into(),
             last_event_count: 0,
-            last_animation_events_json: "".into(),
+            last_visual_transaction_json: "".into(),
             preedit_text: String::new(),
             preedit_cursor: 0,
             suppress_next_ime_commit: false,
@@ -704,8 +704,8 @@ impl SujianEditorItem {
         self.last_event_count
     }
 
-    fn animation_events_json(&self) -> QString {
-        self.last_animation_events_json.clone()
+    fn visual_transaction_json(&self) -> QString {
+        self.last_visual_transaction_json.clone()
     }
 
     fn cursor_rect_x(&self) -> f32 {
@@ -844,9 +844,9 @@ impl SujianEditorItem {
             EditorTransactionCause::TypingCommit
         };
         let new = self.buffer.snapshot();
-        let _events = self.record_transaction(old, new, cause, true);
+        let _vt = self.record_transaction(old, new, cause, true);
         // Animation lifecycle is owned by QML EditorAnimationOverlay.
-        // Rust only provides glyph rect data via animation_events_json.
+        // Rust only provides glyph rect data via visual_transaction_json.
 
         self.emit_content_changed();
     }
@@ -864,7 +864,7 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
-        let _events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         // Animation lifecycle is owned by QML EditorAnimationOverlay.
 
         self.emit_content_changed();
@@ -883,7 +883,7 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
-        let _events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         // Animation lifecycle is owned by QML EditorAnimationOverlay.
 
         self.emit_content_changed();
@@ -902,7 +902,7 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
-        let _events = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
         // Animation lifecycle is owned by QML EditorAnimationOverlay.
 
         self.emit_content_changed();
@@ -1170,7 +1170,7 @@ impl SujianEditorItem {
         new: EditorSnapshot,
         cause: EditorTransactionCause,
         emit: bool,
-    ) -> Vec<EditorAnimationEvent> {
+    ) -> Option<EditorVisualTransaction> {
         let transaction = self.engine.create_transaction(
             &old.text,
             &new.text,
@@ -1184,36 +1184,53 @@ impl SujianEditorItem {
             },
             cause,
         );
-        let mut events = self.engine.animation_events(&transaction);
+        let mut vt = self.engine.visual_transaction(&transaction);
 
-        // 为 Insert/Delete 事件填充 glyph_rects（动画定位用）
-        self.fill_glyph_rects_for_events(&mut events, &new.text, &old.text);
+        // 为 Insert/Delete 事务填充坐标字段（动画定位用）
+        if let Some(ref mut vt) = vt {
+            self.fill_visual_transaction_coords(vt, &new.text, &old.text);
+        }
 
         // 创建 TextAnimationState 条目，让正文层在动画期间跳过 inserted range
-        // 仅在动画启用且事件非空时创建
-        if self.current_typing_animation_enabled && !events.is_empty() && !self.current_is_scrolling {
-            for event in &events {
-                match event.kind {
+        // 仅在动画启用且事务非空时创建
+        if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
+            if let Some(ref vt) = vt {
+                match vt.kind {
                     EditorAnimationKind::Insert => {
-                        let range_start = event.range_start;
-                        let range_end = range_start + event.range_len;
-                        // 只有 glyph_rects 非空时才创建（空说明被过滤了）
-                        if !event.glyph_rects.is_empty() {
-                            self.text_anim_state.start_insert((range_start, range_end), event.duration_ms);
-                            if editor_animation_debug_enabled() {
-                                eprintln!(
-                                    "record_transaction: created Insert animation byte_range=({},{}), duration_ms={}",
-                                    range_start, range_end, event.duration_ms
-                                );
+                        // 从 vt.inserted_range 读取 hidden range
+                        if let Some((range_start, range_end)) = vt.inserted_range {
+                            // 只有 insert_glyph_rects 非空时才创建（空说明被过滤了）
+                            let has_glyphs = vt.insert_glyph_rects
+                                .as_ref()
+                                .map_or(false, |g| !g.is_empty());
+                            if has_glyphs {
+                                self.text_anim_state.start_insert((range_start, range_end), vt.duration_ms);
+                                if editor_animation_debug_enabled() {
+                                    eprintln!(
+                                        "record_transaction: created Insert animation byte_range=({},{}), duration_ms={}",
+                                        range_start, range_end, vt.duration_ms
+                                    );
+                                }
                             }
                         }
                     }
                     EditorAnimationKind::Delete => {
-                        let range_start = event.range_start;
-                        let range_end = range_start + event.range_len;
                         // Delete 动画不需要正文层跳过，但记录以跟踪活跃动画
-                        if !event.glyph_rects.is_empty() {
-                            self.text_anim_state.start_delete((range_start, range_end), event.duration_ms);
+                        // 从 vt.deleted_glyph_rects 读取
+                        let has_glyphs = vt.deleted_glyph_rects
+                            .as_ref()
+                            .map_or(false, |g| !g.is_empty());
+                        if has_glyphs {
+                            // 对于 Delete，inserted_range 为 None，需要从变更推导 byte range
+                            // 使用 old_text 和 new_text 的 diff 来获取删除范围
+                            let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                            for change in &changes {
+                                if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                                    let range_start = *index;
+                                    let range_end = range_start + text.len();
+                                    self.text_anim_state.start_delete((range_start, range_end), vt.duration_ms);
+                                }
+                            }
                         }
                     }
                     EditorAnimationKind::Cursor => {}
@@ -1221,61 +1238,62 @@ impl SujianEditorItem {
             }
         }
 
-        self.last_event_count = events.len() as u32;
+        self.last_event_count = if vt.is_some() { 1 } else { 0 };
         self.last_summary = format!(
-            "cause={:?};changes={};events={};animate={}",
+            "cause={:?};changes={};vt={};animate={}",
             transaction.cause,
             transaction.changes.len(),
-            events.len(),
+            vt.is_some(),
             transaction.should_animate
         )
         .into();
         if editor_animation_debug_enabled() {
             eprintln!(
-                "record_transaction: cause={:?}, changes={}, events={}, animate={}, typing_anim_enabled={}, is_scrolling={}",
+                "record_transaction: cause={:?}, changes={}, vt={}, animate={}, typing_anim_enabled={}, is_scrolling={}",
                 transaction.cause,
                 transaction.changes.len(),
-                events.len(),
+                vt.is_some(),
                 transaction.should_animate,
                 self.current_typing_animation_enabled,
                 self.current_is_scrolling,
             );
         }
-        if !events.is_empty() {
-            match serde_json::to_string(&events) {
+        // 序列化单个 EditorVisualTransaction 而非 Vec<EditorAnimationEvent>
+        if let Some(ref vt) = vt {
+            match serde_json::to_string(vt) {
                 Ok(json) => {
-                    self.last_animation_events_json = json.into();
+                    self.last_visual_transaction_json = json.into();
                 }
                 Err(e) => {
                     eprintln!(
-                        "record_transaction: failed to serialize animation events: {}",
+                        "record_transaction: failed to serialize visual transaction: {}",
                         e
                     );
-                    self.last_animation_events_json = "[]".into();
+                    self.last_visual_transaction_json = "{}".into();
                 }
             }
         } else {
-            self.last_animation_events_json = "[]".into();
+            self.last_visual_transaction_json = "{}".into();
         }
         if emit {
             self.transaction_created();
-            if !events.is_empty() {
-                self.animation_events_changed();
+            if vt.is_some() {
+                self.visual_transaction_changed();
             }
         }
-        events
+        vt
     }
 
-    /// 为 Insert/Delete 类型 animation events 填充 glyph_rects 数据
+    /// 为 EditorVisualTransaction 填充坐标字段
     ///
     /// 通过 EditorLayout 的 glyph_positions_on_line 获取字符位置
-    /// 转为(x, y, w, h),写入 event.glyph_rects 供 QML overlay 消费
+    /// 转为(x, y, w, h),写入 vt.insert_glyph_rects / vt.deleted_glyph_rects 供 QML overlay 消费
     /// 同时填充 old_cursor_rect / new_cursor_rect 供 QML 动画 overlay
     /// 使用正确的光标位置，避免依赖可能过时的 editorItem.cursor_rect_x/y
     /// Cursor 类型不需要 glyph_rects，直接跳过
-    fn fill_glyph_rects_for_events(
+    fn fill_visual_transaction_coords(
         &mut self,
-        events: &mut [EditorAnimationEvent],
+        vt: &mut EditorVisualTransaction,
         text: &str,
         old_text: &str,
     ) {
@@ -1305,40 +1323,36 @@ impl SujianEditorItem {
             }
         }
 
-        for event in events.iter_mut() {
-            match event.kind {
-                EditorAnimationKind::Insert => {
-                    let range_start = event.range_start;
-                    let range_end = range_start + event.range_len;
-                    let mut glyph_rects = Vec::new();
+        match vt.kind {
+            EditorAnimationKind::Insert => {
+                // Insert: 使用 new_text 布局计算 insert_glyph_rects
+                let insert_snapshot = self.layout_snapshot_for_text(text, width);
+                let mut glyph_rects = Vec::new();
 
-                    // Use new_text layout for Insert events — the cached layout
-                    // may be stale because emit_content_changed() (which calls
-                    // invalidate_layout_cache) has not run yet at this point.
-                    let insert_snapshot = self.layout_snapshot_for_text(text, width);
-
+                // 从 vt.inserted_range 获取插入范围
+                if let Some((range_start, range_end)) = vt.inserted_range {
                     // 计算 old_cursor_rect：使用 old_text 布局
                     let old_snapshot = self.layout_snapshot_for_text(old_text, width);
                     let old_caret = self.editor_layout.caret_rect(
                         &old_snapshot,
-                        event.old_cursor.index,
+                        vt.old_selection.head.index,
                         CaretAffinity::Downstream,
                         scroll_y,
                         viewport_h,
                     );
-                    event.old_cursor_rect = Some(make_cursor_rect(
+                    vt.old_cursor_rect = Some(make_cursor_rect(
                         &old_caret, &old_snapshot, font_family, scroll_y,
                     ));
 
                     // 计算 new_cursor_rect：使用 new_text 布局
                     let new_caret = self.editor_layout.caret_rect(
                         &insert_snapshot,
-                        event.new_cursor.index,
+                        vt.new_selection.head.index,
                         CaretAffinity::Downstream,
                         scroll_y,
                         viewport_h,
                     );
-                    event.new_cursor_rect = Some(make_cursor_rect(
+                    vt.new_cursor_rect = Some(make_cursor_rect(
                         &new_caret, &insert_snapshot, font_family, scroll_y,
                     ));
 
@@ -1386,92 +1400,97 @@ impl SujianEditorItem {
                             });
                         }
                     }
-
-                    event.glyph_rects = glyph_rects;
                 }
-                EditorAnimationKind::Delete => {
-                    let range_start = event.range_start;
-                    let range_end = range_start + event.range_len;
-                    let mut glyph_rects = Vec::new();
 
-                    // Use old_text layout for Delete events
-                    let delete_snapshot = self.layout_snapshot_for_text(old_text, width);
+                vt.insert_glyph_rects = Some(glyph_rects);
+            }
+            EditorAnimationKind::Delete => {
+                // Delete: 使用 old_text 布局计算 deleted_glyph_rects
+                let delete_snapshot = self.layout_snapshot_for_text(old_text, width);
+                let mut glyph_rects = Vec::new();
 
-                    // 计算 old_cursor_rect：使用 old_text 布局
-                    let old_caret = self.editor_layout.caret_rect(
-                        &delete_snapshot,
-                        event.old_cursor.index,
-                        CaretAffinity::Downstream,
-                        scroll_y,
-                        viewport_h,
-                    );
-                    event.old_cursor_rect = Some(make_cursor_rect(
-                        &old_caret, &delete_snapshot, font_family, scroll_y,
-                    ));
+                // 从 diff 推导删除范围
+                let changes = writer_core::editor::diff_plain_text(old_text, text);
+                for change in &changes {
+                    if let writer_core::editor::EditorChange::Delete { index, text: deleted_text } = change {
+                        let range_start = *index;
+                        let range_end = range_start + deleted_text.len();
 
-                    // 计算 new_cursor_rect：使用 new_text 布局
-                    let new_snapshot = self.layout_snapshot_for_text(text, width);
-                    let new_caret = self.editor_layout.caret_rect(
-                        &new_snapshot,
-                        event.new_cursor.index,
-                        CaretAffinity::Downstream,
-                        scroll_y,
-                        viewport_h,
-                    );
-                    event.new_cursor_rect = Some(make_cursor_rect(
-                        &new_caret, &new_snapshot, font_family, scroll_y,
-                    ));
-
-                    for line in &delete_snapshot.lines {
-                        if line.byte_end <= range_start || line.byte_start >= range_end {
-                            continue;
-                        }
-                        if line.para_text.is_empty() {
-                            continue;
-                        }
-                        let seg_start = range_start.max(line.byte_start);
-                        let seg_end = range_end.min(line.byte_end);
-                        if seg_start >= seg_end {
-                            continue;
-                        }
-
-                        let glyph_data = self.editor_layout.glyph_positions_on_line(
-                            line,
-                            seg_start,
-                            seg_end,
-                            font_size,
-                            font_family,
+                        // 计算 old_cursor_rect：使用 old_text 布局
+                        let old_caret = self.editor_layout.caret_rect(
+                            &delete_snapshot,
+                            vt.old_selection.head.index,
+                            CaretAffinity::Downstream,
+                            scroll_y,
+                            viewport_h,
                         );
-                        let line_baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
-                        for (abs_byte, x_pos, ch_w) in glyph_data {
-                            if abs_byte >= old_text.len() {
+                        vt.old_cursor_rect = Some(make_cursor_rect(
+                            &old_caret, &delete_snapshot, font_family, scroll_y,
+                        ));
+
+                        // 计算 new_cursor_rect：使用 new_text 布局
+                        let new_snapshot = self.layout_snapshot_for_text(text, width);
+                        let new_caret = self.editor_layout.caret_rect(
+                            &new_snapshot,
+                            vt.new_selection.head.index,
+                            CaretAffinity::Downstream,
+                            scroll_y,
+                            viewport_h,
+                        );
+                        vt.new_cursor_rect = Some(make_cursor_rect(
+                            &new_caret, &new_snapshot, font_family, scroll_y,
+                        ));
+
+                        for line in &delete_snapshot.lines {
+                            if line.byte_end <= range_start || line.byte_start >= range_end {
                                 continue;
                             }
-                            let ch = old_text
-                                .get(abs_byte..)
-                                .and_then(|s| s.chars().next())
-                                .unwrap_or(' ');
-                            // 复杂字符（emoji / ZWJ / variation selector / combining mark）
-                            // 不参与 glyph ghost 动画，跳过以避免渲染异常和资源浪费
-                            if is_complex_grapheme(ch) {
+                            if line.para_text.is_empty() {
                                 continue;
                             }
-                            glyph_rects.push(GlyphRect {
-                                x: line.x + x_pos,
-                                y: line.y - scroll_y,
-                                w: ch_w,
-                                h: line.height,
-                                char_: ch.to_string(),
-                                baseline_y: line_baseline_y,
-                            });
+                            let seg_start = range_start.max(line.byte_start);
+                            let seg_end = range_end.min(line.byte_end);
+                            if seg_start >= seg_end {
+                                continue;
+                            }
+
+                            let glyph_data = self.editor_layout.glyph_positions_on_line(
+                                line,
+                                seg_start,
+                                seg_end,
+                                font_size,
+                                font_family,
+                            );
+                            let line_baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
+                            for (abs_byte, x_pos, ch_w) in glyph_data {
+                                if abs_byte >= old_text.len() {
+                                    continue;
+                                }
+                                let ch = old_text
+                                    .get(abs_byte..)
+                                    .and_then(|s| s.chars().next())
+                                    .unwrap_or(' ');
+                                // 复杂字符不参与 glyph ghost 动画
+                                if is_complex_grapheme(ch) {
+                                    continue;
+                                }
+                                glyph_rects.push(GlyphRect {
+                                    x: line.x + x_pos,
+                                    y: line.y - scroll_y,
+                                    w: ch_w,
+                                    h: line.height,
+                                    char_: ch.to_string(),
+                                    baseline_y: line_baseline_y,
+                                });
+                            }
                         }
                     }
+                }
 
-                    event.glyph_rects = glyph_rects;
-                }
-                EditorAnimationKind::Cursor => {
-                    // Cursor 类型不需要 glyph rects 或 cursor rects
-                }
+                vt.deleted_glyph_rects = Some(glyph_rects);
+            }
+            EditorAnimationKind::Cursor => {
+                // Cursor 类型不需要 glyph rects 或 cursor rects
             }
         }
     }
@@ -1763,9 +1782,9 @@ mod tests {
     #[test]
     fn typing_animation_disabled_prevents_new_animations() {
         let typing_animation_enabled = false;
-        let events_non_empty = true;
+        let vt_present = true;
         let is_scrolling = false;
-        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
+        let should_create = typing_animation_enabled && vt_present && !is_scrolling;
         assert!(!should_create, "when typing_animation_enabled=false, no animations should be created");
     }
 
@@ -1773,10 +1792,39 @@ mod tests {
     #[test]
     fn scrolling_prevents_new_animations() {
         let typing_animation_enabled = true;
-        let events_non_empty = true;
+        let vt_present = true;
         let is_scrolling = true;
-        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
+        let should_create = typing_animation_enabled && vt_present && !is_scrolling;
         assert!(!should_create, "when scrolling, no animations should be created");
+    }
+
+    /// 验证：visual_transaction 的 inserted_range 用于 hidden range
+    /// EditorVisualTransaction.inserted_range 是 Insert 动画的 hidden range 来源
+    #[test]
+    fn visual_transaction_inserted_range_used_for_hidden_range() {
+        let mut state = TextAnimationState::new();
+        // 模拟从 vt.inserted_range 读取的 hidden range
+        let inserted_range = Some((5, 10));
+        if let Some((range_start, range_end)) = inserted_range {
+            state.start_insert((range_start, range_end), 100);
+        }
+        assert_eq!(state.active_insert_byte_range(), Some((5, 10)));
+        assert!(state.has_active_insert());
+    }
+
+    /// 验证：关闭 typing_animation_enabled 时 hidden range 立即清除
+    /// 不依赖 timeout 恢复文字
+    #[test]
+    fn typing_animation_disabled_clears_hidden_range_immediately() {
+        let mut state = TextAnimationState::new();
+        // 模拟从 vt.inserted_range 创建的 Insert 动画
+        state.start_insert((10, 20), 100);
+        assert!(state.has_active_insert());
+        assert_eq!(state.active_insert_byte_range(), Some((10, 20)));
+        // 关闭动画 — 立即清除，不依赖 timeout
+        state.clear_on_typing_animation_disabled();
+        assert!(state.is_empty());
+        assert_eq!(state.active_insert_byte_range(), None);
     }
 }
 
