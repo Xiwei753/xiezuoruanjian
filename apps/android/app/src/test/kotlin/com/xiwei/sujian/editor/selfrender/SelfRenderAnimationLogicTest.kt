@@ -478,12 +478,12 @@ class SelfRenderAnimationLogicTest {
         animatedInsertRange = null
 
         // 验证动画被清除
-        assertFalse(hasAnimations, "animations should be cleared when scrolling starts during insert")
-        assertNull(animatedInsertRange, "insert range should be null when scrolling starts during insert")
+        assertFalse("animations should be cleared when scrolling starts during insert", hasAnimations)
+        assertNull("insert range should be null when scrolling starts during insert", animatedInsertRange)
 
         // 即使插入的 cause 是 Typing（应该动画），滚动状态也优先清除
-        assertTrue(shouldAnimateForCause(SujianEditCause.Typing), "Typing should animate in principle")
-        assertFalse(hasAnimations, "but scrolling overrides and clears the animation")
+        assertTrue("Typing should animate in principle", shouldAnimateForCause(SujianEditCause.Typing))
+        assertFalse("but scrolling overrides and clears the animation", hasAnimations)
     }
 
     // ── 辅助方法 ──
