@@ -42,7 +42,7 @@ Rectangle {
         Rectangle {
             width: 7
             height: 7
-            radius: 4
+            radius: dt.radiusXs
             color: control.contentColor
             opacity: 0.8
         }

@@ -51,12 +51,12 @@ Rectangle {
             Layout.fillWidth: true
             height: 16
             color: getKindColor(root.kind)
-            radius: 4
+            radius: dt.radiusXs
 
             AppText {
                 anchors.centerIn: parent
                 text: root.kind
-                color: "white"
+                color: dt.onPrimary
                 font.pixelSize: 10
                 font.bold: true
             }

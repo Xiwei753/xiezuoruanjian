@@ -70,7 +70,7 @@ Item {
             Rectangle {
                 anchors.centerIn: parent
                 width: 24; height: 24
-                radius: 4
+                radius: dt.radiusXs
                 color: "transparent"
                 border.color: dt.primary
                 border.width: 2
