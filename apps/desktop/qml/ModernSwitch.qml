@@ -16,8 +16,13 @@ Item {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _primary: dt ? dt.primary : "#006497"
+    readonly property color _onPrimary: dt ? dt.onPrimary : "#FFFFFF"
+    readonly property color _surfaceContainerLow: dt ? dt.surfaceContainerLow : "#F6F8FC"
+    readonly property color _switchTrackOn: dt ? dt.switchTrackOn : "#006497"
+    readonly property color _switchTrackOff: dt ? dt.switchTrackOff : "#DFE3EB"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _outline: dt ? dt.outline : "#727880"
 
     property bool checked: false
     signal toggled(bool checked)
@@ -30,9 +35,9 @@ Item {
         width: 50
         height: 28
         radius: 14
-        color: !root.enabled ? _dt.surfaceContainerLow : (root.checked ? _dt.switchTrackOn : _dt.switchTrackOff)
+        color: !root.enabled ? _surfaceContainerLow : (root.checked ? _switchTrackOn : _switchTrackOff)
         border.width: root.checked ? 0 : 1
-        border.color: !root.enabled ? _dt.border : _dt.outline
+        border.color: !root.enabled ? _border : _outline
 
         Rectangle {
             width: root.checked ? 24 : 18
@@ -40,7 +45,7 @@ Item {
             radius: width / 2
             y: (parent.height - height) / 2
             x: root.checked ? (parent.width - width - 2) : 5
-            color: root.checked ? _dt.onPrimary : _dt.outline
+            color: root.checked ? _onPrimary : _outline
             opacity: root.enabled ? 1.0 : 0.45
             Behavior on x { NumberAnimation { duration: 140 } }
             Behavior on width { NumberAnimation { duration: 140 } }
