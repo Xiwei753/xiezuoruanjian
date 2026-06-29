@@ -5,6 +5,7 @@
 pub(crate) mod buffer;
 pub(crate) mod cursor_controller;
 pub(crate) mod rendering;
+pub(crate) mod text_animation_state;
 
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
@@ -22,6 +23,7 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
+use text_animation_state::TextAnimationState;
 
 pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
@@ -41,31 +43,8 @@ pub fn editor_animation_debug_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_ANIMATION_DEBUG").is_some()
 }
 
-/// 活跃的文本动画状态 — 用于让静态正文层在动画期间跳过 inserted range，
-/// 实现"真吐字"效果（而非正文完整绘制 + ghost overlay）。
-///
-/// - Insert 动画：正文层跳过 inserted range，动画 overlay 显示 glyph 从光标"吐出"
-/// - Delete 动画：正文层正常绘制 new_text，动画 overlay 显示 glyph 被光标"吞入"
-#[derive(Clone, Debug)]
-pub(crate) struct ActiveTextAnimation {
-    pub kind: TextAnimationKind,
-    /// Insert: inserted byte range (start, end) — 基于 new_text
-    /// Delete: deleted byte range (start, end) — 基于 old_text（Delete 不需要正文层跳过）
-    pub byte_range: (usize, usize),
-    /// 动画开始时间
-    pub start_time: Instant,
-    /// 动画持续时间 (ms)
-    pub duration_ms: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TextAnimationKind {
-    Insert,
-    Delete,
-}
-
 pub fn sujian_editor_debug_enabled() -> bool {
-    cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
+    cfg!(debug_assertions) || std::env_os("SUJIAN_EDITOR_DEBUG").is_some()
 }
 
 /// 判断字符是否为复杂 grapheme（emoji / ZWJ / variation selector / combining mark）。
@@ -221,10 +200,10 @@ pub struct SujianEditorItem {
     /// animation, IME pending flag.  All cursor-related visual logic
     /// lives in CursorController; SujianEditorItem only dispatches.
     cursor_ctrl: cursor_controller::CursorController,
-    /// 活跃的文本动画列表（通常 0~1 个元素）。
+    /// 文本动画状态机 — 独立管理动画生命周期（不依赖 Qt）。
     /// Insert 动画期间，正文层跳过 inserted range 不绘制，由 QML overlay 显示 glyph。
-    /// 动画结束后清除，正文层恢复完整绘制。
-    active_text_animations: Vec<ActiveTextAnimation>,
+    /// 动画结束后清除，正文层恢复完整绘制。所有停止路径立即清理 hidden range。
+    text_anim_state: TextAnimationState,
 }
 
 impl Default for SujianEditorItem {
@@ -333,7 +312,7 @@ impl Default for SujianEditorItem {
             scroll_buffer: None,
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
-            active_text_animations: Vec::new(),
+            text_anim_state: TextAnimationState::new(),
         }
     }
 }
@@ -352,8 +331,8 @@ impl SujianEditorItem {
 
     /// 清空所有活跃文本动画，并触发静态正文重绘恢复完整绘制
     fn clear_active_text_animations(&mut self) {
-        if !self.active_text_animations.is_empty() {
-            self.active_text_animations.clear();
+        if !self.text_anim_state.is_empty() {
+            self.text_anim_state.clear();
             self.request_static_repaint();
         }
     }
@@ -362,15 +341,13 @@ impl SujianEditorItem {
     fn on_insert_animation_finished(&mut self, byte_start: i32, byte_end: i32) {
         let bs = byte_start as usize;
         let be = byte_end as usize;
-        let before = self.active_text_animations.len();
-        self.active_text_animations.retain(|anim| {
-            !(anim.kind == TextAnimationKind::Insert && anim.byte_range == (bs, be))
-        });
-        if self.active_text_animations.len() != before {
+        let had_active = self.text_anim_state.has_active_insert();
+        self.text_anim_state.on_insert_animation_finished(bs, be);
+        if had_active && !self.text_anim_state.has_active_insert() {
             if editor_animation_debug_enabled() {
                 eprintln!(
-                    "on_insert_animation_finished: byte_range=({},{}), cleared, remaining={}",
-                    bs, be, self.active_text_animations.len()
+                    "on_insert_animation_finished: byte_range=({},{}), cleared",
+                    bs, be
                 );
             }
             self.request_static_repaint();
@@ -379,17 +356,12 @@ impl SujianEditorItem {
 
     /// 检查是否有活跃的 Insert 动画（正文层需要跳过其 range）
     fn has_active_insert_animation(&self) -> bool {
-        self.active_text_animations
-            .iter()
-            .any(|a| a.kind == TextAnimationKind::Insert)
+        self.text_anim_state.has_active_insert()
     }
 
     /// 获取活跃 Insert 动画的 byte range（如有多个取第一个）
     fn active_insert_byte_range(&self) -> Option<(usize, usize)> {
-        self.active_text_animations
-            .iter()
-            .find(|a| a.kind == TextAnimationKind::Insert)
-            .map(|a| a.byte_range)
+        self.text_anim_state.active_insert_byte_range()
     }
 
     fn bounding_width(&self) -> f64 {
@@ -808,23 +780,10 @@ impl SujianEditorItem {
     /// 正常情况下 QML overlay 动画完成后通过 on_insert_animation_finished 清除，
     /// 此方法作为兜底防止 QML 信号丢失导致正文层永久跳过 range。
     fn tick_text_animations(&mut self) {
-        if self.active_text_animations.is_empty() {
-            return;
-        }
         let now = Instant::now();
-        let before = self.active_text_animations.len();
-        self.active_text_animations.retain(|anim| {
-            let elapsed = now.duration_since(anim.start_time).as_millis() as u64;
-            // 给 2x duration 作为宽限期，防止 QML 动画和 Rust 超时不同步
-            elapsed < anim.duration_ms * 2 + 200
-        });
-        if self.active_text_animations.len() != before {
+        if self.text_anim_state.tick(now) {
             if editor_animation_debug_enabled() {
-                eprintln!(
-                    "tick_text_animations: cleared {} timed-out animations, remaining={}",
-                    before - self.active_text_animations.len(),
-                    self.active_text_animations.len()
-                );
+                eprintln!("tick_text_animations: cleared timed-out animations");
             }
             self.request_static_repaint();
         }
@@ -1205,7 +1164,7 @@ impl SujianEditorItem {
         // 为 Insert/Delete 事件填充 glyph_rects（动画定位用）
         self.fill_glyph_rects_for_events(&mut events, &new.text, &old.text);
 
-        // 创建 active_text_animations 条目，让正文层在动画期间跳过 inserted range
+        // 创建 TextAnimationState 条目，让正文层在动画期间跳过 inserted range
         // 仅在动画启用且事件非空时创建
         if self.current_typing_animation_enabled && !events.is_empty() && !self.current_is_scrolling {
             for event in &events {
@@ -1215,15 +1174,10 @@ impl SujianEditorItem {
                         let range_end = range_start + event.range_len;
                         // 只有 glyph_rects 非空时才创建（空说明被过滤了）
                         if !event.glyph_rects.is_empty() {
-                            self.active_text_animations.push(ActiveTextAnimation {
-                                kind: TextAnimationKind::Insert,
-                                byte_range: (range_start, range_end),
-                                start_time: Instant::now(),
-                                duration_ms: event.duration_ms,
-                            });
+                            self.text_anim_state.start_insert((range_start, range_end), event.duration_ms);
                             if editor_animation_debug_enabled() {
                                 eprintln!(
-                                    "record_transaction: created ActiveTextAnimation::Insert byte_range=({},{}), duration_ms={}",
+                                    "record_transaction: created Insert animation byte_range=({},{}), duration_ms={}",
                                     range_start, range_end, event.duration_ms
                                 );
                             }
@@ -1234,12 +1188,7 @@ impl SujianEditorItem {
                         let range_end = range_start + event.range_len;
                         // Delete 动画不需要正文层跳过，但记录以跟踪活跃动画
                         if !event.glyph_rects.is_empty() {
-                            self.active_text_animations.push(ActiveTextAnimation {
-                                kind: TextAnimationKind::Delete,
-                                byte_range: (range_start, range_end),
-                                start_time: Instant::now(),
-                                duration_ms: event.duration_ms,
-                            });
+                            self.text_anim_state.start_delete((range_start, range_end), event.duration_ms);
                         }
                     }
                     EditorAnimationKind::Cursor => {}
@@ -1758,271 +1707,14 @@ mod tests {
         assert!(is_complex_grapheme('\u{FE20}'));
     }
 
-    #[test]
-    fn test_active_text_animation_insert_kind() {
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (3, 6),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        };
-        assert_eq!(anim.kind, TextAnimationKind::Insert);
-        assert_eq!(anim.byte_range, (3, 6));
-        assert_eq!(anim.duration_ms, 160);
-    }
+    // --- TextAnimationState lifecycle tests ---
+    // TextAnimationState 是正式的生命周期状态机（独立于 Qt/SujianEditorItem），
+    // 完整单元测试见 text_animation_state.rs。
+    // 以下测试验证 SujianEditorItem 与 TextAnimationState 的集成约束。
 
-    #[test]
-    fn test_active_text_animation_delete_kind() {
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Delete,
-            byte_range: (0, 3),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        };
-        assert_eq!(anim.kind, TextAnimationKind::Delete);
-        assert_eq!(anim.byte_range, (0, 3));
-    }
-
-    #[test]
-    fn test_text_animation_kind_equality() {
-        assert_eq!(TextAnimationKind::Insert, TextAnimationKind::Insert);
-        assert_eq!(TextAnimationKind::Delete, TextAnimationKind::Delete);
-        assert_ne!(TextAnimationKind::Insert, TextAnimationKind::Delete);
-    }
-
-    #[test]
-    fn test_active_text_animation_timeout() {
-        // Create an animation that started 100ms ago with 50ms duration
-        // (should be considered timed out by tick_text_animations with 2x+200ms grace)
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (0, 1),
-            start_time: Instant::now() - std::time::Duration::from_millis(1000),
-            duration_ms: 50,
-        };
-        // The animation should have timed out (1000ms > 50*2+200 = 300ms)
-        let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
-        assert!(elapsed > anim.duration_ms * 2 + 200);
-    }
-
-    // --- Animation logic constraint tests ---
-    // These tests verify data-structure invariants and logic constraints of
-    // ActiveTextAnimation / Vec<ActiveTextAnimation>, NOT integration tests
-    // that call SujianEditorItem methods directly.
-    //
-    // TODO(长期): 将 active_text_animations 抽象为独立的 TextAnimationState 结构体，
-    // 不依赖 Qt/SujianEditorItem，支持完整单元测试：
-    //   - start: 插入/删除动画创建，byte_range/duration_ms/kind 正确
-    //   - clear: set_plain_text / reload / visual_changed / typing_animation_disabled 清除
-    //   - timeout: tick_text_animations 超时清除（2x duration + 200ms 宽限）
-    //   - disable: typing_animation_enabled=false 立即清除 hidden range
-    //   - scroll: set_is_scrolling(true) 清除
-    //   - reload: reload_plain_text 清除
-    //   - visual_change: 字号/行距/缩进变更清除
-    // 当前测试仅验证 Vec::clear() 模拟，TextAnimationState 抽象后可真测上述全部路径。
-
-    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection.
-    /// This is a precondition for set_plain_text_from_qml's call to
-    /// clear_active_text_animations() — if clear() didn't empty the Vec,
-    /// hidden ranges would persist and cause permanently invisible text.
-    #[test]
-    fn test_clear_active_text_animations_on_set_plain_text() {
-        // Simulate active insert animation state
-        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (3, 6),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        }];
-        assert!(!animations.is_empty(), "precondition: should have active animation");
-
-        // set_plain_text_from_qml calls clear_active_text_animations()
-        animations.clear();
-
-        assert!(animations.is_empty(), "active_text_animations should be empty after set_plain_text_from_qml");
-    }
-
-    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection
-    /// even with multiple animation entries. This is a precondition for
-    /// reload_plain_text's call to clear_active_text_animations().
-    #[test]
-    fn test_clear_active_text_animations_on_reload() {
-        let mut animations: Vec<ActiveTextAnimation> = vec![
-            ActiveTextAnimation {
-                kind: TextAnimationKind::Insert,
-                byte_range: (0, 3),
-                start_time: Instant::now(),
-                duration_ms: 160,
-            },
-            ActiveTextAnimation {
-                kind: TextAnimationKind::Delete,
-                byte_range: (5, 8),
-                start_time: Instant::now(),
-                duration_ms: 160,
-            },
-        ];
-        assert_eq!(animations.len(), 2, "precondition: should have active animations");
-
-        // reload_plain_text calls clear_active_text_animations()
-        animations.clear();
-
-        assert!(animations.is_empty(), "active_text_animations should be empty after reload_plain_text");
-    }
-
-    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection.
-    /// This is a precondition for set_is_scrolling(true)'s call to
-    /// clear_active_text_animations().
-    #[test]
-    fn test_clear_active_text_animations_on_scroll() {
-        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (10, 13),
-            start_time: Instant::now(),
-            duration_ms: 100,
-        }];
-        assert!(!animations.is_empty(), "precondition: should have active animation");
-
-        // set_is_scrolling(true) calls clear_active_text_animations()
-        animations.clear();
-
-        assert!(animations.is_empty(), "active_text_animations should be empty after set_is_scrolling(true)");
-    }
-
-    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection.
-    /// This is a precondition for visual_changed's call to
-    /// clear_active_text_animations().
-    #[test]
-    fn test_clear_active_text_animations_on_visual_changed() {
-        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (0, 6),
-            start_time: Instant::now(),
-            duration_ms: 200,
-        }];
-        assert!(!animations.is_empty(), "precondition: should have active animation");
-
-        // visual_changed calls clear_active_text_animations()
-        animations.clear();
-
-        assert!(animations.is_empty(), "active_text_animations should be empty after visual_changed");
-    }
-
-    /// Verifies that after Vec<ActiveTextAnimation>.clear(), the active_insert_byte_range
-    /// logic returns None. This is a constraint: clear must eliminate all hidden ranges
-    /// that would cause permanently invisible text in the static text layer.
-    #[test]
-    fn test_no_hidden_range_after_clear() {
-        // Simulate active insert animation
-        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (3, 6),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        }];
-
-        // Before clear: should have an insert byte range
-        let before_clear = animations
-            .iter()
-            .find(|a| a.kind == TextAnimationKind::Insert)
-            .map(|a| a.byte_range);
-        assert_eq!(before_clear, Some((3, 6)), "precondition: should have hidden insert range before clear");
-
-        // Clear (same as clear_active_text_animations)
-        animations.clear();
-
-        // After clear: active_insert_byte_range should return None
-        let after_clear = animations
-            .iter()
-            .find(|a| a.kind == TextAnimationKind::Insert)
-            .map(|a| a.byte_range);
-        assert_eq!(after_clear, None, "active_insert_byte_range should return None after clear — no permanent hidden range");
-    }
-
-    // --- Additional guard tests for different setting combinations ---
-
-    /// Verifies that Vec<ActiveTextAnimation>.clear() removes all entries
-    /// (both Insert and Delete kinds). This is a constraint for
-    /// clear_active_text_animations: no stale entries may remain after clear.
-    #[test]
-    fn test_active_text_animation_cleared_on_multiple_events() {
-        let mut animations: Vec<ActiveTextAnimation> = vec![
-            ActiveTextAnimation {
-                kind: TextAnimationKind::Insert,
-                byte_range: (0, 3),
-                start_time: Instant::now(),
-                duration_ms: 100,
-            },
-            ActiveTextAnimation {
-                kind: TextAnimationKind::Delete,
-                byte_range: (5, 8),
-                start_time: Instant::now(),
-                duration_ms: 160,
-            },
-            ActiveTextAnimation {
-                kind: TextAnimationKind::Insert,
-                byte_range: (10, 13),
-                start_time: Instant::now(),
-                duration_ms: 120,
-            },
-        ];
-        assert_eq!(animations.len(), 3, "precondition: should have 3 active animations");
-
-        // clear_active_text_animations() clears all
-        animations.clear();
-
-        assert!(animations.is_empty(), "all active animations should be cleared");
-        // Verify no Insert or Delete entries remain
-        let has_insert = animations.iter().any(|a| a.kind == TextAnimationKind::Insert);
-        let has_delete = animations.iter().any(|a| a.kind == TextAnimationKind::Delete);
-        assert!(!has_insert, "no Insert animations should remain after clear");
-        assert!(!has_delete, "no Delete animations should remain after clear");
-    }
-
-    /// Verifies that Insert and Delete kinds are not equal.
-    /// This is important for correct filtering in on_insert_animation_finished
-    /// and other kind-based logic.
-    #[test]
-    fn test_text_animation_kind_not_equal() {
-        assert_ne!(
-            TextAnimationKind::Insert, TextAnimationKind::Delete,
-            "Insert and Delete kinds must not be equal — they drive different rendering paths"
-        );
-        // Also verify that each kind equals itself
-        assert_eq!(TextAnimationKind::Insert, TextAnimationKind::Insert);
-        assert_eq!(TextAnimationKind::Delete, TextAnimationKind::Delete);
-    }
-
-    /// Verifies that byte_range in ActiveTextAnimation remains unchanged after creation.
-    /// This is a data integrity guard — the byte_range should never be mutated
-    /// between creation and consumption/clear.
-    #[test]
-    fn test_active_text_animation_byte_range_integrity() {
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (7, 13),
-            start_time: Instant::now(),
-            duration_ms: 200,
-        };
-        // Verify byte_range is exactly as created
-        assert_eq!(anim.byte_range.0, 7, "byte_range start should match creation value");
-        assert_eq!(anim.byte_range.1, 13, "byte_range end should match creation value");
-        assert_eq!(anim.byte_range, (7, 13), "byte_range tuple should match creation value");
-
-        // Verify for Delete kind as well
-        let anim_del = ActiveTextAnimation {
-            kind: TextAnimationKind::Delete,
-            byte_range: (0, 6),
-            start_time: Instant::now(),
-            duration_ms: 160,
-        };
-        assert_eq!(anim_del.byte_range, (0, 6), "Delete byte_range should match creation value");
-    }
-
-    // --- Lifecycle guard tests for typing animation disabled ---
-
-    /// 验证：set_typing_animation_enabled(false) 后不应创建新动画
+    /// 验证：typing_animation_enabled=false 时不应创建新动画
     /// 逻辑约束：当 typing_animation_enabled=false 时，
-    /// record_transaction 不应创建新的 ActiveTextAnimation。
+    /// record_transaction 不应调用 text_anim_state.start_insert/start_delete。
     #[test]
     fn typing_animation_disabled_prevents_new_animations() {
         let typing_animation_enabled = false;
@@ -2040,35 +1732,6 @@ mod tests {
         let is_scrolling = true;
         let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
         assert!(!should_create, "when scrolling, no animations should be created");
-    }
-
-    /// 验证：动画超时后应被 tick_text_animations 清除
-    /// 2x duration + 200ms 宽限期后应过期
-    #[test]
-    fn active_text_animation_expires_after_timeout() {
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (0, 3),
-            start_time: Instant::now() - std::time::Duration::from_millis(500),
-            duration_ms: 100,
-        };
-        let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
-        let should_expire = elapsed >= anim.duration_ms * 2 + 200;
-        assert!(should_expire, "animation should be expired after 2x duration + 200ms grace");
-    }
-
-    /// 验证：动画在宽限期内不应过期
-    #[test]
-    fn active_text_animation_not_expired_within_grace() {
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (0, 3),
-            start_time: Instant::now(),
-            duration_ms: 100,
-        };
-        let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
-        let should_expire = elapsed >= anim.duration_ms * 2 + 200;
-        assert!(!should_expire, "animation should NOT be expired within grace period");
     }
 }
 

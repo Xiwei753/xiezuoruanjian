@@ -8,7 +8,7 @@ use qmetaobject::{
 };
 use std::time::Instant;
 
-use super::{sujian_editor_debug_enabled, SujianEditorItem, TextAnimationKind};
+use super::{sujian_editor_debug_enabled, SujianEditorItem};
 use super::cursor_controller::CursorUpdateResult;
 
 pub struct ScrollBuffer {
@@ -102,11 +102,11 @@ pub struct AnimatedGlyph {
     pub line_index: usize,
 }
 
-// Animation lifecycle: Rust creates ActiveTextAnimation entries to make the
-// static layer skip the inserted range during Insert animations (preventing
-// ghost doubling). QML EditorAnimationOverlay manages glyph ghost rendering
-// and notifies Rust via on_insert_animation_finished when ALL ghosts of an
-// event are done. tick_text_animations() provides timeout safety.
+// Animation lifecycle: TextAnimationState manages hidden range lifecycle
+// to make the static layer skip the inserted range during Insert animations
+// (preventing ghost doubling). QML EditorAnimationOverlay manages glyph ghost
+// rendering and notifies Rust via on_insert_animation_finished when ALL ghosts
+// of an event are done. tick_text_animations() provides timeout safety.
 
 impl SujianEditorItem {
     // has_active_animation() removed: Rust no longer manages animation display

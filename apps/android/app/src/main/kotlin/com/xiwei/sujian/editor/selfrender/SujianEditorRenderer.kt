@@ -3,6 +3,7 @@ package com.xiwei.sujian.editor.selfrender
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
 import android.text.Layout
 import android.text.TextPaint
 
@@ -259,22 +260,6 @@ class SujianEditorRenderer(
         }
     }
 
-    /**
-     * 绘制一行中的文本段 [segStart, segEnd)（UTF-16 offset）
-     * 
-     * 使用 clipRect + Layout.draw() 分段绘制，复用 Layout 的 TextShaper 整形数据，
-     * 避免逐 code point 硬画导致复杂 grapheme（emoji、ZWJ、组合字符、RTL）错位。
-     * 
-     * RTL/双向文本注意：getPrimaryHorizontal 在 RTL run 中返回的 x 坐标可能反向，
-     * 因此 clipRect 使用 min/max 而非假设 xStart < xEnd。
-     * 
-     * TODO(长期路线): 迁移到 Layout.getSelectionPath() 按 visual run 分段绘制，
-     * 不再依赖 getPrimaryHorizontal 两点裁剪。当前 min/max 方式在 RTL/Bidi 场景
-     * 下可能将不连续的 run 段错误合并到同一 clipRect 中。getSelectionPath 返回
-     * 的 Path 精确对应每个 visual run 的实际绘制范围，是唯一可靠的分段方案。
-     * 当前 clipRect + Layout.draw() 方式等价于 StaticLayout 分段绘制，对纯 LTR
-     * 文本正确；RTL/Bidi 场景需 getSelectionPath 修正。
-     */
     private fun drawLineSegment(
         canvas: Canvas,
         layout: Layout,
@@ -286,25 +271,14 @@ class SujianEditorRenderer(
         if (segStart >= segEnd || segStart >= text.length) return
         val safeEnd = minOf(segEnd, text.length)
 
-        val lineTop = layout.getLineTop(lineIdx).toFloat()
-        val lineBottom = layout.getLineBottom(lineIdx).toFloat()
-        val xStart = layout.getPrimaryHorizontal(segStart)
-        // safeEnd 可能等于行尾或文本末尾，需要安全处理
-        val xEnd = if (safeEnd >= text.length) {
-            layout.getLineRight(lineIdx)
-        } else {
-            layout.getPrimaryHorizontal(safeEnd)
-        }
-
-        // RTL/双向文本中 xEnd 可能小于 xStart，取 min/max 确保 clipRect 正确
-        val left = minOf(xStart, xEnd)
-        val right = maxOf(xStart, xEnd)
-        if (right - left < 0.5f) return
+        // 使用 getSelectionPath 精确获取 visual run 的实际绘制范围，
+        // 避免 getPrimaryHorizontal 两点裁剪在 RTL/Bidi 场景下将不连续 run 段错误合并。
+        val path = Path()
+        layout.getSelectionPath(segStart, safeEnd, path)
+        if (path.isEmpty) return
 
         canvas.save()
-        canvas.clipRect(left, lineTop, right, lineBottom)
-        // Layout.draw() 绘制整个 layout，clipRect 限制只显示目标范围
-        // Layout 内部使用 TextShaper，正确处理 emoji/ZWJ/组合字符/RTL
+        canvas.clipPath(path)
         layout.draw(canvas)
         canvas.restore()
     }
@@ -315,24 +289,12 @@ class SujianEditorRenderer(
         val end = selection.end.coerceIn(0, text.length)
         if (start >= end) return
 
-        val startLine = layout.getLineForOffset(start)
-        val endLine = layout.getLineForOffset(end)
+        // 使用 getSelectionPath 精确绘制选区高亮，正确处理 RTL/Bidi 场景
+        val path = Path()
+        layout.getSelectionPath(start, end, path)
+        if (path.isEmpty) return
 
-        for (line in startLine..endLine) {
-            val lineStart = layout.getLineStart(line)
-            val lineEnd = layout.getLineEnd(line)
-            val selStart = if (line == startLine) start else lineStart
-            val selEnd = if (line == endLine) end else lineEnd
-
-            if (selStart >= selEnd) continue
-
-            val left = layout.getPrimaryHorizontal(selStart)
-            val right = layout.getPrimaryHorizontal(selEnd)
-            val top = layout.getLineTop(line).toFloat()
-            val bottom = layout.getLineBottom(line).toFloat()
-
-            canvas.drawRect(left, top, right, bottom, selectionPaint)
-        }
+        canvas.drawPath(path, selectionPaint)
     }
 
     private fun drawCursor(canvas: Canvas, layout: Layout, text: String, offset: Int) {
@@ -365,23 +327,45 @@ class SujianEditorRenderer(
         composingStart: Int,
         composingEnd: Int
     ) {
+        // 使用 getSelectionPath 获取精确的 visual run bounds，
+        // 按 Path 的 bounds 分段绘制下划线，避免 RTL/Bidi 场景下 left/right 反向。
+        val path = Path()
+        layout.getSelectionPath(composingStart, composingEnd, path)
+        if (path.isEmpty) return
+
+        val rect = android.graphics.RectF()
+        path.computeBounds(rect, true)
+
+        // 如果 composing 跨多行，按行分段绘制下划线
         val startLine = layout.getLineForOffset(composingStart)
         val endLine = layout.getLineForOffset(composingEnd)
 
-        for (line in startLine..endLine) {
-            val lineStart = layout.getLineStart(line)
-            val lineEnd = layout.getLineEnd(line)
-            val cStart = if (line == startLine) composingStart else lineStart
-            val cEnd = if (line == endLine) composingEnd else lineEnd
+        if (startLine == endLine) {
+            // 单行：直接用 path bounds 画下划线
+            val baseline = layout.getLineBaseline(startLine).toFloat()
+            val descent = layout.getLineDescent(startLine).toFloat()
+            canvas.drawLine(rect.left, baseline + descent + 2f, rect.right, baseline + descent + 2f, composingUnderlinePaint)
+        } else {
+            // 多行：每行用 getSelectionPath 获取该行的 bounds
+            for (line in startLine..endLine) {
+                val lineStart = layout.getLineStart(line)
+                val lineEnd = layout.getLineEnd(line)
+                val cStart = if (line == startLine) composingStart else lineStart
+                val cEnd = if (line == endLine) composingEnd else lineEnd
 
-            if (cStart >= cEnd) continue
+                if (cStart >= cEnd) continue
 
-            val left = layout.getPrimaryHorizontal(cStart)
-            val right = layout.getPrimaryHorizontal(cEnd)
-            val baseline = layout.getLineBaseline(line).toFloat()
-            val descent = layout.getLineDescent(line).toFloat()
+                val linePath = Path()
+                layout.getSelectionPath(cStart, cEnd, linePath)
+                if (linePath.isEmpty) continue
 
-            canvas.drawLine(left, baseline + descent + 2f, right, baseline + descent + 2f, composingUnderlinePaint)
+                val lineRect = android.graphics.RectF()
+                linePath.computeBounds(lineRect, true)
+
+                val baseline = layout.getLineBaseline(line).toFloat()
+                val descent = layout.getLineDescent(line).toFloat()
+                canvas.drawLine(lineRect.left, baseline + descent + 2f, lineRect.right, baseline + descent + 2f, composingUnderlinePaint)
+            }
         }
     }
 
