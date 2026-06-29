@@ -159,6 +159,7 @@ jobs:
           }
 
       - name: Build installer with Inno Setup
+        id: build_installer
         shell: pwsh
         run: |
           $issDir = "packaging/windows"
@@ -179,7 +180,7 @@ jobs:
           # Record actual installer path for subsequent steps
           $installer = Get-ChildItem "target/release/*${{ matrix.flavor }}*.exe" | Where-Object { $_.Name -notlike "sujian-windows-*" } | Select-Object -First 1
           if ($installer) {
-            "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
+            "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
             Write-Host "Installer path: $($installer.FullName)"
           }
 
@@ -190,7 +191,7 @@ jobs:
             $certBytes = [System.Convert]::FromBase64String($env:SIGNING_CERT_SECRET)
             $certPath = Join-Path $env:RUNNER_TEMP "signing-cert.pfx"
             [System.IO.File]::WriteAllBytes($certPath, $certBytes)
-            $installerPath = $env:INSTALLER_PATH
+            $installerPath = "${{ steps.build_installer.outputs.installer_path }}"
             if ($installerPath -and (Test-Path $installerPath)) {
               $signArgs = @("sign", "/f", $certPath, "/tr", "http://timestamp.digicert.com", "/td", "sha256", "/fd", "sha256")
               if ($env:SIGNING_CERT_PASSWORD) {
@@ -221,5 +222,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sujian-windows-${{ matrix.flavor }}-installer
-          path: ${{ env.INSTALLER_PATH }}
+          path: ${{ steps.build_installer.outputs.installer_path }}
           retention-days: 30

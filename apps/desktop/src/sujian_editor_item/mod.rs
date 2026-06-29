@@ -1810,9 +1810,16 @@ mod tests {
     // ActiveTextAnimation / Vec<ActiveTextAnimation>, NOT integration tests
     // that call SujianEditorItem methods directly.
     //
-    // Long-term: extract active_text_animations into a TextAnimationState struct
-    // (no Qt dependency), enabling real unit tests for start/clear/timeout/
-    // disable/scroll/reload/visual_change — not just Vec::clear() simulations.
+    // TODO(长期): 将 active_text_animations 抽象为独立的 TextAnimationState 结构体，
+    // 不依赖 Qt/SujianEditorItem，支持完整单元测试：
+    //   - start: 插入/删除动画创建，byte_range/duration_ms/kind 正确
+    //   - clear: set_plain_text / reload / visual_changed / typing_animation_disabled 清除
+    //   - timeout: tick_text_animations 超时清除（2x duration + 200ms 宽限）
+    //   - disable: typing_animation_enabled=false 立即清除 hidden range
+    //   - scroll: set_is_scrolling(true) 清除
+    //   - reload: reload_plain_text 清除
+    //   - visual_change: 字号/行距/缩进变更清除
+    // 当前测试仅验证 Vec::clear() 模拟，TextAnimationState 抽象后可真测上述全部路径。
 
     /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection.
     /// This is a precondition for set_plain_text_from_qml's call to

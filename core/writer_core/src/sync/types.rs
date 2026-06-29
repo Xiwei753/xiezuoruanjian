@@ -168,7 +168,14 @@ pub struct SyncDiagnosticsResult {
     /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
     /// 保留仅为向后兼容，不应作为正式契约继续传播。
     /// **禁止扩展**：不得新增任何代理探测逻辑或结果类型。
-    /// TODO(破坏性版本 v2): 同 proxy_policy，一起删除
+    /// TODO(破坏性版本 v2): 与 proxy_policy 一起删除。删除范围：
+    /// - core writer_core::sync::types::SyncDiagnosticsResult.proxy_policy / network_probe_summary
+    /// - core writer_core::sync::types::SyncResult.network_probe_summary
+    /// - api writer_core::api::types::sync::SyncDiagnosticsResultDto.proxy_policy / network_probe_summary
+    /// - api writer_core::api::types::sync::SyncResultDto.network_probe_summary
+    /// - Android Models.kt 中对应的 proxy/network_probe 字段
+    /// - Desktop sync_bridge.rs 中对应的代理残留
+    /// - docs/ 中的代理探测文档残留
     pub network_probe_summary: Vec<NetworkProbeResult>,
 }
 
@@ -231,7 +238,14 @@ pub struct SyncResult {
     /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
     /// 保留仅为向后兼容，不应作为正式契约继续传播。
     /// **禁止扩展**：不得新增任何代理探测逻辑或结果类型。
-    /// TODO(破坏性版本 v2): 同 SyncDiagnosticsResult.proxy_policy，一起删除
+    /// TODO(破坏性版本 v2): 与 proxy_policy 一起删除。删除范围：
+    /// - core writer_core::sync::types::SyncDiagnosticsResult.proxy_policy / network_probe_summary
+    /// - core writer_core::sync::types::SyncResult.network_probe_summary
+    /// - api writer_core::api::types::sync::SyncDiagnosticsResultDto.proxy_policy / network_probe_summary
+    /// - api writer_core::api::types::sync::SyncResultDto.network_probe_summary
+    /// - Android Models.kt 中对应的 proxy/network_probe 字段
+    /// - Desktop sync_bridge.rs 中对应的代理残留
+    /// - docs/ 中的代理探测文档残留
     pub network_probe_summary: Vec<NetworkProbeResult>,
     pub settings_conflicts: Option<Vec<SettingConflictDetail>>,
     #[serde(default)]

@@ -268,9 +268,12 @@ class SujianEditorRenderer(
      * RTL/双向文本注意：getPrimaryHorizontal 在 RTL run 中返回的 x 坐标可能反向，
      * 因此 clipRect 使用 min/max 而非假设 xStart < xEnd。
      * 
-     * 长期路线：迁移到 getSelectionPath / visual run 分段绘制，
-     * 不依赖坐标猜测方向。当前实现通过 clipRect 复用 Layout 整形，
-     * 等价于 StaticLayout 分段绘制的正确性。
+     * TODO(长期路线): 迁移到 Layout.getSelectionPath() 按 visual run 分段绘制，
+     * 不再依赖 getPrimaryHorizontal 两点裁剪。当前 min/max 方式在 RTL/Bidi 场景
+     * 下可能将不连续的 run 段错误合并到同一 clipRect 中。getSelectionPath 返回
+     * 的 Path 精确对应每个 visual run 的实际绘制范围，是唯一可靠的分段方案。
+     * 当前 clipRect + Layout.draw() 方式等价于 StaticLayout 分段绘制，对纯 LTR
+     * 文本正确；RTL/Bidi 场景需 getSelectionPath 修正。
      */
     private fun drawLineSegment(
         canvas: Canvas,
