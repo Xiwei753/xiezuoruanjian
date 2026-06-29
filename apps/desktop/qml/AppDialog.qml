@@ -16,8 +16,15 @@ Dialog {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _surfaceContainerHigh: dt ? dt.surfaceContainerHigh : "#EAEFF5"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _onSurface: dt ? dt.onSurface : "#1A1C1E"
+    readonly property int _dialogRadius: dt ? dt.dialogRadius : 24
+    readonly property int _sp16: dt ? dt.sp16 : 16
+    readonly property int _sp24: dt ? dt.sp24 : 24
+    readonly property int _sp48: dt ? dt.sp48 : 48
+    readonly property int _subtitle: dt ? dt.subtitle : 18
+    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
 
     property string heading: title
     default property alias bodyData: bodyColumn.data
@@ -25,30 +32,30 @@ Dialog {
     modal: true
     padding: 0
     background: Rectangle {
-        color: _dt.surfaceContainerHigh
-        border.color: _dt.border
+        color: _surfaceContainerHigh
+        border.color: _border
         border.width: 1
-        radius: _dt.dialogRadius
+        radius: _dialogRadius
     }
     header: null
 
     contentItem: Item {
-        implicitWidth: bodyColumn.implicitWidth + _dt.sp48
-        implicitHeight: bodyColumn.implicitHeight + _dt.sp48
+        implicitWidth: bodyColumn.implicitWidth + _sp48
+        implicitHeight: bodyColumn.implicitHeight + _sp48
 
         ColumnLayout {
             id: bodyColumn
             anchors.fill: parent
-            anchors.margins: _dt.sp24
-            spacing: _dt.sp16
+            anchors.margins: _sp24
+            spacing: _sp16
 
             AppText {
                 Layout.fillWidth: true
                 text: root.heading
                 visible: text.length > 0
-                color: _dt.onSurface
-                font.pixelSize: _dt.subtitle
-                font.family: _dt.fontFamily
+                color: _onSurface
+                font.pixelSize: _subtitle
+                font.family: _fontFamily
                 font.weight: Font.DemiBold
             }
         }
