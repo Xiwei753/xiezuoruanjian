@@ -136,7 +136,7 @@ Rectangle {
             }
             AppButton {
                             text: qsTr("确定")
-                theme: dt
+                dt: dt
                 variant: "primary"
                 Layout.alignment: Qt.AlignRight
                 onClicked: emptySaveDialog.close()

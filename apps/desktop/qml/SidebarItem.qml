@@ -15,7 +15,7 @@ import QtQuick.Layouts
 
 Item {
     id: control
-    property var theme: null
+    property var dt: null
     property string text: ""
     property string icon: ""
     property bool active: false
@@ -27,24 +27,24 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        anchors.leftMargin: control.theme ? control.theme.sp8 : 8
-        anchors.rightMargin: control.theme ? control.theme.sp8 : 8
-        radius: control.theme ? control.theme.radiusPill : 999
+        anchors.leftMargin: dt ? dt.sp8 : 8
+        anchors.rightMargin: dt ? dt.sp8 : 8
+        radius: dt ? dt.radiusPill : 999
         color: {
-            if (control.active) return control.theme ? control.theme.primaryContainer : "#CCE5FF"
-            return ma.containsMouse ? (control.theme ? control.theme.surfaceVariant : "#DFE3EB") : "transparent"
+            if (control.active) return dt.primaryContainer
+            return ma.containsMouse ? dt.surfaceVariant : "transparent"
         }
     }
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: control.theme ? control.theme.sp12 : 12
-        anchors.rightMargin: control.theme ? control.theme.sp8 : 8
-        spacing: control.theme ? control.theme.sp8 : 8
+        anchors.leftMargin: dt ? dt.sp12 : 12
+        anchors.rightMargin: dt ? dt.sp8 : 8
+        spacing: dt ? dt.sp8 : 8
 
         AppText {
             text: control.icon
-            font.pixelSize: control.theme ? control.theme.fontMd : 13
+            font.pixelSize: dt ? dt.fontMd : 13
             Layout.preferredWidth: 20
             horizontalAlignment: Text.AlignHCenter
             visible: !control.compact
@@ -53,11 +53,11 @@ Item {
         AppText {
             text: control.text
             color: {
-                if (control.active) return control.theme ? control.theme.onPrimaryContainer : "#001E31"
-                return control.theme ? control.theme.onSurfaceVariant : "#42474E"
+                if (control.active) return dt.onPrimaryContainer
+                return dt.onSurfaceVariant
             }
-            font.pixelSize: control.theme ? control.theme.label : 13
-            font.family: control.theme ? control.theme.fontFamily : "sans-serif"
+            font.pixelSize: dt ? dt.label : 13
+            font.family: dt ? dt.fontFamily : "sans-serif"
             font.weight: control.active ? Font.Medium : Font.Normal
             Layout.fillWidth: true
             elide: Text.ElideRight

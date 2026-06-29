@@ -2,6 +2,7 @@ import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { Project, RecentEdit, WritingStats, WorkspaceSummary } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
+import { DesignTokens } from '../system/DesignTokens'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
@@ -277,9 +278,9 @@ struct Index {
     .width('100%')
     .padding({ left: 20, right: 20, top: 20, bottom: 20 })
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(16)
+    .borderRadius(DesignTokens.cardRadius)
     .margin({ bottom: 20 })
-    .shadow({ radius: 4, color: '#1A000000', offsetY: 2 })
+    .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetY: DesignTokens.shadowLight.offsetY })
     .constraintSize({ maxWidth: 600 })
   }
 
@@ -328,7 +329,7 @@ struct Index {
         .width('100%')
         .padding({ left: 16, right: 16, top: 14, bottom: 14 })
         .backgroundColor(this.themeConfig.colors.surface)
-        .borderRadius(12)
+        .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => {
           router.pushUrl({
@@ -385,11 +386,11 @@ struct Index {
           // 删除按钮
           Text('×')
             .fontSize(18)
-            .fontColor(Color.White)
+            .fontColor(this.themeConfig.colors.onError)
             .width(28)
             .height(28)
             .textAlign(TextAlign.Center)
-            .borderRadius(14)
+            .borderRadius(DesignTokens.radiusLg)
             .backgroundColor(this.themeConfig.colors.error)
             .margin({ right: 12 })
             .onClick(() => {
@@ -404,7 +405,7 @@ struct Index {
         .width('100%')
         .padding({ left: 16, right: 16, top: 16, bottom: 16 })
         .backgroundColor(this.themeConfig.colors.surface)
-        .borderRadius(12)
+        .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => {
           router.pushUrl({
@@ -448,7 +449,7 @@ struct Index {
           .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(16)
+          .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
         })
@@ -469,7 +470,7 @@ struct Index {
           .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(16)
+          .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
           router.pushUrl({
@@ -497,7 +498,7 @@ struct Index {
           .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(16)
+          .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
           router.pushUrl({ url: 'pages/SettingsPage' })
@@ -519,7 +520,7 @@ struct Index {
           .height(90)
           .justifyContent(FlexAlign.Center)
           .backgroundColor(this.themeConfig.colors.surface)
-          .borderRadius(16)
+          .borderRadius(DesignTokens.cardRadius)
         }
         .onClick(() => {
           router.pushUrl({ url: 'pages/SettingsPage' })

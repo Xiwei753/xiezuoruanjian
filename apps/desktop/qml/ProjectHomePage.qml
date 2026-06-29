@@ -136,14 +136,14 @@ Rectangle {
                 Item { Layout.fillWidth: true }
                 AppButton {
                     text: qsTr("取消")
-                    theme: dt
+                    dt: dt
                     variant: "text"
                     onClicked: renameProjectDialog.close()
                 }
                 AppButton {
                     id: renameConfirmButton
                     text: qsTr("确定")
-                    theme: dt
+                    dt: dt
                     variant: "primary"
                     onClicked: {
                         var t = renameField.text.trim();

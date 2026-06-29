@@ -50,3 +50,6 @@ jobs:
             cargo install cargo-audit --locked
           fi
           cargo audit
+
+      - name: Check UI tokens
+        run: bash scripts/check_ui_tokens.sh

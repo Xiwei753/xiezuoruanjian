@@ -15,26 +15,26 @@ import QtQuick.Controls
 Button {
     id: control
     flat: true
-    property var theme: null
+    property var dt: null
     property bool active: false
 
     implicitHeight: 36
     implicitWidth: Math.max(tm.width + 24, 52)
 
-    TextMetrics { id: tm; text: control.text; font.pixelSize: control.theme ? control.theme.fontSm : 12 }
+    TextMetrics { id: tm; text: control.text; font.pixelSize: dt ? dt.fontSm : 12 }
 
     contentItem: AppText {
         text: control.text
-        color: control.active ? (control.theme ? control.theme.onPrimaryContainer : "#001E31") : (control.hovered ? (control.theme ? control.theme.primary : "#006497") : (control.theme ? control.theme.onSurfaceVariant : "#42474E"))
-        font.pixelSize: control.theme ? control.theme.label : 13
-        font.family: control.theme ? control.theme.fontFamily : "sans-serif"
+        color: control.active ? dt.onPrimaryContainer : (control.hovered ? dt.primary : dt.onSurfaceVariant)
+        font.pixelSize: dt ? dt.label : 13
+        font.family: dt ? dt.fontFamily : "sans-serif"
         font.weight: control.active ? Font.Medium : Font.Normal
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
     }
 
     background: Rectangle {
-        color: control.active ? (control.theme ? control.theme.primaryContainer : "#CCE5FF") : (control.hovered ? (control.theme ? control.theme.surfaceVariant : "#DFE3EB") : "transparent")
-        radius: control.theme ? control.theme.radiusPill : 999
+        color: control.active ? dt.primaryContainer : (control.hovered ? dt.surfaceVariant : "transparent")
+        radius: dt ? dt.radiusPill : 999
     }
 }

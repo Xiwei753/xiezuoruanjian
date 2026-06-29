@@ -536,7 +536,7 @@ struct WritingPage {
           .fontSize(14)
           .height(32)
           .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
-          .fontColor(this.hasUnsavedChanges ? '#FFFFFF' : this.themeConfig.colors.textSecondary)
+          .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
           .enabled(!this.isSaving && this.hasUnsavedChanges)
           .onClick(() => this.saveChapter())
       }

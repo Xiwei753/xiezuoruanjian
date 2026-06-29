@@ -2,6 +2,7 @@ import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { StarMapGraph, StarMapNode, StarMapEdge, StarMapMeta, StarMapLayoutNode, StarMapEdgeRender, StarMapLayout, StarMapMotionPolicy } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
+import { DesignTokens } from '../system/DesignTokens'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass } from '../model/CoreDtos'
@@ -460,10 +461,10 @@ struct StarMapPage {
         .stroke(this.selectedNodeId === node.id ? '#FF6B6B' : 'transparent')
         .strokeWidth(4)
         .shadow({
-          radius: this.draggingNodeId === node.id ? 12 : (this.selectedNodeId === node.id ? 8 : 4),
-          color: this.draggingNodeId === node.id ? '#40000000' : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
+          radius: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.radius : (this.selectedNodeId === node.id ? DesignTokens.shadowMedium.radius : DesignTokens.shadowLight.radius),
+          color: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.color : (this.selectedNodeId === node.id ? '#40FF6B6B' : '#20000000'),
           offsetX: 0,
-          offsetY: this.draggingNodeId === node.id ? 4 : 2
+          offsetY: this.draggingNodeId === node.id ? DesignTokens.shadowStrong.offsetY : DesignTokens.shadowLight.offsetY
         })
 
       Text(node.title)
@@ -617,8 +618,8 @@ struct StarMapPage {
     .width(300)
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
-    .shadow({ radius: 12, color: '#33000000', offsetX: 0, offsetY: 4 })
+    .borderRadius(DesignTokens.radiusMd)
+    .shadow({ radius: DesignTokens.shadowMedium.radius, color: DesignTokens.shadowMedium.color, offsetX: 0, offsetY: DesignTokens.shadowMedium.offsetY })
     .position({
       x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 300 - 16 : 16,
       y: 16
@@ -650,8 +651,8 @@ struct StarMapPage {
     }
     .padding(12)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(8)
-    .shadow({ radius: 4, color: '#1A000000', offsetX: 0, offsetY: 2 })
+    .borderRadius(DesignTokens.radiusSm)
+    .shadow({ radius: DesignTokens.shadowLight.radius, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: DesignTokens.shadowLight.offsetY })
     .position({
       x: this.adaptiveState.sizeClass === WidthClass.Expanded ? this.stackWidth - 200 - 16 : 16,
       y: this.stackHeight - 120 - 16
@@ -683,8 +684,8 @@ struct StarMapPage {
     }
     .padding(8)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(4)
-    .shadow({ radius: 2, color: '#1A000000', offsetX: 0, offsetY: 1 })
+    .borderRadius(DesignTokens.radiusXs)
+    .shadow({ radius: 2, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: 1 })
     .position({ x: this.stackWidth - 160 - 16, y: this.stackHeight - 40 - 16 })
   }
 

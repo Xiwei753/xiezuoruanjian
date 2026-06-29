@@ -212,14 +212,14 @@ Rectangle {
                 Item { Layout.fillWidth: true }
                 AppButton {
                     text: qsTr("取消")
-                    theme: dt
+                    dt: dt
                     variant: "text"
                     onClicked: createStarmapDialog.close()
                 }
                 AppButton {
                     id: createStarmapButton
                     text: qsTr("创建")
-                    theme: dt
+                    dt: dt
                     variant: "primary"
                     onClicked: {
                         var title = starmapTitleField.text.trim()
@@ -266,8 +266,8 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton { text: qsTr("取消"); theme: dt; variant: "text"; onClicked: renameStarmapDialog.close() }
-                AppButton { id: renameStarmapButton; text: qsTr("确定"); theme: dt; variant: "primary"; onClicked: { var t = renameField.text.trim(); if (t === "") return; if (root.starMapController && root.starMapController.renameStarmap(renameStarmapDialog.starmapId, t)) { renameStarmapDialog.close(); loadStarmaps() } } }
+                AppButton { text: qsTr("取消"); dt: dt; variant: "text"; onClicked: renameStarmapDialog.close() }
+                AppButton { id: renameStarmapButton; text: qsTr("确定"); dt: dt; variant: "primary"; onClicked: { var t = renameField.text.trim(); if (t === "") return; if (root.starMapController && root.starMapController.renameStarmap(renameStarmapDialog.starmapId, t)) { renameStarmapDialog.close(); loadStarmaps() } } }
             }
         }
     }
@@ -290,8 +290,8 @@ Rectangle {
             RowLayout {
                 Layout.fillWidth: true
                 Item { Layout.fillWidth: true }
-                AppButton { text: qsTr("取消"); theme: dt; variant: "text"; onClicked: createChildStarmapDialog.close() }
-                AppButton { id: createChildStarmapButton; text: qsTr("创建"); theme: dt; variant: "primary"; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; if (root.starMapController && root.starMapController.createChildStarmap(createChildStarmapDialog.parentId, t, "")) { createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } } }
+                AppButton { text: qsTr("取消"); dt: dt; variant: "text"; onClicked: createChildStarmapDialog.close() }
+                AppButton { id: createChildStarmapButton; text: qsTr("创建"); dt: dt; variant: "primary"; onClicked: { var t = childTitleField.text.trim(); if (t === "") return; if (root.starMapController && root.starMapController.createChildStarmap(createChildStarmapDialog.parentId, t, "")) { createChildStarmapDialog.close(); childTitleField.text = ""; loadStarmaps() } } }
             }
         }
     }

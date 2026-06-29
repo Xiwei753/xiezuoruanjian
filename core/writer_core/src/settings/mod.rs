@@ -199,6 +199,117 @@ impl Default for LocalSettings {
     }
 }
 
+/// Cross-platform theme palette synced from Android Dynamic Color.
+/// Non-Android clients only consume this; they never produce it.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemePalette {
+    /// Source identifier, e.g. "android_dynamic_color"
+    #[serde(default)]
+    pub source: String,
+    /// Epoch millis when palette was last updated
+    #[serde(default)]
+    pub updated_at_ms: i64,
+    /// Device that produced this palette
+    #[serde(default)]
+    pub device_id: String,
+    /// Variant name, e.g. "tonal_spot"
+    #[serde(default)]
+    pub variant: String,
+
+    // Light palette
+    #[serde(default)]
+    pub light_primary: String,
+    #[serde(default)]
+    pub light_on_primary: String,
+    #[serde(default)]
+    pub light_primary_container: String,
+    #[serde(default)]
+    pub light_on_primary_container: String,
+    #[serde(default)]
+    pub light_secondary: String,
+    #[serde(default)]
+    pub light_on_secondary: String,
+    #[serde(default)]
+    pub light_secondary_container: String,
+    #[serde(default)]
+    pub light_on_secondary_container: String,
+    #[serde(default)]
+    pub light_tertiary: String,
+    #[serde(default)]
+    pub light_on_tertiary: String,
+    #[serde(default)]
+    pub light_tertiary_container: String,
+    #[serde(default)]
+    pub light_on_tertiary_container: String,
+    #[serde(default)]
+    pub light_background: String,
+    #[serde(default)]
+    pub light_on_background: String,
+    #[serde(default)]
+    pub light_surface: String,
+    #[serde(default)]
+    pub light_on_surface: String,
+    #[serde(default)]
+    pub light_surface_variant: String,
+    #[serde(default)]
+    pub light_on_surface_variant: String,
+    #[serde(default)]
+    pub light_surface_container: String,
+    #[serde(default)]
+    pub light_surface_container_high: String,
+    #[serde(default)]
+    pub light_outline: String,
+    #[serde(default)]
+    pub light_outline_variant: String,
+
+    // Dark palette
+    #[serde(default)]
+    pub dark_primary: String,
+    #[serde(default)]
+    pub dark_on_primary: String,
+    #[serde(default)]
+    pub dark_primary_container: String,
+    #[serde(default)]
+    pub dark_on_primary_container: String,
+    #[serde(default)]
+    pub dark_secondary: String,
+    #[serde(default)]
+    pub dark_on_secondary: String,
+    #[serde(default)]
+    pub dark_secondary_container: String,
+    #[serde(default)]
+    pub dark_on_secondary_container: String,
+    #[serde(default)]
+    pub dark_tertiary: String,
+    #[serde(default)]
+    pub dark_on_tertiary: String,
+    #[serde(default)]
+    pub dark_tertiary_container: String,
+    #[serde(default)]
+    pub dark_on_tertiary_container: String,
+    #[serde(default)]
+    pub dark_background: String,
+    #[serde(default)]
+    pub dark_on_background: String,
+    #[serde(default)]
+    pub dark_surface: String,
+    #[serde(default)]
+    pub dark_on_surface: String,
+    #[serde(default)]
+    pub dark_surface_variant: String,
+    #[serde(default)]
+    pub dark_on_surface_variant: String,
+    #[serde(default)]
+    pub dark_surface_container: String,
+    #[serde(default)]
+    pub dark_surface_container_high: String,
+    #[serde(default)]
+    pub dark_outline: String,
+    #[serde(default)]
+    pub dark_outline_variant: String,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncableSettings {
@@ -206,8 +317,12 @@ pub struct SyncableSettings {
     pub font_size: f64,
     #[serde(default)]
     pub theme_mode: String,
+    /// Deprecated: use theme_palette instead. Retained for backward-compatible reading.
     #[serde(default)]
+    #[deprecated(note = "use theme_palette instead")]
     pub monet_color: String,
+    #[serde(default)]
+    pub theme_palette: ThemePalette,
 }
 
 pub fn load_local_settings(workspace_path: &Path) -> Result<LocalSettings> {

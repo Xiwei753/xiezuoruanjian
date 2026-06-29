@@ -13,37 +13,37 @@ import QtQuick.Layouts
 
 Dialog {
     id: root
-    property var theme: null
+    property var dt: null
     property string heading: title
     default property alias bodyData: bodyColumn.data
 
     modal: true
     padding: 0
     background: Rectangle {
-        color: root.theme ? root.theme.surface : "#FCFCFF"
-        border.color: root.theme ? root.theme.border : "#CBD5E1"
+        color: dt.surfaceContainerHigh
+        border.color: dt.border
         border.width: 1
-        radius: root.theme ? root.theme.radiusXl : 24
+        radius: dt ? dt.dialogRadius : dt.radiusXl
     }
     header: null
 
     contentItem: Item {
-        implicitWidth: bodyColumn.implicitWidth + (root.theme ? root.theme.sp48 : 48)
-        implicitHeight: bodyColumn.implicitHeight + (root.theme ? root.theme.sp48 : 48)
+        implicitWidth: bodyColumn.implicitWidth + (dt ? dt.sp48 : 48)
+        implicitHeight: bodyColumn.implicitHeight + (dt ? dt.sp48 : 48)
 
         ColumnLayout {
             id: bodyColumn
             anchors.fill: parent
-            anchors.margins: root.theme ? root.theme.sp24 : 24
-            spacing: root.theme ? root.theme.sp16 : 16
+            anchors.margins: dt ? dt.sp24 : 24
+            spacing: dt ? dt.sp16 : 16
 
             AppText {
                 Layout.fillWidth: true
                 text: root.heading
                 visible: text.length > 0
-                color: root.theme ? root.theme.onSurface : "#E2E2E5"
-                font.pixelSize: root.theme ? root.theme.subtitle : 18
-                font.family: root.theme ? root.theme.fontFamily : "sans-serif"
+                color: dt.onSurface
+                font.pixelSize: dt ? dt.subtitle : 18
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.DemiBold
             }
         }

@@ -626,7 +626,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     const result: SyncableSettings = {
       fontSize: this.mockSettings.editorFontSize,
       themeMode: this.mockSettings.themeMode || 'system',
-      monetColor: 'default'
+      monetColor: 'default',
+      themePaletteJson: ''
     }
     return this.success(result)
   }

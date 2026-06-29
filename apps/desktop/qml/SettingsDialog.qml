@@ -100,7 +100,7 @@ Dialog {
             anchors.leftMargin: dt ? dt.sp24 : 24
             anchors.rightMargin: dt ? dt.sp16 : 16
             AppText { text: qsTr("设置"); color: dt ? dt.textPrimary : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
-            ToolbarButton { text: qsTr("关闭"); theme: root.dt; onClicked: root.close() }
+            ToolbarButton { text: qsTr("关闭"); dt: root.dt; onClicked: root.close() }
         }
     }
 
@@ -147,7 +147,7 @@ Dialog {
                 AppSlider {
                     id: fontSizeSlider
                     Layout.fillWidth: true
-                    theme: root.dt
+                    dt: root.dt
                     label: qsTr("字体大小")
                     valueText: Math.round(value) + " px"
                     // range from Core settings_presentation: min=12, max=72, step=1
@@ -159,7 +159,7 @@ Dialog {
                 AppSlider {
                     id: lineSpacingSlider
                     Layout.fillWidth: true
-                    theme: root.dt
+                    dt: root.dt
                     label: qsTr("行距倍数")
                     valueText: Number(value).toFixed(1) + "x"
                     // range from Core settings_presentation: min=1.0, max=3.0, step=0.1
@@ -186,7 +186,7 @@ Dialog {
                 AppSlider {
                     id: autoIndentWidth
                     Layout.fillWidth: true
-                    theme: root.dt
+                    dt: root.dt
                     label: qsTr("首行缩进宽度")
                     valueText: Number(value).toFixed(1) + qsTr(" 字符")
                     // range from Core settings_presentation: min=0.0, max=8.0, step=0.5
@@ -206,7 +206,7 @@ Dialog {
                 AppSlider {
                     id: typingAnimDuration
                     Layout.fillWidth: true
-                    theme: root.dt
+                    dt: root.dt
                     label: qsTr("打字动画持续时间")
                     valueText: Math.round(value) + " ms"
                     // range from Core settings_presentation: min=30, max=1000, step=10
@@ -226,7 +226,7 @@ Dialog {
                 AppSlider {
                     id: smoothCursorDuration
                     Layout.fillWidth: true
-                    theme: root.dt
+                    dt: root.dt
                     label: qsTr("平滑光标持续时间")
                     valueText: Math.round(value) + " ms"
                     // range from Core settings_presentation: min=30, max=1000, step=10
@@ -261,7 +261,7 @@ Dialog {
                 AppSlider {
                     id: autoSaveDelay
                     Layout.fillWidth: true
-                    theme: root.dt
+                    dt: root.dt
                     label: qsTr("自动保存延迟")
                     valueText: Math.round(value) + qsTr(" 秒")
                     // range from Core settings_presentation: min=1, max=10, step=1

@@ -2,6 +2,7 @@ import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
 import { ProjectTree, VolumeTree, ChapterMeta, Project, ChapterContent, ChapterSaveReceipt, LocalSettings } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeUpdateParams } from '../system/HarmonyThemeAdapter'
+import { DesignTokens } from '../system/DesignTokens'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
@@ -636,7 +637,7 @@ struct WorkspacePage {
             .fontSize(14)
             .height(32)
             .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
-            .fontColor(this.hasUnsavedChanges ? '#FFFFFF' : this.themeConfig.colors.textSecondary)
+            .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
             .enabled(!this.isSaving && this.hasUnsavedChanges)
             .onClick(() => this.saveChapter())
         }
@@ -894,7 +895,7 @@ struct WorkspacePage {
        .width('100%')
        .padding(12)
        .backgroundColor(this.themeConfig.colors.surface)
-       .borderRadius({ topLeft: 8, topRight: 8 })
+       .borderRadius({ topLeft: DesignTokens.radiusSm, topRight: DesignTokens.radiusSm })
        .onClick(() => this.toggleVolume(volumeTree.volume.id))
 
        // Chapters list
@@ -965,9 +966,9 @@ struct WorkspacePage {
     }
     .width('100%')
     .margin({ bottom: 12 })
-    .borderRadius(8)
+    .borderRadius(DesignTokens.radiusSm)
     .clip(true)
-    .shadow({ radius: 2, color: '#1A000000', offsetX: 0, offsetY: 1 })
+    .shadow({ radius: 2, color: DesignTokens.shadowLight.color, offsetX: 0, offsetY: 1 })
   }
 
   formatTime(isoString: string): string {

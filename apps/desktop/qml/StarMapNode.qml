@@ -26,9 +26,9 @@ Rectangle {
     signal positionChangeFinished()
     signal clicked()
 
-    radius: 8
-    color: dt ? dt.surface : "#1A1D23"
-    border.color: isSelected ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
+    radius: dt ? dt.radiusSm : 8
+    color: dt.surfaceContainer
+    border.color: isSelected ? dt.accent : dt.border
     border.width: isSelected ? 2 : 1
 
     // Shadow effect approximation
@@ -37,7 +37,7 @@ Rectangle {
         anchors.margins: -1
         z: -1
         color: "transparent"
-        border.color: Qt.rgba(0,0,0,0.1)
+        border.color: dt.shadowLight
         radius: root.radius + 1
         visible: !isSelected
     }
@@ -66,7 +66,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             text: root.title
-            color: dt ? dt.textPrimary : "#E2E4E9"
+            color: dt.textPrimary
             font.pixelSize: 12
             wrapMode: Text.Wrap
             elide: Text.ElideRight
@@ -126,7 +126,7 @@ Rectangle {
             case "Location": return "#FF9800"
             case "Event": return "#F44336"
             case "Concept": return "#9C27B0"
-            default: return dt ? dt.textMuted : "#606470"
+            default: return dt.textMuted
         }
     }
 

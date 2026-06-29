@@ -42,7 +42,7 @@ Item {
     AppButton {
         id: backBtn
         text: qsTr("← 返回")
-        theme: root.dt
+        dt: root.dt
         variant: "secondary"
         anchors.top: parent.top
         anchors.left: parent.left

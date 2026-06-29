@@ -48,7 +48,7 @@ Item {
         AppButton {
             visible: root.actionText.length > 0
             text: root.actionText
-            theme: root.dt
+            dt: root.dt
             variant: "primary"
             onClicked: root.actionClicked()
         }

@@ -14,10 +14,10 @@ import QtQuick.Layouts
 
 Item {
     id: control
-    property var theme: null
+    property var dt: null
     property alias spacing: col.spacing
     property string variant: "surface"
-    property int padding: theme ? theme.sp16 : 16
+    property int padding: dt ? dt.sp16 : 16
     property bool outlined: true
 
     implicitWidth: 200
@@ -25,12 +25,9 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        radius: theme ? theme.radiusLg : 16
-        color: {
-            if (!theme) return "#ffffff"
-            return control.variant === "surfaceVariant" ? theme.surfaceContainer : theme.card
-        }
-        border.color: theme ? theme.border : "#e2e8f0"
+        radius: dt ? dt.cardRadius : dt.radiusLg
+        color: control.variant === "surfaceVariant" ? dt.surfaceContainer : dt.card
+        border.color: dt.border
         border.width: control.outlined ? 1 : 0
     }
 
@@ -40,6 +37,6 @@ Item {
         id: col
         anchors.fill: parent
         anchors.margins: control.padding
-        spacing: theme ? theme.sp12 : 12
+        spacing: dt ? dt.sp12 : 12
     }
 }

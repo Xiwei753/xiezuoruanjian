@@ -10,6 +10,7 @@ import {
   ResultEnvelope
 } from '../model/CoreDtos'
 import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
+import { DesignTokens } from '../system/DesignTokens'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
 import { WidthClass, ShellMode } from '../model/CoreDtos'
@@ -370,7 +371,7 @@ struct SettingsPage {
     .width('100%')
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
+    .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
 
@@ -488,7 +489,7 @@ struct SettingsPage {
     .width('100%')
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
+    .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
 
@@ -542,7 +543,7 @@ struct SettingsPage {
     .width('100%')
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
+    .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
 
@@ -667,8 +668,8 @@ struct SettingsPage {
           Button($r('app.string.diagnose'))
             .fontSize(14)
             .height(36)
-            .backgroundColor(this.themeConfig.colors.secondary || '#6b7280')
-            .fontColor(this.themeConfig.colors.secondary || '#ffffff')
+            .backgroundColor(this.themeConfig.colors.secondaryContainer)
+            .fontColor(this.themeConfig.colors.onSecondaryContainer)
             .margin({ left: 12 })
             .enabled(!this.isDiagnosing)
             .onClick(() => this.runSyncDiagnostics())
@@ -748,7 +749,7 @@ struct SettingsPage {
           .width('100%')
           .padding(12)
           .backgroundColor(this.themeConfig.colors.background)
-          .borderRadius(8)
+          .borderRadius(DesignTokens.radiusSm)
           .margin({ bottom: 16 })
         }
       }
@@ -756,7 +757,7 @@ struct SettingsPage {
     .width('100%')
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
+    .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
 
@@ -786,7 +787,7 @@ struct SettingsPage {
     .width('100%')
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
+    .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
 
@@ -825,7 +826,7 @@ struct SettingsPage {
     .width('100%')
     .padding(16)
     .backgroundColor(this.themeConfig.colors.surface)
-    .borderRadius(12)
+    .borderRadius(DesignTokens.radiusMd)
     .margin({ bottom: 16 })
   }
 

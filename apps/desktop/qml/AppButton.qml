@@ -14,7 +14,7 @@ import QtQuick.Controls
 
 Button {
     id: control
-    property var theme: null
+    property var dt: null
     property string tooltip: ""
     property bool small: false
     property bool primary: false
@@ -26,32 +26,32 @@ Button {
     readonly property bool isSecondary: control.variant === "secondary"
 
     readonly property color containerColor: {
-        if (!control.enabled) return control.theme ? control.theme.surfaceContainer : "#f1f5f9";
-        if (isPrimary) return control.theme ? control.theme.primary : "#006497";
-        if (isDanger) return control.theme ? control.theme.dangerContainer : "#BA1A1A";
+        if (!control.enabled) return dt.surfaceContainerLow;
+        if (isPrimary) return dt.primary;
+        if (isDanger) return dt.dangerContainer;
         if (isText) return "transparent";
-        return control.theme ? control.theme.secondaryContainer : "#D4E4F6";
+        return dt.secondaryContainer;
     }
 
     readonly property color contentColor: {
-        if (!control.enabled) return control.theme ? control.theme.textDisabled : "#8C9198";
-        if (isPrimary) return control.theme ? control.theme.onPrimary : "#ffffff";
-        if (isDanger) return control.theme ? control.theme.onDangerContainer : "#ffffff";
-        if (isText) return control.theme ? control.theme.primary : "#006497";
-        return control.theme ? control.theme.onSecondaryContainer : "#E2E2E5";
+        if (!control.enabled) return dt.textDisabled;
+        if (isPrimary) return dt.onPrimary;
+        if (isDanger) return dt.onDangerContainer;
+        if (isText) return dt.primary;
+        return dt.onSecondaryContainer;
     }
 
     implicitHeight: small ? 32 : 40
     implicitWidth: Math.max(tm.width + (small ? 20 : 28), small ? 56 : 72)
 
-    TextMetrics { id: tm; text: control.text; font.pixelSize: control.theme ? control.theme.label : 13 }
+    TextMetrics { id: tm; text: control.text; font.pixelSize: dt ? dt.label : 13 }
 
     contentItem: AppText {
         text: control.text
         color: control.contentColor
-        font.pixelSize: control.theme ? control.theme.label : 13
+        font.pixelSize: dt ? dt.label : 13
         font.weight: Font.Medium
-        font.family: control.theme ? control.theme.fontFamily : "sans-serif"
+        font.family: dt ? dt.fontFamily : "sans-serif"
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
     }
@@ -60,19 +60,19 @@ Button {
         color: {
             if (!control.enabled) return control.containerColor;
             if (control.pressed) {
-                if (isText) return control.theme ? control.theme.surfaceContainer : "#f1f5f9";
-                return control.theme ? (control.theme.isDark ? Qt.lighter(control.containerColor, 1.08) : Qt.darker(control.containerColor, 1.08)) : control.containerColor;
+                if (isText) return dt.surfaceContainerLow;
+                return dt.isDark ? Qt.lighter(control.containerColor, 1.08) : Qt.darker(control.containerColor, 1.08);
             }
             if (control.hovered) {
-                if (isText) return control.theme ? control.theme.surfaceContainer : "#f1f5f9";
-                return control.theme ? (control.theme.isDark ? Qt.lighter(control.containerColor, 1.05) : Qt.darker(control.containerColor, 1.03)) : control.containerColor;
+                if (isText) return dt.surfaceContainerLow;
+                return dt.isDark ? Qt.lighter(control.containerColor, 1.05) : Qt.darker(control.containerColor, 1.03);
             }
             return control.containerColor;
         }
-        border.color: control.variant === "secondary" ? (control.theme ? control.theme.border : "#e2e8f0") : "transparent"
+        border.color: control.variant === "secondary" ? dt.border : "transparent"
         border.width: control.variant === "secondary" ? 1 : 0
-        radius: control.theme ? control.theme.radiusMd : 12
+        radius: dt ? dt.inputFieldRadius : dt.radiusMd
 
-        Behavior on color { ColorAnimation { duration: control.theme ? control.theme.animFast : 120 } }
+        Behavior on color { ColorAnimation { duration: dt ? dt.animFast : 120 } }
     }
 }

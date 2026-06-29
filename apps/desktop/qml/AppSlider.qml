@@ -15,7 +15,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    property var theme: null
+    property var dt: null
     property string label: ""
     property string valueText: ""
     property string description: ""
@@ -32,27 +32,27 @@ Item {
     ColumnLayout {
         id: content
         anchors.fill: parent
-        spacing: root.theme ? root.theme.sp6 : 6
+        spacing: dt ? dt.sp6 : 6
 
         RowLayout {
             Layout.fillWidth: true
             visible: root.label.length > 0 || root.valueText.length > 0
-            spacing: root.theme ? root.theme.sp12 : 12
+            spacing: dt ? dt.sp12 : 12
 
             AppText {
                 Layout.fillWidth: true
                 text: root.label
-                color: root.theme ? root.theme.textPrimary : "#E2E4E9"
-                font.pixelSize: root.theme ? root.theme.body : 14
-                font.family: root.theme ? root.theme.fontFamily : "sans-serif"
+                color: dt.textPrimary
+                font.pixelSize: dt ? dt.body : 14
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 wrapMode: Text.Wrap
             }
 
             AppText {
                 text: root.valueText
-                color: root.theme ? root.theme.textSecondary : "#9CA0AB"
-                font.pixelSize: root.theme ? root.theme.caption : 12
-                font.family: root.theme ? root.theme.fontFamily : "sans-serif"
+                color: dt.textSecondary
+                font.pixelSize: dt ? dt.caption : 12
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 horizontalAlignment: Text.AlignRight
                 visible: root.valueText.length > 0
             }
@@ -73,14 +73,12 @@ Item {
                 width: slider.availableWidth
                 height: 6
                 radius: 3
-                color: root.theme ? root.theme.surfaceVariant : "#DFE3EB"
+                color: dt.surfaceVariant
 
                 Rectangle {
                     width: slider.visualPosition * parent.width
                     height: parent.height
-                    color: slider.enabled
-                        ? (root.theme ? root.theme.primary : "#006497")
-                        : (root.theme ? root.theme.border : "#e2e8f0")
+                    color: slider.enabled ? dt.primary : dt.border
                     radius: 3
                 }
             }
@@ -92,11 +90,9 @@ Item {
                 height: width
                 radius: width / 2
                 color: slider.pressed
-                    ? (root.theme ? root.theme.accentHover : "#006497")
-                    : (slider.enabled
-                        ? (root.theme ? root.theme.primary : "#006497")
-                        : (root.theme ? root.theme.border : "#e2e8f0"))
-                border.color: root.theme ? root.theme.surface : "#ffffff"
+                    ? dt.accentHover
+                    : (slider.enabled ? dt.primary : dt.border)
+                border.color: dt.surface
                 border.width: 3
             }
         }
@@ -104,9 +100,9 @@ Item {
         AppText {
             Layout.fillWidth: true
             text: root.description
-            color: root.theme ? root.theme.textSecondary : "#9CA0AB"
-            font.pixelSize: root.theme ? root.theme.caption : 12
-            font.family: root.theme ? root.theme.fontFamily : "sans-serif"
+            color: dt.textSecondary
+            font.pixelSize: dt ? dt.caption : 12
+            font.family: dt ? dt.fontFamily : "sans-serif"
             wrapMode: Text.Wrap
             visible: root.description.length > 0
         }

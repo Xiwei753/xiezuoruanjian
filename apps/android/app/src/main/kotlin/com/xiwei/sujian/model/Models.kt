@@ -53,7 +53,8 @@ data class LocalSettings(
 data class SyncableSettings(
     @SerializedName("fontSize") val fontSize: Double = 0.0,
     @SerializedName("themeMode") val themeMode: String = "",
-    @SerializedName("monetColor") val monetColor: String = ""
+    @Deprecated("Use themePaletteJson instead") @SerializedName("monetColor") val monetColor: String = "",
+    @SerializedName("themePaletteJson") val themePaletteJson: String = ""
 )
 
 data class Project(

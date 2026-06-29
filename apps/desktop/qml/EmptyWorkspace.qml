@@ -16,7 +16,7 @@ import Qt.labs.platform as Platform
 
 Item {
     id: root
-    property var appTheme: null
+    property var dt: null
     property var backendRef: null
 
     signal createWorkspaceWithPath(string path)
@@ -48,11 +48,11 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: root.appTheme ? root.appTheme.bg : "#f5f5f5"
+        color: dt.bg
     }
 
     ColumnLayout {
-        spacing: root.appTheme ? root.appTheme.sp24 : 24
+        spacing: dt ? dt.sp24 : 24
         width: Math.min(parent.width - 80, 480)
         height: implicitHeight
         x: Math.max(0, Math.floor((parent.width - width) / 2))
@@ -63,8 +63,8 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             width: 64; height: 64
             radius: 32
-            color: root.appTheme ? root.appTheme.primaryContainer : "#CCE5FF"
-            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+            color: dt.primaryContainer
+            border.color: dt.border
             border.width: 1
 
             Rectangle {
@@ -72,7 +72,7 @@ Item {
                 width: 24; height: 24
                 radius: 4
                 color: "transparent"
-                border.color: root.appTheme ? root.appTheme.primary : "#006497"
+                border.color: dt.primary
                 border.width: 2
             }
         }
@@ -81,19 +81,19 @@ Item {
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("未打开工作区")
-            font.pixelSize: root.appTheme ? root.appTheme.title : 24
-            font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
+            font.pixelSize: dt ? dt.title : 24
+            font.family: dt ? dt.fontFamily : "sans-serif"
             font.bold: true
-            color: root.appTheme ? root.appTheme.textPrimary : "#E2E2E5"
+            color: dt.textPrimary
         }
 
         // Description
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("选择或创建工作区后开始写作")
-            font.pixelSize: root.appTheme ? root.appTheme.body : 14
-            font.family: root.appTheme ? root.appTheme.fontFamily : "sans-serif"
-            color: root.appTheme ? root.appTheme.textSecondary : "#8C9198"
+            font.pixelSize: dt ? dt.body : 14
+            font.family: dt ? dt.fontFamily : "sans-serif"
+            color: dt.textSecondary
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -102,14 +102,14 @@ Item {
         // Actions
         ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: root.appTheme ? root.appTheme.sp8 : 8
-            spacing: root.appTheme ? root.appTheme.sp12 : 12
+            Layout.topMargin: dt ? dt.sp8 : 8
+            spacing: dt ? dt.sp12 : 12
             width: 280
 
             AppButton {
                 Layout.fillWidth: true
                 text: qsTr("新建工作区")
-                theme: root.appTheme
+                dt: root.dt
                 variant: "primary"
                 onClicked: createWorkspaceDialog.open()
             }
@@ -117,7 +117,7 @@ Item {
             AppButton {
                 Layout.fillWidth: true
                 text: qsTr("打开工作区")
-                theme: root.appTheme
+                dt: root.dt
                 variant: "secondary"
                 onClicked: openWorkspaceDialog.open()
             }

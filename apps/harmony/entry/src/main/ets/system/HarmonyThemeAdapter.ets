@@ -3,14 +3,54 @@ import window from '@ohos.window'
 export type ThemeMode = 'light' | 'dark' | 'system'
 
 export interface ThemeColors {
+  // Primary
   primary: string
+  onPrimary: string
+  primaryContainer: string
+  onPrimaryContainer: string
+  // Secondary
   secondary: string
+  onSecondary: string
+  secondaryContainer: string
+  onSecondaryContainer: string
+  // Tertiary
+  tertiary: string
+  onTertiary: string
+  tertiaryContainer: string
+  onTertiaryContainer: string
+  // Error
+  error: string
+  onError: string
+  errorContainer: string
+  onErrorContainer: string
+  // Background/Surface
   background: string
+  onBackground: string
   surface: string
+  onSurface: string
+  surfaceVariant: string
+  onSurfaceVariant: string
+  // Surface containers
+  surfaceContainerLowest: string
+  surfaceContainerLow: string
+  surfaceContainer: string
+  surfaceContainerHigh: string
+  surfaceContainerHighest: string
+  surfaceDim: string
+  surfaceBright: string
+  // Outline
+  outline: string
+  outlineVariant: string
+  // Inverse
+  inverseSurface: string
+  inverseOnSurface: string
+  inversePrimary: string
+  // Scrim
+  scrim: string
+  // Legacy compat
   textPrimary: string
   textSecondary: string
   textHint: string
-  error: string
   success: string
   divider: string
   overlay: string
@@ -25,30 +65,92 @@ export interface ThemeConfig {
 }
 
 export const LightTheme: ThemeColors = {
-  primary: '#4A90D9',
-  secondary: '#7B68EE',
-  background: '#F5F5F5',
-  surface: '#FFFFFF',
-  textPrimary: '#333333',
-  textSecondary: '#666666',
-  textHint: '#999999',
-  error: '#E74C3C',
+  primary: '#006497',
+  onPrimary: '#FFFFFF',
+  primaryContainer: '#CCE5FF',
+  onPrimaryContainer: '#001E31',
+  secondary: '#51606F',
+  onSecondary: '#FFFFFF',
+  secondaryContainer: '#D4E4F6',
+  onSecondaryContainer: '#0E1D2A',
+  tertiary: '#6D578C',
+  onTertiary: '#FFFFFF',
+  tertiaryContainer: '#F1DAFF',
+  onTertiaryContainer: '#261447',
+  error: '#BA1A1A',
+  onError: '#FFFFFF',
+  errorContainer: '#FFDAD6',
+  onErrorContainer: '#410002',
+  background: '#FCFCFF',
+  onBackground: '#1A1C1E',
+  surface: '#FCFCFF',
+  onSurface: '#1A1C1E',
+  surfaceVariant: '#DFE3EB',
+  onSurfaceVariant: '#42474E',
+  surfaceContainerLowest: '#FFFFFF',
+  surfaceContainerLow: '#F1F3F9',
+  surfaceContainer: '#EBEDF4',
+  surfaceContainerHigh: '#E5E7EF',
+  surfaceContainerHighest: '#E0E2E9',
+  surfaceDim: '#D7D9DF',
+  surfaceBright: '#FCFCFF',
+  outline: '#72777F',
+  outlineVariant: '#C2C6CF',
+  inverseSurface: '#2E3036',
+  inverseOnSurface: '#F0F0F7',
+  inversePrimary: '#92CCFF',
+  scrim: '#000000',
+  // Legacy compat
+  textPrimary: '#1A1C1E',
+  textSecondary: '#42474E',
+  textHint: '#72777F',
   success: '#2ECC71',
-  divider: '#EEEEEE',
+  divider: '#C2C6CF',
   overlay: '#80000000'
 }
 
 export const DarkTheme: ThemeColors = {
-  primary: '#5BA0E9',
-  secondary: '#8B78FF',
-  background: '#1A1A1A',
-  surface: '#2D2D2D',
-  textPrimary: '#FFFFFF',
-  textSecondary: '#B0B0B0',
-  textHint: '#808080',
-  error: '#FF6B6B',
+  primary: '#92CCFF',
+  onPrimary: '#003351',
+  primaryContainer: '#004B73',
+  onPrimaryContainer: '#CCE5FF',
+  secondary: '#B8C8DA',
+  onSecondary: '#233240',
+  secondaryContainer: '#394857',
+  onSecondaryContainer: '#D4E4F6',
+  tertiary: '#D7BFFF',
+  onTertiary: '#3E2A5C',
+  tertiaryContainer: '#554074',
+  onTertiaryContainer: '#F1DAFF',
+  error: '#FFB4AB',
+  onError: '#690005',
+  errorContainer: '#93000A',
+  onErrorContainer: '#FFDAD6',
+  background: '#1A1C1E',
+  onBackground: '#E2E2E5',
+  surface: '#1A1C1E',
+  onSurface: '#E2E2E5',
+  surfaceVariant: '#42474E',
+  onSurfaceVariant: '#C3C6CF',
+  surfaceContainerLowest: '#0D0E13',
+  surfaceContainerLow: '#1A1C20',
+  surfaceContainer: '#1E2024',
+  surfaceContainerHigh: '#282A2F',
+  surfaceContainerHighest: '#33353A',
+  surfaceDim: '#121418',
+  surfaceBright: '#38393F',
+  outline: '#8C919A',
+  outlineVariant: '#42474E',
+  inverseSurface: '#E0E2E9',
+  inverseOnSurface: '#2E3036',
+  inversePrimary: '#006497',
+  scrim: '#000000',
+  // Legacy compat
+  textPrimary: '#E2E2E5',
+  textSecondary: '#C3C6CF',
+  textHint: '#8C919A',
   success: '#4ADE80',
-  divider: '#404040',
+  divider: '#42474E',
   overlay: '#80000000'
 }
 
@@ -100,20 +202,8 @@ export class HarmonyThemeAdapter {
   }
 
   getColors(): ThemeColors {
-    const c: ThemeColors = {
-      primary: this.currentTheme.colors.primary,
-      secondary: this.currentTheme.colors.secondary,
-      background: this.currentTheme.colors.background,
-      surface: this.currentTheme.colors.surface,
-      textPrimary: this.currentTheme.colors.textPrimary,
-      textSecondary: this.currentTheme.colors.textSecondary,
-      textHint: this.currentTheme.colors.textHint,
-      error: this.currentTheme.colors.error,
-      success: this.currentTheme.colors.success,
-      divider: this.currentTheme.colors.divider,
-      overlay: this.currentTheme.colors.overlay
-    }
-    return c
+    // 直接返回当前主题引用，ThemeColors 已包含全部字段
+    return this.currentTheme.colors
   }
 
   getMode(): ThemeMode {

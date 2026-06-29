@@ -13,33 +13,31 @@ import QtQuick.Layouts
 
 Rectangle {
     id: control
-    property var theme: null
+    property var dt: null
     property string status: "info"
     property string text: ""
     property color pillColor: {
-        if (!control.theme) return "#CCE5FF"
-        if (control.status === "success") return control.theme.successContainer
-        if (control.status === "warning") return control.theme.warningContainer
-        if (control.status === "error") return control.theme.dangerContainer
-        return control.theme.primaryContainer
+        if (control.status === "success") return dt.successContainer
+        if (control.status === "warning") return dt.warningContainer
+        if (control.status === "error") return dt.dangerContainer
+        return dt.primaryContainer
     }
     property color contentColor: {
-        if (!control.theme) return "#001E31"
-        if (control.status === "success") return control.theme.onSuccessContainer
-        if (control.status === "warning") return control.theme.onWarningContainer
-        if (control.status === "error") return control.theme.onDangerContainer
-        return control.theme.onPrimaryContainer
+        if (control.status === "success") return dt.onSuccessContainer
+        if (control.status === "warning") return dt.onWarningContainer
+        if (control.status === "error") return dt.onDangerContainer
+        return dt.onPrimaryContainer
     }
 
-    implicitWidth: pillRow.implicitWidth + (theme ? theme.sp16 : 16)
+    implicitWidth: pillRow.implicitWidth + (dt ? dt.sp16 : 16)
     implicitHeight: 28
-    radius: theme ? theme.radiusPill : 999
+    radius: dt ? dt.radiusPill : 999
     color: pillColor
 
     RowLayout {
         id: pillRow
         anchors.centerIn: parent
-        spacing: control.theme ? control.theme.sp6 : 6
+        spacing: dt ? dt.sp6 : 6
 
         Rectangle {
             width: 7
@@ -53,8 +51,8 @@ Rectangle {
             text: control.text
             visible: control.text.length > 0
             color: control.contentColor
-            font.pixelSize: control.theme ? control.theme.caption : 12
-            font.family: control.theme ? control.theme.fontFamily : "sans-serif"
+            font.pixelSize: dt ? dt.caption : 12
+            font.family: dt ? dt.fontFamily : "sans-serif"
             font.weight: Font.Medium
         }
     }

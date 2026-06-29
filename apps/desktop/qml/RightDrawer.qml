@@ -34,8 +34,8 @@ Rectangle {
     Rectangle {
         id: drawerPanel
         anchors.fill: parent
-        color: dt ? dt.surface : "#1A1D23"
-        border.color: dt ? dt.border : "#2A2E36"
+        color: dt.sidebar
+        border.color: dt.border
         border.width: 1
 
         ColumnLayout {
@@ -72,16 +72,16 @@ Rectangle {
                             height: 30
                             radius: dt ? dt.radiusSm : 8
                             color: root.currentTab === modelData.idx ?
-                                   (dt ? dt.accentSoft : "rgba(123,140,222,0.12)") :
-                                   hoverArea.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                                   dt.accentSoft :
+                                   hoverArea.containsMouse ? dt.card : "transparent"
 
                             AppText {
                                 id: tabLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
-                                       (dt ? dt.accentText : "#3D4D9E") :
-                                       (dt ? dt.textSecondary : "#5C6070")
+                                       dt.accentText :
+                                       dt.textSecondary
                                 font.pixelSize: dt ? dt.fontSm : 12
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
                             }
@@ -102,12 +102,12 @@ Rectangle {
                     Rectangle {
                         width: 24; height: 24
                         radius: 12
-                        color: closeHover.containsMouse ? (dt ? dt.card : "#1E2128") : "transparent"
+                        color: closeHover.containsMouse ? dt.card : "transparent"
 
                         AppText {
                             anchors.centerIn: parent
                             text: "\u2715"
-                            color: dt ? dt.textMuted : "#606470"
+                            color: dt.textMuted
                             font.pixelSize: dt ? dt.fontSm : 12
                         }
 
@@ -123,7 +123,7 @@ Rectangle {
             }
 
             // Divider
-            Rectangle { Layout.fillWidth: true; height: 1; color: dt ? dt.border : "#2A2E36" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: dt.border }
 
             // Content area
             Item {
@@ -166,14 +166,14 @@ Rectangle {
                         }
                         AppText {
                             text: qsTr("AI 助手")
-                            color: dt ? dt.textPrimary : "#E2E4E9"
+                            color: dt.textPrimary
                             font.pixelSize: dt ? dt.fontLg : 16
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
                         AppText {
                             text: qsTr("AI 功能将在后续版本实现")
-                            color: dt ? dt.textMuted : "#606470"
+                            color: dt.textMuted
                             font.pixelSize: dt ? dt.fontSm : 12
                             Layout.alignment: Qt.AlignHCenter
                         }

@@ -161,8 +161,9 @@ internal fun LocalSettings.toDto() = LocalSettingsDto(
     diagnosticsVerbose = diagnosticsVerbose
 )
 
-internal fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode, monetColor)
-internal fun SyncableSettings.toDto() = SyncableSettingsDto(fontSize, themeMode, monetColor)
+internal fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMode, monetColor, themePaletteJson)
+@Suppress("DEPRECATION")
+internal fun SyncableSettings.toDto() = SyncableSettingsDto(fontSize, themeMode, monetColor, themePaletteJson)
 
 internal fun SyncConfigDto.toModel() = SyncConfig(
     enabled = enabled,

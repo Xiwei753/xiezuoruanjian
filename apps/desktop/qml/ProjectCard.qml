@@ -23,16 +23,16 @@ Rectangle {
     property int todayInput: 0
     property string lastEdited: ""
     property string syncStatus: "none"
-    property string accentColor: "#7B8CDE"
+    property string accentColor: dt ? dt.primary.toString() : "#7B8CDE"
 
     signal clicked()
     signal rightClicked()
 
     width: 220
     height: 180
-    radius: dt ? dt.radiusLg : 16
-    color: hovered ? (dt ? dt.surfaceContainer : "#F0F3F7") : (dt ? dt.card : "#F6F8FB")
-    border.color: hovered ? (dt ? dt.primary : "#006497") : (dt ? dt.border : "#CBD5E1")
+    radius: dt ? dt.cardRadius : dt.radiusLg
+    color: hovered ? dt.cardHover : dt.card
+    border.color: hovered ? dt.primary : dt.border
     border.width: 1
 
     property bool hovered: false
@@ -71,7 +71,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
 
             StatusPill {
-                theme: dt
+                dt: dt
                 status: root.syncStatus === "success" ? "success" : (root.syncStatus === "syncing" ? "warning" : (root.syncStatus === "error" ? "error" : "info"))
                 text: ""
                 visible: root.syncStatus !== "none"
@@ -83,7 +83,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.topMargin: dt ? dt.sp12 : 12
             text: root.title || qsTr("未命名作品")
-            color: dt ? dt.textPrimary : "#E2E4E9"
+            color: dt.textPrimary
             font.pixelSize: dt ? dt.subtitle : 18
             font.family: dt ? dt.fontFamily : "sans-serif"
             font.weight: Font.DemiBold
@@ -103,14 +103,14 @@ Rectangle {
                 spacing: 2
                 AppText {
                     text: root.wordCount >= 10000 ? (root.wordCount / 10000).toFixed(1) + "w" : root.wordCount.toLocaleString()
-                    color: dt ? dt.textPrimary : "#E2E4E9"
+                    color: dt.textPrimary
                     font.pixelSize: dt ? dt.body : 14
                     font.family: dt ? dt.fontFamily : "sans-serif"
                     font.weight: Font.Medium
                 }
                 AppText {
                     text: qsTr("总字数")
-                    color: dt ? dt.textMuted : "#606470"
+                    color: dt.textMuted
                     font.pixelSize: dt ? dt.caption : 12
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
@@ -121,14 +121,14 @@ Rectangle {
                 visible: root.todayInput > 0
                 AppText {
                     text: "+" + (root.todayInput >= 1000 ? (root.todayInput / 1000).toFixed(1) + "k" : root.todayInput.toLocaleString())
-                    color: dt ? dt.primary : "#006497"
+                    color: dt.primary
                     font.pixelSize: dt ? dt.body : 14
                     font.family: dt ? dt.fontFamily : "sans-serif"
                     font.weight: Font.Medium
                 }
                 AppText {
                     text: qsTr("今日")
-                    color: dt ? dt.textMuted : "#606470"
+                    color: dt.textMuted
                     font.pixelSize: dt ? dt.caption : 12
                     font.family: dt ? dt.fontFamily : "sans-serif"
                 }
@@ -138,7 +138,7 @@ Rectangle {
 
             AppText {
                 text: root.lastEdited || ""
-                color: dt ? dt.textMuted : "#606470"
+                color: dt.textMuted
                 font.pixelSize: dt ? dt.caption : 12
                 font.family: dt ? dt.fontFamily : "sans-serif"
                 visible: text !== ""

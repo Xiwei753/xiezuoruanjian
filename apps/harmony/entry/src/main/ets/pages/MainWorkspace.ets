@@ -27,6 +27,7 @@ import {
   ThemeObserverImpl,
   ThemeUpdateParams
 } from '../system/HarmonyThemeAdapter'
+import { DesignTokens } from '../system/DesignTokens'
 import { HarmonyLifecycle, AutoSaveLifecycleObserver } from '../system/HarmonyLifecycle'
 import { getBridge } from '../common/AppContext'
 import {
@@ -699,7 +700,7 @@ struct MainWorkspace {
               }
               .width('100%')
               .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-              .borderRadius(8)
+              .borderRadius(DesignTokens.radiusSm)
               .backgroundColor(this.selectedProjectId === project.id
                 ? this.themeConfig.colors.background
                 : 'transparent')
@@ -833,7 +834,7 @@ struct MainWorkspace {
       }
       .width('100%')
       .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-      .borderRadius({ topLeft: 6, topRight: 6 })
+      .borderRadius({ topLeft: DesignTokens.radiusSm, topRight: DesignTokens.radiusSm })
       .backgroundColor(this.themeConfig.colors.background)
       .onClick(() => this.toggleVolume(volumeTree.volume.id))
 
@@ -886,7 +887,7 @@ struct MainWorkspace {
             .backgroundColor(this.selectedChapterId === chapter.id
               ? this.themeConfig.colors.background
               : 'transparent')
-            .borderRadius(4)
+            .borderRadius(DesignTokens.radiusXs)
             .onClick(() => this.selectChapter(chapter.id, chapter.title, volumeTree.volume.id))
           }, (chapter: ChapterMeta) => chapter.id)
         }
@@ -894,7 +895,7 @@ struct MainWorkspace {
     }
     .width('100%')
     .margin({ bottom: 8 })
-    .borderRadius(6)
+    .borderRadius(DesignTokens.radiusSm)
     .clip(true)
   }
 
@@ -971,7 +972,7 @@ struct MainWorkspace {
           .fontSize(14)
           .height(32)
           .backgroundColor(this.hasUnsavedChanges ? this.themeConfig.colors.primary : this.themeConfig.colors.divider)
-          .fontColor(this.hasUnsavedChanges ? '#FFFFFF' : this.themeConfig.colors.textSecondary)
+          .fontColor(this.hasUnsavedChanges ? this.themeConfig.colors.onPrimary : this.themeConfig.colors.textSecondary)
           .enabled(!this.isSaving && this.hasUnsavedChanges)
           .onClick(() => this.saveChapter())
       }
@@ -1186,7 +1187,7 @@ struct MainWorkspace {
         .width('100%')
         .padding({ left: 16, right: 16, top: 14, bottom: 14 })
         .backgroundColor(this.themeConfig.colors.surface)
-        .borderRadius(12)
+        .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => {
           router.pushUrl({
@@ -1260,7 +1261,7 @@ struct MainWorkspace {
         .width('100%')
         .padding({ left: 16, right: 16, top: 16, bottom: 16 })
         .backgroundColor(this.themeConfig.colors.surface)
-        .borderRadius(12)
+        .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => {
           router.pushUrl({

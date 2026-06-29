@@ -117,6 +117,7 @@ export interface SyncableSettings {
   fontSize: number
   themeMode: string
   monetColor: string
+  themePaletteJson: string
 }
 
 export type ThemeMode = 'light' | 'dark' | 'system'

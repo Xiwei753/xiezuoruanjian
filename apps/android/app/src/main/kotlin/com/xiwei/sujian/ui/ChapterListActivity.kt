@@ -105,6 +105,14 @@ class ChapterListActivity : AppCompatActivity() {
         fabNewVolume.setOnClickListener {
             showNewVolumeDialog()
         }
+
+        // ChapterListActivity 无底栏，FAB 只需 24dp 间距
+        val density = resources.displayMetrics.density
+        val insets = androidx.core.view.ViewCompat.getRootWindowInsets(window.decorView)
+        val safeBottomInset = insets?.let {
+            it.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom
+        } ?: 0
+        FabPlacementHelper.adjustFabBottomMargin(fabNewVolume, hasBottomNav = false, bottomNavHeight = 0, safeBottomInset = safeBottomInset, density = density)
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {

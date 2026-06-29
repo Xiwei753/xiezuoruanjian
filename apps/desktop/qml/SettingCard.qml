@@ -17,9 +17,9 @@ Rectangle {
     property var dt: null
     property string title: ""
     default property alias contentData: contentColumn.data
-    radius: dt ? dt.radiusCard : 18
-    color: dt ? dt.card : "#1E2128"
-    border.color: dt ? dt.border : "#2A2E36"
+    radius: dt ? dt.cardRadius : dt.radiusCard
+    color: dt.surfaceContainerLow
+    border.color: dt.border
     border.width: 1
 
     implicitHeight: contentColumn.implicitHeight + (dt ? dt.sp32 : 32)
@@ -32,7 +32,7 @@ Rectangle {
 
         AppText {
             text: root.title
-            color: dt ? dt.accent : "#7B8CDE"
+            color: dt.accent
             font.pixelSize: dt ? dt.fontMd : 14
             font.weight: Font.Bold
         }

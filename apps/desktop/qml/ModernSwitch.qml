@@ -25,9 +25,9 @@ Item {
         width: 50
         height: 28
         radius: 14
-        color: !root.enabled ? (dt ? dt.surfaceContainer : "#E2E8F0") : (root.checked ? (dt ? dt.primary : "#006497") : (dt ? dt.surfaceVariant : "#DFE3EB"))
+        color: !root.enabled ? dt.surfaceContainerLow : (root.checked ? dt.switchTrackOn : dt.switchTrackOff)
         border.width: root.checked ? 0 : 1
-        border.color: !root.enabled ? (dt ? dt.border : "#CBD5E1") : (dt ? dt.outline : "#72787E")
+        border.color: !root.enabled ? dt.border : dt.outline
 
         Rectangle {
             width: root.checked ? 24 : 18
@@ -35,7 +35,7 @@ Item {
             radius: width / 2
             y: (parent.height - height) / 2
             x: root.checked ? (parent.width - width - 2) : 5
-            color: root.checked ? (dt ? dt.onPrimary : "#FFFFFF") : (dt ? dt.outline : "#72787E")
+            color: root.checked ? dt.onPrimary : dt.outline
             opacity: root.enabled ? 1.0 : 0.45
             Behavior on x { NumberAnimation { duration: 140 } }
             Behavior on width { NumberAnimation { duration: 140 } }

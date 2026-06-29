@@ -462,7 +462,7 @@ ApplicationWindow {
             }
             sourceComponent: EmptyWorkspace {
                 backendRef: workspaceBackend
-                appTheme: designTokens
+                dt: designTokens
                 onCreateWorkspaceWithPath: (path) => {
                     appController.createWorkspaceWithPath(path, false);
                 }

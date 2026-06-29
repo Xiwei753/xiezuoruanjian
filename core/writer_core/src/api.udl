@@ -116,6 +116,7 @@ dictionary SyncableSettingsDto {
     f64 font_size;
     string theme_mode;
     string monet_color;
+    string theme_palette_json;
 };
 
 dictionary SyncConfigDto {

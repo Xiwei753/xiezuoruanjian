@@ -348,6 +348,9 @@ class MainActivity : AppCompatActivity() {
             val safeBottomVp = insets?.let {
                 it.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom / density
             } ?: 0f
+            val safeBottomInsetPx = insets?.let {
+                it.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom
+            } ?: 0
             val keyboardVisible = insets?.let {
                 it.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime())
             } ?: false
@@ -368,9 +371,9 @@ class MainActivity : AppCompatActivity() {
 
             currentLayoutPlan?.let { plan ->
                 when (plan.shellMode) {
-                    ShellMode.TwoPane -> applyTwoPaneLayout(plan, widthPx, density)
-                    ShellMode.SupportingPane -> applySupportingPaneLayout(plan, widthPx, density)
-                    ShellMode.SinglePane -> applySinglePaneLayout(plan, density)
+                    ShellMode.TwoPane -> applyTwoPaneLayout(plan, widthPx, density, safeBottomInsetPx)
+                    ShellMode.SupportingPane -> applySupportingPaneLayout(plan, widthPx, density, safeBottomInsetPx)
+                    ShellMode.SinglePane -> applySinglePaneLayout(plan, density, safeBottomInsetPx)
                 }
 
                 Log.d("MainActivity", "LayoutPlan applied: shellMode=${plan.shellMode}, " +
@@ -383,7 +386,7 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             Log.w("MainActivity", "Failed to apply LayoutPlan, using defaults", e)
             // 降级为 SinglePane
-            applySinglePaneLayout(null, resources.displayMetrics.density)
+            applySinglePaneLayout(null, resources.displayMetrics.density, 0)
         }
     }
 
@@ -393,7 +396,7 @@ class MainActivity : AppCompatActivity() {
      * - 显示 twoPaneContainer，左侧列表 + 右侧详情
      * - 左侧面板占 40%，右侧面板占 60%
      */
-    private fun applyTwoPaneLayout(plan: LayoutPlan, widthPx: Float, density: Float) {
+    private fun applyTwoPaneLayout(plan: LayoutPlan, widthPx: Float, density: Float, safeBottomInset: Int) {
         isTwoPaneMode = true
 
         // 隐藏 SinglePane 的主容器和底部导航
@@ -452,6 +455,10 @@ class MainActivity : AppCompatActivity() {
         fabNewProject.layoutParams = fabLayoutParams
         // FAB 的显示/隐藏由 applyWorkspaceScreenPolicy() 统一管理，此处不主动 show
         fabNewStarMapNode.hide()
+
+        // TwoPane 模式下无底栏，FAB 只需 24dp 间距
+        FabPlacementHelper.adjustFabBottomMargin(fabNewProject, hasBottomNav = false, bottomNavHeight = 0, safeBottomInset = safeBottomInset, density = density)
+        FabPlacementHelper.adjustFabBottomMargin(fabNewStarMapNode, hasBottomNav = false, bottomNavHeight = 0, safeBottomInset = safeBottomInset, density = density)
     }
 
     /**
@@ -459,7 +466,7 @@ class MainActivity : AppCompatActivity() {
      * - 保持底部导航
      * - 内容区域居中并限制最大宽度
      */
-    private fun applySupportingPaneLayout(plan: LayoutPlan, widthPx: Float, density: Float) {
+    private fun applySupportingPaneLayout(plan: LayoutPlan, widthPx: Float, density: Float, safeBottomInset: Int) {
         isTwoPaneMode = false
 
         // 隐藏 TwoPane 容器
@@ -498,6 +505,10 @@ class MainActivity : AppCompatActivity() {
         val fabLayoutParams = fabNewProject.layoutParams as? CoordinatorLayout.LayoutParams
         fabLayoutParams?.anchorId = R.id.mainContainer
         fabNewProject.layoutParams = fabLayoutParams
+
+        // SupportingPane 模式下有底栏，FAB 需要避让
+        FabPlacementHelper.adjustFabBottomMargin(fabNewProject, hasBottomNav = true, bottomNavHeight = bottomNav.measuredHeight, safeBottomInset = safeBottomInset, density = density)
+        FabPlacementHelper.adjustFabBottomMargin(fabNewStarMapNode, hasBottomNav = true, bottomNavHeight = bottomNav.measuredHeight, safeBottomInset = safeBottomInset, density = density)
     }
 
     /**
@@ -505,7 +516,7 @@ class MainActivity : AppCompatActivity() {
      * - 保持底部导航
      * - 全宽内容区域
      */
-    private fun applySinglePaneLayout(plan: LayoutPlan?, density: Float) {
+    private fun applySinglePaneLayout(plan: LayoutPlan?, density: Float, safeBottomInset: Int) {
         isTwoPaneMode = false
 
         // 隐藏 TwoPane 容器
@@ -536,6 +547,10 @@ class MainActivity : AppCompatActivity() {
         val fabLayoutParams = fabNewProject.layoutParams as? CoordinatorLayout.LayoutParams
         fabLayoutParams?.anchorId = R.id.mainContainer
         fabNewProject.layoutParams = fabLayoutParams
+
+        // SinglePane 模式下有底栏，FAB 需要避让
+        FabPlacementHelper.adjustFabBottomMargin(fabNewProject, hasBottomNav = true, bottomNavHeight = bottomNav.measuredHeight, safeBottomInset = safeBottomInset, density = density)
+        FabPlacementHelper.adjustFabBottomMargin(fabNewStarMapNode, hasBottomNav = true, bottomNavHeight = bottomNav.measuredHeight, safeBottomInset = safeBottomInset, density = density)
     }
 
     /**
@@ -745,7 +760,9 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         loadProjects()
         loadRecentEdits()
+        // Deprecated: syncMonetColor() — replaced by syncThemePalette()
         syncMonetColor()
+        syncThemePalette()
     }
 
     private fun syncMonetColor() {
@@ -759,12 +776,33 @@ class MainActivity : AppCompatActivity() {
                         withContext(Dispatchers.IO) {
                             val syncable = settingsRepository.getSyncableSettings()
                             if (syncable.monetColor != hexColor) {
+                                @Suppress("DEPRECATION")
                                 settingsRepository.saveSyncableSettings(syncable.copy(monetColor = hexColor))
                             }
                         }
                     }
                 } catch (e: Exception) {
                     Log.w("MainActivity", "Failed to extract Monet color", e)
+                }
+            }
+        }
+    }
+
+    private fun syncThemePalette() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            lifecycleScope.launch {
+                try {
+                    val paletteJson = ThemePaletteHelper.extractThemePaletteJson(this@MainActivity)
+                    if (paletteJson != null && ::settingsRepository.isInitialized) {
+                        withContext(Dispatchers.IO) {
+                            val syncable = settingsRepository.getSyncableSettings()
+                            if (syncable.themePaletteJson != paletteJson) {
+                                settingsRepository.saveSyncableSettings(syncable.copy(themePaletteJson = paletteJson))
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w("MainActivity", "Failed to sync theme palette", e)
                 }
             }
         }
