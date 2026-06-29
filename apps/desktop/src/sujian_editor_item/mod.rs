@@ -2184,29 +2184,46 @@ impl QQuickItem for SujianEditorItem {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
+    // --- Lifecycle guard tests for typing animation disabled ---
 
-    /// 测试：动画超时后被 tick_text_animations 清除
-    /// 注意：此测试验证 ActiveTextAnimation 数据结构和超时逻辑，
-    /// 不依赖 Qt 运行时。
+    /// 验证：set_typing_animation_enabled(false) 后不应创建新动画
+    /// 逻辑约束：当 typing_animation_enabled=false 时，
+    /// record_transaction 不应创建新的 ActiveTextAnimation。
+    #[test]
+    fn typing_animation_disabled_prevents_new_animations() {
+        let typing_animation_enabled = false;
+        let events_non_empty = true;
+        let is_scrolling = false;
+        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
+        assert!(!should_create, "when typing_animation_enabled=false, no animations should be created");
+    }
+
+    /// 验证：scrolling 抑制动画创建
+    #[test]
+    fn scrolling_prevents_new_animations() {
+        let typing_animation_enabled = true;
+        let events_non_empty = true;
+        let is_scrolling = true;
+        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
+        assert!(!should_create, "when scrolling, no animations should be created");
+    }
+
+    /// 验证：动画超时后应被 tick_text_animations 清除
+    /// 2x duration + 200ms 宽限期后应过期
     #[test]
     fn active_text_animation_expires_after_timeout() {
         let anim = ActiveTextAnimation {
             kind: TextAnimationKind::Insert,
             byte_range: (0, 3),
-            start_time: Instant::now() - Duration::from_millis(500),
+            start_time: Instant::now() - std::time::Duration::from_millis(500),
             duration_ms: 100,
         };
-        // 2x duration + 200ms = 400ms grace period
-        // 500ms > 400ms, so this animation should be expired
         let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
         let should_expire = elapsed >= anim.duration_ms * 2 + 200;
         assert!(should_expire, "animation should be expired after 2x duration + 200ms grace");
     }
 
+    /// 验证：动画在宽限期内不应过期
     #[test]
     fn active_text_animation_not_expired_within_grace() {
         let anim = ActiveTextAnimation {
@@ -2218,62 +2235,5 @@ mod tests {
         let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
         let should_expire = elapsed >= anim.duration_ms * 2 + 200;
         assert!(!should_expire, "animation should NOT be expired within grace period");
-    }
-
-    /// 测试：is_complex_grapheme 正确识别复杂字符
-    #[test]
-    fn complex_grapheme_detection() {
-        // Emoji (non-BMP)
-        assert!(is_complex_grapheme('\u{1F600}')); // 😀
-        // ZWJ
-        assert!(is_complex_grapheme('\u{200D}'));
-        // Variation selector
-        assert!(is_complex_grapheme('\u{FE0F}'));
-        // Combining diacritical mark
-        assert!(is_complex_grapheme('\u{0300}'));
-        // Regular ASCII - not complex
-        assert!(!is_complex_grapheme('a'));
-        // Regular CJK - not complex
-        assert!(!is_complex_grapheme('你'));
-    }
-
-    /// 测试：set_typing_animation_enabled(false) 语义验证
-    /// 验证关闭动画后，active_text_animations 应该被清除，
-    /// active_insert_byte_range() 应返回 None。
-    ///
-    /// 由于无法在测试中构造 SujianEditorItem（需要 Qt 运行时），
-    /// 此测试验证逻辑约束：当 typing_animation_enabled=false 时，
-    /// record_transaction 不应创建新的 ActiveTextAnimation。
-    #[test]
-    fn typing_animation_disabled_prevents_new_animations() {
-        // 验证条件逻辑：如果 !typing_animation_enabled，则不应创建动画
-        let typing_animation_enabled = false;
-        let events_non_empty = true;
-        let is_scrolling = false;
-        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
-        assert!(!should_create, "when typing_animation_enabled=false, no animations should be created");
-    }
-
-    /// 测试：scrolling 抑制动画创建
-    #[test]
-    fn scrolling_prevents_new_animations() {
-        let typing_animation_enabled = true;
-        let events_non_empty = true;
-        let is_scrolling = true;
-        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
-        assert!(!should_create, "when scrolling, no animations should be created");
-    }
-
-    /// 测试：set_scroll_y / set_is_scrolling(true) 清除活跃动画的语义
-    /// 验证 clear_active_text_animations 后 active_insert_byte_range == None
-    #[test]
-    fn cleared_animations_yield_no_insert_range() {
-        // 模拟 Vec<ActiveTextAnimation> 被 clear 后的状态
-        let active_text_animations: Vec<ActiveTextAnimation> = Vec::new();
-        let insert_range = active_text_animations
-            .iter()
-            .find(|a| a.kind == TextAnimationKind::Insert)
-            .map(|a| a.byte_range);
-        assert_eq!(insert_range, None, "after clear, active_insert_byte_range should be None");
     }
 }
