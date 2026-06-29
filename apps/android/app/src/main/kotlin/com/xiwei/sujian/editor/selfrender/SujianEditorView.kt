@@ -32,7 +32,7 @@ import com.xiwei.sujian.model.SujianVisualEditContext
  * - Core 仍唯一业务语义来源
  * - Android 只负责输入适配、布局、绘制、触摸、IME
  * - 文本变化必须生成 EditorTransaction
- * - 动画事件继续复用 Core EditorAnimationEvent
+ * - 动画事件统一走 Core EditorVisualTransaction
  * - 通过同一个 ViewModel 读写章节内容，不能绕过 Core
  *
  * ## 控制器层级
@@ -120,48 +120,11 @@ class SujianEditorView @JvmOverloads constructor(
             }
         }
 
-        // 设置动画事件提供者桥接
-        // SujianAnimationEventProvider 使用 Int/Long，
-        // AnimationEventProvider 使用 UInt/ULong，
-        // 这里做类型转换桥接
-        buffer.setAnimationEventProvider(object : SujianAnimationEventProvider {
-            override fun provide(
-                oldText: String,
-                newText: String,
-                oldCursorUtf8: Int,
-                newCursorUtf8: Int,
-                cause: String,
-                maxAnimatedChars: Int,
-                animationDurationMs: Long
-            ): List<com.xiwei.sujian.model.EditorAnimationEventData> {
-                val provider = animationEventProvider ?: return emptyList()
-                return provider.provide(
-                    oldText,
-                    newText,
-                    oldCursorUtf8.toUInt(),
-                    newCursorUtf8.toUInt(),
-                    cause,
-                    maxAnimatedChars.toUInt(),
-                    animationDurationMs.toULong()
-                )
-            }
-        })
-
         // 可聚焦，可获取输入
         isFocusable = true
         isFocusableInTouchMode = true
         isClickable = true
         isLongClickable = true
-    }
-
-    // ── 外部注入的动画事件提供者 ──
-    private var animationEventProvider: com.xiwei.sujian.ui.AnimationEventProvider? = null
-
-    /**
-     * 注入 Core 动画事件提供者（由 EditorFragment 调用）
-     */
-    fun setAnimationEventProvider(provider: com.xiwei.sujian.ui.AnimationEventProvider) {
-        animationEventProvider = provider
     }
 
     // ── 视觉事务提供者（Phase 2） ──

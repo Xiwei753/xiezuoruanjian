@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# pre-commit hook — 禁止提交构建产物/二进制文件
+#
+# 安装方法：
+#   git config core.hooksPath .githooks
+#
+# 或者手动复制到 .git/hooks/pre-commit
+
+set -euo pipefail
+
+# 获取即将提交的文件列表
+staged_files=$(git diff --cached --name-only --diff-filter=ACM)
+
+if [ -z "$staged_files" ]; then
+    exit 0
+fi
+
+FORBIDDEN_EXTENSIONS="apk aab hap exe msi AppImage zip 7z dmg so dll"
+violations=0
+
+# 检查禁止的扩展名
+for ext in $FORBIDDEN_EXTENSIONS; do
+    matching=$(echo "$staged_files" | grep -i "\\.${ext}$" || true)
+    if [ -n "$matching" ]; then
+        echo "PRE-COMMIT BLOCKED: found *.${ext} files (forbidden binary artifact):"
+        echo "$matching" | while read -r f; do
+            echo "  - $f"
+        done
+        violations=$((violations + 1))
+    fi
+done
+
+# 检查禁止的目录
+for dir in target build dist; do
+    matching=$(echo "$staged_files" | grep "^${dir}/" || true)
+    if [ -n "$matching" ]; then
+        echo "PRE-COMMIT BLOCKED: found files in ${dir}/ directory (forbidden build output):"
+        echo "$matching" | while read -r f; do
+            echo "  - $f"
+        done
+        violations=$((violations + 1))
+    fi
+done
+
+if [ "$violations" -gt 0 ]; then
+    echo ""
+    echo "Commit rejected: build artifacts must not be committed."
+    echo "Unstage these files with: git reset HEAD <file>"
+    exit 1
+fi
+
+exit 0

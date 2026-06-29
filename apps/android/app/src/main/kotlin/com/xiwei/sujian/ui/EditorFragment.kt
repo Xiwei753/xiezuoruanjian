@@ -284,22 +284,11 @@ class EditorFragment : Fragment() {
     private fun setupSelfRenderEditor() {
         DiagnosticsLogger.d("SujianEditor", "Setting up self-render editor (SujianEditorView)")
 
-        // 注入 Core 动画事件提供者
+        // 注入 Core 视觉事务提供者
         try {
             val animBridge = com.xiwei.sujian.data.BridgeProvider.getEditorAnimationBridge(requireContext())
-            sujianEditorView.setAnimationEventProvider(AnimationEventProvider { oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs ->
-                try {
-                    when (val result = animBridge.editorAnimationEvents(oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs)) {
-                        is com.xiwei.sujian.data.BridgeResult.Success -> result.data
-                        else -> emptyList()
-                    }
-                } catch (_: Exception) {
-                    emptyList()
-                }
-            })
-            DiagnosticsLogger.d("SujianEditor", "AnimationEventProvider injected for SujianEditorView")
 
-            // 注入 Core 视觉事务提供者（Phase 2）
+            // 注入 Core 视觉事务提供者（唯一主路径）
             sujianEditorView.setVisualTransactionProvider(VisualTransactionProvider { oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs ->
                 try {
                     when (val result = animBridge.editorVisualTransaction(oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs)) {
@@ -312,7 +301,7 @@ class EditorFragment : Fragment() {
             })
             DiagnosticsLogger.d("SujianEditor", "VisualTransactionProvider injected for SujianEditorView")
         } catch (e: Exception) {
-            DiagnosticsLogger.w("SujianEditor", "Failed to inject AnimationEventProvider for SujianEditorView", e)
+            DiagnosticsLogger.w("SujianEditor", "Failed to inject VisualTransactionProvider for SujianEditorView", e)
         }
 
         // 内容变更监听

@@ -12,6 +12,7 @@ enum class EditorAnimationKindData {
     Cursor
 }
 
+/** Legacy: 仅用于旧版 WriterEditText fallback，自研写作区（SujianEditorView）不再使用此链路 */
 data class EditorAnimationEventData(
     val id: ULong,
     val kind: EditorAnimationKindData,

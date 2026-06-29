@@ -81,7 +81,7 @@ class SujianImeController(
      * 此处不再重复处理动画。
      */
     fun onEditResult(result: SujianEditResult) {
-        // 动画事件由 SujianAnimationController.handleAnimationEvents() 处理
+        // 动画事件由 SujianAnimationController.handleVisualEdit() 处理
         // 此处仅做 IME 相关的善后工作
     }
     

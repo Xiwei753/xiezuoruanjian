@@ -1,6 +1,5 @@
 package com.xiwei.sujian.editor.selfrender
 
-import com.xiwei.sujian.model.EditorAnimationEventData
 import com.xiwei.sujian.model.EditorAnimationKindData
 import com.xiwei.sujian.model.EditorVisualTransactionData
 import com.xiwei.sujian.model.SujianCursorRectData
@@ -12,7 +11,7 @@ import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 /**
  * SujianAnimationController — 自研写作区动画控制器（唯一主路径）
  *
- * 管理 EditorAnimationEvent 的接收、分发、生命周期。
+ * 管理 EditorVisualTransaction 的接收、分发、生命周期。
  *
  * ## 动画路线
  * - 真吞吐：静态层跳过 inserted range + overlay 层绘制
@@ -59,7 +58,7 @@ class SujianAnimationController(
     private val deleteSnapshots = mutableListOf<DeleteSnapshot>()
     
     // 最近一次 onBeforeDelete 返回的 animationId，
-    // 用于在 handleDeleteEvent 中精确匹配 Core 返回的 Delete 事件
+    // 用于在 handleDeleteTransaction 中精确匹配 Core 返回的 Delete 事件
     private var lastDeleteSnapshotId: ULong = 0u
     
     /**
@@ -164,6 +163,13 @@ class SujianAnimationController(
         
         // 获取插入的 glyph rects（从新文本的新布局中获取）
         val glyphRects = layout.getGlyphRects(text, rangeStartUtf16, rangeEndUtf16)
+        
+        // 防御：glyphRects 为空时直接 return，不设置 animatedInsertRange/hidden range，不 addAnimation
+        if (glyphRects.isEmpty()) {
+            DiagnosticsLogger.d(TAG, "No glyph rects for insert transaction at [$rangeStartUtf16, $rangeEndUtf16), skipping animation")
+            return
+        }
+        
         vt.insertGlyphRects = glyphRects.map { gr ->
             SujianGlyphRectData(gr.x.toDouble(), gr.y.toDouble(), gr.w.toDouble(), gr.h.toDouble(), gr.char, gr.baselineY.toDouble())
         }
@@ -316,33 +322,6 @@ class SujianAnimationController(
         }
     }
     
-    // ── Legacy: 旧版 handleAnimationEvents（保留兼容） ──
-    
-    /**
-     * 处理 Core 返回的动画事件（旧版路线，保留兼容）
-     *
-     * Phase 2 推荐使用 handleVisualEdit + handleInsertTransaction/handleDeleteTransaction。
-     * 此方法仅在未使用 runVisualEdit 时被调用。
-     */
-    fun handleAnimationEvents(events: List<EditorAnimationEventData>, cause: SujianEditCause) {
-        if (!animationEnabled) return
-        if (!shouldAnimate(cause)) return
-        
-        for (event in events) {
-            when (event.kind) {
-                EditorAnimationKindData.Insert -> {
-                    handleInsertEvent(event)
-                }
-                EditorAnimationKindData.Delete -> {
-                    handleDeleteEvent(event)
-                }
-                EditorAnimationKindData.Cursor -> {
-                    // Cursor 动画由 CursorController 处理
-                }
-            }
-        }
-    }
-    
     /**
      * 设置滚动状态
      */
@@ -388,127 +367,39 @@ class SujianAnimationController(
     }
     
     /**
-     * Legacy: 判断是否需要动画（使用 SujianEditCause）
-     */
-    private fun shouldAnimate(cause: SujianEditCause): Boolean {
-        return when (cause) {
-            SujianEditCause.Typing,
-            SujianEditCause.Delete,
-            SujianEditCause.TypingCommit -> true
-            SujianEditCause.Paste,
-            SujianEditCause.Load,
-            SujianEditCause.Format,
-            SujianEditCause.ImeComposition,
-            SujianEditCause.Programmatic -> false
-        }
-    }
-    
-    /**
      * 检查是否应跳过复杂 grapheme 的 glyph 动画
-     * （emoji/ZWJ/variation selector/combining mark）
+     * （emoji/ZWJ/variation selector/combining mark/regional indicator/surrogate pair）
      */
     private fun shouldSkipGlyphAnimation(text: String, startUtf16: Int, endUtf16: Int): Boolean {
         if (startUtf16 >= endUtf16 || startUtf16 >= text.length) return false
-        // 检查范围内是否包含 surrogate pair（emoji 等）
         for (i in startUtf16 until endUtf16.coerceAtMost(text.length)) {
+            val codePoint = text.codePointAt(i)
+            // Surrogate pair（emoji 等）
             if (Character.isHighSurrogate(text[i]) || Character.isLowSurrogate(text[i])) {
+                return true
+            }
+            // ZWJ (U+200D)
+            if (codePoint == 0x200D) {
+                return true
+            }
+            // Variation Selector (U+FE00-U+FE0F, U+E0100-U+E01EF)
+            if ((codePoint in 0xFE00..0xFE0F) || (codePoint in 0xE0100..0xE01EF)) {
+                return true
+            }
+            // Combining mark (Unicode general category M*)
+            val charType = Character.getType(codePoint)
+            if (charType == Character.NON_SPACING_MARK.toInt()
+                || charType == Character.COMBINING_SPACING_MARK.toInt()
+                || charType == Character.ENCLOSING_MARK.toInt()
+            ) {
+                return true
+            }
+            // Regional Indicator (U+1F1E6-U+1F1FF)
+            if (codePoint in 0x1F1E6..0x1F1FF) {
                 return true
             }
         }
         return false
-    }
-    
-    // ── Legacy: 旧版事件处理 ──
-    
-    private fun handleInsertEvent(event: EditorAnimationEventData) {
-        val text = buffer.text
-        val rangeStartUtf16 = buffer.utf8ToUtf16(event.rangeStart)
-        val rangeEndUtf16 = rangeStartUtf16 + event.text.length
-
-        // oldCursorRect: 插入前的光标位置
-        // rangeStartUtf16 是新文本中插入文本的起始位置，对应插入前的光标位置
-        // 因为插入点之前的文本没有改变，所以新布局中该位置的坐标等于旧布局中的坐标
-        val oldCursorRect = layout.getCursorRect(text, rangeStartUtf16)
-
-        val glyphRects = layout.getGlyphRects(text, rangeStartUtf16, rangeEndUtf16)
-
-        // 设置静态层跳过范围，避免插入动画期间重影
-        renderer.setAnimatedInsertRange(IntRange(rangeStartUtf16, rangeEndUtf16))
-
-        renderer.addAnimation(SujianOverlayAnim(
-            id = event.id,
-            kind = "insert",
-            text = event.text,
-            startX = oldCursorRect.x,
-            startY = oldCursorRect.top,
-            startBaselineY = oldCursorRect.baselineY,
-            endX = if (glyphRects.isNotEmpty()) glyphRects.first().x else oldCursorRect.x,
-            endY = if (glyphRects.isNotEmpty()) glyphRects.first().y else oldCursorRect.top,
-            endBaselineY = if (glyphRects.isNotEmpty()) glyphRects.first().baselineY else oldCursorRect.baselineY,
-            durationMs = event.durationMs,
-            startTimeMs = System.currentTimeMillis(),
-            glyphRects = glyphRects
-        ))
-    }
-    
-    private fun handleDeleteEvent(event: EditorAnimationEventData) {
-        val newCursorRect = layout.getCursorRect(buffer.text, buffer.selection.head)
-
-        // 使用 lastDeleteSnapshotId 精确匹配最近的删除快照
-        val snapshot = consumeDeleteSnapshot(lastDeleteSnapshotId)
-        if (snapshot != null) {
-            renderer.addAnimation(SujianOverlayAnim(
-                id = event.id,
-                kind = "delete",
-                text = event.text,
-                startX = snapshot.oldCursorRect.x,
-                startY = snapshot.oldCursorRect.top,
-                startBaselineY = snapshot.oldCursorRect.baselineY,
-                endX = newCursorRect.x,
-                endY = newCursorRect.top,
-                endBaselineY = newCursorRect.baselineY,
-                durationMs = event.durationMs,
-                startTimeMs = System.currentTimeMillis(),
-                glyphRects = snapshot.deletedGlyphRects
-            ))
-        } else {
-            // 没有匹配的快照时，尝试 FIFO fallback
-            val fallbackSnapshot = deleteSnapshots.firstOrNull()
-            if (fallbackSnapshot != null) {
-                deleteSnapshots.remove(fallbackSnapshot)
-                renderer.addAnimation(SujianOverlayAnim(
-                    id = event.id,
-                    kind = "delete",
-                    text = event.text,
-                    startX = fallbackSnapshot.oldCursorRect.x,
-                    startY = fallbackSnapshot.oldCursorRect.top,
-                    startBaselineY = fallbackSnapshot.oldCursorRect.baselineY,
-                    endX = newCursorRect.x,
-                    endY = newCursorRect.top,
-                    endBaselineY = newCursorRect.baselineY,
-                    durationMs = event.durationMs,
-                    startTimeMs = System.currentTimeMillis(),
-                    glyphRects = fallbackSnapshot.deletedGlyphRects
-                ))
-            } else {
-                // 完全没有快照时，使用 Core 事件信息创建简化动画
-                DiagnosticsLogger.d(TAG, "No delete snapshot for event ${event.id}, using fallback")
-                renderer.addAnimation(SujianOverlayAnim(
-                    id = event.id,
-                    kind = "delete",
-                    text = event.text,
-                    startX = newCursorRect.x,
-                    startY = newCursorRect.top,
-                    startBaselineY = newCursorRect.baselineY,
-                    endX = newCursorRect.x,
-                    endY = newCursorRect.top,
-                    endBaselineY = newCursorRect.baselineY,
-                    durationMs = event.durationMs,
-                    startTimeMs = System.currentTimeMillis(),
-                    glyphRects = emptyList()
-                ))
-            }
-        }
     }
     
     companion object {

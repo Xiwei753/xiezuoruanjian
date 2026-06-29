@@ -18,6 +18,7 @@ import uniffi.writer_core.VisualCoordinateModeDto
  * parse them back on Android; the JSON property is retained only for the Desktop QML route.
  */
 class EditorAnimationBridge internal constructor(private val appService: AppServiceBridge) {
+    /** Legacy: 仅用于旧版 WriterEditText fallback，自研写作区不再使用 */
     fun editorAnimationEvents(
         oldText: String,
         newText: String,

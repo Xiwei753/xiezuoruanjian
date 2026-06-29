@@ -20,11 +20,23 @@ build/
 *.apk
 *.aab
 *.so
+*.hap
 local.properties
 .gradle/
 captures/
 apps/android/app/build/
 apps/android/app/src/main/jniLibs/
+apps/android/build/
+
+# Binary / build artifacts (never commit)
+*.exe
+*.msi
+*.AppImage
+*.zip
+*.7z
+*.dmg
+*.dll
+dist/
 # UniFFI 自动生成的 Kotlin 绑定（构建时自动生成）
 apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/
 

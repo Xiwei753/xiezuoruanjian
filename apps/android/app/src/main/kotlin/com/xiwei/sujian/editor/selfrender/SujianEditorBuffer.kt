@@ -1,8 +1,5 @@
 package com.xiwei.sujian.editor.selfrender
 
-import com.xiwei.sujian.model.EditorAnimationEventData
-import com.xiwei.sujian.model.EditorAnimationKindData
-
 /**
  * 文本变更原因，与 Core EditorTransactionCause 对齐。
  */
@@ -34,30 +31,13 @@ data class SujianSelection(
 }
 
 /**
- * 文本变更结果，包含新文本、新选区、以及 Core 返回的动画事件
+ * 文本变更结果，包含新文本、新选区、变更原因
  */
 data class SujianEditResult(
     val newText: String,
     val newSelection: SujianSelection,
-    val cause: SujianEditCause,
-    val animationEvents: List<EditorAnimationEventData>
+    val cause: SujianEditCause
 )
-
-/**
- * 动画事件提供者接口。
- * Android 端通过此接口调用 Core EditorEngine 的 animation_events 方法。
- */
-interface SujianAnimationEventProvider {
-    fun provide(
-        oldText: String,
-        newText: String,
-        oldCursorUtf8: Int,
-        newCursorUtf8: Int,
-        cause: String,
-        maxAnimatedChars: Int,
-        animationDurationMs: Long
-    ): List<EditorAnimationEventData>
-}
 
 /**
  * SujianEditorBuffer — 自研写作区文本缓冲区
@@ -70,6 +50,7 @@ interface SujianAnimationEventProvider {
  * - Android 只负责文本存储和选区管理
  * - 文本变化必须生成 EditorTransaction 语义
  * - composing text 不进 undo/保存/正文动画
+ * - 动画事件统一走 Core EditorVisualTransaction（通过 VisualTransactionProvider）
  */
 class SujianEditorBuffer {
 
@@ -87,9 +68,6 @@ class SujianEditorBuffer {
         private set
     val hasComposing: Boolean get() = composingStart >= 0 && composingEnd >= 0 && composingStart != composingEnd
 
-    // ── 动画事件提供者 ──
-    private var animationProvider: SujianAnimationEventProvider? = null
-
     // ── 配置 ──
     var maxAnimatedChars: Int = 8
     var animationDurationMs: Long = 160L
@@ -97,33 +75,24 @@ class SujianEditorBuffer {
     // ── 监听器 ──
     var onTextChanged: ((SujianEditResult) -> Unit)? = null
 
-    fun setAnimationEventProvider(provider: SujianAnimationEventProvider) {
-        animationProvider = provider
-    }
-
     // ── 公共 API ──
 
     /**
      * 加载文本（章节加载），不触发动画
      */
     fun loadText(newText: String) {
-        val oldText = text
         text = newText
         selection = SujianSelection.collapsed(0)
         clearComposing()
 
-        val events = queryAnimationEvents(oldText, newText, 0, 0, "Load")
-        onTextChanged?.invoke(SujianEditResult(newText, selection, SujianEditCause.Load, events))
+        onTextChanged?.invoke(SujianEditResult(newText, selection, SujianEditCause.Load))
     }
 
     /**
      * 插入文本（commitText），触发 TypingCommit 或 Typing
      */
     fun commitText(inserted: String, cause: SujianEditCause = SujianEditCause.TypingCommit): SujianEditResult {
-        if (inserted.isEmpty()) return SujianEditResult(text, selection, cause, emptyList())
-
-        val oldText = text
-        val oldCursorUtf8 = selectionUtf8()
+        if (inserted.isEmpty()) return SujianEditResult(text, selection, cause)
 
         // 如果有选区，先删除选中内容
         val effectiveText = if (!selection.isCollapsed) {
@@ -138,15 +107,7 @@ class SujianEditorBuffer {
         selection = SujianSelection.collapsed(newCursorPos)
         clearComposing()
 
-        val newCursorUtf8 = selectionUtf8()
-        val causeStr = when (cause) {
-            SujianEditCause.Typing -> "Typing"
-            SujianEditCause.TypingCommit -> "TypingCommit"
-            SujianEditCause.Paste -> "Paste"
-            else -> "Programmatic"
-        }
-        val events = queryAnimationEvents(oldText, text, oldCursorUtf8, newCursorUtf8, causeStr)
-        val result = SujianEditResult(text, selection, cause, events)
+        val result = SujianEditResult(text, selection, cause)
         onTextChanged?.invoke(result)
         return result
     }
@@ -155,22 +116,17 @@ class SujianEditorBuffer {
      * 删除光标周围的文本
      */
     fun deleteSurrounding(beforeLength: Int, afterLength: Int): SujianEditResult {
-        val oldText = text
-        val oldCursorUtf8 = selectionUtf8()
-
         val cursorPos = selection.head
         val deleteStart = (cursorPos - beforeLength).coerceAtLeast(0)
         val deleteEnd = (cursorPos + afterLength).coerceAtMost(text.length)
 
-        if (deleteStart >= deleteEnd) return SujianEditResult(text, selection, SujianEditCause.Delete, emptyList())
+        if (deleteStart >= deleteEnd) return SujianEditResult(text, selection, SujianEditCause.Delete)
 
         text = text.substring(0, deleteStart) + text.substring(deleteEnd)
         selection = SujianSelection.collapsed(deleteStart)
         clearComposing()
 
-        val newCursorUtf8 = selectionUtf8()
-        val events = queryAnimationEvents(oldText, text, oldCursorUtf8, newCursorUtf8, "Delete")
-        val result = SujianEditResult(text, selection, SujianEditCause.Delete, events)
+        val result = SujianEditResult(text, selection, SujianEditCause.Delete)
         onTextChanged?.invoke(result)
         return result
     }
@@ -340,34 +296,9 @@ class SujianEditorBuffer {
 
     // ── 内部方法 ──
 
-    private fun selectionUtf8(): Int = utf16ToUtf8(selection.head)
-
     private fun clearComposing() {
         composingStart = -1
         composingEnd = -1
     }
 
-    private fun queryAnimationEvents(
-        oldText: String,
-        newText: String,
-        oldCursorUtf8: Int,
-        newCursorUtf8: Int,
-        cause: String
-    ): List<EditorAnimationEventData> {
-        val provider = animationProvider ?: return emptyList()
-        return try {
-            provider.provide(
-                oldText = oldText,
-                newText = newText,
-                oldCursorUtf8 = oldCursorUtf8,
-                newCursorUtf8 = newCursorUtf8,
-                cause = cause,
-                maxAnimatedChars = maxAnimatedChars,
-                animationDurationMs = animationDurationMs
-            )
-        } catch (e: Exception) {
-            // Core 调用失败时跳过动画，不打断编辑
-            emptyList()
-        }
-    }
 }

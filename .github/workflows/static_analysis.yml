@@ -38,6 +38,9 @@ jobs:
           echo "PYTHONUTF8=1" >> "$GITHUB_ENV"
           echo "PYTHONIOENCODING=utf-8" >> "$GITHUB_ENV"
 
+      - name: Check no binary artifacts in tracked files
+        run: bash tools/check_no_binary_artifacts.sh
+
       - name: Check documentation links
         run: python3 tools/check_doc_links.py
 
