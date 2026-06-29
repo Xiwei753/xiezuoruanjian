@@ -238,6 +238,7 @@ impl Default for SujianEditorItem {
             cursor_animation_duration_ms: Default::default(),
             typing_animation_enabled: Default::default(),
             typing_animation_duration_ms: Default::default(),
+            coordinated_text_cursor_animation_enabled: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
             animation_events_json: Default::default(),
