@@ -786,7 +786,9 @@ mod tests {
     #[test]
     fn test_verbose_disabled_filters_info() {
         // 保存原始状态
-        let prev = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
         VERBOSE_ENABLED.store(false, Ordering::Relaxed);
 
         let dir = tempdir().unwrap();
@@ -811,12 +813,15 @@ mod tests {
         assert!(content.contains("some error"), "ERROR should always be written");
 
         // 恢复原始状态
-        VERBOSE_ENABLED.store(prev, Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
     }
 
     #[test]
     fn test_verbose_enabled_writes_all() {
-        let prev = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
         VERBOSE_ENABLED.store(true, Ordering::Relaxed);
 
         let dir = tempdir().unwrap();
@@ -829,7 +834,8 @@ mod tests {
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("some info message"), "INFO should be written when verbose is enabled");
 
-        VERBOSE_ENABLED.store(prev, Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
     }
 
     #[test]
