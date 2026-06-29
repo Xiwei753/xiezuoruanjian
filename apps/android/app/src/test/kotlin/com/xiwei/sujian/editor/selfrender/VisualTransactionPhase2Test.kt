@@ -266,7 +266,7 @@ class VisualTransactionPhase2Test {
             coordinateMode = VisualCoordinateModeData.Baseline
         )
 
-        assertEquals(42u, vt.id)
+        assertEquals(42uL, vt.id)
         assertEquals(EditorAnimationKindData.Insert, vt.kind)
         assertEquals(SujianEditCauseData.Typing, vt.cause)
         assertEquals("ab", vt.oldText)
