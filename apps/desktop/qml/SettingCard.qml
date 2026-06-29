@@ -17,28 +17,34 @@ Rectangle {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _surfaceContainerLow: dt ? dt.surfaceContainerLow : "#F6F8FC"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _accent: dt ? dt.accent : "#006497"
+    readonly property int _cardRadius: dt ? dt.cardRadius : 16
+    readonly property int _sp16: dt ? dt.sp16 : 16
+    readonly property int _sp20: dt ? dt.sp20 : 20
+    readonly property int _sp32: dt ? dt.sp32 : 32
+    readonly property int _fontMd: dt ? dt.fontMd : 14
 
     property string title: ""
     default property alias contentData: contentColumn.data
-    radius: _dt.cardRadius
-    color: _dt.surfaceContainerLow
-    border.color: _dt.border
+    radius: _cardRadius
+    color: _surfaceContainerLow
+    border.color: _border
     border.width: 1
 
-    implicitHeight: contentColumn.implicitHeight + _dt.sp32
+    implicitHeight: contentColumn.implicitHeight + _sp32
 
     ColumnLayout {
         id: contentColumn
         anchors.fill: parent
-        anchors.margins: _dt.sp20
-        spacing: _dt.sp16
+        anchors.margins: _sp20
+        spacing: _sp16
 
         AppText {
             text: root.title
-            color: _dt.accent
-            font.pixelSize: _dt.fontMd
+            color: _accent
+            font.pixelSize: _fontMd
             font.weight: Font.Bold
         }
     }
