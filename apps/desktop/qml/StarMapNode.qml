@@ -20,8 +20,16 @@ Rectangle {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _primary: dt ? dt.primary : "#006497"
+    readonly property color _onPrimary: dt ? dt.onPrimary : "#FFFFFF"
+    readonly property color _accent: dt ? dt.accent : "#006497"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _surfaceContainer: dt ? dt.surfaceContainer : "#F0F3F8"
+    readonly property color _shadowLight: dt ? dt.shadowLight : "#0000000F"
+    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
+    readonly property color _textMuted: dt ? dt.textMuted : "#747880"
+    readonly property int _radiusXs: dt ? dt.radiusXs : 4
+    readonly property int _radiusSm: dt ? dt.radiusSm : 8
 
     property string title: "Node"
     property string kind: "Note"
@@ -31,9 +39,9 @@ Rectangle {
     signal positionChangeFinished()
     signal clicked()
 
-    radius: _dt.radiusSm
-    color: _dt.surfaceContainer
-    border.color: isSelected ? _dt.accent : _dt.border
+    radius: _radiusSm
+    color: _surfaceContainer
+    border.color: isSelected ? _accent : _border
     border.width: isSelected ? 2 : 1
 
     // Shadow effect approximation
@@ -42,7 +50,7 @@ Rectangle {
         anchors.margins: -1
         z: -1
         color: "transparent"
-        border.color: _dt.shadowLight
+        border.color: _shadowLight
         radius: root.radius + 1
         visible: !isSelected
     }
@@ -56,12 +64,12 @@ Rectangle {
             Layout.fillWidth: true
             height: 16
             color: getKindColor(root.kind)
-            radius: _dt.radiusXs
+            radius: _radiusXs
 
             AppText {
                 anchors.centerIn: parent
                 text: root.kind
-                color: _dt.onPrimary
+                color: _onPrimary
                 font.pixelSize: 10
                 font.bold: true
             }
@@ -71,7 +79,7 @@ Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
             text: root.title
-            color: _dt.textPrimary
+            color: _textPrimary
             font.pixelSize: 12
             wrapMode: Text.Wrap
             elide: Text.ElideRight
@@ -131,7 +139,7 @@ Rectangle {
             case "Location": return "#FF9800"
             case "Event": return "#F44336"
             case "Concept": return "#9C27B0"
-            default: return _dt.textMuted
+            default: return _textMuted
         }
     }
 
