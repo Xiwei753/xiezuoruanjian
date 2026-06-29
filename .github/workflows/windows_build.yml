@@ -176,6 +176,12 @@ jobs:
               Write-Host "Moved installer to target/release/$($installer.Name)"
             }
           }
+          # Record actual installer path for subsequent steps
+          $installer = Get-ChildItem "target/release/*${{ matrix.flavor }}*.exe" | Where-Object { $_.Name -notlike "sujian-windows-*" } | Select-Object -First 1
+          if ($installer) {
+            "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_ENV
+            Write-Host "Installer path: $($installer.FullName)"
+          }
 
       - name: Sign installer (optional)
         shell: pwsh
@@ -184,8 +190,8 @@ jobs:
             $certBytes = [System.Convert]::FromBase64String($env:SIGNING_CERT_SECRET)
             $certPath = Join-Path $env:RUNNER_TEMP "signing-cert.pfx"
             [System.IO.File]::WriteAllBytes($certPath, $certBytes)
-            $installerPath = "target/release/SujianWriterSetup-${{ matrix.flavor }}.exe"
-            if (Test-Path $installerPath) {
+            $installerPath = $env:INSTALLER_PATH
+            if ($installerPath -and (Test-Path $installerPath)) {
               $signArgs = @("sign", "/f", $certPath, "/tr", "http://timestamp.digicert.com", "/td", "sha256", "/fd", "sha256")
               if ($env:SIGNING_CERT_PASSWORD) {
                 $signArgs += @("/p", $env:SIGNING_CERT_PASSWORD)
@@ -193,6 +199,8 @@ jobs:
               $signArgs += $installerPath
               & signtool @signArgs
               Write-Host "Installer signed successfully"
+            } else {
+              Write-Host "Installer not found at INSTALLER_PATH=$installerPath, skipping signing"
             }
             Remove-Item $certPath -Force
           } else {
@@ -213,5 +221,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sujian-windows-${{ matrix.flavor }}-installer
-          path: target/release/SujianWriterSetup-${{ matrix.flavor }}.exe
+          path: ${{ env.INSTALLER_PATH }}
           retention-days: 30

@@ -1805,15 +1805,19 @@ mod tests {
         assert!(elapsed > anim.duration_ms * 2 + 200);
     }
 
-    // --- Animation suppressed boundary tests ---
-    // These tests verify that clear_active_text_animations is correctly called
-    // when certain operations occur (set_plain_text_from_qml, reload_plain_text,
-    // set_scroll_y, set_is_scrolling(true), visual_changed), ensuring no hidden
-    // range remains that would cause permanently invisible text.
+    // --- Animation logic constraint tests ---
+    // These tests verify data-structure invariants and logic constraints of
+    // ActiveTextAnimation / Vec<ActiveTextAnimation>, NOT integration tests
+    // that call SujianEditorItem methods directly.
+    //
+    // Long-term: extract active_text_animations into a TextAnimationState struct
+    // (no Qt dependency), enabling real unit tests for start/clear/timeout/
+    // disable/scroll/reload/visual_change — not just Vec::clear() simulations.
 
-    /// Simulates having active insert animations, then clears them.
-    /// Verifies that after clear, active_text_animations is empty —
-    /// mirroring what set_plain_text_from_qml does via clear_active_text_animations().
+    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection.
+    /// This is a precondition for set_plain_text_from_qml's call to
+    /// clear_active_text_animations() — if clear() didn't empty the Vec,
+    /// hidden ranges would persist and cause permanently invisible text.
     #[test]
     fn test_clear_active_text_animations_on_set_plain_text() {
         // Simulate active insert animation state
@@ -1831,9 +1835,9 @@ mod tests {
         assert!(animations.is_empty(), "active_text_animations should be empty after set_plain_text_from_qml");
     }
 
-    /// Simulates having active animation, then clears them.
-    /// Verifies that after clear, active_text_animations is empty —
-    /// mirroring what reload_plain_text does via clear_active_text_animations().
+    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection
+    /// even with multiple animation entries. This is a precondition for
+    /// reload_plain_text's call to clear_active_text_animations().
     #[test]
     fn test_clear_active_text_animations_on_reload() {
         let mut animations: Vec<ActiveTextAnimation> = vec![
@@ -1858,9 +1862,9 @@ mod tests {
         assert!(animations.is_empty(), "active_text_animations should be empty after reload_plain_text");
     }
 
-    /// Simulates having active animation, then clears them when is_scrolling becomes true.
-    /// Verifies that after clear, active_text_animations is empty —
-    /// mirroring what set_is_scrolling(true) does via clear_active_text_animations().
+    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection.
+    /// This is a precondition for set_is_scrolling(true)'s call to
+    /// clear_active_text_animations().
     #[test]
     fn test_clear_active_text_animations_on_scroll() {
         let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
@@ -1877,9 +1881,9 @@ mod tests {
         assert!(animations.is_empty(), "active_text_animations should be empty after set_is_scrolling(true)");
     }
 
-    /// Simulates having active animation, then clears them on visual_changed.
-    /// Verifies that after clear, active_text_animations is empty —
-    /// mirroring what visual_changed does via clear_active_text_animations().
+    /// Verifies that Vec<ActiveTextAnimation>.clear() empties the collection.
+    /// This is a precondition for visual_changed's call to
+    /// clear_active_text_animations().
     #[test]
     fn test_clear_active_text_animations_on_visual_changed() {
         let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
@@ -1896,9 +1900,9 @@ mod tests {
         assert!(animations.is_empty(), "active_text_animations should be empty after visual_changed");
     }
 
-    /// Verifies that after clear_active_text_animations, active_insert_byte_range returns None.
-    /// This ensures no hidden range remains that would cause permanently invisible text
-    /// in the static text layer.
+    /// Verifies that after Vec<ActiveTextAnimation>.clear(), the active_insert_byte_range
+    /// logic returns None. This is a constraint: clear must eliminate all hidden ranges
+    /// that would cause permanently invisible text in the static text layer.
     #[test]
     fn test_no_hidden_range_after_clear() {
         // Simulate active insert animation
@@ -1929,9 +1933,9 @@ mod tests {
 
     // --- Additional guard tests for different setting combinations ---
 
-    /// Simulates multiple active animations, then clears them all.
-    /// Verifies that after clear, active_text_animations is completely empty —
-    /// no stale Insert or Delete entries remain.
+    /// Verifies that Vec<ActiveTextAnimation>.clear() removes all entries
+    /// (both Insert and Delete kinds). This is a constraint for
+    /// clear_active_text_animations: no stale entries may remain after clear.
     #[test]
     fn test_active_text_animation_cleared_on_multiple_events() {
         let mut animations: Vec<ActiveTextAnimation> = vec![
@@ -2222,8 +2226,10 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // Animation lifecycle is owned by QML EditorAnimationOverlay.
-        // No Rust-side animation cleanup needed.
+        // Animation lifecycle split:
+        // - QML EditorAnimationOverlay owns ghost (insert overlay glyph) lifecycle
+        // - Rust owns hidden range lifecycle (active_text_animations),
+        //   animation-disabled cleanup, and timeout fallback (tick_text_animations)
 
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {

@@ -296,9 +296,9 @@ data class SyncDiagnosticsResult(
     @SerializedName("error_category") val errorCategory: String,
     @SerializedName("raw_error") val rawError: String?,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String?,
+    @Deprecated("proxy_policy — 代理功能已移除，禁止扩展。破坏性版本 v2 删除")
     @SerializedName("proxy_policy") val proxyPolicy: String,
-    // [DEPRECATED] proxy_policy — 代理功能已移除。禁止扩展代理探测逻辑。
-    // TODO(破坏性版本 v2): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
+    @Deprecated("network_probe_summary — 代理探测已移除，禁止扩展。破坏性版本 v2 删除")
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>
 )
 
@@ -318,9 +318,9 @@ data class SyncResult(
     @SerializedName("error_category") val errorCategory: String? = null,
     @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
+    @Deprecated("proxy_policy — 代理功能已移除，禁止扩展。破坏性版本 v2 删除")
     @SerializedName("proxy_policy") val proxyPolicy: String = "",
-    // [DEPRECATED] proxy_policy — 代理功能已移除。禁止扩展代理探测逻辑。
-    // TODO(破坏性版本 v2): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
+    @Deprecated("network_probe_summary — 代理探测已移除，禁止扩展。破坏性版本 v2 删除")
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
 )
 

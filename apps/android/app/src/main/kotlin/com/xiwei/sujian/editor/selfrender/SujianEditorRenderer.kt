@@ -265,9 +265,12 @@ class SujianEditorRenderer(
      * 使用 clipRect + Layout.draw() 分段绘制，复用 Layout 的 TextShaper 整形数据，
      * 避免逐 code point 硬画导致复杂 grapheme（emoji、ZWJ、组合字符、RTL）错位。
      * 
-     * 长期路线：完全迁移到 grapheme cluster / StaticLayout / TextShaper 分段绘制，
-     * 消除手动分段逻辑。当前实现通过 clipRect 复用 Layout 整形，等价于
-     * StaticLayout 分段绘制的正确性。
+     * RTL/双向文本注意：getPrimaryHorizontal 在 RTL run 中返回的 x 坐标可能反向，
+     * 因此 clipRect 使用 min/max 而非假设 xStart < xEnd。
+     * 
+     * 长期路线：迁移到 getSelectionPath / visual run 分段绘制，
+     * 不依赖坐标猜测方向。当前实现通过 clipRect 复用 Layout 整形，
+     * 等价于 StaticLayout 分段绘制的正确性。
      */
     private fun drawLineSegment(
         canvas: Canvas,
@@ -290,10 +293,13 @@ class SujianEditorRenderer(
             layout.getPrimaryHorizontal(safeEnd)
         }
 
-        if (xEnd <= xStart) return
+        // RTL/双向文本中 xEnd 可能小于 xStart，取 min/max 确保 clipRect 正确
+        val left = minOf(xStart, xEnd)
+        val right = maxOf(xStart, xEnd)
+        if (right - left < 0.5f) return
 
         canvas.save()
-        canvas.clipRect(xStart, lineTop, xEnd, lineBottom)
+        canvas.clipRect(left, lineTop, right, lineBottom)
         // Layout.draw() 绘制整个 layout，clipRect 限制只显示目标范围
         // Layout 内部使用 TextShaper，正确处理 emoji/ZWJ/组合字符/RTL
         layout.draw(canvas)
