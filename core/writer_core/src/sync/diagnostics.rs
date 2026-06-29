@@ -90,17 +90,18 @@ impl crate::sync::SyncService {
                 }
             }
             BackendType::Git => {
-                // Git 后端（libgit2）不支持独立 diagnose，保留快速路径
-                // 实际同步时如果出错会暴露真实错误
-                result.network_ok = true;
-                result.network_status = "ok_git_backend".to_string();
-                result.auth_ok = true;
-                result.auth_status = "assumed_ok_git".to_string();
-                result.repo_ok = true;
-                result.repo_status = "assumed_exists".to_string();
-                result.branch_ok = true;
-                result.branch_status = "assumed_exists".to_string();
-                result.success = true;
+                // Git 后端（libgit2）是 legacy 后端，不支持独立 diagnose。
+                // 不再假成功，返回明确的"不支持"状态，建议用户使用 GitHubApi 后端。
+                // 实际同步时如果出错会暴露真实错误。
+                result.network_ok = false;
+                result.network_status = "unsupported_git_backend".to_string();
+                result.auth_ok = false;
+                result.auth_status = "not_checked_git_backend".to_string();
+                result.repo_ok = false;
+                result.repo_status = "not_checked_git_backend".to_string();
+                result.branch_ok = false;
+                result.branch_status = "not_checked_git_backend".to_string();
+                result.success = false;
                 Ok(result)
             }
         }

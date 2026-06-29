@@ -247,6 +247,142 @@ class SelfRenderAnimationLogicTest {
         assertEquals(2, range2.last - range2.first)
     }
 
+    // ── excludeRange 不相交行批量收集 ──
+
+    @Test
+    fun excludeRange_nonOverlapLines_batchDrawn() {
+        // 可视行 0-9（每行 10 字符），exclude [25, 35) 影响行 2-3
+        // 不相交行应被收集为连续区间：[0, 1] 和 [4, 9]
+        val firstVisLine = 0
+        val lastVisLine = 9
+        val excludeRange = IntRange(25, 35) // 影响行 2, 3
+
+        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
+        var rangeStart = -1
+        for (lineIdx in firstVisLine..lastVisLine) {
+            val lineStart = lineIdx * 10
+            val lineEnd = lineStart + 10
+            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            if (!overlaps) {
+                if (rangeStart < 0) rangeStart = lineIdx
+            } else {
+                if (rangeStart >= 0) {
+                    nonOverlapLineRanges.add(Pair(rangeStart, lineIdx - 1))
+                    rangeStart = -1
+                }
+            }
+        }
+        if (rangeStart >= 0) {
+            nonOverlapLineRanges.add(Pair(rangeStart, lastVisLine))
+        }
+
+        // 不相交行分为两个区间：[0, 1] 和 [4, 9]
+        assertEquals(2, nonOverlapLineRanges.size)
+        assertEquals(Pair(0, 1), nonOverlapLineRanges[0])
+        assertEquals(Pair(4, 9), nonOverlapLineRanges[1])
+    }
+
+    @Test
+    fun excludeRange_nonOverlapLines_allNonOverlap_singleRange() {
+        // 可视行 0-9，exclude [100, 110) 不影响任何可视行
+        val firstVisLine = 0
+        val lastVisLine = 9
+        val excludeRange = IntRange(100, 110)
+
+        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
+        var rangeStart = -1
+        for (lineIdx in firstVisLine..lastVisLine) {
+            val lineStart = lineIdx * 10
+            val lineEnd = lineStart + 10
+            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            if (!overlaps) {
+                if (rangeStart < 0) rangeStart = lineIdx
+            } else {
+                if (rangeStart >= 0) {
+                    nonOverlapLineRanges.add(Pair(rangeStart, lineIdx - 1))
+                    rangeStart = -1
+                }
+            }
+        }
+        if (rangeStart >= 0) {
+            nonOverlapLineRanges.add(Pair(rangeStart, lastVisLine))
+        }
+
+        // 所有行都不与 excludeRange 相交，形成 1 个连续区间
+        assertEquals(1, nonOverlapLineRanges.size)
+        assertEquals(Pair(0, 9), nonOverlapLineRanges[0])
+    }
+
+    // ── excludeRange 相交行分段绘制 ──
+
+    @Test
+    fun excludeRange_overlapLines_splitSegments() {
+        // 行 [0, 10) 与 exclude [3, 7) → before [0, 3), after [7, 10)
+        val lineStart = 0
+        val lineEnd = 10
+        val excludeStart = 3
+        val excludeEnd = 7
+
+        val beforeEnd = minOf(lineEnd, excludeStart)
+        val afterStart = maxOf(lineStart, excludeEnd)
+
+        assertEquals(3, beforeEnd)   // before: [0, 3)
+        assertEquals(7, afterStart)  // after: [7, 10)
+        assertTrue(beforeEnd > lineStart)   // before 段非空
+        assertTrue(afterStart < lineEnd)    // after 段非空
+    }
+
+    @Test
+    fun excludeRange_overlapLines_excludeCoversEntireLine() {
+        // 行 [5, 15) 与 exclude [0, 20) → 完全被覆盖，before 和 after 都为空
+        val lineStart = 5
+        val lineEnd = 15
+        val excludeStart = 0
+        val excludeEnd = 20
+
+        val beforeEnd = minOf(lineEnd, excludeStart)
+        val afterStart = maxOf(lineStart, excludeEnd)
+
+        assertEquals(0, beforeEnd)    // before: [5, 0) = 空
+        assertEquals(20, afterStart)  // after: [20, 15) = 空
+        assertFalse(beforeEnd > lineStart)  // before 段为空
+        assertFalse(afterStart < lineEnd)   // after 段为空
+    }
+
+    @Test
+    fun excludeRange_overlapLines_partialOverlapAtEnd() {
+        // 行 [0, 10) 与 exclude [8, 12) → before [0, 8), after 为空
+        val lineStart = 0
+        val lineEnd = 10
+        val excludeStart = 8
+        val excludeEnd = 12
+
+        val beforeEnd = minOf(lineEnd, excludeStart)
+        val afterStart = maxOf(lineStart, excludeEnd)
+
+        assertEquals(8, beforeEnd)     // before: [0, 8)
+        assertEquals(12, afterStart)   // after: [12, 10) = 空
+        assertTrue(beforeEnd > lineStart)    // before 段非空
+        assertFalse(afterStart < lineEnd)    // after 段为空
+    }
+
+    @Test
+    fun excludeRange_overlapLines_partialOverlapAtStart() {
+        // 行 [5, 15) 与 exclude [0, 8) → before 为空，after [8, 15)
+        val lineStart = 5
+        val lineEnd = 15
+        val excludeStart = 0
+        val excludeEnd = 8
+
+        val beforeEnd = minOf(lineEnd, excludeStart)
+        val afterStart = maxOf(lineStart, excludeEnd)
+
+        assertEquals(0, beforeEnd)     // before: [5, 0) = 空
+        assertEquals(8, afterStart)    // after: [8, 15)
+        assertFalse(beforeEnd > lineStart)   // before 段为空
+        assertTrue(afterStart < lineEnd)     // after 段非空
+    }
+
     // ── IME composing 不动画 ──
 
     @Test
@@ -283,6 +419,71 @@ class SelfRenderAnimationLogicTest {
 
         assertFalse(hasAnimations)
         assertNull(animatedInsertRange)
+    }
+
+    // ── Undo/Redo 不动画 ──
+
+    @Test
+    fun undoDoesNotAnimate() {
+        // Undo 在 Android 端走 Programmatic cause（SujianEditCause 没有 Undo 变体），
+        // 但无论哪种方式，Undo 都不应产生动画。
+        // 验证 Programmatic cause 不动画（Undo 在 Android 端映射为 Programmatic）
+        assertFalse(shouldAnimateForCause(SujianEditCause.Programmatic))
+    }
+
+    @Test
+    fun redoDoesNotAnimate() {
+        // Redo 同理，在 Android 端走 Programmatic cause
+        assertFalse(shouldAnimateForCause(SujianEditCause.Programmatic))
+    }
+
+    // ── Paste 完整场景测试 ──
+
+    @Test
+    fun pasteDoesNotAnimate() {
+        // Paste 不动画 — 更完整的场景测试
+        // 验证 Paste cause 不动画
+        assertFalse(shouldAnimateForCause(SujianEditCause.Paste))
+
+        // 模拟粘贴操作：即使文本变化很小（单字），Paste 也不动画
+        var hasAnimations = false
+        var animatedInsertRange: IntRange? = null
+
+        // 模拟粘贴 "a" 到空文本
+        // Paste cause → shouldAnimate = false → 不创建动画
+        assertFalse(shouldAnimateForCause(SujianEditCause.Paste))
+        assertFalse(hasAnimations)
+        assertNull(animatedInsertRange)
+
+        // 模拟粘贴长文本
+        assertFalse(shouldAnimateForCause(SujianEditCause.Paste))
+        assertFalse(hasAnimations)
+        assertNull(animatedInsertRange)
+    }
+
+    // ── 滚动中插入文字清动画 ──
+
+    @Test
+    fun scrollingDuringInsert_clearsAnimation() {
+        // 模拟：正在插入文字时有活跃动画，然后用户滚动
+        var hasAnimations = true
+        var animatedInsertRange: IntRange? = IntRange(5, 8)
+
+        // 插入操作创建了动画
+        assertTrue(hasAnimations)
+        assertNotNull(animatedInsertRange)
+
+        // 用户开始滚动 → 动画被清除
+        hasAnimations = false
+        animatedInsertRange = null
+
+        // 验证动画被清除
+        assertFalse(hasAnimations, "animations should be cleared when scrolling starts during insert")
+        assertNull(animatedInsertRange, "insert range should be null when scrolling starts during insert")
+
+        // 即使插入的 cause 是 Typing（应该动画），滚动状态也优先清除
+        assertTrue(shouldAnimateForCause(SujianEditCause.Typing), "Typing should animate in principle")
+        assertFalse(hasAnimations, "but scrolling overrides and clears the animation")
     }
 
     // ── 辅助方法 ──

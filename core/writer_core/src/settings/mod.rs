@@ -432,4 +432,132 @@ mod tests {
         assert!(!loaded.diagnostics_enabled);
         assert!(!loaded.diagnostics_verbose);
     }
+
+    // --- Guard tests for different setting combinations ---
+
+    #[test]
+    fn test_diagnostics_enabled_false_persists() {
+        let temp_dir = tempdir().unwrap();
+        let mut settings = LocalSettings::default();
+        settings.diagnostics_enabled = false;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert!(!loaded.diagnostics_enabled, "diagnostics_enabled=false should persist correctly");
+    }
+
+    #[test]
+    fn test_diagnostics_verbose_false_persists() {
+        let temp_dir = tempdir().unwrap();
+        let mut settings = LocalSettings::default();
+        settings.diagnostics_verbose = false;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert!(!loaded.diagnostics_verbose, "diagnostics_verbose=false should persist correctly");
+    }
+
+    #[test]
+    fn test_typing_animation_toggle_persists() {
+        let temp_dir = tempdir().unwrap();
+
+        // Default is true, toggle to false
+        let mut settings = LocalSettings::default();
+        assert!(settings.editor_typing_animation_enabled, "default should be true");
+        settings.editor_typing_animation_enabled = false;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert!(!loaded.editor_typing_animation_enabled, "typing animation should persist as false after toggle");
+
+        // Toggle back to true
+        let mut settings2 = loaded;
+        settings2.editor_typing_animation_enabled = true;
+        save_local_settings(temp_dir.path(), &settings2).unwrap();
+
+        let loaded2 = load_local_settings(temp_dir.path()).unwrap();
+        assert!(loaded2.editor_typing_animation_enabled, "typing animation should persist as true after toggle back");
+    }
+
+    #[test]
+    fn test_smooth_cursor_toggle_persists() {
+        let temp_dir = tempdir().unwrap();
+
+        // Default is true, toggle to false
+        let mut settings = LocalSettings::default();
+        assert!(settings.editor_smooth_cursor_enabled, "default should be true");
+        settings.editor_smooth_cursor_enabled = false;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert!(!loaded.editor_smooth_cursor_enabled, "smooth cursor should persist as false after toggle");
+
+        // Toggle back to true
+        let mut settings2 = loaded;
+        settings2.editor_smooth_cursor_enabled = true;
+        save_local_settings(temp_dir.path(), &settings2).unwrap();
+
+        let loaded2 = load_local_settings(temp_dir.path()).unwrap();
+        assert!(loaded2.editor_smooth_cursor_enabled, "smooth cursor should persist as true after toggle back");
+    }
+
+    #[test]
+    fn test_font_size_change_persists() {
+        let temp_dir = tempdir().unwrap();
+
+        let mut settings = LocalSettings::default();
+        settings.editor_font_size = 24.0;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(loaded.editor_font_size, 24.0, "font size should persist as 24.0");
+
+        // Change again
+        let mut settings2 = loaded;
+        settings2.editor_font_size = 18.0;
+        save_local_settings(temp_dir.path(), &settings2).unwrap();
+
+        let loaded2 = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(loaded2.editor_font_size, 18.0, "font size should persist as 18.0 after change");
+    }
+
+    #[test]
+    fn test_line_spacing_change_persists() {
+        let temp_dir = tempdir().unwrap();
+
+        let mut settings = LocalSettings::default();
+        settings.editor_line_spacing_multiplier = 2.0;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(loaded.editor_line_spacing_multiplier, 2.0, "line spacing should persist as 2.0");
+
+        // Change again
+        let mut settings2 = loaded;
+        settings2.editor_line_spacing_multiplier = 1.2;
+        save_local_settings(temp_dir.path(), &settings2).unwrap();
+
+        let loaded2 = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(loaded2.editor_line_spacing_multiplier, 1.2, "line spacing should persist as 1.2 after change");
+    }
+
+    #[test]
+    fn test_indent_width_change_persists() {
+        let temp_dir = tempdir().unwrap();
+
+        let mut settings = LocalSettings::default();
+        settings.auto_indent_width = 4.0;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(loaded.auto_indent_width, 4.0, "indent width should persist as 4.0");
+
+        // Change again
+        let mut settings2 = loaded;
+        settings2.auto_indent_width = 0.0;
+        save_local_settings(temp_dir.path(), &settings2).unwrap();
+
+        let loaded2 = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(loaded2.auto_indent_width, 0.0, "indent width should persist as 0.0 after change");
+    }
 }

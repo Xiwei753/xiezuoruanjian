@@ -56,7 +56,7 @@ class SettingsRepository(context: Context) {
         return fromCore.copy(
             diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true),
             diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true),
-            useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", false)
+            useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true)
         )
     }
 

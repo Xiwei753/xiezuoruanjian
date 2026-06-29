@@ -3210,4 +3210,37 @@ mod tests {
         // diagnose sets proxy_policy = "no_proxy" even when token is missing
         assert_eq!(result.proxy_policy, "no_proxy");
     }
+
+    #[test]
+    fn test_git_backend_diagnostics_not_assumed_ok() {
+        // Git 后端诊断不再假成功，应返回明确的"不支持"状态
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::Git,
+            remote_url: "https://github.com/user/repo.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 0,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("test_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        let result = SyncService::perform_sync_diagnostics(&config, &secrets).unwrap();
+        // Git 后端不再假成功
+        assert!(!result.success, "Git backend diagnostics should not report success");
+        assert!(!result.network_ok, "Git backend network_ok should be false");
+        assert!(!result.auth_ok, "Git backend auth_ok should be false");
+        assert!(!result.repo_ok, "Git backend repo_ok should be false");
+        assert!(!result.branch_ok, "Git backend branch_ok should be false");
+        assert_eq!(result.network_status, "unsupported_git_backend");
+        assert_eq!(result.auth_status, "not_checked_git_backend");
+        assert_eq!(result.repo_status, "not_checked_git_backend");
+        assert_eq!(result.branch_status, "not_checked_git_backend");
+    }
 }

@@ -159,11 +159,12 @@ pub struct SyncDiagnosticsResult {
     pub chosen_network_mode: Option<String>,
     /// [DEPRECATED] proxy_policy — 代理功能已移除，此字段固定为 "no_proxy"。
     /// 保留仅为向后兼容，不应作为正式契约继续传播。
-    /// 后续版本可移除此字段。
+    /// TODO(破坏性版本): 在下一个破坏性版本中删除 proxy_policy、network_probe_summary
+    /// 以及所有 DTO/文档/Android 模型中的代理探测残留，只保留 chosen_network_mode=direct 或不展示
     pub proxy_policy: String,
     /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
     /// 保留仅为向后兼容，不应作为正式契约继续传播。
-    /// 后续版本可移除此字段。
+    /// TODO(破坏性版本): 同上，与 proxy_policy 一起删除
     pub network_probe_summary: Vec<NetworkProbeResult>,
 }
 
@@ -225,7 +226,7 @@ pub struct SyncResult {
     pub chosen_network_mode: Option<String>,
     /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
     /// 保留仅为向后兼容，不应作为正式契约继续传播。
-    /// 后续版本可移除此字段。
+    /// TODO(破坏性版本): 同 SyncDiagnosticsResult.proxy_policy，一起删除
     pub network_probe_summary: Vec<NetworkProbeResult>,
     pub settings_conflicts: Option<Vec<SettingConflictDetail>>,
     #[serde(default)]

@@ -51,6 +51,37 @@ LEGACY_CONTEXT_KEYWORDS = [
     '已删除', 'deleted', 'legacy', '不得恢复', 'must not restore', '废弃', 'deprecated',
 ]
 
+# 禁止在文档中出现的旧结论/旧路线表述
+# 除非在 AGENTS.md 中（作为"禁止规则"说明）或在包含 legacy/deleted 关键词的上下文中
+FORBIDDEN_PHRASES = [
+    '静态正文永远完整绘制、禁止 hidden range',  # 旧结论，已被动画机制取代
+    'DocumentHandler',  # 已删除，不得恢复
+    'useSujianEditorItem',  # 已删除的开关
+    'SUJIAN_DESKTOP_USE_SUJIAN_EDITOR',  # 已删除的环境变量
+]
+
+# 禁止在代码中出现的旧路线模式
+FORBIDDEN_CODE_PATTERNS = {
+    '.qml': [
+        'DocumentHandler',  # 已删除
+        'SmoothCursor',  # 已删除
+        'EditorPage.qml',  # 已删除
+        'useSujianEditorItem',  # 已删除的开关
+        'SUJIAN_DESKTOP_USE_SUJIAN_EDITOR',  # 已删除的环境变量
+    ],
+    '.rs': [
+        'document_handler',  # 已删除
+        'use_sujian_editor_item',  # 已删除的开关
+    ],
+}
+
+# 检查脚本自身白名单：这些文件是验证禁止模式的代码，不是使用禁止模式的代码
+FORBIDDEN_CODE_PATTERN_WHITELIST_PATHS = {
+    'apps/desktop/tests/qml_static_check.rs',  # 验证 document_handler 不存在的检查脚本
+    'tools/check_doc_links.py',  # 本脚本自身
+    'tools/test_check_doc_links.py',  # 本脚本的测试
+}
+
 def is_legacy_context(md_filename, line_text):
     """Check if the context allows legacy file references.
 
@@ -82,6 +113,8 @@ def check_links():
     checked_links_count = 0
     checked_paths_count = 0
     checked_files_count = 0
+    forbidden_phrase_count = 0
+    forbidden_code_pattern_count = 0
     
     exclude_dirs = {
         ".git", "target", "build", ".gradle", ".idea", "node_modules", 
@@ -220,13 +253,97 @@ def check_links():
                         print()
                         broken_count += 1
 
+    # 4. Scan all .md files for FORBIDDEN_PHRASES (excluding AGENTS.md and legacy context)
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        
+        for file in files:
+            if not file.endswith(".md"):
+                continue
+                
+            md_path = os.path.join(root, file)
+            rel_md_path = os.path.relpath(md_path, repo_root)
+            
+            with open(md_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            
+            # Strip fenced code blocks to avoid false positives in code snippets/scripts
+            content_no_code = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
+            # Strip HTML comments
+            content_no_code = re.sub(r'<!--.*?-->', '', content_no_code, flags=re.DOTALL)
+            
+            for line in content_no_code.split('\n'):
+                for phrase in FORBIDDEN_PHRASES:
+                    if phrase in line:
+                        # Allow in AGENTS.md (as "forbidden rule" documentation)
+                        if os.path.basename(rel_md_path) == 'AGENTS.md':
+                            continue
+                        # Allow if line contains legacy/deleted keyword
+                        if is_legacy_context(rel_md_path, line):
+                            continue
+                        forbidden_phrase_count += 1
+                        print(f"Forbidden phrase in {rel_md_path}:")
+                        print(f"  Phrase: '{phrase}'")
+                        print(f"  Line: '{line.strip()}'")
+                        print()
+
+    # 5. Scan all .qml and .rs files for FORBIDDEN_CODE_PATTERNS
+    for root, dirs, files in os.walk(repo_root):
+        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        
+        for file in files:
+            ext = os.path.splitext(file)[1]
+            if ext not in FORBIDDEN_CODE_PATTERNS:
+                continue
+            
+            code_path = os.path.join(root, file)
+            rel_code_path = os.path.relpath(code_path, repo_root)
+            
+            # 跳过检查脚本自身（验证禁止模式的代码，不是使用禁止模式的代码）
+            normalized_code_path = rel_code_path.replace(os.sep, '/')
+            if normalized_code_path in FORBIDDEN_CODE_PATTERN_WHITELIST_PATHS:
+                continue
+            
+            with open(code_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+            
+            patterns = FORBIDDEN_CODE_PATTERNS[ext]
+            for line_no, line in enumerate(content.split('\n'), 1):
+                for pattern in patterns:
+                    if pattern in line:
+                        # Skip if it's a comment explaining the deletion/legacy status
+                        line_stripped = line.strip()
+                        # Allow lines that are comments explaining the forbidden pattern
+                        # (e.g. "// document_handler is deleted" or "# DocumentHandler is legacy")
+                        if line_stripped.startswith('//') or line_stripped.startswith('#'):
+                            # Check if the line contains a legacy/deleted keyword
+                            line_lower = line.lower()
+                            for kw in LEGACY_CONTEXT_KEYWORDS:
+                                if kw.lower() in line_lower:
+                                    break
+                            else:
+                                # No legacy keyword found in comment — still report
+                                pass
+                            # If legacy keyword found in comment, skip reporting
+                            if any(kw.lower() in line.lower() for kw in LEGACY_CONTEXT_KEYWORDS):
+                                continue
+                        forbidden_code_pattern_count += 1
+                        print(f"Forbidden code pattern in {rel_code_path}:{line_no}:")
+                        print(f"  Pattern: '{pattern}'")
+                        print(f"  Line: '{line.strip()}'")
+                        print()
+
+    total_issues = broken_count + forbidden_phrase_count + forbidden_code_pattern_count
+
     print(f"Scan complete:")
     print(f"  - Standard markdown links checked: {checked_links_count}")
     print(f"  - Plain text paths checked: {checked_paths_count}")
     print(f"  - Plain text filenames checked: {checked_files_count}")
+    print(f"  - Forbidden phrases found: {forbidden_phrase_count}")
+    print(f"  - Forbidden code patterns found: {forbidden_code_pattern_count}")
     
-    if broken_count > 0:
-        print(f"\nFound {broken_count} broken reference(s)!")
+    if total_issues > 0:
+        print(f"\nFound {total_issues} issue(s) ({broken_count} broken, {forbidden_phrase_count} forbidden phrases, {forbidden_code_pattern_count} forbidden code patterns)!")
         sys.exit(1)
     else:
         print("\nAll repository-internal documentation links and references are valid!")

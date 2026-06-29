@@ -203,55 +203,60 @@ class SujianEditorRenderer(
             return
         }
 
-        // 有 excludeRange：只对可视行做拆分
-        // TODO(mid-term): 当前 drawLineFull 仍使用 clipRect + layout.draw() 逐行绘制
-        // 长期应改为真正只绘制受影响行的文本段（drawText），避免每行重复 draw 完整 layout
-        // 但 Layout.drawLine() 是 @hide API 不可用，当前 clipRect 限制是可行方案
+        // 有 excludeRange 时的优化路径：
+        // 1. 不相交行：收集连续区间，批量 clipRect + layout.draw()，避免逐行 clipRect
+        // 2. 相交行：保持 before/after 分段绘制（drawLineSegment）
+
+        // 1. 收集不相交行的连续区间
+        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>() // (firstLine, lastLine) pairs
+        var rangeStart = -1
         for (lineIdx in firstVisLine..lastVisLine) {
             val lineStart = layout.getLineStart(lineIdx)
             val lineEnd = layout.getLineEnd(lineIdx)
-
-            // 该行与 excludeRange 不相交 → 正常绘制整行
-            if (lineEnd <= excludeRange.first || lineStart >= excludeRange.last) {
-                drawLineFull(canvas, layout, lineIdx)
-                continue
+            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            if (!overlaps) {
+                if (rangeStart < 0) rangeStart = lineIdx
+            } else {
+                if (rangeStart >= 0) {
+                    nonOverlapLineRanges.add(Pair(rangeStart, lineIdx - 1))
+                    rangeStart = -1
+                }
             }
+        }
+        if (rangeStart >= 0) {
+            nonOverlapLineRanges.add(Pair(rangeStart, lastVisLine))
+        }
 
-            // 相交 → 拆分为 before / hidden / after 三段
-            // Before: [lineStart, min(lineEnd, excludeRange.first))
+        // 2. 批量绘制不相交行（一次 clipRect + layout.draw per 连续区间）
+        for ((rangeFirst, rangeLast) in nonOverlapLineRanges) {
+            val visTop = layout.getLineTop(rangeFirst).toFloat()
+            val visBottom = layout.getLineBottom(rangeLast).toFloat()
+            val visLeft = 0f
+            val visRight = layout.width.toFloat()
+            canvas.save()
+            canvas.clipRect(visLeft, visTop, visRight, visBottom)
+            layout.draw(canvas)
+            canvas.restore()
+        }
+
+        // 3. 分段绘制相交行
+        for (lineIdx in firstVisLine..lastVisLine) {
+            val lineStart = layout.getLineStart(lineIdx)
+            val lineEnd = layout.getLineEnd(lineIdx)
+            if (lineEnd <= excludeRange.first || lineStart >= excludeRange.last) {
+                continue // 已在批量绘制中处理
+            }
+            // before segment
             val beforeEnd = minOf(lineEnd, excludeRange.first)
             if (beforeEnd > lineStart) {
                 drawLineSegment(canvas, layout, text, lineIdx, lineStart, beforeEnd)
             }
-            // Hidden: [excludeRange.first, excludeRange.last) — 跳过
-            // After: [max(lineStart, excludeRange.last), lineEnd)
+            // after segment
             val afterStart = maxOf(lineStart, excludeRange.last)
             if (afterStart < lineEnd) {
                 drawLineSegment(canvas, layout, text, lineIdx, afterStart, lineEnd)
             }
         }
-    }
-
-    /**
-     * 绘制完整的一行（无裁剪）
-     * 使用 clipRect + layout.draw() 限制绘制范围到当前行。
-     * 注意：Layout.drawLine() 是 @hide API 不可用，只能用 clip 限制。
-     *
-     * 性能说明：
-     * - 无 excludeRange 时，drawStaticText 已改用单次 layout.draw() + 可视区域 clip，
-     *   不会再调用此方法。
-     * - 有 excludeRange 时，此方法仍用于不与 excludeRange 相交的行。
-     * - 长期应改为 drawText 逐字符/逐段绘制，避免每行重复 draw 完整 layout。
-     */
-    private fun drawLineFull(canvas: Canvas, layout: Layout, lineIdx: Int) {
-        val lineTop = layout.getLineTop(lineIdx)
-        val lineBottom = layout.getLineBottom(lineIdx)
-        val lineLeft = layout.getLineLeft(lineIdx)
-        val lineRight = layout.getLineRight(lineIdx)
-        canvas.save()
-        canvas.clipRect(lineLeft, lineTop.toFloat(), lineRight, lineBottom.toFloat())
-        layout.draw(canvas)
-        canvas.restore()
     }
 
     /**

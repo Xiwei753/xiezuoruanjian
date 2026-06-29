@@ -205,6 +205,7 @@ impl SettingsBackend {
     }
     fn set_setting_diagnostics_enabled(&mut self, val: bool) {
         self.with_app_mut((), |app| app.set_setting_diagnostics_enabled(val));
+        crate::backend::diagnostics::set_diagnostics_enabled(val);
         self.settings_changed();
     }
     fn setting_diagnostics_verbose(&self) -> bool {
@@ -217,8 +218,10 @@ impl SettingsBackend {
     }
     fn load_local_settings(&mut self) {
         self.with_app_mut((), |app| app.load_local_settings());
-        // 同步 verbose 状态到 diagnostics 全局变量
+        // 同步 diagnostics_enabled 和 verbose 状态到 diagnostics 全局变量
+        let enabled = self.with_app(true, |app| app.setting_diagnostics_enabled());
         let verbose = self.with_app(true, |app| app.setting_diagnostics_verbose());
+        crate::backend::diagnostics::set_diagnostics_enabled(enabled);
         crate::backend::diagnostics::set_verbose_enabled(verbose);
         self.settings_changed();
     }

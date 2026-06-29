@@ -46,7 +46,7 @@ data class LocalSettings(
     val linuxEditorWidth: Double = 0.0,
     @SerializedName("diagnostics_enabled") val diagnosticsEnabled: Boolean = true,
     @SerializedName("diagnostics_verbose") val diagnosticsVerbose: Boolean = true,
-    @SerializedName("use_self_render_editor_on_android") val useSelfRenderEditorOnAndroid: Boolean = false
+    @SerializedName("use_self_render_editor_on_android") val useSelfRenderEditorOnAndroid: Boolean = true
 )
 
 data class SyncableSettings(
@@ -297,6 +297,7 @@ data class SyncDiagnosticsResult(
     @SerializedName("raw_error") val rawError: String?,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String?,
     @SerializedName("proxy_policy") val proxyPolicy: String,
+    // TODO(破坏性版本): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>
 )
 
@@ -317,6 +318,7 @@ data class SyncResult(
     @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
     @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
     @SerializedName("proxy_policy") val proxyPolicy: String = "",
+    // TODO(破坏性版本): 删除 proxy_policy、network_probe_summary 残留，只保留 chosenNetworkMode
     @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
 )
 

@@ -9,7 +9,7 @@ import org.junit.Test
  * 验证 drawStaticText 的可视行裁剪逻辑：
  * - 无 excludeRange 时只绘制可视行（快速路径）
  * - 有 excludeRange 时只对可视行做拆分
- * - 不相交的可视行直接 drawLineFull
+ * - 不相交的可视行批量 clipRect + layout.draw()
  *
  * 注意：由于 Layout 是 Android framework 类，单元测试中无法直接使用。
  * 这里测试的是可视行范围计算的纯逻辑部分，不依赖 Android framework。
@@ -191,8 +191,9 @@ class SujianEditorRendererTest {
         }
 
         // excludeRange [10, 15) 对应行 1-1（字符 10-15），不在可视范围 [25, 35] 内
-        // 所以所有可视行都应该走 drawLineFull
+        // 所以所有可视行都应该走批量绘制（nonOverlapLineRanges）
         assertEquals(0, linesNeedSplit.size)
+        // 所有 11 行都不与 excludeRange 相交，形成 1 个连续区间
         assertEquals(11, linesFullDraw.size)
     }
 
@@ -265,27 +266,116 @@ class SujianEditorRendererTest {
         assertEquals(7, linesFullDraw.size) // 11 - 4 = 7
     }
 
-    // ── drawLineFull 使用 clipRect + layout.draw() 限制到当前行 ──
-    // Layout.drawLine() 是 @hide API 不可用，只能用 clip 限制。
-    // 相比遍历全文所有行，只对可视行做 clip + draw 仍然有显著性能提升。
-    // 这里测试逻辑正确性：确保 drawLineFull 对每行只调用一次
+    // ── 不相交行批量绘制：连续区间合并 ──
+    // 不相交行收集为连续区间，每个区间一次 clipRect + layout.draw()
+    // 这里测试逻辑正确性：确保连续不相交行被正确合并
 
     @Test
-    fun testDrawLineFull_calledOncePerVisibleLine() {
-        val totalLines = 50
-        val visibleRange = computeVisibleLineRange(
-            scrollY = 200,
-            viewportHeight = 200,
-            lineHeight = 20,
-            totalLines = totalLines
-        )
+    fun testNonOverlapLines_batchDrawn_continuousRanges() {
+        val totalLines = 100
+        val lineHeight = 20
+        val scrollY = 500
+        val viewportHeight = 200
+        // excludeRange 覆盖可视范围中间的某些行
+        // 可视行 25-35，每行 10 字符 → 字符范围 250-360
+        val excludeRange = IntRange(270, 280) // 影响行 27
 
-        var drawLineCallCount = 0
+        val visibleRange = computeVisibleLineRange(scrollY, viewportHeight, lineHeight, totalLines)
+
+        // 模拟 nonOverlapLineRanges 收集逻辑
+        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
+        var rangeStart = -1
         for (lineIdx in visibleRange.first..visibleRange.last) {
-            drawLineCallCount++
+            val lineStart = lineIdx * 10
+            val lineEnd = lineStart + 10
+            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            if (!overlaps) {
+                if (rangeStart < 0) rangeStart = lineIdx
+            } else {
+                if (rangeStart >= 0) {
+                    nonOverlapLineRanges.add(Pair(rangeStart, lineIdx - 1))
+                    rangeStart = -1
+                }
+            }
+        }
+        if (rangeStart >= 0) {
+            nonOverlapLineRanges.add(Pair(rangeStart, visibleRange.last))
         }
 
-        // 可视范围 [10, 20]，共 11 行
-        assertEquals(11, drawLineCallCount)
+        // 行 27 与 excludeRange 相交，其余行不相交
+        // 不相交行分为两个区间：[25, 26] 和 [28, 35]
+        assertEquals(2, nonOverlapLineRanges.size)
+        assertEquals(Pair(25, 26), nonOverlapLineRanges[0])
+        assertEquals(Pair(28, 35), nonOverlapLineRanges[1])
+    }
+
+    @Test
+    fun testNonOverlapLines_batchDrawn_allNonOverlap() {
+        val totalLines = 100
+        val lineHeight = 20
+        val scrollY = 500
+        val viewportHeight = 200
+        val excludeRange = IntRange(10, 15) // 在可视范围之外
+
+        val visibleRange = computeVisibleLineRange(scrollY, viewportHeight, lineHeight, totalLines)
+
+        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
+        var rangeStart = -1
+        for (lineIdx in visibleRange.first..visibleRange.last) {
+            val lineStart = lineIdx * 10
+            val lineEnd = lineStart + 10
+            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            if (!overlaps) {
+                if (rangeStart < 0) rangeStart = lineIdx
+            } else {
+                if (rangeStart >= 0) {
+                    nonOverlapLineRanges.add(Pair(rangeStart, lineIdx - 1))
+                    rangeStart = -1
+                }
+            }
+        }
+        if (rangeStart >= 0) {
+            nonOverlapLineRanges.add(Pair(rangeStart, visibleRange.last))
+        }
+
+        // 所有可视行都不与 excludeRange 相交，形成 1 个连续区间 [25, 35]
+        assertEquals(1, nonOverlapLineRanges.size)
+        assertEquals(Pair(25, 35), nonOverlapLineRanges[0])
+    }
+
+    @Test
+    fun testNonOverlapLines_batchDrawn_multipleGaps() {
+        val totalLines = 100
+        val lineHeight = 20
+        val scrollY = 500
+        val viewportHeight = 200
+        // excludeRange 跨越多行，形成多个不相交区间
+        val excludeRange = IntRange(265, 295) // 影响行 26, 27, 28, 29
+
+        val visibleRange = computeVisibleLineRange(scrollY, viewportHeight, lineHeight, totalLines)
+
+        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
+        var rangeStart = -1
+        for (lineIdx in visibleRange.first..visibleRange.last) {
+            val lineStart = lineIdx * 10
+            val lineEnd = lineStart + 10
+            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            if (!overlaps) {
+                if (rangeStart < 0) rangeStart = lineIdx
+            } else {
+                if (rangeStart >= 0) {
+                    nonOverlapLineRanges.add(Pair(rangeStart, lineIdx - 1))
+                    rangeStart = -1
+                }
+            }
+        }
+        if (rangeStart >= 0) {
+            nonOverlapLineRanges.add(Pair(rangeStart, visibleRange.last))
+        }
+
+        // 行 26-29 与 excludeRange 相交，不相交行分为两个区间：[25, 25] 和 [30, 35]
+        assertEquals(2, nonOverlapLineRanges.size)
+        assertEquals(Pair(25, 25), nonOverlapLineRanges[0])
+        assertEquals(Pair(30, 35), nonOverlapLineRanges[1])
     }
 }

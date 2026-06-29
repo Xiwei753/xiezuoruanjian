@@ -133,7 +133,7 @@ internal fun LocalSettingsDto.toModel() = LocalSettings(
     linuxEditorWidth = desktopEditorWidth,
     diagnosticsEnabled = diagnosticsEnabled,
     diagnosticsVerbose = diagnosticsVerbose,
-    useSelfRenderEditorOnAndroid = false  // TODO: 待 Core LocalSettingsDto 添加此字段后从 DTO 读取
+    useSelfRenderEditorOnAndroid = true  // 默认开启自研写作区；保留"回退到系统 EditText"的开发开关，不给普通用户暴露
 )
 
 internal fun LocalSettings.toDto() = LocalSettingsDto(

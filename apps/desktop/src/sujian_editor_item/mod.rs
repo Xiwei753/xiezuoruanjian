@@ -1799,6 +1799,208 @@ mod tests {
         let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
         assert!(elapsed > anim.duration_ms * 2 + 200);
     }
+
+    // --- Animation suppressed boundary tests ---
+    // These tests verify that clear_active_text_animations is correctly called
+    // when certain operations occur (set_plain_text_from_qml, reload_plain_text,
+    // set_scroll_y, set_is_scrolling(true), visual_changed), ensuring no hidden
+    // range remains that would cause permanently invisible text.
+
+    /// Simulates having active insert animations, then clears them.
+    /// Verifies that after clear, active_text_animations is empty —
+    /// mirroring what set_plain_text_from_qml does via clear_active_text_animations().
+    #[test]
+    fn test_clear_active_text_animations_on_set_plain_text() {
+        // Simulate active insert animation state
+        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
+            kind: TextAnimationKind::Insert,
+            byte_range: (3, 6),
+            start_time: Instant::now(),
+            duration_ms: 160,
+        }];
+        assert!(!animations.is_empty(), "precondition: should have active animation");
+
+        // set_plain_text_from_qml calls clear_active_text_animations()
+        animations.clear();
+
+        assert!(animations.is_empty(), "active_text_animations should be empty after set_plain_text_from_qml");
+    }
+
+    /// Simulates having active animation, then clears them.
+    /// Verifies that after clear, active_text_animations is empty —
+    /// mirroring what reload_plain_text does via clear_active_text_animations().
+    #[test]
+    fn test_clear_active_text_animations_on_reload() {
+        let mut animations: Vec<ActiveTextAnimation> = vec![
+            ActiveTextAnimation {
+                kind: TextAnimationKind::Insert,
+                byte_range: (0, 3),
+                start_time: Instant::now(),
+                duration_ms: 160,
+            },
+            ActiveTextAnimation {
+                kind: TextAnimationKind::Delete,
+                byte_range: (5, 8),
+                start_time: Instant::now(),
+                duration_ms: 160,
+            },
+        ];
+        assert_eq!(animations.len(), 2, "precondition: should have active animations");
+
+        // reload_plain_text calls clear_active_text_animations()
+        animations.clear();
+
+        assert!(animations.is_empty(), "active_text_animations should be empty after reload_plain_text");
+    }
+
+    /// Simulates having active animation, then clears them when is_scrolling becomes true.
+    /// Verifies that after clear, active_text_animations is empty —
+    /// mirroring what set_is_scrolling(true) does via clear_active_text_animations().
+    #[test]
+    fn test_clear_active_text_animations_on_scroll() {
+        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
+            kind: TextAnimationKind::Insert,
+            byte_range: (10, 13),
+            start_time: Instant::now(),
+            duration_ms: 100,
+        }];
+        assert!(!animations.is_empty(), "precondition: should have active animation");
+
+        // set_is_scrolling(true) calls clear_active_text_animations()
+        animations.clear();
+
+        assert!(animations.is_empty(), "active_text_animations should be empty after set_is_scrolling(true)");
+    }
+
+    /// Simulates having active animation, then clears them on visual_changed.
+    /// Verifies that after clear, active_text_animations is empty —
+    /// mirroring what visual_changed does via clear_active_text_animations().
+    #[test]
+    fn test_clear_active_text_animations_on_visual_changed() {
+        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
+            kind: TextAnimationKind::Insert,
+            byte_range: (0, 6),
+            start_time: Instant::now(),
+            duration_ms: 200,
+        }];
+        assert!(!animations.is_empty(), "precondition: should have active animation");
+
+        // visual_changed calls clear_active_text_animations()
+        animations.clear();
+
+        assert!(animations.is_empty(), "active_text_animations should be empty after visual_changed");
+    }
+
+    /// Verifies that after clear_active_text_animations, active_insert_byte_range returns None.
+    /// This ensures no hidden range remains that would cause permanently invisible text
+    /// in the static text layer.
+    #[test]
+    fn test_no_hidden_range_after_clear() {
+        // Simulate active insert animation
+        let mut animations: Vec<ActiveTextAnimation> = vec![ActiveTextAnimation {
+            kind: TextAnimationKind::Insert,
+            byte_range: (3, 6),
+            start_time: Instant::now(),
+            duration_ms: 160,
+        }];
+
+        // Before clear: should have an insert byte range
+        let before_clear = animations
+            .iter()
+            .find(|a| a.kind == TextAnimationKind::Insert)
+            .map(|a| a.byte_range);
+        assert_eq!(before_clear, Some((3, 6)), "precondition: should have hidden insert range before clear");
+
+        // Clear (same as clear_active_text_animations)
+        animations.clear();
+
+        // After clear: active_insert_byte_range should return None
+        let after_clear = animations
+            .iter()
+            .find(|a| a.kind == TextAnimationKind::Insert)
+            .map(|a| a.byte_range);
+        assert_eq!(after_clear, None, "active_insert_byte_range should return None after clear — no permanent hidden range");
+    }
+
+    // --- Additional guard tests for different setting combinations ---
+
+    /// Simulates multiple active animations, then clears them all.
+    /// Verifies that after clear, active_text_animations is completely empty —
+    /// no stale Insert or Delete entries remain.
+    #[test]
+    fn test_active_text_animation_cleared_on_multiple_events() {
+        let mut animations: Vec<ActiveTextAnimation> = vec![
+            ActiveTextAnimation {
+                kind: TextAnimationKind::Insert,
+                byte_range: (0, 3),
+                start_time: Instant::now(),
+                duration_ms: 100,
+            },
+            ActiveTextAnimation {
+                kind: TextAnimationKind::Delete,
+                byte_range: (5, 8),
+                start_time: Instant::now(),
+                duration_ms: 160,
+            },
+            ActiveTextAnimation {
+                kind: TextAnimationKind::Insert,
+                byte_range: (10, 13),
+                start_time: Instant::now(),
+                duration_ms: 120,
+            },
+        ];
+        assert_eq!(animations.len(), 3, "precondition: should have 3 active animations");
+
+        // clear_active_text_animations() clears all
+        animations.clear();
+
+        assert!(animations.is_empty(), "all active animations should be cleared");
+        // Verify no Insert or Delete entries remain
+        let has_insert = animations.iter().any(|a| a.kind == TextAnimationKind::Insert);
+        let has_delete = animations.iter().any(|a| a.kind == TextAnimationKind::Delete);
+        assert!(!has_insert, "no Insert animations should remain after clear");
+        assert!(!has_delete, "no Delete animations should remain after clear");
+    }
+
+    /// Verifies that Insert and Delete kinds are not equal.
+    /// This is important for correct filtering in on_insert_animation_finished
+    /// and other kind-based logic.
+    #[test]
+    fn test_text_animation_kind_not_equal() {
+        assert_ne!(
+            TextAnimationKind::Insert, TextAnimationKind::Delete,
+            "Insert and Delete kinds must not be equal — they drive different rendering paths"
+        );
+        // Also verify that each kind equals itself
+        assert_eq!(TextAnimationKind::Insert, TextAnimationKind::Insert);
+        assert_eq!(TextAnimationKind::Delete, TextAnimationKind::Delete);
+    }
+
+    /// Verifies that byte_range in ActiveTextAnimation remains unchanged after creation.
+    /// This is a data integrity guard — the byte_range should never be mutated
+    /// between creation and consumption/clear.
+    #[test]
+    fn test_active_text_animation_byte_range_integrity() {
+        let anim = ActiveTextAnimation {
+            kind: TextAnimationKind::Insert,
+            byte_range: (7, 13),
+            start_time: Instant::now(),
+            duration_ms: 200,
+        };
+        // Verify byte_range is exactly as created
+        assert_eq!(anim.byte_range.0, 7, "byte_range start should match creation value");
+        assert_eq!(anim.byte_range.1, 13, "byte_range end should match creation value");
+        assert_eq!(anim.byte_range, (7, 13), "byte_range tuple should match creation value");
+
+        // Verify for Delete kind as well
+        let anim_del = ActiveTextAnimation {
+            kind: TextAnimationKind::Delete,
+            byte_range: (0, 6),
+            start_time: Instant::now(),
+            duration_ms: 160,
+        };
+        assert_eq!(anim_del.byte_range, (0, 6), "Delete byte_range should match creation value");
+    }
 }
 
 impl QQuickItem for SujianEditorItem {

@@ -34,6 +34,12 @@ const LOG_PREFIX: &str = "sujian-current";
 /// 全局日志目录路径，在 main() 最早期通过 init_global_log_dir() 或 ensure_early_log_dir() 设置
 static GLOBAL_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
 
+/// 全局 diagnostics_enabled 开关状态，由 SettingsBackend 在设置变更时同步更新
+/// 默认 true（alpha 阶段），稳定版应改为 false
+/// - ERROR/WARN/CRASH 永远写入，不受此开关控制
+/// - INFO/DEBUG/TRACE 同时受 diagnostics_enabled 和 diagnostics_verbose 控制
+static DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(true);
+
 /// 全局 verbose 开关状态，由 SettingsBackend 在设置变更时同步更新
 /// 默认 true（alpha 阶段），稳定版应改为 false
 static VERBOSE_ENABLED: AtomicBool = AtomicBool::new(true);
@@ -100,13 +106,13 @@ pub fn get_global_log_dir() -> PathBuf {
 ///
 /// 格式：[YYYY-MM-DD HH:MM:SS.mmm] [LEVEL] [module::event] message
 /// 自动脱敏，自动获取全局日志目录
-/// - ERROR/WARN 级别永远写入
-/// - INFO/DEBUG/TRACE 级别受 diagnostics_verbose 控制
+/// - ERROR/WARN/CRASH 级别永远写入（不受任何开关控制）
+/// - INFO/DEBUG/TRACE 级别同时受 diagnostics_enabled 和 diagnostics_verbose 控制
 pub fn log_to_file(level: &str, module: &str, event: &str, message: &str) {
     let level_upper = level.to_uppercase();
     let should_write = match level_upper.as_str() {
-        "ERROR" | "WARN" => true,
-        "INFO" | "DEBUG" | "TRACE" => is_verbose_enabled(),
+        "ERROR" | "WARN" | "CRASH" => true,
+        "INFO" | "DEBUG" | "TRACE" => is_diagnostics_enabled() && is_verbose_enabled(),
         _ => true, // 未知级别默认写入
     };
 
@@ -129,6 +135,20 @@ pub fn log_to_file(level: &str, module: &str, event: &str, message: &str) {
     if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&current_file) {
         let _ = writeln!(file, "{}", redacted);
     }
+}
+
+/// 检查 diagnostics_enabled 是否开启
+///
+/// 读取全局 AtomicBool 状态，由 SettingsBackend 在设置变更时通过 set_diagnostics_enabled() 同步更新
+fn is_diagnostics_enabled() -> bool {
+    DIAGNOSTICS_ENABLED.load(Ordering::Relaxed)
+}
+
+/// 设置 diagnostics_enabled 开关状态
+///
+/// 由 SettingsBackend 在读取/更新设置时调用，同步全局 AtomicBool 状态
+pub fn set_diagnostics_enabled(enabled: bool) {
+    DIAGNOSTICS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
 /// 检查 diagnostics_verbose 是否开启
@@ -328,13 +348,15 @@ fn prune_old_logs(log_dir: &Path) {
 
 /// 追加一行日志到当前日志文件
 ///
-/// crash/error 级别永远写入，verbose 级别受 diagnostics_verbose 控制
+/// crash/error/warn 级别永远写入，info/debug/trace 级别同时受 diagnostics_enabled 和 diagnostics_verbose 控制
 /// 已废弃 enabled 参数，改用 log_to_file() 进行结构化日志写入
 pub fn append_log_line(log_dir: &Path, line: &str, verbose: bool) {
-    if !verbose && !is_verbose_enabled() {
-        // 非 verbose 模式下，只有包含 ERROR/CRASH/WARN 的行才写入
-        let upper = line.to_uppercase();
-        if !upper.contains("ERROR") && !upper.contains("CRASH") && !upper.contains("WARN") {
+    let upper = line.to_uppercase();
+    let is_error_or_warn = upper.contains("ERROR") || upper.contains("CRASH") || upper.contains("WARN");
+
+    if !is_error_or_warn {
+        // INFO/DEBUG/TRACE 需要同时满足 diagnostics_enabled 和 verbose
+        if !is_diagnostics_enabled() || (!verbose && !is_verbose_enabled()) {
             return;
         }
     }
@@ -821,5 +843,122 @@ mod tests {
         assert!(is_verbose_enabled());
 
         VERBOSE_ENABLED.store(prev, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_error_always_written_even_when_disabled() {
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(false, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(false, Ordering::Relaxed);
+
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path();
+
+        log_to_file("ERROR", "test", "always", "error message when disabled");
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let content = fs::read_to_string(&current_file).unwrap();
+        assert!(content.contains("error message when disabled"), "ERROR should always be written even when diagnostics disabled");
+
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_warn_always_written_even_when_disabled() {
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(false, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(false, Ordering::Relaxed);
+
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path();
+
+        log_to_file("WARN", "test", "always", "warn message when disabled");
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let content = fs::read_to_string(&current_file).unwrap();
+        assert!(content.contains("warn message when disabled"), "WARN should always be written even when diagnostics disabled");
+
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_info_requires_both_enabled() {
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(true, Ordering::Relaxed);
+
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path();
+
+        log_to_file("INFO", "test", "both", "info message with both enabled");
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let content = fs::read_to_string(&current_file).unwrap();
+        assert!(content.contains("info message with both enabled"), "INFO should be written when both enabled and verbose");
+
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_info_blocked_when_disabled() {
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(false, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(true, Ordering::Relaxed);
+
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path();
+
+        log_to_file("INFO", "test", "blocked", "info message when disabled");
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        if current_file.exists() {
+            let content = fs::read_to_string(&current_file).unwrap();
+            assert!(!content.contains("info message when disabled"), "INFO should NOT be written when diagnostics_enabled=false");
+        }
+
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_info_blocked_when_not_verbose() {
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(false, Ordering::Relaxed);
+
+        let dir = tempdir().unwrap();
+        let log_dir = dir.path();
+
+        log_to_file("INFO", "test", "blocked", "info message when not verbose");
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        if current_file.exists() {
+            let content = fs::read_to_string(&current_file).unwrap();
+            assert!(!content.contains("info message when not verbose"), "INFO should NOT be written when diagnostics_verbose=false");
+        }
+
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn test_set_diagnostics_enabled_updates_global() {
+        let prev = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+
+        set_diagnostics_enabled(false);
+        assert!(!is_diagnostics_enabled());
+
+        set_diagnostics_enabled(true);
+        assert!(is_diagnostics_enabled());
+
+        DIAGNOSTICS_ENABLED.store(prev, Ordering::Relaxed);
     }
 }

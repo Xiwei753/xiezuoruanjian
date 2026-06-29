@@ -56,12 +56,12 @@ Item {
     Connections {
         target: editorItem
         function onAnimationEventsChanged() {
-        if (!root.animationEnabled || root.suppressed) {
-            root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
-            // 当动画被跳过时，不会有 insert 动画创建，因此不会有 hidden range 需要清理
-            // Rust 侧在 suppressed/animationDisabled 场景下不应创建 hidden range
-            return
-        }
+            if (!root.animationEnabled || root.suppressed) {
+                root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
+                // 当动画被跳过时，不会有 insert 动画创建，因此不会有 hidden range 需要清理
+                // Rust 侧在 suppressed/animationDisabled 场景下不应创建 hidden range
+                return
+            }
             var jsonStr = editorItem.animation_events_json
             if (!jsonStr || jsonStr === "[]") {
                 root._log("skipped: jsonStr empty or []")

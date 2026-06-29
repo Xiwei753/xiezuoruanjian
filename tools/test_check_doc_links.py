@@ -202,6 +202,87 @@ def test_docs_legacy_path_no_keyword_fail():
     assert found, "Legacy path without keyword should be reported as broken"
 
 
+# ── Forbidden phrase tests ──
+
+def test_forbidden_phrase_in_normal_doc_fails():
+    """Normal doc with forbidden phrase should be reported"""
+    broken, output = _run_check_in_tmpdir({
+        'docs/guide.md': '# Guide\nUse DocumentHandler for editing\n',
+    })
+    # Should report a forbidden phrase (check for the error line, not the summary)
+    found = any('Forbidden phrase in ' in line for line in output)
+    assert found, "DocumentHandler in normal doc should be reported as forbidden phrase"
+
+
+def test_forbidden_phrase_in_agents_md_passes():
+    """AGENTS.md with forbidden phrase should pass (AGENTS.md is always allowed)"""
+    broken, output = _run_check_in_tmpdir({
+        'AGENTS.md': '# Rules\n| DocumentHandler | 已删除（legacy），不得恢复 |\n',
+    })
+    # AGENTS.md is always allowed for forbidden phrases (check for the error line, not the summary)
+    found = any('Forbidden phrase in ' in line for line in output)
+    assert not found, "Forbidden phrase in AGENTS.md should NOT be reported"
+
+
+def test_forbidden_phrase_with_legacy_keyword_passes():
+    """Doc with forbidden phrase + legacy keyword on same line should pass"""
+    broken, output = _run_check_in_tmpdir({
+        'docs/guide.md': '# Guide\nDocumentHandler is deprecated and deleted\n',
+    })
+    # Legacy keyword on same line should allow the forbidden phrase (check for the error line, not the summary)
+    found = any('Forbidden phrase in ' in line for line in output)
+    assert not found, "Forbidden phrase with legacy keyword should NOT be reported"
+
+
+def test_forbidden_code_pattern_in_qml_fails():
+    """QML file with DocumentHandler should be reported"""
+    tmpdir = tempfile.mkdtemp(prefix='test_doc_links_')
+    try:
+        # Create a minimal repo structure
+        os.makedirs(os.path.join(tmpdir, 'docs'), exist_ok=True)
+        os.makedirs(os.path.join(tmpdir, 'apps', 'desktop', 'qml'), exist_ok=True)
+
+        # Create a real QML file with forbidden pattern
+        with open(os.path.join(tmpdir, 'apps', 'desktop', 'qml', 'Test.qml'), 'w', encoding='utf-8') as f:
+            f.write('import QtQuick 2.0\nDocumentHandler {\n}\n')
+
+        # Create a minimal doc file so the scan runs
+        with open(os.path.join(tmpdir, 'docs', 'guide.md'), 'w', encoding='utf-8') as f:
+            f.write('# Guide\n')
+
+        import io
+        old_stdout = sys.stdout
+        sys.stdout = io.StringIO()
+
+        original_dirname = os.path.dirname
+        def patched_dirname(path):
+            if path.endswith('check_doc_links.py'):
+                return os.path.join(tmpdir, 'tools')
+            return original_dirname(path)
+
+        try:
+            import check_doc_links
+            old_dirname = check_doc_links.os.path.dirname
+            check_doc_links.os.path.dirname = patched_dirname
+
+            try:
+                check_doc_links.check_links()
+            except SystemExit:
+                pass
+
+            output = sys.stdout.getvalue()
+            output_lines = output.strip().split('\n')
+        finally:
+            check_doc_links.os.path.dirname = old_dirname
+            sys.stdout = old_stdout
+
+        found = any('Forbidden code pattern in ' in line for line in output_lines)
+        assert found, "DocumentHandler in QML file should be reported as forbidden code pattern"
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 def main():
     tests = [
         test_is_legacy_context,
@@ -214,6 +295,10 @@ def main():
         test_docs_editor_page_plain_fail,
         test_agents_md_always_pass,
         test_docs_legacy_path_no_keyword_fail,
+        test_forbidden_phrase_in_normal_doc_fails,
+        test_forbidden_phrase_in_agents_md_passes,
+        test_forbidden_phrase_with_legacy_keyword_passes,
+        test_forbidden_code_pattern_in_qml_fails,
     ]
 
     passed = 0

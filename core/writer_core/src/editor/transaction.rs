@@ -732,4 +732,294 @@ mod tests {
         assert!(!tx.should_animate);
         assert!(engine.animation_events(&tx).is_empty());
     }
+
+    // --- Cause-based animation suppression tests ---
+    // These tests verify that non-typing causes (Format, Undo, Redo,
+    // ImeComposition, Programmatic) do not produce text animation events,
+    // as ensured by should_animate_changes().
+
+    #[test]
+    fn format_does_not_produce_animation_events() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "hello world",
+            "Hello World",
+            EditorSelection::collapsed("hello world", 0),
+            EditorSelection::collapsed("Hello World", 0),
+            EditorTransactionCause::Format,
+        );
+        assert!(!tx.should_animate, "Format cause should not animate");
+        // Format with cursor movement should only produce Cursor event, no Insert/Delete
+        let events = engine.animation_events(&tx);
+        for event in &events {
+            assert!(
+                event.kind == EditorAnimationKind::Cursor,
+                "Format should only produce Cursor events, got {:?}",
+                event.kind
+            );
+        }
+    }
+
+    #[test]
+    fn undo_does_not_produce_animation_events() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "abc",
+            "a",
+            EditorSelection::collapsed("abc", 3),
+            EditorSelection::collapsed("a", 1),
+            EditorTransactionCause::Undo,
+        );
+        assert!(!tx.should_animate, "Undo cause should not animate");
+        // Undo with cursor movement should only produce Cursor event
+        let events = engine.animation_events(&tx);
+        for event in &events {
+            assert!(
+                event.kind == EditorAnimationKind::Cursor,
+                "Undo should only produce Cursor events, got {:?}",
+                event.kind
+            );
+        }
+    }
+
+    #[test]
+    fn redo_does_not_produce_animation_events() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "a",
+            "abc",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Redo,
+        );
+        assert!(!tx.should_animate, "Redo cause should not animate");
+        // Redo with cursor movement should only produce Cursor event
+        let events = engine.animation_events(&tx);
+        for event in &events {
+            assert!(
+                event.kind == EditorAnimationKind::Cursor,
+                "Redo should only produce Cursor events, got {:?}",
+                event.kind
+            );
+        }
+    }
+
+    #[test]
+    fn ime_composition_does_not_produce_animation_events() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "ni",
+            "nihao",
+            EditorSelection::collapsed("ni", 2),
+            EditorSelection::collapsed("nihao", 5),
+            EditorTransactionCause::ImeComposition,
+        );
+        assert!(!tx.should_animate, "ImeComposition cause should not animate");
+        // ImeComposition with cursor movement should only produce Cursor event
+        let events = engine.animation_events(&tx);
+        for event in &events {
+            assert!(
+                event.kind == EditorAnimationKind::Cursor,
+                "ImeComposition should only produce Cursor events, got {:?}",
+                event.kind
+            );
+        }
+    }
+
+    #[test]
+    fn programmatic_does_not_produce_animation_events() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "old text",
+            "new text",
+            EditorSelection::collapsed("old text", 0),
+            EditorSelection::collapsed("new text", 0),
+            EditorTransactionCause::Programmatic,
+        );
+        assert!(!tx.should_animate, "Programmatic cause should not animate");
+        // Programmatic without cursor movement should produce no events at all
+        let events = engine.animation_events(&tx);
+        assert!(
+            events.is_empty(),
+            "Programmatic with same cursor position should produce no events, got {} events",
+            events.len()
+        );
+    }
+
+    // --- Guard tests for different setting combinations ---
+
+    #[test]
+    fn typing_animation_toggle_on_off() {
+        // When typing animation is ON: Typing cause should_animate = true
+        let engine = EditorEngine::with_animation_limits(8, 120);
+        let tx_on = engine.create_transaction(
+            "ab",
+            "abc",
+            EditorSelection::collapsed("ab", 2),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Typing,
+        );
+        assert!(tx_on.should_animate, "Typing should animate when animation is on");
+
+        // When typing animation is OFF: should_animate_changes still returns true for Typing cause,
+        // but the caller (platform) should check the setting and skip creating animation events.
+        // The core should_animate_changes function is cause-based, not setting-based.
+        // This test verifies the core behavior is consistent regardless of external toggle.
+        let tx_off = engine.create_transaction(
+            "abc",
+            "abcd",
+            EditorSelection::collapsed("abc", 3),
+            EditorSelection::collapsed("abcd", 4),
+            EditorTransactionCause::Typing,
+        );
+        // Core always returns true for Typing cause — platform is responsible for checking the toggle
+        assert!(tx_off.should_animate, "Core should_animate_changes is cause-based, not toggle-based");
+
+        // Non-typing causes should never animate regardless of toggle
+        let tx_paste = engine.create_transaction(
+            "a",
+            "a pasted text",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("a pasted text", "a pasted text".len()),
+            EditorTransactionCause::Paste,
+        );
+        assert!(!tx_paste.should_animate, "Paste should never animate regardless of toggle");
+    }
+
+    #[test]
+    fn animation_duration_clamped() {
+        // Verify that animation duration is stored as-is in EditorEngine,
+        // and that the settings layer (not core) is responsible for clamping.
+        // Core stores whatever duration is set via set_animation_duration_ms.
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+
+        // Normal duration
+        engine.set_animation_duration_ms(200);
+        let tx = engine.create_transaction(
+            "ab",
+            "abc",
+            EditorSelection::collapsed("ab", 2),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Typing,
+        );
+        let events = engine.animation_events(&tx);
+        assert_eq!(events[0].duration_ms, 200);
+
+        // Very small duration — core stores it, settings layer should clamp before calling set
+        engine.set_animation_duration_ms(5);
+        let tx2 = engine.create_transaction(
+            "abc",
+            "abcd",
+            EditorSelection::collapsed("abc", 3),
+            EditorSelection::collapsed("abcd", 4),
+            EditorTransactionCause::Typing,
+        );
+        let events2 = engine.animation_events(&tx2);
+        assert_eq!(events2[0].duration_ms, 5, "Core stores whatever duration is set; clamping is the caller's responsibility");
+
+        // Very large duration
+        engine.set_animation_duration_ms(9999);
+        let tx3 = engine.create_transaction(
+            "abcd",
+            "abcde",
+            EditorSelection::collapsed("abcd", 4),
+            EditorSelection::collapsed("abcde", 5),
+            EditorTransactionCause::Typing,
+        );
+        let events3 = engine.animation_events(&tx3);
+        assert_eq!(events3[0].duration_ms, 9999, "Core stores whatever duration is set; clamping is the caller's responsibility");
+    }
+
+    #[test]
+    fn undo_redo_no_animation() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+
+        // Undo with text change should NOT animate
+        let tx_undo = engine.create_transaction(
+            "abc",
+            "a",
+            EditorSelection::collapsed("abc", 3),
+            EditorSelection::collapsed("a", 1),
+            EditorTransactionCause::Undo,
+        );
+        assert!(!tx_undo.should_animate, "Undo should not animate");
+        let events_undo = engine.animation_events(&tx_undo);
+        for event in &events_undo {
+            assert_ne!(event.kind, EditorAnimationKind::Insert, "Undo should not produce Insert animation");
+            assert_ne!(event.kind, EditorAnimationKind::Delete, "Undo should not produce Delete animation");
+        }
+
+        // Redo with text change should NOT animate
+        let tx_redo = engine.create_transaction(
+            "a",
+            "abc",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Redo,
+        );
+        assert!(!tx_redo.should_animate, "Redo should not animate");
+        let events_redo = engine.animation_events(&tx_redo);
+        for event in &events_redo {
+            assert_ne!(event.kind, EditorAnimationKind::Insert, "Redo should not produce Insert animation");
+            assert_ne!(event.kind, EditorAnimationKind::Delete, "Redo should not produce Delete animation");
+        }
+    }
+
+    #[test]
+    fn paste_no_animation() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+
+        // Paste with single-char text should still NOT animate
+        let tx = engine.create_transaction(
+            "a",
+            "ab",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("ab", 2),
+            EditorTransactionCause::Paste,
+        );
+        assert!(!tx.should_animate, "Paste should not animate even for single char");
+        let events = engine.animation_events(&tx);
+        for event in &events {
+            assert_ne!(event.kind, EditorAnimationKind::Insert, "Paste should not produce Insert animation");
+            assert_ne!(event.kind, EditorAnimationKind::Delete, "Paste should not produce Delete animation");
+        }
+
+        // Paste with multi-char text should NOT animate
+        let tx2 = engine.create_transaction(
+            "a",
+            "a long pasted text",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("a long pasted text", "a long pasted text".len()),
+            EditorTransactionCause::Paste,
+        );
+        assert!(!tx2.should_animate, "Paste should not animate for multi-char text");
+    }
+
+    #[test]
+    fn load_no_animation() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+
+        // Load should produce zero animation events (not even Cursor)
+        let tx = engine.create_transaction(
+            "",
+            "loaded text",
+            EditorSelection::collapsed("", 0),
+            EditorSelection::collapsed("loaded text", "loaded text".len()),
+            EditorTransactionCause::Load,
+        );
+        assert!(!tx.should_animate, "Load should not animate");
+        let events = engine.animation_events(&tx);
+        assert!(events.is_empty(), "Load should produce zero animation events (not even Cursor)");
+
+        // Load with same cursor position (0→0) should also produce no events
+        let tx2 = engine.create_transaction(
+            "",
+            "loaded",
+            EditorSelection::collapsed("", 0),
+            EditorSelection::collapsed("loaded", 0),
+            EditorTransactionCause::Load,
+        );
+        assert!(!tx2.should_animate);
+        assert!(engine.animation_events(&tx2).is_empty());
+    }
 }
