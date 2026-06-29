@@ -19,8 +19,19 @@ Item {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _bg: dt ? dt.bg : "#FCFCFF"
+    readonly property color _primaryContainer: dt ? dt.primaryContainer : "#CCE5FF"
+    readonly property color _primary: dt ? dt.primary : "#006497"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
+    readonly property color _textSecondary: dt ? dt.textSecondary : "#42474E"
+    readonly property int _radiusXs: dt ? dt.radiusXs : 4
+    readonly property int _sp8: dt ? dt.sp8 : 8
+    readonly property int _sp12: dt ? dt.sp12 : 12
+    readonly property int _sp24: dt ? dt.sp24 : 24
+    readonly property int _title: dt ? dt.title : 24
+    readonly property int _body: dt ? dt.body : 14
+    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
 
     property var backendRef: null
 
@@ -53,11 +64,11 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: _dt.bg
+        color: _bg
     }
 
     ColumnLayout {
-        spacing: _dt.sp24
+        spacing: _sp24
         width: Math.min(parent.width - 80, 480)
         height: implicitHeight
         x: Math.max(0, Math.floor((parent.width - width) / 2))
@@ -68,16 +79,16 @@ Item {
             Layout.alignment: Qt.AlignHCenter
             width: 64; height: 64
             radius: 32
-            color: _dt.primaryContainer
-            border.color: _dt.border
+            color: _primaryContainer
+            border.color: _border
             border.width: 1
 
             Rectangle {
                 anchors.centerIn: parent
                 width: 24; height: 24
-                radius: _dt.radiusXs
+                radius: _radiusXs
                 color: "transparent"
-                border.color: _dt.primary
+                border.color: _primary
                 border.width: 2
             }
         }
@@ -86,19 +97,19 @@ Item {
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("未打开工作区")
-            font.pixelSize: _dt.title
-            font.family: _dt.fontFamily
+            font.pixelSize: _title
+            font.family: _fontFamily
             font.bold: true
-            color: _dt.textPrimary
+            color: _textPrimary
         }
 
         // Description
         Text {
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("选择或创建工作区后开始写作")
-            font.pixelSize: _dt.body
-            font.family: _dt.fontFamily
-            color: _dt.textSecondary
+            font.pixelSize: _body
+            font.family: _fontFamily
+            color: _textSecondary
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -107,8 +118,8 @@ Item {
         // Actions
         ColumnLayout {
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: _dt.sp8
-            spacing: _dt.sp12
+            Layout.topMargin: _sp8
+            spacing: _sp12
             width: 280
 
             AppButton {
