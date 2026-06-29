@@ -123,6 +123,8 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/AppComboBox.qml" as "AppComboBox.qml",
     "qml/AppDialog.qml" as "AppDialog.qml",
     "qml/AppText.qml" as "AppText.qml",
+    "qml/FallbackTokens.qml" as "FallbackTokens.qml",
+    "qml/AppShadow.qml" as "AppShadow.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
     "qml/SettingsRow.qml" as "SettingsRow.qml",
     "qml/SidebarItem.qml" as "SidebarItem.qml",
