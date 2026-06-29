@@ -89,15 +89,11 @@ class EditorFragment : Fragment() {
     }
 
     // ── Views ──
-    private lateinit var editorEditText: WriterEditText
     private lateinit var sujianEditorView: SujianEditorView
     private lateinit var tvWordCount: TextView
     private lateinit var tvSessionAdded: TextView
     private lateinit var tvSpeed: TextView
     private lateinit var tvSaveStatus: TextView
-
-    // ── Self-render editor switch ──
-    private var useSelfRenderEditor: Boolean = false
 
     // Search and Replace
     private lateinit var searchLayout: LinearLayout
@@ -113,12 +109,10 @@ class EditorFragment : Fragment() {
     private var projectId: String? = null
     private var volumeId: String? = null
     private var chapterId: String? = null
-    private var textWatcher: android.text.TextWatcher? = null
     private lateinit var workspaceRepository: WorkspaceRepository
 
     private var searchResults = mutableListOf<Pair<Int, Int>>()
     private var currentSearchIndex = -1
-    private val highlightSpans = mutableListOf<BackgroundColorSpan>()
 
     private var callback: EditorFragmentCallback? = null
 
@@ -156,16 +150,7 @@ class EditorFragment : Fragment() {
 
         workspaceRepository = WorkspaceRepository(requireContext())
 
-        // ── 读取自研写作区开关 ──
-        useSelfRenderEditor = try {
-            val settings = com.xiwei.sujian.data.SettingsRepository(requireContext()).getLocalSettings()
-            settings.useSelfRenderEditorOnAndroid
-        } catch (_: Exception) {
-            false
-        }
-
         // ── Bind views ──
-        editorEditText = view.findViewById(R.id.editorEditText)
         sujianEditorView = view.findViewById(R.id.sujianEditorView)
         tvWordCount = view.findViewById(R.id.tvWordCount)
         tvSessionAdded = view.findViewById(R.id.tvSessionAdded)
@@ -180,16 +165,8 @@ class EditorFragment : Fragment() {
         btnReplace = view.findViewById(R.id.btnReplace)
         btnReplaceAll = view.findViewById(R.id.btnReplaceAll)
 
-        // ── 根据开关切换编辑器 ──
-        if (useSelfRenderEditor) {
-            editorEditText.visibility = View.GONE
-            sujianEditorView.visibility = View.VISIBLE
-            setupSelfRenderEditor()
-        } else {
-            editorEditText.visibility = View.VISIBLE
-            sujianEditorView.visibility = View.GONE
-            setupLegacyEditor()
-        }
+        // ── 设置自研写作区（唯一主路径） ──
+        setupSelfRenderEditor()
 
         // ── Apply font fallback ──
         view.post {
@@ -207,27 +184,11 @@ class EditorFragment : Fragment() {
             params.bottomMargin = bottomInset + (16 * resources.displayMetrics.density).toInt()
             editorStatusBar.layoutParams = params
 
-            if (!useSelfRenderEditor) {
-                editorStatusBar.post {
-                    val statsBarHeight = editorStatusBar.height
-                    val extraPadding = (32 * resources.displayMetrics.density).toInt()
-                    editorEditText.setPadding(
-                        editorEditText.paddingLeft,
-                        editorEditText.paddingTop,
-                        editorEditText.paddingRight,
-                        statsBarHeight + bottomInset + extraPadding
-                    )
-                }
-            }
-
             WindowInsetsCompat.CONSUMED
         }
 
         setupSearchAndReplace()
         observeViewModel()
-        if (!useSelfRenderEditor) {
-            setupTextWatcher()
-        }
 
         // ── Initialize chapter from arguments if available ──
         val chapterTitle = arguments?.getString(ARG_CHAPTER_TITLE) ?: ""
@@ -235,46 +196,6 @@ class EditorFragment : Fragment() {
             viewModel.initChapter(projectId!!, volumeId!!, chapterId!!, chapterTitle)
         } else {
             viewModel.initErrorState(getString(R.string.error_missing_chapter_identifiers))
-        }
-    }
-
-    /**
-     * 设置旧版 WriterEditText 编辑器
-     */
-    private fun setupLegacyEditor() {
-        editorEditText.typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.NORMAL)
-
-        try {
-            val animBridge = com.xiwei.sujian.data.BridgeProvider.getEditorAnimationBridge(requireContext())
-            editorEditText.setAnimationEventProvider(AnimationEventProvider { oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs ->
-                try {
-                    when (val result = animBridge.editorAnimationEvents(oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs)) {
-                        is com.xiwei.sujian.data.BridgeResult.Success -> {
-                            editorEditText.typingAnimationController?.providerFailedLastTime = false
-                            result.data
-                        }
-                        else -> {
-                            val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
-                            DiagnosticsLogger.w("WriterSettings", "AnimationEventProvider returned failure: typingEnabled=$typingEnabled, providerInjected=true")
-                            editorEditText.typingAnimationController?.providerFailedLastTime = true
-                            emptyList()
-                        }
-                    }
-                } catch (e: Exception) {
-                    val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
-                    DiagnosticsLogger.w("WriterSettings", "AnimationEventProvider threw exception: typingEnabled=$typingEnabled, providerInjected=true, exception=${e.message}", e)
-                    editorEditText.typingAnimationController?.providerFailedLastTime = true
-                    emptyList()
-                }
-            })
-            DiagnosticsLogger.d("WriterSettings", "AnimationEventProvider injected from EditorAnimationBridge")
-        } catch (e: Exception) {
-            val typingEnabled = editorEditText.typingAnimationController?.typingAnimationEnabled ?: false
-            editorEditText.typingAnimationController?.providerUnavailable = true
-            if (typingEnabled) {
-                editorEditText.setTypingAnimationEnabled(false)
-            }
-            DiagnosticsLogger.w("WriterSettings", "Failed to inject AnimationEventProvider: typingEnabled=$typingEnabled, providerUnavailable=true, typing animation disabled", e)
         }
     }
 
@@ -314,10 +235,6 @@ class EditorFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        if (!useSelfRenderEditor && !::editorEditText.isInitialized) return
-        if (!useSelfRenderEditor) {
-            editorEditText.onEditorResume()
-        }
 
         if (SyncChangeBus.consumeChanged()) {
             val pid = projectId
@@ -456,28 +373,11 @@ class EditorFragment : Fragment() {
                         return@collectLatest
                     }
 
-                    if (useSelfRenderEditor) {
-                        // 自研写作区：加载内容
-                        if (!sujianEditorView.hasFocus()) {
-                            if (sujianEditorView.getText() != state.content) {
-                                sujianEditorView.setText(state.content)
-                            }
+                    // 自研写作区：加载内容
+                    if (!sujianEditorView.hasFocus()) {
+                        if (sujianEditorView.getText() != state.content) {
+                            sujianEditorView.setText(state.content)
                         }
-                    } else {
-                        // 旧版编辑器：加载内容
-                        if (!editorEditText.hasFocus()) {
-                            editorEditText.runWithoutTextAnimations {
-                                if (editorEditText.text?.toString() != state.content) {
-                                    editorEditText.setText(state.content)
-                                }
-                            }
-                        }
-                    }
-
-                    if (useSelfRenderEditor) {
-                        // 自研写作区没有 isEnabled 概念，暂不处理
-                    } else {
-                        editorEditText.isEnabled = state.editorEnabled
                     }
 
                     when (state.saveStatus) {
@@ -518,102 +418,45 @@ class EditorFragment : Fragment() {
         DiagnosticsLogger.d(tag, "applySettingsToEditor: fontSize=${settings.fontSize}, lineSpacing=${settings.lineSpacingMultiplier}, " +
             "autoIndent=${settings.autoIndentEnabled}/${settings.autoIndentWidth}, " +
             "typingAnim=${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms, " +
-            "smoothCursor=${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms, " +
-            "selfRender=$useSelfRenderEditor")
+            "smoothCursor=${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
 
-        if (useSelfRenderEditor) {
-            // ── 自研写作区设置 ──
-            if (lastFontSize != settings.fontSize) {
-                lastFontSize = settings.fontSize
-                sujianEditorView.setFontSize(settings.fontSize)
-                DiagnosticsLogger.d(tag, "  → fontSize applied to SujianEditorView: ${settings.fontSize}")
-            }
-            if (lastLineSpacing != settings.lineSpacingMultiplier) {
-                lastLineSpacing = settings.lineSpacingMultiplier
-                sujianEditorView.setLineSpacingMultiplier(settings.lineSpacingMultiplier)
-                DiagnosticsLogger.d(tag, "  → lineSpacing applied to SujianEditorView: ${settings.lineSpacingMultiplier}")
-            }
-            if (lastTypingAnimEnabled != settings.typingAnimationEnabled || lastTypingAnimDuration != settings.typingAnimationDurationMs) {
-                lastTypingAnimEnabled = settings.typingAnimationEnabled
-                lastTypingAnimDuration = settings.typingAnimationDurationMs
-                sujianEditorView.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
-                DiagnosticsLogger.d(tag, "  → typingAnimation applied to SujianEditorView: ${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms")
-            }
-            if (lastSmoothCursorEnabled != settings.smoothCursorEnabled || lastSmoothCursorDuration != settings.smoothCursorDurationMs) {
-                lastSmoothCursorEnabled = settings.smoothCursorEnabled
-                lastSmoothCursorDuration = settings.smoothCursorDurationMs
-                sujianEditorView.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
-                DiagnosticsLogger.d(tag, "  → smoothCursor applied to SujianEditorView: ${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
-            }
-            // autoIndent 同步到自研写作区
-            if (lastAutoIndentEnabled != settings.autoIndentEnabled || lastAutoIndentWidth != settings.autoIndentWidth) {
-                lastAutoIndentEnabled = settings.autoIndentEnabled
-                lastAutoIndentWidth = settings.autoIndentWidth
-                sujianEditorView.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
-                DiagnosticsLogger.d(tag, "  → autoIndent applied to SujianEditorView: ${settings.autoIndentEnabled}/${settings.autoIndentWidth}")
-            }
-            // 协调动画同步
-            if (lastCoordinatedAnimEnabled != settings.coordinatedTextCursorAnimationEnabled) {
-                lastCoordinatedAnimEnabled = settings.coordinatedTextCursorAnimationEnabled
-                sujianEditorView.setCoordinatedAnimationEnabled(settings.coordinatedTextCursorAnimationEnabled)
-                DiagnosticsLogger.d(tag, "  → coordinatedAnim applied to SujianEditorView: ${settings.coordinatedTextCursorAnimationEnabled}")
-            }
-            DiagnosticsLogger.d(tag, "applySettingsToEditor: SujianEditorView settings applied, typingAnim=${settings.typingAnimationEnabled}, smoothCursor=${settings.smoothCursorEnabled}")
-        } else {
-            // ── 旧版编辑器设置 ──
-            editorEditText.runWithoutTextAnimations {
-                if (lastFontSize != settings.fontSize) {
-                    lastFontSize = settings.fontSize
-                    editorEditText.textSize = settings.fontSize
-                    DiagnosticsLogger.d(tag, "  → fontSize applied: ${settings.fontSize}")
-                }
-                if (lastLineSpacing != settings.lineSpacingMultiplier) {
-                    lastLineSpacing = settings.lineSpacingMultiplier
-                    editorEditText.setLineSpacing(0f, settings.lineSpacingMultiplier)
-                    DiagnosticsLogger.d(tag, "  → lineSpacing applied: ${settings.lineSpacingMultiplier}")
-                }
-            }
-
-            editorEditText.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
-            if (lastTypingAnimEnabled != settings.typingAnimationEnabled || lastTypingAnimDuration != settings.typingAnimationDurationMs) {
-                lastTypingAnimEnabled = settings.typingAnimationEnabled
-                lastTypingAnimDuration = settings.typingAnimationDurationMs
-                editorEditText.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
-                DiagnosticsLogger.d(tag, "  → typingAnimation applied: ${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms")
-            }
-            if (lastSmoothCursorEnabled != settings.smoothCursorEnabled || lastSmoothCursorDuration != settings.smoothCursorDurationMs) {
-                lastSmoothCursorEnabled = settings.smoothCursorEnabled
-                lastSmoothCursorDuration = settings.smoothCursorDurationMs
-                editorEditText.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
-                DiagnosticsLogger.d(tag, "  → smoothCursor applied: ${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
-            }
-
-            val typingCtrl = editorEditText.typingAnimationController
-            val animActualPath = when {
-                !settings.typingAnimationEnabled -> "disabled"
-                typingCtrl?.hasProvider == true && !typingCtrl.providerFailedLastTime -> "core"
-                typingCtrl?.hasProvider == true && typingCtrl.providerFailedLastTime -> "core(failed,skip)"
-                typingCtrl?.providerUnavailable == true -> "no-provider(disabled)"
-                else -> "no-provider(disabled)"
-            }
-            DiagnosticsLogger.d(tag, "applySettingsToEditor: all settings applied, settingEnabled=${settings.typingAnimationEnabled}, providerAvailable=${typingCtrl?.hasProvider == true}, actualAnimationPath=$animActualPath, smoothCursor=${settings.smoothCursorEnabled}")
+        // ── 自研写作区设置（唯一主路径） ──
+        if (lastFontSize != settings.fontSize) {
+            lastFontSize = settings.fontSize
+            sujianEditorView.setFontSize(settings.fontSize)
+            DiagnosticsLogger.d(tag, "  → fontSize applied to SujianEditorView: ${settings.fontSize}")
         }
-    }
-
-    // ── Text Watcher ──
-
-    private fun setupTextWatcher() {
-        textWatcher = object : android.text.TextWatcher {
-            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
-                if (projectId == null || volumeId == null || chapterId == null) return
-                if (editorEditText.hasFocus()) {
-                    viewModel.onContentChanged(editorEditText.text?.toString() ?: "")
-                }
-            }
-            override fun afterTextChanged(s: Editable?) {}
+        if (lastLineSpacing != settings.lineSpacingMultiplier) {
+            lastLineSpacing = settings.lineSpacingMultiplier
+            sujianEditorView.setLineSpacingMultiplier(settings.lineSpacingMultiplier)
+            DiagnosticsLogger.d(tag, "  → lineSpacing applied to SujianEditorView: ${settings.lineSpacingMultiplier}")
         }
-        textWatcher?.let { editorEditText.addTextChangedListener(it) }
+        if (lastTypingAnimEnabled != settings.typingAnimationEnabled || lastTypingAnimDuration != settings.typingAnimationDurationMs) {
+            lastTypingAnimEnabled = settings.typingAnimationEnabled
+            lastTypingAnimDuration = settings.typingAnimationDurationMs
+            sujianEditorView.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
+            DiagnosticsLogger.d(tag, "  → typingAnimation applied to SujianEditorView: ${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms")
+        }
+        if (lastSmoothCursorEnabled != settings.smoothCursorEnabled || lastSmoothCursorDuration != settings.smoothCursorDurationMs) {
+            lastSmoothCursorEnabled = settings.smoothCursorEnabled
+            lastSmoothCursorDuration = settings.smoothCursorDurationMs
+            sujianEditorView.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
+            DiagnosticsLogger.d(tag, "  → smoothCursor applied to SujianEditorView: ${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
+        }
+        // autoIndent 同步到自研写作区
+        if (lastAutoIndentEnabled != settings.autoIndentEnabled || lastAutoIndentWidth != settings.autoIndentWidth) {
+            lastAutoIndentEnabled = settings.autoIndentEnabled
+            lastAutoIndentWidth = settings.autoIndentWidth
+            sujianEditorView.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
+            DiagnosticsLogger.d(tag, "  → autoIndent applied to SujianEditorView: ${settings.autoIndentEnabled}/${settings.autoIndentWidth}")
+        }
+        // 协调动画同步
+        if (lastCoordinatedAnimEnabled != settings.coordinatedTextCursorAnimationEnabled) {
+            lastCoordinatedAnimEnabled = settings.coordinatedTextCursorAnimationEnabled
+            sujianEditorView.setCoordinatedAnimationEnabled(settings.coordinatedTextCursorAnimationEnabled)
+            DiagnosticsLogger.d(tag, "  → coordinatedAnim applied to SujianEditorView: ${settings.coordinatedTextCursorAnimationEnabled}")
+        }
+        DiagnosticsLogger.d(tag, "applySettingsToEditor: SujianEditorView settings applied, typingAnim=${settings.typingAnimationEnabled}, smoothCursor=${settings.smoothCursorEnabled}")
     }
 
     // ── Save Failed Dialog ──
@@ -649,7 +492,7 @@ class EditorFragment : Fragment() {
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 performSearch()
             }
-            override fun afterTextChanged(s: Editable?) {}
+            override fun afterTextChanged(s: android.text.Editable?) {}
         })
 
         btnSearchNext.setOnClickListener {
@@ -659,33 +502,13 @@ class EditorFragment : Fragment() {
             }
         }
 
+        // TODO: 替换功能待自研写作区 SujianEditorView 支持文本替换 API 后实现
         btnReplace.setOnClickListener {
-            if (searchResults.isNotEmpty() && currentSearchIndex in searchResults.indices) {
-                val replaceStr = etReplace.text.toString()
-                val currentMatch = searchResults[currentSearchIndex]
-                val editable = editorEditText.text
-                if (editable != null) {
-                    editorEditText.runWithoutTextAnimations {
-                        editable.replace(currentMatch.first, currentMatch.second, replaceStr)
-                    }
-                }
-            }
+            // 替换当前匹配项 — 暂未实现
         }
 
         btnReplaceAll.setOnClickListener {
-            val searchStr = etSearch.text.toString()
-            val replaceStr = etReplace.text.toString()
-            if (searchStr.isNotEmpty()) {
-                val editable = editorEditText.text
-                if (editable != null) {
-                    val content = editable.toString()
-                    val newContent = content.replace(searchStr, replaceStr)
-                    editorEditText.runWithoutTextAnimations {
-                        editorEditText.setText(newContent)
-                    }
-                    performSearch()
-                }
-            }
+            // 全部替换 — 暂未实现
         }
     }
 
@@ -699,18 +522,12 @@ class EditorFragment : Fragment() {
         val searchStr = etSearch.text.toString()
         if (searchStr.isEmpty()) return
 
-        val content = editorEditText.text?.toString() ?: return
+        val content = sujianEditorView.getText()
         var startIndex = content.indexOf(searchStr)
-        val highlightColor = requireContext().getColor(com.google.android.material.R.color.material_dynamic_primary70)
 
         while (startIndex >= 0) {
             val endIndex = startIndex + searchStr.length
             searchResults.add(Pair(startIndex, endIndex))
-
-            val span = BackgroundColorSpan(highlightColor)
-            editorEditText.text?.setSpan(span, startIndex, endIndex, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-            highlightSpans.add(span)
-
             startIndex = content.indexOf(searchStr, endIndex)
         }
 
@@ -721,29 +538,13 @@ class EditorFragment : Fragment() {
     }
 
     private fun focusSearchResult() {
-        if (currentSearchIndex in searchResults.indices) {
-            val match = searchResults[currentSearchIndex]
-            editorEditText.setSelection(match.second)
-
-            clearHighlights()
-            val highlightColor = requireContext().getColor(com.google.android.material.R.color.material_dynamic_primary70)
-            val activeColor = requireContext().getColor(com.google.android.material.R.color.material_dynamic_primary50)
-
-            for (i in searchResults.indices) {
-                val res = searchResults[i]
-                val color = if (i == currentSearchIndex) activeColor else highlightColor
-                val span = BackgroundColorSpan(color)
-                editorEditText.text?.setSpan(span, res.first, res.second, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                highlightSpans.add(span)
-            }
-        }
+        // TODO: 自研写作区搜索高亮和光标定位待 SujianEditorView 支持后实现
+        // 目前仅记录当前搜索索引
     }
 
     private fun clearHighlights() {
-        val editable = editorEditText.text ?: return
-        for (span in highlightSpans) {
-            editable.removeSpan(span)
-        }
-        highlightSpans.clear()
+        // TODO: 自研写作区搜索高亮清除待 SujianEditorView 支持后实现
+        searchResults.clear()
+        currentSearchIndex = -1
     }
 }
