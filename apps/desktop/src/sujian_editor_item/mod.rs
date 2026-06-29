@@ -2006,6 +2006,59 @@ mod tests {
         };
         assert_eq!(anim_del.byte_range, (0, 6), "Delete byte_range should match creation value");
     }
+
+    // --- Lifecycle guard tests for typing animation disabled ---
+
+    /// 验证：set_typing_animation_enabled(false) 后不应创建新动画
+    /// 逻辑约束：当 typing_animation_enabled=false 时，
+    /// record_transaction 不应创建新的 ActiveTextAnimation。
+    #[test]
+    fn typing_animation_disabled_prevents_new_animations() {
+        let typing_animation_enabled = false;
+        let events_non_empty = true;
+        let is_scrolling = false;
+        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
+        assert!(!should_create, "when typing_animation_enabled=false, no animations should be created");
+    }
+
+    /// 验证：scrolling 抑制动画创建
+    #[test]
+    fn scrolling_prevents_new_animations() {
+        let typing_animation_enabled = true;
+        let events_non_empty = true;
+        let is_scrolling = true;
+        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
+        assert!(!should_create, "when scrolling, no animations should be created");
+    }
+
+    /// 验证：动画超时后应被 tick_text_animations 清除
+    /// 2x duration + 200ms 宽限期后应过期
+    #[test]
+    fn active_text_animation_expires_after_timeout() {
+        let anim = ActiveTextAnimation {
+            kind: TextAnimationKind::Insert,
+            byte_range: (0, 3),
+            start_time: Instant::now() - std::time::Duration::from_millis(500),
+            duration_ms: 100,
+        };
+        let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
+        let should_expire = elapsed >= anim.duration_ms * 2 + 200;
+        assert!(should_expire, "animation should be expired after 2x duration + 200ms grace");
+    }
+
+    /// 验证：动画在宽限期内不应过期
+    #[test]
+    fn active_text_animation_not_expired_within_grace() {
+        let anim = ActiveTextAnimation {
+            kind: TextAnimationKind::Insert,
+            byte_range: (0, 3),
+            start_time: Instant::now(),
+            duration_ms: 100,
+        };
+        let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
+        let should_expire = elapsed >= anim.duration_ms * 2 + 200;
+        assert!(!should_expire, "animation should NOT be expired within grace period");
+    }
 }
 
 impl QQuickItem for SujianEditorItem {
@@ -2181,59 +2234,5 @@ impl QQuickItem for SujianEditorItem {
         }
 
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
-    }
-}
-
-    // --- Lifecycle guard tests for typing animation disabled ---
-
-    /// 验证：set_typing_animation_enabled(false) 后不应创建新动画
-    /// 逻辑约束：当 typing_animation_enabled=false 时，
-    /// record_transaction 不应创建新的 ActiveTextAnimation。
-    #[test]
-    fn typing_animation_disabled_prevents_new_animations() {
-        let typing_animation_enabled = false;
-        let events_non_empty = true;
-        let is_scrolling = false;
-        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
-        assert!(!should_create, "when typing_animation_enabled=false, no animations should be created");
-    }
-
-    /// 验证：scrolling 抑制动画创建
-    #[test]
-    fn scrolling_prevents_new_animations() {
-        let typing_animation_enabled = true;
-        let events_non_empty = true;
-        let is_scrolling = true;
-        let should_create = typing_animation_enabled && events_non_empty && !is_scrolling;
-        assert!(!should_create, "when scrolling, no animations should be created");
-    }
-
-    /// 验证：动画超时后应被 tick_text_animations 清除
-    /// 2x duration + 200ms 宽限期后应过期
-    #[test]
-    fn active_text_animation_expires_after_timeout() {
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (0, 3),
-            start_time: Instant::now() - std::time::Duration::from_millis(500),
-            duration_ms: 100,
-        };
-        let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
-        let should_expire = elapsed >= anim.duration_ms * 2 + 200;
-        assert!(should_expire, "animation should be expired after 2x duration + 200ms grace");
-    }
-
-    /// 验证：动画在宽限期内不应过期
-    #[test]
-    fn active_text_animation_not_expired_within_grace() {
-        let anim = ActiveTextAnimation {
-            kind: TextAnimationKind::Insert,
-            byte_range: (0, 3),
-            start_time: Instant::now(),
-            duration_ms: 100,
-        };
-        let elapsed = Instant::now().duration_since(anim.start_time).as_millis() as u64;
-        let should_expire = elapsed >= anim.duration_ms * 2 + 200;
-        assert!(!should_expire, "animation should NOT be expired within grace period");
     }
 }
