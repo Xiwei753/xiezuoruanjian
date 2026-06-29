@@ -12,8 +12,11 @@
 
 import QtQuick
 
-QtObject {
+Item {
     id: fallback
+    width: 0
+    height: 0
+    visible: false
 
     // --- Theme ---
     property bool isDark: false
