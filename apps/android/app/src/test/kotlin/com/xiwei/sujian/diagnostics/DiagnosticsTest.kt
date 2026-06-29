@@ -320,10 +320,10 @@ class DiagnosticsRedactionTest {
 class LocalSettingsDiagnosticsDefaultTest {
 
     @Test
-    fun diagnosticsDefaultsToDisabled() {
+    fun diagnosticsDefaultsToEnabled() {
         val settings = LocalSettings()
-        assertFalse(settings.diagnosticsEnabled)
-        assertFalse(settings.diagnosticsVerbose)
+        assertTrue(settings.diagnosticsEnabled)
+        assertTrue(settings.diagnosticsVerbose)
     }
 
     @Test

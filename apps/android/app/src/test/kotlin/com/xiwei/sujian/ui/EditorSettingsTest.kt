@@ -31,8 +31,8 @@ class EditorSettingsTest {
         assertEquals(100, settings.editorTypingAnimationDurationMs)
         assertTrue(settings.editorSmoothCursorEnabled)
         assertEquals(80, settings.editorSmoothCursorDurationMs)
-        assertFalse(settings.diagnosticsEnabled)
-        assertFalse(settings.diagnosticsVerbose)
+        assertTrue(settings.diagnosticsEnabled)
+        assertTrue(settings.diagnosticsVerbose)
     }
 
     @Test
