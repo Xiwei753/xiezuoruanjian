@@ -18,8 +18,16 @@ Item {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _primaryContainer: dt ? dt.primaryContainer : "#CCE5FF"
+    readonly property color _onPrimaryContainer: dt ? dt.onPrimaryContainer : "#001E31"
+    readonly property color _onSurfaceVariant: dt ? dt.onSurfaceVariant : "#42474E"
+    readonly property color _surfaceVariant: dt ? dt.surfaceVariant : "#DFE3EB"
+    readonly property int _sp8: dt ? dt.sp8 : 8
+    readonly property int _sp12: dt ? dt.sp12 : 12
+    readonly property int _radiusPill: dt ? dt.radiusPill : 999
+    readonly property int _fontMd: dt ? dt.fontMd : 14
+    readonly property int _label: dt ? dt.label : 13
+    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
 
     property string text: ""
     property string icon: ""
@@ -32,24 +40,24 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        anchors.leftMargin: _dt.sp8
-        anchors.rightMargin: _dt.sp8
-        radius: _dt.radiusPill
+        anchors.leftMargin: _sp8
+        anchors.rightMargin: _sp8
+        radius: _radiusPill
         color: {
-            if (control.active) return _dt.primaryContainer
-            return ma.containsMouse ? _dt.surfaceVariant : "transparent"
+            if (control.active) return _primaryContainer
+            return ma.containsMouse ? _surfaceVariant : "transparent"
         }
     }
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: _dt.sp12
-        anchors.rightMargin: _dt.sp8
-        spacing: _dt.sp8
+        anchors.leftMargin: _sp12
+        anchors.rightMargin: _sp8
+        spacing: _sp8
 
         AppText {
             text: control.icon
-            font.pixelSize: _dt.fontMd
+            font.pixelSize: _fontMd
             Layout.preferredWidth: 20
             horizontalAlignment: Text.AlignHCenter
             visible: !control.compact
@@ -58,11 +66,11 @@ Item {
         AppText {
             text: control.text
             color: {
-                if (control.active) return _dt.onPrimaryContainer
-                return _dt.onSurfaceVariant
+                if (control.active) return _onPrimaryContainer
+                return _onSurfaceVariant
             }
-            font.pixelSize: _dt.label
-            font.family: _dt.fontFamily
+            font.pixelSize: _label
+            font.family: _fontFamily
             font.weight: control.active ? Font.Medium : Font.Normal
             Layout.fillWidth: true
             elide: Text.ElideRight
