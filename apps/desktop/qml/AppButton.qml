@@ -17,8 +17,20 @@ Button {
     property var dt: null
 
     // Safe access: fallback to light-theme defaults when dt is null
-    FallbackTokens { id: _fallback }
-    readonly property var _dt: dt ?? _fallback
+    readonly property color _primary: dt ? dt.primary : "#006497"
+    readonly property color _onPrimary: dt ? dt.onPrimary : "#FFFFFF"
+    readonly property color _secondaryContainer: dt ? dt.secondaryContainer : "#D4E3F7"
+    readonly property color _onSecondaryContainer: dt ? dt.onSecondaryContainer : "#0E1D2A"
+    readonly property color _surfaceContainerLow: dt ? dt.surfaceContainerLow : "#F6F8FC"
+    readonly property color _dangerContainer: dt ? dt.dangerContainer : "#FFDAD6"
+    readonly property color _onDangerContainer: dt ? dt.onDangerContainer : "#410002"
+    readonly property color _border: dt ? dt.border : "#71788057"
+    readonly property color _textDisabled: dt ? dt.textDisabled : "#1A1C1E61"
+    readonly property bool _isDark: dt ? dt.isDark : false
+    readonly property int _inputFieldRadius: dt ? dt.inputFieldRadius : 12
+    readonly property int _label: dt ? dt.label : 13
+    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
+    readonly property int _animFast: dt ? dt.animFast : 120
 
     property string tooltip: ""
     property bool small: false
@@ -31,32 +43,32 @@ Button {
     readonly property bool isSecondary: control.variant === "secondary"
 
     readonly property color containerColor: {
-        if (!control.enabled) return _dt.surfaceContainerLow;
-        if (isPrimary) return _dt.primary;
-        if (isDanger) return _dt.dangerContainer;
+        if (!control.enabled) return _surfaceContainerLow;
+        if (isPrimary) return _primary;
+        if (isDanger) return _dangerContainer;
         if (isText) return "transparent";
-        return _dt.secondaryContainer;
+        return _secondaryContainer;
     }
 
     readonly property color contentColor: {
-        if (!control.enabled) return _dt.textDisabled;
-        if (isPrimary) return _dt.onPrimary;
-        if (isDanger) return _dt.onDangerContainer;
-        if (isText) return _dt.primary;
-        return _dt.onSecondaryContainer;
+        if (!control.enabled) return _textDisabled;
+        if (isPrimary) return _onPrimary;
+        if (isDanger) return _onDangerContainer;
+        if (isText) return _primary;
+        return _onSecondaryContainer;
     }
 
     implicitHeight: small ? 32 : 40
     implicitWidth: Math.max(tm.width + (small ? 20 : 28), small ? 56 : 72)
 
-    TextMetrics { id: tm; text: control.text; font.pixelSize: _dt.label }
+    TextMetrics { id: tm; text: control.text; font.pixelSize: _label }
 
     contentItem: AppText {
         text: control.text
         color: control.contentColor
-        font.pixelSize: _dt.label
+        font.pixelSize: _label
         font.weight: Font.Medium
-        font.family: _dt.fontFamily
+        font.family: _fontFamily
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
     }
@@ -65,19 +77,19 @@ Button {
         color: {
             if (!control.enabled) return control.containerColor;
             if (control.pressed) {
-                if (isText) return _dt.surfaceContainerLow;
-                return _dt.isDark ? Qt.lighter(control.containerColor, 1.08) : Qt.darker(control.containerColor, 1.08);
+                if (isText) return _surfaceContainerLow;
+                return _isDark ? Qt.lighter(control.containerColor, 1.08) : Qt.darker(control.containerColor, 1.08);
             }
             if (control.hovered) {
-                if (isText) return _dt.surfaceContainerLow;
-                return _dt.isDark ? Qt.lighter(control.containerColor, 1.05) : Qt.darker(control.containerColor, 1.03);
+                if (isText) return _surfaceContainerLow;
+                return _isDark ? Qt.lighter(control.containerColor, 1.05) : Qt.darker(control.containerColor, 1.03);
             }
             return control.containerColor;
         }
-        border.color: control.variant === "secondary" ? _dt.border : "transparent"
+        border.color: control.variant === "secondary" ? _border : "transparent"
         border.width: control.variant === "secondary" ? 1 : 0
-        radius: _dt.inputFieldRadius
+        radius: _inputFieldRadius
 
-        Behavior on color { ColorAnimation { duration: _dt.animFast } }
+        Behavior on color { ColorAnimation { duration: _animFast } }
     }
 }
