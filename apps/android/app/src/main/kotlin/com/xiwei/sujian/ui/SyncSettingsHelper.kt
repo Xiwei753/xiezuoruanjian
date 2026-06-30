@@ -412,14 +412,14 @@ internal class SyncSettingsHelper(
         val input = etHttpsToken.text?.toString() ?: ""
         if (input.isNotEmpty()) {
             tvTokenStatus.text = activity.getString(R.string.token_input_active)
-            tvTokenStatus.setTextColor(MaterialColors.getColor(activity, M3Attr.colorPrimary))
+            tvTokenStatus.setTextColor(MaterialColors.getColor(tvTokenStatus, M3Attr.colorPrimary))
         } else {
             if (currentSyncSecrets.token.isNullOrEmpty()) {
                 tvTokenStatus.text = activity.getString(R.string.token_not_configured)
-                tvTokenStatus.setTextColor(MaterialColors.getColor(activity, M3Attr.colorError))
+                tvTokenStatus.setTextColor(MaterialColors.getColor(tvTokenStatus, M3Attr.colorError))
             } else {
                 tvTokenStatus.text = activity.getString(R.string.token_configured)
-                tvTokenStatus.setTextColor(MaterialColors.getColor(activity, M3Attr.colorPrimary))
+                tvTokenStatus.setTextColor(MaterialColors.getColor(tvTokenStatus, M3Attr.colorPrimary))
             }
         }
     }
