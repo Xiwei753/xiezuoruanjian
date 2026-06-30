@@ -532,13 +532,13 @@ ApplicationWindow {
                 Item { Layout.fillWidth: true }
                 AppButton {
                     text: qsTr("取消")
-                    theme: designTokens
+                    dt: designTokens
                     variant: "text"
                     onClicked: confirmDialog.close()
                 }
                 AppButton {
                     text: qsTr("删除")
-                    theme: designTokens
+                    dt: designTokens
                     variant: "danger"
                     onClicked: {
                         if (projectController.deleteItem(confirmDialog.actionType, confirmDialog.contextData)) {
@@ -576,7 +576,7 @@ ApplicationWindow {
             }
             AppButton {
                 text: qsTr("确定")
-                theme: designTokens
+                dt: designTokens
                 variant: "primary"
                 Layout.alignment: Qt.AlignRight
                 onClicked: errorDialog.close()
@@ -653,7 +653,7 @@ ApplicationWindow {
                 AppButton {
                     id: confirmInputButton
                     text: qsTr("确定")
-                    theme: designTokens
+                    dt: designTokens
                     variant: "primary"
                     onClicked: {
                         var title = inputField.text.trim();

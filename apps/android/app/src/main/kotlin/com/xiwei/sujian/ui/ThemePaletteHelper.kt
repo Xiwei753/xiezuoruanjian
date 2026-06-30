@@ -3,6 +3,8 @@ package com.xiwei.sujian.ui
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.google.android.material.R.attr as M3Attr
+import com.google.android.material.color.MaterialColors
 import org.json.JSONObject
 
 /**
@@ -10,19 +12,181 @@ import org.json.JSONObject
  * and format it as a cross-platform ThemePalette JSON object.
  *
  * Non-Android clients only consume this; they never produce it.
+ *
+ * ## Color resolution priority
+ *
+ * 1. **Primary route**: Read semantic attr (e.g. `R.attr.colorPrimary`) from the
+ *    currently-applied DynamicColors theme via `MaterialColors.getColor()`.
+ *    This yields the true Material3 token value, including any customisation
+ *    applied by the DynamicColors engine.
+ *
+ * 2. **Fallback route**: When the semantic attr is unavailable (pre-Android 12,
+ *    theme without DynamicColors, or API-33-only attrs on older devices),
+ *    fall back to `system_accent1/2/3` / `system_neutral1/2` tone mapping.
  */
 object ThemePaletteHelper {
 
     private const val TAG = "ThemePaletteHelper"
 
+    // ------------------------------------------------------------------ //
+    //  ColorResolver – injectable colour-resolution strategy for testing  //
+    // ------------------------------------------------------------------ //
+
     /**
-     * Extract the full Material You palette from system resources (Android 12+).
+     * Abstraction over colour resolution so that unit tests can inject
+     * deterministic mocks without needing an Android Context or MaterialColors.
+     */
+    interface ColorResolver {
+        /**
+         * Attempt to resolve a semantic theme-attr colour.
+         *
+         * @return the colour as a hex string (e.g. `"#006497"`), or `null`
+         *         if the attr is not available in the current theme.
+         */
+        fun resolveThemeAttrColor(attrResId: Int): String?
+
+        /**
+         * Resolve a system-resource colour (fallback route).
+         *
+         * @return the colour as a hex string, or `null` if unavailable.
+         */
+        fun resolveSystemColor(colorResId: Int): String?
+    }
+
+    /**
+     * Production implementation that reads colours from a real Android [Context].
+     */
+    class DefaultColorResolver(private val context: Context) : ColorResolver {
+
+        override fun resolveThemeAttrColor(attrResId: Int): String? {
+            // Semantic attrs require Android 12+ with DynamicColors applied.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+            return try {
+                val colorInt = MaterialColors.getColor(context, attrResId, /* fallback= */ 0)
+                // MaterialColors.getColor returns the fallback value (0) when the attr
+                // is not resolved, which means the colour is fully transparent black.
+                // Treat that as "not available".
+                if (colorInt == 0) null
+                else String.format("#%06X", 0xFFFFFF and colorInt)
+            } catch (e: Exception) {
+                Log.d(TAG, "Semantic attr 0x${attrResId.toString(16)} not available", e)
+                null
+            }
+        }
+
+        override fun resolveSystemColor(colorResId: Int): String? {
+            return try {
+                val colorInt = context.resources.getColor(colorResId, context.theme)
+                String.format("#%06X", 0xFFFFFF and colorInt)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    // ----------------------------------------------------------- //
+    //  Semantic attr definitions (light + dark)                    //
+    // ----------------------------------------------------------- //
+
+    /**
+     * A colour entry to be written into the JSON output.
+     *
+     * @param jsonKey   snake_case key in the output JSON.
+     * @param attrResId Material3 semantic attr (e.g. `M3Attr.colorPrimary`).
+     *                  `null` for attrs that only exist on API 33+.
+     * @param attrResIdV33 Same attr but only available on API 33+.
+     *                  If non-null, takes precedence over [attrResId] on API 33+.
+     * @param systemColorResId  Fallback system-resource colour ID.
+     */
+    private data class ColorEntry(
+        val jsonKey: String,
+        val attrResId: Int?,
+        val attrResIdV33: Int? = null,
+        val systemColorResId: Int
+    )
+
+    /** Light-palette colour entries. */
+    private val lightColorEntries = listOf(
+        // Primary
+        ColorEntry("light_primary",              M3Attr.colorPrimary,              systemColorResId = android.R.color.system_accent1_500),
+        ColorEntry("light_on_primary",           M3Attr.colorOnPrimary,            systemColorResId = android.R.color.system_accent1_100),
+        ColorEntry("light_primary_container",    M3Attr.colorPrimaryContainer,     systemColorResId = android.R.color.system_accent1_100),
+        ColorEntry("light_on_primary_container", M3Attr.colorOnPrimaryContainer,   systemColorResId = android.R.color.system_accent1_900),
+        // Secondary
+        ColorEntry("light_secondary",              M3Attr.colorSecondary,              systemColorResId = android.R.color.system_accent2_500),
+        ColorEntry("light_on_secondary",           M3Attr.colorOnSecondary,            systemColorResId = android.R.color.system_accent2_100),
+        ColorEntry("light_secondary_container",    M3Attr.colorSecondaryContainer,     systemColorResId = android.R.color.system_accent2_100),
+        ColorEntry("light_on_secondary_container", M3Attr.colorOnSecondaryContainer,   systemColorResId = android.R.color.system_accent2_900),
+        // Tertiary
+        ColorEntry("light_tertiary",              M3Attr.colorTertiary,              systemColorResId = android.R.color.system_accent3_500),
+        ColorEntry("light_on_tertiary",           M3Attr.colorOnTertiary,            systemColorResId = android.R.color.system_accent3_100),
+        ColorEntry("light_tertiary_container",    M3Attr.colorTertiaryContainer,     systemColorResId = android.R.color.system_accent3_100),
+        ColorEntry("light_on_tertiary_container", M3Attr.colorOnTertiaryContainer,   systemColorResId = android.R.color.system_accent3_900),
+        // Background / Surface
+        ColorEntry("light_background",           M3Attr.colorBackground,           systemColorResId = android.R.color.system_neutral1_50),
+        ColorEntry("light_on_background",        M3Attr.colorOnBackground,         systemColorResId = android.R.color.system_neutral1_900),
+        ColorEntry("light_surface",              M3Attr.colorSurface,              systemColorResId = android.R.color.system_neutral1_50),
+        ColorEntry("light_on_surface",           M3Attr.colorOnSurface,            systemColorResId = android.R.color.system_neutral1_900),
+        ColorEntry("light_surface_variant",      M3Attr.colorSurfaceVariant,       systemColorResId = android.R.color.system_neutral2_200),
+        ColorEntry("light_on_surface_variant",   M3Attr.colorOnSurfaceVariant,     systemColorResId = android.R.color.system_neutral2_700),
+        // SurfaceContainer (API 33+)
+        ColorEntry("light_surface_container",      null, M3Attr.colorSurfaceContainer,     systemColorResId = android.R.color.system_neutral1_100),
+        ColorEntry("light_surface_container_high", null, M3Attr.colorSurfaceContainerHigh,  systemColorResId = android.R.color.system_neutral1_200),
+        // Outline
+        ColorEntry("light_outline",          M3Attr.colorOutline,          systemColorResId = android.R.color.system_neutral2_500),
+        ColorEntry("light_outline_variant",  M3Attr.colorOutlineVariant,   systemColorResId = android.R.color.system_neutral2_200),
+    )
+
+    /** Dark-palette colour entries. */
+    private val darkColorEntries = listOf(
+        // Primary
+        ColorEntry("dark_primary",              M3Attr.colorPrimary,              systemColorResId = android.R.color.system_accent1_200),
+        ColorEntry("dark_on_primary",           M3Attr.colorOnPrimary,            systemColorResId = android.R.color.system_accent1_800),
+        ColorEntry("dark_primary_container",    M3Attr.colorPrimaryContainer,     systemColorResId = android.R.color.system_accent1_700),
+        ColorEntry("dark_on_primary_container", M3Attr.colorOnPrimaryContainer,   systemColorResId = android.R.color.system_accent1_100),
+        // Secondary
+        ColorEntry("dark_secondary",              M3Attr.colorSecondary,              systemColorResId = android.R.color.system_accent2_200),
+        ColorEntry("dark_on_secondary",           M3Attr.colorOnSecondary,            systemColorResId = android.R.color.system_accent2_800),
+        ColorEntry("dark_secondary_container",    M3Attr.colorSecondaryContainer,     systemColorResId = android.R.color.system_accent2_700),
+        ColorEntry("dark_on_secondary_container", M3Attr.colorOnSecondaryContainer,   systemColorResId = android.R.color.system_accent2_100),
+        // Tertiary
+        ColorEntry("dark_tertiary",              M3Attr.colorTertiary,              systemColorResId = android.R.color.system_accent3_200),
+        ColorEntry("dark_on_tertiary",           M3Attr.colorOnTertiary,            systemColorResId = android.R.color.system_accent3_800),
+        ColorEntry("dark_tertiary_container",    M3Attr.colorTertiaryContainer,     systemColorResId = android.R.color.system_accent3_700),
+        ColorEntry("dark_on_tertiary_container", M3Attr.colorOnTertiaryContainer,   systemColorResId = android.R.color.system_accent3_100),
+        // Background / Surface
+        ColorEntry("dark_background",           M3Attr.colorBackground,           systemColorResId = android.R.color.system_neutral1_900),
+        ColorEntry("dark_on_background",        M3Attr.colorOnBackground,         systemColorResId = android.R.color.system_neutral1_100),
+        ColorEntry("dark_surface",              M3Attr.colorSurface,              systemColorResId = android.R.color.system_neutral1_900),
+        ColorEntry("dark_on_surface",           M3Attr.colorOnSurface,            systemColorResId = android.R.color.system_neutral1_100),
+        ColorEntry("dark_surface_variant",      M3Attr.colorSurfaceVariant,       systemColorResId = android.R.color.system_neutral2_700),
+        ColorEntry("dark_on_surface_variant",   M3Attr.colorOnSurfaceVariant,     systemColorResId = android.R.color.system_neutral2_200),
+        // SurfaceContainer (API 33+)
+        ColorEntry("dark_surface_container",      null, M3Attr.colorSurfaceContainer,     systemColorResId = android.R.color.system_neutral1_800),
+        ColorEntry("dark_surface_container_high", null, M3Attr.colorSurfaceContainerHigh,  systemColorResId = android.R.color.system_neutral1_700),
+        // Outline
+        ColorEntry("dark_outline",          M3Attr.colorOutline,          systemColorResId = android.R.color.system_neutral2_500),
+        ColorEntry("dark_outline_variant",  M3Attr.colorOutlineVariant,   systemColorResId = android.R.color.system_neutral2_700),
+    )
+
+    // ----------------------------------------------------------- //
+    //  Public API                                                   //
+    // ----------------------------------------------------------- //
+
+    /**
+     * Extract the full Material You palette.
      * Returns a JSON string compatible with Rust core's ThemePalette struct.
      * Returns null if not available (pre-Android 12 or no dynamic color).
      */
     fun extractThemePaletteJson(context: Context): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        return extractThemePaletteJson(DefaultColorResolver(context))
+    }
 
+    /**
+     * Testable overload that accepts a [ColorResolver] instead of a [Context].
+     */
+    fun extractThemePaletteJson(resolver: ColorResolver): String? {
         return try {
             val palette = JSONObject()
             palette.put("source", "android_dynamic_color")
@@ -30,102 +194,12 @@ object ThemePaletteHelper {
             palette.put("device_id", "")  // Will be filled by settings layer
             palette.put("variant", "tonal_spot")
 
-            // Accent colors from system resources
-            // Android 12+ provides system_accent1, system_accent2, system_accent3
-            // and system_neutral1, system_neutral2 in 10 shades (0-999)
-            // We use key shades that map to Material3 semantic tokens
-
-            // Light palette
-            putSystemColor(palette, "light_primary", context,
-                android.R.color.system_accent1_500)
-            putSystemColor(palette, "light_on_primary", context,
-                android.R.color.system_accent1_100)
-            putSystemColor(palette, "light_primary_container", context,
-                android.R.color.system_accent1_100)
-            putSystemColor(palette, "light_on_primary_container", context,
-                android.R.color.system_accent1_900)
-            putSystemColor(palette, "light_secondary", context,
-                android.R.color.system_accent2_500)
-            putSystemColor(palette, "light_on_secondary", context,
-                android.R.color.system_accent2_100)
-            putSystemColor(palette, "light_secondary_container", context,
-                android.R.color.system_accent2_100)
-            putSystemColor(palette, "light_on_secondary_container", context,
-                android.R.color.system_accent2_900)
-            putSystemColor(palette, "light_tertiary", context,
-                android.R.color.system_accent3_500)
-            putSystemColor(palette, "light_on_tertiary", context,
-                android.R.color.system_accent3_100)
-            putSystemColor(palette, "light_tertiary_container", context,
-                android.R.color.system_accent3_100)
-            putSystemColor(palette, "light_on_tertiary_container", context,
-                android.R.color.system_accent3_900)
-            putSystemColor(palette, "light_background", context,
-                android.R.color.system_neutral1_50)
-            putSystemColor(palette, "light_on_background", context,
-                android.R.color.system_neutral1_900)
-            putSystemColor(palette, "light_surface", context,
-                android.R.color.system_neutral1_50)
-            putSystemColor(palette, "light_on_surface", context,
-                android.R.color.system_neutral1_900)
-            putSystemColor(palette, "light_surface_variant", context,
-                android.R.color.system_neutral2_200)
-            putSystemColor(palette, "light_on_surface_variant", context,
-                android.R.color.system_neutral2_700)
-            putSystemColor(palette, "light_surface_container", context,
-                android.R.color.system_neutral1_100)
-            putSystemColor(palette, "light_surface_container_high", context,
-                android.R.color.system_neutral1_200)
-            putSystemColor(palette, "light_outline", context,
-                android.R.color.system_neutral2_500)
-            putSystemColor(palette, "light_outline_variant", context,
-                android.R.color.system_neutral2_200)
-
-            // Dark palette
-            putSystemColor(palette, "dark_primary", context,
-                android.R.color.system_accent1_200)
-            putSystemColor(palette, "dark_on_primary", context,
-                android.R.color.system_accent1_800)
-            putSystemColor(palette, "dark_primary_container", context,
-                android.R.color.system_accent1_700)
-            putSystemColor(palette, "dark_on_primary_container", context,
-                android.R.color.system_accent1_100)
-            putSystemColor(palette, "dark_secondary", context,
-                android.R.color.system_accent2_200)
-            putSystemColor(palette, "dark_on_secondary", context,
-                android.R.color.system_accent2_800)
-            putSystemColor(palette, "dark_secondary_container", context,
-                android.R.color.system_accent2_700)
-            putSystemColor(palette, "dark_on_secondary_container", context,
-                android.R.color.system_accent2_100)
-            putSystemColor(palette, "dark_tertiary", context,
-                android.R.color.system_accent3_200)
-            putSystemColor(palette, "dark_on_tertiary", context,
-                android.R.color.system_accent3_800)
-            putSystemColor(palette, "dark_tertiary_container", context,
-                android.R.color.system_accent3_700)
-            putSystemColor(palette, "dark_on_tertiary_container", context,
-                android.R.color.system_accent3_100)
-            putSystemColor(palette, "dark_background", context,
-                android.R.color.system_neutral1_900)
-            putSystemColor(palette, "dark_on_background", context,
-                android.R.color.system_neutral1_100)
-            putSystemColor(palette, "dark_surface", context,
-                android.R.color.system_neutral1_900)
-            putSystemColor(palette, "dark_on_surface", context,
-                android.R.color.system_neutral1_100)
-            putSystemColor(palette, "dark_surface_variant", context,
-                android.R.color.system_neutral2_700)
-            putSystemColor(palette, "dark_on_surface_variant", context,
-                android.R.color.system_neutral2_200)
-            putSystemColor(palette, "dark_surface_container", context,
-                android.R.color.system_neutral1_800)
-            putSystemColor(palette, "dark_surface_container_high", context,
-                android.R.color.system_neutral1_700)
-            putSystemColor(palette, "dark_outline", context,
-                android.R.color.system_neutral2_500)
-            putSystemColor(palette, "dark_outline_variant", context,
-                android.R.color.system_neutral2_700)
+            for (entry in lightColorEntries) {
+                putColor(palette, entry, resolver)
+            }
+            for (entry in darkColorEntries) {
+                putColor(palette, entry, resolver)
+            }
 
             palette.toString()
         } catch (e: Exception) {
@@ -134,14 +208,53 @@ object ThemePaletteHelper {
         }
     }
 
-    private fun putSystemColor(json: JSONObject, key: String, context: Context, colorResId: Int) {
-        try {
-            val colorInt = context.resources.getColor(colorResId, context.theme)
-            val hexColor = String.format("#%06X", 0xFFFFFF and colorInt)
-            json.put(key, hexColor)
-        } catch (e: Exception) {
-            // Color resource may not exist on all devices
-            json.put(key, "")
+    // ----------------------------------------------------------- //
+    //  Internal helpers                                             //
+    // ----------------------------------------------------------- //
+
+    /**
+     * Write a single colour entry into [json].
+     *
+     * Priority:
+     * 1. If the entry has an API-33-only attr and we are on API 33+,
+     *    try `resolveThemeAttrColor(attrResIdV33)`.
+     * 2. If the entry has a standard attr, try `resolveThemeAttrColor(attrResId)`.
+     * 3. Fall back to `resolveSystemColor(systemColorResId)`.
+     * 4. If all fail, write empty string.
+     */
+    private fun putColor(
+        json: JSONObject,
+        entry: ColorEntry,
+        resolver: ColorResolver
+    ) {
+        // 1. Try API-33+ semantic attr
+        val v33Attr = entry.attrResIdV33
+        if (v33Attr != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hex = resolver.resolveThemeAttrColor(v33Attr)
+            if (hex != null) {
+                json.put(entry.jsonKey, hex)
+                return
+            }
         }
+
+        // 2. Try standard semantic attr
+        val attr = entry.attrResId
+        if (attr != null) {
+            val hex = resolver.resolveThemeAttrColor(attr)
+            if (hex != null) {
+                json.put(entry.jsonKey, hex)
+                return
+            }
+        }
+
+        // 3. Fallback to system tone
+        val systemHex = resolver.resolveSystemColor(entry.systemColorResId)
+        if (systemHex != null) {
+            json.put(entry.jsonKey, systemHex)
+            return
+        }
+
+        // 4. Nothing available
+        json.put(entry.jsonKey, "")
     }
 }

@@ -194,7 +194,7 @@ Item {
 
             AppButton {
                 text: qsTr("保存配置")
-                theme: root.theme
+                dt: root.theme
                 variant: "primary"
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -221,7 +221,7 @@ Item {
 
             AppButton {
                 text: qsTr("执行同步")
-                theme: root.theme
+                dt: root.theme
                 variant: "secondary"
                 enabled: !(appBackend && appBackend.sync_in_progress)
                 onClicked: {
@@ -238,7 +238,7 @@ Item {
 
             AppButton {
                 text: qsTr("运行诊断")
-                theme: root.theme
+                dt: root.theme
                 variant: "secondary"
                 enabled: !(appBackend && appBackend.sync_in_progress)
                 onClicked: {
@@ -254,7 +254,7 @@ Item {
 
             AppButton {
                 text: qsTr("打开工作区目录")
-                theme: root.theme
+                dt: root.theme
                 variant: "text"
                 visible: root.backendRef && root.backendRef.has_workspace
                 onClicked: if (root.backendRef) root.backendRef.open_workspace_dir()
@@ -262,7 +262,7 @@ Item {
 
             AppButton {
                 text: qsTr("复制冲突信息")
-                theme: root.theme
+                dt: root.theme
                 variant: "danger"
                 visible: root.backendRef && root.isConflictStatus(root.currentSyncStatus)
                 onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncResultArea.text)

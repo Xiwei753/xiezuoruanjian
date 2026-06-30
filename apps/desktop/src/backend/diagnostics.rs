@@ -612,7 +612,12 @@ pub fn open_log_directory(log_dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    /// 全局状态测试的互斥锁，确保修改 DIAGNOSTICS_ENABLED / VERBOSE_ENABLED 的测试串行执行，
+    /// 避免并行测试竞争导致 flaky failure。
+    static GLOBAL_STATE_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_redact_bearer_token() {
@@ -785,6 +790,7 @@ mod tests {
 
     #[test]
     fn test_verbose_disabled_filters_info() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         // 保存原始状态
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
@@ -819,6 +825,7 @@ mod tests {
 
     #[test]
     fn test_verbose_enabled_writes_all() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
         DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
@@ -840,6 +847,7 @@ mod tests {
 
     #[test]
     fn test_set_verbose_enabled_updates_global() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev = VERBOSE_ENABLED.load(Ordering::Relaxed);
 
         set_verbose_enabled(false);
@@ -853,6 +861,7 @@ mod tests {
 
     #[test]
     fn test_error_always_written_even_when_disabled() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
         DIAGNOSTICS_ENABLED.store(false, Ordering::Relaxed);
@@ -874,6 +883,7 @@ mod tests {
 
     #[test]
     fn test_warn_always_written_even_when_disabled() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
         DIAGNOSTICS_ENABLED.store(false, Ordering::Relaxed);
@@ -894,6 +904,7 @@ mod tests {
 
     #[test]
     fn test_info_requires_both_enabled() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
         DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
@@ -914,6 +925,7 @@ mod tests {
 
     #[test]
     fn test_info_blocked_when_disabled() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
         DIAGNOSTICS_ENABLED.store(false, Ordering::Relaxed);
@@ -936,6 +948,7 @@ mod tests {
 
     #[test]
     fn test_info_blocked_when_not_verbose() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
         DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
@@ -958,6 +971,7 @@ mod tests {
 
     #[test]
     fn test_set_diagnostics_enabled_updates_global() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
 
         set_diagnostics_enabled(false);

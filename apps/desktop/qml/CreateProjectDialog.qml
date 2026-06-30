@@ -70,8 +70,8 @@ Dialog {
         RowLayout {
             Layout.fillWidth: true
             Item { Layout.fillWidth: true }
-            AppButton { text: qsTr("取消"); theme: root.theme; variant: "text"; onClicked: root.reject() }
-            AppButton { text: qsTr("创建"); theme: root.theme; variant: "primary"; onClicked: { if (titleField.text.trim() !== "") root.accept() } }
+            AppButton { text: qsTr("取消"); dt: root.theme; variant: "text"; onClicked: root.reject() }
+            AppButton { text: qsTr("创建"); dt: root.theme; variant: "primary"; onClicked: { if (titleField.text.trim() !== "") root.accept() } }
         }
     }
 
