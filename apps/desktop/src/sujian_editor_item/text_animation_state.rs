@@ -285,4 +285,48 @@ mod tests {
         assert!(!state.has_active_insert());
         assert!(state.is_empty());
     }
+
+    // --- Additional animation lifecycle tests ---
+
+    #[test]
+    fn test_delete_animation_timeout_clears() {
+        let mut state = TextAnimationState::new();
+        state.start_delete((5, 15), 100);
+        assert!(!state.is_empty());
+        // duration=100, grace = 2*100 + 200 = 400ms
+        let now = Instant::now() + Duration::from_millis(401);
+        let cleared = state.tick(now);
+        assert!(cleared, "Delete animation should be cleared after timeout");
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_delete_animation_cleared_on_scroll() {
+        let mut state = TextAnimationState::new();
+        state.start_delete((5, 15), 100);
+        assert!(!state.is_empty());
+        state.clear_on_scroll();
+        assert!(state.is_empty(), "Delete animation should be cleared on scroll");
+    }
+
+    #[test]
+    fn test_delete_animation_cleared_on_typing_animation_disabled() {
+        let mut state = TextAnimationState::new();
+        state.start_delete((5, 15), 100);
+        assert!(!state.is_empty());
+        state.clear_on_typing_animation_disabled();
+        assert!(state.is_empty(), "Delete animation should be cleared when typing animation disabled");
+    }
+
+    #[test]
+    fn test_mixed_insert_delete_clear_all() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), 100);
+        state.start_delete((30, 40), 100);
+        assert!(state.has_active_insert());
+        assert!(!state.is_empty());
+        state.clear();
+        assert!(state.is_empty(), "clear() should remove both Insert and Delete animations");
+        assert_eq!(state.active_insert_byte_range(), None);
+    }
 }
