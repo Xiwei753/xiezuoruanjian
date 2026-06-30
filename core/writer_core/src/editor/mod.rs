@@ -31,5 +31,5 @@ pub mod transaction;
 pub use transaction::{
     diff_plain_text, CursorRect, EditorAnimationEvent, EditorAnimationKind, EditorChange,
     EditorCursor, EditorEngine, EditorSelection, EditorTransaction, EditorTransactionCause,
-    EditorVisualTransaction, GlyphRect, VisualCoordinateMode,
+    EditorVisualTransaction, GlyphRect, ReflowGlyphRect, VisualCoordinateMode,
 };

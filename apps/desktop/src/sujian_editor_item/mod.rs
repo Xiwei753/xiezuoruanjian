@@ -2099,6 +2099,7 @@ impl SujianEditorItem {
             inserted_range,
             deleted_glyph_rects: None,
             insert_glyph_rects: None,
+            reflow_glyph_rects: None,
             old_cursor_rect: self.preedit_cursor_rect.clone(),
             new_cursor_rect: self.preedit_cursor_rect.clone(),
             duration_ms: self.current_typing_animation_duration_ms as u64,
