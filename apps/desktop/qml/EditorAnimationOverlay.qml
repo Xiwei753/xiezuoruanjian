@@ -283,6 +283,52 @@ Item {
 
             _trackGhost(ghost, "insert", insertByteStart, insertByteEnd)
         }
+
+        // ── 局部 reflow 动画：插入点右侧 glyph 的位移动画 ──
+        // reflow ghost 不计入 _activeTransaction.pendingCount（辅助动画，不影响 hidden range 生命周期）
+        if (vt.reflowGlyphRects && Array.isArray(vt.reflowGlyphRects) && vt.reflowGlyphRects.length > 0) {
+            var reflowRects = vt.reflowGlyphRects
+            root._log("insert creating " + reflowRects.length + " reflow ghosts")
+
+            // 创建单个 reflow ghost 的辅助函数（避免 for-var 闭包陷阱）
+            function createReflowGhost(rr) {
+                var reflowGhost = component.createObject(root, {
+                    "animKind": "reflow",
+                    "startX": rr.oldX,
+                    "startY": rr.oldBaselineY || rr.oldY,
+                    "endX": rr.newX,
+                    "endY": rr.newBaselineY || rr.newY,
+                    "glyphWidth": rr.w,
+                    "glyphHeight": rr.h,
+                    "glyphBaselineY": rr.newBaselineY || 0,
+                    "width": rr.w,
+                    "height": rr.h,
+                    "duration": duration,
+                    "ghostColor": editorItem.text_color || (root.dt ? root.dt.editorText : (Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E")),
+                    "glyphText": rr.char || "",
+                    "glyphFontFamily": editorItem.font_family || "",
+                    "glyphFontPixelSize": editorItem.font_pixel_size || 0
+                })
+
+                // reflow ghost 不计入 pendingCount，但需要跟踪生命周期
+                root._activeAnimations.push(reflowGhost)
+                reflowGhost.animationFinished.connect(function() {
+                    var idx = root._activeAnimations.indexOf(reflowGhost)
+                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                    reflowGhost.destroy()
+                })
+                reflowGhost.startAnimation()
+            }
+
+            for (var ri = 0; ri < reflowRects.length; ri++) {
+                var rr = reflowRects[ri]
+                // 防御性检查：复杂字符不参与 reflow
+                if (isComplexGrapheme(rr.char)) {
+                    continue
+                }
+                createReflowGhost(rr)
+            }
+        }
     }
 
     /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。

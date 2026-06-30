@@ -108,6 +108,40 @@ pub struct CursorRect {
     pub baseline_y: f64,
 }
 
+/// 受局部 reflow 影响的 glyph 的旧位置和新位置。
+///
+/// 中间插入时，插入点右侧的文字需要做轻量位移动画（局部挤开），
+/// 避免瞬间大跳。ReflowGlyphRect 记录这些 glyph 在插入前后的位置，
+/// 供 QML overlay 渲染位移动画。
+///
+/// 只影响同一行中插入点右侧的 glyph，以及受影响的相邻 1-2 行。
+/// 超过 2 行、跨段落、滚动中、格式化中、加载中时直接 snap，不收集。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReflowGlyphRect {
+    /// 该 glyph 对应的字符（可能是多字节 UTF-8）
+    #[serde(rename = "char")]
+    pub char_: String,
+    /// 插入前的 x 坐标（文档坐标系，不含 scroll offset）
+    pub old_x: f64,
+    /// 插入前的 y 坐标（文档坐标系，不含 scroll offset）
+    pub old_y: f64,
+    /// 插入前的基线 Y 坐标
+    pub old_baseline_y: f64,
+    /// 插入后的 x 坐标（文档坐标系，不含 scroll offset）
+    pub new_x: f64,
+    /// 插入后的 y 坐标（文档坐标系，不含 scroll offset）
+    pub new_y: f64,
+    /// 插入后的基线 Y 坐标
+    pub new_baseline_y: f64,
+    /// glyph 宽度
+    pub w: f64,
+    /// glyph 高度
+    pub h: f64,
+    /// 所在 visual line 索引（新布局中的索引）
+    pub line_index: usize,
+}
+
 /// 单个 glyph 的精确矩形信息，供平台端动画 overlay 使用。
 ///
 /// Core 层不负责绘制，只负责在 animation event 中暴露每个字符的
@@ -208,6 +242,10 @@ pub struct EditorVisualTransaction {
     /// 插入后 glyph 矩形（由平台层填充，Core 默认 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insert_glyph_rects: Option<Vec<GlyphRect>>,
+    /// 受局部 reflow 影响的 glyph 的旧位置和新位置（由平台层填充，Core 默认 None）
+    /// 中间插入时，插入点右侧的文字做轻量位移动画（局部挤开）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reflow_glyph_rects: Option<Vec<ReflowGlyphRect>>,
     /// 变更前光标矩形（由平台层填充，Core 默认 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_cursor_rect: Option<CursorRect>,
@@ -371,6 +409,7 @@ impl EditorEngine {
             inserted_range,
             deleted_glyph_rects: None,
             insert_glyph_rects: None,
+            reflow_glyph_rects: None,
             old_cursor_rect: None,
             new_cursor_rect: None,
             duration_ms: self.animation_duration_ms,

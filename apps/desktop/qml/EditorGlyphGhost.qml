@@ -1,7 +1,7 @@
 // =============================================================================
 // EditorGlyphGhost.qml — 单个 glyph ghost 动画效果
 // =============================================================================
-// 渲染吐字（insert）和吞字（delete）动画。
+// 渲染吐字（insert）、吞字（delete）和局部挤开（reflow）动画。
 //
 // 真吐字/吞字模式：
 // insert: 正文层跳过 inserted range 不绘制，ghost 从光标位置"吐出"到 glyph 位置
@@ -12,6 +12,10 @@
 //   - opacity: 0.85 → 0
 //   - scale: 1.0 → 0.45
 //   - position: glyph → 光标
+// reflow: 中间插入时，插入点右侧文字做轻量位移动画（局部挤开）
+//   - opacity: 1.0（始终可见，因为正文层没有跳过这些 glyph）
+//   - scale: 1.0（无缩放变化）
+//   - position: 旧位置 → 新位置
 // 动画结束后自动 destroy。
 
 import QtQuick
@@ -20,7 +24,7 @@ Item {
     id: root
 
     // 动画类型
-    property string animKind: "insert"  // "insert" or "delete"
+    property string animKind: "insert"  // "insert", "delete", or "reflow"
 
     // 起始位置（insert: 光标位置; delete: glyph 位置）
     property real startX: 0
@@ -74,9 +78,24 @@ Item {
         property real currentOpacity: 1.0
     }
 
+    // ── Reflow 动画属性 ──
+
+    property var reflowMoveAnim: QtObject {
+        property real x: root.startX
+        property real y: root.startY
+    }
+
+    property var reflowOpacityAnim: QtObject {
+        property real currentOpacity: 1.0
+    }
+
     // 当前位置（动画中间值）
-    x: root.animKind === "insert" ? root.insertMoveAnim.x : root.deleteMoveAnim.x
-    y: root.animKind === "insert" ? root.insertMoveAnim.y : root.deleteMoveAnim.y
+    x: root.animKind === "insert" ? root.insertMoveAnim.x
+        : root.animKind === "delete" ? root.deleteMoveAnim.x
+        : root.reflowMoveAnim.x
+    y: root.animKind === "insert" ? root.insertMoveAnim.y
+        : root.animKind === "delete" ? root.deleteMoveAnim.y
+        : root.reflowMoveAnim.y
 
     // 用 Text 渲染真实 glyph 文字
     // 当 startY/endY 使用 baselineY 坐标时，Text 需要调整 y 偏移使 baseline 对齐
@@ -86,7 +105,9 @@ Item {
         color: root.ghostColor
         font.family: root.glyphFontFamily || "serif"
         font.pixelSize: root.glyphFontPixelSize > 0 ? root.glyphFontPixelSize : root.glyphHeight * 0.85
-        opacity: root.animKind === "insert" ? root.insertOpacityAnim.currentOpacity : root.deleteOpacityAnim.currentOpacity
+        opacity: root.animKind === "insert" ? root.insertOpacityAnim.currentOpacity
+            : root.animKind === "delete" ? root.deleteOpacityAnim.currentOpacity
+            : root.reflowOpacityAnim.currentOpacity
         // baselineY 定位：如果 glyphBaselineY > 0，说明 Y 坐标是 baseline，
         // Text 默认 top-left 定位，需要向上偏移 ascent 使 baseline 对齐
         y: root.glyphBaselineY > 0 ? -(root.glyphFontPixelSize > 0 ? root.glyphFontPixelSize * 0.8 : 0) : 0
@@ -194,11 +215,51 @@ Item {
         onFinished: root.animationFinished()
     }
 
+    // ── Reflow 并行动画组 ──
+    // 局部挤开模式：中间插入时，插入点右侧文字做轻量位移动画
+    // opacity: 1.0（始终可见，因为正文层没有跳过这些 glyph）
+    // scale: 1.0（无缩放变化）
+    // position: 旧位置 → 新位置
+
+    ParallelAnimation {
+        id: reflowAnim
+        running: false
+
+        NumberAnimation {
+            target: root.reflowMoveAnim
+            property: "x"
+            from: root.startX
+            to: root.endX
+            duration: root.duration
+            easing.type: Easing.OutCubic
+        }
+        NumberAnimation {
+            target: root.reflowMoveAnim
+            property: "y"
+            from: root.startY
+            to: root.endY
+            duration: root.duration
+            easing.type: Easing.OutCubic
+        }
+        // Reflow: opacity 始终为 1.0，但用动画确保平滑
+        NumberAnimation {
+            target: root.reflowOpacityAnim
+            property: "currentOpacity"
+            from: 1.0
+            to: 1.0
+            duration: root.duration
+        }
+
+        onFinished: root.animationFinished()
+    }
+
     function startAnimation() {
         if (root.animKind === "insert") {
             insertAnim.start()
-        } else {
+        } else if (root.animKind === "delete") {
             deleteAnim.start()
+        } else if (root.animKind === "reflow") {
+            reflowAnim.start()
         }
     }
 }
