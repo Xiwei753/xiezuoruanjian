@@ -17,6 +17,7 @@ cpp! {{
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
     extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
     extern "C" void sujian_ime_preedit(void* rust_item, const ushort* text, int text_len, int cursor);
+    extern "C" void sujian_ime_preedit_attrs(void* rust_item, const ushort* text, int text_len, int cursor, const int* attr_types, const int* attr_starts, const int* attr_lengths, int attr_count);
     extern "C" void sujian_ime_cancel(void* rust_item);
     extern "C" void sujian_request_repaint(void* rust_item);
 
@@ -112,11 +113,29 @@ cpp! {{
                         cursor = ime->replacementStart() + ime->replacementLength();
                         if (cursor < 0) cursor = preedit.length();
                     }
-                    sujian_ime_preedit(
+
+                    // Extract QInputMethodEvent attributes (TextFormat and Cursor)
+                    // Attribute types: 1=TextFormat, 2=Cursor, 3=Language, 4=Ruby, 5=Selection
+                    QVector<int> attr_types;
+                    QVector<int> attr_starts;
+                    QVector<int> attr_lengths;
+                    for (const auto& attr : ime->attributes()) {
+                        if (attr.type == QInputMethodEvent::TextFormat || attr.type == QInputMethodEvent::Cursor) {
+                            attr_types.append(static_cast<int>(attr.type));
+                            attr_starts.append(attr.start);
+                            attr_lengths.append(attr.length);
+                        }
+                    }
+                    int attr_count = attr_types.size();
+                    sujian_ime_preedit_attrs(
                         rust_item,
                         reinterpret_cast<const ushort*>(preedit.utf16()),
                         static_cast<int>(preedit.size()),
-                        cursor
+                        cursor,
+                        attr_types.constData(),
+                        attr_starts.constData(),
+                        attr_lengths.constData(),
+                        attr_count
                     );
                 } else if (commit.isEmpty()) {
                     sujian_ime_cancel(rust_item);
@@ -255,6 +274,7 @@ pub(crate) trait EditorInputHost {
     fn input_move_to_line_edge(&mut self, end: bool, extend: bool);
     fn input_clear_preedit(&mut self);
     fn input_set_preedit(&mut self, text: String, cursor: usize);
+    fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, attributes: Vec<crate::sujian_editor_item::PreeditAttribute>);
     fn input_set_suppress_next_ime_commit(&mut self, value: bool);
     fn input_take_suppress_next_ime_commit(&mut self) -> bool;
     fn input_request_repaint(&mut self);
@@ -401,6 +421,15 @@ pub(crate) fn ime_commit<H: EditorInputHost + ?Sized>(host: &mut H, text: String
         host.input_clear_preedit();
         return;
     }
+    // Commit flow:
+    // 1. Record preedit final visual end position (handled by host)
+    // 2. Clear preedit temporary layer
+    // 3. Insert commitString as formal text (enters undo)
+    // 4. Generate commit visual transaction (handled by host)
+    // The host's input_clear_preedit records preedit_old_text before clearing,
+    // and input_insert_text generates the visual transaction with proper
+    // TypingCommit cause, enabling cursor animation from preedit end to
+    // committed text end (e.g. pinyin→汉字 cursor retreat).
     host.input_clear_preedit();
     host.input_insert_text(text);
 }
@@ -414,6 +443,24 @@ pub(crate) fn ime_preedit<H: EditorInputHost + ?Sized>(host: &mut H, text: Strin
     }
     let cursor = (cursor.max(0) as usize).min(text.len());
     host.input_set_preedit(text, cursor);
+}
+
+/// IME preedit with attributes from QInputMethodEvent.
+/// Handles TextFormat (underline) and Cursor attributes.
+pub(crate) fn ime_preedit_with_attrs<H: EditorInputHost + ?Sized>(
+    host: &mut H,
+    text: String,
+    cursor: i32,
+    attributes: Vec<crate::sujian_editor_item::PreeditAttribute>,
+) {
+    if !host.input_enabled() {
+        return;
+    }
+    if !text.is_empty() {
+        host.input_set_suppress_next_ime_commit(false);
+    }
+    let cursor = (cursor.max(0) as usize).min(text.len());
+    host.input_set_preedit_with_attrs(text, cursor, attributes);
 }
 
 pub(crate) fn ime_cancel<H: EditorInputHost + ?Sized>(host: &mut H) {
@@ -520,6 +567,78 @@ extern "C" fn sujian_ime_preedit(
     let text = decode_utf16_ptr(text, text_len);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_preedit(item, text, cursor);
+    }));
+}
+
+/// FFI callback for IME preedit with attributes.
+/// attr_types: 1=TextFormat, 2=Cursor
+/// attr_starts/attr_lengths: character offsets and lengths for each attribute
+#[no_mangle]
+extern "C" fn sujian_ime_preedit_attrs(
+    rust_item: *mut c_void,
+    text: *const u16,
+    text_len: i32,
+    cursor: i32,
+    attr_types: *const i32,
+    attr_starts: *const i32,
+    attr_lengths: *const i32,
+    attr_count: i32,
+) {
+    let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
+        return;
+    };
+    let text = decode_utf16_ptr(text, text_len);
+
+    // Convert character-offset attributes to byte-offset PreeditAttribute
+    let mut attributes = Vec::new();
+    if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0 {
+        let types_slice = unsafe { std::slice::from_raw_parts(attr_types, attr_count as usize) };
+        let starts_slice = unsafe { std::slice::from_raw_parts(attr_starts, attr_count as usize) };
+        let lengths_slice = unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
+
+        // Pre-compute char-to-byte mapping for the preedit text
+        let char_offsets: Vec<usize> = {
+            let mut offsets = Vec::new();
+            let mut byte_pos = 0;
+            offsets.push(0);
+            for ch in text.chars() {
+                byte_pos += ch.len_utf8();
+                offsets.push(byte_pos);
+            }
+            offsets
+        };
+
+        for i in 0..attr_count as usize {
+            let attr_type = types_slice[i];
+            let char_start = starts_slice[i].max(0) as usize;
+            let char_length = lengths_slice[i].max(0) as usize;
+
+            let kind = if attr_type == 1 {
+                // QInputMethodEvent::TextFormat
+                crate::sujian_editor_item::PreeditAttributeKind::Underline
+            } else if attr_type == 2 {
+                // QInputMethodEvent::Cursor
+                crate::sujian_editor_item::PreeditAttributeKind::Cursor
+            } else {
+                continue; // Skip Language, Ruby, Selection attributes
+            };
+
+            // Convert character offsets to byte offsets
+            let byte_start = char_offsets.get(char_start).copied().unwrap_or(text.len());
+            let char_end = char_start + char_length;
+            let byte_end = char_offsets.get(char_end).copied().unwrap_or(text.len());
+            let byte_length = byte_end.saturating_sub(byte_start);
+
+            attributes.push(crate::sujian_editor_item::PreeditAttribute {
+                start: byte_start,
+                length: byte_length,
+                kind,
+            });
+        }
+    }
+
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ime_preedit_with_attrs(item, text, cursor, attributes);
     }));
 }
 
@@ -641,6 +760,11 @@ mod tests {
         }
 
         fn input_set_preedit(&mut self, text: String, cursor: usize) {
+            self.preedit_text = text;
+            self.preedit_cursor = cursor;
+        }
+
+        fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, _attributes: Vec<crate::sujian_editor_item::PreeditAttribute>) {
             self.preedit_text = text;
             self.preedit_cursor = cursor;
         }

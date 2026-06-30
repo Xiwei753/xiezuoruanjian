@@ -39,6 +39,27 @@ use writer_core::editor::{
     EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect,
 };
 
+/// Preedit attribute from QInputMethodEvent.
+/// Represents TextFormat (underline/highlight) and Cursor attributes
+/// that control visual styling and cursor position within the preedit string.
+#[derive(Clone, Debug)]
+pub(crate) struct PreeditAttribute {
+    /// Byte offset start within preedit_text
+    pub start: usize,
+    /// Byte length of the attribute span
+    pub length: usize,
+    /// Attribute type: "underline" (TextFormat) or "cursor" (Cursor)
+    pub kind: PreeditAttributeKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PreeditAttributeKind {
+    /// QInputMethodEvent::TextFormat — underline/highlight styling
+    Underline,
+    /// QInputMethodEvent::Cursor — cursor position within preedit
+    Cursor,
+}
+
 cpp! {{
     #include <QtGui/QFont>
     #include <QtGui/QPainter>
@@ -200,6 +221,15 @@ pub struct SujianEditorItem {
     last_visual_transaction_json: QString,
     preedit_text: String,
     preedit_cursor: usize,
+    /// Preedit attributes from QInputMethodEvent (TextFormat and Cursor attributes).
+    /// Stores (start, length, type) where type is "underline" or "cursor".
+    preedit_attributes: Vec<PreeditAttribute>,
+    /// Previous preedit text for diff-based visual transaction generation.
+    preedit_old_text: String,
+    /// Visual transaction for preedit changes (insert/delete within composition).
+    preedit_visual_transaction: Option<EditorVisualTransaction>,
+    /// Preedit cursor rect (position within the preedit string, not the buffer cursor).
+    preedit_cursor_rect: Option<CursorRect>,
     suppress_next_ime_commit: bool,
     editor_layout: EditorLayout,
     text_revision: u64,
@@ -317,6 +347,10 @@ impl Default for SujianEditorItem {
             last_visual_transaction_json: "".into(),
             preedit_text: String::new(),
             preedit_cursor: 0,
+            preedit_attributes: Vec::new(),
+            preedit_old_text: String::new(),
+            preedit_visual_transaction: None,
+            preedit_cursor_rect: None,
             suppress_next_ime_commit: false,
             editor_layout: EditorLayout::default(),
             text_revision: 0,
@@ -408,6 +442,10 @@ impl SujianEditorItem {
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
         self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -430,6 +468,10 @@ impl SujianEditorItem {
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
         self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -709,6 +751,12 @@ impl SujianEditorItem {
     }
 
     fn cursor_rect_x(&self) -> f32 {
+        // During preedit, use preedit cursor position for IME candidate window
+        if !self.preedit_text.is_empty() {
+            if let Some(ref r) = self.preedit_cursor_rect {
+                return r.x as f32;
+            }
+        }
         if self.current_smooth_cursor_enabled && self.cursor_ctrl.animation.is_some() {
             self.cursor_ctrl.visual_x as f32
         } else {
@@ -717,6 +765,12 @@ impl SujianEditorItem {
     }
 
     fn cursor_rect_y(&self) -> f32 {
+        // During preedit, use preedit cursor position for IME candidate window
+        if !self.preedit_text.is_empty() {
+            if let Some(ref r) = self.preedit_cursor_rect {
+                return r.top as f32;
+            }
+        }
         if self.current_smooth_cursor_enabled && self.cursor_ctrl.animation.is_some() {
             self.cursor_ctrl.visual_y as f32
         } else {
@@ -831,8 +885,13 @@ impl SujianEditorItem {
         if inserted.is_empty() {
             return;
         }
+        // Clear preedit state when inserting formal text (e.g. IME commit)
         self.preedit_text.clear();
         self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
 
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
@@ -956,6 +1015,10 @@ impl SujianEditorItem {
         self.buffer.move_cursor(index, extend);
         self.preedit_text.clear();
         self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
         self.cursor_position_changed();
         self.selection_changed();
         self.cursor_ctrl.dirty = true;
@@ -1697,13 +1760,37 @@ impl EditorInputHost for SujianEditorItem {
     }
 
     fn input_clear_preedit(&mut self) {
+        self.preedit_old_text = self.preedit_text.clone();
         self.preedit_text.clear();
         self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
     }
 
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
+        self.preedit_old_text = self.preedit_text.clone();
         self.preedit_text = text;
         self.preedit_cursor = cursor;
+        // Generate preedit visual transaction for animation
+        self.update_preedit_visual_state();
+        // Update IME cursor rectangle so Windows input method candidate
+        // window follows the correct position within the preedit
+        self.update_ime_cursor_for_preedit();
+        self.request_static_repaint();
+    }
+
+    fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, attributes: Vec<PreeditAttribute>) {
+        self.preedit_old_text = self.preedit_text.clone();
+        self.preedit_text = text;
+        self.preedit_cursor = cursor;
+        self.preedit_attributes = attributes;
+        // Generate preedit visual transaction for animation
+        self.update_preedit_visual_state();
+        // Update IME cursor rectangle so Windows input method candidate
+        // window follows the correct position within the preedit
+        self.update_ime_cursor_for_preedit();
+        self.request_static_repaint();
     }
 
     fn input_set_suppress_next_ime_commit(&mut self, value: bool) {
@@ -1720,6 +1807,158 @@ impl EditorInputHost for SujianEditorItem {
 
     fn input_request_repaint(&mut self) {
         self.request_static_repaint();
+    }
+}
+
+/// Preedit visual state management methods
+impl SujianEditorItem {
+    /// Update preedit visual transaction based on old vs new preedit text.
+    ///
+    /// Compares preedit_old_text and preedit_text to generate a visual
+    /// transaction that drives animation:
+    /// - New characters → Insert (吐字) animation
+    /// - Removed characters → Delete (吞字) animation
+    /// - Preedit cursor position → updates preedit_cursor_rect
+    fn update_preedit_visual_state(&mut self) {
+        if self.preedit_text.is_empty() {
+            self.preedit_visual_transaction = None;
+            self.preedit_cursor_rect = None;
+            return;
+        }
+
+        // Compute preedit cursor rect based on preedit_cursor position
+        // within the preedit string, relative to the buffer cursor position
+        self.compute_preedit_cursor_rect();
+
+        // Generate visual transaction for preedit changes
+        let old = &self.preedit_old_text;
+        let new = &self.preedit_text;
+
+        if old == new {
+            // No text change, only cursor moved — no visual transaction needed
+            return;
+        }
+
+        // Create a simple visual transaction for the preedit diff
+        // This is a temporary visual layer transaction, NOT a buffer transaction
+        let cause = EditorTransactionCause::ImeComposition;
+        let kind = if new.len() > old.len() {
+            EditorAnimationKind::Insert
+        } else {
+            EditorAnimationKind::Delete
+        };
+
+        // For preedit, the byte range is relative to the buffer cursor position
+        let cursor_pos = self.buffer.cursor;
+        let inserted_range = if kind == EditorAnimationKind::Insert {
+            Some((cursor_pos, cursor_pos + new.len()))
+        } else {
+            None
+        };
+
+        let vt = EditorVisualTransaction {
+            id: 0, // Preedit transactions don't need unique IDs
+            kind,
+            cause,
+            old_text: old.clone(),
+            new_text: new.clone(),
+            old_selection: EditorSelection {
+                anchor: EditorCursor::new(&self.buffer.text, cursor_pos),
+                head: EditorCursor::new(&self.buffer.text, cursor_pos),
+            },
+            new_selection: EditorSelection {
+                anchor: EditorCursor::new(&self.buffer.text, cursor_pos),
+                head: EditorCursor::new(&self.buffer.text, cursor_pos),
+            },
+            inserted_range,
+            deleted_glyph_rects: None,
+            insert_glyph_rects: None,
+            old_cursor_rect: self.preedit_cursor_rect.clone(),
+            new_cursor_rect: self.preedit_cursor_rect.clone(),
+            duration_ms: self.current_typing_animation_duration_ms as u64,
+            coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
+        };
+
+        self.preedit_visual_transaction = Some(vt);
+    }
+
+    /// Compute the preedit cursor rect based on preedit_cursor position.
+    ///
+    /// The preedit cursor is displayed within the preedit string, not at
+    /// the buffer cursor position. This calculates the visual position
+    /// by measuring text width up to preedit_cursor bytes.
+    fn compute_preedit_cursor_rect(&mut self) {
+        if self.preedit_text.is_empty() {
+            self.preedit_cursor_rect = None;
+            return;
+        }
+
+        let width = self.bounding_width();
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+        let scroll_y = self.current_scroll_y as f64;
+
+        // Get the buffer cursor position (where preedit starts)
+        let cursor_byte = self.buffer.cursor;
+        let snapshot = self.layout_snapshot(width);
+
+        // Find the line containing the cursor
+        let cursor_line = snapshot.lines.iter().find(|l| {
+            l.byte_end >= cursor_byte && l.byte_start <= cursor_byte
+        });
+
+        let Some(line) = cursor_line else {
+            self.preedit_cursor_rect = None;
+            return;
+        };
+
+        // X position where preedit starts (buffer cursor position)
+        let preedit_start_x = self.editor_layout.cursor_x_for_line(
+            &snapshot,
+            line,
+            cursor_byte,
+            self.cursor_ctrl.affinity,
+        );
+
+        // Measure width of preedit text up to preedit_cursor
+        let preedit_before_cursor = &self.preedit_text[..self.preedit_cursor.min(self.preedit_text.len())];
+        let preedit_cursor_offset = self.editor_layout.text_width(
+            preedit_before_cursor,
+            font_size,
+            font_family,
+        );
+
+        let cursor_x = preedit_start_x + preedit_cursor_offset;
+        let cursor_y = line.y - scroll_y;
+        let cursor_h = line.height;
+
+        let baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
+
+        self.preedit_cursor_rect = Some(CursorRect {
+            x: cursor_x,
+            top: cursor_y,
+            bottom: cursor_y + cursor_h,
+            baseline_y,
+        });
+    }
+
+    /// Update IME cursor rectangle for preedit.
+    ///
+    /// When in preedit mode, the IME candidate window should follow
+    /// the preedit cursor position (within the composition string),
+    /// not the buffer cursor position.
+    fn update_ime_cursor_for_preedit(&mut self) {
+        if self.preedit_cursor_rect.is_some() {
+            // Update cursor_rect properties so InputMethodQuery returns
+            // the correct position for the IME candidate window
+            self.cursor_rect_changed();
+            let obj_ptr = self.get_cpp_object();
+            if !obj_ptr.is_null() {
+                cpp!(unsafe [obj_ptr as "QQuickItem*"] {
+                    QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle);
+                });
+            }
+        }
     }
 }
 

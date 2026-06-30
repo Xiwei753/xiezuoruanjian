@@ -127,20 +127,30 @@ impl CursorController {
             };
         }
 
+        // NOTE: is_preediting is intentionally NOT in should_snap — preedit
+        // phase should allow cursor animation (e.g. preedit cursor moving
+        // within the composition). Only truly disruptive events should snap.
+        // is_preediting is kept as a parameter for potential future use
+        // (e.g. IME candidate window positioning) but must NOT suppress
+        // cursor animation or blink.
+        let _ = is_preediting;
+
         // Determine if we should snap (no animation)
+        // force_snap_next is NOT here: it only gates large_distance below,
+        // so small-distance clicks still animate, while huge jumps snap.
         let should_snap = is_scrolling
             || is_selecting
-            || is_preediting
             || !old_visible
-            || self.force_snap_next
             || scroll_changed;
 
-        // Large-distance snap: if the cursor moved more than 80px or more
-        // than one line height, snap immediately instead of animating.
-        // Only small same-line movements (keyboard left/right) should animate.
+        // Large-distance snap: only when force_snap_next is true AND the
+        // cursor moved a large distance. This prevents animating across
+        // huge jumps (click far away, chapter switch) while allowing
+        // normal typing / IME / Enter to animate even across lines.
+        // dy threshold: 1.5x cursor_h allows Enter/newline vertical animation.
         let dx = (cursor_x - self.visual_x).abs();
         let dy = (cursor_y - self.visual_y).abs();
-        let large_distance = dx > 80.0 || dy > 80.0;
+        let large_distance = self.force_snap_next && (dx > 80.0 || dy > cursor_h * 1.5);
 
         let now = Instant::now();
 

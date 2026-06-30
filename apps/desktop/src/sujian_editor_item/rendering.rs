@@ -318,7 +318,10 @@ impl SujianEditorItem {
             }
         }
 
-        // ── Layer 3: Preedit ──
+        // ── Layer 3: Preedit visual layer ──
+        // Preedit is a temporary visual layer — it does NOT modify the buffer
+        // text, does NOT enter undo, and the cursor within preedit is computed
+        // from preedit_cursor (not buffer.cursor).
         if !self.preedit_text.is_empty() {
             let pc = self.buffer.cursor;
             for (idx, line) in lines.iter().enumerate() {
@@ -341,6 +344,8 @@ impl SujianEditorItem {
                         self.editor_layout
                             .text_baseline_y(line, font_size, &font_family)
                             + paint_offset_y;
+
+                    // Draw preedit text
                     renderer::draw_text(
                         painter,
                         x,
@@ -349,21 +354,95 @@ impl SujianEditorItem {
                         self.current_text_color.clone(),
                         self.preedit_text.clone().into(),
                     );
+
                     let preedit_w =
                         self.editor_layout
                             .text_width(&self.preedit_text, font_size, &font_family);
-                    painter.set_pen(QPen::from_color(renderer::color_from_qstring(
-                        self.current_text_color.clone(),
-                    )));
-                    let underline_y = baseline + 2.0;
-                    let line_f = QLineF {
-                        pt1: QPointF { x, y: underline_y },
-                        pt2: QPointF {
-                            x: x + preedit_w,
-                            y: underline_y,
-                        },
-                    };
-                    painter.draw_line(line_f);
+
+                    // Draw underline based on preedit_attributes
+                    // If no attributes, draw a default underline for the full preedit
+                    let has_underline_attr = self.preedit_attributes.iter()
+                        .any(|a| a.kind == super::PreeditAttributeKind::Underline);
+
+                    if has_underline_attr {
+                        // Draw underlines for each TextFormat attribute
+                        for attr in &self.preedit_attributes {
+                            if attr.kind == super::PreeditAttributeKind::Underline {
+                                let attr_start = attr.start.min(self.preedit_text.len());
+                                let attr_end = (attr.start + attr.length).min(self.preedit_text.len());
+                                if attr_start >= attr_end {
+                                    continue;
+                                }
+                                let before_w = self.editor_layout.text_width(
+                                    &self.preedit_text[..attr_start],
+                                    font_size,
+                                    &font_family,
+                                );
+                                let attr_text = &self.preedit_text[attr_start..attr_end];
+                                let attr_w = self.editor_layout.text_width(
+                                    attr_text,
+                                    font_size,
+                                    &font_family,
+                                );
+                                painter.set_pen(QPen::from_color(renderer::color_from_qstring(
+                                    self.current_text_color.clone(),
+                                )));
+                                let underline_y = baseline + 2.0;
+                                let line_f = QLineF {
+                                    pt1: QPointF { x: x + before_w, y: underline_y },
+                                    pt2: QPointF {
+                                        x: x + before_w + attr_w,
+                                        y: underline_y,
+                                    },
+                                };
+                                painter.draw_line(line_f);
+                            }
+                        }
+                    } else {
+                        // Default: underline the entire preedit string
+                        painter.set_pen(QPen::from_color(renderer::color_from_qstring(
+                            self.current_text_color.clone(),
+                        )));
+                        let underline_y = baseline + 2.0;
+                        let line_f = QLineF {
+                            pt1: QPointF { x, y: underline_y },
+                            pt2: QPointF {
+                                x: x + preedit_w,
+                                y: underline_y,
+                            },
+                        };
+                        painter.draw_line(line_f);
+                    }
+
+                    // Draw preedit cursor if Cursor attribute is present
+                    // The preedit cursor shows the insertion point within the
+                    // composition string (e.g. between pinyin segments)
+                    let preedit_cursor_pos = self.preedit_cursor;
+                    if preedit_cursor_pos > 0 && preedit_cursor_pos < self.preedit_text.len() {
+                        // Check if there's an explicit Cursor attribute
+                        let has_cursor_attr = self.preedit_attributes.iter()
+                            .any(|a| a.kind == super::PreeditAttributeKind::Cursor);
+
+                        if has_cursor_attr {
+                            let before_cursor_w = self.editor_layout.text_width(
+                                &self.preedit_text[..preedit_cursor_pos],
+                                font_size,
+                                &font_family,
+                            );
+                            let cursor_x = x + before_cursor_w;
+                            let cursor_top = line.y + paint_offset_y;
+                            // Draw a thin vertical line for the preedit cursor
+                            renderer::draw_rect(
+                                painter,
+                                cursor_x,
+                                cursor_top,
+                                2.0,
+                                line.height,
+                                self.current_cursor_color.clone(),
+                            );
+                        }
+                    }
+
                     break;
                 }
             }
