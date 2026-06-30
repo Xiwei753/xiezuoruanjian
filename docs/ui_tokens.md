@@ -128,6 +128,16 @@ Android 负责产出 Dynamic Color，其他端只消费同步 palette，不伪�
 
 ---
 
+## 6.1 Desktop 专属装饰性 Token
+
+以下 token 仅在 Desktop 端使用，属于装饰性颜色（非语义色），但仍需通过 DesignTokens 管理：
+
+| Token 名 | 类型 | 说明 |
+|----------|------|------|
+| `projectAccentColors` | `var` (string array) | 项目卡片装饰色数组，深浅色各 6 色，按索引轮替使用 |
+
+---
+
 ## 7. theme_palette 命名契约
 
 ### 7.1 两层 JSON 不是同一个

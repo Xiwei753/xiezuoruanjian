@@ -165,7 +165,7 @@ Rectangle {
     function refreshProjects() {
         projectModel.clear()
         var projects = getProjects()
-        var accentColors = ["#7B8CDE", "#DE8C7B", "#7BDE8C", "#DE7BC4", "#7BC4DE", "#C4DE7B"]
+        var accentColors = dt.projectAccentColors
         for (var i = 0; i < projects.length; i++) {
             var p = projects[i]
             projectModel.append({

@@ -155,6 +155,11 @@ QtObject {
     property color starMapNodeEvent: isDark ? "#F44336" : "#C62828"
     property color starMapNodeConcept: isDark ? "#9C27B0" : "#6A1B9A"
 
+    // --- Project accent colors (decorative, used in project cards) ---
+    property var projectAccentColors: isDark
+        ? ["#7B8CDE", "#DE8C7B", "#7BDE8C", "#DE7BC4", "#7BC4DE", "#C4DE7B"]
+        : ["#5B6CAE", "#BE6C5B", "#5BBE6C", "#BE5BA4", "#5BA4BE", "#A4BE5B"]
+
     property string textPrimaryHex: isDark ? "#E2E2E5" : "#1A1C1E"
     property string textSecondaryHex: isDark ? "#C3C6CF" : "#42474E"
 

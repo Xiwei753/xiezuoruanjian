@@ -35,6 +35,7 @@ Item {
     readonly property color _textSecondary: dt.textSecondary
     readonly property color _textMuted: dt.textMuted
     readonly property color _error: dt.error
+    readonly property color _onError: dt.onError
     readonly property color _scrim: dt.scrim
     readonly property int _radiusXs: dt.radiusXs
     readonly property int _radiusSm: dt.radiusSm
@@ -429,7 +430,7 @@ Item {
         AppText {
             anchors.centerIn: parent
             text: errorMessage
-            color: "white"
+            color: _onError
             font.pixelSize: 14
         }
         MouseArea {

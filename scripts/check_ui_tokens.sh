@@ -76,8 +76,48 @@ else
     echo "   PASS"
 fi
 
-# --- Check 3: Android hardcoded FAB bottom margin (XML block-level) ---
-echo "3. Checking Android hardcoded FAB bottom margin (XML block-level)..."
+# --- Check 3: QML hardcoded hex colors ---
+echo "3. Checking QML hardcoded hex colors (excluding DesignTokens.qml and AppShadow.qml)..."
+QML_HEX_COLOR_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    # Skip DesignTokens.qml and AppShadow.qml (whitelisted)
+    if [[ "$FILE" == *"DesignTokens.qml" ]] || [[ "$FILE" == *"AppShadow.qml" ]]; then continue; fi
+    # Skip "transparent" — structural, not a color value
+    if [[ "$line" == *"\"transparent\""* ]]; then continue; fi
+    QML_HEX_COLOR_ISSUES="${QML_HEX_COLOR_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && grep -rn '"#[0-9a-fA-F]\{6,8\}"' apps/desktop/qml/ 2>/dev/null || true)
+
+if [[ -n "$QML_HEX_COLOR_ISSUES" ]]; then
+    echo "   FAIL: Found hardcoded hex colors in QML (use DesignTokens instead):"
+    echo "$QML_HEX_COLOR_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
+# --- Check 4: QML hardcoded named colors ---
+echo "4. Checking QML hardcoded named colors (excluding transparent and DesignTokens.qml)..."
+QML_NAMED_COLOR_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    # Skip DesignTokens.qml and AppShadow.qml (whitelisted)
+    if [[ "$FILE" == *"DesignTokens.qml" ]] || [[ "$FILE" == *"AppShadow.qml" ]]; then continue; fi
+    # Skip "transparent" — structural, not a color value
+    if [[ "$line" == *"\"transparent\""* ]]; then continue; fi
+    QML_NAMED_COLOR_ISSUES="${QML_NAMED_COLOR_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && grep -rn 'color: "white"\|color: "black"\|color: "red"\|color: "green"\|color: "blue"\|color: "gray"\|color: "grey"' apps/desktop/qml/ 2>/dev/null || true)
+
+if [[ -n "$QML_NAMED_COLOR_ISSUES" ]]; then
+    echo "   FAIL: Found hardcoded named colors in QML (use DesignTokens instead):"
+    echo "$QML_NAMED_COLOR_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
+# --- Check 5: Android hardcoded FAB bottom margin (XML block-level) ---
+echo "5. Checking Android hardcoded FAB bottom margin (XML block-level)..."
 FAB_MARGIN_ISSUES=""
 
 # Find all layout XML files containing FloatingActionButton
@@ -109,8 +149,8 @@ else
     echo "   PASS"
 fi
 
-# --- Check 4: monetColor expansion ---
-echo "4. Checking monetColor is not used in new files..."
+# --- Check 6: monetColor expansion ---
+echo "6. Checking monetColor is not used in new files..."
 MONET_ISSUES=""
 while IFS= read -r line; do
     FILE=$(echo "$line" | cut -d: -f1)
