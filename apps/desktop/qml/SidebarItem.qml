@@ -17,11 +17,19 @@ Item {
     id: control
     property var dt: null
 
-    // Safe access: fallback to light-theme defaults when dt is null
-    readonly property color _primaryContainer: dt ? dt.primaryContainer : "#CCE5FF"
-    readonly property color _onPrimaryContainer: dt ? dt.onPrimaryContainer : "#001E31"
-    readonly property color _onSurfaceVariant: dt ? dt.onSurfaceVariant : "#42474E"
-    readonly property color _surfaceVariant: dt ? dt.surfaceVariant : "#DFE3EB"
+    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
+    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
+    readonly property color _primaryContainer: dt ? dt.primaryContainer : (_inferDark ? "#004A77" : "#CCE5FF")
+    readonly property color _onPrimaryContainer: dt ? dt.onPrimaryContainer : (_inferDark ? "#CCE5FF" : "#001E31")
+    readonly property color _onSurfaceVariant: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
+    readonly property color _surfaceVariant: dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")
     readonly property int _sp8: dt ? dt.sp8 : 8
     readonly property int _sp12: dt ? dt.sp12 : 12
     readonly property int _radiusPill: dt ? dt.radiusPill : 999

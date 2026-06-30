@@ -17,14 +17,22 @@ Item {
     id: root
     property var dt: null
 
-    // Safe access: fallback to light-theme defaults when dt is null
-    readonly property color _primary: dt ? dt.primary : "#006497"
-    readonly property color _border: dt ? dt.border : "#71788057"
-    readonly property color _surfaceVariant: dt ? dt.surfaceVariant : "#DFE3EB"
-    readonly property color _surface: dt ? dt.surface : "#FCFCFF"
-    readonly property color _accentHover: dt ? dt.accentHover : "#005079"
-    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
-    readonly property color _textSecondary: dt ? dt.textSecondary : "#42474E"
+    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
+    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
+    readonly property color _primary: dt ? dt.primary : (_inferDark ? "#92CCFF" : "#006497")
+    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
+    readonly property color _surfaceVariant: dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")
+    readonly property color _surface: dt ? dt.surface : (_inferDark ? "#1A1D23" : "#FCFCFF")
+    readonly property color _accentHover: dt ? dt.accentHover : (_inferDark ? "#BFE0FF" : "#005079")
+    readonly property color _textPrimary: dt ? dt.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E")
+    readonly property color _textSecondary: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
     readonly property int _sp6: dt ? dt.sp6 : 6
     readonly property int _sp12: dt ? dt.sp12 : 12
     readonly property int _body: dt ? dt.body : 14

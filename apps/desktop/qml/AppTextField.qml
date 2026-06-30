@@ -24,14 +24,22 @@ Item {
     property alias validator: inputField.validator
     property bool fieldTabFocus: true
 
-    readonly property color normalTextColor: control.theme ? control.theme.onSurface : "#E2E2E5"
-    readonly property color placeholderColor: control.theme ? control.theme.textMuted : "#8C9198"
-    readonly property color backgroundColor: control.theme ? control.theme.surfaceContainerLow : "#ffffff"
-    readonly property color labelColor: control.theme ? control.theme.onSurfaceVariant : "#8C9198"
-    readonly property color activeBorderColor: control.theme ? control.theme.primary : "#006497"
-    readonly property color inactiveBorderColor: control.theme ? control.theme.outline : "#cbd5e1"
-    readonly property color highlightColor: control.theme ? control.theme.primary : "#006497"
-    readonly property color highlightTextColor: control.theme ? control.theme.onPrimary : "#FFFFFF"
+    // ── SystemPalette 推断：theme 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
+    readonly property color normalTextColor: control.theme ? control.theme.onSurface : (_inferDark ? "#E2E2E5" : "#1A1C1E")
+    readonly property color placeholderColor: control.theme ? control.theme.textMuted : (_inferDark ? "#8C9198" : "#74777F")
+    readonly property color backgroundColor: control.theme ? control.theme.surfaceContainerLow : (_inferDark ? "#1F2229" : "#F6F8FC")
+    readonly property color labelColor: control.theme ? control.theme.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
+    readonly property color activeBorderColor: control.theme ? control.theme.primary : (_inferDark ? "#92CCFF" : "#006497")
+    readonly property color inactiveBorderColor: control.theme ? control.theme.outline : (_inferDark ? "#8C9198" : "#727880")
+    readonly property color highlightColor: control.theme ? control.theme.primary : (_inferDark ? "#92CCFF" : "#006497")
+    readonly property color highlightTextColor: control.theme ? control.theme.onPrimary : (_inferDark ? "#003351" : "#FFFFFF")
 
     signal accepted()
     signal editingFinished()

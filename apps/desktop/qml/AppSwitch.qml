@@ -18,6 +18,14 @@ Item {
     property bool checked: false
     signal clicked()
 
+    // ── SystemPalette 推断：theme 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
     implicitWidth: 52
     implicitHeight: 32
 
@@ -28,11 +36,11 @@ Item {
         anchors.centerIn: parent
         radius: height / 2
         color: {
-            if (!control.enabled) return control.theme ? control.theme.surfaceContainer : "#e2e8f0"
-            if (control.checked) return control.theme ? control.theme.primary : "#006497"
-            return control.theme ? control.theme.surfaceVariant : "#DFE3EB"
+            if (!control.enabled) return control.theme ? control.theme.surfaceContainer : (_inferDark ? "#232830" : "#e2e8f0")
+            if (control.checked) return control.theme ? control.theme.primary : (_inferDark ? "#92CCFF" : "#006497")
+            return control.theme ? control.theme.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")
         }
-        border.color: control.checked ? "transparent" : (control.theme ? control.theme.outline : "#72787E")
+        border.color: control.checked ? "transparent" : (control.theme ? control.theme.outline : (_inferDark ? "#8C9198" : "#72787E"))
         border.width: control.checked ? 0 : 1
 
         Behavior on color {
@@ -46,9 +54,9 @@ Item {
         height: width
         radius: width / 2
         color: {
-            if (!control.enabled) return control.theme ? control.theme.textDisabled : "#94a3b8"
-            if (control.checked) return control.theme ? control.theme.onPrimary : "#ffffff"
-            return control.theme ? control.theme.outline : "#72787E"
+            if (!control.enabled) return control.theme ? control.theme.textDisabled : (_inferDark ? "#5A5E66" : "#94a3b8")
+            if (control.checked) return control.theme ? control.theme.onPrimary : (_inferDark ? "#003351" : "#ffffff")
+            return control.theme ? control.theme.outline : (_inferDark ? "#8C9198" : "#72787E")
         }
         y: (track.height - height) / 2
         x: control.checked ? track.width - width - 4 : 7

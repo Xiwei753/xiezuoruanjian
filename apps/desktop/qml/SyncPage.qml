@@ -25,6 +25,14 @@ Item {
     property string activeOperationId: ""
     property string activeOperationKind: ""
 
+    // ── SystemPalette 推断：theme 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
     // Local reactive sync state
     property string currentSyncStatus: "not_configured"
     property bool currentSyncInProgress: false
@@ -134,14 +142,14 @@ Item {
                 spacing: theme ? theme.sp4 : 4
                 AppText {
                     text: qsTr("同步设置")
-                    color: theme ? theme.onBackground : "#E2E2E5"
+                    color: theme ? theme.onBackground : (_inferDark ? "#E2E2E5" : "#1A1C1E")
                     font.pixelSize: theme ? theme.title : 24
                     font.family: theme ? theme.fontFamily : "sans-serif"
                     font.weight: Font.Bold
                 }
                 AppText {
                     text: qsTr("配置远端仓库并查看同步状态")
-                    color: theme ? theme.onSurfaceVariant : "#8C9198"
+                    color: theme ? theme.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
                     font.pixelSize: theme ? theme.body : 14
                     font.family: theme ? theme.fontFamily : "sans-serif"
                 }
@@ -272,8 +280,8 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 180
-            color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.surfaceContainerLow : "#F6F8FB")
-            border.color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.error : "#BA1A1A") : (theme ? theme.border : "#CBD5E1")
+            color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.dangerContainer : (_inferDark ? "#93000A" : "#FFDAD6")) : (theme ? theme.surfaceContainerLow : (_inferDark ? "#1F2229" : "#F6F8FB"))
+            border.color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.error : (_inferDark ? "#FFB4AB" : "#BA1A1A")) : (theme ? theme.border : (_inferDark ? "#2A2E36" : "#CBD5E1"))
             border.width: root.isFailureStatus(root.currentSyncStatus) ? 2 : 1
             radius: theme ? theme.radiusLg : 16
             clip: true
@@ -289,7 +297,7 @@ Item {
                     id: syncResultArea
                     width: logScroll.availableWidth
                     text: ""
-                    color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.dangerContainer : "#FFDAD6") : (theme ? theme.onSurfaceVariant : "#42474E")
+                    color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.dangerContainer : (_inferDark ? "#93000A" : "#FFDAD6")) : (theme ? theme.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E"))
                     font.family: "monospace"
                     font.pixelSize: theme ? theme.caption : 12
                     readOnly: true

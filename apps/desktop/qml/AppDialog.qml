@@ -19,10 +19,18 @@ Dialog {
     property int elevation: 3
     property var appShadow: null
 
-    // Safe access: fallback to light-theme defaults when dt is null
-    readonly property color _surfaceContainerHigh: dt ? dt.surfaceContainerHigh : "#EAEFF5"
-    readonly property color _border: dt ? dt.border : "#71788057"
-    readonly property color _onSurface: dt ? dt.onSurface : "#1A1C1E"
+    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
+    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
+    readonly property color _surfaceContainerHigh: dt ? dt.surfaceContainerHigh : (_inferDark ? "#2D3139" : "#EAEFF5")
+    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
+    readonly property color _onSurface: dt ? dt.onSurface : (_inferDark ? "#E2E2E5" : "#1A1C1E")
     readonly property int _dialogRadius: dt ? dt.dialogRadius : 24
     readonly property int _sp16: dt ? dt.sp16 : 16
     readonly property int _sp24: dt ? dt.sp24 : 24

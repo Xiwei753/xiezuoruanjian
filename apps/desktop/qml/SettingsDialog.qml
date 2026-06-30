@@ -35,7 +35,15 @@ Dialog {
     property var _saveTimer: null
     signal settingsChanged()
 
-    background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; border.width: 1; radius: dt ? dt.radiusXl : 28 }
+    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
+    background: Rectangle { color: dt ? dt.surface : (_inferDark ? "#1A1D23" : "#FCFCFF"); border.color: dt ? dt.border : (_inferDark ? "#2A2E36" : "#CBD5E1"); border.width: 1; radius: dt ? dt.radiusXl : 28 }
     header: null
 
     function saveAndNotify() { if (!backendRef || !root.settingsDirty) return; backendRef.save_local_settings(); root.settingsDirty = false; root.settingsChanged() }
@@ -99,7 +107,7 @@ Dialog {
             anchors.fill: parent
             anchors.leftMargin: dt ? dt.sp24 : 24
             anchors.rightMargin: dt ? dt.sp16 : 16
-            AppText { text: qsTr("设置"); color: dt ? dt.textPrimary : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
+            AppText { text: qsTr("设置"); color: dt ? dt.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E"); font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
             ToolbarButton { text: qsTr("关闭"); dt: root.dt; onClicked: root.close() }
         }
     }
@@ -351,7 +359,7 @@ Dialog {
                         property string message: ""
                         visible: message.length > 0
                         text: diagnosticsFeedback.message
-                        color: dt ? dt.textSecondary : "#999"
+                        color: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
                         font.pixelSize: dt ? dt.caption : 12
                         font.family: dt ? dt.fontFamily : "sans-serif"
                     }

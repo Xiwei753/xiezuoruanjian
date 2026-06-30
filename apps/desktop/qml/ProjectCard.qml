@@ -22,13 +22,21 @@ Rectangle {
     property int elevation: 1
     property var appShadow: null
 
-    // Safe access: fallback to light-theme defaults when dt is null
-    readonly property color _primary: dt ? dt.primary : "#006497"
-    readonly property color _card: dt ? dt.card : "#F6F8FC"
-    readonly property color _cardHover: dt ? dt.cardHover : "#F0F3F8"
-    readonly property color _border: dt ? dt.border : "#71788057"
-    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
-    readonly property color _textMuted: dt ? dt.textMuted : "#747880"
+    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
+    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
+    readonly property color _primary: dt ? dt.primary : (_inferDark ? "#92CCFF" : "#006497")
+    readonly property color _card: dt ? dt.card : (_inferDark ? "#1F2229" : "#F6F8FC")
+    readonly property color _cardHover: dt ? dt.cardHover : (_inferDark ? "#232830" : "#F0F3F8")
+    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
+    readonly property color _textPrimary: dt ? dt.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E")
+    readonly property color _textMuted: dt ? dt.textMuted : (_inferDark ? "#8C9198" : "#747880")
     readonly property int _cardRadius: dt ? dt.cardRadius : 16
     readonly property int _sp12: dt ? dt.sp12 : 12
     readonly property int _sp16: dt ? dt.sp16 : 16

@@ -14,6 +14,7 @@
 
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Window
 
@@ -24,6 +25,15 @@ ApplicationWindow {
     height: 768
     title: qsTr("素笺写作")
     color: designTokens.bg
+
+    // ── Material 主题绑定：确保 Qt 原生控件（Dialog/Popup/Menu/TextField 等）跟随深浅色 ──
+    Material.theme: designTokens.isDark ? Material.Dark : Material.Light
+    Material.primary: designTokens.primary
+    Material.accent: designTokens.primary
+    Material.foreground: designTokens.textPrimary
+    Material.background: designTokens.bg
+
+    // ── Palette 绑定：保留作为非 Material 控件的 fallback ──
     palette.window: designTokens.bg
     palette.windowText: designTokens.textPrimary
     palette.base: designTokens.surfaceContainerLow

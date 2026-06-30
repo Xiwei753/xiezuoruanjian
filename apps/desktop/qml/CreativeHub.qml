@@ -28,6 +28,14 @@ Rectangle {
     property bool aiEnabled: false
     property var layoutPlan: null
 
+    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
+    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
+    readonly property bool _inferDark: {
+        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
+        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
+        return tL > wL;
+    }
+
     signal openProject(string projectId, string projectTitle)
     signal createProject()
     signal openSettings()
@@ -37,7 +45,7 @@ Rectangle {
     signal renameProjectRequested(string projectId, string title)
     signal deleteProjectRequested(string projectId, string title)
 
-    color: dt ? dt.bg : "#111318"
+    color: dt ? dt.bg : (_inferDark ? "#111318" : "#FCFCFF")
 
     ColumnLayout {
         anchors.fill: parent
@@ -47,8 +55,8 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 64
-            color: dt ? dt.surface : "#1A1D23"
-            border.color: dt ? dt.border : "#2A2E36"
+            color: dt ? dt.surface : (_inferDark ? "#1A1D23" : "#FCFCFF")
+            border.color: dt ? dt.border : (_inferDark ? "#2A2E36" : "#CBD5E1")
             border.width: 1
 
             RowLayout {
@@ -63,7 +71,7 @@ Rectangle {
                     Layout.alignment: Qt.AlignVCenter
                     AppText {
                         text: qsTr("素笺写作")
-                        color: dt ? dt.primary : "#006497"
+                        color: dt ? dt.primary : (_inferDark ? "#92CCFF" : "#006497")
                         font.pixelSize: dt ? dt.fontXl : 18
                         font.family: dt ? dt.fontFamily : "sans-serif"
                         font.weight: Font.Bold
@@ -87,16 +95,16 @@ Rectangle {
                             height: 36
                             radius: dt ? dt.radiusPill : 999
                             color: root.currentTab === modelData.idx ?
-                                   (dt ? dt.primaryContainer : "#CCE5FF") :
-                                   navHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                                   (dt ? dt.primaryContainer : (_inferDark ? "#004A77" : "#CCE5FF")) :
+                                   navHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
 
                             AppText {
                                 id: navLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
-                                       (dt ? dt.onPrimaryContainer : "#001E31") :
-                                       (dt ? dt.onSurfaceVariant : "#E2E2E5")
+                                       (dt ? dt.onPrimaryContainer : (_inferDark ? "#CCE5FF" : "#001E31")) :
+                                       (dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E"))
                                 font.pixelSize: dt ? dt.label : 13
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
@@ -125,7 +133,7 @@ Rectangle {
                         width: syncRow.implicitWidth + (dt ? dt.sp16 : 16)
                         height: 40
                         radius: dt ? dt.radiusPill : 999
-                        color: syncHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                        color: syncHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
                         visible: root.appState && root.appState.sync && root.appState.sync.status !== "not_configured"
 
                         Row {
@@ -155,7 +163,7 @@ Rectangle {
                                     if (s === "partial_conflict") return qsTr("正文冲突");
                                     return qsTr("已配置");
                                 }
-                                color: dt ? dt.onSurfaceVariant : "#8C9198"
+                                color: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
                                 font.pixelSize: dt ? dt.caption : 12
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 Layout.alignment: Qt.AlignVCenter
@@ -177,13 +185,13 @@ Rectangle {
                         width: settingsText.implicitWidth + 24
                         height: 40
                         radius: dt ? dt.radiusPill : 999
-                        color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                        color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
 
                         AppText {
                             id: settingsText
                             anchors.centerIn: parent
                             text: qsTr("设置")
-                            color: dt ? dt.onSurfaceVariant : "#8C9198"
+                            color: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
                             font.pixelSize: dt ? dt.caption : 12
                         }
 
@@ -201,7 +209,7 @@ Rectangle {
                         width: switchRow.implicitWidth + (dt ? dt.sp16 : 16)
                         height: 40
                         radius: dt ? dt.radiusPill : 999
-                        color: switchHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                        color: switchHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
 
                         Row {
                             id: switchRow
@@ -209,7 +217,7 @@ Rectangle {
                             spacing: dt ? dt.sp6 : 6
                             AppText {
                                 text: qsTr("切换工作区")
-                                color: dt ? dt.onSurfaceVariant : "#8C9198"
+                                color: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
                                 font.pixelSize: dt ? dt.caption : 12
                                 font.family: dt ? dt.fontFamily : "sans-serif"
                                 Layout.alignment: Qt.AlignVCenter
