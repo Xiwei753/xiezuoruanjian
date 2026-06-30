@@ -148,7 +148,7 @@ Item {
             }
 
             StatusPill {
-                theme: root.theme
+                dt: root.theme
                 status: root.statusKind()
                 text: root.statusText()
             }
@@ -156,7 +156,7 @@ Item {
 
         AppCard {
             Layout.fillWidth: true
-            theme: root.theme
+            dt: root.theme
             variant: "surface"
             spacing: theme ? theme.sp16 : 16
 
