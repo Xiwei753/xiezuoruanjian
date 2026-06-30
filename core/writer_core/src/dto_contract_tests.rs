@@ -852,3 +852,73 @@ fn theme_palette_dto_rejects_camel_case_json() {
     assert!(dto.light_surface_container_high.is_empty(), "camelCase lightSurfaceContainerHigh should not populate snake_case light_surface_container_high");
     assert!(dto.dark_surface_container_high.is_empty(), "camelCase darkSurfaceContainerHigh should not populate snake_case dark_surface_container_high");
 }
+
+#[test]
+fn theme_palette_dto_round_trip() {
+    // Construct a fully-populated ThemePaletteDto (matching Android ThemePaletteHelper output)
+    let original = crate::api::types::ThemePaletteDto {
+        source: "android_dynamic_color".into(),
+        updated_at_ms: 1719792000000i64,
+        device_id: "test_device_001".into(),
+        variant: "tonal_spot".into(),
+        light_primary: "#006497".into(),
+        light_on_primary: "#FFFFFF".into(),
+        light_primary_container: "#CCE5FF".into(),
+        light_on_primary_container: "#001E31".into(),
+        light_secondary: "#50606E".into(),
+        light_on_secondary: "#FFFFFF".into(),
+        light_secondary_container: "#D3E5F5".into(),
+        light_on_secondary_container: "#0C1D29".into(),
+        light_tertiary: "#65587B".into(),
+        light_on_tertiary: "#FFFFFF".into(),
+        light_tertiary_container: "#EBDDFF".into(),
+        light_on_tertiary_container: "#201634".into(),
+        light_background: "#F6FAFE".into(),
+        light_on_background: "#171C1F".into(),
+        light_surface: "#F6FAFE".into(),
+        light_on_surface: "#171C1F".into(),
+        light_surface_variant: "#DEE3EB".into(),
+        light_on_surface_variant: "#42474E".into(),
+        light_surface_container: "#EAF0F7".into(),
+        light_surface_container_high: "#E4EAF1".into(),
+        light_outline: "#72787E".into(),
+        light_outline_variant: "#C2C8CE".into(),
+        dark_primary: "#85CFFF".into(),
+        dark_on_primary: "#00344D".into(),
+        dark_primary_container: "#004B6E".into(),
+        dark_on_primary_container: "#CCE5FF".into(),
+        dark_secondary: "#B7C9D8".into(),
+        dark_on_secondary: "#22323F".into(),
+        dark_secondary_container: "#384956".into(),
+        dark_on_secondary_container: "#D3E5F5".into(),
+        dark_tertiary: "#CFC0E8".into(),
+        dark_on_tertiary: "#362E4B".into(),
+        dark_tertiary_container: "#4D4462".into(),
+        dark_on_tertiary_container: "#EBDDFF".into(),
+        dark_background: "#0E1417".into(),
+        dark_on_background: "#DEE3EB".into(),
+        dark_surface: "#0E1417".into(),
+        dark_on_surface: "#DEE3EB".into(),
+        dark_surface_variant: "#42474E".into(),
+        dark_on_surface_variant: "#C2C8CE".into(),
+        dark_surface_container: "#1B2024".into(),
+        dark_surface_container_high: "#252B2F".into(),
+        dark_outline: "#8C9298".into(),
+        dark_outline_variant: "#42474E".into(),
+    };
+
+    // Serialize to JSON
+    let json_str = serde_json::to_string(&original).expect("ThemePaletteDto should serialize");
+    // Deserialize back
+    let round_tripped: crate::api::types::ThemePaletteDto =
+        serde_json::from_str(&json_str).expect("ThemePaletteDto JSON should deserialize");
+
+    // Round-trip must be lossless
+    assert_eq!(original, round_tripped, "ThemePaletteDto round-trip must be lossless");
+
+    // Key fields must not be empty
+    assert!(!original.light_primary.is_empty(), "light_primary must not be empty");
+    assert!(!original.dark_surface.is_empty(), "dark_surface must not be empty");
+    assert!(!original.light_outline_variant.is_empty(), "light_outline_variant must not be empty");
+    assert!(!original.dark_outline_variant.is_empty(), "dark_outline_variant must not be empty");
+}
