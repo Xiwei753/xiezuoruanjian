@@ -16,6 +16,10 @@ Rectangle {
     id: root
     property var dt: null
 
+    // Elevation shadow support
+    property int elevation: 0
+    property var appShadow: null
+
     // Safe access: fallback to light-theme defaults when dt is null
     readonly property color _surfaceContainerLow: dt ? dt.surfaceContainerLow : "#F6F8FC"
     readonly property color _border: dt ? dt.border : "#71788057"
