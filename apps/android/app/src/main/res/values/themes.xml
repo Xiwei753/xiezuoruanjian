@@ -42,5 +42,11 @@
         <!-- System font fallback -->
         <item name="android:fontFamily">sans-serif</item>
         <item name="fontFamily">sans-serif</item>
+
+        <!-- Material3 component style overrides -->
+        <item name="materialCardViewStyle">@style/Widget.Sujian.Card</item>
+        <item name="bottomNavigationStyle">@style/Widget.Sujian.BottomNavigationView</item>
+        <item name="toolbarStyle">@style/Widget.Sujian.Toolbar</item>
+        <item name="materialAlertDialogTheme">@style/Widget.Sujian.Dialog</item>
     </style>
 </resources>
