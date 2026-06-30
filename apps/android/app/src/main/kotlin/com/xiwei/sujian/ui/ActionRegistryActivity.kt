@@ -7,6 +7,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.R.attr as M3Attr
 import com.google.android.material.color.MaterialColors
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
@@ -100,7 +101,7 @@ class ActionRegistryActivity : AppCompatActivity() {
         return TextView(this).apply {
             text = category.uppercase()
             textSize = 12f
-            setTextColor(MaterialColors.getColor(this, R.attr.colorPrimary))
+            setTextColor(MaterialColors.getColor(this, M3Attr.colorPrimary))
             setPadding(0, 16, 0, 8)
         }
     }
@@ -123,20 +124,20 @@ class ActionRegistryActivity : AppCompatActivity() {
         content.addView(TextView(this@ActionRegistryActivity).apply {
             text = action.title
             textSize = 16f
-            setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurface))
+            setTextColor(MaterialColors.getColor(this, M3Attr.colorOnSurface))
         })
 
         content.addView(TextView(this@ActionRegistryActivity).apply {
             text = action.description
             textSize = 14f
-            setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurfaceVariant))
+            setTextColor(MaterialColors.getColor(this, M3Attr.colorOnSurfaceVariant))
             setPadding(0, 4, 0, 8)
         })
 
         content.addView(TextView(this@ActionRegistryActivity).apply {
             text = "ID: ${action.id}"
             textSize = 12f
-            setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurfaceVariant))
+            setTextColor(MaterialColors.getColor(this, M3Attr.colorOnSurfaceVariant))
         })
 
         val metaLine = "${kindLabel(action.kind)} | ${riskLabel(action.riskLevel)}"
@@ -150,7 +151,7 @@ class ActionRegistryActivity : AppCompatActivity() {
             content.addView(TextView(this@ActionRegistryActivity).apply {
                 text = getString(R.string.action_confirm_required)
                 textSize = 12f
-                setTextColor(MaterialColors.getColor(this, R.attr.colorTertiary))
+                setTextColor(MaterialColors.getColor(this, M3Attr.colorTertiary))
                 setPadding(0, 0, 0, 8)
             })
         }
@@ -160,7 +161,7 @@ class ActionRegistryActivity : AppCompatActivity() {
             content.addView(TextView(this@ActionRegistryActivity).apply {
                 text = getString(R.string.action_blocked_dangerous)
                 textSize = 12f
-                    setTextColor(MaterialColors.getColor(this, R.attr.colorError))
+                    setTextColor(MaterialColors.getColor(this, M3Attr.colorError))
                 setPadding(0, 0, 0, 8)
             })
         }
@@ -411,9 +412,9 @@ class ActionRegistryActivity : AppCompatActivity() {
                     text = msg
                     textSize = 14f
                     setTextColor(if (actionResult.success)
-                        MaterialColors.getColor(this, R.attr.colorPrimary)
+                        MaterialColors.getColor(this, M3Attr.colorPrimary)
                     else
-                        MaterialColors.getColor(this, R.attr.colorError))
+                        MaterialColors.getColor(this, M3Attr.colorError))
                     setPadding(0, 8, 0, 4)
                 })
 
@@ -422,7 +423,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                     resultContainer.addView(TextView(this).apply {
                         text = getString(R.string.action_return_data, dataStr)
                         textSize = 12f
-                        setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurfaceVariant))
+                        setTextColor(MaterialColors.getColor(this, M3Attr.colorOnSurfaceVariant))
                         setPadding(0, 4, 0, 0)
                     })
                 }
@@ -431,7 +432,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                 resultContainer.addView(TextView(this).apply {
                     text = getString(R.string.action_error_prefix, result.message)
                     textSize = 14f
-                setTextColor(MaterialColors.getColor(this, R.attr.colorError))
+                setTextColor(MaterialColors.getColor(this, M3Attr.colorError))
                     setPadding(0, 8, 0, 0)
                 })
             }
