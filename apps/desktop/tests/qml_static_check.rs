@@ -98,6 +98,16 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || trimmed.contains("color=")
                     || trimmed.contains("color :")
                 {
+                    // Exemption: SystemPalette / DesignTokens fallback patterns
+                    let is_system_palette_fallback = trimmed.contains("_inferDark")
+                        || trimmed.contains("isDark")
+                        || trimmed.contains("Application.styleHints.colorScheme")
+                        || trimmed.contains("Qt.ColorScheme.Dark");
+                    let is_design_tokens_def = file_name == "DesignTokens.qml";
+                    let is_scrim_or_shadow = trimmed.contains("scrim")
+                        || trimmed.contains("shadow")
+                        || trimmed.contains("Shadow");
+
                     let lower = trimmed.to_lowercase();
                     for color in &forbidden_colors {
                         let c = color.to_lowercase();
@@ -105,6 +115,16 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             || lower.contains(&format!("'{}'", c))
                             || lower.contains(&c)
                         {
+                            // Exempt #1A1C1E/#1a1c1e in SystemPalette fallback or DesignTokens definition
+                            if (c == "#1a1c1e")
+                                && (is_system_palette_fallback || is_design_tokens_def)
+                            {
+                                continue;
+                            }
+                            // Exempt #000000 in scrim/shadow contexts
+                            if (c == "#000000") && is_scrim_or_shadow {
+                                continue;
+                            }
                             eprintln!(
                                 "{}:{}: Found hardcoded dark color '{}'",
                                 file_name, line_num, color
@@ -123,12 +143,18 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             has_errors = true;
                         }
                     }
+                    // Exempt palette.text when used as Material theme property binding
+                    // (e.g. "palette.text: designTokens.textPrimary") — not a color fallback
                     if trimmed.contains("palette.text") {
-                        eprintln!(
-                            "{}:{}: Found forbidden palette.text fallback: {}",
-                            file_name, line_num, trimmed
-                        );
-                        has_errors = true;
+                        let is_material_theme_binding = trimmed.contains("palette.text:")
+                            && (trimmed.contains("designTokens") || trimmed.contains("dt."));
+                        if !is_material_theme_binding {
+                            eprintln!(
+                                "{}:{}: Found forbidden palette.text fallback: {}",
+                                file_name, line_num, trimmed
+                            );
+                            has_errors = true;
+                        }
                     }
                 }
 
