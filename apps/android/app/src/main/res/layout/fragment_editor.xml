@@ -47,7 +47,6 @@
                     android:background="@android:color/transparent"
                     android:textColor="?attr/colorOnSurface"
                     android:textColorHint="?attr/colorOnSurfaceVariant"
-                    android:cursorTint="?attr/colorPrimary"
                     android:paddingVertical="8dp" />
                 <ImageButton
                     android:id="@+id/btnSearchNext"
@@ -83,7 +82,6 @@
                     android:background="@android:color/transparent"
                     android:textColor="?attr/colorOnSurface"
                     android:textColorHint="?attr/colorOnSurfaceVariant"
-                    android:cursorTint="?attr/colorPrimary"
                     android:paddingVertical="8dp" />
                 <Button
                     android:id="@+id/btnReplace"
