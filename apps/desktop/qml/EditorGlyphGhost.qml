@@ -40,8 +40,8 @@ Item {
     // 动画时长（由外部传入，默认 100ms，范围 30~1000ms）
     property int duration: 100
 
-    // 颜色
-    property color ghostColor: "#E2E2E5"
+    // 颜色（默认值跟随系统主题，实际值由父组件 EditorAnimationOverlay 传入）
+    property color ghostColor: Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E"
 
     // glyph 文字内容
     property string glyphText: ""

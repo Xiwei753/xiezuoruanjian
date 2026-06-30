@@ -995,6 +995,93 @@ fn test_editor_route_doc_no_legacy_full_render_claim() {
     );
 }
 
+/// 验证 DesignTokens.qml 中 _paletteColor 只读取 snake_case key，
+/// 不读取 camelCase key（如 lightPrimary、darkPrimary、lightSurfaceContainerHigh）。
+/// 三端统一：Android 产出 snake_case theme_palette，Harmony/Desktop 按 snake_case 消费。
+#[test]
+fn test_design_tokens_palette_keys_are_snake_case() {
+    let qml_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("qml");
+    let dt_path = qml_dir.join("DesignTokens.qml");
+    if !dt_path.exists() {
+        return;
+    }
+    let content = fs::read_to_string(&dt_path).unwrap();
+
+    // camelCase palette key patterns that must NOT appear inside _paletteColor() calls
+    let forbidden_camel_keys = [
+        "lightPrimary",
+        "darkPrimary",
+        "lightOnPrimary",
+        "darkOnPrimary",
+        "lightPrimaryContainer",
+        "darkPrimaryContainer",
+        "lightOnPrimaryContainer",
+        "darkOnPrimaryContainer",
+        "lightSecondary",
+        "darkSecondary",
+        "lightOnSecondary",
+        "darkOnSecondary",
+        "lightSecondaryContainer",
+        "darkSecondaryContainer",
+        "lightOnSecondaryContainer",
+        "darkOnSecondaryContainer",
+        "lightTertiary",
+        "darkTertiary",
+        "lightOnTertiary",
+        "darkOnTertiary",
+        "lightTertiaryContainer",
+        "darkTertiaryContainer",
+        "lightOnTertiaryContainer",
+        "darkOnTertiaryContainer",
+        "lightBackground",
+        "darkBackground",
+        "lightOnBackground",
+        "darkOnBackground",
+        "lightSurface",
+        "darkSurface",
+        "lightOnSurface",
+        "darkOnSurface",
+        "lightSurfaceVariant",
+        "darkSurfaceVariant",
+        "lightOnSurfaceVariant",
+        "darkOnSurfaceVariant",
+        "lightSurfaceContainerHigh",
+        "darkSurfaceContainerHigh",
+        "lightSurfaceContainerHighest",
+        "darkSurfaceContainerHighest",
+        "lightSurfaceContainerLow",
+        "darkSurfaceContainerLow",
+        "lightSurfaceContainerLowest",
+        "darkSurfaceContainerLowest",
+        "lightOutline",
+        "darkOutline",
+        "lightOutlineVariant",
+        "darkOutlineVariant",
+    ];
+
+    for (line_idx, line) in content.lines().enumerate() {
+        let line_num = line_idx + 1;
+        let trimmed = line.trim();
+        // Skip comments
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        // Only check lines that contain _paletteColor
+        if !trimmed.contains("_paletteColor") {
+            continue;
+        }
+        for camel_key in &forbidden_camel_keys {
+            if trimmed.contains(camel_key) {
+                panic!(
+                    "DesignTokens.qml:{}: _paletteColor must use snake_case keys, \
+                     found camelCase key '{}' in line: {}",
+                    line_num, camel_key, trimmed
+                );
+            }
+        }
+    }
+}
+
 /// 确保 AGENTS.md 中"静态正文层为动画隐藏文字"的禁止项已更新为更精确的描述
 #[test]
 fn test_agents_md_no_legacy_animation_prohibition() {

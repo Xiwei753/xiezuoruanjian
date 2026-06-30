@@ -228,7 +228,7 @@ Item {
                 "width": gr.w,
                 "height": gr.h,
                 "duration": duration,
-                "ghostColor": editorItem.text_color || "#E2E2E5",
+                "ghostColor": editorItem.text_color || (root.dt ? root.dt.editorText : (Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E")),
                 "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
                 "glyphFontFamily": editorItem.font_family || "",
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0
@@ -296,7 +296,7 @@ Item {
                 "width": gr.w,
                 "height": gr.h,
                 "duration": duration,
-                "ghostColor": editorItem.text_color || "#E2E2E5",
+                "ghostColor": editorItem.text_color || (root.dt ? root.dt.editorText : (Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E")),
                 "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
                 "glyphFontFamily": editorItem.font_family || "",
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0

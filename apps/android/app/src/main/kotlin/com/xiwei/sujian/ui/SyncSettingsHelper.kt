@@ -4,6 +4,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.google.android.material.button.MaterialButton
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.materialswitch.MaterialSwitch
 import com.google.android.material.textfield.TextInputEditText
 import com.xiwei.sujian.R
@@ -410,14 +411,14 @@ internal class SyncSettingsHelper(
         val input = etHttpsToken.text?.toString() ?: ""
         if (input.isNotEmpty()) {
             tvTokenStatus.text = activity.getString(R.string.token_input_active)
-            tvTokenStatus.setTextColor(activity.getColor(com.google.android.material.R.color.material_dynamic_primary40))
+            tvTokenStatus.setTextColor(MaterialColors.getColor(activity, R.attr.colorPrimary))
         } else {
             if (currentSyncSecrets.token.isNullOrEmpty()) {
                 tvTokenStatus.text = activity.getString(R.string.token_not_configured)
-                tvTokenStatus.setTextColor(activity.getColor(com.google.android.material.R.color.design_default_color_error))
+                tvTokenStatus.setTextColor(MaterialColors.getColor(activity, R.attr.colorError))
             } else {
                 tvTokenStatus.text = activity.getString(R.string.token_configured)
-                tvTokenStatus.setTextColor(activity.getColor(com.google.android.material.R.color.material_dynamic_primary40))
+                tvTokenStatus.setTextColor(MaterialColors.getColor(activity, R.attr.colorPrimary))
             }
         }
     }

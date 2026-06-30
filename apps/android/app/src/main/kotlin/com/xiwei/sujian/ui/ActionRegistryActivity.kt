@@ -7,6 +7,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
@@ -99,7 +100,7 @@ class ActionRegistryActivity : AppCompatActivity() {
         return TextView(this).apply {
             text = category.uppercase()
             textSize = 12f
-            setTextColor(getColor(com.google.android.material.R.color.material_dynamic_primary40))
+            setTextColor(MaterialColors.getColor(this, R.attr.colorPrimary))
             setPadding(0, 16, 0, 8)
         }
     }
@@ -122,20 +123,20 @@ class ActionRegistryActivity : AppCompatActivity() {
         content.addView(TextView(this@ActionRegistryActivity).apply {
             text = action.title
             textSize = 16f
-            setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_high_type))
+            setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurface))
         })
 
         content.addView(TextView(this@ActionRegistryActivity).apply {
             text = action.description
             textSize = 14f
-            setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_medium))
+            setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurfaceVariant))
             setPadding(0, 4, 0, 8)
         })
 
         content.addView(TextView(this@ActionRegistryActivity).apply {
             text = "ID: ${action.id}"
             textSize = 12f
-            setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_medium))
+            setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurfaceVariant))
         })
 
         val metaLine = "${kindLabel(action.kind)} | ${riskLabel(action.riskLevel)}"
@@ -149,7 +150,7 @@ class ActionRegistryActivity : AppCompatActivity() {
             content.addView(TextView(this@ActionRegistryActivity).apply {
                 text = getString(R.string.action_confirm_required)
                 textSize = 12f
-                setTextColor(getColor(com.google.android.material.R.color.material_dynamic_tertiary50))
+                setTextColor(MaterialColors.getColor(this, R.attr.colorTertiary))
                 setPadding(0, 0, 0, 8)
             })
         }
@@ -159,7 +160,7 @@ class ActionRegistryActivity : AppCompatActivity() {
             content.addView(TextView(this@ActionRegistryActivity).apply {
                 text = getString(R.string.action_blocked_dangerous)
                 textSize = 12f
-                setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
+                    setTextColor(MaterialColors.getColor(this, R.attr.colorError))
                 setPadding(0, 0, 0, 8)
             })
         }
@@ -410,9 +411,9 @@ class ActionRegistryActivity : AppCompatActivity() {
                     text = msg
                     textSize = 14f
                     setTextColor(if (actionResult.success)
-                        getColor(com.google.android.material.R.color.material_dynamic_primary50)
+                        MaterialColors.getColor(this, R.attr.colorPrimary)
                     else
-                        getColor(com.google.android.material.R.color.design_default_color_error))
+                        MaterialColors.getColor(this, R.attr.colorError))
                     setPadding(0, 8, 0, 4)
                 })
 
@@ -421,7 +422,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                     resultContainer.addView(TextView(this).apply {
                         text = getString(R.string.action_return_data, dataStr)
                         textSize = 12f
-                        setTextColor(getColor(com.google.android.material.R.color.material_on_surface_emphasis_medium))
+                        setTextColor(MaterialColors.getColor(this, R.attr.colorOnSurfaceVariant))
                         setPadding(0, 4, 0, 0)
                     })
                 }
@@ -430,7 +431,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                 resultContainer.addView(TextView(this).apply {
                     text = getString(R.string.action_error_prefix, result.message)
                     textSize = 14f
-                    setTextColor(getColor(com.google.android.material.R.color.design_default_color_error))
+                setTextColor(MaterialColors.getColor(this, R.attr.colorError))
                     setPadding(0, 8, 0, 0)
                 })
             }
