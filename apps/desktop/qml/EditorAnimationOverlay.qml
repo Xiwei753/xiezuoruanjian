@@ -6,13 +6,14 @@
 // Core transaction → visual_transaction_json signal → QML overlay rendering.
 // The static text texture (Layer 0) and QML cursor remain unchanged.
 //
-// Rules:
-// - glyphRects > 8: no animation
-// - contains newline: no animation
-// - IME composing: no animation (only commit events)
-// - paste: no animation (Core already filters this)
-// - scroll/settings/load/chapter switch: clearAll()
-// - No rectangle highlight fallback — if glyphRects is empty, skip animation
+// Unified animation decision rules (must match Rust should_create_text_animation):
+// - glyph 为空：不动画
+// - glyph 超过上限（8）：不动画
+// - 包含换行：文字不动画，但光标仍可动画
+// - scrolling/loading/settings/applyingFormat：不动画
+// - component not ready：不动画
+// - 不动画时绝对不能 start_insert hidden range
+// - 如果已经 start_insert 但 overlay 跳过，必须立即通知 Rust 清除 hidden range
 //
 // Animation mechanism:
 // - Insert: during animation, the static text layer (Layer 0) temporarily skips the inserted range.
@@ -43,6 +44,11 @@ Item {
     // hidden range 是自研渲染层的内部渲染状态，不是正文数据污染
     signal insertAnimationFinished(int byteStart, int byteEnd)
 
+    // Insert 动画被跳过时通知 Rust 侧清除 hidden range
+    // 当 QML overlay 因 component not ready / glyph 超限 / 换行等原因跳过动画时，
+    // Rust 侧可能已经创建了 hidden range，必须立即清除否则文字消失
+    signal insertAnimationSkipped(int byteStart, int byteEnd)
+
     function _log(message) {
         if (verboseLogging) console.log("[AnimOverlay] " + message)
     }
@@ -53,6 +59,20 @@ Item {
     // 当前活跃事务（替换旧的 _pendingInsertEvents）
     property var _activeTransaction: null
     property Component _glyphGhostComponent: Qt.createComponent("EditorGlyphGhost.qml")
+
+    /// 统一动画判定函数 — 与 Rust should_create_text_animation 使用相同规则
+    /// 返回值: "noAnimation" / "cursorOnly" / "fullAnimation"
+    function shouldCreateTextAnimation(glyphCount, containsNewline, isScrolling, isLoading, isApplyingFormat, isApplyingSettings, animEnabled, componentReady) {
+        var MAX_GLYPH_COUNT = 8
+
+        if (!animEnabled) return "noAnimation"
+        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return "noAnimation"
+        if (!componentReady) return "noAnimation"
+        if (glyphCount === 0) return "noAnimation"
+        if (glyphCount > MAX_GLYPH_COUNT) return "noAnimation"
+        if (containsNewline) return "cursorOnly"
+        return "fullAnimation"
+    }
 
     Connections {
         target: editorItem
@@ -157,27 +177,8 @@ Item {
         var glyphRects = vt.insertGlyphRects
         if (!glyphRects || !Array.isArray(glyphRects) || glyphRects.length === 0) {
             root._log("insert skipped: insertGlyphRects empty")
-            return
-        }
-
-        // Multi-char limit: > 8 glyphs → no animation
-        if (glyphRects.length > 8) {
-            root._log("insert skipped: insertGlyphRects count=" + glyphRects.length + " > 8")
-            return
-        }
-
-        // Newline check: if any glyph char is newline, skip
-        for (var ci = 0; ci < glyphRects.length; ci++) {
-            if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
-                root._log("insert skipped: contains newline at index=" + ci)
-                return
-            }
-        }
-
-        // ── Glyph Ghost path ──
-        var component = root._glyphGhostComponent
-        if (!component || component.status !== Component.Ready) {
-            root._log("insert skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
+            // 通知 Rust 清除可能已创建的 hidden range
+            _notifySkippedIfHasRange(vt)
             return
         }
 
@@ -190,6 +191,50 @@ Item {
             insertByteEnd = vt.insertedRange[1]
         }
 
+        // 检测是否包含换行
+        var containsNewline = false
+        for (var ci = 0; ci < glyphRects.length; ci++) {
+            if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
+                containsNewline = true
+                break
+            }
+        }
+
+        // ── 统一动画判定 ──
+        // 必须与 Rust should_create_text_animation 使用相同规则
+        var component = root._glyphGhostComponent
+        var componentReady = component && component.status === Component.Ready
+
+        var decision = root.shouldCreateTextAnimation(
+            glyphRects.length,    // glyphCount
+            containsNewline,      // containsNewline
+            false,                // isScrolling (QML 侧已通过 suppressed 处理)
+            root.suppressed,      // isLoading (suppressed 包含 loading)
+            false,                // isApplyingFormat (suppressed 包含)
+            false,                // isApplyingSettings (suppressed 包含)
+            root.animationEnabled, // animationEnabled
+            componentReady        // componentReady
+        )
+
+        root._log("insert decision=" + decision + " glyphCount=" + glyphRects.length + " containsNewline=" + containsNewline + " componentReady=" + componentReady)
+
+        if (decision === "noAnimation") {
+            root._log("insert skipped: decision=noAnimation")
+            // 通知 Rust 清除可能已创建的 hidden range
+            _notifySkippedIfHasRange(vt)
+            return
+        }
+
+        if (decision === "cursorOnly") {
+            root._log("insert skipped: decision=cursorOnly (newline), cursor still animates")
+            // 换行场景：不创建文字 ghost，但光标仍可动画
+            // 通知 Rust 清除可能已创建的 hidden range
+            _notifySkippedIfHasRange(vt)
+            return
+        }
+
+        // decision === "fullAnimation"
+
         // 统计实际会创建的 ghost 数量（排除复杂 grapheme）
         var ghostCount = 0
         for (var i = 0; i < glyphRects.length; i++) {
@@ -201,6 +246,8 @@ Item {
 
         if (ghostCount === 0) {
             root._log("insert skipped: no valid ghosts after filtering")
+            // 通知 Rust 清除可能已创建的 hidden range
+            _notifySkippedIfHasRange(vt)
             return
         }
 
@@ -238,6 +285,18 @@ Item {
         }
     }
 
+    /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。
+    /// 这是防止文字短暂消失的关键：Rust 可能已经在 record_transaction 中
+    /// 创建了 hidden range，但 QML 因各种原因跳过了动画。
+    function _notifySkippedIfHasRange(vt) {
+        if (vt.insertedRange && Array.isArray(vt.insertedRange) && vt.insertedRange.length === 2) {
+            var byteStart = vt.insertedRange[0]
+            var byteEnd = vt.insertedRange[1]
+            root._log("insert skipped, notifying Rust to clear hidden range: byteStart=" + byteStart + " byteEnd=" + byteEnd)
+            root.insertAnimationSkipped(byteStart, byteEnd)
+        }
+    }
+
     function _createDeleteAnimation(vt) {
         // 使用 vt.newCursorRect 作为终点（删除后的新光标位置）
         // 使用 baselineY 作为 Y 坐标（文字基线），回退到 top（兼容旧数据）
@@ -252,24 +311,33 @@ Item {
             return
         }
 
-        // Multi-char limit: > 8 glyphs → no animation
-        if (glyphRects.length > 8) {
-            root._log("delete skipped: deletedGlyphRects count=" + glyphRects.length + " > 8")
-            return
-        }
-
-        // Newline check: if any glyph char is newline, skip
+        // ── 统一动画判定 ──
+        var containsNewline = false
         for (var ci = 0; ci < glyphRects.length; ci++) {
             if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
-                root._log("delete skipped: contains newline at index=" + ci)
-                return
+                containsNewline = true
+                break
             }
         }
 
-        // ── Glyph Ghost path ──
         var component = root._glyphGhostComponent
-        if (!component || component.status !== Component.Ready) {
-            root._log("delete skipped: component not ready, status=" + (component ? component.status : "null") + " error=" + (component ? component.errorString() : "no component"))
+        var componentReady = component && component.status === Component.Ready
+
+        var decision = root.shouldCreateTextAnimation(
+            glyphRects.length,
+            containsNewline,
+            false,
+            root.suppressed,
+            false,
+            false,
+            root.animationEnabled,
+            componentReady
+        )
+
+        root._log("delete decision=" + decision + " glyphCount=" + glyphRects.length + " containsNewline=" + containsNewline + " componentReady=" + componentReady)
+
+        if (decision !== "fullAnimation") {
+            root._log("delete skipped: decision=" + decision)
             return
         }
 

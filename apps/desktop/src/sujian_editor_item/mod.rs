@@ -31,7 +31,7 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
-use text_animation_state::TextAnimationState;
+use text_animation_state::{AnimationDecision, TextAnimationState, should_create_text_animation};
 
 pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
@@ -193,6 +193,7 @@ pub struct SujianEditorItem {
     request_text_input_focus: qt_method!(fn(&mut self)),
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     on_insert_animation_finished: qt_method!(fn(&mut self, byte_start: i32, byte_end: i32)),
+    on_insert_animation_skipped: qt_method!(fn(&mut self, byte_start: i32, byte_end: i32)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -320,6 +321,7 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             on_insert_animation_finished: Default::default(),
+            on_insert_animation_skipped: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -394,6 +396,24 @@ impl SujianEditorItem {
             if editor_animation_debug_enabled() {
                 eprintln!(
                     "on_insert_animation_finished: byte_range=({},{}), removed, has_active_insert={}",
+                    bs, be, self.text_anim_state.has_active_insert()
+                );
+            }
+            self.request_static_repaint();
+        }
+    }
+
+    /// QML 动画 overlay 通知 Insert 动画被跳过（component not ready / glyph 超限 / 换行等）。
+    /// 此时 Rust 侧可能已经创建了 hidden range，必须立即清除，
+    /// 否则正文层会永久跳过该 range 导致文字消失。
+    fn on_insert_animation_skipped(&mut self, byte_start: i32, byte_end: i32) {
+        let bs = byte_start as usize;
+        let be = byte_end as usize;
+        let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
+        if removed {
+            if editor_animation_debug_enabled() {
+                eprintln!(
+                    "on_insert_animation_skipped: byte_range=({},{}), cleared hidden range, has_active_insert={}",
                     bs, be, self.text_anim_state.has_active_insert()
                 );
             }
@@ -1255,6 +1275,7 @@ impl SujianEditorItem {
         }
 
         // 创建 TextAnimationState 条目，让正文层在动画期间跳过 inserted range
+        // 使用统一的 should_create_text_animation 判定，确保 Rust 和 QML 一致
         // 仅在动画启用且事务非空时创建
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
@@ -1262,30 +1283,71 @@ impl SujianEditorItem {
                     EditorAnimationKind::Insert => {
                         // 从 vt.inserted_range 读取 hidden range
                         if let Some((range_start, range_end)) = vt.inserted_range {
-                            // 只有 insert_glyph_rects 非空时才创建（空说明被过滤了）
-                            let has_glyphs = vt.insert_glyph_rects
-                                .as_ref()
-                                .map_or(false, |g| !g.is_empty());
-                            if has_glyphs {
-                                self.text_anim_state.start_insert((range_start, range_end), vt.duration_ms);
-                                if editor_animation_debug_enabled() {
-                                    eprintln!(
-                                        "record_transaction: created Insert animation byte_range=({},{}), duration_ms={}",
-                                        range_start, range_end, vt.duration_ms
-                                    );
+                            // 统一动画判定：与 QML 使用相同规则
+                            let glyph_rects = vt.insert_glyph_rects.as_ref();
+                            let glyph_count = glyph_rects.map_or(0, |g| g.len());
+                            let contains_newline = vt.new_text[range_start..range_end].contains('\n');
+                            let decision = should_create_text_animation(
+                                glyph_count,
+                                contains_newline,
+                                self.current_is_scrolling,
+                                false, // is_loading — record_transaction 不会在 loading 时调用
+                                false, // is_applying_format
+                                false, // is_applying_settings
+                                self.current_typing_animation_enabled,
+                                true,  // component_ready — Rust 侧始终为 true
+                            );
+                            match decision {
+                                AnimationDecision::FullAnimation => {
+                                    self.text_anim_state.start_insert((range_start, range_end), vt.duration_ms);
+                                    if editor_animation_debug_enabled() {
+                                        eprintln!(
+                                            "record_transaction: created Insert animation byte_range=({},{}), duration_ms={}",
+                                            range_start, range_end, vt.duration_ms
+                                        );
+                                    }
+                                }
+                                AnimationDecision::CursorOnly => {
+                                    // 换行场景：不创建 hidden range，光标仍可动画
+                                    // 不调用 start_insert，正文层正常绘制
+                                    if editor_animation_debug_enabled() {
+                                        eprintln!(
+                                            "record_transaction: Insert CursorOnly (newline), byte_range=({},{}), no hidden range",
+                                            range_start, range_end
+                                        );
+                                    }
+                                }
+                                AnimationDecision::NoAnimation => {
+                                    // 不创建 hidden range，正文层正常绘制
+                                    if editor_animation_debug_enabled() {
+                                        eprintln!(
+                                            "record_transaction: Insert NoAnimation, byte_range=({},{}), no hidden range",
+                                            range_start, range_end
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
                     EditorAnimationKind::Delete => {
                         // Delete 动画不需要正文层跳过，但记录以跟踪活跃动画
-                        // 从 vt.deleted_glyph_rects 读取
-                        let has_glyphs = vt.deleted_glyph_rects
-                            .as_ref()
-                            .map_or(false, |g| !g.is_empty());
-                        if has_glyphs {
+                        // 使用统一判定
+                        let glyph_rects = vt.deleted_glyph_rects.as_ref();
+                        let glyph_count = glyph_rects.map_or(0, |g| g.len());
+                        let contains_newline = vt.old_text != vt.new_text &&
+                            (vt.old_text.contains('\n') || vt.new_text.contains('\n'));
+                        let decision = should_create_text_animation(
+                            glyph_count,
+                            contains_newline,
+                            self.current_is_scrolling,
+                            false, // is_loading
+                            false, // is_applying_format
+                            false, // is_applying_settings
+                            self.current_typing_animation_enabled,
+                            true,  // component_ready
+                        );
+                        if matches!(decision, AnimationDecision::FullAnimation) {
                             // 对于 Delete，inserted_range 为 None，需要从变更推导 byte range
-                            // 使用 old_text 和 new_text 的 diff 来获取删除范围
                             let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
                             for change in &changes {
                                 if let writer_core::editor::EditorChange::Delete { index, text } = change {
@@ -1419,13 +1481,34 @@ impl SujianEditorItem {
                         &new_caret, &insert_snapshot, font_family, scroll_y,
                     ));
 
-                    for line in &insert_snapshot.lines {
+                    // 局部 reflow 动画：限制 glyph_rects 只包含插入点所在行和下一行（最多 2 行）
+                    // 避免中间插入时给光标后面的全部正文做字符动画，导致换行牵动整个屏幕
+                    let mut lines_with_insert: Vec<usize> = Vec::new();
+                    for (line_idx, line) in insert_snapshot.lines.iter().enumerate() {
                         if line.byte_end <= range_start || line.byte_start >= range_end {
                             continue;
                         }
                         if line.para_text.is_empty() {
                             continue;
                         }
+                        lines_with_insert.push(line_idx);
+                    }
+
+                    // 限制到插入点所在行 + 下一行（最多 2 行）
+                    // 如果影响超过 2 行、跨段落、滚动中、格式化中，直接 snap
+                    let max_affected_lines = 2;
+                    let should_snap = lines_with_insert.len() > max_affected_lines
+                        || self.current_is_scrolling;
+
+                    let allowed_lines: Vec<usize> = if should_snap {
+                        // 只保留前 2 行的 glyph，后续行不做动画
+                        lines_with_insert.into_iter().take(max_affected_lines).collect()
+                    } else {
+                        lines_with_insert
+                    };
+
+                    for line_idx in allowed_lines {
+                        let line = &insert_snapshot.lines[line_idx];
                         let seg_start = range_start.max(line.byte_start);
                         let seg_end = range_end.min(line.byte_end);
                         if seg_start >= seg_end {

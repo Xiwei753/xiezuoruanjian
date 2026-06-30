@@ -5,19 +5,11 @@ Last verified: 2026-06-11
 Truth source: code / product decision / protocol
 Supersedes: AGENTS.md (previous version)
 
-本文档是给 AI 助手看的项目规则。修改代码前必须通读。
+本文档只记录必须遵守的项目红线。AI 修改代码时按任务需要查阅相关条目；禁止复述仓库结构、目录树、技术栈总览或阅读过程，除非用户明确要求。
 
 ---
 
 ## 1. 项目架构
-
-```
-core/writer_core/          Rust 核心库（唯一业务逻辑层）
-bindings/shared/           跨平台共享绑定
-apps/android/              Kotlin Android 客户端（薄客户端）
-apps/desktop/              Qt/QML Linux 客户端（薄客户端）
-apps/harmony/              ArkTS HarmonyOS NEXT 客户端（薄客户端）
-```
 
 **核心原则：Rust Core 是唯一事实来源。**
 
@@ -72,29 +64,6 @@ apps/harmony/              ArkTS HarmonyOS NEXT 客户端（薄客户端）
 
 ## 3. Linux/QML 开发规则
 
-### 3.1 目录结构
-
-```
-apps/desktop/
-  src/
-    main.rs                      入口 + AppBackend QObject（业务绑定层）
-    sujian_editor_item/          自研编辑器核心（mod.rs, rendering.rs, cursor_controller.rs, buffer.rs）
-    editor/                      编辑器子模块（layout.rs, renderer.rs, scene_graph.rs, input.rs）
-    document_handler.rs          已删除（legacy），不得恢复
-    starmap_bridge.rs            星图桥接
-    sync_bridge.rs               同步桥接
-  qml/
-    main.qml                     应用入口
-    WritingWorkspace.qml         写作工作区（编辑区 + 侧栏）
-    EditorController.qml         编辑器逻辑控制器
-    EditorAnimationOverlay.qml   动画 overlay（唯一动画主路径）
-    TopWritingToolbar.qml        写作工具栏
-    StarMapPage.qml              星图页面
-    SyncPage.qml                 同步页面
-    SettingsDialog.qml           设置对话框
-    ...其他 QML 组件
-```
-
 ### 3.2 QML 规则
 
 - **避免重复 UI 容器**：一个功能区域只有一层 ScrollView、一个 id。
@@ -140,30 +109,7 @@ apps/desktop/
 
 ## 5. Rust Core 开发规则
 
-### 5.1 目录结构
-
-```
-core/writer_core/
-  src/
-    facade/              Facade 层（对外 API 入口）
-    api/                 跨平台稳定 API 层（DTO、错误映射、WriterCoreApi）
-    app_service.rs       UniFFI adapter
-    workspace.rs         工作区管理
-    project.rs           项目管理
-    volume.rs            卷管理
-    chapter.rs           章节管理
-    sync/                同步逻辑
-    settings/            设置管理
-    starmap/             星图（正式图谱路线）
-    editor/              编辑器事务
-    ffi/                 C-ABI / NAPI 导出
-    writing_stats/       写作统计
-    storage/             存储事务
-    history/             撤销/重做
-    ...
-```
-
-### 5.2 规则
+### 5.1 规则
 
 - `core/writer_core` 是唯一业务底层核心库。
 - 处理所有文件 I/O、项目管理、同步、格式化和设置规则。
@@ -223,9 +169,9 @@ cd apps/desktop && cargo check && cargo test
 
 ### 8.1 修改前
 
-1. **读取目标文件的当前状态**，不要凭记忆假设。
-2. **理解文件的嵌套结构 and 括号平衡**，QML/Rust 都是。
-3. **确定修改范围**，不要扩散到不相关的文件。
+1. 只读取与当前任务直接相关的文件；不要做通用仓库巡检。
+2. QML/Rust 修改前确认局部嵌套结构和括号平衡。
+3. 确定修改范围，不要扩散到不相关文件。
 
 ### 8.2 修改中
 
@@ -314,7 +260,7 @@ python tools/api_push.py "<token>" Xiwei753/xiezuoruanjian main
 4. **获取 check-run annotations**：`webfetch` → `https://api.github.com/repos/Xiwei753/xiezuoruanjian/check-runs/{check_run_id}/annotations`
 5. **下载日志**（需要认证）：
    - 日志 API：`https://api.github.com/repos/Xiwei753/xiezuoruanjian/actions/jobs/{job_id}/logs`
-   - `webfetch` 不支持自定义 Authorization header，且 URL 嵌入 token 的方式 (`x-access-token:token@`) 也被 GitHub 拒绝（403）。
+   - `webfetch` 不支持自定义 Authorization header，且 URL 嵌入 token 的方式 (`x-access-token:*** 也被 GitHub 拒绝（403）。
    - **如果 PAT 没有 `actions:read` 权限，无法通过 API 下载日志**，此时需要用户手动从 GitHub 网页复制日志内容。
    - 替代方案：在 CI workflow 中将关键输出写入 `$GITHUB_STEP_SUMMARY`，这样可以通过 check-run annotations 或 job 步骤结果间接获取。
 

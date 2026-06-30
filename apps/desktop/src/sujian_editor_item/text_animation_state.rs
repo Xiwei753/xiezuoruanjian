@@ -7,6 +7,75 @@ pub(crate) enum TextAnimationKind {
     Delete,
 }
 
+/// 统一动画判定结果。
+///
+/// Rust 创建 hidden range 前和 QML 创建 ghost 前必须使用同一套规则，
+/// 避免 Rust 已经 hidden range 但 QML 跳过导致文字短暂消失。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AnimationDecision {
+    /// 完全不做动画（不创建 hidden range，不创建 ghost）
+    NoAnimation,
+    /// 只做光标动画（不创建 hidden range，不创建文字 ghost）
+    CursorOnly,
+    /// 完整动画（创建 hidden range + 文字 ghost + 光标动画）
+    FullAnimation,
+}
+
+/// 统一动画判定函数。
+///
+/// Rust 侧 `record_transaction` 和 QML 侧 `EditorAnimationOverlay` 必须使用
+/// 相同的判定规则，确保 hidden range 和 ghost 的创建/跳过完全一致。
+///
+/// 规则：
+/// - glyph 为空：不动画
+/// - glyph 超过上限（8）：不动画
+/// - 包含换行：文字不动画，但光标仍可动画（CursorOnly）
+/// - scrolling/loading/settings/applyingFormat：不动画
+/// - component not ready：不动画
+/// - 不动画时绝对不能 start_insert hidden range
+/// - 如果已经 start_insert 但 overlay 跳过，必须立即 clear_active_text_animations
+pub(crate) fn should_create_text_animation(
+    glyph_count: usize,
+    contains_newline: bool,
+    is_scrolling: bool,
+    is_loading: bool,
+    is_applying_format: bool,
+    is_applying_settings: bool,
+    animation_enabled: bool,
+    component_ready: bool,
+) -> AnimationDecision {
+    const MAX_GLYPH_COUNT: usize = 8;
+
+    // 全局抑制条件：这些情况下完全不做动画
+    if !animation_enabled {
+        return AnimationDecision::NoAnimation;
+    }
+    if is_scrolling || is_loading || is_applying_format || is_applying_settings {
+        return AnimationDecision::NoAnimation;
+    }
+    if !component_ready {
+        return AnimationDecision::NoAnimation;
+    }
+
+    // Glyph 为空：不动画
+    if glyph_count == 0 {
+        return AnimationDecision::NoAnimation;
+    }
+
+    // Glyph 超过上限：不动画
+    if glyph_count > MAX_GLYPH_COUNT {
+        return AnimationDecision::NoAnimation;
+    }
+
+    // 包含换行：文字不动画，但光标仍可动画
+    if contains_newline {
+        return AnimationDecision::CursorOnly;
+    }
+
+    // 所有条件通过：完整动画
+    AnimationDecision::FullAnimation
+}
+
 /// 单个活跃动画条目
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveTextAnimation {
@@ -328,5 +397,189 @@ mod tests {
         state.clear();
         assert!(state.is_empty(), "clear() should remove both Insert and Delete animations");
         assert_eq!(state.active_insert_byte_range(), None);
+    }
+
+    // --- should_create_text_animation unified decision tests ---
+
+    #[test]
+    fn test_should_create_animation_full() {
+        let decision = should_create_text_animation(
+            3,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::FullAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_empty_glyphs() {
+        let decision = should_create_text_animation(
+            0,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_glyph_over_limit() {
+        let decision = should_create_text_animation(
+            9,    // glyph_count > 8
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_contains_newline() {
+        let decision = should_create_text_animation(
+            1,    // glyph_count
+            true, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::CursorOnly);
+    }
+
+    #[test]
+    fn test_should_create_animation_scrolling() {
+        let decision = should_create_text_animation(
+            1,    // glyph_count
+            false, // contains_newline
+            true, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_loading() {
+        let decision = should_create_text_animation(
+            1,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            true, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_disabled() {
+        let decision = should_create_text_animation(
+            1,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            false, // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_component_not_ready() {
+        let decision = should_create_text_animation(
+            1,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            false, // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_exactly_at_limit() {
+        // glyph_count == 8 should still be FullAnimation
+        let decision = should_create_text_animation(
+            8,    // glyph_count == MAX_GLYPH_COUNT
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::FullAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_applying_format() {
+        let decision = should_create_text_animation(
+            1,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            true, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_applying_settings() {
+        let decision = should_create_text_animation(
+            1,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            true, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_should_create_animation_newline_overrides_glyph_count() {
+        // Even with valid glyph_count, newline means CursorOnly
+        let decision = should_create_text_animation(
+            5,    // glyph_count
+            true, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::CursorOnly);
     }
 }
