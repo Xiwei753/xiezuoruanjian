@@ -261,11 +261,11 @@ class ThemePaletteHelperTest {
         // Verify some actual colour values are present
         assertTrue(
             "JSON should contain a light_primary hex value from attr",
-            jsonStr.contains("\"light_primary\":\"#")
+            jsonStr!!.contains("\"light_primary\":\"#")
         )
         assertTrue(
             "JSON should contain a dark_primary hex value from attr",
-            jsonStr.contains("\"dark_primary\":\"#")
+            jsonStr!!.contains("\"dark_primary\":\"#")
         )
     }
 
