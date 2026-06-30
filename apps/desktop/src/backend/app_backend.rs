@@ -276,8 +276,9 @@ pub struct AppBackend {
     current_setting_typing_animation_duration_ms: u32,
     current_setting_smooth_cursor_duration_ms: u32,
     current_setting_coordinated_text_cursor_animation_enabled: bool,
-    current_setting_diagnostics_enabled: bool,
-    current_setting_diagnostics_verbose: bool,
+    // alpha 阶段 diagnostics 默认 true（与 core settings 和 diagnostics 全局 AtomicBool 对齐）
+    pub(crate) current_setting_diagnostics_enabled: bool,
+    pub(crate) current_setting_diagnostics_verbose: bool,
 
     // ── Layout Policy ──
     resolve_layout: qt_method!(fn(&self, width_vp: f64, height_vp: f64, safe_top_vp: f64, safe_bottom_vp: f64, keyboard_visible: bool, fold_posture: QString, orientation: QString, pointer: QString) -> QJsonObject),

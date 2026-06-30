@@ -225,6 +225,7 @@ Rectangle {
                 onTriggered: {
                     if (root.backendRef && sidebarRect.width > 0 && Math.abs(root.backendRef.setting_desktop_sidebar_width - sidebarRect.width) >= 1.0) {
                         root.backendRef.setting_desktop_sidebar_width = sidebarRect.width;
+                        if (settingsBackend) settingsBackend.debounced_save_local_settings();
                     }
                 }
             }
@@ -549,16 +550,19 @@ Rectangle {
                 onFontSizeChanged: function(size) {
                     if (settingsBackend) {
                         settingsBackend.setting_font_size = size;
+                        settingsBackend.debounced_save_local_settings();
                     }
                 }
                 onLineSpacingChanged: function(spacing) {
                     if (settingsBackend) {
                         settingsBackend.setting_line_spacing = spacing;
+                        settingsBackend.debounced_save_local_settings();
                     }
                 }
                 onFirstLineIndentToggled: {
                     if (settingsBackend) {
                         settingsBackend.setting_auto_indent_enabled = !settingsBackend.setting_auto_indent_enabled;
+                        settingsBackend.debounced_save_local_settings();
                     }
                 }
                 onFormatOneClick: editorController.formatText()
@@ -639,6 +643,7 @@ Rectangle {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
                                 settingsBackend.setting_desktop_editor_width = newWidth;
+                                settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }
@@ -676,6 +681,7 @@ Rectangle {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
                                 settingsBackend.setting_desktop_editor_width = newWidth;
+                                settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }
@@ -886,6 +892,12 @@ Rectangle {
                         onInsertAnimationFinished: function(byteStart, byteEnd) {
                             sujianEditor.on_insert_animation_finished(byteStart, byteEnd)
                         }
+
+                        // Insert 动画被跳过时通知 Rust 清除 hidden range
+                        // 防止 Rust 已创建 hidden range 但 QML 跳过动画导致文字消失
+                        onInsertAnimationSkipped: function(byteStart, byteEnd) {
+                            sujianEditor.on_insert_animation_skipped(byteStart, byteEnd)
+                        }
                     }
 
                     EditorWheelScroller {
@@ -1008,6 +1020,16 @@ Rectangle {
             if (editorController.chapterId) {
                 console.log("[QML] chapter_id_changed_focus_requested chapterId=" + editorController.chapterId);
                 root.requestEditorFocus();
+                // 保存导航状态（包含当前章节信息）
+                if (workspaceBackend) {
+                    workspaceBackend.save_last_navigation_state(
+                        "writing",
+                        root.workspaceProjectId || "",
+                        editorController.volumeId || "",
+                        editorController.chapterId || "",
+                        ""
+                    );
+                }
             }
         }
     }

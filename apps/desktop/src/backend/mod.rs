@@ -77,7 +77,14 @@ pub struct BackendRuntime {
 
 impl BackendRuntime {
     pub fn new() -> Self {
-        let app_backend = QObjectBox::new(AppBackend::default());
+        let mut app_backend = QObjectBox::new(AppBackend::default());
+        // alpha 阶段 diagnostics 默认 true，覆盖 Default trait 的 false
+        {
+            let pinned = app_backend.pinned();
+            let mut r = pinned.borrow_mut();
+            r.current_setting_diagnostics_enabled = true;
+            r.current_setting_diagnostics_verbose = true;
+        }
         let app_ptr = SafeAppPtr::new();
         // SAFETY: app_backend is heap-allocated inside QObjectBox and pinned
         // for the entire lifetime of BackendRuntime. The pointer remains valid

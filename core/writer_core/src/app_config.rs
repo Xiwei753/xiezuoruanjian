@@ -37,6 +37,16 @@ const CONFIG_FILE_NAME: &str = "app_config.json";
 pub struct AppConfig {
     #[serde(default)]
     pub last_workspace_path: Option<String>,
+    #[serde(default)]
+    pub last_route: Option<String>,
+    #[serde(default)]
+    pub last_project_id: Option<String>,
+    #[serde(default)]
+    pub last_volume_id: Option<String>,
+    #[serde(default)]
+    pub last_chapter_id: Option<String>,
+    #[serde(default)]
+    pub last_starmap_id: Option<String>,
 }
 
 fn config_dir() -> Option<PathBuf> {
@@ -91,4 +101,54 @@ pub fn clear_last_workspace_path() -> Result<(), String> {
     let mut config = load_app_config();
     config.last_workspace_path = None;
     save_app_config(&config)
+}
+
+/// 保存上次导航状态（路由、项目ID、卷ID、章节ID、星图ID）
+pub fn save_last_navigation_state(
+    route: &str,
+    project_id: Option<&str>,
+    volume_id: Option<&str>,
+    chapter_id: Option<&str>,
+    starmap_id: Option<&str>,
+) -> Result<(), String> {
+    let mut config = load_app_config();
+    config.last_route = if route.is_empty() { None } else { Some(route.to_string()) };
+    config.last_project_id = project_id.map(|s| s.to_string());
+    config.last_volume_id = volume_id.map(|s| s.to_string());
+    config.last_chapter_id = chapter_id.map(|s| s.to_string());
+    config.last_starmap_id = starmap_id.map(|s| s.to_string());
+    save_app_config(&config)
+}
+
+/// 获取上次导航状态
+pub fn get_last_navigation_state() -> NavigationState {
+    let config = load_app_config();
+    NavigationState {
+        route: config.last_route,
+        project_id: config.last_project_id,
+        volume_id: config.last_volume_id,
+        chapter_id: config.last_chapter_id,
+        starmap_id: config.last_starmap_id,
+    }
+}
+
+/// 清除上次导航状态
+pub fn clear_last_navigation_state() -> Result<(), String> {
+    let mut config = load_app_config();
+    config.last_route = None;
+    config.last_project_id = None;
+    config.last_volume_id = None;
+    config.last_chapter_id = None;
+    config.last_starmap_id = None;
+    save_app_config(&config)
+}
+
+/// 上次导航状态
+#[derive(Debug, Clone, Default)]
+pub struct NavigationState {
+    pub route: Option<String>,
+    pub project_id: Option<String>,
+    pub volume_id: Option<String>,
+    pub chapter_id: Option<String>,
+    pub starmap_id: Option<String>,
 }

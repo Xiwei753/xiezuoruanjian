@@ -42,15 +42,25 @@ pub struct SettingsBackend {
     setting_diagnostics_enabled: qt_property!(bool; READ setting_diagnostics_enabled WRITE set_setting_diagnostics_enabled NOTIFY settings_changed),
     setting_diagnostics_verbose: qt_property!(bool; READ setting_diagnostics_verbose WRITE set_setting_diagnostics_verbose NOTIFY settings_changed),
     settings_changed: qt_signal!(),
+    /// 设置变更后发出，QML 层用 Timer 延迟调用 do_save_local_settings()
+    save_requested: qt_signal!(),
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),
     load_local_settings: qt_method!(fn(&mut self)),
     save_local_settings: qt_method!(fn(&mut self) -> bool),
+    /// 标记设置已变更，需要保存。QML 层用 Timer 延迟调用 do_save_local_settings()
+    debounced_save_local_settings: qt_method!(fn(&mut self)),
+    /// 实际执行保存（由 QML Timer 触发或应用关闭时调用）
+    do_save_local_settings: qt_method!(fn(&mut self) -> bool),
+    /// 应用关闭前 flush pending save
+    flush_pending_settings_save: qt_method!(fn(&mut self) -> bool),
     export_diagnostics_pack: qt_method!(fn(&self) -> QString),
     clear_logs: qt_method!(fn(&self) -> QString),
     copy_device_info: qt_method!(fn(&self) -> QString),
     open_log_directory: qt_method!(fn(&self) -> QString),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
+    /// 标记是否有待保存的设置
+    pending_save: bool,
     app: SafeAppPtr,
 }
 
@@ -234,22 +244,47 @@ impl SettingsBackend {
         self.settings_changed();
     }
     fn save_local_settings(&mut self) -> bool {
+        self.pending_save = false;
         self.with_app_mut(false, |app| app.save_local_settings())
+    }
+
+    /// 标记设置已变更，需要延迟保存。
+    /// QML 层用 Timer 监听 save_requested 信号，延迟 300ms 后调用 do_save_local_settings()。
+    fn debounced_save_local_settings(&mut self) {
+        self.pending_save = true;
+        self.save_requested();
+    }
+
+    /// 实际执行保存（由 QML Timer 触发）
+    fn do_save_local_settings(&mut self) -> bool {
+        if !self.pending_save {
+            return true; // 没有待保存的设置
+        }
+        self.save_local_settings()
+    }
+
+    /// 应用关闭前 flush pending save
+    fn flush_pending_settings_save(&mut self) -> bool {
+        if self.pending_save {
+            self.save_local_settings()
+        } else {
+            true
+        }
     }
 
     fn export_diagnostics_pack(&self) -> QString {
         self.with_app("".into(), |app| {
-            let log_dir = crate::backend::diagnostics::get_log_dir(
-                &std::path::PathBuf::from(&app.current_workspace),
-            );
+            let workspace_path = std::path::PathBuf::from(&app.current_workspace);
+            let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
             match crate::backend::diagnostics::export_diagnostics_pack(
-                &std::path::PathBuf::from(&app.current_workspace),
+                &workspace_path,
                 &log_dir,
             ) {
                 Ok(path) => path.to_string_lossy().to_string().into(),
                 Err(e) => {
                     eprintln!("[SettingsBackend] export_diagnostics_pack failed: {}", e);
-                    "".into()
+                    // 返回具体错误文本，不要只返回空字符串
+                    format!("error.export_failed: {}", e).into()
                 }
             }
         })

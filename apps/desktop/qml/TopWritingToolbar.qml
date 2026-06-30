@@ -656,6 +656,7 @@ Rectangle {
                         onMoved: {
                             if (settingsBackend) {
                                 settingsBackend.setting_desktop_editor_width = value;
+                                settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }

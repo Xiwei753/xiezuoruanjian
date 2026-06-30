@@ -240,6 +240,30 @@ ApplicationWindow {
             editorBackend.flush_writing_stats();
             editorBackend.flush_recent_edits();
         }
+        // 应用关闭前 flush pending settings save
+        if (settingsBackend) {
+            settingsBackend.flush_pending_settings_save();
+        }
+    }
+
+    // ── Debounced settings save Timer ──
+    // settingsBackend.save_requested 信号触发后，延迟 300ms 执行实际保存
+    Timer {
+        id: settingsDebounceSaveTimer
+        interval: 300
+        repeat: false
+        onTriggered: {
+            if (settingsBackend) {
+                settingsBackend.do_save_local_settings();
+            }
+        }
+    }
+
+    Connections {
+        target: settingsBackend
+        function onSave_requested() {
+            settingsDebounceSaveTimer.restart();
+        }
     }
 
     Timer {

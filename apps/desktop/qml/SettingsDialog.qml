@@ -47,29 +47,27 @@ Dialog {
     header: null
 
     function saveAndNotify() { if (!backendRef || !root.settingsDirty) return; backendRef.save_local_settings(); root.settingsDirty = false; root.settingsChanged() }
-    // Debounced save: only saves after 300ms of inactivity.
-    // Slider onMoved should call this instead of saveAndNotify()
-    // to avoid saving on every slider tick.
+    // Debounced save: 使用 SettingsBackend 统一的 debounced_save_local_settings
+    // 所有设置入口共用同一个保存事务
     function debouncedSave() {
         if (!backendRef) return
         root.settingsDirty = true
-        if (_saveTimer) _saveTimer.destroy()
-        _saveTimer = Qt.createQmlObject('import QtQuick; Timer { interval: 300; onTriggered: { root.saveAndNotify() } }', root)
-        _saveTimer.start()
+        backendRef.debounced_save_local_settings()
     }
     // Force-save: called when dialog closes.
     // Only saves if settingsDirty is true.
     function flushSave() {
-        if (_saveTimer) { _saveTimer.stop(); _saveTimer.destroy(); _saveTimer = null }
         if (!root.settingsDirty) return
-        saveAndNotify()
+        if (backendRef) backendRef.flush_pending_settings_save()
+        root.settingsDirty = false
+        root.settingsChanged()
     }
     function setSwitchValue(control, key, value) {
         control.checked = value
         if (!backendRef || updatingValues) return
         backendRef[key] = value
         root.settingsDirty = true
-        saveAndNotify()
+        debouncedSave()
     }
     function updateValues() {
         if (!backendRef) return
@@ -383,8 +381,34 @@ Dialog {
                         if (!root.backendRef) return
                         var info = root.backendRef.copy_device_info()
                         if (info && info.length > 0) {
-                            root.backendRef.copy_text_to_clipboard(info)
+                            var result = root.backendRef.copy_text_to_clipboard(info)
+                            // result 是 JSON envelope：success=true 表示成功
+                            try {
+                                var obj = JSON.parse(result)
+                                if (obj.success) {
+                                    deviceInfoFeedback.message = qsTr("已复制")
+                                } else {
+                                    deviceInfoFeedback.message = qsTr("复制失败：") + (obj.messageKey || obj.rawError || qsTr("未知错误"))
+                                }
+                            } catch(e) {
+                                if (result === "ok" || result.length > 0) {
+                                    deviceInfoFeedback.message = qsTr("已复制")
+                                } else {
+                                    deviceInfoFeedback.message = qsTr("复制失败")
+                                }
+                            }
+                        } else {
+                            deviceInfoFeedback.message = qsTr("获取设备信息失败")
                         }
+                    }
+                    AppText {
+                        id: deviceInfoFeedback
+                        property string message: ""
+                        visible: message.length > 0
+                        text: deviceInfoFeedback.message
+                        color: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
+                        font.pixelSize: dt ? dt.caption : 12
+                        font.family: dt ? dt.fontFamily : "sans-serif"
                     }
                 }
                 SettingsRow {

@@ -154,15 +154,16 @@ Rectangle {
                             }
 
                             AppText {
-                                text: {
-                                    var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                                    if (s === "success") return qsTr("已同步");
-                                    if (s === "syncing") return qsTr("同步中");
-                                    if (s === "error") return qsTr("同步失败");
-                                    if (s === "conflict") return qsTr("冲突");
-                                    if (s === "partial_conflict") return qsTr("正文冲突");
-                                    return qsTr("已配置");
-                                }
+                                 text: {
+                                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
+                                     if (s === "success") return qsTr("已同步");
+                                     if (s === "syncing") return qsTr("同步中");
+                                     if (s === "error") return qsTr("同步失败");
+                                     if (s === "conflict") return qsTr("同步冲突");
+                                     if (s === "partial_conflict") return qsTr("同步冲突");
+                                     // 已配置但无特定状态时显示"同步"
+                                     return qsTr("同步");
+                                 }
                                 color: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
                                 font.pixelSize: dt ? dt.caption : 12
                                 font.family: dt ? dt.fontFamily : "sans-serif"
@@ -176,7 +177,12 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: root.openSettings()
+                            onClicked: {
+                                // 点击"同步"优先触发同步；需要改配置再进入同步设置页
+                                if (syncBackend && !syncBackend.sync_in_progress) {
+                                    syncBackend.perform_sync();
+                                }
+                            }
                         }
                     }
 

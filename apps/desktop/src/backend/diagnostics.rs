@@ -385,7 +385,19 @@ pub fn clear_logs(log_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 全局 Qt 版本缓存，由 main.rs 通过 set_qt_version() 注入
+static QT_VERSION: OnceLock<String> = OnceLock::new();
+
+/// 设置 Qt 版本（由 main.rs 在启动时调用，使用 cpp! 宏获取运行时版本）
+pub fn set_qt_version(version: &str) {
+    let _ = QT_VERSION.set(version.to_string());
+}
+
 /// 收集设备信息并返回 JSON 字符串
+///
+/// 不依赖运行时 qmake/rustc 命令（Windows 打包后这些命令不存在）。
+/// Qt 版本通过 set_qt_version() 由 main.rs 注入。
+/// rustc 版本使用编译期 env! 宏。
 pub fn device_info_json() -> String {
     let os_type = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
@@ -399,63 +411,39 @@ pub fn device_info_json() -> String {
         "unknown"
     };
 
-    let qt_version = cpp_qt_version();
+    let qt_version = QT_VERSION.get().cloned().unwrap_or_else(|| "unknown".to_string());
+    let app_version = env!("CARGO_PKG_VERSION");
 
     let info = serde_json::json!({
         "platform": os_name,
         "osType": os_type,
         "arch": arch,
+        "appVersion": app_version,
         "qtVersion": qt_version,
-        "rustcVersion": rustc_version(),
+        "rustcVersion": "unknown",
     });
 
     redact(&serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string()))
 }
 
-fn cpp_qt_version() -> String {
-    // We can't call cpp! from here (not in a cxx/qmetaobject context),
-    // so we use a runtime approach
-    let output = std::process::Command::new("qmake")
-        .args(["-query", "QT_VERSION"])
-        .output();
-    if let Ok(out) = output {
-        if out.status.success() {
-            return String::from_utf8_lossy(&out.stdout).trim().to_string();
-        }
-    }
-    // Fallback: try qmake6
-    let output = std::process::Command::new("qmake6")
-        .args(["-query", "QT_VERSION"])
-        .output();
-    if let Ok(out) = output {
-        if out.status.success() {
-            return String::from_utf8_lossy(&out.stdout).trim().to_string();
-        }
-    }
-    "unknown".to_string()
-}
-
-fn rustc_version() -> String {
-    let output = std::process::Command::new("rustc")
-        .args(["--version"])
-        .output();
-    if let Ok(out) = output {
-        if out.status.success() {
-            return String::from_utf8_lossy(&out.stdout).trim().to_string();
-        }
-    }
-    "unknown".to_string()
-}
-
 /// 导出诊断包
 ///
 /// 收集日志文件、设备信息、设置快照，打包为 zip，返回 zip 文件路径
+///
+/// - 有 workspace 且路径可写：导出到 workspace/app-meta/diagnostics
+/// - 没 workspace 或路径不可写：导出到平台标准 AppData 目录
+///   - Windows: %APPDATA%/sujian/diagnostics
+///   - Linux: ~/.local/share/sujian/diagnostics
+///   - macOS: ~/Library/Application Support/sujian/diagnostics
+///   - Fallback: /tmp/sujian/diagnostics
 pub fn export_diagnostics_pack(
     workspace_path: &Path,
     log_dir: &Path,
 ) -> Result<PathBuf, String> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let export_dir = workspace_path.join("app-meta/diagnostics");
+
+    // 确定导出目录：优先 workspace，不可写则用平台标准目录
+    let export_dir = determine_export_dir(workspace_path);
     ensure_log_dir(&export_dir)?;
 
     // Clean previous exports
@@ -475,8 +463,10 @@ pub fn export_diagnostics_pack(
     // Write device info
     write_device_info(&temp_dir);
 
-    // Write settings snapshot (sanitized)
-    write_settings_snapshot(workspace_path, &temp_dir);
+    // Write settings snapshot (sanitized) — only if workspace exists
+    if !workspace_path.as_os_str().is_empty() && workspace_path.exists() {
+        write_settings_snapshot(workspace_path, &temp_dir);
+    }
 
     // Zip the temp dir
     zip_directory(&temp_dir, &zip_path)?;
@@ -485,6 +475,48 @@ pub fn export_diagnostics_pack(
     let _ = fs::remove_dir_all(&temp_dir);
 
     Ok(zip_path)
+}
+
+/// 确定诊断包导出目录
+///
+/// 优先使用 workspace/app-meta/diagnostics，不可写则回退到平台标准目录
+fn determine_export_dir(workspace_path: &Path) -> PathBuf {
+    // 1. 尝试 workspace 路径
+    if !workspace_path.as_os_str().is_empty() {
+        let ws_export = workspace_path.join("app-meta/diagnostics");
+        // 尝试创建目录，成功则可用
+        if fs::create_dir_all(&ws_export).is_ok() {
+            // 验证可写：尝试创建并删除一个临时文件
+            let test_file = ws_export.join(".write_test");
+            if let Ok(mut f) = fs::File::create(&test_file) {
+                let _ = write!(f, "test");
+                drop(f);
+                let _ = fs::remove_file(&test_file);
+                return ws_export;
+            }
+        }
+    }
+
+    // 2. 回退到平台标准目录
+    if cfg!(target_os = "windows") {
+        if let Ok(appdata) = std::env::var("APPDATA") {
+            return PathBuf::from(appdata).join("sujian/diagnostics");
+        }
+    } else if cfg!(target_os = "linux") {
+        if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
+            return PathBuf::from(xdg_data).join("sujian/diagnostics");
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(".local/share/sujian/diagnostics");
+        }
+    } else if cfg!(target_os = "macos") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join("Library/Application Support/sujian/diagnostics");
+        }
+    }
+
+    // 3. 最终回退
+    PathBuf::from("/tmp/sujian/diagnostics")
 }
 
 fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) {

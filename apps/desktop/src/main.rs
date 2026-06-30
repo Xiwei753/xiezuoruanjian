@@ -314,6 +314,12 @@ fn main() {
 
     debug_log_static("app", "app_startup", "Sujian application starting...");
     diagnostics::log_to_file("INFO", "app", "app_startup", "Sujian application starting...");
+
+    // 注入 Qt 运行时版本到 diagnostics 模块（避免运行时调用 qmake 命令）
+    let qt_ver = qt_runtime_version();
+    diagnostics::set_qt_version(&qt_ver);
+    debug_log_static("app", "qt_version", &format!("Qt runtime version: {}", qt_ver));
+
     fail_if_not_qt6();
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();

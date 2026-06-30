@@ -63,6 +63,9 @@ pub struct WorkspaceBackend {
     ),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     open_workspace_dir: qt_method!(fn(&mut self)),
+    save_last_navigation_state: qt_method!(fn(&mut self, route: QString, project_id: QString, volume_id: QString, chapter_id: QString, starmap_id: QString)),
+    get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
+    clear_last_navigation_state: qt_method!(fn(&mut self)),
     app: SafeAppPtr,
 }
 
@@ -241,6 +244,41 @@ impl WorkspaceBackend {
     }
     fn open_workspace_dir(&mut self) {
         self.with_app_mut((), |app| app.open_workspace_dir());
+    }
+    fn save_last_navigation_state(
+        &mut self,
+        route: QString,
+        project_id: QString,
+        volume_id: QString,
+        chapter_id: QString,
+        starmap_id: QString,
+    ) {
+        let r = route.to_string();
+        let p = project_id.to_string();
+        let v = volume_id.to_string();
+        let c = chapter_id.to_string();
+        let s = starmap_id.to_string();
+        let _ = writer_core::app_config::save_last_navigation_state(
+            &r,
+            if p.is_empty() { None } else { Some(&p) },
+            if v.is_empty() { None } else { Some(&v) },
+            if c.is_empty() { None } else { Some(&c) },
+            if s.is_empty() { None } else { Some(&s) },
+        );
+    }
+    fn get_last_navigation_state(&self) -> QJsonObject {
+        let state = writer_core::app_config::get_last_navigation_state();
+        let json = serde_json::json!({
+            "route": state.route.unwrap_or_default(),
+            "projectId": state.project_id.unwrap_or_default(),
+            "volumeId": state.volume_id.unwrap_or_default(),
+            "chapterId": state.chapter_id.unwrap_or_default(),
+            "starmapId": state.starmap_id.unwrap_or_default(),
+        });
+        qjson_object_from_json(&serde_json::to_string(&json).unwrap_or_else(|_| "{}".to_string()))
+    }
+    fn clear_last_navigation_state(&mut self) {
+        let _ = writer_core::app_config::clear_last_navigation_state();
     }
 }
 

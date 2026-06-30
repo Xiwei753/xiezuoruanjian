@@ -106,6 +106,60 @@ QtObject {
         if (appApi) appApi.query_system_color_scheme();
         workspaceApi.try_restore_last_workspace();
         refreshState(qsTr("恢复工作区失败"));
+
+        // 恢复上次导航状态
+        if (workspaceApi.has_workspace) {
+            var navState = workspaceApi.get_last_navigation_state();
+            if (navState && navState.route) {
+                var route = navState.route;
+                if (route === "writing" && navState.projectId) {
+                    // 验证 project 仍存在
+                    var found = false;
+                    if (appState && appState.tree) {
+                        for (var i = 0; i < appState.tree.length; i++) {
+                            if (appState.tree[i].id === navState.projectId) {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (found) {
+                        writingProjectId = navState.projectId;
+                        writingProjectTitle = "";
+                        starmapId = "";
+                        starmapTitle = "";
+                        controller.route = "writing";
+                        // 如果有章节信息，设置选中章节
+                        if (navState.volumeId && navState.chapterId && editorBackend) {
+                            editorBackend.selected_project_id = navState.projectId;
+                            editorBackend.selected_volume_id = navState.volumeId;
+                            editorBackend.selected_chapter_id = navState.chapterId;
+                        }
+                    } else {
+                        // 章节不存在，退回 hub
+                        controller.route = "hub";
+                    }
+                } else if (route === "starmap" && navState.starmapId) {
+                    starmapId = navState.starmapId;
+                    starmapTitle = "";
+                    writingProjectId = "";
+                    writingProjectTitle = "";
+                    controller.route = "starmap";
+                } else {
+                    controller.route = "hub";
+                }
+            }
+        }
+    }
+
+    function saveNavigationState() {
+        var workspaceApi = workspaceBackendRef || backendRef;
+        if (!workspaceApi) return;
+        var projectId = writingProjectId || "";
+        var volumeId = (editorBackend && editorBackend.selected_volume_id) ? editorBackend.selected_volume_id : "";
+        var chapterId = (editorBackend && editorBackend.selected_chapter_id) ? editorBackend.selected_chapter_id : "";
+        var smId = starmapId || "";
+        workspaceApi.save_last_navigation_state(route, projectId, volumeId, chapterId, smId);
     }
 
     function openWriting(projectId, projectTitle) {
@@ -114,6 +168,7 @@ QtObject {
         starmapId = "";
         starmapTitle = "";
         route = "writing";
+        saveNavigationState();
     }
 
     function openStarmap(id, title) {
@@ -122,6 +177,7 @@ QtObject {
         writingProjectId = "";
         writingProjectTitle = "";
         route = "starmap";
+        saveNavigationState();
     }
 
     function openHub() {
@@ -130,6 +186,7 @@ QtObject {
         writingProjectTitle = "";
         starmapId = "";
         starmapTitle = "";
+        saveNavigationState();
         refreshState(qsTr("返回工作台失败"));
     }
 
@@ -138,6 +195,8 @@ QtObject {
         if (!workspaceApi) return;
         workspaceApi.switch_workspace();
         route = "hub";
+        // 清除导航状态（切换工作区后旧状态无效）
+        workspaceApi.clear_last_navigation_state();
         refreshState(qsTr("切换工作区失败"));
     }
 

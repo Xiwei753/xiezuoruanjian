@@ -84,7 +84,7 @@ Item {
         var s = root.currentSyncStatus
         if (s === "success") return qsTr("已同步")
         if (s === "syncing") return qsTr("同步中")
-        if (s === "conflict") return qsTr("存在冲突")
+        if (s === "conflict") return qsTr("同步冲突")
         if (s === "partial_conflict") return qsTr("部分同步，存在正文冲突")
         if (s === "dry_run_success") return qsTr("检查成功")
         if (s === "diagnostics_success") return qsTr("诊断成功")
@@ -95,8 +95,8 @@ Item {
         if (s === "remote_branch_missing" || s === "branch_missing") return qsTr("远程分支不存在")
         if (s === "network_failed") return qsTr("网络连接失败")
         if (root.isFailureStatus(s)) return qsTr("同步失败")
-        if (root.backendRef && root.backendRef.sync_enabled) return qsTr("已配置")
-        return qsTr("未配置")
+        if (root.backendRef && root.backendRef.sync_enabled) return qsTr("同步")
+        return qsTr("配置同步")
     }
 
     Connections {
