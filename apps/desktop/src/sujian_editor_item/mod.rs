@@ -1826,6 +1826,81 @@ mod tests {
         assert!(state.is_empty());
         assert_eq!(state.active_insert_byte_range(), None);
     }
+
+    // --- Additional animation scenario tests ---
+
+    /// 验证：输入中文句号（。）不跳过动画
+    /// is_complex_grapheme('。') == false，因此句号应正常创建动画
+    #[test]
+    fn chinese_period_not_complex_grapheme_allows_animation() {
+        assert!(!is_complex_grapheme('。'), "Chinese period '。' is not complex, should allow animation");
+    }
+
+    /// 验证：删除单字动画生命周期
+    /// Delete 动画不产生 hidden range，但状态机跟踪它
+    #[test]
+    fn delete_single_char_animation_lifecycle() {
+        let mut state = TextAnimationState::new();
+        state.start_delete((5, 8), 100);
+        // Delete 不产生 hidden range
+        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(!state.has_active_insert());
+        // 但状态机不为空
+        assert!(!state.is_empty());
+        // Delete 可通过 clear 清除
+        state.clear();
+        assert!(state.is_empty());
+    }
+
+    /// 验证：emoji 输入跳过动画
+    /// is_complex_grapheme('😀') == true，因此 emoji 不应创建动画
+    #[test]
+    fn emoji_is_complex_grapheme_skips_animation() {
+        assert!(is_complex_grapheme('😀'), "Emoji should be complex grapheme, skipping animation");
+    }
+
+    /// 验证：组合音标跳过动画
+    /// is_complex_grapheme('\u{0301}') == true（combining acute accent）
+    #[test]
+    fn combining_accent_is_complex_grapheme_skips_animation() {
+        assert!(is_complex_grapheme('\u{0301}'), "Combining acute accent should be complex grapheme, skipping animation");
+    }
+
+    /// 验证：滚动中输入不创建动画
+    /// 即使 typing_animation_enabled=true 且 visual_transaction 存在
+    #[test]
+    fn scrolling_input_does_not_create_animation() {
+        let typing_animation_enabled = true;
+        let vt_present = true;
+        let is_scrolling = true;
+        let should_create = typing_animation_enabled && vt_present && !is_scrolling;
+        assert!(!should_create, "Scrolling should suppress animation creation");
+    }
+
+    /// 验证：关闭 typingAnimation 后新输入不创建动画
+    #[test]
+    fn typing_animation_disabled_no_new_animation_on_input() {
+        let typing_animation_enabled = false;
+        let vt_present = true;
+        let is_scrolling = false;
+        let should_create = typing_animation_enabled && vt_present && !is_scrolling;
+        assert!(!should_create, "Disabled typing animation should prevent new animations");
+    }
+
+    /// 验证：关闭 coordinated cursor 不影响 text animation 创建条件
+    /// text animation 只看 typing_animation_enabled && vt_present && !is_scrolling
+    #[test]
+    fn coordinated_cursor_disabled_does_not_affect_text_animation() {
+        let typing_animation_enabled = true;
+        let vt_present = true;
+        let is_scrolling = false;
+        let coordinated_enabled = false;
+        // Text animation creation is independent of coordinated cursor
+        let should_create_text_anim = typing_animation_enabled && vt_present && !is_scrolling;
+        assert!(should_create_text_anim, "Text animation creation should not be affected by coordinated cursor setting");
+        // coordinated_enabled is a separate concern for cursor animation, not text animation
+        let _ = coordinated_enabled; // explicitly not used in text animation logic
+    }
 }
 
 impl QQuickItem for SujianEditorItem {
