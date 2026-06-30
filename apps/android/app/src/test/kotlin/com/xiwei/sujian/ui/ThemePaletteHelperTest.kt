@@ -66,10 +66,10 @@ class ThemePaletteHelperTest {
 
     @Test
     fun themePaletteJson_keyCountMatchesRustDto() {
-        // ThemePaletteDto 有 50 个字段（source + updated_at_ms + device_id + variant + 46 color fields）
+        // ThemePaletteDto 有 48 个字段（4 meta + 22 light + 22 dark）
         assertEquals(
             "Key count must match Rust ThemePaletteDto field count",
-            50,
+            48,
             expectedSnakeCaseKeys.size
         )
     }
