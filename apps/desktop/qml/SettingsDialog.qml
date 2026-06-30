@@ -391,20 +391,45 @@ Dialog {
                 }
             }
 
-            // ── 7. 关于/高级 (about) ──
+            // ── 7. 关于 (about) ──
             SettingsSection {
                 dt: root.dt
-                title: qsTr("关于/高级")
+                title: qsTr("关于")
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
-                    title: qsTr("工作区路径")
-                    description: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
+                    title: qsTr("应用名")
+                    description: qsTr("素笺写作")
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("作者")
+                    description: "Xiwei753"
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("项目地址")
+                    description: qsTr("GitHub: github.com/Xiwei753/xiezuoruanjian\nGitee 镜像: gitee.com/wei-xi753/xiezuoruanjian")
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("开源协议")
+                    description: "GPLv3"
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("镜像说明")
+                    description: qsTr("GitHub 为主仓库。Gitee 为镜像同步仓库，方便国内访问。")
                 }
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("版本信息")
-                    description: qsTr("Qt 桌面客户端")
+                    description: qsTr("Desktop Qt 客户端")
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("工作区路径")
+                    description: root.workspaceBackendRef ? root.workspaceBackendRef.workspace_path : qsTr("未加载")
                 }
                 SettingsRow {
                     dt: root.dt

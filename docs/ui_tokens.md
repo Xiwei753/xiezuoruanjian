@@ -125,3 +125,74 @@ Android 负责产出 Dynamic Color，其他端只消费同步 palette，不伪�
 - QML 中无新增硬编码圆角/阴影颜色
 - Android 中无新增硬编码 FAB 底部避让
 - monetColor 不再扩展
+
+---
+
+## 7. theme_palette 命名契约
+
+### 7.1 两层 JSON 不是同一个
+
+`theme_palette` 在系统中存在两层 JSON 序列化，**键名格式不同，不可混用**：
+
+| 层级 | 数据结构 | `serde` 属性 | JSON 键名格式 | 用途 |
+|------|---------|-------------|-------------|------|
+| **SyncableSettings 持久化层** | `SyncableSettings`（内嵌 `ThemePalette`） | `#[serde(rename_all = "camelCase")]` | camelCase（如 `lightSurfaceContainer`） | 写入 `settings.sync.json` 磁盘文件 |
+| **跨端 themePaletteJson 层** | `ThemePaletteDto` | 无 `rename_all` | snake_case（如 `light_surface_container`） | Android→Core 同步通道，`theme_palette_json` 字段传递 |
+
+**关键区别：**
+- `SyncableSettings` 和嵌套的 `ThemePalette` 都有 `#[serde(rename_all = "camelCase")]`，所以磁盘上的 JSON 键名是 camelCase。
+- `ThemePaletteDto` 没有 `rename_all`，所以 JSON 键名是 snake_case。Android `ThemePaletteHelper` 输出 snake_case JSON，Kotlin 端通过 `theme_palette_json` 字段传递。
+
+### 7.2 字段命名对照表（新增 surfaceContainer 字段）
+
+以下列出新增的 surfaceContainer 系列字段的命名对照：
+
+| Rust 字段 | 持久化 camelCase（settings.sync.json） | 跨端 snake_case（themePaletteJson） |
+|-----------|--------------------------------------|-----------------------------------|
+| `light_surface_container_lowest` | `lightSurfaceContainerLowest` | `light_surface_container_lowest` |
+| `light_surface_container_low` | `lightSurfaceContainerLow` | `light_surface_container_low` |
+| `light_surface_container` | `lightSurfaceContainer` | `light_surface_container` |
+| `light_surface_container_high` | `lightSurfaceContainerHigh` | `light_surface_container_high` |
+| `light_surface_container_highest` | `lightSurfaceContainerHighest` | `light_surface_container_highest` |
+| `dark_surface_container_lowest` | `darkSurfaceContainerLowest` | `dark_surface_container_lowest` |
+| `dark_surface_container_low` | `darkSurfaceContainerLow` | `dark_surface_container_low` |
+| `dark_surface_container` | `darkSurfaceContainer` | `dark_surface_container` |
+| `dark_surface_container_high` | `darkSurfaceContainerHigh` | `dark_surface_container_high` |
+| `dark_surface_container_highest` | `darkSurfaceContainerHighest` | `dark_surface_container_highest` |
+
+### 7.3 数据流路径
+
+```
+Android 产出
+  → ThemePaletteHelper.extractThemePaletteJson()
+  → snake_case JSON 字符串
+  → Core ThemePaletteDto 反序列化
+  → Core ThemePalette（camelCase 持久化到 settings.sync.json 磁盘）
+
+Core 磁盘读取
+  → SyncableSettings（camelCase JSON 反序列化）
+  → ThemePaletteDto（snake_case 序列化）
+  → 跨端同步（theme_palette_json 字段）
+```
+
+**详细流程：**
+1. Android 端通过 `ThemePaletteHelper.extractThemePaletteJson()` 产出 snake_case JSON 字符串。
+2. Kotlin 端将此 JSON 字符串放入 `SyncableSettingsDto.theme_palette_json` 字段，传给 Core。
+3. Core 的 `SyncableSettingsDto → SyncableSettings` 转换中，先从 `theme_palette_json` 解析出 `ThemePaletteDto`（snake_case），再转为 `ThemePalette`（camelCase）。
+4. `ThemePalette` 随 `SyncableSettings` 以 camelCase 序列化写入 `settings.sync.json`。
+5. 反向同步时，Core 读取 `settings.sync.json`（camelCase），转为 `ThemePaletteDto`（snake_case），序列化为 `theme_palette_json` 传给各端。
+
+### 7.4 旧数据兼容
+
+所有 `ThemePalette` 和 `ThemePaletteDto` 的字段都标注了 `#[serde(default)]`：
+- 旧数据缺少新增字段时，反序列化不会报错。
+- 缺失字段 fallback 为对应类型的默认值（`String` 为空字符串 `""`，`i64` 为 `0`）。
+- 不需要数据迁移脚本。
+
+### 7.5 非 Android 端只消费不同步
+
+- **只有 Android 端产出** `theme_palette`，其他端只消费。
+- 非 Android 端不读取壁纸色，不伪装莫奈。
+- Desktop 默认走 `SystemPalette` + 素笺纸面。
+- Harmony 默认走 HDS / 沉浸光感。
+- 只有同步仓库存在 `theme_palette.source = "android_dynamic_color"` 时，设置里才显示"使用 Android 同步主题色"开关。

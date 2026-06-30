@@ -132,8 +132,11 @@ object ThemePaletteHelper {
         ColorEntry("light_surface_variant",      M3Attr.colorSurfaceVariant,       systemColorResId = android.R.color.system_neutral2_200),
         ColorEntry("light_on_surface_variant",   M3Attr.colorOnSurfaceVariant,     systemColorResId = android.R.color.system_neutral2_700),
         // SurfaceContainer (API 33+)
-        ColorEntry("light_surface_container",      null, M3Attr.colorSurfaceContainer,     systemColorResId = android.R.color.system_neutral1_100),
-        ColorEntry("light_surface_container_high", null, M3Attr.colorSurfaceContainerHigh,  systemColorResId = android.R.color.system_neutral1_200),
+        ColorEntry("light_surface_container_lowest",  null, M3Attr.colorSurfaceContainerLowest,  systemColorResId = android.R.color.system_neutral1_50),
+        ColorEntry("light_surface_container_low",     null, M3Attr.colorSurfaceContainerLow,     systemColorResId = android.R.color.system_neutral1_100),
+        ColorEntry("light_surface_container",         null, M3Attr.colorSurfaceContainer,        systemColorResId = android.R.color.system_neutral1_100),
+        ColorEntry("light_surface_container_high",    null, M3Attr.colorSurfaceContainerHigh,    systemColorResId = android.R.color.system_neutral1_200),
+        ColorEntry("light_surface_container_highest", null, M3Attr.colorSurfaceContainerHighest, systemColorResId = android.R.color.system_neutral2_100),
         // Outline
         ColorEntry("light_outline",          M3Attr.colorOutline,          systemColorResId = android.R.color.system_neutral2_500),
         ColorEntry("light_outline_variant",  M3Attr.colorOutlineVariant,   systemColorResId = android.R.color.system_neutral2_200),
@@ -164,8 +167,11 @@ object ThemePaletteHelper {
         ColorEntry("dark_surface_variant",      M3Attr.colorSurfaceVariant,       systemColorResId = android.R.color.system_neutral2_700),
         ColorEntry("dark_on_surface_variant",   M3Attr.colorOnSurfaceVariant,     systemColorResId = android.R.color.system_neutral2_200),
         // SurfaceContainer (API 33+)
-        ColorEntry("dark_surface_container",      null, M3Attr.colorSurfaceContainer,     systemColorResId = android.R.color.system_neutral1_800),
-        ColorEntry("dark_surface_container_high", null, M3Attr.colorSurfaceContainerHigh,  systemColorResId = android.R.color.system_neutral1_700),
+        ColorEntry("dark_surface_container_lowest",  null, M3Attr.colorSurfaceContainerLowest,  systemColorResId = android.R.color.system_neutral1_900),
+        ColorEntry("dark_surface_container_low",     null, M3Attr.colorSurfaceContainerLow,     systemColorResId = android.R.color.system_neutral1_800),
+        ColorEntry("dark_surface_container",         null, M3Attr.colorSurfaceContainer,        systemColorResId = android.R.color.system_neutral1_800),
+        ColorEntry("dark_surface_container_high",    null, M3Attr.colorSurfaceContainerHigh,    systemColorResId = android.R.color.system_neutral1_700),
+        ColorEntry("dark_surface_container_highest", null, M3Attr.colorSurfaceContainerHighest, systemColorResId = android.R.color.system_neutral2_700),
         // Outline
         ColorEntry("dark_outline",          M3Attr.colorOutline,          systemColorResId = android.R.color.system_neutral2_500),
         ColorEntry("dark_outline_variant",  M3Attr.colorOutlineVariant,   systemColorResId = android.R.color.system_neutral2_700),

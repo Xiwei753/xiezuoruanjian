@@ -35,4 +35,13 @@
     <dimen name="elevation_1">1dp</dimen>
     <dimen name="elevation_2">3dp</dimen>
     <dimen name="elevation_3">6dp</dimen>
+
+    <!-- Spacing tokens -->
+    <dimen name="spacing_4">4dp</dimen>
+    <dimen name="spacing_8">8dp</dimen>
+    <dimen name="spacing_12">12dp</dimen>
+    <dimen name="spacing_16">16dp</dimen>
+    <dimen name="spacing_20">20dp</dimen>
+    <dimen name="spacing_24">24dp</dimen>
+    <dimen name="spacing_32">32dp</dimen>
 </resources>

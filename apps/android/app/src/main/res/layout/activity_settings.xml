@@ -633,6 +633,14 @@
                         android:layout_marginBottom="16dp"/>
 
                     <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnAbout"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:text="@string/about_btn_text"
+                        android:layout_marginBottom="8dp"/>
+
+                    <com.google.android.material.button.MaterialButton
                         android:id="@+id/btnActionRegistry"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"

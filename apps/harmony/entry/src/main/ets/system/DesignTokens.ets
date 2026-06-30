@@ -34,7 +34,9 @@ export class DesignTokens {
   static readonly shadowStrong = { radius: 12, color: '#40000000', offsetY: 6 }
 
   // --- Surface tokens ---
+  static readonly surfaceContainerLowest: string = 'surfaceContainerLowest'
   static readonly surfaceContainerLow: string = 'surfaceContainerLow'
   static readonly surfaceContainer: string = 'surfaceContainer'
   static readonly surfaceContainerHigh: string = 'surfaceContainerHigh'
+  static readonly surfaceContainerHighest: string = 'surfaceContainerHighest'
 }

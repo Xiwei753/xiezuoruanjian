@@ -319,4 +319,16 @@
     <string name="diagnostics_export_failed">导出诊断包失败</string>
     <string name="diagnostics_cleared">日志已清空</string>
     <string name="diagnostics_device_info_copied">设备信息已复制</string>
+
+    <!-- About -->
+    <string name="about_title">关于素笺写作</string>
+    <string name="about_app_name">素笺写作</string>
+    <string name="about_author">作者：Xiwei753</string>
+    <string name="about_github">GitHub：&lt;a href="https://github.com/Xiwei753/xiezuoruanjian"&gt;https://github.com/Xiwei753/xiezuoruanjian&lt;/a&gt;</string>
+    <string name="about_gitee">Gitee 镜像：&lt;a href="https://gitee.com/wei-xi753/xiezuoruanjian"&gt;https://gitee.com/wei-xi753/xiezuoruanjian&lt;/a&gt;</string>
+    <string name="about_license">开源协议：GPLv3</string>
+    <string name="about_mirror_note">GitHub 为主仓库。Gitee 为镜像同步仓库，方便国内访问。</string>
+    <string name="about_version_detail">应用版本：%1$s\nCore 版本：%2$s\n平台：%3$s</string>
+    <string name="about_version_section">版本信息</string>
+    <string name="about_btn_text">关于素笺写作</string>
 </resources>

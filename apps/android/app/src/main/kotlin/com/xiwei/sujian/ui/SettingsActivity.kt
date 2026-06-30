@@ -57,6 +57,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var cardAi: com.google.android.material.card.MaterialCardView
 
     private lateinit var btnActionRegistry: MaterialButton
+    private lateinit var btnAbout: MaterialButton
 
     private lateinit var switchDiagnosticsEnabled: MaterialSwitch
     private lateinit var switchDiagnosticsVerbose: MaterialSwitch
@@ -127,6 +128,7 @@ class SettingsActivity : AppCompatActivity() {
         tvVersionInfo = findViewById(R.id.tvVersionInfo)
 
         btnActionRegistry = findViewById(R.id.btnActionRegistry)
+        btnAbout = findViewById(R.id.btnAbout)
 
         switchDiagnosticsEnabled = findViewById(R.id.switchDiagnosticsEnabled)
         switchDiagnosticsVerbose = findViewById(R.id.switchDiagnosticsVerbose)
@@ -291,6 +293,11 @@ class SettingsActivity : AppCompatActivity() {
 
         btnActionRegistry.setOnClickListener {
             val intent = android.content.Intent(this, ActionRegistryActivity::class.java)
+            startActivity(intent)
+        }
+
+        btnAbout.setOnClickListener {
+            val intent = android.content.Intent(this, AboutActivity::class.java)
             startActivity(intent)
         }
 

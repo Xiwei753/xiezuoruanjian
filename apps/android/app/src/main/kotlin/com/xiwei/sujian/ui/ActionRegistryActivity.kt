@@ -53,7 +53,6 @@ class ActionRegistryActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_action_registry)
 
-         
         bridge = BridgeProvider.getActionBridge(this)
         actionContainer = findViewById(R.id.actionContainer)
         tvLoading = findViewById(R.id.tvLoading)
@@ -102,7 +101,9 @@ class ActionRegistryActivity : AppCompatActivity() {
             text = category.uppercase()
             textSize = 12f
             setTextColor(MaterialColors.getColor(this, M3Attr.colorPrimary))
-            setPadding(0, 16, 0, 8)
+            val sp16 = resources.getDimensionPixelSize(R.dimen.spacing_16)
+            val sp8 = resources.getDimensionPixelSize(R.dimen.spacing_8)
+            setPadding(0, sp16, 0, sp8)
         }
     }
 
@@ -112,13 +113,14 @@ class ActionRegistryActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             )
-            radius = 16f
-            elevation = 2f
+            radius = resources.getDimension(R.dimen.radius_lg)
+            elevation = resources.getDimension(R.dimen.elevation_2)
         }
 
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(16, 16, 16, 16)
+            val sp16 = resources.getDimensionPixelSize(R.dimen.spacing_16)
+            setPadding(sp16, sp16, sp16, sp16)
         }
 
         content.addView(TextView(this@ActionRegistryActivity).apply {
@@ -161,7 +163,7 @@ class ActionRegistryActivity : AppCompatActivity() {
             content.addView(TextView(this@ActionRegistryActivity).apply {
                 text = getString(R.string.action_blocked_dangerous)
                 textSize = 12f
-                    setTextColor(MaterialColors.getColor(this, M3Attr.colorError))
+                setTextColor(MaterialColors.getColor(this, M3Attr.colorError))
                 setPadding(0, 0, 0, 8)
             })
         }
@@ -432,7 +434,7 @@ class ActionRegistryActivity : AppCompatActivity() {
                 resultContainer.addView(TextView(this).apply {
                     text = getString(R.string.action_error_prefix, result.message)
                     textSize = 14f
-                setTextColor(MaterialColors.getColor(this, M3Attr.colorError))
+                    setTextColor(MaterialColors.getColor(this, M3Attr.colorError))
                     setPadding(0, 8, 0, 0)
                 })
             }

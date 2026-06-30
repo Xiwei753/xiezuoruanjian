@@ -104,8 +104,11 @@ pub unsafe extern "C" fn writer_core_load_syncable_settings() -> *mut c_char {
                 "lightOnSurface": palette.light_on_surface,
                 "lightSurfaceVariant": palette.light_surface_variant,
                 "lightOnSurfaceVariant": palette.light_on_surface_variant,
+                "lightSurfaceContainerLowest": palette.light_surface_container_lowest,
+                "lightSurfaceContainerLow": palette.light_surface_container_low,
                 "lightSurfaceContainer": palette.light_surface_container,
                 "lightSurfaceContainerHigh": palette.light_surface_container_high,
+                "lightSurfaceContainerHighest": palette.light_surface_container_highest,
                 "lightOutline": palette.light_outline,
                 "lightOutlineVariant": palette.light_outline_variant,
                 "darkPrimary": palette.dark_primary,
@@ -126,8 +129,11 @@ pub unsafe extern "C" fn writer_core_load_syncable_settings() -> *mut c_char {
                 "darkOnSurface": palette.dark_on_surface,
                 "darkSurfaceVariant": palette.dark_surface_variant,
                 "darkOnSurfaceVariant": palette.dark_on_surface_variant,
+                "darkSurfaceContainerLowest": palette.dark_surface_container_lowest,
+                "darkSurfaceContainerLow": palette.dark_surface_container_low,
                 "darkSurfaceContainer": palette.dark_surface_container,
                 "darkSurfaceContainerHigh": palette.dark_surface_container_high,
+                "darkSurfaceContainerHighest": palette.dark_surface_container_highest,
                 "darkOutline": palette.dark_outline,
                 "darkOutlineVariant": palette.dark_outline_variant,
             }
@@ -236,11 +242,20 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             if let Some(v) = tp.get("lightOnSurfaceVariant").and_then(|v| v.as_str()) {
                 palette.light_on_surface_variant = v.to_string();
             }
+            if let Some(v) = tp.get("lightSurfaceContainerLowest").and_then(|v| v.as_str()) {
+                palette.light_surface_container_lowest = v.to_string();
+            }
+            if let Some(v) = tp.get("lightSurfaceContainerLow").and_then(|v| v.as_str()) {
+                palette.light_surface_container_low = v.to_string();
+            }
             if let Some(v) = tp.get("lightSurfaceContainer").and_then(|v| v.as_str()) {
                 palette.light_surface_container = v.to_string();
             }
             if let Some(v) = tp.get("lightSurfaceContainerHigh").and_then(|v| v.as_str()) {
                 palette.light_surface_container_high = v.to_string();
+            }
+            if let Some(v) = tp.get("lightSurfaceContainerHighest").and_then(|v| v.as_str()) {
+                palette.light_surface_container_highest = v.to_string();
             }
             if let Some(v) = tp.get("lightOutline").and_then(|v| v.as_str()) {
                 palette.light_outline = v.to_string();
@@ -302,11 +317,20 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             if let Some(v) = tp.get("darkOnSurfaceVariant").and_then(|v| v.as_str()) {
                 palette.dark_on_surface_variant = v.to_string();
             }
+            if let Some(v) = tp.get("darkSurfaceContainerLowest").and_then(|v| v.as_str()) {
+                palette.dark_surface_container_lowest = v.to_string();
+            }
+            if let Some(v) = tp.get("darkSurfaceContainerLow").and_then(|v| v.as_str()) {
+                palette.dark_surface_container_low = v.to_string();
+            }
             if let Some(v) = tp.get("darkSurfaceContainer").and_then(|v| v.as_str()) {
                 palette.dark_surface_container = v.to_string();
             }
             if let Some(v) = tp.get("darkSurfaceContainerHigh").and_then(|v| v.as_str()) {
                 palette.dark_surface_container_high = v.to_string();
+            }
+            if let Some(v) = tp.get("darkSurfaceContainerHighest").and_then(|v| v.as_str()) {
+                palette.dark_surface_container_highest = v.to_string();
             }
             if let Some(v) = tp.get("darkOutline").and_then(|v| v.as_str()) {
                 palette.dark_outline = v.to_string();

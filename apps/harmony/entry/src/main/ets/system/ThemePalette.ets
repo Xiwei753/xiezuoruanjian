@@ -31,8 +31,11 @@ export interface ThemePaletteData {
   light_on_surface: string
   light_surface_variant: string
   light_on_surface_variant: string
+  light_surface_container_lowest: string
+  light_surface_container_low: string
   light_surface_container: string
   light_surface_container_high: string
+  light_surface_container_highest: string
   light_outline: string
   light_outline_variant: string
   dark_primary: string
@@ -53,8 +56,11 @@ export interface ThemePaletteData {
   dark_on_surface: string
   dark_surface_variant: string
   dark_on_surface_variant: string
+  dark_surface_container_lowest: string
+  dark_surface_container_low: string
   dark_surface_container: string
   dark_surface_container_high: string
+  dark_surface_container_highest: string
   dark_outline: string
   dark_outline_variant: string
 }
@@ -101,8 +107,11 @@ export class ThemePaletteHelper {
     merge('onSurface', prefix + 'on_surface')
     merge('surfaceVariant', prefix + 'surface_variant')
     merge('onSurfaceVariant', prefix + 'on_surface_variant')
+    merge('surfaceContainerLowest', prefix + 'surface_container_lowest')
+    merge('surfaceContainerLow', prefix + 'surface_container_low')
     merge('surfaceContainer', prefix + 'surface_container')
     merge('surfaceContainerHigh', prefix + 'surface_container_high')
+    merge('surfaceContainerHighest', prefix + 'surface_container_highest')
     merge('outline', prefix + 'outline')
     merge('outlineVariant', prefix + 'outline_variant')
 

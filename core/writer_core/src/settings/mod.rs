@@ -255,9 +255,15 @@ pub struct ThemePalette {
     #[serde(default)]
     pub light_on_surface_variant: String,
     #[serde(default)]
+    pub light_surface_container_lowest: String,
+    #[serde(default)]
+    pub light_surface_container_low: String,
+    #[serde(default)]
     pub light_surface_container: String,
     #[serde(default)]
     pub light_surface_container_high: String,
+    #[serde(default)]
+    pub light_surface_container_highest: String,
     #[serde(default)]
     pub light_outline: String,
     #[serde(default)]
@@ -301,9 +307,15 @@ pub struct ThemePalette {
     #[serde(default)]
     pub dark_on_surface_variant: String,
     #[serde(default)]
+    pub dark_surface_container_lowest: String,
+    #[serde(default)]
+    pub dark_surface_container_low: String,
+    #[serde(default)]
     pub dark_surface_container: String,
     #[serde(default)]
     pub dark_surface_container_high: String,
+    #[serde(default)]
+    pub dark_surface_container_highest: String,
     #[serde(default)]
     pub dark_outline: String,
     #[serde(default)]

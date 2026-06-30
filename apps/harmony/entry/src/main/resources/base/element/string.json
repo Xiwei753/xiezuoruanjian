@@ -525,6 +525,50 @@
       "value": "关于/高级"
     },
     {
+      "name": "about_title",
+      "value": "关于"
+    },
+    {
+      "name": "about_app_name_label",
+      "value": "应用名"
+    },
+    {
+      "name": "about_app_name",
+      "value": "素笺写作"
+    },
+    {
+      "name": "about_author_label",
+      "value": "作者"
+    },
+    {
+      "name": "about_author",
+      "value": "Xiwei753"
+    },
+    {
+      "name": "about_project_label",
+      "value": "项目地址"
+    },
+    {
+      "name": "about_gitee",
+      "value": "Gitee 镜像: gitee.com/wei-xi753/xiezuoruanjian"
+    },
+    {
+      "name": "about_license_label",
+      "value": "开源协议"
+    },
+    {
+      "name": "about_license",
+      "value": "GPLv3"
+    },
+    {
+      "name": "about_mirror_note",
+      "value": "GitHub 为主仓库。Gitee 为镜像同步仓库，方便国内访问。"
+    },
+    {
+      "name": "about_platform",
+      "value": "HarmonyOS NEXT 客户端"
+    },
+    {
       "name": "workspace_path",
       "value": "工作区路径"
     },

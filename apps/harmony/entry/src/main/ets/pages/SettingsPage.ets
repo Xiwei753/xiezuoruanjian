@@ -791,15 +791,90 @@ struct SettingsPage {
     .margin({ bottom: 16 })
   }
 
-  // ── 关于/高级 (about) ── 工作区路径、版本信息
+  // ── 关于/高级 (about) ── 应用名、作者、项目地址、开源协议、镜像说明、版本信息、工作区路径
   @Builder
   AboutSettingsSection() {
     Column() {
-      Text($r('app.string.about_advanced'))
+      Text($r('app.string.about_title'))
         .fontSize(18)
         .fontWeight(FontWeight.Medium)
         .fontColor(this.themeConfig.colors.textPrimary)
         .margin({ bottom: 16 })
+
+      // 应用名
+      Row() {
+        Text($r('app.string.about_app_name_label'))
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text($r('app.string.about_app_name'))
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .width('100%')
+      .margin({ bottom: 8 })
+
+      // 作者
+      Row() {
+        Text($r('app.string.about_author_label'))
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text($r('app.string.about_author'))
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .width('100%')
+      .margin({ bottom: 8 })
+
+      // 项目地址
+      Column() {
+        Text($r('app.string.about_project_label'))
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .margin({ bottom: 4 })
+        Text('GitHub: github.com/Xiwei753/xiezuoruanjian')
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.primary)
+        Text($r('app.string.about_gitee'))
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.primary)
+          .margin({ top: 4 })
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .margin({ bottom: 8 })
+
+      // 开源协议
+      Row() {
+        Text($r('app.string.about_license_label'))
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text($r('app.string.about_license'))
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .width('100%')
+      .margin({ bottom: 8 })
+
+      // 镜像说明
+      Text($r('app.string.about_mirror_note'))
+        .fontSize(13)
+        .fontColor(this.themeConfig.colors.textMuted)
+        .margin({ bottom: 8 })
+
+      // 版本信息
+      Row() {
+        Text($r('app.string.version_info'))
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+        Text($r('app.string.about_platform'))
+          .fontSize(14)
+          .fontColor(this.themeConfig.colors.textSecondary)
+      }
+      .width('100%')
 
       // 工作区路径
       Row() {
@@ -809,19 +884,7 @@ struct SettingsPage {
           .layoutWeight(1)
       }
       .width('100%')
-      .margin({ bottom: 8 })
-
-      // 版本信息
-      Row() {
-        Text($r('app.string.version_info'))
-          .fontSize(16)
-          .fontColor(this.themeConfig.colors.textPrimary)
-          .layoutWeight(1)
-        Text($r('app.string.harmonyos_client'))
-          .fontSize(14)
-          .fontColor(this.themeConfig.colors.textSecondary)
-      }
-      .width('100%')
+      .margin({ top: 8 })
     }
     .width('100%')
     .padding(16)
