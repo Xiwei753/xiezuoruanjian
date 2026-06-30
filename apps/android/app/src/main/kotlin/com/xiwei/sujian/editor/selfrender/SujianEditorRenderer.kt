@@ -56,8 +56,8 @@ class SujianEditorRenderer(
     private val density: Float  // resources.displayMetrics.density
 ) {
     // ── 绘制工具 ──
-    private val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(60, 100, 150, 255) // 半透明蓝色选区
+    internal val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(60, 100, 150, 255) // 默认值，由 applyThemeColors() 覆盖
         style = Paint.Style.FILL
     }
 
@@ -67,8 +67,8 @@ class SujianEditorRenderer(
         strokeWidth = 1.5f * density  // 固定 1.5dp
     }
 
-    private val composingUnderlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(180, 50, 50, 50)
+    internal val composingUnderlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.argb(180, 50, 50, 50) // 默认值，由 applyThemeColors() 覆盖
         style = Paint.Style.STROKE
         strokeWidth = 1.5f
     }

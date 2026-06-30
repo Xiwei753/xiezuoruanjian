@@ -68,11 +68,22 @@ class SettingsActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_settings)
 
+        // 在 setContentView 前应用主题，避免深色模式下先显示浅色再闪烁
         ErrorUtil.safeRun(this) {
             settingsRepository = SettingsRepository(this)
+            val settings = ErrorUtil.safeRun(this, LocalSettings()) {
+                settingsRepository.getLocalSettings()
+            }
+            when (settings.themeMode) {
+                "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+            }
         }
+
+        setContentView(R.layout.activity_settings)
+
         currentSettings = ErrorUtil.safeRun(this, LocalSettings()) {
             if (::settingsRepository.isInitialized) {
                 settingsRepository.getLocalSettings()

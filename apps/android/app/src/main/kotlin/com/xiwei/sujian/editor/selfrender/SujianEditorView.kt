@@ -699,9 +699,56 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        applyThemeColors()
         if (isFocused) {
             cursorController.onFocusChanged(true)
         }
+    }
+
+    /**
+     * 从主题 attr 注入颜色到渲染器，避免硬编码颜色。
+     * 必须在 attach 到 window 后调用（需要 context 取 theme attr）。
+     */
+    fun applyThemeColors() {
+        val typedValue = android.util.TypedValue()
+        val theme = context.theme
+
+        // editor background → colorSurface
+        if (theme.resolveAttribute(com.google.android.material.R.attr.colorSurface, typedValue, true)) {
+            setBackgroundColor(typedValue.data)
+        }
+
+        // text color → colorOnSurface
+        if (theme.resolveAttribute(com.google.android.material.R.attr.colorOnSurface, typedValue, true)) {
+            textPaint.color = typedValue.data
+        }
+
+        // cursor → colorPrimary
+        if (theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, typedValue, true)) {
+            renderer.cursorPaint.color = typedValue.data
+        }
+
+        // composing underline → colorPrimary
+        if (theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, typedValue, true)) {
+            renderer.composingUnderlinePaint.color = android.graphics.Color.argb(
+                180,
+                android.graphics.Color.red(typedValue.data),
+                android.graphics.Color.green(typedValue.data),
+                android.graphics.Color.blue(typedValue.data)
+            )
+        }
+
+        // selection → colorPrimary with alpha
+        if (theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, typedValue, true)) {
+            renderer.selectionPaint.color = android.graphics.Color.argb(
+                60,
+                android.graphics.Color.red(typedValue.data),
+                android.graphics.Color.green(typedValue.data),
+                android.graphics.Color.blue(typedValue.data)
+            )
+        }
+
+        invalidate()
     }
 
     // ── Accessibility ──

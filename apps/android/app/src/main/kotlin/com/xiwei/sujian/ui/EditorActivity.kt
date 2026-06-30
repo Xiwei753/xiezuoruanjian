@@ -4,11 +4,14 @@ import android.os.Bundle
 import android.util.Log
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.ScreenRole
 import com.xiwei.sujian.model.ScreenPolicy
 import com.xiwei.sujian.model.ActionSlot
@@ -41,6 +44,20 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 在 setContentView 前应用主题
+        ErrorUtil.safeRun(this) {
+            val settingsRepository = SettingsRepository(this)
+            val settings = ErrorUtil.safeRun(this, LocalSettings()) {
+                settingsRepository.getLocalSettings()
+            }
+            when (settings.themeMode) {
+                "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+            }
+        }
+
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(R.layout.activity_editor)
 
