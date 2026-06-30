@@ -3,7 +3,6 @@ package com.xiwei.sujian.ui
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
@@ -13,6 +12,8 @@ import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
+import com.google.android.material.color.MaterialColors
+import com.google.android.material.R.attr as M3Attr
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapEdgeRenderData
 import com.xiwei.sujian.model.StarMapGraphEdge
@@ -54,29 +55,29 @@ class StarMapCanvasView @JvmOverloads constructor(
     private var data: StarMapData? = null
     private var renderSnapshot: StarMapRenderSnapshot = StarMapRenderSnapshot.empty()
 
-    private val paintNodeBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A1D23") }
+    private val paintNodeBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = MaterialColors.getColor(context, M3Attr.colorSurfaceContainerHigh, 0) }
     private val paintNodeBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#2A2E36")
+        color = MaterialColors.getColor(context, M3Attr.colorOutlineVariant, 0)
         style = Paint.Style.STROKE
         strokeWidth = 2f
     }
     private val paintHeader = Paint(Paint.ANTI_ALIAS_FLAG)
 
     private val paintTitleText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#E2E4E9")
+        color = MaterialColors.getColor(context, M3Attr.colorOnSurface, 0)
         textSize = 36f
         textAlign = Paint.Align.CENTER
     }
 
     private val paintKindText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.WHITE
+        color = MaterialColors.getColor(context, M3Attr.colorOnPrimary, 0)
         textSize = 28f
         typeface = Typeface.DEFAULT_BOLD
         textAlign = Paint.Align.CENTER
     }
 
     private val paintEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#4C566A")
+        color = MaterialColors.getColor(context, M3Attr.colorOutline, 0)
         strokeWidth = 4f
         style = Paint.Style.STROKE
     }
@@ -209,12 +210,12 @@ class StarMapCanvasView @JvmOverloads constructor(
 
     private fun getKindColor(kind: StarMapNodeKind): Int {
         return when (kind) {
-            StarMapNodeKind.Chapter -> Color.parseColor("#4CAF50")
-            StarMapNodeKind.Character -> Color.parseColor("#2196F3")
-            StarMapNodeKind.Location -> Color.parseColor("#FF9800")
-            StarMapNodeKind.Event -> Color.parseColor("#F44336")
-            StarMapNodeKind.Concept -> Color.parseColor("#9C27B0")
-            else -> Color.parseColor("#606470")
+            StarMapNodeKind.Chapter -> MaterialColors.getColor(context, M3Attr.colorPrimary, 0)
+            StarMapNodeKind.Character -> MaterialColors.getColor(context, M3Attr.colorSecondary, 0)
+            StarMapNodeKind.Location -> MaterialColors.getColor(context, M3Attr.colorTertiary, 0)
+            StarMapNodeKind.Event -> MaterialColors.getColor(context, M3Attr.colorError, 0)
+            StarMapNodeKind.Concept -> MaterialColors.getColor(context, M3Attr.colorPrimaryContainer, 0)
+            else -> MaterialColors.getColor(context, M3Attr.colorOnSurfaceVariant, 0)
         }
     }
 
@@ -295,7 +296,7 @@ class StarMapCanvasView @JvmOverloads constructor(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawColor(Color.parseColor("#111318"))
+        canvas.drawColor(MaterialColors.getColor(context, M3Attr.colorSurfaceDim, 0))
 
         val currentData = data ?: return
         val snapshot = renderSnapshot
@@ -361,7 +362,8 @@ class StarMapCanvasView @JvmOverloads constructor(
 
             // 拖动时阴影加强
             if (isDragging) {
-                paintNodeBg.setShadowLayer(motionPolicy.dragShadowBoost, 0f, 4f, Color.parseColor("#66000000"))
+                val shadowBase = MaterialColors.getColor(context, M3Attr.colorOnSurface, 0)
+                paintNodeBg.setShadowLayer(motionPolicy.dragShadowBoost, 0f, 4f, (shadowBase and 0x00FFFFFF) or 0x66000000.toInt())
             } else {
                 paintNodeBg.clearShadowLayer()
             }

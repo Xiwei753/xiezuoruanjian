@@ -232,3 +232,37 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 **冲突处理规则**：
 - 如果全局文档和目录文档存在冲突，先以更严格的约束为准。
 - 如果需要调整路线，必须先提交文档变更，不能在功能代码里绕开。
+
+## 富文本路线约束（RichTextModel）
+
+### 核心原则
+- 自研写作区当前路线只适合纯文本写作区 + 吞吐动画 + 光标控制，不是富文本终极形态。
+- 要支撑富文本，必须先设计统一 RichTextModel，不能跳过模型层直接在渲染层堆功能。
+
+### 统一 RichTextModel 定义
+- **数据结构**：`plain_text + style_runs + paragraph_attrs + inline_marks`
+  - `plain_text`：纯文本正文，不含任何格式标记
+  - `style_runs`：字符级样式区间（粗体、斜体、下划线、删除线等），每个 run 包含 `[start, end)` 和 style type
+  - `paragraph_attrs`：段落级属性（对齐方式、缩进、列表类型等），每个段落一个 attr set
+  - `inline_marks`：行内标记（链接、注释、图片占位等），每个 mark 包含位置和元数据
+- **存储**：Core 保存结构化 runs，不能保存 HTML，不能污染正文纯文本
+- **传输**：通过 typed DTO（非 envelope_json）在 Core 和平台端之间传输
+
+### 平台端渲染策略
+- **Android**：使用 Spanned / StaticLayout 或自研 run layout，将 style_runs 映射为 CharacterStyle / ParagraphStyle span
+- **Desktop**：使用 QTextLayout FormatRange 或自研 run layout，将 style_runs 映射为 QTextCharFormat
+- **Harmony**：使用 TextStyle / TextDecoration 或自研 run layout
+- **共同约束**：渲染层只消费 RichTextModel 的结构化数据，不反向生成 HTML 或富文本序列化
+
+### 红线
+- **禁止**将正文保存为 HTML 或任何富文本标记格式
+- **禁止**在正文纯文本中插入格式控制字符或零宽字符
+- **禁止**跳过 RichTextModel 直接在渲染层实现富文本逻辑
+- **禁止**在 Core 中保存平台特定的渲染状态（如 Span 对象、QTextCharFormat）
+- **禁止**为富文本功能引入 envelope_json 接口，必须使用 typed DTO
+
+### 演进路径
+1. V1：在 Core 定义 RichTextModel 数据结构和序列化格式
+2. V2：平台端实现 RichTextModel → 渲染层映射
+3. V3：编辑操作（插入/删除/格式切换）通过 Core EditorTransaction 统一处理
+4. V4：富文本编辑的 undo/redo 纳入 Core history 模块
