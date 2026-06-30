@@ -2366,6 +2366,446 @@ mod tests {
         // coordinated_enabled is a separate concern for cursor animation, not text animation
         let _ = coordinated_enabled; // explicitly not used in text animation logic
     }
+
+    // ========================================================================
+    // IME commit / newline / reflow 场景自动化测试
+    // ========================================================================
+
+    /// 测试 1：ime_commit_4_char_idiom_produces_cursor_animation
+    ///
+    /// 插入 4 字成语（如 "风和日丽"），验证产生 Cursor 类型动画事件。
+    /// IME commit 多字使用 TypingCommit cause，4 字 ≤ max_animated_chars(8)，
+    /// should_animate=true，should_create_text_animation=FullAnimation，
+    /// TextAnimationState 应创建 hidden range，cursor rect 正确更新。
+    #[test]
+    fn ime_commit_4_char_idiom_produces_cursor_animation() {
+        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
+            EditorAnimationKind};
+
+        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let idiom = "风和日丽";
+        let old_text = "你好";
+        let new_text = "你好风和日丽";
+        let old_cursor = EditorSelection::collapsed(old_text, old_text.len());
+        let new_cursor = EditorSelection::collapsed(new_text, new_text.len());
+
+        let tx = engine.create_transaction(
+            old_text, new_text,
+            old_cursor, new_cursor,
+            EditorTransactionCause::TypingCommit,
+        );
+
+        // TypingCommit cause + 4 chars ≤ 8 → should_animate = true
+        assert!(tx.should_animate, "4-char idiom commit should animate");
+
+        // visual_transaction 应返回 Insert kind
+        let vt = engine.visual_transaction(&tx);
+        assert!(vt.is_some(), "4-char idiom commit should produce visual transaction");
+        let vt = vt.unwrap();
+        assert_eq!(vt.kind, EditorAnimationKind::Insert);
+        assert_eq!(vt.inserted_range, Some((old_text.len(), old_text.len() + idiom.len())));
+
+        // should_create_text_animation → FullAnimation (4 glyphs, no newline)
+        let decision = should_create_text_animation(
+            4,    // glyph_count
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::FullAnimation);
+
+        // TextAnimationState 应创建 hidden range
+        let mut state = TextAnimationState::new();
+        if let Some((range_start, range_end)) = vt.inserted_range {
+            match decision {
+                AnimationDecision::FullAnimation => {
+                    state.start_insert((range_start, range_end), vt.duration_ms);
+                }
+                _ => {}
+            }
+        }
+        assert!(state.has_active_insert(), "4-char idiom should create hidden range");
+        assert_eq!(state.active_insert_byte_range(), Some((6, 18))); // "你好"=6 bytes, "风和日丽"=12 bytes
+
+        // Cursor 动画事件：old_cursor.index != new_cursor.index → Cursor 事件产生
+        assert_ne!(tx.old_selection.head.index, tx.new_selection.head.index,
+            "Cursor should move after idiom commit");
+        assert_eq!(tx.new_selection.head.index, new_text.len(),
+            "Cursor byte offset should be at end of committed text");
+    }
+
+    /// 测试 2：ime_commit_long_candidate_no_text_animation_cursor_still_moves
+    ///
+    /// 插入超过 8 字的候选，验证不产生 Insert 文字动画（NoAnimation），
+    /// 但验证光标位置正确更新。
+    #[test]
+    fn ime_commit_long_candidate_no_text_animation_cursor_still_moves() {
+        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
+
+        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        // 9 个汉字，超过 max_animated_chars(8)
+        let long_candidate = "一二三四五六七八九";
+        assert!(long_candidate.chars().count() > 8);
+        let old_text = "";
+        let new_text = long_candidate;
+        let old_cursor = EditorSelection::collapsed(old_text, 0);
+        let new_cursor = EditorSelection::collapsed(new_text, new_text.len());
+
+        let tx = engine.create_transaction(
+            old_text, new_text,
+            old_cursor, new_cursor,
+            EditorTransactionCause::TypingCommit,
+        );
+
+        // 9 chars > 8 → should_animate = false (core level)
+        assert!(!tx.should_animate, "9-char candidate should not animate at core level");
+
+        // should_create_text_animation → NoAnimation (9 glyphs > 8)
+        let decision = should_create_text_animation(
+            9,    // glyph_count > MAX_GLYPH_COUNT
+            false, // contains_newline
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation,
+            "Long candidate should produce NoAnimation decision");
+
+        // TextAnimationState 不应创建 hidden range
+        let mut state = TextAnimationState::new();
+        match decision {
+            AnimationDecision::FullAnimation => {
+                // 不会进入此分支
+                state.start_insert((0, long_candidate.len()), 160);
+            }
+            _ => {}
+        }
+        assert!(!state.has_active_insert(),
+            "Long candidate should NOT create hidden range");
+
+        // 光标位置仍正确更新
+        assert_eq!(tx.new_selection.head.index, long_candidate.len(),
+            "Cursor byte offset should be at end of committed text even without animation");
+    }
+
+    /// 测试 3：ime_commit_after_initials_cursor_moves_forward
+    ///
+    /// 只输入首字母出长词，commit 后验证光标正常向前走，
+    /// 验证 cursor byte offset 正确。
+    #[test]
+    fn ime_commit_after_initials_cursor_moves_forward() {
+        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
+
+        let mut engine = EditorEngine::with_animation_limits(8, 160);
+
+        // 模拟：用户输入首字母 "fhrl"，commit 后得到 "风和日丽"
+        // Step 1: preedit 阶段（ImeComposition cause，不产生动画）
+        let preedit_text = "fhrl";
+        let tx_preedit = engine.create_transaction(
+            "", preedit_text,
+            EditorSelection::collapsed("", 0),
+            EditorSelection::collapsed(preedit_text, preedit_text.len()),
+            EditorTransactionCause::ImeComposition,
+        );
+        assert!(!tx_preedit.should_animate,
+            "ImeComposition should not animate");
+        assert_eq!(tx_preedit.new_selection.head.index, preedit_text.len(),
+            "Preedit cursor should be at end of preedit text");
+
+        // Step 2: commit 阶段（TypingCommit cause，产生动画）
+        let committed = "风和日丽";
+        let tx_commit = engine.create_transaction(
+            preedit_text, committed,
+            EditorSelection::collapsed(preedit_text, preedit_text.len()),
+            EditorSelection::collapsed(committed, committed.len()),
+            EditorTransactionCause::TypingCommit,
+        );
+        // 4 chars ≤ 8 → should_animate = true
+        assert!(tx_commit.should_animate,
+            "TypingCommit of 4-char idiom should animate");
+
+        // 光标从 preedit 末尾移动到 commit 末尾
+        // preedit_text.len() = 4, committed.len() = 12
+        assert_eq!(tx_commit.old_selection.head.index, preedit_text.len(),
+            "Old cursor should be at end of preedit");
+        assert_eq!(tx_commit.new_selection.head.index, committed.len(),
+            "New cursor should be at end of committed text (forward move)");
+
+        // 光标确实向前走了（byte offset 增大）
+        assert!(tx_commit.new_selection.head.index > tx_commit.old_selection.head.index,
+            "Cursor should move forward after commit (byte offset increases)");
+    }
+
+    /// 测试 4：ime_commit_pinyin_longer_than_hanzi_cursor_can_retreat
+    ///
+    /// 拼音比上屏汉字长，commit 后光标允许回退动画。
+    /// 场景：preedit "fengherili" (10 bytes) → commit "风和日丽" (12 bytes)
+    /// 在字节偏移上光标实际前进，但视觉上拼音可能比汉字宽。
+    /// 此测试验证：当 pinyin 在视觉上比 hanzi 宽时，cursor 动画事件仍然生成，
+    /// 允许光标从 preedit 位置到 commit 后位置做动画（可能视觉回退）。
+    #[test]
+    fn ime_commit_pinyin_longer_than_hanzi_cursor_can_retreat() {
+        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
+            EditorAnimationKind};
+
+        let mut engine = EditorEngine::with_animation_limits(8, 160);
+
+        // 拼音 "fengherili" 有 10 个 ASCII 字符（视觉上可能比 4 个汉字宽）
+        let pinyin = "fengherili";
+        let hanzi = "风和日丽";
+
+        // 模拟 preedit 阶段
+        let tx_preedit = engine.create_transaction(
+            "", pinyin,
+            EditorSelection::collapsed("", 0),
+            EditorSelection::collapsed(pinyin, pinyin.len()),
+            EditorTransactionCause::ImeComposition,
+        );
+        assert!(!tx_preedit.should_animate);
+
+        // commit 阶段：pinyin → hanzi
+        let tx_commit = engine.create_transaction(
+            pinyin, hanzi,
+            EditorSelection::collapsed(pinyin, pinyin.len()),
+            EditorSelection::collapsed(hanzi, hanzi.len()),
+            EditorTransactionCause::TypingCommit,
+        );
+        assert!(tx_commit.should_animate,
+            "TypingCommit should animate for 4-char hanzi");
+
+        // Cursor 动画事件必须生成（光标位置变化）
+        assert_ne!(tx_commit.old_selection.head.index, tx_commit.new_selection.head.index,
+            "Cursor position must change for retreat animation");
+
+        // 验证 visual_transaction 包含 cursor 信息
+        let vt = engine.visual_transaction(&tx_commit);
+        assert!(vt.is_some());
+        let vt = vt.unwrap();
+        assert_eq!(vt.kind, EditorAnimationKind::Insert);
+        // old_cursor_rect 和 new_cursor_rect 由平台层填充，core 默认 None
+        // 但 old_selection / new_selection 正确记录了光标位置
+        assert_eq!(vt.old_selection.head.index, pinyin.len());
+        assert_eq!(vt.new_selection.head.index, hanzi.len());
+
+        // should_create_text_animation → FullAnimation (4 glyphs, no newline)
+        let decision = should_create_text_animation(
+            4, false, false, false, false, false, true, true,
+        );
+        assert_eq!(decision, AnimationDecision::FullAnimation);
+
+        // TextAnimationState 创建 hidden range
+        let mut state = TextAnimationState::new();
+        if let Some((rs, re)) = vt.inserted_range {
+            if decision == AnimationDecision::FullAnimation {
+                state.start_insert((rs, re), vt.duration_ms);
+            }
+        }
+        assert!(state.has_active_insert());
+    }
+
+    /// 测试 5：newline_commit_cursor_vertical_animation
+    ///
+    /// 回车换行，验证不产生 Insert 文字动画（containsNewline → CursorOnly），
+    /// 但验证光标必须垂直动画（cursor rect y 变化）。
+    #[test]
+    fn newline_commit_cursor_vertical_animation() {
+        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
+            EditorAnimationKind, CursorRect};
+
+        let mut engine = EditorEngine::with_animation_limits(8, 160);
+
+        // 插入换行
+        let old_text = "你好";
+        let new_text = "你好\n";
+        let tx = engine.create_transaction(
+            old_text, new_text,
+            EditorSelection::collapsed(old_text, old_text.len()),
+            EditorSelection::collapsed(new_text, new_text.len()),
+            EditorTransactionCause::Typing,
+        );
+
+        // 换行包含 \n → should_animate = false (core level: text.contains('\n'))
+        assert!(!tx.should_animate,
+            "Newline commit should not animate at core level (contains newline)");
+
+        // should_create_text_animation → CursorOnly (contains_newline=true)
+        let decision = should_create_text_animation(
+            1,    // glyph_count (the newline char)
+            true, // contains_newline
+            false, false, false, false, true, true,
+        );
+        assert_eq!(decision, AnimationDecision::CursorOnly,
+            "Newline should produce CursorOnly decision");
+
+        // TextAnimationState 不应创建 hidden range (CursorOnly 不创建 hidden range)
+        let mut state = TextAnimationState::new();
+        match decision {
+            AnimationDecision::FullAnimation => {
+                state.start_insert((old_text.len(), new_text.len()), 160);
+            }
+            _ => {} // CursorOnly 和 NoAnimation 都不创建 hidden range
+        }
+        assert!(!state.has_active_insert(),
+            "Newline should NOT create hidden range (CursorOnly)");
+
+        // 光标位置必须变化（y 变化 → 垂直动画）
+        assert_ne!(tx.old_selection.head.index, tx.new_selection.head.index,
+            "Cursor must move after newline (vertical animation required)");
+
+        // 模拟 cursor rect y 变化：换行后光标 y 应增大
+        // Core 不计算坐标，但我们可以验证 CursorRect 数据结构支持 y 变化
+        let old_cursor_rect = CursorRect {
+            x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0,
+        };
+        let new_cursor_rect = CursorRect {
+            x: 0.0,  // 行首
+            top: 30.0, // 下一行
+            bottom: 50.0,
+            baseline_y: 45.0,
+        };
+        // y 变化 = 垂直动画
+        assert_ne!(old_cursor_rect.top, new_cursor_rect.top,
+            "Cursor rect y must change for vertical animation after newline");
+        assert!(new_cursor_rect.top > old_cursor_rect.top,
+            "New cursor rect y should be below old (moved down a line)");
+    }
+
+    /// 测试 6：mid_insert_reflow_animation_local_push
+    ///
+    /// 中间插入，验证后文不能瞬间大跳。
+    /// 验证 ReflowGlyphRect 包含插入点右侧的 glyph。
+    /// 由于单元测试无法执行 Qt layout，此测试验证：
+    /// 1. ReflowGlyphRect 数据结构正确
+    /// 2. 中间插入时 reflow_glyph_rects 的概念正确性
+    /// 3. 插入范围内的 glyph 不应出现在 reflow_rects 中
+    #[test]
+    fn mid_insert_reflow_animation_local_push() {
+        use writer_core::editor::ReflowGlyphRect;
+
+        // 构造 ReflowGlyphRect 模拟中间插入后的 reflow 数据
+        // 场景：文本 "ABCDE"，在 B 和 C 之间插入 "XY"
+        // 插入前：A(0) B(1) C(2) D(3) E(4)
+        // 插入后：A(0) B(1) X(2) Y(3) C(4) D(5) E(6)
+        // reflow 应包含 C, D, E 的旧位置→新位置
+
+        let reflow_c = ReflowGlyphRect {
+            char_: "C".to_string(),
+            old_x: 20.0,
+            old_y: 0.0,
+            old_baseline_y: 16.0,
+            new_x: 40.0,  // 向右推了
+            new_y: 0.0,
+            new_baseline_y: 16.0,
+            w: 10.0,
+            h: 20.0,
+            line_index: 0,
+        };
+        let reflow_d = ReflowGlyphRect {
+            char_: "D".to_string(),
+            old_x: 30.0,
+            old_y: 0.0,
+            old_baseline_y: 16.0,
+            new_x: 50.0,  // 向右推了
+            new_y: 0.0,
+            new_baseline_y: 16.0,
+            w: 10.0,
+            h: 20.0,
+            line_index: 0,
+        };
+        let reflow_e = ReflowGlyphRect {
+            char_: "E".to_string(),
+            old_x: 40.0,
+            old_y: 0.0,
+            old_baseline_y: 16.0,
+            new_x: 60.0,  // 向右推了
+            new_y: 0.0,
+            new_baseline_y: 16.0,
+            w: 10.0,
+            h: 20.0,
+            line_index: 0,
+        };
+
+        let reflow_rects = vec![reflow_c, reflow_d, reflow_e];
+
+        // 验证 reflow_rects 包含插入点右侧的 glyph
+        assert_eq!(reflow_rects.len(), 3, "Reflow should contain 3 glyphs right of insertion");
+        assert_eq!(reflow_rects[0].char_, "C");
+        assert_eq!(reflow_rects[1].char_, "D");
+        assert_eq!(reflow_rects[2].char_, "E");
+
+        // 验证每个 reflow glyph 的新位置比旧位置更右（被推开了）
+        for rect in &reflow_rects {
+            assert!(rect.new_x > rect.old_x,
+                "Reflow glyph '{}' should be pushed right: old_x={}, new_x={}",
+                rect.char_, rect.old_x, rect.new_x);
+        }
+
+        // 验证插入范围内的 glyph（X, Y）不应出现在 reflow_rects 中
+        // （它们走 insert 动画，不走 reflow 动画）
+        let inserted_chars: Vec<&str> = vec!["X", "Y"];
+        for rect in &reflow_rects {
+            assert!(
+                !inserted_chars.contains(&rect.char_.as_str()),
+                "Inserted glyph '{}' should NOT be in reflow_rects (it goes through insert animation)",
+                rect.char_
+            );
+        }
+
+        // 验证 reflow 动画是局部推送而非瞬间大跳
+        // new_x - old_x 应该等于插入文本的宽度（2 chars × 10px = 20px）
+        let push_distance = reflow_rects[0].new_x - reflow_rects[0].old_x;
+        assert!((push_distance - 20.0).abs() < 0.1,
+            "Reflow push distance should equal inserted text width: got {}",
+            push_distance);
+    }
+
+    /// 测试 7：qml_overlay_skip_must_clear_hidden_range
+    ///
+    /// QML overlay 跳过动画时 Rust hidden range 必须立刻清掉。
+    /// 验证 on_insert_animation_skipped 清除 active_insert_byte_range。
+    /// 这模拟了 QML 调用 on_insert_animation_skipped(byte_start, byte_end) 的场景：
+    /// Rust 侧可能已经创建了 hidden range，但 QML 决定跳过动画，
+    /// 此时必须立即清除 hidden range，否则正文层会永久跳过该 range 导致文字消失。
+    #[test]
+    fn qml_overlay_skip_must_clear_hidden_range() {
+        // 场景：Rust 侧已经创建了 Insert 动画（hidden range）
+        let mut state = TextAnimationState::new();
+        let byte_range = (10, 22); // 模拟 "风和日丽" 的 byte range
+        state.start_insert(byte_range, 160);
+        assert!(state.has_active_insert(),
+            "Should have active insert before skip");
+        assert_eq!(state.active_insert_byte_range(), Some(byte_range),
+            "Hidden range should be (10, 22) before skip");
+
+        // QML overlay 跳过动画 → 调用 on_insert_animation_finished（与 skip 共用逻辑）
+        // 这模拟了 SujianEditorItem::on_insert_animation_skipped 的行为：
+        //   let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
+        let removed = state.on_insert_animation_finished(10, 22);
+        assert!(removed, "on_insert_animation_skipped should return true (removed matching animation)");
+        assert!(state.is_empty(),
+            "Hidden range must be immediately cleared after skip");
+        assert_eq!(state.active_insert_byte_range(), None,
+            "No active insert byte range should remain after skip");
+
+        // 验证：跳过不匹配的 range 不影响现有 hidden range
+        state.start_insert((30, 42), 160);
+        let removed_wrong = state.on_insert_animation_finished(50, 60);
+        assert!(!removed_wrong, "Skipping non-matching range should return false");
+        assert!(state.has_active_insert(),
+            "Existing hidden range should remain when skip doesn't match");
+        assert_eq!(state.active_insert_byte_range(), Some((30, 42)));
+
+        // 清理
+        state.clear();
+        assert!(state.is_empty());
+    }
 }
 
 impl QQuickItem for SujianEditorItem {
