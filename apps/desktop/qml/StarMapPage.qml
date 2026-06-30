@@ -24,7 +24,7 @@ Rectangle {
 
     signal openStarmap(string starmapId, string title)
 
-    color: dt ? dt.bg : "#111318"
+    color: dt.bg
 
     function loadStarmaps() {
         if (!root.starMapController) {
@@ -84,7 +84,7 @@ Rectangle {
 
             Column {
                 anchors.fill: parent
-                spacing: dt ? dt.sp8 : 8
+                spacing: dt.sp8
 
                 StarMapCard {
                     id: starMapCard
@@ -113,7 +113,7 @@ Rectangle {
 
                 Flow {
                     width: parent.width
-                    spacing: dt ? dt.sp4 : 4
+                    spacing: dt.sp4
                     visible: childCount > 0
 
                     Repeater {
@@ -133,9 +133,9 @@ Rectangle {
                         Rectangle {
                             width: Math.min(120, parent ? parent.width : 120)
                             height: 28
-                            radius: dt ? dt.radiusPill : 999
-                            color: dt ? dt.surfaceVariant : "#DFE3EB"
-                            border.color: dt ? dt.border : "#2A2E36"
+                            radius: dt.radiusPill
+                            color: dt.surfaceVariant
+                            border.color: dt.border
                             border.width: 1
 
                             // chip 漂浮动画
@@ -151,9 +151,9 @@ Rectangle {
                             AppText {
                                 anchors.centerIn: parent
                                 text: modelData.title || ""
-                                color: dt ? dt.onSurfaceVariant : "#42474E"
-                                font.pixelSize: dt ? dt.caption : 12
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.onSurfaceVariant
+                                font.pixelSize: dt.caption
+                                font.family: dt.fontFamily
                                 elide: Text.ElideRight
                                 width: parent.width - 12
                                 horizontalAlignment: Text.AlignHCenter
@@ -178,18 +178,18 @@ Rectangle {
         width: 360
         height: 300
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 28; border.width: 1 }
+        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt ? dt.sp24 : 24
-            spacing: dt ? dt.sp12 : 12
+            anchors.margins: dt.sp24
+            spacing: dt.sp12
 
             AppText {
                 text: qsTr("新建星图")
-                color: dt ? dt.onSurface : "#E2E2E5"
-                font.pixelSize: dt ? dt.subtitle : 18
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.onSurface
+                font.pixelSize: dt.subtitle
+                font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
             AppTextField {
@@ -255,13 +255,13 @@ Rectangle {
         width: 360
         height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 28; border.width: 1 }
+        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt ? dt.sp24 : 24
-            spacing: dt ? dt.sp12 : 12
-            AppText { text: qsTr("重命名星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            anchors.margins: dt.sp24
+            spacing: dt.sp12
+            AppText { text: qsTr("重命名星图"); color: dt.onSurface; font.pixelSize: dt.subtitle; font.family: dt.fontFamily; font.weight: Font.DemiBold }
             AppTextField { id: renameField; Layout.fillWidth: true; theme: dt; text: renameStarmapDialog.currentTitle; placeholderText: qsTr("星图名称"); onAccepted: renameStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true
@@ -279,13 +279,13 @@ Rectangle {
         width: 360
         height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 28; border.width: 1 }
+        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt ? dt.sp24 : 24
-            spacing: dt ? dt.sp12 : 12
-            AppText { text: qsTr("新建子星图"); color: dt ? dt.onSurface : "#E2E2E5"; font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.DemiBold }
+            anchors.margins: dt.sp24
+            spacing: dt.sp12
+            AppText { text: qsTr("新建子星图"); color: dt.onSurface; font.pixelSize: dt.subtitle; font.family: dt.fontFamily; font.weight: Font.DemiBold }
             AppTextField { id: childTitleField; Layout.fillWidth: true; theme: dt; placeholderText: qsTr("子星图名称"); onAccepted: createChildStarmapButton.clicked() }
             RowLayout {
                 Layout.fillWidth: true

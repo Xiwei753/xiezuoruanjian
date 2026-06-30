@@ -25,7 +25,7 @@ Rectangle {
     property var chapterStats: []
     property var deviceStats: []
     property var speedCurve: []
-    color: dt ? dt.bg : "#111318"
+    color: dt.bg
 
     function val(obj, key) { var v = obj && obj[key] !== undefined ? Number(obj[key]) : 0; return isNaN(v) ? 0 : v }
     function formatNum(n) { return Number(n || 0).toLocaleString() }
@@ -87,7 +87,7 @@ Rectangle {
                     title: qsTr("速度曲线")
                     Layout.fillWidth: true
                     Layout.columnSpan: dashboard.wide ? 2 : 1
-                    AppText { text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: dt ? dt.textPrimary : "#E2E2E5" }
+                    AppText { text: speedCurve.length > 0 ? qsTr("已记录 %1 段").arg(speedCurve.length) : qsTr("暂无数据"); color: dt.textPrimary }
                 }
 
                 DashboardSection {
@@ -96,7 +96,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Repeater {
                         model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: qsTr("暂无数据"), typed_chars: 0 }]
-                        delegate: AppText { text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt ? dt.textSecondary : "#8C9198" }
+                        delegate: AppText { text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt.textSecondary }
                     }
                 }
             }
@@ -113,7 +113,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Repeater {
                         model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                        delegate: AppText { text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E2E5" }
+                        delegate: AppText { text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
                     }
                 }
 
@@ -123,7 +123,7 @@ Rectangle {
                     Layout.fillWidth: true
                     Repeater {
                         model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                        delegate: AppText { text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt ? dt.textPrimary : "#E2E2E5" }
+                        delegate: AppText { text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
                     }
                 }
             }

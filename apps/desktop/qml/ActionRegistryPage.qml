@@ -30,20 +30,20 @@ ScrollView {
 
     ColumnLayout {
         width: Math.min(540, root.availableWidth - 16)
-        spacing: root.appTheme ? root.appTheme.sp12 : 10
+        spacing: root.appTheme.sp12
 
         // Header
         Text {
             text: qsTr("Action 调试")
-            font.pixelSize: root.appTheme ? root.appTheme.fontXl : 18
+            font.pixelSize: root.appTheme.fontXl
             font.weight: Font.Bold
-            color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
+            color: root.appTheme.textPrimary
         }
 
         Text {
             text: qsTr("列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。")
-            color: root.appTheme ? root.appTheme.textSecondary : "#475569"
-            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+            color: root.appTheme.textSecondary
+            font.pixelSize: root.appTheme.fontSm
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
@@ -51,7 +51,7 @@ ScrollView {
         // Action buttons
         RowLayout {
             Layout.fillWidth: true
-            spacing: root.appTheme ? root.appTheme.sp8 : 8
+                    spacing: root.appTheme.sp8
 
             Button {
                 text: qsTr("列出所有 Action")
@@ -68,16 +68,16 @@ ScrollView {
                 }
                 contentItem: AppText {
                     text: parent.text
-                    color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
-                    font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                    color: root.appTheme.primaryText
+                    font.pixelSize: root.appTheme.fontSm
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
                     color: parent.hovered
-                        ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa")
-                        : (root.appTheme ? root.appTheme.primary : "#3b82f6")
-                    radius: root.appTheme ? root.appTheme.radiusSm : 6
+                        ? root.appTheme.primaryHover
+                        : root.appTheme.primary
+                    radius: root.appTheme.radiusSm
                 }
             }
 
@@ -91,14 +91,14 @@ ScrollView {
                 }
                 contentItem: AppText {
                     text: parent.text
-                    color: root.appTheme ? root.appTheme.textSecondary : "#475569"
-                    font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                    color: root.appTheme.textSecondary
+                    font.pixelSize: root.appTheme.fontSm
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
-                    color: parent.hovered ? (root.appTheme ? root.appTheme.hover : "#f1f5f9") : "transparent"
-                    radius: root.appTheme ? root.appTheme.radiusSm : 6
+                    color: parent.hovered ? root.appTheme.hover : "transparent"
+                    radius: root.appTheme.radiusSm
                 }
             }
         }
@@ -111,24 +111,24 @@ ScrollView {
             delegate: Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: 120
-                color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
-                radius: root.appTheme ? root.appTheme.radiusMd : 8
-                border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                color: root.appTheme.surfaceAlt
+                radius: root.appTheme.radiusMd
+                border.color: root.appTheme.border
                 border.width: 1
 
                 ColumnLayout {
                     id: actionCardCol
                     anchors.fill: parent
-                    anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
-                    spacing: root.appTheme ? root.appTheme.sp6 : 4
+                    anchors.margins: root.appTheme.sp12
+                    spacing: root.appTheme.sp6
 
                     RowLayout {
                         Layout.fillWidth: true
                         Text {
                             text: modelData.title || modelData.id || ""
-                            font.pixelSize: root.appTheme ? root.appTheme.fontMd : 14
+                            font.pixelSize: root.appTheme.fontMd
                             font.weight: Font.DemiBold
-                            color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
+                            color: root.appTheme.textPrimary
                             Layout.fillWidth: true
                         }
                         Text {
@@ -139,34 +139,34 @@ ScrollView {
                                 if (risk === "safeWrite") return qsTr("写入")
                                 return qsTr("只读")
                             }
-                            font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
+                            font.pixelSize: root.appTheme.fontXs
                             color: {
                                 var risk = modelData.riskLevel || ""
-                                if (risk === "dangerous") return root.appTheme ? root.appTheme.danger : "#ef4444"
-                                if (risk === "contentWrite") return root.appTheme ? root.appTheme.warning : "#f59e0b"
-                                if (risk === "safeWrite") return root.appTheme ? root.appTheme.success : "#22c55e"
-                                return root.appTheme ? root.appTheme.textSecondary : "#475569"
+                                if (risk === "dangerous") return root.appTheme.danger
+                                if (risk === "contentWrite") return root.appTheme.warning
+                                if (risk === "safeWrite") return root.appTheme.success
+                                return root.appTheme.textSecondary
                             }
                         }
                     }
 
                     Text {
                         text: modelData.id || ""
-                        font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
-                        color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                        font.pixelSize: root.appTheme.fontXs
+                        color: root.appTheme.textSecondary
                         font.family: "monospace"
                     }
 
                     Text {
                         text: modelData.description || ""
-                        font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
-                        color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                        font.pixelSize: root.appTheme.fontSm
+                        color: root.appTheme.textSecondary
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
 
                     RowLayout {
-                        spacing: root.appTheme ? root.appTheme.sp8 : 8
+            spacing: root.appTheme.sp8
                         Button {
                             text: qsTr("执行")
                             visible: modelData.kind === "query" || modelData.kind === "preview"
@@ -187,16 +187,16 @@ ScrollView {
                             }
                             contentItem: AppText {
                                 text: parent.text
-                                color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
-                                font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                                color: root.appTheme.primaryText
+                                font.pixelSize: root.appTheme.fontSm
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
                                 color: parent.hovered
-                                    ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa")
-                                    : (root.appTheme ? root.appTheme.primary : "#3b82f6")
-                                radius: root.appTheme ? root.appTheme.radiusSm : 6
+                                    ? root.appTheme.primaryHover
+                                    : root.appTheme.primary
+                                radius: root.appTheme.radiusSm
                             }
                         }
                         Button {
@@ -236,25 +236,25 @@ ScrollView {
                             }
                             contentItem: AppText {
                                 text: parent.text
-                                color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
-                                font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                                color: root.appTheme.primaryText
+                                font.pixelSize: root.appTheme.fontSm
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
                                 color: parent.enabled
                                     ? (parent.hovered
-                                        ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa")
-                                        : (root.appTheme ? root.appTheme.primary : "#3b82f6"))
-                                    : (root.appTheme ? root.appTheme.border : "#e2e8f0")
-                                radius: root.appTheme ? root.appTheme.radiusSm : 6
+                                        ? root.appTheme.primaryHover
+                                        : root.appTheme.primary)
+                                    : root.appTheme.border
+                                radius: root.appTheme.radiusSm
                             }
                         }
                         Text {
                             text: qsTr("危险操作已阻断")
                             visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
-                            color: root.appTheme ? root.appTheme.danger : "#ef4444"
-                            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                            color: root.appTheme.danger
+                            font.pixelSize: root.appTheme.fontSm
                         }
                     }
                 }
@@ -265,23 +265,23 @@ ScrollView {
         Rectangle {
             Layout.fillWidth: true
             height: 120
-            color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
-            radius: root.appTheme ? root.appTheme.radiusSm : 6
-            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+            color: root.appTheme.surfaceAlt
+            radius: root.appTheme.radiusSm
+            border.color: root.appTheme.border
             border.width: 1
 
             TextArea {
                 id: actionResultText
                 anchors.fill: parent
-                anchors.margins: root.appTheme ? root.appTheme.sp8 : 8
+                anchors.margins: root.appTheme.sp8
                 readOnly: true
                 wrapMode: Text.Wrap
-                color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
-                font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                color: root.appTheme.textPrimary
+                font.pixelSize: root.appTheme.fontSm
                 font.family: "monospace"
                 placeholderText: qsTr("执行结果将显示在此处...")
                 background: Rectangle { color: "transparent" }
-                placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                        placeholderTextColor: root.appTheme.textSecondary
             }
         }
 
@@ -290,24 +290,24 @@ ScrollView {
         Rectangle {
             Layout.fillWidth: true
             height: 320
-            radius: root.appTheme ? root.appTheme.radiusMd : 8
-            color: root.appTheme ? root.appTheme.surface : "#ffffff"
-            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+            radius: root.appTheme.radiusMd
+            color: root.appTheme.surface
+            border.color: root.appTheme.border
             border.width: 1
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: root.appTheme ? root.appTheme.sp12 : 12
-                spacing: root.appTheme ? root.appTheme.sp8 : 8
+                anchors.margins: root.appTheme.sp12
+                spacing: root.appTheme.sp8
                 Text {
                     text: qsTr("获取当前工作区的详细状态信息，可用于排查新建作品失败等问题。")
-                    font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
-                    color: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                    font.pixelSize: root.appTheme.fontSm
+                    color: root.appTheme.textSecondary
                     wrapMode: Text.Wrap
                     Layout.fillWidth: true
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: root.appTheme ? root.appTheme.sp8 : 8
+                        spacing: root.appTheme.sp8
                     Button {
                         text: qsTr("获取工作区诊断")
                         implicitHeight: 32; implicitWidth: 130
@@ -326,14 +326,14 @@ ScrollView {
                         }
                         contentItem: AppText {
                             text: parent.text
-                            color: root.appTheme ? root.appTheme.primaryText : "#ffffff"
-                            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                            color: root.appTheme.primaryText
+                            font.pixelSize: root.appTheme.fontSm
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle {
-                            color: parent.hovered ? (root.appTheme ? root.appTheme.primaryHover : "#60a5fa") : (root.appTheme ? root.appTheme.primary : "#3b82f6")
-                            radius: root.appTheme ? root.appTheme.radiusSm : 6
+                            color: parent.hovered ? root.appTheme.primaryHover : root.appTheme.primary
+                            radius: root.appTheme.radiusSm
                         }
                     }
                     Button {
@@ -347,14 +347,14 @@ ScrollView {
                         }
                         contentItem: AppText {
                             text: parent.text
-                            color: root.appTheme ? root.appTheme.textSecondary : "#475569"
-                            font.pixelSize: root.appTheme ? root.appTheme.fontSm : 12
+                            color: root.appTheme.textSecondary
+                            font.pixelSize: root.appTheme.fontSm
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle {
-                            color: parent.hovered ? (root.appTheme ? root.appTheme.hover : "#f1f5f9") : "transparent"
-                            radius: root.appTheme ? root.appTheme.radiusSm : 6
+                            color: parent.hovered ? root.appTheme.hover : "transparent"
+                            radius: root.appTheme.radiusSm
                         }
                     }
                 }
@@ -369,21 +369,21 @@ ScrollView {
                         selectByMouse: true
                         wrapMode: TextArea.Wrap
                         font.family: "monospace"
-                        font.pixelSize: root.appTheme ? root.appTheme.fontXs : 11
-                        color: root.appTheme ? root.appTheme.textPrimary : "#0f172a"
+                        font.pixelSize: root.appTheme.fontXs
+                        color: root.appTheme.textPrimary
                         background: Rectangle {
-                            color: root.appTheme ? root.appTheme.surfaceAlt : "#f1f5f9"
-                            radius: root.appTheme ? root.appTheme.radiusSm : 6
-                            border.color: root.appTheme ? root.appTheme.border : "#e2e8f0"
+                            color: root.appTheme.surfaceAlt
+                            radius: root.appTheme.radiusSm
+                            border.color: root.appTheme.border
                             border.width: 1
                         }
                         leftPadding: 8; topPadding: 8; rightPadding: 8; bottomPadding: 8
                         placeholderText: qsTr("点击「获取工作区诊断」查看详情...")
-                        placeholderTextColor: root.appTheme ? root.appTheme.textSecondary : "#475569"
+                placeholderTextColor: root.appTheme.textSecondary
                     }
                 }
             }
         }
-        Item { height: root.appTheme ? root.appTheme.sp16 : 16 }
+        Item { height: root.appTheme.sp16 }
     }
 }

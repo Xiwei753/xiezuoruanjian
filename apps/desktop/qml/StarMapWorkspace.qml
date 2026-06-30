@@ -27,7 +27,7 @@ Item {
 
     Rectangle {
         anchors.fill: parent
-        color: dt ? dt.surface : "#1A1D23"
+        color: dt.surface
     }
 
     StarMapCanvas {
@@ -46,7 +46,7 @@ Item {
         variant: "secondary"
         anchors.top: parent.top
         anchors.left: parent.left
-        anchors.margins: dt ? dt.sp16 : 16
+        anchors.margins: dt.sp16
         z: 100
         onClicked: root.backClicked()
     }

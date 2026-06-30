@@ -20,20 +20,12 @@ Rectangle {
     property var appState: ({})
     property var tree: []
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
     signal openProject(string projectId)
     signal createProject()
     signal renameProjectRequested(string projectId, string title)
     signal deleteProjectRequested(string projectId, string title)
 
-    color: dt ? dt.bg : (_inferDark ? "#111318" : "#FCFCFF")
+    color: dt.bg
 
     function getProjects() {
         var projects = []
@@ -117,18 +109,18 @@ Rectangle {
         width: 360
         height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt ? dt.surface : (_inferDark ? "#1A1D23" : "#FCFCFF"); border.color: dt ? dt.border : (_inferDark ? "#2A2E36" : "#CBD5E1"); radius: dt ? dt.radiusXl : 28; border.width: 1 }
+        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt ? dt.sp24 : 24
-            spacing: dt ? dt.sp12 : 12
+            anchors.margins: dt.sp24
+            spacing: dt.sp12
 
             AppText {
                 text: qsTr("重命名作品")
-                color: dt ? dt.onSurface : (_inferDark ? "#E2E2E5" : "#1A1C1E")
-                font.pixelSize: dt ? dt.subtitle : 18
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.onSurface
+                font.pixelSize: dt.subtitle
+                font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
             AppTextField {

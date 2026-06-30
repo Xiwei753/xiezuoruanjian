@@ -18,19 +18,19 @@ Rectangle {
     property string title: ""
     property string value: "0"
     property string caption: ""
-    property color tone: dt ? dt.primary : "#006497"
-    radius: dt ? dt.radiusLg : 16
-    color: dt ? dt.card : "#1E2128"
-    border.color: dt ? dt.border : "#2A2E36"
+    property color tone: dt.primary
+    radius: dt.radiusLg
+    color: dt.card
+    border.color: dt.border
     border.width: 1
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: dt ? dt.sp12 : 12
-        spacing: dt ? dt.sp6 : 6
+        anchors.margins: dt.sp12
+        spacing: dt.sp6
 
-        AppText { text: root.title; color: dt ? dt.onSurfaceVariant : "#42474E"; font.pixelSize: dt ? dt.label : 13; font.family: dt ? dt.fontFamily : "sans-serif" }
-        AppText { text: root.value; color: root.tone; font.pixelSize: dt ? dt.title : 24; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold }
-        AppText { text: root.caption; color: dt ? dt.textMuted : "#74787F"; font.pixelSize: dt ? dt.caption : 12; font.family: dt ? dt.fontFamily : "sans-serif" }
+        AppText { text: root.title; color: dt.onSurfaceVariant; font.pixelSize: dt.label; font.family: dt.fontFamily }
+        AppText { text: root.value; color: root.tone; font.pixelSize: dt.title; font.family: dt.fontFamily; font.weight: Font.Bold }
+        AppText { text: root.caption; color: dt.textMuted; font.pixelSize: dt.caption; font.family: dt.fontFamily }
     }
 }

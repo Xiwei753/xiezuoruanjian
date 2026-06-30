@@ -14,7 +14,7 @@ import QtQuick.Window
 
 Item {
     id: root
-    implicitHeight: mainCol.implicitHeight + (theme ? theme.sp32 : 32)
+    implicitHeight: mainCol.implicitHeight + theme.sp32
     property int lastSyncResultLen: -1
     property double lastSyncStatusLogTime: 0
     property var theme: null
@@ -24,14 +24,6 @@ Item {
 
     property string activeOperationId: ""
     property string activeOperationKind: ""
-
-    // ── SystemPalette 推断：theme 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
 
     // Local reactive sync state
     property string currentSyncStatus: "not_configured"
@@ -130,28 +122,28 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: theme ? theme.sp16 : 16
-        spacing: theme ? theme.sp16 : 16
+        anchors.margins: theme.sp16
+        spacing: theme.sp16
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: theme ? theme.sp12 : 12
+            spacing: theme.sp12
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: theme ? theme.sp4 : 4
+                spacing: theme.sp4
                 AppText {
                     text: qsTr("同步设置")
-                    color: theme ? theme.onBackground : (_inferDark ? "#E2E2E5" : "#1A1C1E")
-                    font.pixelSize: theme ? theme.title : 24
-                    font.family: theme ? theme.fontFamily : "sans-serif"
+                    color: theme.onBackground
+                    font.pixelSize: theme.title
+                    font.family: theme.fontFamily
                     font.weight: Font.Bold
                 }
                 AppText {
                     text: qsTr("配置远端仓库并查看同步状态")
-                    color: theme ? theme.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
-                    font.pixelSize: theme ? theme.body : 14
-                    font.family: theme ? theme.fontFamily : "sans-serif"
+                    color: theme.onSurfaceVariant
+                    font.pixelSize: theme.body
+                    font.family: theme.fontFamily
                 }
             }
 
@@ -166,7 +158,7 @@ Item {
             Layout.fillWidth: true
             dt: root.theme
             variant: "surface"
-            spacing: theme ? theme.sp16 : 16
+            spacing: theme.sp16
 
             AppTextField {
                 id: urlField
@@ -198,7 +190,7 @@ Item {
 
         Flow {
             Layout.fillWidth: true
-            spacing: theme ? theme.sp8 : 8
+            spacing: theme.sp8
 
             AppButton {
                 text: qsTr("保存配置")
@@ -280,26 +272,26 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 180
-            color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.dangerContainer : (_inferDark ? "#93000A" : "#FFDAD6")) : (theme ? theme.surfaceContainerLow : (_inferDark ? "#1F2229" : "#F6F8FB"))
-            border.color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.error : (_inferDark ? "#FFB4AB" : "#BA1A1A")) : (theme ? theme.border : (_inferDark ? "#2A2E36" : "#CBD5E1"))
+            color: root.isFailureStatus(root.currentSyncStatus) ? theme.dangerContainer : theme.surfaceContainerLow
+            border.color: root.isFailureStatus(root.currentSyncStatus) ? theme.error : theme.border
             border.width: root.isFailureStatus(root.currentSyncStatus) ? 2 : 1
-            radius: theme ? theme.radiusLg : 16
+            radius: theme.radiusLg
             clip: true
             visible: (root.currentSyncOperationState !== "" || root.currentSyncStatus === "syncing" || root.isFailureStatus(root.currentSyncStatus))
 
             ScrollView {
                 id: logScroll
                 anchors.fill: parent
-                anchors.margins: theme ? theme.sp12 : 12
+                anchors.margins: theme.sp12
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ScrollBar.vertical.policy: ScrollBar.AsNeeded
                 TextArea {
                     id: syncResultArea
                     width: logScroll.availableWidth
                     text: ""
-                    color: root.isFailureStatus(root.currentSyncStatus) ? (theme ? theme.dangerContainer : (_inferDark ? "#93000A" : "#FFDAD6")) : (theme ? theme.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E"))
+                    color: root.isFailureStatus(root.currentSyncStatus) ? theme.dangerContainer : theme.onSurfaceVariant
                     font.family: "monospace"
-                    font.pixelSize: theme ? theme.caption : 12
+                    font.pixelSize: theme.caption
                     readOnly: true
                     background: null
                     wrapMode: TextEdit.Wrap

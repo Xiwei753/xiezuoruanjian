@@ -15,22 +15,13 @@ Item {
     id: root
     property var dt: null
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
-    readonly property color _primary: dt ? dt.primary : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property color _onPrimary: dt ? dt.onPrimary : (_inferDark ? "#003351" : "#FFFFFF")
-    readonly property color _surfaceContainerLow: dt ? dt.surfaceContainerLow : (_inferDark ? "#1F2229" : "#F6F8FC")
-    readonly property color _switchTrackOn: dt ? dt.switchTrackOn : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property color _switchTrackOff: dt ? dt.switchTrackOff : (_inferDark ? "#42474E" : "#DFE3EB")
-    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
-    readonly property color _outline: dt ? dt.outline : (_inferDark ? "#8C9198" : "#727880")
+    readonly property color _primary: dt.primary
+    readonly property color _onPrimary: dt.onPrimary
+    readonly property color _surfaceContainerLow: dt.surfaceContainerLow
+    readonly property color _switchTrackOn: dt.switchTrackOn
+    readonly property color _switchTrackOff: dt.switchTrackOff
+    readonly property color _border: dt.border
+    readonly property color _outline: dt.outline
 
     property bool checked: false
     signal toggled(bool checked)

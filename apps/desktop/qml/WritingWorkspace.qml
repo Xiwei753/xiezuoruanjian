@@ -111,27 +111,27 @@ Rectangle {
         width: 360
         height: 180
         anchors.centerIn: parent
-        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 28; border.width: 1 }
+        background: Rectangle { color: dt.surface; border.color: dt.border; radius: dt.radiusXl; border.width: 1 }
         header: null
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: dt ? dt.sp24 : 24
-            spacing: dt ? dt.sp16 : 16
+            anchors.margins: dt.sp24
+            spacing: dt.sp16
             AppText {
                 text: qsTr("保存被阻止")
-                color: dt ? dt.textPrimary : "#E2E2E5"
-                font.pixelSize: dt ? dt.subtitle : 18
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textPrimary
+                font.pixelSize: dt.subtitle
+                font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
             AppText {
                 id: emptySaveDialogText
                 Layout.fillWidth: true
                 text: qsTr("空内容保存被阻止，请输入内容后重试")
-                color: dt ? dt.textSecondary : "#8C9198"
-                font.pixelSize: dt ? dt.body : 14
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textSecondary
+                font.pixelSize: dt.body
+                font.family: dt.fontFamily
                 wrapMode: Text.Wrap
             }
             AppButton {
@@ -196,7 +196,7 @@ Rectangle {
         }
     }
 
-    color: dt ? dt.bg : "#111318"
+    color: dt.bg
 
     SplitView {
         anchors.fill: parent
@@ -204,7 +204,7 @@ Rectangle {
 
         handle: Rectangle {
             implicitWidth: 4
-            color: SplitHandle.hovered || SplitHandle.pressed ? (dt ? dt.primary : "#006497") : (dt ? dt.border : "#2A2E36")
+            color: SplitHandle.hovered || SplitHandle.pressed ? dt.primary : dt.border
             Behavior on color { ColorAnimation { duration: 120 } }
         }
 
@@ -214,8 +214,8 @@ Rectangle {
             SplitView.preferredWidth: root.backendRef && root.backendRef.setting_desktop_sidebar_width > 0 ? root.backendRef.setting_desktop_sidebar_width : 240
             SplitView.minimumWidth: 180
             SplitView.maximumWidth: 420
-            color: dt ? dt.sidebar : "#14161B"
-            border.color: dt ? dt.border : "#2A2E36"
+            color: dt.sidebar
+            border.color: dt.border
             border.width: 1
 
             Timer {
@@ -248,20 +248,20 @@ Rectangle {
 
                         RowLayout {
                             anchors.fill: parent
-                            anchors.leftMargin: dt ? dt.sp12 : 12
-                            anchors.rightMargin: dt ? dt.sp8 : 8
-                            spacing: dt ? dt.sp8 : 8
+                            anchors.leftMargin: dt.sp12
+                            anchors.rightMargin: dt.sp8
+                            spacing: dt.sp8
 
                             Rectangle {
                                 width: 28; height: 28
-                                radius: dt ? dt.radiusPill : 999
-                                color: backHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                                radius: dt.radiusPill
+                                color: backHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                                 AppText {
                                     anchors.centerIn: parent
                                     text: "\u2190"
-                                    color: dt ? dt.textSecondary : "#8C9198"
-                                    font.pixelSize: dt ? dt.fontLg : 16
+                                    color: dt.textSecondary
+                                    font.pixelSize: dt.fontLg
                                 }
 
                                 MouseArea {
@@ -275,9 +275,9 @@ Rectangle {
 
                             AppText {
                                 text: root.projectTitle || qsTr("作品")
-                                color: dt ? dt.textPrimary : "#E2E2E5"
-                                font.pixelSize: dt ? dt.fontMd : 14
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.textPrimary
+                                font.pixelSize: dt.fontMd
+                                font.family: dt.fontFamily
                                 font.weight: Font.DemiBold
                                 Layout.fillWidth: true
                                 elide: Text.ElideRight
@@ -286,7 +286,7 @@ Rectangle {
                 }
 
                 // Divider
-                Rectangle { Layout.fillWidth: true; height: 1; color: dt ? dt.border : "#2A2E36" }
+                Rectangle { Layout.fillWidth: true; height: 1; color: dt.border }
 
                 // Tree list
                 ScrollView {
@@ -304,12 +304,12 @@ Rectangle {
                                 Rectangle {
                                     id: delegateBg
                                     anchors.fill: parent
-                                    anchors.leftMargin: dt ? dt.sp8 : 8
-                                    anchors.rightMargin: dt ? dt.sp8 : 8
-                                    radius: dt ? dt.radiusPill : 999
+                                    anchors.leftMargin: dt.sp8
+                                    anchors.rightMargin: dt.sp8
+                                    radius: dt.radiusPill
                                     color: {
-                                        if (isSelected) return dt ? dt.primaryContainer : "#CCE5FF";
-                                        if (delegateHover.containsMouse) return dt ? dt.surfaceVariant : "#DFE3EB";
+                                        if (isSelected) return dt.primaryContainer;
+                                        if (delegateHover.containsMouse) return dt.surfaceVariant;
                                         return "transparent";
                                     }
 
@@ -317,13 +317,13 @@ Rectangle {
 
                                     RowLayout {
                                         anchors.fill: parent
-                                        anchors.leftMargin: model.itemType === "chapter" ? (dt ? dt.sp32 : 32) : (dt ? dt.sp12 : 12)
-                                        spacing: dt ? dt.sp6 : 6
+                                        anchors.leftMargin: model.itemType === "chapter" ? dt.sp32 : dt.sp12
+                                        spacing: dt.sp6
 
                                         Rectangle {
                                             width: 6; height: 6
                                             radius: model.itemType === "volume" ? 0 : 3
-                                            color: delegateBg.isSelected ? (dt ? dt.selectedText : "#CCE5FF") : (dt ? dt.textSecondary : "#8C9198")
+                                            color: delegateBg.isSelected ? dt.selectedText : dt.textSecondary
                                             Layout.alignment: Qt.AlignVCenter
                                             opacity: 0.6
                                         }
@@ -331,11 +331,11 @@ Rectangle {
                                         AppText {
                                             text: model.itemTitle || ""
                                             color: {
-                                                if (delegateBg.isSelected) return dt ? dt.onPrimaryContainer : "#CCE5FF";
-                                                return dt ? dt.textPrimary : "#E2E2E5";
+                                                if (delegateBg.isSelected) return dt.onPrimaryContainer;
+                                                return dt.textPrimary;
                                             }
-                                            font.pixelSize: dt ? dt.label : 13
-                                            font.family: dt ? dt.fontFamily : "sans-serif"
+                                            font.pixelSize: dt.label
+                                            font.family: dt.fontFamily
                                             font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
                                             Layout.fillWidth: true
                                             elide: Text.ElideRight
@@ -369,18 +369,18 @@ Rectangle {
                                         visible: model.itemType === "volume"
                                         width: 20; height: 20
                                         radius: 10
-                                        color: addChapterHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
+                                        color: addChapterHover.containsMouse ? dt.primaryContainer : "transparent"
                                         anchors {
                                             right: parent.right
-                                            rightMargin: dt ? dt.sp8 : 8
+                                            rightMargin: dt.sp8
                                         }
                                         anchors.verticalCenter: parent.verticalCenter
 
                                         AppText {
                                             anchors.centerIn: parent
                                             text: "+"
-                                            color: dt ? dt.primary : "#006497"
-                                            font.pixelSize: dt ? dt.fontSm : 12
+                                            color: dt.primary
+                                            font.pixelSize: dt.fontSm
                                             font.weight: Font.Bold
                                         }
 
@@ -401,25 +401,25 @@ Rectangle {
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.preferredHeight: 36
-                        Layout.leftMargin: dt ? dt.sp8 : 8
-                        Layout.rightMargin: dt ? dt.sp8 : 8
-                        radius: dt ? dt.radiusPill : 999
-                        color: addVolumeHover.containsMouse ? (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
+                        Layout.leftMargin: dt.sp8
+                        Layout.rightMargin: dt.sp8
+                        radius: dt.radiusPill
+                        color: addVolumeHover.containsMouse ? dt.primaryContainer : "transparent"
 
                         RowLayout {
                             anchors.centerIn: parent
-                            spacing: dt ? dt.sp4 : 4
+                            spacing: dt.sp4
                             AppText {
                                 text: "+"
-                                color: dt ? dt.primary : "#006497"
-                                font.pixelSize: dt ? dt.fontMd : 14
+                                color: dt.primary
+                                font.pixelSize: dt.fontMd
                                 font.weight: Font.Bold
                             }
                             AppText {
                                 text: qsTr("新卷")
-                                color: dt ? dt.primary : "#006497"
-                                font.pixelSize: dt ? dt.label : 13
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.primary
+                                font.pixelSize: dt.label
+                                font.family: dt.fontFamily
                             }
                         }
 
@@ -441,9 +441,9 @@ Rectangle {
                         property string itemProjectId: ""
                         property string itemVolumeId: ""
                         background: Rectangle {
-                            color: dt ? dt.surface : "#1A1D23"
-                            border.color: dt ? dt.border : "#2A2E36"
-                            radius: dt ? dt.radiusMd : 12
+                            color: dt.surface
+                            border.color: dt.border
+                            radius: dt.radiusMd
                             border.width: 1
                         }
 
@@ -453,13 +453,13 @@ Rectangle {
                             visible: treeContextMenu.itemType === "project"
                             contentItem: AppText {
                                 text: createVolumeMenuItem.text
-                                color: dt ? dt.textPrimary : "#E2E2E5"
-                                font.pixelSize: dt ? dt.label : 13
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.textPrimary
+                                font.pixelSize: dt.label
+                                font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: createVolumeMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                                color: createVolumeMenuItem.highlighted ? dt.surfaceVariant : "transparent"
                             }
                             onTriggered: root.createVolumeRequested(treeContextMenu.itemProjectId || root.workspaceProjectId)
                         }
@@ -469,13 +469,13 @@ Rectangle {
                             visible: treeContextMenu.itemType === "volume"
                             contentItem: AppText {
                                 text: createChapterMenuItem.text
-                                color: dt ? dt.textPrimary : "#E2E2E5"
-                                font.pixelSize: dt ? dt.label : 13
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.textPrimary
+                                font.pixelSize: dt.label
+                                font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: createChapterMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                                color: createChapterMenuItem.highlighted ? dt.surfaceVariant : "transparent"
                             }
                             onTriggered: root.createChapterRequested(treeContextMenu.itemProjectId, treeContextMenu.itemId)
                         }
@@ -488,13 +488,13 @@ Rectangle {
                             visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
                             contentItem: AppText {
                                 text: renameMenuItem.text
-                                color: dt ? dt.textPrimary : "#E2E2E5"
-                                font.pixelSize: dt ? dt.label : 13
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.textPrimary
+                                font.pixelSize: dt.label
+                                font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: renameMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                                color: renameMenuItem.highlighted ? dt.surfaceVariant : "transparent"
                             }
                             onTriggered: root.renameItemRequested({
                                 type: treeContextMenu.itemType,
@@ -510,13 +510,13 @@ Rectangle {
                             visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
                             contentItem: AppText {
                                 text: deleteMenuItem.text
-                                color: dt ? dt.error : "#FFB4AB"
-                                font.pixelSize: dt ? dt.label : 13
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.error
+                                font.pixelSize: dt.label
+                                font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
-                                color: deleteMenuItem.highlighted ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                                color: deleteMenuItem.highlighted ? dt.surfaceVariant : "transparent"
                             }
                             onTriggered: root.deleteItemRequested({
                                 type: treeContextMenu.itemType,
@@ -575,15 +575,15 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: dt ? dt.bg : "#111318"
+                color: dt.bg
 
                 // Centered paper container
                 Item {
                     anchors.fill: parent
-                    anchors.leftMargin: dt ? dt.sp8 : 8
-                    anchors.rightMargin: dt ? dt.sp8 : 8
-                    anchors.topMargin: dt ? dt.sp8 : 8
-                    anchors.bottomMargin: dt ? dt.sp8 : 8
+                    anchors.leftMargin: dt.sp8
+                    anchors.rightMargin: dt.sp8
+                    anchors.topMargin: dt.sp8
+                    anchors.bottomMargin: dt.sp8
 
                     // Paper background - adapts to available space up to contentMaxWidthVp from LayoutPlan
                     // 关于 LayoutPlan：contentMaxWidthVp 控制 paperBg 最大宽度，
@@ -604,16 +604,16 @@ Rectangle {
                         }
                         height: parent.height
                         anchors.horizontalCenter: parent.horizontalCenter
-                        color: dt ? dt.editorBackground : "#191C21"
-                        radius: dt ? dt.radiusMd : 12
-                        border.color: dt ? dt.border : "#2A2E36"
+                        color: dt.editorBackground
+                        radius: dt.radiusMd
+                        border.color: dt.border
                         border.width: 1
                     }
 
                     // Left drag resize handle
                     MouseArea {
                         id: leftResizeHandle
-                        width: dt ? dt.sp8 : 8
+                        width: dt.sp8
                         anchors.left: paperBg.left
                         anchors.leftMargin: -(width / 2)
                         anchors.top: parent.top
@@ -625,7 +625,7 @@ Rectangle {
                             anchors.centerIn: parent
                             width: 2
                             height: parent.height
-                            color: parent.containsMouse || parent.pressed ? (dt ? dt.primary : "#006497") : "transparent"
+                            color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
                             opacity: parent.pressed ? 0.9 : 0.4
                             Behavior on color { ColorAnimation { duration: 120 } }
                         }
@@ -651,7 +651,7 @@ Rectangle {
                     // Right drag resize handle
                     MouseArea {
                         id: rightResizeHandle
-                        width: dt ? dt.sp8 : 8
+                        width: dt.sp8
                         anchors.right: paperBg.right
                         anchors.rightMargin: -(width / 2)
                         anchors.top: parent.top
@@ -663,7 +663,7 @@ Rectangle {
                             anchors.centerIn: parent
                             width: 2
                             height: parent.height
-                            color: parent.containsMouse || parent.pressed ? (dt ? dt.primary : "#006497") : "transparent"
+                            color: parent.containsMouse || parent.pressed ? dt.primary : "transparent"
                             opacity: parent.pressed ? 0.9 : 0.4
                             Behavior on color { ColorAnimation { duration: 120 } }
                         }
@@ -691,7 +691,7 @@ Rectangle {
                         readonly property bool editorIsScrolling: editorWheelScroller.active || ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
                         property bool editorAnimationSuppressed: false
                         anchors.fill: paperBg
-                        anchors.margins: dt ? dt.sp20 : 20
+                        anchors.margins: dt.sp20
                         clip: true
                         contentWidth: availableWidth
                         contentHeight: Math.max(sujianEditor.content_height, editorCanvas.emptyContentMinimumHeight)
@@ -735,7 +735,7 @@ Rectangle {
 
                         Item {
                             id: editorCanvas
-                            readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + (dt ? dt.sp16 : 16) * 2, editorScroll.availableHeight)
+                            readonly property real emptyContentMinimumHeight: Math.max((settingsBackend ? settingsBackend.setting_font_size : 16) * 2.4 + dt.sp16 * 2, editorScroll.availableHeight)
                             width: editorScroll.availableWidth
                             height: editorScroll.availableHeight
                             implicitHeight: Math.max(sujianEditor.content_height, emptyContentMinimumHeight)
@@ -777,11 +777,11 @@ Rectangle {
                         font_family: "serif"
                         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
                         text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.max(Math.round((settingsBackend.setting_font_size || 16) * 2), 28) : 0
-                        padding: dt ? dt.sp16 : 16
-                        text_color: editorController.colorToHex(dt ? dt.editorText : "#E2E2E5", "#E2E2E5")
-                        selection_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
-                        selected_text_color: editorController.colorToHex(dt ? dt.selectedText : "#CCE5FF", "#CCE5FF")
-                        cursor_color: editorController.colorToHex(dt ? dt.primary : "#006497", "#006497")
+                        padding: dt.sp16
+                        text_color: editorController.colorToHex(dt.editorText, dt.textPrimaryHex)
+                        selection_color: editorController.colorToHex(dt.primary, dt.primaryFallback)
+                        selected_text_color: editorController.colorToHex(dt.selectedText, dt.primaryContainerFallback)
+                        cursor_color: editorController.colorToHex(dt.primary, dt.primaryFallback)
                         smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
                         cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                         typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
@@ -916,20 +916,20 @@ Rectangle {
                 // Empty state
                 ColumnLayout {
                     anchors.centerIn: parent
-                    spacing: dt ? dt.sp12 : 12
+                    spacing: dt.sp12
                     visible: !editorController.chapterId
 
                     Rectangle {
                         width: 32; height: 32
                         radius: 16
-                        color: dt ? dt.textSecondary : "#8C9198"
+                        color: dt.textSecondary
                         opacity: 0.1
                         Layout.alignment: Qt.AlignHCenter
                     }
                     AppText {
                         text: qsTr("请选择或新建章节")
-                        color: dt ? dt.textSecondary : "#8C9198"
-                        font.pixelSize: dt ? dt.fontLg : 16
+                        color: dt.textSecondary
+                        font.pixelSize: dt.fontLg
                         Layout.alignment: Qt.AlignHCenter
                     }
                 }
@@ -945,18 +945,18 @@ Rectangle {
 
                     ColumnLayout {
                         anchors.centerIn: parent
-                        spacing: dt ? dt.sp8 : 8
+                        spacing: dt.sp8
 
                         Rectangle {
                             width: 28; height: 28
-                            radius: dt ? dt.radiusPill : 999
-                            color: drawerBtnHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                            radius: dt.radiusPill
+                            color: drawerBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                             AppText {
                                 anchors.centerIn: parent
                                 text: "\u25C0" // Left arrow to indicate it opens from the right
-                                color: dt ? dt.textMuted : "#8C9198"
-                                font.pixelSize: dt ? dt.fontXs : 11
+                                color: dt.textMuted
+                                font.pixelSize: dt.fontXs
                             }
 
                             MouseArea {

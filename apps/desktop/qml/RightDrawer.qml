@@ -21,29 +21,20 @@ Rectangle {
     property int elevation: 3
     property var appShadow: null
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
-    readonly property color _sidebar: dt ? dt.sidebar : (_inferDark ? "#151C28" : "#F3F7FC")
-    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
-    readonly property color _accentSoft: dt ? dt.accentSoft : (_inferDark ? "#004A77" : "#CCE5FF")
-    readonly property color _accentText: dt ? dt.accentText : (_inferDark ? "#CCE5FF" : "#001E31")
-    readonly property color _card: dt ? dt.card : (_inferDark ? "#1F2229" : "#F6F8FC")
-    readonly property color _textPrimary: dt ? dt.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E")
-    readonly property color _textSecondary: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
-    readonly property color _textMuted: dt ? dt.textMuted : (_inferDark ? "#8C9198" : "#747880")
-    readonly property int _sp4: dt ? dt.sp4 : 4
-    readonly property int _sp8: dt ? dt.sp8 : 8
-    readonly property int _sp16: dt ? dt.sp16 : 16
-    readonly property int _radiusSm: dt ? dt.radiusSm : 8
-    readonly property int _fontSm: dt ? dt.fontSm : 12
-    readonly property int _fontLg: dt ? dt.fontLg : 16
+    readonly property color _sidebar: dt.sidebar
+    readonly property color _border: dt.border
+    readonly property color _accentSoft: dt.accentSoft
+    readonly property color _accentText: dt.accentText
+    readonly property color _card: dt.card
+    readonly property color _textPrimary: dt.textPrimary
+    readonly property color _textSecondary: dt.textSecondary
+    readonly property color _textMuted: dt.textMuted
+    readonly property int _sp4: dt.sp4
+    readonly property int _sp8: dt.sp8
+    readonly property int _sp16: dt.sp16
+    readonly property int _radiusSm: dt.radiusSm
+    readonly property int _fontSm: dt.fontSm
+    readonly property int _fontLg: dt.fontLg
 
     property var backendRef: null
     property var starMapController: null

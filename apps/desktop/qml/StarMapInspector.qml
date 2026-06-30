@@ -16,7 +16,7 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property var dt: null
-    color: dt ? dt.surface : "#1A1D23"
+    color: dt.surface
 
     property string starmapId: ""
     property var selectedNode: null
@@ -36,13 +36,13 @@ Rectangle {
             text: qsTr("属性")
             font.pixelSize: 16
             font.bold: true
-            color: dt ? dt.textPrimary : "#E2E4E9"
+            color: dt.textPrimary
             visible: selectedNode !== null || selectedEdge !== null
         }
 
         AppText {
             text: qsTr("请在左侧选择节点或连线")
-            color: dt ? dt.textSecondary : "#9CA0AB"
+            color: dt.textSecondary
             visible: selectedNode === null && selectedEdge === null
             Layout.alignment: Qt.AlignHCenter
         }
@@ -53,7 +53,7 @@ Rectangle {
             spacing: 12
             visible: selectedNode !== null
 
-            AppText { text: qsTr("标题"); color: dt ? dt.textSecondary : "#8C9198" }
+            AppText { text: qsTr("标题"); color: dt.textSecondary }
             AppTextField {
                 id: titleInput
                 Layout.fillWidth: true
@@ -82,7 +82,7 @@ Rectangle {
             spacing: 12
             visible: selectedEdge !== null
 
-            AppText { text: qsTr("标签"); color: dt ? dt.textSecondary : "#8C9198" }
+            AppText { text: qsTr("标签"); color: dt.textSecondary }
             AppTextField {
                 id: labelInput
                 Layout.fillWidth: true

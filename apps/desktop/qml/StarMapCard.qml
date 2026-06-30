@@ -25,29 +25,29 @@ Rectangle {
 
     width: isChild ? 200 : 260
     height: isChild ? 140 : 180
-    radius: dt ? (isChild ? dt.radiusMd : dt.radiusCard) : 12
-    color: dt ? dt.card : "#1E2128"
-    border.color: hoverArea.containsMouse ? (dt ? dt.accent : "#7B8CDE") : (dt ? dt.border : "#2A2E36")
+    radius: isChild ? dt.radiusMd : dt.radiusCard
+    color: dt.card
+    border.color: hoverArea.containsMouse ? dt.accent : dt.border
     border.width: 1
 
-    Behavior on border.color { ColorAnimation { duration: dt ? dt.animFast : 120 } }
+    Behavior on border.color { ColorAnimation { duration: dt.animFast } }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: dt ? (root.isChild ? dt.sp12 : dt.sp16) : 12
-        spacing: dt ? dt.sp8 : 8
+        anchors.margins: root.isChild ? dt.sp12 : dt.sp16
+        spacing: dt.sp8
 
         // Top row: icon + title + badge
         RowLayout {
             Layout.fillWidth: true
-            spacing: dt ? dt.sp8 : 8
+            spacing: dt.sp8
 
             Rectangle {
                 width: isChild ? 32 : 40
                 height: isChild ? 32 : 40
-                radius: dt ? dt.radiusSm : 8
+                radius: dt.radiusSm
                 color: {
-                    var c = starmapData.accentColor || (dt ? dt.accent : "#7B8CDE");
+                    var c = starmapData.accentColor || dt.accent;
                     return c + "26"; // 15% opacity
                 }
                 Layout.alignment: Qt.AlignTop
@@ -65,8 +65,8 @@ Rectangle {
 
                 AppText {
                     text: starmapData.title || qsTr("未命名星图")
-                    color: dt ? dt.textPrimary : "#E2E4E9"
-                    font.pixelSize: dt ? (root.isChild ? dt.fontSm : dt.fontMd) : 14
+                    color: dt.textPrimary
+                    font.pixelSize: root.isChild ? dt.fontSm : dt.fontMd
                     font.weight: Font.DemiBold
                     Layout.fillWidth: true
                     elide: Text.ElideRight
@@ -80,9 +80,9 @@ Rectangle {
                         return qsTr("独立星图");
                     }
                     color: starmapData.isMainForProject ?
-                           (dt ? dt.accent : "#7B8CDE") :
-                           (dt ? dt.textMuted : "#606470")
-                    font.pixelSize: dt ? dt.fontXs : 11
+                           dt.accent :
+                           dt.textMuted
+                    font.pixelSize: dt.fontXs
                 }
             }
         }
@@ -90,7 +90,7 @@ Rectangle {
         // Stats row
         Row {
             Layout.fillWidth: true
-            spacing: dt ? dt.sp12 : 12
+            spacing: dt.sp12
 
             Repeater {
                 model: [
@@ -105,14 +105,14 @@ Rectangle {
 
                     AppText {
                         text: modelData.value
-                        color: dt ? dt.textPrimary : "#E2E4E9"
-                        font.pixelSize: dt ? (root.isChild ? dt.fontSm : dt.fontMd) : 14
+                        color: dt.textPrimary
+                        font.pixelSize: root.isChild ? dt.fontSm : dt.fontMd
                         font.weight: Font.Bold
                     }
                     AppText {
                         text: modelData.label
-                        color: dt ? dt.textMuted : "#606470"
-                        font.pixelSize: dt ? dt.fontXs : 11
+                        color: dt.textMuted
+                        font.pixelSize: dt.fontXs
                     }
                 }
             }
@@ -123,29 +123,29 @@ Rectangle {
         // Bottom row: child count + time
         Row {
             Layout.fillWidth: true
-            spacing: dt ? dt.sp8 : 8
+            spacing: dt.sp8
 
             Rectangle {
                 visible: (starmapData.childStarmapCount || 0) > 0
-                width: childCountRow.implicitWidth + (dt ? dt.sp8 : 8)
+                width: childCountRow.implicitWidth + dt.sp8
                 height: 20
-                radius: dt ? dt.radiusSm : 8
-                color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
+                radius: dt.radiusSm
+                color: dt.accentSoft
 
                 Row {
                     id: childCountRow
                     anchors.centerIn: parent
-                    spacing: dt ? dt.sp4 : 4
+                    spacing: dt.sp4
                     AppText {
                         text: "\u25BC"
-                        color: dt ? dt.accentText : "#3D4D9E"
-                        font.pixelSize: dt ? dt.fontXs : 11
+                        color: dt.accentText
+                        font.pixelSize: dt.fontXs
                         Layout.alignment: Qt.AlignVCenter
                     }
                     AppText {
                         text: (starmapData.childStarmapCount || 0) + " " + qsTr("子星图")
-                        color: dt ? dt.accentText : "#3D4D9E"
-                        font.pixelSize: dt ? dt.fontXs : 11
+                        color: dt.accentText
+                        font.pixelSize: dt.fontXs
                         Layout.alignment: Qt.AlignVCenter
                     }
                 }
@@ -164,8 +164,8 @@ Rectangle {
                     if (diff < 86400000) return Math.floor(diff / 3600000) + qsTr("小时前");
                     return Math.floor(diff / 86400000) + qsTr("天前");
                 }
-                color: dt ? dt.textMuted : "#606470"
-                font.pixelSize: dt ? dt.fontXs : 11
+                color: dt.textMuted
+                font.pixelSize: dt.fontXs
                 Layout.alignment: Qt.AlignVCenter
             }
         }

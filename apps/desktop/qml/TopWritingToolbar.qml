@@ -74,44 +74,44 @@ Rectangle {
 
     onCurrentFontSizeChanged: root.syncFontSizeInput()
 
-    color: dt ? dt.surface : "#FCFCFF"
+    color: dt.surface
     height: 48
 
     RowLayout {
         anchors.fill: parent
-        anchors.leftMargin: dt ? dt.sp16 : 16
-        anchors.rightMargin: dt ? dt.sp16 : 16
-        spacing: dt ? dt.sp4 : 4
+        anchors.leftMargin: dt.sp16
+        anchors.rightMargin: dt.sp16
+        spacing: dt.sp4
 
         // Font button (triggers popover)
         Rectangle {
-            width: fontRow.implicitWidth + (dt ? dt.sp12 : 12)
+            width: fontRow.implicitWidth + dt.sp12
             height: 32
-            radius: dt ? dt.radiusPill : 999
+            radius: dt.radiusPill
             color: fontPopover.visible || fontHover.containsMouse ?
-                   (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
+                   dt.primaryContainer : "transparent"
 
             Row {
                 id: fontRow
                 anchors.centerIn: parent
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
                 AppText {
                     text: "A"
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                     font.weight: Font.Bold
                 }
                 AppText {
                     text: Math.round(root.currentFontSize) + "px"
-                    color: dt ? dt.textPrimary : "#E2E2E5"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textPrimary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
                 AppText {
                     text: "\u25BE"
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    color: dt.textSecondary
+                    font.pixelSize: dt.fontXs
                 }
             }
 
@@ -130,32 +130,32 @@ Rectangle {
 
         // Line Spacing button (triggers lineSpacingPopover)
         Rectangle {
-            width: spacingRow.implicitWidth + (dt ? dt.sp12 : 12)
+            width: spacingRow.implicitWidth + dt.sp12
             height: 32
-            radius: dt ? dt.radiusPill : 999
+            radius: dt.radiusPill
             color: lineSpacingPopover.visible || spacingHover.containsMouse ?
-                   (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
+                   dt.primaryContainer : "transparent"
 
             Row {
                 id: spacingRow
                 anchors.centerIn: parent
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
                 AppText {
                     text: "\u2630"
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
                 AppText {
                     text: Number(root.currentLineSpacing).toFixed(1) + "x"
-                    color: dt ? dt.textPrimary : "#E2E2E5"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textPrimary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
                 AppText {
                     text: "\u25BE"
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    color: dt.textSecondary
+                    font.pixelSize: dt.fontXs
                 }
             }
 
@@ -174,33 +174,33 @@ Rectangle {
 
         // Paragraph Layout button (triggers layoutPopover)
         Rectangle {
-            width: layoutRow.implicitWidth + (dt ? dt.sp12 : 12)
+            width: layoutRow.implicitWidth + dt.sp12
             height: 32
-            radius: dt ? dt.radiusPill : 999
+            radius: dt.radiusPill
             color: layoutPopover.visible || layoutHover.containsMouse ?
-                   (dt ? dt.primaryContainer : "#CCE5FF") : "transparent"
+                   dt.primaryContainer : "transparent"
 
             Row {
                 id: layoutRow
                 anchors.centerIn: parent
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
                 AppText {
                     text: "\u21E5"
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                     font.weight: Font.Bold
                 }
                 AppText {
                     text: qsTr("段落")
-                    color: dt ? dt.textPrimary : "#E2E2E5"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textPrimary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
                 AppText {
                     text: "\u25BE"
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    color: dt.textSecondary
+                    font.pixelSize: dt.fontXs
                 }
             }
 
@@ -220,22 +220,22 @@ Rectangle {
         // Format button
         Rectangle {
             visible: true
-            width: formatRow.implicitWidth + (dt ? dt.sp12 : 12)
+            width: formatRow.implicitWidth + dt.sp12
             height: 32
-            radius: dt ? dt.radiusPill : 999
-            color: formatHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
-            border.color: dt ? dt.border : "#2A2E36"
+            radius: dt.radiusPill
+            color: formatHover.containsMouse ? dt.surfaceVariant : "transparent"
+            border.color: dt.border
             border.width: 1
 
             Row {
                 id: formatRow
                 anchors.centerIn: parent
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
                 AppText {
                     text: qsTr("一键排版")
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
             }
 
@@ -253,22 +253,22 @@ Rectangle {
         // Star map button
         Rectangle {
             visible: true
-            width: starRow.implicitWidth + (dt ? dt.sp12 : 12)
+            width: starRow.implicitWidth + dt.sp12
             height: 32
-            radius: dt ? dt.radiusPill : 999
-            color: starHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
-            border.color: dt ? dt.border : "#2A2E36"
+            radius: dt.radiusPill
+            color: starHover.containsMouse ? dt.surfaceVariant : "transparent"
+            border.color: dt.border
             border.width: 1
 
             Row {
                 id: starRow
                 anchors.centerIn: parent
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
                 AppText {
                     text: qsTr("星图")
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
             }
 
@@ -284,22 +284,22 @@ Rectangle {
         // Stats button
         Rectangle {
             visible: true
-            width: statsRow.implicitWidth + (dt ? dt.sp12 : 12)
+            width: statsRow.implicitWidth + dt.sp12
             height: 32
-            radius: dt ? dt.radiusPill : 999
-            color: statsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
-            border.color: dt ? dt.border : "#2A2E36"
+            radius: dt.radiusPill
+            color: statsHover.containsMouse ? dt.surfaceVariant : "transparent"
+            border.color: dt.border
             border.width: 1
 
             Row {
                 id: statsRow
                 anchors.centerIn: parent
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
                 AppText {
                     text: qsTr("统计")
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
             }
 
@@ -315,22 +315,22 @@ Rectangle {
         // Settings button
         Rectangle {
             visible: true
-            width: settingsRow.implicitWidth + (dt ? dt.sp12 : 12)
+            width: settingsRow.implicitWidth + dt.sp12
             height: 32
-            radius: dt ? dt.radiusPill : 999
-            color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
-            border.color: dt ? dt.border : "#2A2E36"
+            radius: dt.radiusPill
+            color: settingsHover.containsMouse ? dt.surfaceVariant : "transparent"
+            border.color: dt.border
             border.width: 1
 
             Row {
                 id: settingsRow
                 anchors.centerIn: parent
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
                 AppText {
                     text: qsTr("设置")
-                    color: dt ? dt.textSecondary : "#8C9198"
-                    font.pixelSize: dt ? dt.label : 13
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.label
+                    font.family: dt.fontFamily
                 }
             }
 
@@ -343,14 +343,14 @@ Rectangle {
             }
         }
 
-        Item { Layout.preferredWidth: dt ? dt.sp8 : 8 }
+        Item { Layout.preferredWidth: dt.sp8 }
 
         // Save status
         AppText {
             text: root.saveStatus || ""
-            color: dt ? dt.textSecondary : "#8C9198"
-            font.pixelSize: dt ? dt.caption : 12
-            font.family: dt ? dt.fontFamily : "sans-serif"
+            color: dt.textSecondary
+            font.pixelSize: dt.caption
+            font.family: dt.fontFamily
             visible: text !== ""
         }
     }
@@ -358,52 +358,52 @@ Rectangle {
     // === Font Size Popover ===
     Popup {
         id: fontPopover
-        y: root.height + (dt ? dt.sp8 : 8)
+        y: root.height + dt.sp8
         x: 60
         width: 200
-        padding: dt ? dt.sp12 : 12
+        padding: dt.sp12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusXl : 28
-            color: dt ? dt.surface : "#1A1D23"
-            border.color: dt ? dt.border : "#2A2E36"
+            radius: dt.radiusXl
+            color: dt.surface
+            border.color: dt.border
             border.width: 1
         }
 
         contentItem: ColumnLayout {
-            spacing: dt ? dt.sp12 : 12
+            spacing: dt.sp12
 
             AppText {
                 text: qsTr("字号")
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.subtitle : 18
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textPrimary
+                font.pixelSize: dt.subtitle
+                font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
 
             // Quick presets
             Flow {
                 Layout.fillWidth: true
-                spacing: dt ? dt.sp6 : 6
+                spacing: dt.sp6
 
                 Repeater {
                     model: [12, 14, 16, 18, 20, 24]
 
                     Rectangle {
                         width: 40; height: 32
-                        radius: dt ? dt.radiusPill : 999
+                        radius: dt.radiusPill
                         color: Math.round(root.currentFontSize) === modelData ?
-                               (dt ? dt.primaryContainer : "#CCE5FF") :
-                               presetHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                               dt.primaryContainer :
+                               presetHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                         AppText {
                             anchors.centerIn: parent
                             text: modelData
                             color: Math.round(root.currentFontSize) === modelData ?
-                                   (dt ? dt.selectedText : "#CCE5FF") :
-                                   (dt ? dt.textSecondary : "#8C9198")
-                            font.pixelSize: dt ? dt.label : 13
-                            font.family: dt ? dt.fontFamily : "sans-serif"
+                                   dt.selectedText :
+                                   dt.textSecondary
+                            font.pixelSize: dt.label
+                            font.family: dt.fontFamily
                             font.weight: Math.round(root.currentFontSize) === modelData ? Font.DemiBold : Font.Normal
                         }
 
@@ -424,12 +424,12 @@ Rectangle {
             // Slider
             RowLayout {
                 Layout.fillWidth: true
-                spacing: dt ? dt.sp8 : 8
+                spacing: dt.sp8
 
                 AppText {
                     text: "10"
-                    color: dt ? dt.textMuted : "#8C9198"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    color: dt.textMuted
+                    font.pixelSize: dt.fontXs
                 }
 
                 AppSlider {
@@ -445,14 +445,14 @@ Rectangle {
 
                 AppText {
                     text: "72"
-                    color: dt ? dt.textMuted : "#8C9198"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    color: dt.textMuted
+                    font.pixelSize: dt.fontXs
                 }
             }
 
             RowLayout {
                 Layout.alignment: Qt.AlignHCenter
-                spacing: dt ? dt.sp6 : 6
+                spacing: dt.sp6
 
                 TextField {
                     id: fontSizeInput
@@ -463,31 +463,31 @@ Rectangle {
                     selectByMouse: true
                     inputMethodHints: Qt.ImhDigitsOnly
                     validator: IntValidator { bottom: root.minFontSize; top: root.maxFontSize }
-                    color: dt ? dt.textPrimary : "#E2E4E9"
-                    selectionColor: dt ? dt.primary : "#006497"
-                    selectedTextColor: dt ? dt.onPrimary : "#FFFFFF"
-                    font.pixelSize: dt ? dt.body : 14
-                    font.family: dt ? dt.fontFamily : "sans-serif"
-                    leftPadding: dt ? dt.sp8 : 8
-                    rightPadding: dt ? dt.sp8 : 8
-                    topPadding: dt ? dt.sp4 : 4
-                    bottomPadding: dt ? dt.sp4 : 4
+                    color: dt.textPrimary
+                    selectionColor: dt.primary
+                    selectedTextColor: dt.onPrimary
+                    font.pixelSize: dt.body
+                    font.family: dt.fontFamily
+                    leftPadding: dt.sp8
+                    rightPadding: dt.sp8
+                    topPadding: dt.sp4
+                    bottomPadding: dt.sp4
                     onTextEdited: root.commitFontSizeInput(false)
                     onAccepted: root.commitFontSizeInput(true)
                     onEditingFinished: root.commitFontSizeInput(true)
                     background: Rectangle {
-                        color: dt ? dt.surfaceContainerLow : "#ffffff"
-                        border.color: fontSizeInput.activeFocus ? (dt ? dt.primary : "#006497") : (dt ? dt.border : "#2A2E36")
+                        color: dt.surfaceContainerLow
+                        border.color: fontSizeInput.activeFocus ? dt.primary : dt.border
                         border.width: fontSizeInput.activeFocus ? 2 : 1
-                        radius: dt ? dt.radiusMd : 12
+                        radius: dt.radiusMd
                     }
                 }
 
                 AppText {
                     text: "px"
-                    color: dt ? dt.textSecondary : "#9CA0AB"
-                    font.pixelSize: dt ? dt.fontSm : 12
-                    font.family: dt ? dt.fontFamily : "sans-serif"
+                    color: dt.textSecondary
+                    font.pixelSize: dt.fontSm
+                    font.family: dt.fontFamily
                     Layout.alignment: Qt.AlignVCenter
                 }
             }
@@ -497,52 +497,52 @@ Rectangle {
     // === Line Spacing Popover ===
     Popup {
         id: lineSpacingPopover
-        y: root.height + (dt ? dt.sp8 : 8)
+        y: root.height + dt.sp8
         x: 100
         width: 200
-        padding: dt ? dt.sp12 : 12
+        padding: dt.sp12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusXl : 28
-            color: dt ? dt.surface : "#1A1D23"
-            border.color: dt ? dt.border : "#2A2E36"
+            radius: dt.radiusXl
+            color: dt.surface
+            border.color: dt.border
             border.width: 1
         }
 
         contentItem: ColumnLayout {
-            spacing: dt ? dt.sp12 : 12
+            spacing: dt.sp12
 
             AppText {
                 text: qsTr("行距倍数")
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.subtitle : 18
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textPrimary
+                font.pixelSize: dt.subtitle
+                font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
 
             // Quick presets
             Flow {
                 Layout.fillWidth: true
-                spacing: dt ? dt.sp6 : 6
+                spacing: dt.sp6
 
                 Repeater {
                     model: [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0]
 
                     Rectangle {
                         width: 40; height: 32
-                        radius: dt ? dt.radiusPill : 999
+                        radius: dt.radiusPill
                         color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
-                               (dt ? dt.primaryContainer : "#CCE5FF") :
-                               presetHover.containsMouse ? (dt ? dt.surfaceVariant : "#DFE3EB") : "transparent"
+                               dt.primaryContainer :
+                               presetHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                         AppText {
                             anchors.centerIn: parent
                             text: Number(modelData).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")
                             color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
-                                   (dt ? dt.selectedText : "#CCE5FF") :
-                                   (dt ? dt.textSecondary : "#8C9198")
-                            font.pixelSize: dt ? dt.label : 13
-                            font.family: dt ? dt.fontFamily : "sans-serif"
+                                   dt.selectedText :
+                                   dt.textSecondary
+                            font.pixelSize: dt.label
+                            font.family: dt.fontFamily
                             font.weight: Math.abs(root.currentLineSpacing - modelData) < 0.01 ? Font.DemiBold : Font.Normal
                         }
 
@@ -563,12 +563,12 @@ Rectangle {
             // Slider
             RowLayout {
                 Layout.fillWidth: true
-                spacing: dt ? dt.sp8 : 8
+                spacing: dt.sp8
 
                 AppText {
                     text: "1.0"
-                    color: dt ? dt.textMuted : "#8C9198"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    color: dt.textMuted
+                    font.pixelSize: dt.fontXs
                 }
 
                 AppSlider {
@@ -584,15 +584,15 @@ Rectangle {
 
                 AppText {
                     text: "3.0"
-                    color: dt ? dt.textMuted : "#8C9198"
-                    font.pixelSize: dt ? dt.fontXs : 11
+                    color: dt.textMuted
+                    font.pixelSize: dt.fontXs
                 }
             }
 
             AppText {
                 text: Number(root.currentLineSpacing).toFixed(1) + " x"
-                color: dt ? dt.textSecondary : "#9CA0AB"
-                font.pixelSize: dt ? dt.fontSm : 12
+                color: dt.textSecondary
+                font.pixelSize: dt.fontSm
                 Layout.alignment: Qt.AlignHCenter
             }
         }
@@ -601,48 +601,48 @@ Rectangle {
     // === Layout Popover ===
     Popup {
         id: layoutPopover
-        y: root.height + (dt ? dt.sp8 : 8)
+        y: root.height + dt.sp8
         x: 180
         width: 240
-        padding: dt ? dt.sp12 : 12
+        padding: dt.sp12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusXl : 28
-            color: dt ? dt.surface : "#1A1D23"
-            border.color: dt ? dt.border : "#2A2E36"
+            radius: dt.radiusXl
+            color: dt.surface
+            border.color: dt.border
             border.width: 1
         }
 
         contentItem: ColumnLayout {
-            spacing: dt ? dt.sp12 : 12
+            spacing: dt.sp12
 
             AppText {
                 text: qsTr("段落设置")
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.subtitle : 18
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textPrimary
+                font.pixelSize: dt.subtitle
+                font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
 
             // Editor width slider
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: dt ? dt.sp4 : 4
+                spacing: dt.sp4
 
                 AppText {
                     text: qsTr("正文宽度")
-                    color: dt ? dt.textSecondary : "#9CA0AB"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt.textSecondary
+                    font.pixelSize: dt.fontSm
                 }
 
                 RowLayout {
                     Layout.fillWidth: true
-                    spacing: dt ? dt.sp8 : 8
+                    spacing: dt.sp8
 
                     AppText {
                         text: "480"
-                        color: dt ? dt.textMuted : "#8C9198"
-                        font.pixelSize: dt ? dt.fontXs : 11
+                        color: dt.textMuted
+                        font.pixelSize: dt.fontXs
                     }
 
                     AppSlider {
@@ -663,39 +663,39 @@ Rectangle {
 
                     AppText {
                         text: "3840"
-                        color: dt ? dt.textMuted : "#8C9198"
-                        font.pixelSize: dt ? dt.fontXs : 11
+                        color: dt.textMuted
+                        font.pixelSize: dt.fontXs
                     }
                 }
 
                 AppText {
                     text: Math.round(widthSlider.value) + " px"
-                    color: dt ? dt.textSecondary : "#9CA0AB"
-                    font.pixelSize: dt ? dt.fontSm : 12
+                    color: dt.textSecondary
+                    font.pixelSize: dt.fontSm
                     Layout.alignment: Qt.AlignHCenter
                 }
             }
 
             // Divider
-            Rectangle { Layout.fillWidth: true; height: 1; color: dt ? dt.border : "#2A2E36" }
+            Rectangle { Layout.fillWidth: true; height: 1; color: dt.border }
 
             // First line indent
             RowLayout {
                 Layout.fillWidth: true
-                spacing: dt ? dt.sp8 : 8
+                spacing: dt.sp8
 
                 Column {
                     Layout.fillWidth: true
                     spacing: 2
                     AppText {
                         text: qsTr("首行缩进")
-                        color: dt ? dt.textPrimary : "#E2E2E5"
-                        font.pixelSize: dt ? dt.fontMd : 14
+                        color: dt.textPrimary
+                        font.pixelSize: dt.fontMd
                     }
                     AppText {
                         text: qsTr("段落开头缩进两个字符")
-                        color: dt ? dt.textMuted : "#8C9198"
-                        font.pixelSize: dt ? dt.fontXs : 11
+                        color: dt.textMuted
+                        font.pixelSize: dt.fontXs
                     }
                 }
 

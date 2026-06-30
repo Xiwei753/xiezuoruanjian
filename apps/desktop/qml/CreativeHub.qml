@@ -28,14 +28,6 @@ Rectangle {
     property bool aiEnabled: false
     property var layoutPlan: null
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
     signal openProject(string projectId, string projectTitle)
     signal createProject()
     signal openSettings()
@@ -45,7 +37,7 @@ Rectangle {
     signal renameProjectRequested(string projectId, string title)
     signal deleteProjectRequested(string projectId, string title)
 
-    color: dt ? dt.bg : (_inferDark ? "#111318" : "#FCFCFF")
+    color: dt.bg
 
     ColumnLayout {
         anchors.fill: parent
@@ -55,32 +47,32 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 64
-            color: dt ? dt.surface : (_inferDark ? "#1A1D23" : "#FCFCFF")
-            border.color: dt ? dt.border : (_inferDark ? "#2A2E36" : "#CBD5E1")
+            color: dt.surface
+            border.color: dt.border
             border.width: 1
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: dt ? dt.sp32 : 32
-                anchors.rightMargin: dt ? dt.sp32 : 32
-                spacing: dt ? dt.sp32 : 32
+                anchors.leftMargin: dt.sp32
+                anchors.rightMargin: dt.sp32
+                spacing: dt.sp32
 
                 // Logo
                 Row {
-                    spacing: dt ? dt.sp10 : 10
+                    spacing: dt.sp10
                     Layout.alignment: Qt.AlignVCenter
                     AppText {
                         text: qsTr("素笺写作")
-                        color: dt ? dt.primary : (_inferDark ? "#92CCFF" : "#006497")
-                        font.pixelSize: dt ? dt.fontXl : 18
-                        font.family: dt ? dt.fontFamily : "sans-serif"
+                        color: dt.primary
+                        font.pixelSize: dt.fontXl
+                        font.family: dt.fontFamily
                         font.weight: Font.Bold
                     }
                 }
 
                 // Navigation tabs
                 Row {
-                    spacing: dt ? dt.sp4 : 4
+                    spacing: dt.sp4
                     Layout.alignment: Qt.AlignVCenter
 
                     Repeater {
@@ -91,22 +83,22 @@ Rectangle {
                         ]
 
                         Rectangle {
-                            width: navLabel.implicitWidth + (dt ? dt.sp20 : 20)
+                            width: navLabel.implicitWidth + dt.sp20
                             height: 36
-                            radius: dt ? dt.radiusPill : 999
+                            radius: dt.radiusPill
                             color: root.currentTab === modelData.idx ?
-                                   (dt ? dt.primaryContainer : (_inferDark ? "#004A77" : "#CCE5FF")) :
-                                   navHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
+                                   dt.primaryContainer :
+                                   navHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                             AppText {
                                 id: navLabel
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
-                                       (dt ? dt.onPrimaryContainer : (_inferDark ? "#CCE5FF" : "#001E31")) :
-                                       (dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E"))
-                                font.pixelSize: dt ? dt.label : 13
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                       dt.onPrimaryContainer :
+                                       dt.onSurfaceVariant
+                                font.pixelSize: dt.label
+                                font.family: dt.fontFamily
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
                             }
 
@@ -125,30 +117,30 @@ Rectangle {
 
                 // Right actions — enlarged buttons
                 Row {
-                    spacing: dt ? dt.sp8 : 8
+                    spacing: dt.sp8
                     Layout.alignment: Qt.AlignVCenter
 
                     // Sync status indicator
                     Rectangle {
-                        width: syncRow.implicitWidth + (dt ? dt.sp16 : 16)
+                        width: syncRow.implicitWidth + dt.sp16
                         height: 40
-                        radius: dt ? dt.radiusPill : 999
-                        color: syncHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
+                        radius: dt.radiusPill
+                        color: syncHover.containsMouse ? dt.surfaceVariant : "transparent"
                         visible: root.appState && root.appState.sync && root.appState.sync.status !== "not_configured"
 
                         Row {
                             id: syncRow
                             anchors.centerIn: parent
-                            spacing: dt ? dt.sp6 : 6
+                            spacing: dt.sp6
 
                             Rectangle {
                                 width: 8; height: 8; radius: 4
                                 color: {
                                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                                    if (s === "success") return dt ? dt.success : "#5CB880";
-                                    if (s === "syncing") return dt ? dt.warning : "#E0A840";
-                                    if (s === "error" || s === "conflict" || s === "partial_conflict") return dt ? dt.error : "#E06060";
-                                    return dt ? dt.textMuted : "#606470";
+                                    if (s === "success") return dt.success;
+                                    if (s === "syncing") return dt.warning;
+                                    if (s === "error" || s === "conflict" || s === "partial_conflict") return dt.error;
+                                    return dt.textMuted;
                                 }
                                 Layout.alignment: Qt.AlignVCenter
                             }
@@ -164,11 +156,11 @@ Rectangle {
                                      // 已配置但无特定状态时显示"同步"
                                      return qsTr("同步");
                                  }
-                                color: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
-                                font.pixelSize: dt ? dt.caption : 12
-                                font.family: dt ? dt.fontFamily : "sans-serif"
-                                Layout.alignment: Qt.AlignVCenter
-                                visible: root.width > 700
+                                 color: dt.onSurfaceVariant
+                                 font.pixelSize: dt.caption
+                                 font.family: dt.fontFamily
+                                 Layout.alignment: Qt.AlignVCenter
+                                 visible: root.width > 700
                             }
                         }
 
@@ -190,15 +182,15 @@ Rectangle {
                     Rectangle {
                         width: settingsText.implicitWidth + 24
                         height: 40
-                        radius: dt ? dt.radiusPill : 999
-                        color: settingsHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
+                        radius: dt.radiusPill
+                        color: settingsHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                         AppText {
                             id: settingsText
                             anchors.centerIn: parent
                             text: qsTr("设置")
-                            color: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
-                            font.pixelSize: dt ? dt.caption : 12
+                            color: dt.onSurfaceVariant
+                            font.pixelSize: dt.caption
                         }
 
                         MouseArea {
@@ -212,20 +204,20 @@ Rectangle {
 
                     // Workspace switch
                     Rectangle {
-                        width: switchRow.implicitWidth + (dt ? dt.sp16 : 16)
+                        width: switchRow.implicitWidth + dt.sp16
                         height: 40
-                        radius: dt ? dt.radiusPill : 999
-                        color: switchHover.containsMouse ? (dt ? dt.surfaceVariant : (_inferDark ? "#42474E" : "#DFE3EB")) : "transparent"
+                        radius: dt.radiusPill
+                        color: switchHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                         Row {
                             id: switchRow
                             anchors.centerIn: parent
-                            spacing: dt ? dt.sp6 : 6
+                            spacing: dt.sp6
                             AppText {
                                 text: qsTr("切换工作区")
-                                color: dt ? dt.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
-                                font.pixelSize: dt ? dt.caption : 12
-                                font.family: dt ? dt.fontFamily : "sans-serif"
+                                color: dt.onSurfaceVariant
+                                font.pixelSize: dt.caption
+                                font.family: dt.fontFamily
                                 Layout.alignment: Qt.AlignVCenter
                                 visible: true
                             }

@@ -107,7 +107,7 @@ QtObject {
 
         var isDark = dt ? dt.isDark : "<no-dt>";
         var editorText = dt ? String(dt.editorText) : "<no-dt>";
-        var convertedEditorText = dt ? controller.colorToHex(dt.editorText, "#E2E2E5") : "<no-dt>";
+        var convertedEditorText = dt ? controller.colorToHex(dt.editorText, dt.textPrimaryHex) : "<no-dt>";
         backendRef.log_qml("info", "editor", "theme_color_probe",
                            "reason=" + reason
                            + " themeMode=" + themeMode

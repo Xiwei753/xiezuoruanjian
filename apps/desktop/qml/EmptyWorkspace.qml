@@ -18,28 +18,19 @@ Item {
     id: root
     property var dt: null
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
-    readonly property color _bg: dt ? dt.bg : (_inferDark ? "#1A1D23" : "#FCFCFF")
-    readonly property color _primaryContainer: dt ? dt.primaryContainer : (_inferDark ? "#004A77" : "#CCE5FF")
-    readonly property color _primary: dt ? dt.primary : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
-    readonly property color _textPrimary: dt ? dt.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E")
-    readonly property color _textSecondary: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
-    readonly property int _radiusXs: dt ? dt.radiusXs : 4
-    readonly property int _sp8: dt ? dt.sp8 : 8
-    readonly property int _sp12: dt ? dt.sp12 : 12
-    readonly property int _sp24: dt ? dt.sp24 : 24
-    readonly property int _title: dt ? dt.title : 24
-    readonly property int _body: dt ? dt.body : 14
-    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
+    readonly property color _bg: dt.bg
+    readonly property color _primaryContainer: dt.primaryContainer
+    readonly property color _primary: dt.primary
+    readonly property color _border: dt.border
+    readonly property color _textPrimary: dt.textPrimary
+    readonly property color _textSecondary: dt.textSecondary
+    readonly property int _radiusXs: dt.radiusXs
+    readonly property int _sp8: dt.sp8
+    readonly property int _sp12: dt.sp12
+    readonly property int _sp24: dt.sp24
+    readonly property int _title: dt.title
+    readonly property int _body: dt.body
+    readonly property string _fontFamily: dt.fontFamily
 
     property var backendRef: null
 

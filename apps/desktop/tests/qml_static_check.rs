@@ -98,12 +98,13 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || trimmed.contains("color=")
                     || trimmed.contains("color :")
                 {
-                    // Exemption: SystemPalette / DesignTokens fallback patterns
-                    let is_system_palette_fallback = trimmed.contains("_inferDark")
-                        || trimmed.contains("isDark")
-                        || trimmed.contains("Application.styleHints.colorScheme")
+                    // Exemption: DesignTokens.qml and main.qml are allowed to define dark colors directly.
+                    // All other components must use semantic tokens from DesignTokens.
+                    // Note: _inferDark and isDark exemptions have been removed — components should
+                    // no longer infer dark/light mode themselves; use DesignTokens instead.
+                    let is_system_palette_fallback = trimmed.contains("Application.styleHints.colorScheme")
                         || trimmed.contains("Qt.ColorScheme.Dark");
-                    let is_design_tokens_def = file_name == "DesignTokens.qml";
+                    let is_whitelisted = file_name == "DesignTokens.qml" || file_name == "main.qml";
                     let is_scrim_or_shadow = trimmed.contains("scrim")
                         || trimmed.contains("shadow")
                         || trimmed.contains("Shadow");
@@ -115,9 +116,9 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             || lower.contains(&format!("'{}'", c))
                             || lower.contains(&c)
                         {
-                            // Exempt #1A1C1E/#1a1c1e in SystemPalette fallback or DesignTokens definition
+                            // Exempt #1A1C1E/#1a1c1e in SystemPalette fallback or whitelisted files
                             if (c == "#1a1c1e")
-                                && (is_system_palette_fallback || is_design_tokens_def)
+                                && (is_system_palette_fallback || is_whitelisted)
                             {
                                 continue;
                             }
@@ -154,6 +155,41 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                                 file_name, line_num, trimmed
                             );
                             has_errors = true;
+                        }
+                    }
+                }
+
+                // 5. Check for hex colors in non-whitelisted QML files
+                // Only DesignTokens.qml and main.qml are allowed to define hex colors directly.
+                // All other components must use semantic tokens from DesignTokens.
+                // TRANSITION PERIOD: This check is currently warning-only (no has_errors = true).
+                // Once all components have been migrated to use DesignTokens semantic tokens,
+                // change the eprintln! to also set has_errors = true.
+                let hex_color_whitelist = ["DesignTokens.qml", "main.qml"];
+                if !hex_color_whitelist.contains(&file_name) {
+                    // Match hex colors: #RRGGBB or #AARRGGBB (6 or 8 hex digits after #)
+                    let hex_re = regex::Regex::new(r#"#[0-9A-Fa-f]{6,8}"#).unwrap();
+                    if hex_re.is_match(trimmed) {
+                        // Exception: if the line is a comment (already skipped above, but double-check)
+                        // Exception: Qt.rgba() calls use decimal, not hex — but if there's a hex
+                        // color on the same line, it's still a violation regardless.
+                        // Exception: scrim/shadow contexts with #000000 are allowed (covered by
+                        // existing rule above, but we also allow them here for consistency).
+                        let is_scrim_or_shadow = trimmed.contains("scrim")
+                            || trimmed.contains("shadow")
+                            || trimmed.contains("Shadow");
+                        // Check if the only hex match is #000000 in scrim/shadow context
+                        let hex_matches: Vec<_> = hex_re.find_iter(trimmed).collect();
+                        let all_allowed = is_scrim_or_shadow
+                            && hex_matches.iter().all(|m| m.as_str().eq_ignore_ascii_case("#000000"));
+
+                        if !all_allowed {
+                            // TRANSITION: warning only — do NOT set has_errors = true yet.
+                            // Change to has_errors = true after all components are migrated.
+                            eprintln!(
+                                "{}:{}: Hex color found in non-whitelisted component. Use DesignTokens semantic tokens instead: {}",
+                                file_name, line_num, trimmed
+                            );
                         }
                     }
                 }

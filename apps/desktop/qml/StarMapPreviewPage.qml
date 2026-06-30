@@ -19,19 +19,19 @@ Rectangle {
     property var backendRef: null
     property var appState: ({})
 
-    color: dt ? dt.bg : "#111318"
+    color: dt.bg
 
     ColumnLayout {
         anchors.centerIn: parent
-        spacing: dt ? dt.sp24 : 24
+        spacing: dt.sp24
         width: Math.min(parent.width - 80, 560)
 
         // Constellation icon
         Rectangle {
             Layout.alignment: Qt.AlignHCenter
             width: 80; height: 80
-            radius: dt ? dt.radiusCard : 18
-            color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
+            radius: dt.radiusCard
+            color: dt.accentSoft
 
             AppText {
                 anchors.centerIn: parent
@@ -42,22 +42,22 @@ Rectangle {
 
         AppText {
             text: qsTr("星图")
-            color: dt ? dt.textPrimary : "#E2E2E5"
-            font.pixelSize: dt ? dt.fontTitle : 26
+            color: dt.textPrimary
+            font.pixelSize: dt.fontTitle
             font.weight: Font.Bold
             Layout.alignment: Qt.AlignHCenter
         }
 
         AppText {
             text: qsTr("构建你的创作宇宙，可视化人物关系与故事脉络")
-            color: dt ? dt.textSecondary : "#8C9198"
-            font.pixelSize: dt ? dt.fontMd : 14
+            color: dt.textSecondary
+            font.pixelSize: dt.fontMd
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
         }
 
-        Item { Layout.preferredHeight: dt ? dt.sp16 : 16 }
+        Item { Layout.preferredHeight: dt.sp16 }
 
         // Feature cards
         Repeater {
@@ -72,18 +72,18 @@ Rectangle {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 64
-                radius: dt ? dt.radiusMd : 12
-                color: dt ? dt.card : "#1E2128"
+                radius: dt.radiusMd
+                color: dt.card
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.margins: dt ? dt.sp16 : 16
-                    spacing: dt ? dt.sp12 : 12
+                    anchors.margins: dt.sp16
+                    spacing: dt.sp12
 
                     Rectangle {
                         width: 40; height: 40
-                        radius: dt ? dt.radiusSm : 8
-                        color: dt ? dt.accentSoft : "rgba(123,140,222,0.12)"
+                        radius: dt.radiusSm
+                        color: dt.accentSoft
 
                         AppText {
                             anchors.centerIn: parent
@@ -97,21 +97,21 @@ Rectangle {
                         spacing: 2
                         AppText {
                             text: modelData.label
-                            color: dt ? dt.textPrimary : "#E2E2E5"
-                            font.pixelSize: dt ? dt.fontMd : 14
+                            color: dt.textPrimary
+                            font.pixelSize: dt.fontMd
                             font.weight: Font.Medium
                         }
                         AppText {
                             text: modelData.desc
-                            color: dt ? dt.textMuted : "#8C9198"
-                            font.pixelSize: dt ? dt.fontXs : 11
+                            color: dt.textMuted
+                            font.pixelSize: dt.fontXs
                         }
                     }
 
                     AppText {
                         text: "\u2192"
-                        color: dt ? dt.textMuted : "#8C9198"
-                        font.pixelSize: dt ? dt.fontLg : 16
+                        color: dt.textMuted
+                        font.pixelSize: dt.fontLg
                     }
                 }
             }
@@ -120,10 +120,10 @@ Rectangle {
         // Placeholder hint
         AppText {
             text: qsTr("完整星图渲染将在后续版本实现")
-            color: dt ? dt.textMuted : "#8C9198"
-            font.pixelSize: dt ? dt.fontXs : 11
+            color: dt.textMuted
+            font.pixelSize: dt.fontXs
             Layout.alignment: Qt.AlignHCenter
-            Layout.topMargin: dt ? dt.sp8 : 8
+            Layout.topMargin: dt.sp8
         }
     }
 }

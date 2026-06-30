@@ -21,30 +21,22 @@ Rectangle {
     signal clicked()
     default property alias controlData: controlHost.data
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
+    color: rowHover.containsMouse && root.clickable ? dt.surfaceContainer : "transparent"
+    radius: dt.radiusMd
 
-    color: rowHover.containsMouse && root.clickable ? (dt ? dt.surfaceContainer : (_inferDark ? "#232830" : "#F1F5F9")) : "transparent"
-    radius: dt ? dt.radiusMd : 12
-
-    readonly property int _verticalPadding: dt ? dt.sp12 : 12
-    readonly property int _controlMinHeight: dt ? dt.settingsControlHeight : 40
+    readonly property int _verticalPadding: dt.sp12
+    readonly property int _controlMinHeight: dt.settingsControlHeight
     implicitHeight: Math.max(_controlMinHeight, textCol.implicitHeight) + _verticalPadding * 2
-    implicitWidth: row.implicitWidth + (dt ? dt.sp16 : 16)
+    implicitWidth: row.implicitWidth + dt.sp16
 
     RowLayout {
         id: row
         anchors.fill: parent
-        anchors.leftMargin: dt ? dt.sp8 : 8
-        anchors.rightMargin: dt ? dt.sp8 : 8
+        anchors.leftMargin: dt.sp8
+        anchors.rightMargin: dt.sp8
         anchors.topMargin: root._verticalPadding
         anchors.bottomMargin: root._verticalPadding
-        spacing: dt ? dt.sp12 : 12
+        spacing: dt.sp12
 
         ColumnLayout {
             id: textCol
@@ -53,17 +45,17 @@ Rectangle {
             spacing: 2
             AppText {
                 text: root.title
-                color: dt ? dt.textPrimary : "#E2E4E9"
-                font.pixelSize: dt ? dt.body : 14
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textPrimary
+                font.pixelSize: dt.body
+                font.family: dt.fontFamily
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
             AppText {
                 text: root.description
-                color: dt ? dt.textSecondary : "#9CA0AB"
-                font.pixelSize: dt ? dt.caption : 12
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textSecondary
+                font.pixelSize: dt.caption
+                font.family: dt.fontFamily
                 visible: text.length > 0
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -101,7 +93,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: dt ? dt.border : (_inferDark ? "#2A2E36" : "#CBD5E1")
+        color: dt.border
         opacity: 0.65
     }
 

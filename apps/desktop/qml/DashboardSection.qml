@@ -18,31 +18,31 @@ Rectangle {
     property string title: ""
     default property alias contentData: body.data
 
-    radius: dt ? dt.radiusMd : 12
-    color: dt ? dt.card : "#1E2128"
-    border.color: dt ? dt.border : "#2A2E36"
+    radius: dt.radiusMd
+    color: dt.card
+    border.color: dt.border
     border.width: 1
-    implicitHeight: (contentCol.implicitHeight + (dt ? dt.sp16 : 16) * 2)
+    implicitHeight: (contentCol.implicitHeight + dt.sp16 * 2)
 
     ColumnLayout {
         id: contentCol
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: dt ? dt.sp16 : 16
-        spacing: dt ? dt.sp12 : 12
+        anchors.margins: dt.sp16
+        spacing: dt.sp12
 
         AppText {
             text: root.title
-            color: dt ? dt.textSecondary : "#9CA0AB"
-            font.pixelSize: dt ? dt.fontSm : 12
+            color: dt.textSecondary
+            font.pixelSize: dt.fontSm
             font.weight: Font.DemiBold
         }
 
         ColumnLayout {
             id: body
             Layout.fillWidth: true
-            spacing: dt ? dt.sp8 : 8
+            spacing: dt.sp8
         }
     }
 }

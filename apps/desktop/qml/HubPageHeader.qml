@@ -22,25 +22,25 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        spacing: dt ? dt.sp16 : 16
+        spacing: dt.sp16
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: dt ? dt.sp6 : 6
+            spacing: dt.sp6
 
             AppText {
                 text: root.title
-                color: dt ? dt.onBackground : "#E2E2E5"
-                font.pixelSize: dt ? dt.fontTitle : 26
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.onBackground
+                font.pixelSize: dt.fontTitle
+                font.family: dt.fontFamily
                 font.weight: Font.Bold
             }
 
             AppText {
                 text: root.subtitle
-                color: dt ? dt.textSecondary : "#9CA0AB"
-                font.pixelSize: dt ? dt.body : 14
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textSecondary
+                font.pixelSize: dt.body
+                font.family: dt.fontFamily
                 visible: text.length > 0
             }
         }

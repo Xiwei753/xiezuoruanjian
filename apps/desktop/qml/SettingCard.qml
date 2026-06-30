@@ -20,23 +20,14 @@ Rectangle {
     property int elevation: 0
     property var appShadow: null
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
-    readonly property color _surfaceContainerLow: dt ? dt.surfaceContainerLow : (_inferDark ? "#1F2229" : "#F6F8FC")
-    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
-    readonly property color _accent: dt ? dt.accent : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property int _cardRadius: dt ? dt.cardRadius : 16
-    readonly property int _sp16: dt ? dt.sp16 : 16
-    readonly property int _sp20: dt ? dt.sp20 : 20
-    readonly property int _sp32: dt ? dt.sp32 : 32
-    readonly property int _fontMd: dt ? dt.fontMd : 14
+    readonly property color _surfaceContainerLow: dt.surfaceContainerLow
+    readonly property color _border: dt.border
+    readonly property color _accent: dt.accent
+    readonly property int _cardRadius: dt.cardRadius
+    readonly property int _sp16: dt.sp16
+    readonly property int _sp20: dt.sp20
+    readonly property int _sp32: dt.sp32
+    readonly property int _fontMd: dt.fontMd
 
     property string title: ""
     default property alias contentData: contentColumn.data

@@ -21,33 +21,24 @@ Item {
     property string starmapId: ""
     property var dt: null
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    // Safe access: fallback 根据 SystemPalette 推断深浅色，不再固定走 light
-    readonly property color _primary: dt ? dt.primary : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property color _onPrimary: dt ? dt.onPrimary : (_inferDark ? "#003351" : "#FFFFFF")
-    readonly property color _accent: dt ? dt.accent : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property color _accentSoft: dt ? dt.accentSoft : (_inferDark ? "#004A77" : "#CCE5FF")
-    readonly property color _accentHover: dt ? dt.accentHover : (_inferDark ? "#BFE0FF" : "#005079")
-    readonly property color _border: dt ? dt.border : (_inferDark ? "#8C919842" : "#71788057")
-    readonly property color _card: dt ? dt.card : (_inferDark ? "#1F2229" : "#F6F8FC")
-    readonly property color _danger: dt ? dt.danger : (_inferDark ? "#FFB4AB" : "#BA1A1A")
-    readonly property color _dangerContainer: dt ? dt.dangerContainer : (_inferDark ? "#93000A" : "#FFDAD6")
-    readonly property color _surfaceContainer: dt ? dt.surfaceContainer : (_inferDark ? "#232830" : "#F0F3F8")
-    readonly property color _textPrimary: dt ? dt.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E")
-    readonly property color _textSecondary: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
-    readonly property color _textMuted: dt ? dt.textMuted : (_inferDark ? "#8C9198" : "#747880")
-    readonly property color _error: dt ? dt.error : (_inferDark ? "#FFB4AB" : "#BA1A1A")
-    readonly property color _scrim: dt ? dt.scrim : "#000000"
-    readonly property int _radiusXs: dt ? dt.radiusXs : 4
-    readonly property int _radiusSm: dt ? dt.radiusSm : 8
-    readonly property int _dialogRadius: dt ? dt.dialogRadius : 24
+    readonly property color _primary: dt.primary
+    readonly property color _onPrimary: dt.onPrimary
+    readonly property color _accent: dt.accent
+    readonly property color _accentSoft: dt.accentSoft
+    readonly property color _accentHover: dt.accentHover
+    readonly property color _border: dt.border
+    readonly property color _card: dt.card
+    readonly property color _danger: dt.danger
+    readonly property color _dangerContainer: dt.dangerContainer
+    readonly property color _surfaceContainer: dt.surfaceContainer
+    readonly property color _textPrimary: dt.textPrimary
+    readonly property color _textSecondary: dt.textSecondary
+    readonly property color _textMuted: dt.textMuted
+    readonly property color _error: dt.error
+    readonly property color _scrim: dt.scrim
+    readonly property int _radiusXs: dt.radiusXs
+    readonly property int _radiusSm: dt.radiusSm
+    readonly property int _dialogRadius: dt.dialogRadius
 
     property var backendRef: null
     property string errorMessage: graphController.errorMessage

@@ -136,6 +136,25 @@ QtObject {
     // --- Editor ---
     property color editorBackground: isDark ? Qt.rgba(0.125, 0.137, 0.149, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
     property color editorText: textPrimary
+
+    // --- Component fallback semantic tokens ---
+    // 统一 fallback 语义色，组件不再自行推断深浅色
+    property color surfaceFallback: isDark ? "#1A1D23" : "#FCFCFF"
+    property color surfaceContainerLowFallback: isDark ? "#1F2229" : "#F6F8FC"
+    property color borderFallback: isDark ? "#2A2E36" : "#CBD5E1"
+    property color borderWithAlpha: isDark ? Qt.rgba(0.165, 0.173, 0.192, 0.26) : Qt.rgba(0.443, 0.471, 0.502, 0.34)
+    property color primaryFallback: isDark ? "#92CCFF" : "#006497"
+    property color primaryContainerFallback: isDark ? "#004A77" : "#CCE5FF"
+    property color hoverOverlay: isDark ? Qt.rgba(1, 1, 1, 0.08) : Qt.rgba(0, 0, 0, 0.04)
+    property color pressOverlay: isDark ? Qt.rgba(1, 1, 1, 0.12) : Qt.rgba(0, 0, 0, 0.08)
+    property color disabledOverlay: isDark ? Qt.rgba(1, 1, 1, 0.04) : Qt.rgba(0, 0, 0, 0.02)
+    property color divider: isDark ? Qt.rgba(0.165, 0.173, 0.192, 0.26) : Qt.rgba(0.839, 0.859, 0.886, 0.52)
+    property color starMapNodeChapter: isDark ? "#4CAF50" : "#2E7D32"
+    property color starMapNodeCharacter: isDark ? "#2196F3" : "#1565C0"
+    property color starMapNodeLocation: isDark ? "#FF9800" : "#E65100"
+    property color starMapNodeEvent: isDark ? "#F44336" : "#C62828"
+    property color starMapNodeConcept: isDark ? "#9C27B0" : "#6A1B9A"
+
     property string textPrimaryHex: isDark ? "#E2E2E5" : "#1A1C1E"
     property string textSecondaryHex: isDark ? "#C3C6CF" : "#42474E"
 

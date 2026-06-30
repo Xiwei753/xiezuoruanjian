@@ -18,7 +18,7 @@ Item {
     property Component delegate: null
     property int minCardWidth: 280
     property int cardHeight: 220
-    property int gridGap: dt ? dt.gridGap : 16
+    property int gridGap: dt.gridGap
     property string emptyTitle: qsTr("暂无数据")
     property string emptySubtitle: ""
     property string emptyIcon: ""
@@ -60,7 +60,7 @@ Item {
 
         Column {
             anchors.centerIn: parent
-            spacing: dt ? dt.sp8 : 8
+            spacing: dt.sp8
 
             AppText {
                 text: root.emptyIcon
@@ -70,15 +70,15 @@ Item {
             }
             AppText {
                 text: root.emptyTitle
-                color: dt ? dt.textPrimary : "#E2E2E5"
-                font.pixelSize: dt ? dt.fontXl : 18
+                color: dt.textPrimary
+                font.pixelSize: dt.fontXl
                 font.weight: Font.DemiBold
                 anchors.horizontalCenter: parent.horizontalCenter
             }
             AppText {
                 text: root.emptySubtitle
-                color: dt ? dt.textSecondary : "#8C9198"
-                font.pixelSize: dt ? dt.fontMd : 14
+                color: dt.textSecondary
+                font.pixelSize: dt.fontMd
                 visible: text.length > 0
                 anchors.horizontalCenter: parent.horizontalCenter
             }

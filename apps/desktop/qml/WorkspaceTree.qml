@@ -27,7 +27,7 @@ Rectangle {
     signal showError(string message)
     signal deleteItem(string type, string projectId, string volumeId, string chapterId, string title)
 
-    color: theme ? theme.sidebar : "#14161B"
+    color: theme.sidebar
 
     ListModel {
         id: treeModel
@@ -87,8 +87,8 @@ Rectangle {
                 property bool isHovered: hoverArea.containsMouse
                 
                 color: {
-                    if (isSelected) return theme ? theme.primaryContainer : "#CCE5FF";
-                    if (isHovered) return theme ? theme.surfaceVariant : "#DFE3EB";
+                    if (isSelected) return theme.primaryContainer;
+                    if (isHovered) return theme.surfaceVariant;
                     return "transparent";
                 }
 
@@ -111,8 +111,8 @@ Rectangle {
                             return "";
                         }
                         color: {
-                            if (delegateRect.isSelected) return root.theme ? root.theme.onPrimaryContainer : "#CCE5FF";
-                            return root.theme ? root.theme.textSecondary : "#8C9198";
+                            if (delegateRect.isSelected) return root.theme.onPrimaryContainer;
+                            return root.theme.textSecondary;
                         }
                         font.pixelSize: 14
                     }
@@ -121,8 +121,8 @@ Rectangle {
                         Layout.fillWidth: true
                         text: model.title || ""
                         color: {
-                            if (delegateRect.isSelected) return root.theme ? root.theme.onPrimaryContainer : "#CCE5FF";
-                            return root.theme ? root.theme.textPrimary : "#E2E2E5";
+                            if (delegateRect.isSelected) return root.theme.onPrimaryContainer;
+                            return root.theme.textPrimary;
                         }
                         font.pixelSize: 14
                         elide: Text.ElideRight
@@ -157,7 +157,7 @@ Rectangle {
         anchors.centerIn: parent
         visible: treeModel.count === 0
         text: qsTr("暂无作品")
-        color: theme ? theme.textMuted : "#8C9198"
+        color: theme.textMuted
         font.pixelSize: 14
     }
 
@@ -165,9 +165,9 @@ Rectangle {
         id: contextMenu
         property var itemData: null
         background: Rectangle {
-            color: theme ? theme.surface : "#1A1D23"
-            border.color: theme ? theme.border : "#2A2E36"
-            radius: theme ? theme.radiusMd : 12
+            color: theme.surface
+            border.color: theme.border
+            radius: theme.radiusMd
             border.width: 1
         }
 
@@ -177,12 +177,12 @@ Rectangle {
             visible: contextMenu.itemData && contextMenu.itemData.type === "project"
             contentItem: AppText {
                 text: menuCreateVolume.text
-                color: theme ? theme.textPrimary : "#E2E2E5"
-                font.pixelSize: theme ? theme.label : 13
-                font.family: theme ? theme.fontFamily : "sans-serif"
+                color: theme.textPrimary
+                font.pixelSize: theme.label
+                font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }
-            background: Rectangle { color: menuCreateVolume.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
+            background: Rectangle { color: menuCreateVolume.highlighted ? theme.surfaceVariant : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -198,12 +198,12 @@ Rectangle {
             visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
             contentItem: AppText {
                 text: menuCreateChapter.text
-                color: theme ? theme.textPrimary : "#E2E2E5"
-                font.pixelSize: theme ? theme.label : 13
-                font.family: theme ? theme.fontFamily : "sans-serif"
+                color: theme.textPrimary
+                font.pixelSize: theme.label
+                font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }
-            background: Rectangle { color: menuCreateChapter.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
+            background: Rectangle { color: menuCreateChapter.highlighted ? theme.surfaceVariant : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -221,12 +221,12 @@ Rectangle {
             text: qsTr("重命名")
             contentItem: AppText {
                 text: menuRename.text
-                color: theme ? theme.textPrimary : "#E2E2E5"
-                font.pixelSize: theme ? theme.label : 13
-                font.family: theme ? theme.fontFamily : "sans-serif"
+                color: theme.textPrimary
+                font.pixelSize: theme.label
+                font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }
-            background: Rectangle { color: menuRename.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
+            background: Rectangle { color: menuRename.highlighted ? theme.surfaceVariant : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;
@@ -249,12 +249,12 @@ Rectangle {
             text: qsTr("删除")
             contentItem: AppText {
                 text: menuDelete.text
-                color: theme ? theme.error : "#FFB4AB"
-                font.pixelSize: theme ? theme.label : 13
-                font.family: theme ? theme.fontFamily : "sans-serif"
+                color: theme.error
+                font.pixelSize: theme.label
+                font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }
-            background: Rectangle { color: menuDelete.highlighted ? (theme ? theme.surfaceVariant : "#DFE3EB") : "transparent" }
+            background: Rectangle { color: menuDelete.highlighted ? theme.surfaceVariant : "transparent" }
             onTriggered: {
                 if (contextMenu.itemData) {
                     var data = contextMenu.itemData;

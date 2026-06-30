@@ -275,7 +275,7 @@ Item {
                 "width": gr.w,
                 "height": gr.h,
                 "duration": duration,
-                "ghostColor": editorItem.text_color || (root.dt ? root.dt.editorText : (Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E")),
+                "ghostColor": editorItem.text_color || root.dt.editorText,
                 "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
                 "glyphFontFamily": editorItem.font_family || "",
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0
@@ -304,7 +304,7 @@ Item {
                     "width": rr.w,
                     "height": rr.h,
                     "duration": duration,
-                    "ghostColor": editorItem.text_color || (root.dt ? root.dt.editorText : (Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E")),
+                    "ghostColor": editorItem.text_color || root.dt.editorText,
                     "glyphText": rr.char || "",
                     "glyphFontFamily": editorItem.font_family || "",
                     "glyphFontPixelSize": editorItem.font_pixel_size || 0
@@ -410,7 +410,7 @@ Item {
                 "width": gr.w,
                 "height": gr.h,
                 "duration": duration,
-                "ghostColor": editorItem.text_color || (root.dt ? root.dt.editorText : (Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E")),
+                "ghostColor": editorItem.text_color || root.dt.editorText,
                 "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
                 "glyphFontFamily": editorItem.font_family || "",
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0

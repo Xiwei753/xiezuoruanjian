@@ -16,7 +16,7 @@ Text {
     id: control
     property var theme: null
 
-    font.pixelSize: control.theme ? control.theme.fontXl : 18
+    font.pixelSize: control.theme.fontXl
     font.weight: Font.Bold
-    color: control.theme ? control.theme.textPrimary : "#0f172a"
+    color: control.theme.textPrimary
 }

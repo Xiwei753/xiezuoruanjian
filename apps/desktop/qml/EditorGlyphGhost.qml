@@ -26,6 +26,9 @@ Item {
     // 动画类型
     property string animKind: "insert"  // "insert", "delete", or "reflow"
 
+    // DesignTokens 引用（由父组件传入或设置）
+    property var dt: null
+
     // 起始位置（insert: 光标位置; delete: glyph 位置）
     property real startX: 0
     property real startY: 0
@@ -45,7 +48,7 @@ Item {
     property int duration: 100
 
     // 颜色（默认值跟随系统主题，实际值由父组件 EditorAnimationOverlay 传入）
-    property color ghostColor: Application.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E"
+    property color ghostColor: dt.editorText
 
     // glyph 文字内容
     property string glyphText: ""

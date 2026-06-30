@@ -35,15 +35,7 @@ Dialog {
     property var _saveTimer: null
     signal settingsChanged()
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    background: Rectangle { color: dt ? dt.surface : (_inferDark ? "#1A1D23" : "#FCFCFF"); border.color: dt ? dt.border : (_inferDark ? "#2A2E36" : "#CBD5E1"); border.width: 1; radius: dt ? dt.radiusXl : 28 }
+    background: Rectangle { color: dt.surface; border.color: dt.border; border.width: 1; radius: dt.radiusXl }
     header: null
 
     function saveAndNotify() { if (!backendRef || !root.settingsDirty) return; backendRef.save_local_settings(); root.settingsDirty = false; root.settingsChanged() }
@@ -103,9 +95,9 @@ Dialog {
         color: "transparent"
         RowLayout {
             anchors.fill: parent
-            anchors.leftMargin: dt ? dt.sp24 : 24
-            anchors.rightMargin: dt ? dt.sp16 : 16
-            AppText { text: qsTr("设置"); color: dt ? dt.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E"); font.pixelSize: dt ? dt.subtitle : 18; font.family: dt ? dt.fontFamily : "sans-serif"; font.weight: Font.Bold; Layout.fillWidth: true }
+            anchors.leftMargin: dt.sp24
+            anchors.rightMargin: dt.sp16
+            AppText { text: qsTr("设置"); color: dt.textPrimary; font.pixelSize: dt.subtitle; font.family: dt.fontFamily; font.weight: Font.Bold; Layout.fillWidth: true }
             ToolbarButton { text: qsTr("关闭"); dt: root.dt; onClicked: root.close() }
         }
     }
@@ -116,10 +108,10 @@ Dialog {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         anchors.top: topBar.bottom
-        anchors.leftMargin: dt ? dt.sp20 : 20
-        anchors.rightMargin: dt ? dt.sp20 : 20
-        anchors.bottomMargin: dt ? dt.sp20 : 20
-        anchors.topMargin: dt ? dt.sp8 : 8
+        anchors.leftMargin: dt.sp20
+        anchors.rightMargin: dt.sp20
+        anchors.bottomMargin: dt.sp20
+        anchors.topMargin: dt.sp8
         clip: true
         contentWidth: availableWidth
         contentHeight: settingsColumn.implicitHeight
@@ -127,7 +119,7 @@ Dialog {
         ColumnLayout {
             id: settingsColumn
             width: settingsScroll.availableWidth
-            spacing: dt ? dt.cardGap : 16
+            spacing: dt.cardGap
 
             // ── 1. 外观 (appearance) ──
             SettingsSection {
@@ -357,9 +349,9 @@ Dialog {
                         property string message: ""
                         visible: message.length > 0
                         text: diagnosticsFeedback.message
-                        color: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
-                        font.pixelSize: dt ? dt.caption : 12
-                        font.family: dt ? dt.fontFamily : "sans-serif"
+                        color: dt.textSecondary
+                        font.pixelSize: dt.caption
+                        font.family: dt.fontFamily
                     }
                 }
                 SettingsRow {
@@ -406,9 +398,9 @@ Dialog {
                         property string message: ""
                         visible: message.length > 0
                         text: deviceInfoFeedback.message
-                        color: dt ? dt.textSecondary : (_inferDark ? "#C3C6CF" : "#42474E")
-                        font.pixelSize: dt ? dt.caption : 12
-                        font.family: dt ? dt.fontFamily : "sans-serif"
+                        color: dt.textSecondary
+                        font.pixelSize: dt.caption
+                        font.family: dt.fontFamily
                     }
                 }
                 SettingsRow {

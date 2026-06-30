@@ -27,40 +27,32 @@ Dialog {
     width: 400
     height: 220
 
-    // ── SystemPalette 推断：theme 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
     background: Rectangle {
-        color: theme ? theme.surface : (_inferDark ? "#1A1D23" : "#FCFCFF")
-        border.color: theme ? theme.border : (_inferDark ? "#2A2E36" : "#CBD5E1")
+        color: theme.surface
+        border.color: theme.border
         border.width: 1
-        radius: theme ? theme.radiusXl : 28
+        radius: theme.radiusXl
     }
     header: null
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: theme ? theme.sp24 : 24
-        spacing: theme ? theme.sp16 : 16
+        anchors.margins: theme.sp24
+        spacing: theme.sp16
 
         AppText {
             text: qsTr("新建作品")
-            color: theme ? theme.textPrimary : (_inferDark ? "#E2E2E5" : "#1A1C1E")
-            font.pixelSize: theme ? theme.subtitle : 18
-            font.family: theme ? theme.fontFamily : "sans-serif"
+            color: theme.textPrimary
+            font.pixelSize: theme.subtitle
+            font.family: theme.fontFamily
             font.weight: Font.DemiBold
         }
 
         AppText {
             text: qsTr("请输入作品名称：")
-            color: theme ? theme.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
-            font.pixelSize: theme ? theme.body : 14
-            font.family: theme ? theme.fontFamily : "sans-serif"
+            color: theme.onSurfaceVariant
+            font.pixelSize: theme.body
+            font.family: theme.fontFamily
         }
 
         AppTextField {

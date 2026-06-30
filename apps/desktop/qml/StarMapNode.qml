@@ -19,17 +19,16 @@ Rectangle {
 
     property var dt: null
 
-    // Safe access: fallback to light-theme defaults when dt is null
-    readonly property color _primary: dt ? dt.primary : "#006497"
-    readonly property color _onPrimary: dt ? dt.onPrimary : "#FFFFFF"
-    readonly property color _accent: dt ? dt.accent : "#006497"
-    readonly property color _border: dt ? dt.border : "#71788057"
-    readonly property color _surfaceContainer: dt ? dt.surfaceContainer : "#F0F3F8"
-    readonly property color _shadowLight: dt ? dt.shadowLight : "#0000000F"
-    readonly property color _textPrimary: dt ? dt.textPrimary : "#1A1C1E"
-    readonly property color _textMuted: dt ? dt.textMuted : "#747880"
-    readonly property int _radiusXs: dt ? dt.radiusXs : 4
-    readonly property int _radiusSm: dt ? dt.radiusSm : 8
+    readonly property color _primary: dt.primary
+    readonly property color _onPrimary: dt.onPrimary
+    readonly property color _accent: dt.accent
+    readonly property color _border: dt.border
+    readonly property color _surfaceContainer: dt.surfaceContainer
+    readonly property color _shadowLight: dt.shadowLight
+    readonly property color _textPrimary: dt.textPrimary
+    readonly property color _textMuted: dt.textMuted
+    readonly property int _radiusXs: dt.radiusXs
+    readonly property int _radiusSm: dt.radiusSm
 
     property string title: "Node"
     property string kind: "Note"
@@ -134,11 +133,11 @@ Rectangle {
 
     function getKindColor(k) {
         switch(k) {
-            case "Chapter": return "#4CAF50"
-            case "Character": return "#2196F3"
-            case "Location": return "#FF9800"
-            case "Event": return "#F44336"
-            case "Concept": return "#9C27B0"
+            case "Chapter": return dt.starMapNodeChapter
+            case "Character": return dt.starMapNodeCharacter
+            case "Location": return dt.starMapNodeLocation
+            case "Event": return dt.starMapNodeEvent
+            case "Concept": return dt.starMapNodeConcept
             default: return _textMuted
         }
     }

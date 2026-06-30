@@ -24,22 +24,14 @@ Item {
     property alias validator: inputField.validator
     property bool fieldTabFocus: true
 
-    // ── SystemPalette 推断：theme 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    readonly property color normalTextColor: control.theme ? control.theme.onSurface : (_inferDark ? "#E2E2E5" : "#1A1C1E")
-    readonly property color placeholderColor: control.theme ? control.theme.textMuted : (_inferDark ? "#8C9198" : "#74777F")
-    readonly property color backgroundColor: control.theme ? control.theme.surfaceContainerLow : (_inferDark ? "#1F2229" : "#F6F8FC")
-    readonly property color labelColor: control.theme ? control.theme.onSurfaceVariant : (_inferDark ? "#C3C6CF" : "#42474E")
-    readonly property color activeBorderColor: control.theme ? control.theme.primary : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property color inactiveBorderColor: control.theme ? control.theme.outline : (_inferDark ? "#8C9198" : "#727880")
-    readonly property color highlightColor: control.theme ? control.theme.primary : (_inferDark ? "#92CCFF" : "#006497")
-    readonly property color highlightTextColor: control.theme ? control.theme.onPrimary : (_inferDark ? "#003351" : "#FFFFFF")
+    readonly property color normalTextColor: control.theme.onSurface
+    readonly property color placeholderColor: control.theme.textMuted
+    readonly property color backgroundColor: control.theme.surfaceContainerLow
+    readonly property color labelColor: control.theme.onSurfaceVariant
+    readonly property color activeBorderColor: control.theme.primary
+    readonly property color inactiveBorderColor: control.theme.outline
+    readonly property color highlightColor: control.theme.primary
+    readonly property color highlightTextColor: control.theme.onPrimary
 
     signal accepted()
     signal editingFinished()
@@ -49,21 +41,21 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: control.theme ? control.theme.sp4 : 4
+        spacing: control.theme.sp4
 
         Text {
             text: control.label
-            font.pixelSize: control.theme ? control.theme.label : 13
+            font.pixelSize: control.theme.label
             color: control.labelColor
             font.weight: Font.Medium
-            font.family: control.theme ? control.theme.fontFamily : "sans-serif"
+            font.family: control.theme.fontFamily
             visible: control.label.length > 0
         }
 
         TextField {
             id: inputField
             Layout.fillWidth: true
-            implicitHeight: control.theme ? control.theme.settingsControlHeight : 40
+            implicitHeight: control.theme.settingsControlHeight
             placeholderText: control.placeholder
             color: control.normalTextColor
             placeholderTextColor: control.placeholderColor
@@ -76,14 +68,14 @@ Item {
                 color: control.backgroundColor
                 border.color: inputField.activeFocus ? control.activeBorderColor : control.inactiveBorderColor
                 border.width: inputField.activeFocus ? 2 : 1
-                radius: control.theme ? control.theme.radiusMd : 12
+                radius: control.theme.radiusMd
             }
-            font.pixelSize: control.theme ? control.theme.body : 14
-            font.family: control.theme ? control.theme.fontFamily : "sans-serif"
-            leftPadding: control.theme ? control.theme.sp12 : 12
-            rightPadding: control.theme ? control.theme.sp12 : 12
-            topPadding: control.theme ? control.theme.sp8 : 8
-            bottomPadding: control.theme ? control.theme.sp8 : 8
+            font.pixelSize: control.theme.body
+            font.family: control.theme.fontFamily
+            leftPadding: control.theme.sp12
+            rightPadding: control.theme.sp12
+            topPadding: control.theme.sp8
+            bottomPadding: control.theme.sp8
         }
     }
 }

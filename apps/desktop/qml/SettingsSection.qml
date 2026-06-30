@@ -18,20 +18,12 @@ Rectangle {
     property string title: ""
     default property alias contentData: rows.data
 
-    // ── SystemPalette 推断：dt 为空时从系统调色板推断深浅色 ──
-    SystemPalette { id: _sysPalette; colorGroup: SystemPalette.Active }
-    readonly property bool _inferDark: {
-        var wL = _sysPalette.window.r * 0.2126 + _sysPalette.window.g * 0.7152 + _sysPalette.window.b * 0.0722;
-        var tL = _sysPalette.windowText.r * 0.2126 + _sysPalette.windowText.g * 0.7152 + _sysPalette.windowText.b * 0.0722;
-        return tL > wL;
-    }
-
-    radius: dt ? dt.radiusLg : 16
-    color: dt ? dt.card : (_inferDark ? "#1E2128" : "#F6F8FC")
-    border.color: dt ? dt.border : (_inferDark ? "#2A2E36" : "#CBD5E1")
+    radius: dt.radiusLg
+    color: dt.card
+    border.color: dt.border
     border.width: 1
 
-    readonly property int _sectionPadding: dt ? dt.sp20 : 20
+    readonly property int _sectionPadding: dt.sp20
     implicitHeight: contentCol.implicitHeight + _sectionPadding * 2
 
     ColumnLayout {
@@ -40,13 +32,13 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.margins: root._sectionPadding
-        spacing: dt ? dt.sp12 : 12
+        spacing: dt.sp12
 
         AppText {
             text: root.title
-            color: dt ? dt.textPrimary : "#E2E4E9"
-            font.pixelSize: dt ? dt.subtitle : 18
-            font.family: dt ? dt.fontFamily : "sans-serif"
+            color: dt.textPrimary
+            font.pixelSize: dt.subtitle
+            font.family: dt.fontFamily
             font.weight: Font.DemiBold
             Layout.fillWidth: true
         }
@@ -54,7 +46,7 @@ Rectangle {
         ColumnLayout {
             id: rows
             Layout.fillWidth: true
-            spacing: dt ? dt.sp12 : 12
+            spacing: dt.sp12
         }
     }
 }
