@@ -123,8 +123,11 @@ object ThemePaletteHelper {
         ColorEntry("light_tertiary_container",    M3Attr.colorTertiaryContainer,     systemColorResId = android.R.color.system_accent3_100),
         ColorEntry("light_on_tertiary_container", M3Attr.colorOnTertiaryContainer,   systemColorResId = android.R.color.system_accent3_900),
         // Background / Surface
-        ColorEntry("light_background",           M3Attr.colorBackground,           systemColorResId = android.R.color.system_neutral1_50),
-        ColorEntry("light_on_background",        M3Attr.colorOnBackground,         systemColorResId = android.R.color.system_neutral1_900),
+        // Note: colorBackground is in android.R.attr, not Material R.attr.
+        // colorOnBackground is not available as a standard attr, so we use null
+        // and fall back to system tone mapping.
+        ColorEntry("light_background",           android.R.attr.colorBackground,    systemColorResId = android.R.color.system_neutral1_50),
+        ColorEntry("light_on_background",        null,                              systemColorResId = android.R.color.system_neutral1_900),
         ColorEntry("light_surface",              M3Attr.colorSurface,              systemColorResId = android.R.color.system_neutral1_50),
         ColorEntry("light_on_surface",           M3Attr.colorOnSurface,            systemColorResId = android.R.color.system_neutral1_900),
         ColorEntry("light_surface_variant",      M3Attr.colorSurfaceVariant,       systemColorResId = android.R.color.system_neutral2_200),
@@ -155,8 +158,8 @@ object ThemePaletteHelper {
         ColorEntry("dark_tertiary_container",    M3Attr.colorTertiaryContainer,     systemColorResId = android.R.color.system_accent3_700),
         ColorEntry("dark_on_tertiary_container", M3Attr.colorOnTertiaryContainer,   systemColorResId = android.R.color.system_accent3_100),
         // Background / Surface
-        ColorEntry("dark_background",           M3Attr.colorBackground,           systemColorResId = android.R.color.system_neutral1_900),
-        ColorEntry("dark_on_background",        M3Attr.colorOnBackground,         systemColorResId = android.R.color.system_neutral1_100),
+        ColorEntry("dark_background",           android.R.attr.colorBackground,    systemColorResId = android.R.color.system_neutral1_900),
+        ColorEntry("dark_on_background",        null,                              systemColorResId = android.R.color.system_neutral1_100),
         ColorEntry("dark_surface",              M3Attr.colorSurface,              systemColorResId = android.R.color.system_neutral1_900),
         ColorEntry("dark_on_surface",           M3Attr.colorOnSurface,            systemColorResId = android.R.color.system_neutral1_100),
         ColorEntry("dark_surface_variant",      M3Attr.colorSurfaceVariant,       systemColorResId = android.R.color.system_neutral2_700),
