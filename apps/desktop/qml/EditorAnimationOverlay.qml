@@ -208,10 +208,10 @@ Item {
         var decision = root.shouldCreateTextAnimation(
             glyphRects.length,    // glyphCount
             containsNewline,      // containsNewline
-            false,                // isScrolling (QML 侧已通过 suppressed 处理)
-            root.suppressed,      // isLoading (suppressed 包含 loading)
-            false,                // isApplyingFormat (suppressed 包含)
-            false,                // isApplyingSettings (suppressed 包含)
+            false,                // isScrolling (handled via suppressed on QML side)
+            root.suppressed,      // isLoading (suppressed covers loading)
+            false,                // isApplyingFormat (suppressed covers this)
+            false,                // isApplyingSettings (suppressed covers this)
             root.animationEnabled, // animationEnabled
             componentReady        // componentReady
         )
