@@ -17,6 +17,10 @@ Rectangle {
     id: root
     property var dt: null
 
+    // Elevation shadow support
+    property int elevation: 3
+    property var appShadow: null
+
     // Safe access: fallback to light-theme defaults when dt is null
     readonly property color _sidebar: dt ? dt.sidebar : "#F3F7FC"
     readonly property color _border: dt ? dt.border : "#71788057"
@@ -47,6 +51,17 @@ Rectangle {
     color: "transparent"
     clip: true
     visible: isOpen
+
+    // Shadow layer (behind the drawer panel)
+    Rectangle {
+        anchors.fill: parent
+        anchors.topMargin: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).verticalOffset : 0
+        radius: 0
+        color: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).color : "transparent"
+        opacity: 0.2
+        visible: root.elevation > 0 && root.appShadow !== null
+        z: -1
+    }
 
     Rectangle {
         id: drawerPanel
