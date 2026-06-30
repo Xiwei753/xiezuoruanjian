@@ -15,6 +15,10 @@ Dialog {
     id: root
     property var dt: null
 
+    // Elevation shadow support
+    property int elevation: 3
+    property var appShadow: null
+
     // Safe access: fallback to light-theme defaults when dt is null
     readonly property color _surfaceContainerHigh: dt ? dt.surfaceContainerHigh : "#EAEFF5"
     readonly property color _border: dt ? dt.border : "#71788057"
@@ -31,11 +35,25 @@ Dialog {
 
     modal: true
     padding: 0
-    background: Rectangle {
-        color: _surfaceContainerHigh
-        border.color: _border
-        border.width: 1
-        radius: _dialogRadius
+    background: Item {
+        // Shadow layer (behind the dialog background)
+        Rectangle {
+            anchors.fill: parent
+            anchors.topMargin: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).verticalOffset : 0
+            radius: _dialogRadius
+            color: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).color : "transparent"
+            opacity: 0.2
+            visible: root.elevation > 0 && root.appShadow !== null
+            z: -1
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: _surfaceContainerHigh
+            border.color: _border
+            border.width: 1
+            radius: _dialogRadius
+        }
     }
     header: null
 
