@@ -16,6 +16,10 @@ Item {
     id: control
     property var dt: null
 
+    // Elevation shadow support
+    property int elevation: 1
+    property var appShadow: null
+
     // Safe access: fallback to light-theme defaults when dt is null
     readonly property color _surfaceContainer: dt ? dt.surfaceContainer : "#F0F3F8"
     readonly property color _card: dt ? dt.card : "#F6F8FC"
@@ -31,6 +35,17 @@ Item {
 
     implicitWidth: 200
     implicitHeight: col.implicitHeight + control.padding * 2
+
+    // Shadow layer (behind the card background)
+    Rectangle {
+        anchors.fill: parent
+        anchors.topMargin: control.elevation > 0 && control.appShadow ? control.appShadow.forElevation(control.elevation).verticalOffset : 0
+        radius: _cardRadius
+        color: control.elevation > 0 && control.appShadow ? control.appShadow.forElevation(control.elevation).color : "transparent"
+        opacity: 0.2
+        visible: control.elevation > 0 && control.appShadow !== null
+        z: -1
+    }
 
     Rectangle {
         anchors.fill: parent
