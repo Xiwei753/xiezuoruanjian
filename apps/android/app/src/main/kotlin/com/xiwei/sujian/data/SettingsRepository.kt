@@ -56,7 +56,8 @@ class SettingsRepository(context: Context) {
         return fromCore.copy(
             diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true),
             diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true),
-            useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true)
+            useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true),
+            experimentalFullscreenMode = diagPrefs.getBoolean("experimental_fullscreen_mode", false)
         )
     }
 
@@ -66,8 +67,9 @@ class SettingsRepository(context: Context) {
             .putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
             .putBoolean("diagnostics_verbose", effectiveVerbose)
             .putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
+            .putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
             .apply()
-        val coreSettings = settings.copy(diagnosticsEnabled = false, diagnosticsVerbose = false, useSelfRenderEditorOnAndroid = false)
+        val coreSettings = settings.copy(diagnosticsEnabled = false, diagnosticsVerbose = false, useSelfRenderEditorOnAndroid = false, experimentalFullscreenMode = false)
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
                 CoreSettingsEvents.record(result.envelope)

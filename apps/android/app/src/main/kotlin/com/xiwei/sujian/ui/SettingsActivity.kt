@@ -16,6 +16,7 @@ import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.model.LocalSettings
+import com.xiwei.sujian.ui.system.SystemBarsController
 import com.google.android.material.button.MaterialButton
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +60,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var btnActionRegistry: MaterialButton
     private lateinit var btnAbout: MaterialButton
 
+    private lateinit var switchExperimentalFullscreen: MaterialSwitch
     private lateinit var switchDiagnosticsEnabled: MaterialSwitch
     private lateinit var switchDiagnosticsVerbose: MaterialSwitch
     private lateinit var btnExportDiagnostics: MaterialButton
@@ -83,6 +85,10 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         setContentView(R.layout.activity_settings)
+
+        // ── SystemBarsController: edge-to-edge + insets ──
+        val systemBarsController = SystemBarsController(this)
+        systemBarsController.setupEdgeToEdge()
 
         currentSettings = ErrorUtil.safeRun(this, LocalSettings()) {
             if (::settingsRepository.isInitialized) {
@@ -109,6 +115,10 @@ class SettingsActivity : AppCompatActivity() {
         toolbar.setNavigationOnClickListener {
             saveAndFinish()
         }
+
+        // ── SystemBarsController: 设置 inset target ──
+        val appBarLayout = findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBarLayout)
+        systemBarsController.setAppBarInsetTarget(appBarLayout)
 
         sbFontSize = findViewById(R.id.sbFontSize)
         sbLineSpacing = findViewById(R.id.sbLineSpacing)
@@ -143,6 +153,7 @@ class SettingsActivity : AppCompatActivity() {
 
         switchDiagnosticsEnabled = findViewById(R.id.switchDiagnosticsEnabled)
         switchDiagnosticsVerbose = findViewById(R.id.switchDiagnosticsVerbose)
+        switchExperimentalFullscreen = findViewById(R.id.switchExperimentalFullscreen)
         btnExportDiagnostics = findViewById(R.id.btnExportDiagnostics)
         btnClearLogs = findViewById(R.id.btnClearLogs)
         btnCopyDeviceInfo = findViewById(R.id.btnCopyDeviceInfo)
@@ -336,6 +347,13 @@ class SettingsActivity : AppCompatActivity() {
             saveAndFinish(false)
         }
 
+        // ── 实验室全屏模式开关 ──
+        switchExperimentalFullscreen.isChecked = currentSettings.experimentalFullscreenMode
+        switchExperimentalFullscreen.setOnCheckedChangeListener { _, isChecked ->
+            currentSettings = currentSettings.copy(experimentalFullscreenMode = isChecked)
+            saveAndFinish(false)
+        }
+
         btnExportDiagnostics.setOnClickListener {
             btnExportDiagnostics.isEnabled = false
             lifecycleScope.launch {
@@ -406,6 +424,7 @@ class SettingsActivity : AppCompatActivity() {
         switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
         switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
         switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
+        switchExperimentalFullscreen.isChecked = currentSettings.experimentalFullscreenMode
         DiagnosticsLogger.setEnabled(currentSettings.diagnosticsEnabled)
         DiagnosticsLogger.setVerbose(currentSettings.diagnosticsVerbose)
         EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
@@ -451,7 +470,8 @@ class SettingsActivity : AppCompatActivity() {
             editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),
             aiEnabled = switchAiEnabled.isChecked,
             diagnosticsEnabled = switchDiagnosticsEnabled.isChecked,
-            diagnosticsVerbose = switchDiagnosticsVerbose.isChecked
+            diagnosticsVerbose = switchDiagnosticsVerbose.isChecked,
+            experimentalFullscreenMode = switchExperimentalFullscreen.isChecked
         )
 
         ErrorUtil.safeRun(this) {

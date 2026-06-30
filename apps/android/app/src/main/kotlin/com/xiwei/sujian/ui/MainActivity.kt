@@ -38,6 +38,7 @@ import com.xiwei.sujian.model.FoldPosture
 import com.xiwei.sujian.model.ShellMode
 import com.xiwei.sujian.model.ScreenRole
 import com.xiwei.sujian.model.ScreenPolicy
+import com.xiwei.sujian.ui.system.SystemBarsController
 import com.xiwei.sujian.model.ActionSlot
 import com.xiwei.sujian.model.ActionRole
 import com.xiwei.sujian.model.ActionPlacement
@@ -142,6 +143,10 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_main)
 
+        // ── SystemBarsController: edge-to-edge + insets ──
+        val systemBarsController = SystemBarsController(this)
+        systemBarsController.setupEdgeToEdge()
+
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
@@ -161,6 +166,19 @@ class MainActivity : AppCompatActivity() {
         bottomNav = findViewById(R.id.bottomNav)
         canvasView = findViewById(R.id.canvasView)
         toolbar = findViewById(R.id.toolbar)
+
+        // ── SystemBarsController: 设置 inset target ──
+        val appBarLayout = findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBarLayout)
+        systemBarsController.setAppBarInsetTarget(appBarLayout)
+        systemBarsController.setBottomInsetTarget(bottomNav)
+
+        // ── 实验室全屏模式 ──
+        ErrorUtil.safeRun(this) {
+            val settings = settingsRepository.getLocalSettings()
+            if (settings.experimentalFullscreenMode) {
+                systemBarsController.applyFullscreen(true)
+            }
+        }
         toolbar.inflateMenu(R.menu.menu_main_toolbar)
         createProjectMenuItem = toolbar.menu.findItem(R.id.action_create_project)
         toolbar.setOnMenuItemClickListener { item ->

@@ -5,8 +5,6 @@ import android.util.Log
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
@@ -14,6 +12,7 @@ import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.ScreenRole
 import com.xiwei.sujian.model.ScreenPolicy
+import com.xiwei.sujian.ui.system.SystemBarsController
 import com.xiwei.sujian.model.ActionSlot
 import com.xiwei.sujian.model.ActionRole
 import com.xiwei.sujian.model.ActionPlacement
@@ -58,20 +57,26 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
             }
         }
 
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        // ── SystemBarsController: edge-to-edge + insets ──
+        val systemBarsController = SystemBarsController(this)
+        systemBarsController.setupEdgeToEdge()
+
         setContentView(R.layout.activity_editor)
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
         }
 
-        val mainLayout = findViewById<android.view.View>(R.id.editorCoordinatorLayout)
-        val appBarLayout = findViewById<android.view.View>(R.id.appBarLayout)
+        val appBarLayout = findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBarLayout)
+        systemBarsController.setAppBarInsetTarget(appBarLayout)
 
-        ViewCompat.setOnApplyWindowInsetsListener(mainLayout) { view, insets ->
-            val systemBarsInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            appBarLayout.setPadding(0, systemBarsInsets.top, 0, 0)
-            WindowInsetsCompat.CONSUMED
+        // ── 实验室全屏模式 ──
+        ErrorUtil.safeRun(this) {
+            val settingsRepository = SettingsRepository(this)
+            val settings = settingsRepository.getLocalSettings()
+            if (settings.experimentalFullscreenMode) {
+                systemBarsController.applyFullscreen(true)
+            }
         }
 
         toolbar = findViewById(R.id.toolbar)

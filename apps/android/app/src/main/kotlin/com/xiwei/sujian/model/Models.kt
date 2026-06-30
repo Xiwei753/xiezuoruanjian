@@ -47,7 +47,8 @@ data class LocalSettings(
     val editorCoordinatedTextCursorAnimationEnabled: Boolean = true,
     @SerializedName("diagnostics_enabled") val diagnosticsEnabled: Boolean = true,
     @SerializedName("diagnostics_verbose") val diagnosticsVerbose: Boolean = true,
-    @SerializedName("use_self_render_editor_on_android") val useSelfRenderEditorOnAndroid: Boolean = true
+    @SerializedName("use_self_render_editor_on_android") val useSelfRenderEditorOnAndroid: Boolean = true,
+    @SerializedName("experimental_fullscreen_mode") val experimentalFullscreenMode: Boolean = false
 )
 
 data class SyncableSettings(

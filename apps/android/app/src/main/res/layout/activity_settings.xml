@@ -5,6 +5,7 @@
     android:layout_height="match_parent">
 
     <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/appBarLayout"
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
@@ -510,6 +511,47 @@
                         android:text="@string/pref_ai_enabled"
                         android:textSize="16sp"
                         android:layout_marginBottom="8dp"/>
+
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <!-- ═══ 实验室 (Laboratory) ═══ -->
+            <com.google.android.material.card.MaterialCardView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="16dp"
+                style="?attr/materialCardViewElevatedStyle"
+                app:cardElevation="2dp"
+                app:cardCornerRadius="16dp">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="实验室"
+                        android:textColor="?attr/colorPrimary"
+                        android:textSize="14sp"
+                        android:textStyle="bold"
+                        android:layout_marginBottom="8dp"/>
+
+                    <com.google.android.material.materialswitch.MaterialSwitch
+                        android:id="@+id/switchExperimentalFullscreen"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="沉浸式全屏"
+                        android:textSize="16sp"
+                        android:layout_marginBottom="4dp"/>
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="隐藏系统状态栏/导航栏，滑动边缘会临时显示系统栏，可能影响刘海屏/手势区。"
+                        android:textColor="?attr/colorOnSurfaceVariant"
+                        android:textSize="12sp"/>
 
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
