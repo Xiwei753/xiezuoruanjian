@@ -144,7 +144,7 @@ QtObject {
     property int radiusSm: 8
     property int radiusMd: 12
     property int radiusLg: 16
-    property int radiusXl: 24
+    property int radiusXl: 28
     property int radiusPill: 999
     property int radiusCard: radiusLg
     property int radiusPanel: radiusXl

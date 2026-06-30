@@ -760,49 +760,33 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         loadProjects()
         loadRecentEdits()
-        // Deprecated: syncMonetColor() — replaced by syncThemePalette()
-        syncMonetColor()
-        syncThemePalette()
+        syncAndroidThemePalette()
     }
 
-    private fun syncMonetColor() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            lifecycleScope.launch {
-                try {
-                    val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
-                    val hexColor = String.format("#%06X", 0xFFFFFF and colorInt)
-
-                    if (::settingsRepository.isInitialized) {
-                        withContext(Dispatchers.IO) {
-                            val syncable = settingsRepository.getSyncableSettings()
-                            if (syncable.monetColor != hexColor) {
-                                @Suppress("DEPRECATION")
-                                settingsRepository.saveSyncableSettings(syncable.copy(monetColor = hexColor))
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    Log.w("MainActivity", "Failed to extract Monet color", e)
-                }
-            }
-        }
-    }
-
-    private fun syncThemePalette() {
+    private fun syncAndroidThemePalette() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             lifecycleScope.launch {
                 try {
                     val paletteJson = ThemePaletteHelper.extractThemePaletteJson(this@MainActivity)
-                    if (paletteJson != null && ::settingsRepository.isInitialized) {
+                    val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
+                    val monetColor = String.format("#%06X", 0xFFFFFF and colorInt)
+
+                    if (::settingsRepository.isInitialized) {
                         withContext(Dispatchers.IO) {
                             val syncable = settingsRepository.getSyncableSettings()
-                            if (syncable.themePaletteJson != paletteJson) {
-                                settingsRepository.saveSyncableSettings(syncable.copy(themePaletteJson = paletteJson))
+                            val needsMonetUpdate = syncable.monetColor != monetColor
+                            val needsPaletteUpdate = paletteJson != null && syncable.themePaletteJson != paletteJson
+                            if (needsMonetUpdate || needsPaletteUpdate) {
+                                @Suppress("DEPRECATION")
+                                settingsRepository.saveSyncableSettings(syncable.copy(
+                                    monetColor = monetColor,
+                                    themePaletteJson = paletteJson ?: syncable.themePaletteJson
+                                ))
                             }
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w("MainActivity", "Failed to sync theme palette", e)
+                    Log.w("MainActivity", "Failed to sync Android theme palette", e)
                 }
             }
         }

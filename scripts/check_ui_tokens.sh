@@ -76,23 +76,35 @@ else
     echo "   PASS"
 fi
 
-# --- Check 3: Android hardcoded FAB bottom margin ---
-echo "3. Checking Android hardcoded FAB bottom margin..."
+# --- Check 3: Android hardcoded FAB bottom margin (XML block-level) ---
+echo "3. Checking Android hardcoded FAB bottom margin (XML block-level)..."
 FAB_MARGIN_ISSUES=""
-while IFS= read -r line; do
-    FILE=$(echo "$line" | cut -d: -f1)
-    # Only check FAB elements
-    if [[ "$line" == *"FloatingActionButton"* ]] || [[ "$line" == *"fab"* ]]; then
-        if [[ "$line" == *"layout_margin"* ]] && [[ "$line" != *"FabPlacementHelper"* ]]; then
-            FAB_MARGIN_ISSUES="${FAB_MARGIN_ISSUES}  $line"$'\n'
+
+# Find all layout XML files containing FloatingActionButton
+while IFS= read -r xmlfile; do
+    # Check if any FloatingActionButton element (may span multiple lines) contains layout_margin
+    # Using perl -0777 to slurp entire file, then check for FAB block with layout_margin inside
+    # [^>]* matches everything except '>' which works because '>' doesn't appear in XML attribute values
+    fab_has_margin=$(perl -0777 -ne '
+        # Match FAB blocks that contain layout_margin or layout_marginBottom
+        # but NOT layout_marginStart/End/Top (horizontal margins are acceptable)
+        if (/<FloatingActionButton[^>]*(?:android:layout_margin(?:Bottom)?=)[^>]*\/>/s) { print "yes"; }
+        elsif (/<com\.google\.android\.material\.floatingactionbutton\.FloatingActionButton[^>]*(?:android:layout_margin(?:Bottom)?=)[^>]*\/>/s) { print "yes"; }
+    ' "$xmlfile" 2>/dev/null || true)
+
+    if [[ "$fab_has_margin" == "yes" ]]; then
+        # Exclude FabPlacementHelper references
+        file_content=$(perl -0777 -ne 'print' "$xmlfile" 2>/dev/null || true)
+        if [[ "$file_content" != *"FabPlacementHelper"* ]]; then
+            FAB_MARGIN_ISSUES="${FAB_MARGIN_ISSUES}  $xmlfile: FloatingActionButton with layout_margin"$'\n'
         fi
     fi
-done < <(cd "$REPO_ROOT" && grep -rn 'layout_margin' apps/android/app/src/main/res/layout/ 2>/dev/null || true)
+done < <(cd "$REPO_ROOT" && find apps/android/app/src/main/res/layout/ -name '*.xml' -type f 2>/dev/null || true)
 
 if [[ -n "$FAB_MARGIN_ISSUES" ]]; then
-    echo "   WARN: Found FAB layout_margin in XML (should use FabPlacementHelper):"
+    echo "   FAIL: Found FloatingActionButton with layout_margin in XML (should use FabPlacementHelper):"
     echo "$FAB_MARGIN_ISSUES"
-    # This is a warning, not a hard error, since XML fallback is acceptable
+    ERRORS=$((ERRORS + 1))
 else
     echo "   PASS"
 fi
@@ -120,6 +132,70 @@ if [[ -n "$MONET_ISSUES" ]]; then
     echo "$MONET_ISSUES"
 else
     echo "   PASS"
+fi
+
+# --- Self-test (optional) ---
+if [[ "${CHECK_UI_TOKENS_SELFTEST:-0}" == "1" ]]; then
+    echo ""
+    echo "=== Self-test: multi-line XML FAB + layout_margin detection ==="
+    SELFTEST_DIR=$(mktemp -d)
+
+    # Test 1: FAB with layout_margin (should be detected)
+    SELFTEST_FILE1="$SELFTEST_DIR/test_fab_margin.xml"
+    cat > "$SELFTEST_FILE1" << 'XMLEOF'
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabTest"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_margin="16dp"
+        android:contentDescription="test" />
+</LinearLayout>
+XMLEOF
+
+    fab_has_margin=$(perl -0777 -ne '
+        if (/<com\.google\.android\.material\.floatingactionbutton\.FloatingActionButton[^>]*(?:android:layout_margin(?:Bottom)?=)[^>]*\/>/s) { print "yes"; }
+    ' "$SELFTEST_FILE1" 2>/dev/null || true)
+
+    if [[ "$fab_has_margin" == "yes" ]]; then
+        echo "   SELFTEST 1 PASS: Detected multi-line FAB + layout_margin"
+    else
+        echo "   SELFTEST 1 FAIL: Did NOT detect multi-line FAB + layout_margin"
+        ERRORS=$((ERRORS + 1))
+    fi
+
+    # Test 2: FAB with only layout_marginStart/End (should NOT be detected)
+    SELFTEST_FILE2="$SELFTEST_DIR/test_fab_margin_start.xml"
+    cat > "$SELFTEST_FILE2" << 'XMLEOF'
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+    <com.google.android.material.floatingactionbutton.FloatingActionButton
+        android:id="@+id/fabTest2"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp"
+        android:contentDescription="test" />
+</LinearLayout>
+XMLEOF
+
+    fab_has_margin2=$(perl -0777 -ne '
+        if (/<com\.google\.android\.material\.floatingactionbutton\.FloatingActionButton[^>]*(?:android:layout_margin(?:Bottom)?=)[^>]*\/>/s) { print "yes"; }
+    ' "$SELFTEST_FILE2" 2>/dev/null || true)
+
+    if [[ "$fab_has_margin2" == "yes" ]]; then
+        echo "   SELFTEST 2 FAIL: FAB with only layout_marginStart/End should NOT be flagged"
+        ERRORS=$((ERRORS + 1))
+    else
+        echo "   SELFTEST 2 PASS: FAB with only layout_marginStart/End correctly not flagged"
+    fi
+
+    rm -rf "$SELFTEST_DIR"
 fi
 
 echo ""

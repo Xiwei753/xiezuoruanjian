@@ -35,7 +35,7 @@ Dialog {
     property var _saveTimer: null
     signal settingsChanged()
 
-    background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; border.width: 1; radius: dt ? dt.radiusXl : 24 }
+    background: Rectangle { color: dt ? dt.surface : "#1A1D23"; border.color: dt ? dt.border : "#2A2E36"; border.width: 1; radius: dt ? dt.radiusXl : 28 }
     header: null
 
     function saveAndNotify() { if (!backendRef || !root.settingsDirty) return; backendRef.save_local_settings(); root.settingsDirty = false; root.settingsChanged() }

@@ -109,7 +109,7 @@ Rectangle {
         width: 360
         height: 208
         anchors.centerIn: Overlay.overlay
-        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 24; border.width: 1 }
+        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 28; border.width: 1 }
         header: null
         ColumnLayout {
             anchors.fill: parent

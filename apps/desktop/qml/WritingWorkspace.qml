@@ -111,7 +111,7 @@ Rectangle {
         width: 360
         height: 180
         anchors.centerIn: parent
-        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 24; border.width: 1 }
+        background: Rectangle { color: dt ? dt.surface : "#FCFCFF"; border.color: dt ? dt.border : "#CBD5E1"; radius: dt ? dt.radiusXl : 28; border.width: 1 }
         header: null
 
         ColumnLayout {

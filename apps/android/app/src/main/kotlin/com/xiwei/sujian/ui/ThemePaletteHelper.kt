@@ -26,8 +26,8 @@ object ThemePaletteHelper {
         return try {
             val palette = JSONObject()
             palette.put("source", "android_dynamic_color")
-            palette.put("updatedAtMs", System.currentTimeMillis())
-            palette.put("deviceId", "")  // Will be filled by settings layer
+            palette.put("updated_at_ms", System.currentTimeMillis())
+            palette.put("device_id", "")  // Will be filled by settings layer
             palette.put("variant", "tonal_spot")
 
             // Accent colors from system resources
@@ -36,95 +36,95 @@ object ThemePaletteHelper {
             // We use key shades that map to Material3 semantic tokens
 
             // Light palette
-            putSystemColor(palette, "lightPrimary", context,
+            putSystemColor(palette, "light_primary", context,
                 android.R.color.system_accent1_500)
-            putSystemColor(palette, "lightOnPrimary", context,
+            putSystemColor(palette, "light_on_primary", context,
                 android.R.color.system_accent1_100)
-            putSystemColor(palette, "lightPrimaryContainer", context,
+            putSystemColor(palette, "light_primary_container", context,
                 android.R.color.system_accent1_100)
-            putSystemColor(palette, "lightOnPrimaryContainer", context,
+            putSystemColor(palette, "light_on_primary_container", context,
                 android.R.color.system_accent1_900)
-            putSystemColor(palette, "lightSecondary", context,
+            putSystemColor(palette, "light_secondary", context,
                 android.R.color.system_accent2_500)
-            putSystemColor(palette, "lightOnSecondary", context,
+            putSystemColor(palette, "light_on_secondary", context,
                 android.R.color.system_accent2_100)
-            putSystemColor(palette, "lightSecondaryContainer", context,
+            putSystemColor(palette, "light_secondary_container", context,
                 android.R.color.system_accent2_100)
-            putSystemColor(palette, "lightOnSecondaryContainer", context,
+            putSystemColor(palette, "light_on_secondary_container", context,
                 android.R.color.system_accent2_900)
-            putSystemColor(palette, "lightTertiary", context,
+            putSystemColor(palette, "light_tertiary", context,
                 android.R.color.system_accent3_500)
-            putSystemColor(palette, "lightOnTertiary", context,
+            putSystemColor(palette, "light_on_tertiary", context,
                 android.R.color.system_accent3_100)
-            putSystemColor(palette, "lightTertiaryContainer", context,
+            putSystemColor(palette, "light_tertiary_container", context,
                 android.R.color.system_accent3_100)
-            putSystemColor(palette, "lightOnTertiaryContainer", context,
+            putSystemColor(palette, "light_on_tertiary_container", context,
                 android.R.color.system_accent3_900)
-            putSystemColor(palette, "lightBackground", context,
+            putSystemColor(palette, "light_background", context,
                 android.R.color.system_neutral1_50)
-            putSystemColor(palette, "lightOnBackground", context,
+            putSystemColor(palette, "light_on_background", context,
                 android.R.color.system_neutral1_900)
-            putSystemColor(palette, "lightSurface", context,
+            putSystemColor(palette, "light_surface", context,
                 android.R.color.system_neutral1_50)
-            putSystemColor(palette, "lightOnSurface", context,
+            putSystemColor(palette, "light_on_surface", context,
                 android.R.color.system_neutral1_900)
-            putSystemColor(palette, "lightSurfaceVariant", context,
+            putSystemColor(palette, "light_surface_variant", context,
                 android.R.color.system_neutral2_200)
-            putSystemColor(palette, "lightOnSurfaceVariant", context,
+            putSystemColor(palette, "light_on_surface_variant", context,
                 android.R.color.system_neutral2_700)
-            putSystemColor(palette, "lightSurfaceContainer", context,
+            putSystemColor(palette, "light_surface_container", context,
                 android.R.color.system_neutral1_100)
-            putSystemColor(palette, "lightSurfaceContainerHigh", context,
+            putSystemColor(palette, "light_surface_container_high", context,
                 android.R.color.system_neutral1_200)
-            putSystemColor(palette, "lightOutline", context,
+            putSystemColor(palette, "light_outline", context,
                 android.R.color.system_neutral2_500)
-            putSystemColor(palette, "lightOutlineVariant", context,
+            putSystemColor(palette, "light_outline_variant", context,
                 android.R.color.system_neutral2_200)
 
             // Dark palette
-            putSystemColor(palette, "darkPrimary", context,
+            putSystemColor(palette, "dark_primary", context,
                 android.R.color.system_accent1_200)
-            putSystemColor(palette, "darkOnPrimary", context,
+            putSystemColor(palette, "dark_on_primary", context,
                 android.R.color.system_accent1_800)
-            putSystemColor(palette, "darkPrimaryContainer", context,
+            putSystemColor(palette, "dark_primary_container", context,
                 android.R.color.system_accent1_700)
-            putSystemColor(palette, "darkOnPrimaryContainer", context,
+            putSystemColor(palette, "dark_on_primary_container", context,
                 android.R.color.system_accent1_100)
-            putSystemColor(palette, "darkSecondary", context,
+            putSystemColor(palette, "dark_secondary", context,
                 android.R.color.system_accent2_200)
-            putSystemColor(palette, "darkOnSecondary", context,
+            putSystemColor(palette, "dark_on_secondary", context,
                 android.R.color.system_accent2_800)
-            putSystemColor(palette, "darkSecondaryContainer", context,
+            putSystemColor(palette, "dark_secondary_container", context,
                 android.R.color.system_accent2_700)
-            putSystemColor(palette, "darkOnSecondaryContainer", context,
+            putSystemColor(palette, "dark_on_secondary_container", context,
                 android.R.color.system_accent2_100)
-            putSystemColor(palette, "darkTertiary", context,
+            putSystemColor(palette, "dark_tertiary", context,
                 android.R.color.system_accent3_200)
-            putSystemColor(palette, "darkOnTertiary", context,
+            putSystemColor(palette, "dark_on_tertiary", context,
                 android.R.color.system_accent3_800)
-            putSystemColor(palette, "darkTertiaryContainer", context,
+            putSystemColor(palette, "dark_tertiary_container", context,
                 android.R.color.system_accent3_700)
-            putSystemColor(palette, "darkOnTertiaryContainer", context,
+            putSystemColor(palette, "dark_on_tertiary_container", context,
                 android.R.color.system_accent3_100)
-            putSystemColor(palette, "darkBackground", context,
+            putSystemColor(palette, "dark_background", context,
                 android.R.color.system_neutral1_900)
-            putSystemColor(palette, "darkOnBackground", context,
+            putSystemColor(palette, "dark_on_background", context,
                 android.R.color.system_neutral1_100)
-            putSystemColor(palette, "darkSurface", context,
+            putSystemColor(palette, "dark_surface", context,
                 android.R.color.system_neutral1_900)
-            putSystemColor(palette, "darkOnSurface", context,
+            putSystemColor(palette, "dark_on_surface", context,
                 android.R.color.system_neutral1_100)
-            putSystemColor(palette, "darkSurfaceVariant", context,
+            putSystemColor(palette, "dark_surface_variant", context,
                 android.R.color.system_neutral2_700)
-            putSystemColor(palette, "darkOnSurfaceVariant", context,
+            putSystemColor(palette, "dark_on_surface_variant", context,
                 android.R.color.system_neutral2_200)
-            putSystemColor(palette, "darkSurfaceContainer", context,
+            putSystemColor(palette, "dark_surface_container", context,
                 android.R.color.system_neutral1_800)
-            putSystemColor(palette, "darkSurfaceContainerHigh", context,
+            putSystemColor(palette, "dark_surface_container_high", context,
                 android.R.color.system_neutral1_700)
-            putSystemColor(palette, "darkOutline", context,
+            putSystemColor(palette, "dark_outline", context,
                 android.R.color.system_neutral2_500)
-            putSystemColor(palette, "darkOutlineVariant", context,
+            putSystemColor(palette, "dark_outline_variant", context,
                 android.R.color.system_neutral2_700)
 
             palette.toString()

@@ -364,7 +364,7 @@ Rectangle {
         padding: dt ? dt.sp12 : 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusXl : 24
+            radius: dt ? dt.radiusXl : 28
             color: dt ? dt.surface : "#1A1D23"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
@@ -503,7 +503,7 @@ Rectangle {
         padding: dt ? dt.sp12 : 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusXl : 24
+            radius: dt ? dt.radiusXl : 28
             color: dt ? dt.surface : "#1A1D23"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1
@@ -607,7 +607,7 @@ Rectangle {
         padding: dt ? dt.sp12 : 12
         closePolicy: Popup.CloseOnPressOutside | Popup.CloseOnEscape
         background: Rectangle {
-            radius: dt ? dt.radiusXl : 24
+            radius: dt ? dt.radiusXl : 28
             color: dt ? dt.surface : "#1A1D23"
             border.color: dt ? dt.border : "#2A2E36"
             border.width: 1

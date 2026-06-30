@@ -31,7 +31,7 @@ Dialog {
         color: theme ? theme.surface : "#FCFCFF"
         border.color: theme ? theme.border : "#333333"
         border.width: 1
-        radius: theme ? theme.radiusXl : 24
+        radius: theme ? theme.radiusXl : 28
     }
     header: null
 

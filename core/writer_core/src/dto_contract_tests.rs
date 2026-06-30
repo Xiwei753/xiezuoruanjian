@@ -735,3 +735,120 @@ fn starmap_viewport_dto_fields_match_harmony() {
         "StarMapViewport DTO field names must match Harmony CoreDtos.ets"
     );
 }
+
+// ── ThemePalette DTO contract tests ──
+// Android 端 ThemePaletteHelper 生成 JSON，Rust 端 ThemePaletteDto 解析。
+// ThemePaletteDto 没有 #[serde(rename_all = "camelCase")]，默认期望 snake_case。
+
+#[test]
+fn theme_palette_dto_parses_snake_case_json() {
+    // Build JSON incrementally to avoid macro recursion limit
+    let mut map = serde_json::Map::new();
+    map.insert("source".into(), json!("android_dynamic_color"));
+    map.insert("updated_at_ms".into(), json!(1234567890i64));
+    map.insert("device_id".into(), json!("test_device"));
+    map.insert("variant".into(), json!("tonal_spot"));
+    // Light palette
+    map.insert("light_primary".into(), json!("#FF1234"));
+    map.insert("light_on_primary".into(), json!("#FFFFFF"));
+    map.insert("light_primary_container".into(), json!("#FFE0E0"));
+    map.insert("light_on_primary_container".into(), json!("#690005"));
+    map.insert("light_secondary".into(), json!("#FF5678"));
+    map.insert("light_on_secondary".into(), json!("#FFFFFF"));
+    map.insert("light_secondary_container".into(), json!("#FFDADA"));
+    map.insert("light_on_secondary_container".into(), json!("#5F1318"));
+    map.insert("light_tertiary".into(), json!("#FF9ABC"));
+    map.insert("light_on_tertiary".into(), json!("#FFFFFF"));
+    map.insert("light_tertiary_container".into(), json!("#FFDADF"));
+    map.insert("light_on_tertiary_container".into(), json!("#5F1128"));
+    map.insert("light_background".into(), json!("#FFFBFF"));
+    map.insert("light_on_background".into(), json!("#1C1B1F"));
+    map.insert("light_surface".into(), json!("#FFFBFF"));
+    map.insert("light_on_surface".into(), json!("#1C1B1F"));
+    map.insert("light_surface_variant".into(), json!("#E7E0EC"));
+    map.insert("light_on_surface_variant".into(), json!("#49454F"));
+    map.insert("light_surface_container".into(), json!("#F3EDF7"));
+    map.insert("light_surface_container_high".into(), json!("#ECE6F0"));
+    map.insert("light_outline".into(), json!("#79747E"));
+    map.insert("light_outline_variant".into(), json!("#CAC4D0"));
+    // Dark palette
+    map.insert("dark_primary".into(), json!("#D0BCFF"));
+    map.insert("dark_on_primary".into(), json!("#381E72"));
+    map.insert("dark_primary_container".into(), json!("#4F378B"));
+    map.insert("dark_on_primary_container".into(), json!("#EADDFF"));
+    map.insert("dark_secondary".into(), json!("#CCC2DC"));
+    map.insert("dark_on_secondary".into(), json!("#332D41"));
+    map.insert("dark_secondary_container".into(), json!("#4A4458"));
+    map.insert("dark_on_secondary_container".into(), json!("#E8DEF8"));
+    map.insert("dark_tertiary".into(), json!("#EFB8C8"));
+    map.insert("dark_on_tertiary".into(), json!("#492532"));
+    map.insert("dark_tertiary_container".into(), json!("#633B48"));
+    map.insert("dark_on_tertiary_container".into(), json!("#FFD8E4"));
+    map.insert("dark_background".into(), json!("#1C1B1F"));
+    map.insert("dark_on_background".into(), json!("#E6E1E5"));
+    map.insert("dark_surface".into(), json!("#1C1B1F"));
+    map.insert("dark_on_surface".into(), json!("#E6E1E5"));
+    map.insert("dark_surface_variant".into(), json!("#49454F"));
+    map.insert("dark_on_surface_variant".into(), json!("#CAC4D0"));
+    map.insert("dark_surface_container".into(), json!("#211F26"));
+    map.insert("dark_surface_container_high".into(), json!("#2B2930"));
+    map.insert("dark_outline".into(), json!("#938F99"));
+    map.insert("dark_outline_variant".into(), json!("#49454F"));
+
+    let json_val = serde_json::Value::Object(map);
+    let dto: crate::api::types::ThemePaletteDto = serde_json::from_value(json_val).unwrap();
+    assert_eq!(dto.source, "android_dynamic_color");
+    assert_eq!(dto.updated_at_ms, 1234567890i64);
+    assert_eq!(dto.device_id, "test_device");
+    assert_eq!(dto.variant, "tonal_spot");
+    assert!(!dto.light_primary.is_empty(), "light_primary must not be empty");
+    assert!(!dto.dark_primary.is_empty(), "dark_primary must not be empty");
+    assert!(!dto.light_surface_container_high.is_empty(), "light_surface_container_high must not be empty");
+    assert!(!dto.dark_surface_container_high.is_empty(), "dark_surface_container_high must not be empty");
+}
+
+#[test]
+fn theme_palette_dto_rejects_camel_case_json() {
+    // camelCase JSON should NOT populate snake_case Rust fields.
+    // Since ThemePaletteDto has no #[serde(default)] on String fields, we must provide
+    // all required snake_case fields (as empty strings) so deserialization succeeds,
+    // then add camelCase keys to verify they are NOT matched to the struct fields.
+    let mut map = serde_json::Map::new();
+    map.insert("source".into(), json!("android_dynamic_color"));
+    map.insert("updated_at_ms".into(), json!(0i64));
+    map.insert("device_id".into(), json!(""));
+    map.insert("variant".into(), json!("tonal_spot"));
+    // Provide all required snake_case fields as empty strings
+    let snake_case_color_keys = [
+        "light_primary", "light_on_primary", "light_primary_container", "light_on_primary_container",
+        "light_secondary", "light_on_secondary", "light_secondary_container", "light_on_secondary_container",
+        "light_tertiary", "light_on_tertiary", "light_tertiary_container", "light_on_tertiary_container",
+        "light_background", "light_on_background", "light_surface", "light_on_surface",
+        "light_surface_variant", "light_on_surface_variant",
+        "light_surface_container", "light_surface_container_high",
+        "light_outline", "light_outline_variant",
+        "dark_primary", "dark_on_primary", "dark_primary_container", "dark_on_primary_container",
+        "dark_secondary", "dark_on_secondary", "dark_secondary_container", "dark_on_secondary_container",
+        "dark_tertiary", "dark_on_tertiary", "dark_tertiary_container", "dark_on_tertiary_container",
+        "dark_background", "dark_on_background", "dark_surface", "dark_on_surface",
+        "dark_surface_variant", "dark_on_surface_variant",
+        "dark_surface_container", "dark_surface_container_high",
+        "dark_outline", "dark_outline_variant",
+    ];
+    for key in &snake_case_color_keys {
+        map.insert((*key).into(), json!(""));
+    }
+    // Add camelCase keys with non-empty values — these should NOT be matched
+    map.insert("lightPrimary".into(), json!("#FF1234"));
+    map.insert("darkPrimary".into(), json!("#D0BCFF"));
+    map.insert("lightSurfaceContainerHigh".into(), json!("#ECE6F0"));
+    map.insert("darkSurfaceContainerHigh".into(), json!("#2B2930"));
+
+    let json_val = serde_json::Value::Object(map);
+    let dto: crate::api::types::ThemePaletteDto = serde_json::from_value(json_val).unwrap();
+    // These fields should be empty because camelCase keys don't match snake_case fields
+    assert!(dto.light_primary.is_empty(), "camelCase lightPrimary should not populate snake_case light_primary");
+    assert!(dto.dark_primary.is_empty(), "camelCase darkPrimary should not populate snake_case dark_primary");
+    assert!(dto.light_surface_container_high.is_empty(), "camelCase lightSurfaceContainerHigh should not populate snake_case light_surface_container_high");
+    assert!(dto.dark_surface_container_high.is_empty(), "camelCase darkSurfaceContainerHigh should not populate snake_case dark_surface_container_high");
+}

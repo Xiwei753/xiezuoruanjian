@@ -107,12 +107,14 @@ class ChapterListActivity : AppCompatActivity() {
         }
 
         // ChapterListActivity 无底栏，FAB 只需 24dp 间距
+        // 使用 WindowInsetsListener 确保 insets 到达后再调整 FAB 位置
         val density = resources.displayMetrics.density
-        val insets = androidx.core.view.ViewCompat.getRootWindowInsets(window.decorView)
-        val safeBottomInset = insets?.let {
-            it.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom
-        } ?: 0
-        FabPlacementHelper.adjustFabBottomMargin(fabNewVolume, hasBottomNav = false, bottomNavHeight = 0, safeBottomInset = safeBottomInset, density = density)
+        val rootView = window.decorView.findViewById<View>(android.R.id.content) ?: window.decorView
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
+            val safeBottomInset = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars()).bottom
+            FabPlacementHelper.adjustFabBottomMargin(fabNewVolume, hasBottomNav = false, bottomNavHeight = 0, safeBottomInset = safeBottomInset, density = density)
+            insets
+        }
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
