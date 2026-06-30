@@ -18,6 +18,10 @@ Rectangle {
     id: root
     property var dt: null
 
+    // Elevation shadow support
+    property int elevation: 1
+    property var appShadow: null
+
     // Safe access: fallback to light-theme defaults when dt is null
     readonly property color _primary: dt ? dt.primary : "#006497"
     readonly property color _card: dt ? dt.card : "#F6F8FC"
@@ -57,6 +61,17 @@ Rectangle {
 
     Behavior on color { ColorAnimation { duration: _animFast } }
     Behavior on border.color { ColorAnimation { duration: _animFast } }
+
+    // Shadow layer (behind the card)
+    Rectangle {
+        anchors.fill: parent
+        anchors.topMargin: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).verticalOffset : 0
+        radius: _cardRadius
+        color: root.elevation > 0 && root.appShadow ? root.appShadow.forElevation(root.elevation).color : "transparent"
+        opacity: 0.2
+        visible: root.elevation > 0 && root.appShadow !== null
+        z: -1
+    }
 
     MouseArea {
         anchors.fill: parent
