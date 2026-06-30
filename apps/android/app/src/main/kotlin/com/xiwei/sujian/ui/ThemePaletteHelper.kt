@@ -5,7 +5,6 @@ import android.os.Build
 import android.util.Log
 import com.google.android.material.R.attr as M3Attr
 import com.google.android.material.color.MaterialColors
-import org.json.JSONObject
 
 /**
  * Helper to extract Android 12+ Dynamic Color (Material You) palette
@@ -188,76 +187,57 @@ object ThemePaletteHelper {
 
     /**
      * Testable overload that accepts a [ColorResolver] instead of a [Context].
+     *
+     * Uses [StringBuilder] instead of [JSONObject] so that pure-JVM unit tests
+     * (which lack the Android stub `org.json`) can execute this path.
      */
     fun extractThemePaletteJson(resolver: ColorResolver): String? {
         return try {
-            val palette = JSONObject()
-            palette.put("source", "android_dynamic_color")
-            palette.put("updated_at_ms", System.currentTimeMillis())
-            palette.put("device_id", "")  // Will be filled by settings layer
-            palette.put("variant", "tonal_spot")
+            val sb = StringBuilder()
+            sb.append("{\"source\":\"android_dynamic_color\",")
+            sb.append("\"updated_at_ms\":${System.currentTimeMillis()},")
+            sb.append("\"device_id\":\"\",")
+            sb.append("\"variant\":\"tonal_spot\",")
 
-            for (entry in lightColorEntries) {
-                putColor(palette, entry, resolver)
-            }
-            for (entry in darkColorEntries) {
-                putColor(palette, entry, resolver)
+            val allEntries = lightColorEntries + darkColorEntries
+            for ((i, entry) in allEntries.withIndex()) {
+                val value = resolveColorValue(entry, resolver)
+                sb.append("\"${entry.jsonKey}\":\"$value\"")
+                if (i < allEntries.size - 1) sb.append(",")
             }
 
-            palette.toString()
+            sb.append("}")
+            sb.toString()
         } catch (e: Exception) {
             Log.w(TAG, "Failed to extract theme palette", e)
             null
         }
     }
 
-    // ----------------------------------------------------------- //
-    //  Internal helpers                                             //
-    // ----------------------------------------------------------- //
-
     /**
-     * Write a single colour entry into [json].
-     *
-     * Priority:
-     * 1. If the entry has an API-33-only attr and we are on API 33+,
-     *    try `resolveThemeAttrColor(attrResIdV33)`.
-     * 2. If the entry has a standard attr, try `resolveThemeAttrColor(attrResId)`.
-     * 3. Fall back to `resolveSystemColor(systemColorResId)`.
-     * 4. If all fail, write empty string.
+     * Resolve the colour value for a single [ColorEntry] using the priority chain:
+     * 1. API-33+ semantic attr → 2. Standard semantic attr → 3. System tone fallback → 4. ""
      */
-    private fun putColor(
-        json: JSONObject,
-        entry: ColorEntry,
-        resolver: ColorResolver
-    ) {
+    private fun resolveColorValue(entry: ColorEntry, resolver: ColorResolver): String {
         // 1. Try API-33+ semantic attr
         val v33Attr = entry.attrResIdV33
         if (v33Attr != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val hex = resolver.resolveThemeAttrColor(v33Attr)
-            if (hex != null) {
-                json.put(entry.jsonKey, hex)
-                return
-            }
+            if (hex != null) return hex
         }
 
         // 2. Try standard semantic attr
         val attr = entry.attrResId
         if (attr != null) {
             val hex = resolver.resolveThemeAttrColor(attr)
-            if (hex != null) {
-                json.put(entry.jsonKey, hex)
-                return
-            }
+            if (hex != null) return hex
         }
 
         // 3. Fallback to system tone
         val systemHex = resolver.resolveSystemColor(entry.systemColorResId)
-        if (systemHex != null) {
-            json.put(entry.jsonKey, systemHex)
-            return
-        }
+        if (systemHex != null) return systemHex
 
         // 4. Nothing available
-        json.put(entry.jsonKey, "")
+        return ""
     }
 }
