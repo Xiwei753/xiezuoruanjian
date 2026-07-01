@@ -70,6 +70,7 @@ struct ChapterStatsAgg {
 struct DeviceStatsAgg {
     device_id: String,
     platform: String,
+    device_class: String,
     human_typed_chars: u64,
     pasted_chars: u64,
     deleted_chars: u64,
@@ -253,6 +254,7 @@ impl StatsApi {
                 .or_insert_with(|| DeviceStatsAgg {
                     device_id: stats.device_id.clone(),
                     platform: stats.platform.clone(),
+                    device_class: stats.device_class.clone(),
                     human_typed_chars: 0,
                     pasted_chars: 0,
                     deleted_chars: 0,

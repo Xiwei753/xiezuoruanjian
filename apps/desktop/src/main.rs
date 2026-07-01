@@ -52,6 +52,7 @@ mod editor;
 mod starmap_bridge;
 mod sujian_editor_item;
 mod sync_bridge;
+mod platform_utils;
 mod writing_bridge;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};

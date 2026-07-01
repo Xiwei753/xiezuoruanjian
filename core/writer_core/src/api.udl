@@ -295,6 +295,7 @@ dictionary ChapterStatsSummaryDto {
 dictionary DeviceStatsRecordDto {
     string device_id;
     PlatformDto platform;
+    string device_class;
     u64 human_typed_chars;
     u64 pasted_chars;
     u64 deleted_chars;

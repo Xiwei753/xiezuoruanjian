@@ -108,9 +108,16 @@ pub fn report_writing_event(
     device_id: &str,
     session_id: &str,
 ) -> Result<bool, WriterError> {
+    let platform = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
     api.record_writing_event_for_platform(
         device_id,
-        "linux",
+        platform,
         project_id,
         volume_id,
         chapter_id,
@@ -134,8 +141,15 @@ pub fn process_writing_event_from_text(
     device_id: &str,
     session_id: &str,
 ) -> Result<bool, WriterError> {
+    let platform = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "linux"
+    };
     api.process_writing_event(
-        device_id, "linux", project_id, volume_id, chapter_id, old_text, new_text, 0, session_id,
+        device_id, platform, project_id, volume_id, chapter_id, old_text, new_text, 0, session_id,
     )
 }
 

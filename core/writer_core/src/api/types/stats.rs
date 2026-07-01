@@ -64,6 +64,7 @@ pub struct ChapterStatsSummaryDto {
 pub struct DeviceStatsRecordDto {
     pub device_id: String,
     pub platform: PlatformDto,
+    pub device_class: String,
     pub human_typed_chars: u64,
     pub pasted_chars: u64,
     pub deleted_chars: u64,

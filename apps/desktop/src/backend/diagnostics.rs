@@ -600,45 +600,7 @@ fn zip_dir_recursive(
 /// 用系统文件管理器打开日志目录
 pub fn open_log_directory(log_dir: &Path) -> Result<(), String> {
     ensure_log_dir(log_dir)?;
-
-    #[cfg(target_os = "linux")]
-    {
-        let path_str = log_dir.to_string_lossy().to_string();
-        // Try xdg-open first, then nautilus, then dolphin
-        for cmd in &["xdg-open", "nautilus", "dolphin"] {
-            if std::process::Command::new(cmd)
-                .arg(&path_str)
-                .spawn()
-                .is_ok()
-            {
-                return Ok(());
-            }
-        }
-        return Err("无法打开文件管理器：未找到 xdg-open/nautilus/dolphin".to_string());
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        let path_str = log_dir.to_string_lossy().to_string();
-        std::process::Command::new("explorer")
-            .arg(&path_str)
-            .spawn()
-            .map_err(|e| format!("打开文件管理器失败: {}", e))?;
-        return Ok(());
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let path_str = log_dir.to_string_lossy().to_string();
-        std::process::Command::new("open")
-            .arg(&path_str)
-            .spawn()
-            .map_err(|e| format!("打开 Finder 失败: {}", e))?;
-        return Ok(());
-    }
-
-    #[allow(unreachable_code)]
-    Err("不支持的平台".to_string())
+    crate::platform_utils::open_directory(&log_dir.to_string_lossy())
 }
 
 #[cfg(test)]

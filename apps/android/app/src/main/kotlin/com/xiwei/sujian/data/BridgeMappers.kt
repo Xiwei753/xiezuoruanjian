@@ -357,6 +357,7 @@ internal fun ChapterStatsSummaryDto.toModel() = ChapterWritingStatsSummary(
 internal fun DeviceStatsRecordDto.toModel() = DeviceWritingStatsItem(
     deviceId = deviceId,
     platform = platform.name,
+    deviceClass = deviceClass,
     humanTypedChars = humanTypedChars.toLong(),
     pastedChars = pastedChars.toLong(),
     deletedChars = deletedChars.toLong(),

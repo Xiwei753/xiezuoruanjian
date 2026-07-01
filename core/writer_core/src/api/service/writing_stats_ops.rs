@@ -109,20 +109,33 @@ impl WriterCoreApi {
         duration_seconds: i32,
         session_id: &str,
     ) -> ApiResult<bool> {
-        self.record_writing_event_for_platform(
-            device_id,
-            "android",
-            project_id,
-            volume_id,
-            chapter_id,
-            source,
-            inserted_chars,
-            deleted_chars,
-            pasted_chars,
-            ai_inserted_chars,
-            duration_seconds,
-            session_id,
-        )
+        // 校验非负计数器
+        let inserted_chars = Self::non_negative_counter("inserted_chars", inserted_chars)?;
+        let deleted_chars = Self::non_negative_counter("deleted_chars", deleted_chars)?;
+        let pasted_chars = Self::non_negative_counter("pasted_chars", pasted_chars)?;
+        let ai_inserted_chars = Self::non_negative_counter("ai_inserted_chars", ai_inserted_chars)?;
+        let duration_seconds = Self::non_negative_counter("duration_seconds", duration_seconds)?;
+
+        // 读取 current_device.json 获取 platform 和 device_class
+        let (platform, device_class) = if let Ok(info) = crate::settings::load_device_info(
+            &self.workspace_path,
+        ) {
+            let p = if info.platform.is_empty() { "android" } else { &info.platform };
+            let dc = if info.device_class.is_empty() { "phone" } else { &info.device_class };
+            (p.to_string(), dc.to_string())
+        } else {
+            ("android".to_string(), "phone".to_string())
+        };
+
+        self.core()
+            .record_writing_event(
+                device_id, &platform, &device_class,
+                project_id, volume_id, chapter_id, source,
+                inserted_chars, deleted_chars, pasted_chars,
+                ai_inserted_chars, duration_seconds, session_id,
+            )
+            .map(|_| true)
+            .map_err(WriterError::from)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -147,18 +160,38 @@ impl WriterCoreApi {
         let ai_inserted_chars = Self::non_negative_counter("ai_inserted_chars", ai_inserted_chars)?;
         let duration_seconds = Self::non_negative_counter("duration_seconds", duration_seconds)?;
 
-        // 根据 platform 推断 device_class
-        let device_class = if platform == "android" {
-            "phone"
+        // 优先从 current_device.json 读取 device_class
+        let device_class = if let Ok(info) = crate::settings::load_device_info(
+            &self.workspace_path,
+        ) {
+            if info.device_class.is_empty() {
+                // fallback：根据 platform 推断
+                if platform == "android" {
+                    "phone".to_string()
+                } else if platform == "harmony" {
+                    "tablet".to_string()
+                } else {
+                    "desktop".to_string()
+                }
+            } else {
+                info.device_class
+            }
         } else {
-            "desktop"
+            // fallback：根据 platform 推断
+            if platform == "android" {
+                "phone".to_string()
+            } else if platform == "harmony" {
+                "tablet".to_string()
+            } else {
+                "desktop".to_string()
+            }
         };
 
         self.core()
             .record_writing_event(
                 device_id,
                 platform,
-                device_class,
+                &device_class,
                 project_id,
                 volume_id,
                 chapter_id,

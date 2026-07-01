@@ -332,6 +332,10 @@ impl AppBackend {
                 self.reload_tree();
                 self.load_sync_config();
                 self.load_local_settings();
+                // 写入 current_device.json 设备信息（与 internal_open_workspace 一致）
+                if let Err(e) = api.ensure_device_info("desktop", "desktop") {
+                    self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
+                }
                 self.ai_available_changed();
                 self.workspace_opened();
                 self.workspace_content_changed();
@@ -514,10 +518,9 @@ impl AppBackend {
     pub(crate) fn open_workspace_dir(&mut self) {
         let path = self.current_workspace.clone();
         if !path.is_empty() {
-            let _ = std::process::Command::new("xdg-open")
-                .arg("--")
-                .arg(&path)
-                .spawn();
+            if let Err(e) = crate::platform_utils::open_directory(&path) {
+                self.debug_warn("workspace", "open_workspace_dir_failed", &e);
+            }
         }
     }
 }

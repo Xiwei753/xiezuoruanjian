@@ -460,6 +460,7 @@ data class DeviceWritingStatsSummary(
 data class DeviceWritingStatsItem(
     @SerializedName("device_id") val deviceId: String? = null,
     val platform: String? = null,
+    @SerializedName("device_class") val deviceClass: String? = null,
     @SerializedName("human_typed_chars") val humanTypedChars: Long? = null,
     @SerializedName("pasted_chars") val pastedChars: Long? = null,
     @SerializedName("deleted_chars") val deletedChars: Long? = null,
