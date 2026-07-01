@@ -15,6 +15,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
     // Hardcoded colors we want to forbid
     let forbidden_colors = [
         "#000000", "#111111", "#1a1c1e", "#1A1C1E", "black", "#2C2E36", "#2c2e36",
+        "#ffffff", "#FFFFFF", "white",
     ];
     // Forbidden qml binding usages
     let forbidden_bindings = [
@@ -97,6 +98,8 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || trimmed.contains("color :")
                     || trimmed.contains("color=")
                     || trimmed.contains("color :")
+                    || trimmed.contains("strokeStyle")
+                    || trimmed.contains("fillStyle")
                 {
                     // Exemption: DesignTokens.qml and main.qml are allowed to define dark colors directly.
                     // All other components must use semantic tokens from DesignTokens.
@@ -124,6 +127,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             }
                             // Exempt #000000 in scrim/shadow contexts
                             if (c == "#000000") && is_scrim_or_shadow {
+                                continue;
+                            }
+                            // Exempt #ffffff/white in whitelisted files (DesignTokens defines light surface colors)
+                            if (c == "#ffffff" || c == "white") && is_whitelisted {
                                 continue;
                             }
                             eprintln!(
