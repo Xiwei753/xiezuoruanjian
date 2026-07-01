@@ -112,6 +112,8 @@ internal class SyncSettingsHelper(
                 "platform" to "android"
             )
             settingsRepository.saveDeviceInfo(deviceInfo)
+            // 同时通过 Core 层写入 current_device.json
+            settingsRepository.ensureDeviceInfo("android", determineDeviceClass())
         }
         currentSyncConfig = uiConfig
         currentSyncSecrets = uiSecrets
@@ -480,10 +482,10 @@ internal class SyncSettingsHelper(
      */
     private fun getDeviceId(): String {
         val prefs = activity.getSharedPreferences("sujian_device", android.content.Context.MODE_PRIVATE)
-        var id = prefs.getString("device_id", null)
+        var id = prefs.getString("deviceId", null)
         if (id == null) {
             id = java.util.UUID.randomUUID().toString()
-            prefs.edit().putString("device_id", id).apply()
+            prefs.edit().putString("deviceId", id).apply()
         }
         return id
     }
