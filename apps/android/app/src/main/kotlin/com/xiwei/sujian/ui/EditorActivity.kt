@@ -41,6 +41,9 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
     private var editorFragment: EditorFragment? = null
     private var currentWritingPolicy: ScreenPolicy? = null
 
+    // ── SystemBarsController: 存为属性，供 EditorFragment 访问 ──
+    val systemBarsController: SystemBarsController by lazy { SystemBarsController(this) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -57,18 +60,17 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
             }
         }
 
-        // ── SystemBarsController: edge-to-edge + insets ──
-        val systemBarsController = SystemBarsController(this)
-        systemBarsController.setupEdgeToEdge()
-
         setContentView(R.layout.activity_editor)
+
+        // ── SystemBarsController: edge-to-edge + insets ──
+        systemBarsController.setupEdgeToEdge()
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
         }
 
         val appBarLayout = findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBarLayout)
-        systemBarsController.setAppBarInsetTarget(appBarLayout)
+        systemBarsController.addAppBarTarget(appBarLayout)
 
         // ── 实验室全屏模式 ──
         ErrorUtil.safeRun(this) {

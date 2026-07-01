@@ -201,6 +201,8 @@
     <!-- MainActivity -->
     <string name="unknown_project">未知作品</string>
     <string name="continue_writing">继续编写...</string>
+    <string name="recent_edits">最近编辑</string>
+    <string name="select_chapter_to_edit">选择章节开始编辑</string>
 
     <!-- StarMapController -->
     <string name="default_starmap_title">作品宇宙</string>
@@ -322,6 +324,11 @@
 
     <!-- About -->
     <string name="about_title">关于素笺写作</string>
+
+    <!-- 实验室功能 -->
+    <string name="pref_category_laboratory">实验室</string>
+    <string name="lab_fullscreen_immersive">沉浸式全屏</string>
+    <string name="lab_fullscreen_immersive_summary">隐藏系统状态栏/导航栏，滑动边缘会临时显示系统栏，可能影响刘海屏/手势区。</string>
     <string name="about_app_name">素笺写作</string>
     <string name="about_author">作者：Xiwei753</string>
     <string name="about_github">GitHub：&lt;a href="https://github.com/Xiwei753/xiezuoruanjian"&gt;https://github.com/Xiwei753/xiezuoruanjian&lt;/a&gt;</string>

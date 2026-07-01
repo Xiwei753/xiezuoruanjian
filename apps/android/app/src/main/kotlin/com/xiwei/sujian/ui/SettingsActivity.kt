@@ -17,6 +17,7 @@ import com.xiwei.sujian.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.system.SystemBarsController
+import com.xiwei.sujian.labs.ExperimentalSettingsRepository
 import com.google.android.material.button.MaterialButton
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
@@ -28,6 +29,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var currentSettings: LocalSettings
     private lateinit var syncHelper: SyncSettingsHelper
+
+    // ── SystemBarsController: 存为属性，供实验室开关立即生效 ──
+    private var systemBarsController: SystemBarsController? = null
 
     private lateinit var sbFontSize: Slider
     private lateinit var sbLineSpacing: Slider
@@ -87,8 +91,8 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(R.layout.activity_settings)
 
         // ── SystemBarsController: edge-to-edge + insets ──
-        val systemBarsController = SystemBarsController(this)
-        systemBarsController.setupEdgeToEdge()
+        systemBarsController = SystemBarsController(this)
+        systemBarsController?.setupEdgeToEdge()
 
         currentSettings = ErrorUtil.safeRun(this, LocalSettings()) {
             if (::settingsRepository.isInitialized) {
@@ -118,7 +122,10 @@ class SettingsActivity : AppCompatActivity() {
 
         // ── SystemBarsController: 设置 inset target ──
         val appBarLayout = findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBarLayout)
-        systemBarsController.setAppBarInsetTarget(appBarLayout)
+        systemBarsController?.addAppBarTarget(appBarLayout)
+
+        val nestedScrollView = findViewById<androidx.core.widget.NestedScrollView>(R.id.nestedScrollView)
+        systemBarsController?.addBottomPaddingTarget(nestedScrollView)
 
         sbFontSize = findViewById(R.id.sbFontSize)
         sbLineSpacing = findViewById(R.id.sbLineSpacing)
@@ -348,8 +355,14 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         // ── 实验室全屏模式开关 ──
-        switchExperimentalFullscreen.isChecked = currentSettings.experimentalFullscreenMode
+        val labsRepo = ExperimentalSettingsRepository(this)
+        labsRepo.migrateFromLegacy(currentSettings.experimentalFullscreenMode)
+        switchExperimentalFullscreen.isChecked = labsRepo.isEnabled("fullscreen_immersive")
         switchExperimentalFullscreen.setOnCheckedChangeListener { _, isChecked ->
+            labsRepo.setEnabled("fullscreen_immersive", isChecked)
+            // 立即生效
+            systemBarsController?.applyFullscreen(isChecked)
+            // 同步到 LocalSettings
             currentSettings = currentSettings.copy(experimentalFullscreenMode = isChecked)
             saveAndFinish(false)
         }

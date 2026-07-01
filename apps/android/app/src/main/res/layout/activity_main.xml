@@ -74,7 +74,7 @@
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="最近编辑"
+                            android:text="@string/recent_edits"
                             android:textAppearance="?attr/textAppearanceLabelLarge"
                             android:textColor="?attr/colorPrimary"
                             android:layout_marginBottom="8dp"/>
@@ -175,7 +175,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:text="选择章节开始编辑"
+                    android:text="@string/select_chapter_to_edit"
                     android:textColor="?attr/colorOnSurfaceVariant"
                     android:textSize="14sp" />
             </LinearLayout>
@@ -223,7 +223,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="最近编辑"
+                        android:text="@string/recent_edits"
                         android:textAppearance="?attr/textAppearanceLabelLarge"
                         android:textColor="?attr/colorPrimary"
                         android:layout_marginBottom="8dp"/>

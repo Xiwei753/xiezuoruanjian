@@ -174,6 +174,46 @@ else
     echo "   PASS"
 fi
 
+# --- Check 7: Android Kotlin hardcoded colors ---
+echo "7. Checking Android Kotlin hardcoded colors (Color.argb/rgb/parseColor)..."
+KT_COLOR_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    # Whitelist: ThemePaletteHelper.kt (adaptation layer)
+    if [[ "$FILE" == *"ThemePaletteHelper.kt" ]]; then continue; fi
+    # Whitelist: SujianEditorView.kt (alpha compositing on dynamic theme color)
+    if [[ "$FILE" == *"SujianEditorView.kt" ]]; then continue; fi
+    # Whitelist: test files
+    if [[ "$FILE" == *"/test/"* ]]; then continue; fi
+    KT_COLOR_ISSUES="${KT_COLOR_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && grep -rn 'Color\.argb\|Color\.rgb\|Color\.parseColor' apps/android/ 2>/dev/null || true)
+
+if [[ -n "$KT_COLOR_ISSUES" ]]; then
+    echo "   FAIL: Found hardcoded Color.argb/rgb/parseColor in Android Kotlin (use MaterialColors instead):"
+    echo "$KT_COLOR_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
+# --- Check 8: Android XML hardcoded Chinese text ---
+echo "8. Checking Android XML hardcoded Chinese text (android:text with CJK)..."
+XML_CJK_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    # Whitelist: colors.xml, themes.xml (not layout files)
+    if [[ "$FILE" == *"colors.xml" ]] || [[ "$FILE" == *"themes.xml" ]]; then continue; fi
+    XML_CJK_ISSUES="${XML_CJK_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && perl -CSD -ne 'print "$ARGV:$.: $_" if /android:text="[^"]*[\x{4e00}-\x{9fff}]/' apps/android/app/src/main/res/layout/*.xml 2>/dev/null || true)
+
+if [[ -n "$XML_CJK_ISSUES" ]]; then
+    echo "   FAIL: Found hardcoded Chinese text in layout XML (use @string/ instead):"
+    echo "$XML_CJK_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
 # --- Self-test (optional) ---
 if [[ "${CHECK_UI_TOKENS_SELFTEST:-0}" == "1" ]]; then
     echo ""

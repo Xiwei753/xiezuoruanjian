@@ -1,7 +1,7 @@
 package com.xiwei.sujian.editor.selfrender
 
 import android.graphics.Canvas
-import android.graphics.Color
+
 import android.graphics.Paint
 import android.graphics.Path
 import android.text.Layout
@@ -57,23 +57,34 @@ class SujianEditorRenderer(
 ) {
     // ── 绘制工具 ──
     internal val selectionPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(60, 100, 150, 255) // 默认值，由 applyThemeColors() 覆盖
+        color = 0 // 默认值，由 setThemeColors() 覆盖
         style = Paint.Style.FILL
     }
 
     internal val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(255, 50, 50, 50)
+        color = 0 // 默认值，由 setThemeColors() 覆盖
         style = Paint.Style.FILL
         strokeWidth = 1.5f * density  // 固定 1.5dp
     }
 
     internal val composingUnderlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(180, 50, 50, 50) // 默认值，由 applyThemeColors() 覆盖
+        color = 0 // 默认值，由 setThemeColors() 覆盖
         style = Paint.Style.STROKE
         strokeWidth = 1.5f
     }
 
     private val animTextPaint = TextPaint(textPaint)
+
+    /**
+     * 从主题注入颜色，覆盖所有硬编码默认值。
+     * 由 SujianEditorView.applyThemeColors() 调用。
+     */
+    fun setThemeColors(textColor: Int, cursorColor: Int, composingColor: Int, selectionColor: Int) {
+        cursorPaint.color = cursorColor
+        composingUnderlinePaint.color = composingColor
+        selectionPaint.color = selectionColor
+        animTextPaint.color = textColor
+    }
 
     // ── 动画状态 ──
     private val activeAnimations = mutableListOf<SujianOverlayAnim>()

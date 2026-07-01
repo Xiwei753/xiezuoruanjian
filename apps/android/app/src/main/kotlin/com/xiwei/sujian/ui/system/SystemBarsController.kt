@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui.system
 
 import android.app.Activity
 import android.view.View
+import android.view.ViewGroup
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -22,8 +23,17 @@ import androidx.core.view.WindowInsetsControllerCompat
  */
 class SystemBarsController(private val activity: Activity) {
 
-    private var appBarInsetTarget: View? = null
-    private var bottomInsetTarget: View? = null
+    // 多 target 列表
+    private val appBarTargets = mutableListOf<View>()
+    private val bottomPaddingTargets = mutableListOf<View>()
+    private val bottomMarginTargets = mutableListOf<View>()
+
+    // 保存原始 padding/margin
+    private val originalPaddings = mutableMapOf<View, OriginalPadding>()
+    private val originalMargins = mutableMapOf<View, OriginalMargin>()
+
+    private data class OriginalPadding(val left: Int, val top: Int, val right: Int, val bottom: Int)
+    private data class OriginalMargin(val left: Int, val top: Int, val right: Int, val bottom: Int)
 
     /**
      * 设置 edge-to-edge + insets 监听。
@@ -50,22 +60,40 @@ class SystemBarsController(private val activity: Activity) {
             val systemBars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
 
-            // AppBarLayout: top padding
-            appBarInsetTarget?.setPadding(
-                systemBars.left,
-                systemBars.top,
-                systemBars.right,
-                0
-            )
+            // AppBarLayout: top padding — 在原始值基础上叠加
+            for (view in appBarTargets) {
+                val orig = originalPaddings[view] ?: continue
+                view.setPadding(
+                    orig.left + systemBars.left,
+                    orig.top + systemBars.top,
+                    orig.right + systemBars.right,
+                    orig.bottom
+                )
+            }
 
-            // Bottom container: max(systemBars.bottom, ime.bottom)
+            // Bottom padding targets — 在原始值基础上叠加
             val bottomPadding = maxOf(systemBars.bottom, ime.bottom)
-            bottomInsetTarget?.setPadding(
-                systemBars.left,
-                0,
-                systemBars.right,
-                bottomPadding
-            )
+            for (view in bottomPaddingTargets) {
+                val orig = originalPaddings[view] ?: continue
+                view.setPadding(
+                    orig.left + systemBars.left,
+                    orig.top,
+                    orig.right + systemBars.right,
+                    orig.bottom + bottomPadding
+                )
+            }
+
+            // Bottom margin targets — 在原始值基础上叠加
+            for (view in bottomMarginTargets) {
+                val orig = originalMargins[view] ?: continue
+                val lp = view.layoutParams
+                if (lp is ViewGroup.MarginLayoutParams) {
+                    lp.leftMargin = orig.left + systemBars.left
+                    lp.rightMargin = orig.right + systemBars.right
+                    lp.bottomMargin = orig.bottom + bottomPadding
+                    view.layoutParams = lp
+                }
+            }
 
             insets
         }
@@ -91,16 +119,46 @@ class SystemBarsController(private val activity: Activity) {
     }
 
     /**
-     * 设置需要 top inset 的 AppBarLayout / Toolbar 容器。
+     * 添加需要 top inset 的 AppBarLayout / Toolbar 容器。
+     * 保存原始 padding，insets 叠加在原始值之上。
      */
-    fun setAppBarInsetTarget(view: View) {
-        appBarInsetTarget = view
+    fun addAppBarTarget(view: View) {
+        if (!appBarTargets.contains(view)) {
+            appBarTargets.add(view)
+            originalPaddings[view] = OriginalPadding(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)
+        }
     }
 
     /**
-     * 设置需要 bottom inset 的底部容器（BottomNavigationView / FAB 容器 / 正文底部）。
+     * 添加需要 bottom inset 的底部容器（BottomNavigationView / 正文底部）。
+     * 保存原始 padding，insets 叠加在原始值之上。
      */
-    fun setBottomInsetTarget(view: View) {
-        bottomInsetTarget = view
+    fun addBottomPaddingTarget(view: View) {
+        if (!bottomPaddingTargets.contains(view)) {
+            bottomPaddingTargets.add(view)
+            originalPaddings[view] = OriginalPadding(view.paddingLeft, view.paddingTop, view.paddingRight, view.paddingBottom)
+        }
     }
+
+    /**
+     * 添加需要 bottom margin inset 的 View（如 editorStatusBar）。
+     * 保存原始 margin，insets 叠加在原始值之上。
+     */
+    fun addBottomMarginTarget(view: View) {
+        if (!bottomMarginTargets.contains(view)) {
+            bottomMarginTargets.add(view)
+            val lp = view.layoutParams
+            if (lp is ViewGroup.MarginLayoutParams) {
+                originalMargins[view] = OriginalMargin(lp.leftMargin, lp.topMargin, lp.rightMargin, lp.bottomMargin)
+            }
+        }
+    }
+
+    // ── 旧方法兼容（标记 @Deprecated） ──
+
+    @Deprecated("Use addAppBarTarget", ReplaceWith("addAppBarTarget(view)"))
+    fun setAppBarInsetTarget(view: View) = addAppBarTarget(view)
+
+    @Deprecated("Use addBottomPaddingTarget", ReplaceWith("addBottomPaddingTarget(view)"))
+    fun setBottomInsetTarget(view: View) = addBottomPaddingTarget(view)
 }

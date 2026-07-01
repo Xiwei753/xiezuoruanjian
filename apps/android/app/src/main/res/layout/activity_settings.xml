@@ -19,6 +19,7 @@
     </com.google.android.material.appbar.AppBarLayout>
 
     <androidx.core.widget.NestedScrollView
+        android:id="@+id/nestedScrollView"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         app:layout_behavior="@string/appbar_scrolling_view_behavior">
@@ -532,7 +533,7 @@
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="实验室"
+                        android:text="@string/pref_category_laboratory"
                         android:textColor="?attr/colorPrimary"
                         android:textSize="14sp"
                         android:textStyle="bold"
@@ -542,14 +543,14 @@
                         android:id="@+id/switchExperimentalFullscreen"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="沉浸式全屏"
+                        android:text="@string/lab_fullscreen_immersive"
                         android:textSize="16sp"
                         android:layout_marginBottom="4dp"/>
 
                     <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="隐藏系统状态栏/导航栏，滑动边缘会临时显示系统栏，可能影响刘海屏/手势区。"
+                        android:text="@string/lab_fullscreen_immersive_summary"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:textSize="12sp"/>
 

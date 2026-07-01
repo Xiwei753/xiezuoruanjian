@@ -1,7 +1,9 @@
 package com.xiwei.sujian.editor.selfrender
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.text.TextPaint
@@ -16,6 +18,7 @@ import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.SujianCursorRectData
 import com.xiwei.sujian.model.SujianEditCauseData
 import com.xiwei.sujian.model.SujianVisualEditContext
+import com.google.android.material.color.MaterialColors
 
 /**
  * SujianEditorView — Android 自研写作区核心 View（唯一主路径）
@@ -125,6 +128,9 @@ class SujianEditorView @JvmOverloads constructor(
         isFocusableInTouchMode = true
         isClickable = true
         isLongClickable = true
+
+        // 初始应用主题颜色
+        applyThemeColors()
     }
 
     // ── 视觉事务提供者（Phase 2） ──
@@ -705,50 +711,66 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration?) {
+        super.onConfigurationChanged(newConfig)
+        applyThemeColors()
+    }
+
     /**
      * 从主题 attr 注入颜色到渲染器，避免硬编码颜色。
      * 必须在 attach 到 window 后调用（需要 context 取 theme attr）。
      */
     fun applyThemeColors() {
-        val typedValue = android.util.TypedValue()
-        val theme = context.theme
-
-        // editor background → colorSurface
-        if (theme.resolveAttribute(com.google.android.material.R.attr.colorSurface, typedValue, true)) {
-            setBackgroundColor(typedValue.data)
-        }
-
-        // text color → colorOnSurface
-        if (theme.resolveAttribute(com.google.android.material.R.attr.colorOnSurface, typedValue, true)) {
-            textPaint.color = typedValue.data
-        }
-
-        // cursor → colorPrimary
-        if (theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, typedValue, true)) {
-            renderer.cursorPaint.color = typedValue.data
-        }
-
-        // composing underline → colorPrimary
-        if (theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, typedValue, true)) {
-            renderer.composingUnderlinePaint.color = android.graphics.Color.argb(
-                180,
-                android.graphics.Color.red(typedValue.data),
-                android.graphics.Color.green(typedValue.data),
-                android.graphics.Color.blue(typedValue.data)
+        val textColor = MaterialColors.getColor(
+            context,
+            com.google.android.material.R.attr.colorOnSurface,
+            0xFF000000.toInt()
+        )
+        val primaryColor = MaterialColors.getColor(
+            context,
+            com.google.android.material.R.attr.colorPrimary,
+            0xFF6200EE.toInt()
+        )
+        val surfaceColor = MaterialColors.getColor(
+            context,
+            com.google.android.material.R.attr.colorSurfaceContainerLowest,
+            MaterialColors.getColor(
+                context,
+                com.google.android.material.R.attr.colorSurface,
+                0xFFFFFFFF.toInt()
             )
-        }
+        )
 
-        // selection → colorPrimary with alpha
-        if (theme.resolveAttribute(com.google.android.material.R.attr.colorPrimary, typedValue, true)) {
-            renderer.selectionPaint.color = android.graphics.Color.argb(
-                60,
-                android.graphics.Color.red(typedValue.data),
-                android.graphics.Color.green(typedValue.data),
-                android.graphics.Color.blue(typedValue.data)
-            )
-        }
+        // 编辑器背景
+        setBackgroundColor(surfaceColor)
+
+        // 正文颜色
+        textPaint.color = textColor
+
+        // 光标颜色 → colorPrimary
+        val cursorColor = primaryColor
+
+        // composing 下划线颜色 → colorPrimary 叠 alpha 180/255
+        val composingColor = Color.argb(
+            180,
+            Color.red(primaryColor),
+            Color.green(primaryColor),
+            Color.blue(primaryColor)
+        )
+
+        // 选区高亮颜色 → colorPrimary 叠 alpha 60/255
+        val selectionColor = Color.argb(
+            60,
+            Color.red(primaryColor),
+            Color.green(primaryColor),
+            Color.blue(primaryColor)
+        )
+
+        // 传递给渲染器（含 animTextPaint 同步）
+        renderer.setThemeColors(textColor, cursorColor, composingColor, selectionColor)
 
         invalidate()
+        layoutEngine.invalidate()
     }
 
     // ── Accessibility ──

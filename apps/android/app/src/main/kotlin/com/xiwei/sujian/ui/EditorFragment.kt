@@ -173,18 +173,30 @@ class EditorFragment : Fragment() {
             UiFontUtil.applySansSerifFallback(view)
         }
 
-        // ── Window insets ──
+        // ── Window insets: 通过宿主 Activity 的 SystemBarsController 统一管理 ──
         val editorStatusBar = view.findViewById<View>(R.id.editorStatusBar)
-        ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
-            val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
-            val systemBarsInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-
-            val bottomInset = maxOf(imeInsets.bottom, systemBarsInsets.bottom)
-            val params = editorStatusBar.layoutParams as android.view.ViewGroup.MarginLayoutParams
-            params.bottomMargin = bottomInset + (16 * resources.displayMetrics.density).toInt()
-            editorStatusBar.layoutParams = params
-
-            WindowInsetsCompat.CONSUMED
+        val hostController = (activity as? EditorActivity)?.systemBarsController
+        if (hostController != null) {
+            // SinglePane 模式：通过 SystemBarsController 统一管理
+            hostController.addBottomMarginTarget(editorStatusBar)
+        } else {
+            // TwoPane 模式（宿主是 MainActivity）：保留独立的 WindowInsets 处理，但保存原始 margin 叠加
+            var originalBottomMargin = 0
+            val params = editorStatusBar.layoutParams
+            if (params is android.view.ViewGroup.MarginLayoutParams) {
+                originalBottomMargin = params.bottomMargin
+            }
+            ViewCompat.setOnApplyWindowInsetsListener(view) { v, insets ->
+                val imeInsets = insets.getInsets(WindowInsetsCompat.Type.ime())
+                val systemBarsInsets = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+                val bottomInset = maxOf(imeInsets.bottom, systemBarsInsets.bottom)
+                val lp = editorStatusBar.layoutParams
+                if (lp is android.view.ViewGroup.MarginLayoutParams) {
+                    lp.bottomMargin = originalBottomMargin + bottomInset
+                    editorStatusBar.layoutParams = lp
+                }
+                WindowInsetsCompat.CONSUMED
+            }
         }
 
         setupSearchAndReplace()

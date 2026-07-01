@@ -131,4 +131,13 @@
     <string name="diagnostics_export_failed">Failed to export diagnostics package</string>
     <string name="diagnostics_cleared">Logs cleared</string>
     <string name="diagnostics_device_info_copied">Device info copied</string>
+
+    <!-- Laboratory features -->
+    <string name="pref_category_laboratory">Laboratory</string>
+    <string name="lab_fullscreen_immersive">Immersive Fullscreen</string>
+    <string name="lab_fullscreen_immersive_summary">Hide system status/navigation bars. Swiping edges temporarily shows them. May affect notches and gesture areas.</string>
+
+    <!-- MainActivity -->
+    <string name="recent_edits">Recent Edits</string>
+    <string name="select_chapter_to_edit">Select a chapter to start editing</string>
 </resources>

@@ -169,8 +169,8 @@ class MainActivity : AppCompatActivity() {
 
         // ── SystemBarsController: 设置 inset target ──
         val appBarLayout = findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBarLayout)
-        systemBarsController.setAppBarInsetTarget(appBarLayout)
-        systemBarsController.setBottomInsetTarget(bottomNav)
+        systemBarsController.addAppBarTarget(appBarLayout)
+        systemBarsController.addBottomPaddingTarget(bottomNav)
 
         // ── 实验室全屏模式 ──
         ErrorUtil.safeRun(this) {
