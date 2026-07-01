@@ -66,6 +66,11 @@ cpp! {{
     #include <QStringList>
     #include <QTranslator>
     #include <QtGlobal>
+    #include <QWindow>
+    #ifdef _WIN32
+    #include <dwmapi.h>
+    #pragma comment(lib, "dwmapi.lib")
+    #endif
 }}
 
 qmetaobject::qrc!(qml_resources, "/" {
@@ -247,6 +252,46 @@ fn set_application_icon() {
     });
 }
 
+/// 设置 Windows 原生标题栏深色模式
+///
+/// 通过 DwmSetWindowAttribute 调用 DWM API：
+/// - DWMWA_USE_IMMERSIVE_DARK_MODE (20)：启用沉浸式深色标题栏
+/// - DWMWA_CAPTION_COLOR (35)：标题栏背景色（Windows 11 22H2+，可选）
+/// - DWMWA_TEXT_COLOR (36)：标题栏文字色（Windows 11 22H2+，可选）
+///
+/// 非 Windows 平台为空操作。
+pub(crate) fn apply_dwm_dark_mode(is_dark: bool) {
+    let dark_value: i32 = if is_dark { 1 } else { 0 };
+    cpp!(unsafe [dark_value as "int"] {
+        #ifdef _WIN32
+        QWindowList windows = QGuiApplication::topLevelWindows();
+        if (!windows.isEmpty()) {
+            QWindow* window = windows.first();
+            HWND hwnd = (HWND)window->winId();
+            if (hwnd) {
+                // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+                DwmSetWindowAttribute(hwnd, 20, &dark_value, sizeof(dark_value));
+                // DWMWA_CAPTION_COLOR = 35, DWMWA_TEXT_COLOR = 36
+                // 仅 Windows 11 22H2+ 支持，失败时忽略
+                if (dark_value) {
+                    COLORREF caption_color = RGB(28, 27, 31);
+                    DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                    COLORREF text_color = RGB(224, 224, 224);
+                    DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+                } else {
+                    COLORREF caption_color = RGB(243, 243, 243);
+                    DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                    COLORREF text_color = RGB(0, 0, 0);
+                    DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+                }
+            }
+        }
+        #else
+        (void)dark_value;
+        #endif
+    });
+}
+
 fn log_input_method_diagnostics() {
     let qt_im_module = std::env::var("QT_IM_MODULE").unwrap_or_else(|_| "<unset>".to_string());
     let xmodifiers = std::env::var("XMODIFIERS").unwrap_or_else(|_| "<unset>".to_string());
@@ -361,6 +406,17 @@ fn main() {
 
     engine.load_file(qml_path.into());
     install_message_handler(prev_handler);
+
+    // 设置 Windows 原生标题栏深色模式
+    // 使用 Qt 系统主题检测确定初始值，QML isDark 变化时会再次更新
+    let system_is_dark = cpp!(unsafe [] -> bool as "bool" {
+        #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+        return QGuiApplication::styleHints()->colorScheme() == Qt::ColorScheme::Dark;
+        #else
+        return false;
+        #endif
+    });
+    apply_dwm_dark_mode(system_is_dark);
 
     if QML_LOAD_FAILED.load(Ordering::SeqCst) {
         let last_error = last_qml_load_error();

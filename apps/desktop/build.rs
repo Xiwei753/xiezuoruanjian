@@ -548,5 +548,10 @@ fn main() {
         );
     }
 
+    // Link dwmapi for Windows DWM dark mode title bar support
+    if std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default() == "windows" {
+        println!("cargo:rustc-link-lib=dylib=dwmapi");
+    }
+
     config.build("src/main.rs");
 }

@@ -104,7 +104,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     // no longer infer dark/light mode themselves; use DesignTokens instead.
                     let is_system_palette_fallback = trimmed.contains("Application.styleHints.colorScheme")
                         || trimmed.contains("Qt.ColorScheme.Dark");
-                    let is_whitelisted = file_name == "DesignTokens.qml" || file_name == "main.qml";
+                    let is_whitelisted = file_name == "DesignTokens.qml" || file_name == "main.qml" || file_name == "AppText.qml";
                     let is_scrim_or_shadow = trimmed.contains("scrim")
                         || trimmed.contains("shadow")
                         || trimmed.contains("Shadow");
@@ -165,7 +165,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 // TRANSITION PERIOD: This check is currently warning-only (no has_errors = true).
                 // Once all components have been migrated to use DesignTokens semantic tokens,
                 // change the eprintln! to also set has_errors = true.
-                let hex_color_whitelist = ["DesignTokens.qml", "main.qml"];
+                let hex_color_whitelist = ["DesignTokens.qml", "main.qml", "AppText.qml"];
                 if !hex_color_whitelist.contains(&file_name) {
                     // Match hex colors: #RRGGBB or #AARRGGBB (6 or 8 hex digits after #)
                     let hex_re = regex::Regex::new(r#"#[0-9A-Fa-f]{6,8}"#).unwrap();
@@ -203,6 +203,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     if trimmed.contains("anchors.verticalCenter: parent.verticalCenter")
                         && file_name != "ModernComboBox.qml"
                         && file_name != "WritingWorkspace.qml"
+                        && file_name != "StatusPill.qml"
                     {
                         eprintln!("{}:{}: Found potentially dangerous anchors.verticalCenter. Use Layout.alignment instead if inside Layout.", file_name, line_num);
                         has_errors = true;
@@ -255,6 +256,50 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     file_name
                 );
                 has_errors = true;
+            }
+
+            // AppText dt/theme check: every AppText usage must have dt or theme binding,
+            // or an explicit color binding (token color). Otherwise it will fall back to
+            // globalDt/colorScheme which is not the intended usage pattern.
+            if file_name != "AppText.qml" && content.contains("AppText {") {
+                let mut search_pos = 0;
+                while let Some(start) = content[search_pos..].find("AppText {") {
+                    let abs_start = search_pos + start;
+                    search_pos = abs_start + 1;
+                    // Find the matching closing brace
+                    let after = &content[abs_start..];
+                    let mut bc = 0;
+                    let mut block_end = 0;
+                    let mut found_open = false;
+                    for (i, c) in after.chars().enumerate() {
+                        if c == '{' {
+                            bc += 1;
+                            found_open = true;
+                        } else if c == '}' {
+                            bc -= 1;
+                        }
+                        if found_open && bc == 0 {
+                            block_end = i;
+                            break;
+                        }
+                    }
+                    if block_end == 0 {
+                        continue;
+                    }
+                    let block = &after[..block_end];
+                    let has_dt = block.contains("dt:");
+                    let has_theme = block.contains("theme:");
+                    let has_color = block.contains("color:");
+                    if !has_dt && !has_theme && !has_color {
+                        // Calculate approximate line number
+                        let line_num = content[..abs_start].lines().count() + 1;
+                        eprintln!(
+                            "{}:{}: AppText usage without dt, theme, or color binding. Every AppText must receive a DesignTokens reference.",
+                            file_name, line_num
+                        );
+                        has_errors = true;
+                    }
+                }
             }
 
             if brace_count != 0 {

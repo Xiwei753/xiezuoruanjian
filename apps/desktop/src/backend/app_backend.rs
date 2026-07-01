@@ -218,6 +218,7 @@ pub struct AppBackend {
 
     pending_github_init_path_changed: qt_signal!(),
     query_system_color_scheme: qt_method!(fn(&mut self)),
+    apply_window_dark_mode: qt_method!(fn(&mut self, is_dark: bool)),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
@@ -528,6 +529,10 @@ impl AppBackend {
         let scheme = system_utils::detect_system_theme_from_platform();
         self.current_system_color_scheme = scheme;
         self.system_color_scheme_changed();
+    }
+
+    fn apply_window_dark_mode(&mut self, is_dark: bool) {
+        crate::apply_dwm_dark_mode(is_dark);
     }
 
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {

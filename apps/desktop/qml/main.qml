@@ -190,6 +190,9 @@ ApplicationWindow {
         target: designTokens
         function onIsDarkChanged() {
             window.logThemeDiagnostics("is_dark_changed");
+            if (appBackend) {
+                appBackend.apply_window_dark_mode(designTokens.isDark);
+            }
         }
         function onEditorTextChanged() {
             window.logThemeDiagnostics("editor_text_changed");
@@ -226,6 +229,9 @@ ApplicationWindow {
         window.verifyBackendRuntime();
         window.debugLog("app", "qml_completed", "QML components fully loaded");
         window.logThemeDiagnostics("startup");
+        if (appBackend) {
+            appBackend.apply_window_dark_mode(designTokens.isDark);
+        }
         appController.restoreWorkspace();
     }
 
