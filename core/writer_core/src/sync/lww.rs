@@ -165,19 +165,27 @@ pub(crate) fn perform_lww_sync(
             let now = chrono::Utc::now().timestamp();
             let elapsed = now - last_sync;
             if elapsed >= 0 && elapsed < min_interval {
-                eprintln!(
-                    "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
-                    elapsed, min_interval
-                );
-                result.status = SyncStatus::Success;
-                return Ok(result);
+                // 冲突解决后（pending_take_remote 非空）必须绕过 debounce，
+                // 否则用户解决冲突后可能要等 60 秒才能同步到远端内容
+                if !state.pending_take_remote.is_empty() {
+                    eprintln!(
+                        "[sync] debounce bypassed: pending_take_remote has {} entries",
+                        state.pending_take_remote.len()
+                    );
+                } else {
+                    eprintln!(
+                        "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
+                        elapsed, min_interval
+                    );
+                    result.status = SyncStatus::Success;
+                    return Ok(result);
+                }
             }
         }
     }
 
     let api_base = GitHubApiBackend::api_base_url(&config.remote_url);
-    let network_mode = GitHubApiBackend::resolve_network_mode(config);
-    let client = match GitHubApiBackend::build_client(&network_mode) {
+    let client = match GitHubApiBackend::build_client() {
         Ok(c) => c,
         Err(e) => {
             result.error = Some(e.to_string());
@@ -185,7 +193,6 @@ pub(crate) fn perform_lww_sync(
             return Ok(result);
         }
     };
-    result.chosen_network_mode = Some(network_mode);
 
     let max_retries = 2;
     let mut attempt = 0;
@@ -885,7 +892,6 @@ fn execute_lww_sync_attempt(
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
     state.last_synced_commit = None;
     state.last_error = None;
-    state.last_successful_network_mode = result.chosen_network_mode.clone().or_else(|| Some("direct".to_string()));
 
     let post_local_entries = scan_workspace_for_sync(workspace_path)?;
 

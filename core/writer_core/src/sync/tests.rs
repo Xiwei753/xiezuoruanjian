@@ -1,5 +1,4 @@
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use crate::sync::backends::SyncBackend;
     #[cfg(feature = "git-https")]
@@ -307,7 +306,6 @@ mod tests {
             last_sync_time: Some(0),
             last_synced_commit: None,
             last_error: None,
-            last_successful_network_mode: None,
             known_files: std::collections::HashMap::new(),
             conflicts: vec![],
             tombstones: Vec::new(),
@@ -457,7 +455,6 @@ mod tests {
             last_synced_commit: None,
             last_sync_time: None,
             last_error: None,
-            last_successful_network_mode: None,
             known_files: std::collections::HashMap::new(),
             conflicts: vec![],
             tombstones: Vec::new(),
@@ -3229,31 +3226,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diagnostics_result_has_proxy_policy() {
-        // Verify that SyncDiagnosticsResult has proxy_policy field
-        let config = SyncConfig {
-            enabled: true,
-            backend_type: BackendType::GithubApi,
-            remote_url: "https://github.com/user/repo.git".to_string(),
-            transport: SyncTransport::HttpsToken,
-            branch: "main".to_string(),
-            auto_sync: false,
-            sync_interval_seconds: 0,
-            username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            token: None,
-            ssh_private_key: None,
-        };
-
-        let result = GitHubApiBackend.diagnose(&config, &secrets).unwrap();
-        // diagnose sets proxy_policy = "no_proxy" even when token is missing
-        assert_eq!(result.proxy_policy, "no_proxy");
-    }
-
-    #[test]
     fn test_git_backend_diagnostics_not_assumed_ok() {
         // Git 后端诊断不再假成功，应返回明确的"不支持"状态
         let config = SyncConfig {
@@ -3362,5 +3334,41 @@ mod tests {
         // force_sync=true 绕过了 debounce，会尝试网络请求
         // 因为测试环境没有真实 API，预期返回错误状态
         assert_ne!(res2.status, SyncStatus::Success, "force_sync should bypass debounce and attempt sync");
+    }
+
+    #[test]
+    fn test_pending_take_remote_bypasses_debounce() {
+        // 冲突解决后（pending_take_remote 非空），即使 force_sync=false 也应绕过 debounce
+        let dir = tempfile::tempdir().unwrap();
+        crate::workspace::create_workspace(dir.path()).unwrap();
+
+        let config = SyncConfig {
+            enabled: true,
+            backend_type: BackendType::GithubApi,
+            remote_url: "https://github.com/test/pending-take-remote-test.git".to_string(),
+            transport: SyncTransport::HttpsToken,
+            branch: "main".to_string(),
+            auto_sync: false,
+            sync_interval_seconds: 300,
+            username: String::new(),
+            android_has_internet_permission: true,
+            android_has_access_network_state_permission: true,
+        };
+        let secrets = SyncSecrets {
+            token: Some("test_token".to_string()),
+            ssh_private_key: None,
+        };
+
+        // 设置 last_sync_time 为当前时间（模拟刚同步过）
+        let mut state = crate::sync::SyncService::load_sync_state(dir.path()).unwrap();
+        state.last_sync_time = Some(chrono::Utc::now().timestamp());
+        // 添加 pending_take_remote（模拟用户刚解决冲突选择"采用远端"）
+        state.pending_take_remote.insert("test_chapter.md".to_string());
+        crate::sync::SyncService::save_sync_state(dir.path(), &state).unwrap();
+
+        // force_sync=false 但有 pending_take_remote，应该绕过 debounce（尝试执行）
+        let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        // 绕过了 debounce，会尝试网络请求，因测试环境没有真实 API，预期返回错误状态
+        assert_ne!(res.status, SyncStatus::Success, "pending_take_remote should bypass debounce");
     }
 }
