@@ -525,6 +525,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_default_settings_presentation() {
+        let presentation = default_settings_presentation();
+
+        // Assert section count
+        assert_eq!(presentation.sections.len(), 7);
+
+        // Assert section ids
+        assert_eq!(presentation.sections[0].id, "appearance");
+        assert_eq!(presentation.sections[1].id, "editor");
+        assert_eq!(presentation.sections[2].id, "save");
+        assert_eq!(presentation.sections[3].id, "sync");
+        assert_eq!(presentation.sections[4].id, "ai");
+        assert_eq!(presentation.sections[5].id, "stats");
+        assert_eq!(presentation.sections[6].id, "about");
+
+        // Assert orders
+        for (i, section) in presentation.sections.iter().enumerate() {
+            assert_eq!(section.order, (i as u32 + 1) * 10);
+        }
+
+        // Assert items count
+        assert_eq!(presentation.sections[0].items.len(), 3);
+        assert_eq!(presentation.sections[1].items.len(), 6);
+        assert_eq!(presentation.sections[2].items.len(), 2);
+        assert_eq!(presentation.sections[3].items.len(), 9);
+        assert_eq!(presentation.sections[4].items.len(), 1);
+        assert_eq!(presentation.sections[5].items.len(), 0);
+        assert_eq!(presentation.sections[6].items.len(), 3);
+
+        // Verify a specific item completely (e.g. theme_mode)
+        let theme_mode = &presentation.sections[0].items[0];
+        assert_eq!(theme_mode.id, "theme_mode");
+        assert_eq!(theme_mode.title_key, "settings.item.theme_mode");
+        assert_eq!(theme_mode.kind, SettingControlKind::Select);
+        assert_eq!(theme_mode.value_key, "theme_mode");
+        assert_eq!(theme_mode.order, 1);
+        assert_eq!(theme_mode.platform_visibility, PlatformVisibility::All);
+        assert!(theme_mode.select_options.is_some());
+        let options = theme_mode.select_options.as_ref().unwrap();
+        assert_eq!(options.len(), 3);
+        assert_eq!(options[0].value, "system");
+        assert_eq!(options[1].value, "light");
+        assert_eq!(options[2].value, "dark");
+    }
+
+    #[test]
     fn test_section_order() {
         let presentation = default_settings_presentation();
         let section_ids: Vec<&str> = presentation
