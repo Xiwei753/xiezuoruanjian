@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use crate::sync::backends::SyncBackend;
 use crate::sync::service::SyncService;
 use crate::sync::types::FirstSyncMode;
@@ -14,29 +13,12 @@ use std::path::Path;
 pub struct GitHubApiBackend;
 
 impl GitHubApiBackend {
-    /// 构建 HTTP 客户端，根据 network_mode 选择是否使用代理。
-    /// - "direct" 或 ""：不使用代理（.no_proxy()）
-    /// - "system"：使用系统代理设置（reqwest 默认行为）
-    /// - 其他：默认不使用代理
-    pub(crate) fn build_client(network_mode: &str) -> crate::Result<reqwest::blocking::Client> {
-        let mut builder = reqwest::blocking::Client::builder()
+    /// 构建 HTTP 客户端（直连模式，不使用代理）。
+    pub(crate) fn build_client() -> crate::Result<reqwest::blocking::Client> {
+        reqwest::blocking::Client::builder()
             .user_agent("WriterApp/1.0")
-            .timeout(std::time::Duration::from_secs(15));
-
-        match network_mode {
-            "direct" | "" => {
-                builder = builder.no_proxy();
-            }
-            "system" => {
-                // 使用系统代理设置（reqwest 默认行为）
-            }
-            _ => {
-                // 未知模式，默认不使用代理
-                builder = builder.no_proxy();
-            }
-        }
-
-        builder
+            .timeout(std::time::Duration::from_secs(15))
+            .no_proxy()
             .build()
             .map_err(|e| crate::Error::Other(format!("Failed to build HTTP client: {}", e)))
     }
@@ -53,13 +35,6 @@ impl GitHubApiBackend {
             sanitized
         }
     }
-
-    /// 决定网络模式：优先使用 last_successful_network_mode，否则默认 "direct"
-    pub(crate) fn resolve_network_mode(_config: &SyncConfig) -> String {
-        // 未来可根据 config 中的用户偏好选择网络模式
-        // 当前默认 "direct"，如果直连失败可在 diagnose 中尝试 "system"
-        "direct".to_string()
-    }
 }
 
 impl SyncBackend for GitHubApiBackend {
@@ -75,14 +50,6 @@ impl SyncBackend for GitHubApiBackend {
             .clone();
         result.transport = "https".to_string();
 
-        let network_mode = Self::resolve_network_mode(config);
-        result.chosen_network_mode = Some(network_mode.clone());
-        result.proxy_policy = if network_mode == "system" {
-            "system_proxy".to_string()
-        } else {
-            "no_proxy".to_string()
-        };
-
         if !config.android_has_internet_permission {
             result.error_category = "missing_permission".to_string();
             return Ok(result);
@@ -97,8 +64,7 @@ impl SyncBackend for GitHubApiBackend {
         let api_base = Self::api_base_url(&config.remote_url);
         let _masked_url = mask_token_in_url(&api_base);
 
-        // 先尝试首选网络模式
-        let client = match Self::build_client(&network_mode) {
+        let client = match Self::build_client() {
             Ok(c) => c,
             Err(e) => {
                 result.error_category = "network_probe_failed".to_string();
@@ -192,42 +158,6 @@ impl SyncBackend for GitHubApiBackend {
                 }
                 result.network_ok = false;
                 result.network_status = "failed".to_string();
-
-                // direct 模式失败时，尝试 system 代理模式
-                if network_mode == "direct" {
-                    let system_client = match Self::build_client("system") {
-                        Ok(c) => c,
-                        Err(_) => return Ok(result),
-                    };
-                    match system_client
-                        .get(&api_url)
-                        .header("Authorization", format!("Bearer {}", token))
-                        .header("User-Agent", "WriterApp/1.0")
-                        .header("Accept", "application/vnd.github+json")
-                        .send()
-                    {
-                        Ok(resp) => {
-                            let status = resp.status().as_u16();
-                            if status == 200 {
-                                result.success = true;
-                                result.network_ok = true;
-                                result.network_status = "ok".to_string();
-                                result.auth_ok = true;
-                                result.auth_status = "ok".to_string();
-                                result.repo_ok = true;
-                                result.repo_status = "ok".to_string();
-                                result.branch_ok = true;
-                                result.branch_status = "ok".to_string();
-                                result.chosen_network_mode = Some("system".to_string());
-                                result.proxy_policy = "system_proxy".to_string();
-                            }
-                            // 其他状态码保持 direct 模式的错误信息
-                        }
-                        Err(_) => {
-                            // system 代理也失败，保持 direct 模式的错误信息
-                        }
-                    }
-                }
             }
         }
 
@@ -261,11 +191,8 @@ impl SyncBackend for GitHubApiBackend {
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        let network_mode = Self::resolve_network_mode(config);
         eprintln!(
-            "[sync] backend_type=github_api sync_mode=lww_manifest chosen_network_mode={} proxy_policy={} force_sync={} entry=GitHubApiBackend::sync remote_url={}",
-            network_mode,
-            if network_mode == "system" { "system_proxy" } else { "no_proxy" },
+            "[sync] backend_type=github_api sync_mode=lww_manifest force_sync={} entry=GitHubApiBackend::sync remote_url={}",
             force_sync,
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
         );
@@ -295,26 +222,10 @@ impl SyncBackend for GitHubApiBackend {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn test_build_client_direct_uses_no_proxy() {
-        let source = include_str!("github_backend.rs");
-        // build_client("direct") 分支应调用 .no_proxy()
-        assert!(
-            source.contains("\"direct\" | \"\" => {\n                builder = builder.no_proxy();"),
-            "build_client must call .no_proxy() for direct mode"
-        );
-    }
-
-    #[test]
-    fn test_build_client_system_does_not_use_no_proxy() {
-        let source = include_str!("github_backend.rs");
-        // "system" 分支不应调用 .no_proxy()
-        let system_idx = source.find("\"system\" =>").expect("must have system branch");
-        let wildcard_idx = source[system_idx..].find("_ =>").expect("must have wildcard arm after system");
-        let system_section = &source[system_idx..system_idx + wildcard_idx];
-        assert!(
-            !system_section.contains(".no_proxy()"),
-            "build_client must NOT call .no_proxy() for system mode"
-        );
+    fn test_build_client_uses_no_proxy() {
+        let client = super::GitHubApiBackend::build_client().unwrap();
+        // Verify the client was built successfully (direct mode with no_proxy)
+        drop(client);
     }
 
     #[test]

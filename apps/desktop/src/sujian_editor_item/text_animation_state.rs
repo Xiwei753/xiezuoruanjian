@@ -1106,4 +1106,98 @@ mod tests {
     fn test_map_range_for_delete_superset() {
         assert_eq!(map_range_for_delete((10, 20), 5, 20), None);
     }
+
+    // --- record_transaction repaint-signal tests ---
+
+    #[test]
+    fn test_map_ranges_for_insert_triggers_repaint_on_cancel() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        assert!(state.has_active_insert());
+        // insert 在 range 内部，取消动画 → has_active_insert 变为 false（需要 repaint）
+        state.map_ranges_for_insert(15, 3);
+        assert!(!state.has_active_insert(), "Insert inside range should cancel animation, triggering repaint");
+    }
+
+    #[test]
+    fn test_map_ranges_for_delete_triggers_repaint_on_cancel() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        assert!(state.has_active_insert());
+        // delete 和 range 相交，取消动画 → has_active_insert 变为 false（需要 repaint）
+        state.map_ranges_for_delete(8, 5);
+        assert!(!state.has_active_insert(), "Delete intersecting range should cancel animation, triggering repaint");
+    }
+
+    #[test]
+    fn test_map_ranges_for_insert_no_repaint_when_no_cancel() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        assert!(state.has_active_insert());
+        // insert 在 range 之前，不取消 → has_active_insert 仍为 true（无需 repaint）
+        state.map_ranges_for_insert(5, 3);
+        assert!(state.has_active_insert(), "Insert before range should not cancel animation");
+        assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
+    }
+
+    #[test]
+    fn test_map_ranges_for_delete_no_repaint_when_no_cancel() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        assert!(state.has_active_insert());
+        // delete 在 range 之后，不取消 → has_active_insert 仍为 true（无需 repaint）
+        state.map_ranges_for_delete(25, 5);
+        assert!(state.has_active_insert(), "Delete after range should not cancel animation");
+    }
+
+    #[test]
+    fn test_map_ranges_insert_before_with_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        // insert 在 byte_range 之前，byte_range 和 reflow_byte_ranges 都后移
+        state.map_ranges_for_insert(5, 3);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(23, 28), (28, 33)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_intersecting_reflow_cancels_that_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (30, 35)], 100);
+        // delete [22, 27) 和 reflow (20,25) 相交，取消该 reflow；
+        // reflow (30,35) 在 delete 之后，前移 → (25, 30)
+        state.map_ranges_for_delete(22, 5);
+        // byte_range 不受影响（delete 在 byte_range 之后）
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(25, 30)]);
+    }
+
+    #[test]
+    fn test_map_ranges_insert_cancels_animation_with_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25)], 100);
+        // insert 在 byte_range 内部，取消整个动画（包括 reflow）
+        state.map_ranges_for_insert(15, 3);
+        assert!(state.is_empty(), "Insert inside byte_range should cancel entire animation");
+        assert!(state.active_reflow_byte_ranges().is_empty(), "Reflow ranges should be cleared when animation is cancelled");
+    }
+
+    #[test]
+    fn test_sequential_inserts_map_correctly() {
+        let mut state = TextAnimationState::new();
+        // 第一个动画
+        state.start_insert((5, 10), vec![], 100);
+        // insert 在第一个 range 之后（pos=10 >= range.1=10），range 不变
+        state.map_ranges_for_insert(10, 1);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(5, 10)]);
+
+        // 第二个动画
+        state.start_insert((10, 11), vec![], 100);
+        // insert 在第一个 range 之后、第二个 range 边界
+        state.map_ranges_for_insert(11, 1);
+        let ranges = state.active_insert_byte_ranges();
+        assert_eq!(ranges.len(), 2);
+        assert!(ranges.contains(&(5, 10)), "First animation range should remain (5, 10)");
+        assert!(ranges.contains(&(10, 11)), "Second animation range should remain (10, 11)");
+    }
 }

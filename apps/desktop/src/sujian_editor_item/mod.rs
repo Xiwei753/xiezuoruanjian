@@ -1289,6 +1289,14 @@ impl SujianEditorItem {
                     EditorAnimationKind::Insert => {
                         // 从 vt.inserted_range 读取 hidden range
                         if let Some((range_start, range_end)) = vt.inserted_range {
+                            // 映射已有动画的 byte ranges（对齐 Android mapActiveInsertRangesForInsert）
+                            let insert_len = range_end - range_start;
+                            let had_active_before = self.text_anim_state.has_active_insert();
+                            self.text_anim_state.map_ranges_for_insert(range_start, insert_len);
+                            if had_active_before && !self.text_anim_state.has_active_insert() {
+                                // 旧动画被取消（相交），需要触发 static repaint 恢复文字
+                                self.request_static_repaint();
+                            }
                             // 统一动画判定：与 QML 使用相同规则
                             let glyph_rects = vt.insert_glyph_rects.as_ref();
                             let glyph_count = glyph_rects.map_or(0, |g| g.len());
@@ -1369,6 +1377,19 @@ impl SujianEditorItem {
                         if matches!(decision, AnimationDecision::FullAnimation) {
                             // 对于 Delete，inserted_range 为 None，需要从变更推导 byte range
                             let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                            // 第一遍：映射已有动画的 byte ranges（对齐 Android mapActiveInsertRangesForDelete）
+                            for change in &changes {
+                                if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                                    let range_start = *index;
+                                    let delete_len = text.len();
+                                    let had_active_before = self.text_anim_state.has_active_insert();
+                                    self.text_anim_state.map_ranges_for_delete(range_start, delete_len);
+                                    if had_active_before && !self.text_anim_state.has_active_insert() {
+                                        self.request_static_repaint();
+                                    }
+                                }
+                            }
+                            // 第二遍：创建新的 Delete 动画
                             for change in &changes {
                                 if let writer_core::editor::EditorChange::Delete { index, text } = change {
                                     let range_start = *index;

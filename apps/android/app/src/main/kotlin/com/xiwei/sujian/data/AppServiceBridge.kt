@@ -12,7 +12,6 @@ import com.xiwei.sujian.model.DeviceWritingStatsItem
 import com.xiwei.sujian.model.DeviceWritingStatsSummary
 import com.xiwei.sujian.model.FirstSyncMode
 import com.xiwei.sujian.model.LocalSettings
-import com.xiwei.sujian.model.NetworkProbeResult
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.ProjectStats
 import com.xiwei.sujian.model.ProjectWritingStatsItem
@@ -41,7 +40,6 @@ import uniffi.writer_core.DateRangeDto
 import uniffi.writer_core.DeviceStatsRecordDto
 import uniffi.writer_core.DeviceStatsSummaryDto
 import uniffi.writer_core.LocalSettingsDto
-import uniffi.writer_core.NetworkProbeResultDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
 import uniffi.writer_core.ProjectStatsRecordDto

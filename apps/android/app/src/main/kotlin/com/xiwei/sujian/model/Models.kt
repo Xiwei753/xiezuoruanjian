@@ -176,7 +176,6 @@ data class SyncState(
     @SerializedName("last_synced_commit") val lastSyncedCommit: String? = null,
     @SerializedName("last_sync_time") val lastSyncTime: Long? = null,
     @SerializedName("last_error") val lastError: String? = null,
-    @SerializedName("last_successful_network_mode") val lastSuccessfulNetworkMode: String? = null,
     @SerializedName("known_files") val knownFiles: Map<String, String>? = emptyMap(),
     val conflicts: List<SyncConflict>? = emptyList(),
     val tombstones: List<Tombstone>? = emptyList(),
@@ -272,14 +271,6 @@ data class SyncConflict(
     val description: String
 )
 
-data class NetworkProbeResult(
-    val mode: String,
-    val success: Boolean,
-    val status: String,
-    val message: String,
-    @SerializedName("raw_error") val rawError: String? = null
-)
-
 data class SyncDiagnosticsResult(
     val success: Boolean,
     val backendType: String,
@@ -297,12 +288,7 @@ data class SyncDiagnosticsResult(
     @SerializedName("remote_url_sanitized") val remoteUrlSanitized: String,
     val transport: String,
     @SerializedName("error_category") val errorCategory: String,
-    @SerializedName("raw_error") val rawError: String?,
-    @SerializedName("chosen_network_mode") val chosenNetworkMode: String?,
-    @Deprecated("proxy_policy — 代理功能已移除，禁止扩展。破坏性版本 v2 删除")
-    @SerializedName("proxy_policy") val proxyPolicy: String,
-    @Deprecated("network_probe_summary — 代理探测已移除，禁止扩展。破坏性版本 v2 删除")
-    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>
+    @SerializedName("raw_error") val rawError: String?
 )
 
 data class SyncResult(
@@ -319,12 +305,7 @@ data class SyncResult(
     @SerializedName("commit_hash") val commitHash: String? = null,
     val error: String? = null,
     @SerializedName("error_category") val errorCategory: String? = null,
-    @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
-    @SerializedName("chosen_network_mode") val chosenNetworkMode: String? = null,
-    @Deprecated("proxy_policy — 代理功能已移除，禁止扩展。破坏性版本 v2 删除")
-    @SerializedName("proxy_policy") val proxyPolicy: String = "",
-    @Deprecated("network_probe_summary — 代理探测已移除，禁止扩展。破坏性版本 v2 删除")
-    @SerializedName("network_probe_summary") val networkProbeSummary: List<NetworkProbeResult>? = emptyList()
+    @SerializedName("first_sync_mode") val firstSyncMode: FirstSyncMode = FirstSyncMode.None
 )
 
 data class SyncPlan(

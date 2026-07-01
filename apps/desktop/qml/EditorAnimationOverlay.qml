@@ -257,10 +257,7 @@ Item {
             return
         }
 
-        // 记录当前事务的 pending ghost 数量（push 到事务列表，支持连续输入不覆盖）
-        root._activeTransactions.push({ pendingCount: ghostCount, byteStart: insertByteStart, byteEnd: insertByteEnd })
-
-        root._log("insert creating " + ghostCount + " ghosts, cursorRect=(" + startX + "," + startY + ") byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
+        // 先创建 insert ghost 和 reflow ghost，之后再统计总 pendingCount 并 push transaction
 
         for (var i = 0; i < glyphRects.length; i++) {
             var gr = glyphRects[i]
@@ -332,6 +329,24 @@ Item {
                 _trackGhost(reflowGhost, "insert", insertByteStart, insertByteEnd)
             }
         }
+
+        // 统计有效 reflow ghost 数量
+        var validReflowGhostCount = 0
+        if (reflowRects && Array.isArray(reflowRects) && reflowRects.length > 0) {
+            for (var ri = 0; ri < reflowRects.length; ri++) {
+                var rr = reflowRects[ri]
+                if (isComplexGrapheme(rr.char)) continue
+                var dx = Math.abs(rr.newX - rr.oldX)
+                var dy = Math.abs(rr.newY - rr.oldY)
+                if (dx < 0.5 && dy < 0.5) continue
+                validReflowGhostCount++
+            }
+        }
+
+        // 总 pendingCount = insert ghost + reflow ghost
+        var totalPending = ghostCount + validReflowGhostCount
+        root._activeTransactions.push({ pendingCount: totalPending, byteStart: insertByteStart, byteEnd: insertByteEnd })
+        root._log("insert creating " + ghostCount + " insert ghosts + " + validReflowGhostCount + " reflow ghosts, totalPending=" + totalPending + " byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
     }
 
     /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。

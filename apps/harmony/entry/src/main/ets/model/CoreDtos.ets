@@ -145,7 +145,6 @@ export interface SyncState {
   lastSyncedCommit?: string
   lastSyncTime?: number
   lastError?: string
-  lastSuccessfulNetworkMode?: string
   conflicts?: SyncConflict[]
 }
 
@@ -173,47 +172,6 @@ export interface SyncResult {
   errorCategory?: string
   firstSyncMode: string
   userMessage?: string
-  chosenNetworkMode?: string
-  networkProbeSummary?: NetworkProbeResult[]
-}
-
-export interface NetworkProbeResult {
-  // 待 Core NetworkProbeResultDto 字段稳定后补充
-  // ArkTS 不支持索引签名，以下为占位字段，Core 字段稳定后替换
-  mode: string
-  success: boolean
-  latencyMs: number
-  errorMessage: string
-}
-
-export interface SyncDiagnosticsResult {
-  success: boolean
-  backendType: string
-  androidHasInternetPermission: boolean
-  androidHasAccessNetworkStatePermission: boolean
-  androidNetworkState: string
-  tcpProbeOk: boolean
-  tcpProbeStatus: string
-  httpConnectProbeOk: boolean
-  httpConnectProbeStatus: string
-  libgit2ProbeOk: boolean
-  libgit2ProbeStatus: string
-  networkOk: boolean
-  authOk: boolean
-  repoOk: boolean
-  branchOk: boolean
-  networkStatus: string
-  authStatus: string
-  repoStatus: string
-  branchStatus: string
-  remoteUrlSanitized: string
-  transport: string
-  errorCategory: string
-  userMessage?: string
-  rawError?: string
-  chosenNetworkMode?: string
-  proxyPolicy: string
-  networkProbeSummary?: NetworkProbeResult[]
 }
 
 // ─── Envelope DTOs ───
