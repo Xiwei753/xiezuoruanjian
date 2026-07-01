@@ -29,4 +29,13 @@ impl WriterCoreApi {
             .map(|_| true)
             .map_err(Into::into)
     }
+
+    /// Ensure device info exists in app-meta/device/current_device.json.
+    /// Creates the file with the given platform and device_class if it doesn't exist yet.
+    pub fn ensure_device_info(&self, platform: &str, device_class: &str) -> ApiResult<bool> {
+        self.core()
+            .ensure_device_info(platform, device_class)
+            .map(|_| true)
+            .map_err(Into::into)
+    }
 }
