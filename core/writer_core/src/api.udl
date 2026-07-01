@@ -158,14 +158,6 @@ dictionary SyncStateDto {
     sequence<SyncConflictDto>? conflicts;
 };
 
-dictionary NetworkProbeResultDto {
-    string mode;
-    boolean success;
-    string status;
-    string message;
-    string? raw_error;
-};
-
 dictionary SyncDiagnosticsResultDto {
     boolean success;
     string backend_type;
@@ -185,8 +177,6 @@ dictionary SyncDiagnosticsResultDto {
     string error_category;
     string? raw_error;
     string? chosen_network_mode;
-    string proxy_policy;
-    sequence<NetworkProbeResultDto>? network_probe_summary;
 };
 
 dictionary SyncPlanDto {
@@ -212,7 +202,6 @@ dictionary SyncResultDto {
     string? error_category;
     string first_sync_mode;
     string? chosen_network_mode;
-    sequence<NetworkProbeResultDto>? network_probe_summary;
 };
 
 [Error]

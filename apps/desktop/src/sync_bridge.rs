@@ -380,8 +380,6 @@ mod tests {
             error_category: String::new(),
             raw_error: None,
             chosen_network_mode: None,
-            proxy_policy: String::new(),
-            network_probe_summary: None,
         }
     }
 
@@ -450,7 +448,6 @@ pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
     if let Some(mode) = result.chosen_network_mode.as_ref() {
         msg.push_str(&format!("\n网络模式: {}", mode));
     }
-    // proxy_policy 已 deprecated，固定为 "no_proxy"，不再展示
 
     msg.push_str(&format!(
         "\n网络连接: {}",

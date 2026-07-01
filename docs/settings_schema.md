@@ -46,7 +46,6 @@ Supersedes: None
 - `remote_url`（字符串）
 - `branch`（字符串）
 - `auto_sync`（布尔值）
-- `proxy`（对象） [DEPRECATED — 代理功能已移除]
 
 ### `app-meta/sync/sync_secrets.local.json`
 存储敏感信息，如 GitHub 令牌、SSH 私钥。此文件保存在本地，**绝不**应被同步。
