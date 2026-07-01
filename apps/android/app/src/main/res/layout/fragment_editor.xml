@@ -142,7 +142,7 @@
                     android:id="@+id/tvWordCount"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="字数: 0"
+                    android:text="@string/stats_word_count"
                     android:textAppearance="?attr/textAppearanceBodySmall"
                     android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -155,7 +155,7 @@
                     android:id="@+id/tvSessionAdded"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="新增: 0"
+                    android:text="@string/stats_session_added"
                     android:layout_marginEnd="12dp"
                     android:textAppearance="?attr/textAppearanceBodySmall"
                     android:textColor="?attr/colorOnSurfaceVariant" />
@@ -164,7 +164,7 @@
                     android:id="@+id/tvSpeed"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="速度: 0 字/分"
+                    android:text="@string/stats_speed"
                     android:layout_marginEnd="12dp"
                     android:textAppearance="?attr/textAppearanceBodySmall"
                     android:textColor="?attr/colorOnSurfaceVariant" />
