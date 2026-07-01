@@ -217,6 +217,128 @@ impl TextAnimationState {
     pub fn is_empty(&self) -> bool {
         self.animations.is_empty()
     }
+
+    /// 当新文本插入到 `pos` 位置、长度为 `len` 时，调整所有活跃动画的 byte ranges。
+    ///
+    /// 映射规则（对齐 CodeMirror/ProseMirror 的 decoration mapping 思路）：
+    /// - `pos <= range.0`：range 整体后移 len → `(range.0 + len, range.1 + len)`
+    /// - `pos >= range.1`：range 不受影响
+    /// - `pos` 在 range 内部（`range.0 < pos < range.1`）：取消该动画（从列表中移除）
+    ///
+    /// 对每个动画的 `byte_range` 和 `reflow_byte_ranges` 都做映射。
+    /// reflow_byte_ranges 中的每个 range 独立映射，如果某个 reflow range 被取消（相交），
+    /// 则从 reflow_byte_ranges 中移除它（但不取消整个动画，除非 byte_range 本身被取消）。
+    pub fn map_ranges_for_insert(&mut self, pos: usize, len: usize) {
+        // 第一遍：计算每个动画的新 byte_range，标记需要取消的
+        let new_ranges: Vec<Option<(usize, usize)>> = self
+            .animations
+            .iter()
+            .map(|anim| map_range_for_insert(anim.byte_range, pos, len))
+            .collect();
+
+        // 第二遍：更新存活的动画并移除被取消的
+        for (i, anim) in self.animations.iter_mut().enumerate() {
+            if let Some(new_range) = new_ranges[i] {
+                anim.byte_range = new_range;
+            }
+        }
+        // 移除 byte_range 被取消的动画（new_ranges[i] == None）
+        let mut i = 0;
+        self.animations.retain(|_| {
+            let keep = new_ranges[i].is_some();
+            i += 1;
+            keep
+        });
+
+        // 对存活的动画，映射 reflow_byte_ranges
+        for anim in &mut self.animations {
+            anim.reflow_byte_ranges = anim
+                .reflow_byte_ranges
+                .iter()
+                .filter_map(|&r| map_range_for_insert(r, pos, len))
+                .collect();
+        }
+    }
+
+    /// 当文本从 `pos` 位置删除、长度为 `len` 时（删除范围 `[pos, pos+len)`），
+    /// 调整所有活跃动画的 byte ranges。
+    ///
+    /// 映射规则：
+    /// - 删除范围完全在 range 之前（`pos + len <= range.0`）：range 整体前移 → `(range.0 - len, range.1 - len)`
+    /// - 删除范围完全在 range 之后（`pos >= range.1`）：range 不受影响
+    /// - 删除范围和 range 相交：取消该动画（从列表中移除）
+    ///
+    /// 对每个动画的 `byte_range` 和 `reflow_byte_ranges` 都做映射。
+    /// reflow_byte_ranges 中的每个 range 独立映射，如果某个 reflow range 被取消（相交），
+    /// 则从 reflow_byte_ranges 中移除它（但不取消整个动画，除非 byte_range 本身被取消）。
+    pub fn map_ranges_for_delete(&mut self, pos: usize, len: usize) {
+        // 第一遍：计算每个动画的新 byte_range，标记需要取消的
+        let new_ranges: Vec<Option<(usize, usize)>> = self
+            .animations
+            .iter()
+            .map(|anim| map_range_for_delete(anim.byte_range, pos, len))
+            .collect();
+
+        // 第二遍：更新存活的动画并移除被取消的
+        for (i, anim) in self.animations.iter_mut().enumerate() {
+            if let Some(new_range) = new_ranges[i] {
+                anim.byte_range = new_range;
+            }
+        }
+        // 移除 byte_range 被取消的动画（new_ranges[i] == None）
+        let mut i = 0;
+        self.animations.retain(|_| {
+            let keep = new_ranges[i].is_some();
+            i += 1;
+            keep
+        });
+
+        // 对存活的动画，映射 reflow_byte_ranges
+        for anim in &mut self.animations {
+            anim.reflow_byte_ranges = anim
+                .reflow_byte_ranges
+                .iter()
+                .filter_map(|&r| map_range_for_delete(r, pos, len))
+                .collect();
+        }
+    }
+}
+
+/// 单个 range 的 insert 映射。
+///
+/// - `pos <= range.0`：range 整体后移 len
+/// - `pos >= range.1`：range 不受影响
+/// - `pos` 在 range 内部：返回 None（取消）
+fn map_range_for_insert(range: (usize, usize), pos: usize, len: usize) -> Option<(usize, usize)> {
+    if pos <= range.0 {
+        // insert 在 range 之前（或恰好在 range 起点），整体后移
+        Some((range.0 + len, range.1 + len))
+    } else if pos >= range.1 {
+        // insert 在 range 之后，不受影响
+        Some(range)
+    } else {
+        // insert 在 range 内部，取消
+        None
+    }
+}
+
+/// 单个 range 的 delete 映射。
+///
+/// - 删除范围完全在 range 之前（`pos + len <= range.0`）：range 整体前移
+/// - 删除范围完全在 range 之后（`pos >= range.1`）：range 不受影响
+/// - 删除范围和 range 相交：返回 None（取消）
+fn map_range_for_delete(range: (usize, usize), pos: usize, len: usize) -> Option<(usize, usize)> {
+    let delete_end = pos + len;
+    if delete_end <= range.0 {
+        // 删除范围完全在 range 之前，整体前移
+        Some((range.0 - len, range.1 - len))
+    } else if pos >= range.1 {
+        // 删除范围完全在 range 之后，不受影响
+        Some(range)
+    } else {
+        // 删除范围和 range 相交，取消
+        None
+    }
 }
 
 #[cfg(test)]
@@ -662,5 +784,326 @@ mod tests {
             true,  // component_ready
         );
         assert_eq!(decision, AnimationDecision::CursorOnly);
+    }
+
+    // --- Range mapping tests ---
+
+    #[test]
+    fn test_map_ranges_insert_before_range() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_insert(5, 3);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
+    }
+
+    #[test]
+    fn test_map_ranges_insert_at_range_start() {
+        // pos == range.0 算"在 range 之前"，整体后移
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_insert(10, 4);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(14, 24)]);
+    }
+
+    #[test]
+    fn test_map_ranges_insert_after_range() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_insert(20, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+    }
+
+    #[test]
+    fn test_map_ranges_insert_beyond_range() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_insert(25, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+    }
+
+    #[test]
+    fn test_map_ranges_insert_inside_range_cancels() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_insert(15, 3);
+        assert!(state.is_empty());
+        assert!(state.active_insert_byte_ranges().is_empty());
+    }
+
+    #[test]
+    fn test_map_ranges_delete_before_range() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(5, 3);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(7, 17)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_up_to_range_start() {
+        // 删除范围 [5, 10)，range.0 = 10，delete_end = 10 <= range.0，整体前移
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(5, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(5, 15)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_after_range() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(20, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_beyond_range() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(25, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_overlapping_start_cancels() {
+        // 删除范围 [8, 13)，和 range [10, 20) 相交
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(8, 5);
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_map_ranges_delete_overlapping_end_cancels() {
+        // 删除范围 [18, 25)，和 range [10, 20) 相交
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(18, 7);
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_map_ranges_delete_inside_range_cancels() {
+        // 删除范围 [12, 18)，完全在 range [10, 20) 内部，相交
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(12, 6);
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_map_ranges_delete_superset_of_range_cancels() {
+        // 删除范围 [5, 25)，完全包含 range [10, 20)，相交
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.map_ranges_for_delete(5, 20);
+        assert!(state.is_empty());
+    }
+
+    // --- Reflow range mapping tests ---
+
+    #[test]
+    fn test_map_ranges_insert_before_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.map_ranges_for_insert(5, 3);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(23, 28), (28, 33)]);
+    }
+
+    #[test]
+    fn test_map_ranges_insert_after_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.map_ranges_for_insert(30, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
+    }
+
+    #[test]
+    fn test_map_ranges_insert_inside_reflow_removes_that_reflow() {
+        // insert 在 reflow range 内部，移除该 reflow range，但不取消整个动画
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.map_ranges_for_insert(22, 3);
+        // byte_range 不受影响（insert 在 byte_range 之后）
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        // reflow (20,25) 被 insert 在 22 处取消；reflow (25,30) 后移到 (28,33)
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(28, 33)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_before_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.map_ranges_for_delete(5, 3);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(7, 17)]);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(17, 22), (22, 27)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_after_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.map_ranges_for_delete(30, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_overlapping_reflow_removes_that_reflow() {
+        // delete 和 reflow range 相交，移除该 reflow range，但不取消整个动画
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.map_ranges_for_delete(22, 5);
+        // byte_range 不受影响（delete 在 byte_range 之后）
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        // reflow (20,25) 被相交删除取消；reflow (25,30) 也被相交删除取消
+        // delete [22, 27) 和 (20,25) 相交，和 (25,30) 也相交
+        assert!(state.active_reflow_byte_ranges().is_empty());
+    }
+
+    #[test]
+    fn test_map_ranges_delete_partial_reflow_overlap() {
+        // delete 只和一个 reflow 相交
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (30, 35)], 100);
+        state.map_ranges_for_delete(22, 5);
+        // byte_range 不受影响
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        // reflow (20,25) 被相交删除取消；
+        // reflow (30,35)：delete [22,27) 完全在 (30,35) 之前，前移 → (25,30)
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(25, 30)]);
+    }
+
+    // --- Multiple animations mapping tests ---
+
+    #[test]
+    fn test_map_ranges_insert_multiple_animations() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((30, 40), vec![], 100);
+        state.map_ranges_for_insert(5, 3);
+        let ranges = state.active_insert_byte_ranges();
+        assert_eq!(ranges.len(), 2);
+        assert!(ranges.contains(&(13, 23)));
+        assert!(ranges.contains(&(33, 43)));
+    }
+
+    #[test]
+    fn test_map_ranges_insert_cancels_one_of_multiple() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((30, 40), vec![], 100);
+        // insert 在第一个 range 内部，取消第一个；第二个后移
+        state.map_ranges_for_insert(15, 3);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(33, 43)]);
+    }
+
+    #[test]
+    fn test_map_ranges_delete_multiple_animations() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((30, 40), vec![], 100);
+        state.map_ranges_for_delete(5, 3);
+        let ranges = state.active_insert_byte_ranges();
+        assert_eq!(ranges.len(), 2);
+        assert!(ranges.contains(&(7, 17)));
+        assert!(ranges.contains(&(27, 37)));
+    }
+
+    #[test]
+    fn test_map_ranges_delete_cancels_one_of_multiple() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((30, 40), vec![], 100);
+        // delete 和第一个 range 相交，取消第一个；第二个前移
+        state.map_ranges_for_delete(8, 5);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(25, 35)]);
+    }
+
+    #[test]
+    fn test_map_ranges_multiple_with_reflow() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25)], 100);
+        state.start_insert((30, 40), vec![(40, 45)], 100);
+        state.map_ranges_for_insert(5, 3);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23), (33, 43)]);
+        let reflow = state.active_reflow_byte_ranges();
+        assert_eq!(reflow.len(), 2);
+        assert!(reflow.contains(&(23, 28)));
+        assert!(reflow.contains(&(43, 48)));
+    }
+
+    #[test]
+    fn test_map_ranges_delete_animation_also_mapped() {
+        // Delete 动画的 byte_range 也应该被映射
+        let mut state = TextAnimationState::new();
+        state.start_delete((10, 20), 100);
+        // insert 在 delete range 之前
+        state.map_ranges_for_insert(5, 3);
+        // Delete 动画没有 active_insert_byte_ranges，但状态机不为空
+        assert!(!state.is_empty());
+        assert!(!state.has_active_insert());
+    }
+
+    #[test]
+    fn test_map_ranges_insert_inside_delete_range_cancels() {
+        let mut state = TextAnimationState::new();
+        state.start_delete((10, 20), 100);
+        // insert 在 delete range 内部，取消该 delete 动画
+        state.map_ranges_for_insert(15, 3);
+        assert!(state.is_empty());
+    }
+
+    // --- Unit tests for helper functions ---
+
+    #[test]
+    fn test_map_range_for_insert_before() {
+        assert_eq!(map_range_for_insert((10, 20), 5, 3), Some((13, 23)));
+    }
+
+    #[test]
+    fn test_map_range_for_insert_at_start() {
+        assert_eq!(map_range_for_insert((10, 20), 10, 4), Some((14, 24)));
+    }
+
+    #[test]
+    fn test_map_range_for_insert_after() {
+        assert_eq!(map_range_for_insert((10, 20), 20, 5), Some((10, 20)));
+    }
+
+    #[test]
+    fn test_map_range_for_insert_inside() {
+        assert_eq!(map_range_for_insert((10, 20), 15, 3), None);
+    }
+
+    #[test]
+    fn test_map_range_for_delete_before() {
+        assert_eq!(map_range_for_delete((10, 20), 5, 3), Some((7, 17)));
+    }
+
+    #[test]
+    fn test_map_range_for_delete_up_to_start() {
+        assert_eq!(map_range_for_delete((10, 20), 5, 5), Some((5, 15)));
+    }
+
+    #[test]
+    fn test_map_range_for_delete_after() {
+        assert_eq!(map_range_for_delete((10, 20), 20, 5), Some((10, 20)));
+    }
+
+    #[test]
+    fn test_map_range_for_delete_overlapping() {
+        assert_eq!(map_range_for_delete((10, 20), 8, 5), None);
+    }
+
+    #[test]
+    fn test_map_range_for_delete_inside() {
+        assert_eq!(map_range_for_delete((10, 20), 12, 3), None);
+    }
+
+    #[test]
+    fn test_map_range_for_delete_superset() {
+        assert_eq!(map_range_for_delete((10, 20), 5, 20), None);
     }
 }
