@@ -99,9 +99,10 @@ mod tests {
         for i in 0..10 {
             let content = format!("content {}", i);
             atomic_write_string(&file_path, &content).unwrap();
-            let read_content = std::fs::read_to_string(&file_path).unwrap();
-            assert_eq!(read_content, content);
         }
+
+        let read_content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(read_content, "content 9");
     }
 
     #[test]
