@@ -129,7 +129,7 @@ impl AppBackend {
 
         if !has_content() {
             let backend = writer_core::sync::create_sync_backend(&config.backend_type);
-            match backend.sync(path_obj, &config, &secrets) {
+            match backend.sync(path_obj, &config, &secrets, true) {
                 Ok(result) => {
                     if result.status == writer_core::sync::SyncStatus::Success {
                         let api = WriterCoreApi::new(path);
@@ -145,7 +145,7 @@ impl AppBackend {
                             let push_backend = writer_core::sync::create_sync_backend(
                                 &config.backend_type,
                             );
-                            let push_result = push_backend.sync(path_obj, &config, &secrets);
+                            let push_result = push_backend.sync(path_obj, &config, &secrets, true);
                             let save_first = match &push_result {
                                 Ok(r)
                                     if r.status
@@ -223,7 +223,7 @@ impl AppBackend {
             }
         } else if has_workspace() {
             let backend = writer_core::sync::create_sync_backend(&config.backend_type);
-            match backend.sync(path_obj, &config, &secrets) {
+            match backend.sync(path_obj, &config, &secrets, true) {
                 Ok(result) => {
                     if result.status == writer_core::sync::SyncStatus::Success {
                         match save_sync_configs(path, cfg_ref, sec_ref) {

@@ -1585,6 +1585,7 @@ impl SujianEditorItem {
                     let old_snapshot = self.layout_snapshot_for_text(old_text, width);
 
                     // 收集受影响行：插入点所在行和下一行（最多 2 行）
+                    let max_affected_lines = 2;
                     let mut affected_line_indices: Vec<usize> = Vec::new();
                     for (line_idx, line) in insert_snapshot.lines.iter().enumerate() {
                         if line.byte_end <= range_start || line.para_text.is_empty() {
@@ -2286,7 +2287,7 @@ mod tests {
         // 模拟从 vt.inserted_range 读取的 hidden range
         let inserted_range = Some((5, 10));
         if let Some((range_start, range_end)) = inserted_range {
-            state.start_insert((range_start, range_end), 100);
+            state.start_insert((range_start, range_end), vec![], 100);
         }
         assert_eq!(state.active_insert_byte_ranges(), vec![(5, 10)]);
         assert!(state.has_active_insert());
@@ -2298,7 +2299,7 @@ mod tests {
     fn typing_animation_disabled_clears_hidden_range_immediately() {
         let mut state = TextAnimationState::new();
         // 模拟从 vt.inserted_range 创建的 Insert 动画
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert!(state.has_active_insert());
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         // 关闭动画 — 立即清除，不依赖 timeout
@@ -2438,7 +2439,7 @@ mod tests {
         if let Some((range_start, range_end)) = vt.inserted_range {
             match decision {
                 AnimationDecision::FullAnimation => {
-                    state.start_insert((range_start, range_end), vt.duration_ms);
+                    state.start_insert((range_start, range_end), vec![], vt.duration_ms);
                 }
                 _ => {}
             }
@@ -2498,7 +2499,7 @@ mod tests {
         match decision {
             AnimationDecision::FullAnimation => {
                 // 不会进入此分支
-                state.start_insert((0, long_candidate.len()), 160);
+                state.start_insert((0, long_candidate.len()), vec![], 160);
             }
             _ => {}
         }
@@ -2631,7 +2632,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         if let Some((rs, re)) = vt.inserted_range {
             if decision == AnimationDecision::FullAnimation {
-                state.start_insert((rs, re), vt.duration_ms);
+                state.start_insert((rs, re), vec![], vt.duration_ms);
             }
         }
         assert!(state.has_active_insert());
@@ -2675,7 +2676,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         match decision {
             AnimationDecision::FullAnimation => {
-                state.start_insert((old_text.len(), new_text.len()), 160);
+                state.start_insert((old_text.len(), new_text.len()), vec![], 160);
             }
             _ => {} // CursorOnly 和 NoAnimation 都不创建 hidden range
         }
@@ -2724,6 +2725,8 @@ mod tests {
 
         let reflow_c = ReflowGlyphRect {
             char_: "C".to_string(),
+            byte_start: 4,
+            byte_end: 5,
             old_x: 20.0,
             old_y: 0.0,
             old_baseline_y: 16.0,
@@ -2736,6 +2739,8 @@ mod tests {
         };
         let reflow_d = ReflowGlyphRect {
             char_: "D".to_string(),
+            byte_start: 5,
+            byte_end: 6,
             old_x: 30.0,
             old_y: 0.0,
             old_baseline_y: 16.0,
@@ -2748,6 +2753,8 @@ mod tests {
         };
         let reflow_e = ReflowGlyphRect {
             char_: "E".to_string(),
+            byte_start: 6,
+            byte_end: 7,
             old_x: 40.0,
             old_y: 0.0,
             old_baseline_y: 16.0,

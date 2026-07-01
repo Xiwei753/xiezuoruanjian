@@ -377,6 +377,7 @@ impl AppBackend {
         });
 
         let op_id_capture = op_id.clone();
+        let trigger = trigger.to_string();
         thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
