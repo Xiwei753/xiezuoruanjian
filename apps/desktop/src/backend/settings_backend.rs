@@ -273,18 +273,27 @@ impl SettingsBackend {
     }
 
     fn export_diagnostics_pack(&self) -> QString {
-        self.with_app("".into(), |app| {
+        self.with_app("{\"success\":false,\"error\":\"no workspace\"}".into(), |app| {
             let workspace_path = std::path::PathBuf::from(&app.current_workspace);
             let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
             match crate::backend::diagnostics::export_diagnostics_pack(
                 &workspace_path,
                 &log_dir,
             ) {
-                Ok(path) => path.to_string_lossy().to_string().into(),
+                Ok(path) => {
+                    let envelope = serde_json::json!({
+                        "success": true,
+                        "path": path.to_string_lossy().to_string()
+                    });
+                    envelope.to_string().into()
+                }
                 Err(e) => {
                     eprintln!("[SettingsBackend] export_diagnostics_pack failed: {}", e);
-                    // 返回具体错误文本，不要只返回空字符串
-                    format!("error.export_failed: {}", e).into()
+                    let envelope = serde_json::json!({
+                        "success": false,
+                        "error": e
+                    });
+                    envelope.to_string().into()
                 }
             }
         })
@@ -693,7 +702,7 @@ impl AppBackend {
             let syncable_json = match syncable_result {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
-                    vec!["settings.syncable.json".to_string()],
+                    vec!["settings.sync.json".to_string()],
                     vec![writer_core::api::ChangedEntityDto {
                         entity_type: "SettingsSaved".to_string(),
                         entity_id: None,

@@ -308,6 +308,9 @@ ApplicationWindow {
             if (settingsBackend) {
                 settingsBackend.load_local_settings();
             }
+            if (syncBackend) {
+                syncBackend.load_sync_config();
+            }
             workspaceOpenAutoSyncTimer.restart();
         }
         function onWorkspace_content_changed() {

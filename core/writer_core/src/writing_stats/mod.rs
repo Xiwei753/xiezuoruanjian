@@ -75,6 +75,9 @@ pub struct WritingInputEvent {
     pub timestamp_ms: i64,
     pub device_id: String,
     pub platform: Platform,
+    /// phone / tablet / desktop
+    #[serde(default)]
+    pub device_class: String,
     pub project_id: String,
     pub volume_id: String,
     pub chapter_id: String,
@@ -92,6 +95,7 @@ impl WritingInputEvent {
     pub fn new(
         device_id: &str,
         platform: Platform,
+        device_class: &str,
         project_id: &str,
         volume_id: &str,
         chapter_id: &str,
@@ -110,6 +114,7 @@ impl WritingInputEvent {
             timestamp_ms: chrono::Utc::now().timestamp_millis(),
             device_id: device_id.to_string(),
             platform,
+            device_class: device_class.to_string(),
             project_id: project_id.to_string(),
             volume_id: volume_id.to_string(),
             chapter_id: chapter_id.to_string(),
@@ -148,6 +153,7 @@ mod tests {
         let event = WritingInputEvent::new(
             "device-1",
             Platform::Linux,
+            "desktop",
             "proj1",
             "vol1",
             "chap1",
@@ -163,6 +169,7 @@ mod tests {
         assert_eq!(event.deleted_chars, 0);
         assert_eq!(event.net_delta_chars, 10);
         assert_eq!(event.source, EventSource::HumanTyped);
+        assert_eq!(event.device_class, "desktop");
         assert!(event.is_input_event());
     }
 
@@ -171,6 +178,7 @@ mod tests {
         let event = WritingInputEvent::new(
             "device-1",
             Platform::Linux,
+            "desktop",
             "proj1",
             "vol1",
             "chap1",
@@ -191,6 +199,7 @@ mod tests {
         let event = WritingInputEvent::new(
             "device-1",
             Platform::Android,
+            "phone",
             "proj1",
             "vol1",
             "chap1",
@@ -204,6 +213,7 @@ mod tests {
         );
         assert_eq!(event.pasted_chars, 20);
         assert_eq!(event.net_delta_chars, 20);
+        assert_eq!(event.device_class, "phone");
         assert!(event.is_input_event());
     }
 
@@ -212,6 +222,7 @@ mod tests {
         let event = WritingInputEvent::new(
             "device-1",
             Platform::Linux,
+            "desktop",
             "proj1",
             "vol1",
             "chap1",
@@ -233,6 +244,7 @@ mod tests {
         let event = WritingInputEvent::new(
             "device-1",
             Platform::Linux,
+            "desktop",
             "proj1",
             "vol1",
             "chap1",
@@ -245,5 +257,30 @@ mod tests {
             "session-1",
         );
         assert!(!event.is_input_event());
+    }
+
+    #[test]
+    fn test_event_device_class_default_deserialization() {
+        // 验证旧数据（没有 device_class 字段）可以正常反序列化，默认为空字符串
+        let json = r#"{
+            "event_id": "evt-1",
+            "timestamp_ms": 1000,
+            "device_id": "dev-1",
+            "platform": "linux",
+            "project_id": "p1",
+            "volume_id": "v1",
+            "chapter_id": "c1",
+            "source": "human_typed",
+            "inserted_chars": 5,
+            "deleted_chars": 0,
+            "pasted_chars": 0,
+            "ai_inserted_chars": 0,
+            "net_delta_chars": 5,
+            "duration_seconds": 0,
+            "session_id": "s1"
+        }"#;
+        let event: WritingInputEvent = serde_json::from_str(json).unwrap();
+        assert_eq!(event.device_id, "dev-1");
+        assert_eq!(event.device_class, "", "device_class should default to empty string for old data");
     }
 }

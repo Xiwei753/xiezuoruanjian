@@ -35,6 +35,7 @@
 
 use crate::error::Result;
 use crate::writing_stats::aggregate::StatsAggregator;
+use crate::writing_stats::store::aggregate_by_device_class;
 use crate::writing_stats::{DateRange, WritingInputEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -76,6 +77,16 @@ struct DeviceStatsAgg {
     net_delta_chars: i64,
     active_seconds: u64,
     sessions_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceClassAgg {
+    device_class: String,
+    device_count: u32,
+    total_human_typed_chars: u64,
+    total_net_delta_chars: i64,
+    active_seconds: u64,
 }
 
 pub struct StatsApi {
@@ -271,6 +282,37 @@ impl StatsApi {
                 "endDate": range.end_date,
             },
             "devices": devices,
+        }))
+    }
+
+    pub fn get_stats_by_device_class(&self, range: &DateRange) -> Result<Value> {
+        let daily_stats = self
+            .aggregator
+            .store()
+            .load_daily_stats_range(&range.start_date, &range.end_date)?;
+
+        let by_class = aggregate_by_device_class(&daily_stats);
+
+        let classes: Vec<Value> = by_class
+            .into_iter()
+            .map(|(device_class, summary)| {
+                let agg = DeviceClassAgg {
+                    device_class,
+                    device_count: summary.device_count,
+                    total_human_typed_chars: summary.total_human_typed_chars,
+                    total_net_delta_chars: summary.total_net_delta_chars,
+                    active_seconds: summary.active_seconds,
+                };
+                serde_json::to_value(agg).unwrap_or(Value::Null)
+            })
+            .collect();
+
+        Ok(serde_json::json!({
+            "range": {
+                "startDate": range.start_date,
+                "endDate": range.end_date,
+            },
+            "deviceClasses": classes,
         }))
     }
 

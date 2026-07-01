@@ -16,6 +16,18 @@ impl super::WriterCore {
         duration_seconds: u32,
         session_id: &str,
     ) -> Result<()> {
+        // 尝试从 DeviceInfo 获取 device_class，否则根据 platform 推断
+        let device_class = self
+            .load_device_info()
+            .map(|info| info.device_class)
+            .unwrap_or_else(|_| {
+                if platform_str == "android" {
+                    "phone".to_string()
+                } else {
+                    "desktop".to_string()
+                }
+            });
+
         let old_len = old_text.chars().count() as i32;
         let new_len = new_text.chars().count() as i32;
         let diff = new_len - old_len;
@@ -44,6 +56,7 @@ impl super::WriterCore {
         self.record_writing_event(
             device_id,
             platform_str,
+            &device_class,
             project_id,
             volume_id,
             chapter_id,
@@ -61,6 +74,7 @@ impl super::WriterCore {
         &self,
         device_id: &str,
         platform_str: &str,
+        device_class: &str,
         project_id: &str,
         volume_id: &str,
         chapter_id: &str,
@@ -87,6 +101,7 @@ impl super::WriterCore {
         let event = WritingInputEvent::new(
             device_id,
             platform,
+            device_class,
             project_id,
             volume_id,
             chapter_id,
@@ -136,6 +151,18 @@ impl super::WriterCore {
             end_date: end_date.to_string(),
         };
         self.get_stats_api().get_stats_by_device(&range)
+    }
+
+    pub fn get_writing_stats_by_device_class(
+        &self,
+        start_date: &str,
+        end_date: &str,
+    ) -> Result<Value> {
+        let range = DateRange {
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+        };
+        self.get_stats_api().get_stats_by_device_class(&range)
     }
 
     pub fn get_writing_speed_curve(

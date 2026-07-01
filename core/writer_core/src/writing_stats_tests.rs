@@ -11,8 +11,9 @@ fn test_human_typed_counts_as_pure_input() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -46,8 +47,9 @@ fn test_pasted_does_not_count_as_human_typed() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::Pasted,
@@ -79,8 +81,9 @@ fn test_deleted_does_not_cancel_human_typed() {
 
     let event1 = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -95,8 +98,9 @@ fn test_deleted_does_not_cancel_human_typed() {
 
     let event2 = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::Deleted,
@@ -129,8 +133,9 @@ fn test_ai_inserted_not_counted_as_human() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::AiInserted,
@@ -162,8 +167,9 @@ fn test_sync_remote_not_counted_as_local_input() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::SyncRemote,
@@ -195,8 +201,9 @@ fn test_daily_aggregation_idempotent() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -230,8 +237,9 @@ fn test_multi_device_no_overlap() {
 
     let event1 = WritingInputEvent::new(
         "dev-linux",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -246,8 +254,9 @@ fn test_multi_device_no_overlap() {
 
     let event2 = WritingInputEvent::new(
         "dev-android",
-        Platform::Android,
-        "proj1",
+            Platform::Android,
+            "phone",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -296,6 +305,7 @@ fn test_speed_buckets_generation() {
             timestamp_ms: now_ms + i * 1000,
             device_id: "dev-1".to_string(),
             platform: Platform::Linux,
+            device_class: "desktop".to_string(),
             project_id: "proj1".to_string(),
             volume_id: "vol1".to_string(),
             chapter_id: "chap1".to_string(),
@@ -336,6 +346,7 @@ fn test_per_project_tracking() {
     let event = WritingInputEvent::new(
         "dev-1",
         Platform::Linux,
+        "desktop",
         "proj-abc",
         "vol1",
         "chap1",
@@ -369,8 +380,9 @@ fn test_per_chapter_tracking() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap-xyz",
         EventSource::HumanTyped,
@@ -403,8 +415,9 @@ fn test_event_file_written() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -461,6 +474,7 @@ fn test_session_gap_detection() {
         timestamp_ms: base_ms,
         device_id: "dev-1".to_string(),
         platform: Platform::Linux,
+        device_class: "desktop".to_string(),
         project_id: "proj1".to_string(),
         volume_id: "vol1".to_string(),
         chapter_id: "chap1".to_string(),
@@ -480,6 +494,7 @@ fn test_session_gap_detection() {
         timestamp_ms: base_ms + 10 * 60 * 1000,
         device_id: "dev-1".to_string(),
         platform: Platform::Linux,
+        device_class: "desktop".to_string(),
         project_id: "proj1".to_string(),
         volume_id: "vol1".to_string(),
         chapter_id: "chap1".to_string(),
@@ -513,8 +528,9 @@ fn test_char_count_uses_unicode_scalar() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
-        "proj1",
+            Platform::Linux,
+            "desktop",
+            "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -547,6 +563,7 @@ fn test_facade_record_writing_event() {
     core.record_writing_event(
         "dev-1",
         "linux",
+        "desktop",
         "proj1",
         "vol1",
         "chap1",
@@ -561,18 +578,19 @@ fn test_facade_record_writing_event() {
     .unwrap();
 
     core.record_writing_event(
-        "dev-1", "linux", "proj1", "vol1", "chap1", "pasted", 0, 0, 20, 0, 0, "s1",
+        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "pasted", 0, 0, 20, 0, 0, "s1",
     )
     .unwrap();
 
     core.record_writing_event(
-        "dev-1", "linux", "proj1", "vol1", "chap1", "deleted", 0, 5, 0, 0, 0, "s1",
+        "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "deleted", 0, 5, 0, 0, 0, "s1",
     )
     .unwrap();
 
     core.record_writing_event(
         "dev-1",
         "android",
+        "phone",
         "proj1",
         "vol1",
         "chap1",

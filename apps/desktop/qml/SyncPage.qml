@@ -87,12 +87,15 @@ Item {
         if (s === "remote_branch_missing" || s === "branch_missing") return qsTr("远程分支不存在")
         if (s === "network_failed") return qsTr("网络连接失败")
         if (root.isFailureStatus(s)) return qsTr("同步失败")
+        // 同步状态枚举显示：未配置、已配置未测试
+        if (s === "not_configured") return qsTr("未配置")
+        if (s === "configured_not_tested") return qsTr("已配置")
         if (root.backendRef && root.backendRef.sync_enabled) return qsTr("同步")
         return qsTr("配置同步")
     }
 
     Connections {
-        target: appBackend
+        target: root.backendRef
         function onSync_action_completed() {
             var stateStr = (root.backendRef && root.backendRef.sync_operation_state) || "";
             if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -113,6 +116,9 @@ Item {
                     window.debugLog("sync", "status_changed_callback", "resultLength=" + resLen)
                 }
             }
+            root.refreshLocalSyncState();
+        }
+        function onSync_config_changed() {
             root.refreshLocalSyncState();
         }
     }
@@ -215,7 +221,12 @@ Item {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
                         window.debugLog("sync", "save_config_finished", "success=" + success)
                     }
-                    if (success) root.settingsChanged()
+                    if (success) {
+                        root.backendRef.load_sync_config()
+                        root.refreshLocalSyncState()
+                        tokenField.text = ""
+                        root.settingsChanged()
+                    }
                 }
             }
 
@@ -223,15 +234,32 @@ Item {
                 text: qsTr("执行同步")
                 dt: root.theme
                 variant: "secondary"
-                enabled: !(appBackend && appBackend.sync_in_progress)
+                enabled: !root.currentSyncInProgress
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
+                    // 先保存当前 UI 配置
+                    if (root.backendRef) {
+                        root.backendRef.sync_remote_url = urlField.text
+                        root.backendRef.sync_branch = branchField.text.length > 0 ? branchField.text : "main"
+                        if (tokenField.text.trim().length > 0) {
+                            root.backendRef.set_sync_token(tokenField.text.trim())
+                            tokenField.text = ""
+                        }
+                        root.backendRef.save_sync_config()
+                        root.backendRef.load_sync_config()
+                    }
+                    // 再执行同步
                     syncResultArea.text = qsTr("正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件")
                     if (typeof root.beforeSyncHook === "function") root.beforeSyncHook()
                     if (root.backendRef) {
                         var opId = root.backendRef.perform_sync()
                         root.activeOperationId = opId
                         root.activeOperationKind = "sync"
+                        root.refreshLocalSyncState()
+                        // 如果 opId 为空，显示即时错误
+                        if (!opId || opId.length === 0) {
+                            syncResultArea.text = root.backendRef.sync_operation_state || qsTr("同步启动失败")
+                        }
                     }
                 }
             }
@@ -240,7 +268,7 @@ Item {
                 text: qsTr("运行诊断")
                 dt: root.theme
                 variant: "secondary"
-                enabled: !(appBackend && appBackend.sync_in_progress)
+                enabled: !root.currentSyncInProgress
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")
@@ -301,6 +329,9 @@ Item {
     }
 
     Component.onCompleted: {
+        if (root.backendRef) {
+            root.backendRef.load_sync_config()
+        }
         root.refreshLocalSyncState();
     }
 }

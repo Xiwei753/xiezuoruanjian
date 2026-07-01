@@ -3,7 +3,7 @@ package com.xiwei.sujian.editor.selfrender
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
-import android.graphics.Color
+
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.text.TextPaint
@@ -724,12 +724,12 @@ class SujianEditorView @JvmOverloads constructor(
         val textColor = MaterialColors.getColor(
             context,
             com.google.android.material.R.attr.colorOnSurface,
-            0xFF000000.toInt()
+            0
         )
         val primaryColor = MaterialColors.getColor(
             context,
             com.google.android.material.R.attr.colorPrimary,
-            0xFF6200EE.toInt()
+            0
         )
         val surfaceColor = MaterialColors.getColor(
             context,
@@ -737,7 +737,7 @@ class SujianEditorView @JvmOverloads constructor(
             MaterialColors.getColor(
                 context,
                 com.google.android.material.R.attr.colorSurface,
-                0xFFFFFFFF.toInt()
+                0
             )
         )
 
@@ -751,20 +751,10 @@ class SujianEditorView @JvmOverloads constructor(
         val cursorColor = primaryColor
 
         // composing 下划线颜色 → colorPrimary 叠 alpha 180/255
-        val composingColor = Color.argb(
-            180,
-            Color.red(primaryColor),
-            Color.green(primaryColor),
-            Color.blue(primaryColor)
-        )
+        val composingColor = (primaryColor and 0x00FFFFFF) or (180 shl 24)
 
         // 选区高亮颜色 → colorPrimary 叠 alpha 60/255
-        val selectionColor = Color.argb(
-            60,
-            Color.red(primaryColor),
-            Color.green(primaryColor),
-            Color.blue(primaryColor)
-        )
+        val selectionColor = (primaryColor and 0x00FFFFFF) or (60 shl 24)
 
         // 传递给渲染器（含 animTextPaint 同步）
         renderer.setThemeColors(textColor, cursorColor, composingColor, selectionColor)

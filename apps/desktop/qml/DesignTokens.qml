@@ -199,6 +199,7 @@ QtObject {
     property int sp40: 40
     property int sp48: 48
     property int sp64: 64
+    property int statusDotSize: 7
 
     // --- Hub Layout ---
     property int pageMarginWide: 48

@@ -147,10 +147,18 @@ impl WriterCoreApi {
         let ai_inserted_chars = Self::non_negative_counter("ai_inserted_chars", ai_inserted_chars)?;
         let duration_seconds = Self::non_negative_counter("duration_seconds", duration_seconds)?;
 
+        // 根据 platform 推断 device_class
+        let device_class = if platform == "android" {
+            "phone"
+        } else {
+            "desktop"
+        };
+
         self.core()
             .record_writing_event(
                 device_id,
                 platform,
+                device_class,
                 project_id,
                 volume_id,
                 chapter_id,

@@ -105,6 +105,13 @@ internal class SyncSettingsHelper(
         ErrorUtil.safeRun(activity) {
             settingsRepository.saveSyncConfig(uiConfig)
             settingsRepository.saveSyncSecrets(uiSecrets)
+            // 保存设备信息
+            val deviceInfo = mapOf(
+                "deviceId" to getDeviceId(),
+                "deviceClass" to determineDeviceClass(),
+                "platform" to "android"
+            )
+            settingsRepository.saveDeviceInfo(deviceInfo)
         }
         currentSyncConfig = uiConfig
         currentSyncSecrets = uiSecrets
@@ -272,6 +279,11 @@ internal class SyncSettingsHelper(
             return
         }
 
+        // 确保写作统计已 flush
+        ErrorUtil.safeRun(activity) {
+            settingsRepository.flushWritingStats()
+        }
+
         Thread {
             val result = ErrorUtil.safeRun(activity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during sync"))) {
                 settingsRepository.performSync(currentSyncConfig)
@@ -389,10 +401,18 @@ internal class SyncSettingsHelper(
                         }
                     }
                     is BridgeResult.Error -> {
-                        android.widget.Toast.makeText(activity, result.message, android.widget.Toast.LENGTH_LONG).show()
+                        AlertDialog.Builder(activity)
+                            .setTitle(activity.getString(R.string.sync_fatal_error_title))
+                            .setMessage(result.message)
+                            .setPositiveButton(activity.getString(R.string.action_ok), null)
+                            .show()
                     }
                     BridgeResult.NotLoaded -> {
-                        android.widget.Toast.makeText(activity, activity.getString(R.string.sync_error_not_loaded), android.widget.Toast.LENGTH_SHORT).show()
+                        AlertDialog.Builder(activity)
+                            .setTitle(activity.getString(R.string.sync_fatal_error_title))
+                            .setMessage(activity.getString(R.string.sync_error_not_loaded))
+                            .setPositiveButton(activity.getString(R.string.action_ok), null)
+                            .show()
                     }
                 }
             }
@@ -441,6 +461,31 @@ internal class SyncSettingsHelper(
         return if (tokenInput.isNotEmpty()) {
             currentSyncSecrets.copy(token = tokenInput)
         } else currentSyncSecrets
+    }
+
+    /**
+     * 判断设备类型：smallestScreenWidthDp >= 600 为 tablet，否则为 phone。
+     */
+    fun determineDeviceClass(): String {
+        val config = activity.resources.configuration
+        return if (config.smallestScreenWidthDp >= 600) {
+            "tablet"
+        } else {
+            "phone"
+        }
+    }
+
+    /**
+     * 获取本地持久化的设备 UUID，首次访问时生成并保存。
+     */
+    private fun getDeviceId(): String {
+        val prefs = activity.getSharedPreferences("sujian_device", android.content.Context.MODE_PRIVATE)
+        var id = prefs.getString("device_id", null)
+        if (id == null) {
+            id = java.util.UUID.randomUUID().toString()
+            prefs.edit().putString("device_id", id).apply()
+        }
+        return id
     }
 
     /**

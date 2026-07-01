@@ -108,6 +108,16 @@ impl crate::sync::SyncService {
             return true;
         }
 
+        // 最近编辑记录
+        if rel_path.starts_with("app-meta/recent/") {
+            return true;
+        }
+
+        // 设备信息
+        if rel_path.starts_with("app-meta/device/") {
+            return true;
+        }
+
         if rel_path.starts_with("app-meta/sync/trash/") {
             return true;
         }

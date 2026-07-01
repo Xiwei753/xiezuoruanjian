@@ -26,7 +26,6 @@ Rectangle {
     readonly property int _sp6: dt.sp6
     readonly property int _sp16: dt.sp16
     readonly property int _radiusPill: dt.radiusPill
-    readonly property int _radiusXs: dt.radiusXs
     readonly property int _caption: dt.caption
     readonly property string _fontFamily: dt.fontFamily
 
@@ -52,13 +51,15 @@ Rectangle {
 
     RowLayout {
         id: pillRow
-        anchors.centerIn: parent
+        anchors.verticalCenter: parent.verticalCenter
+        anchors.horizontalCenter: parent.horizontalCenter
         spacing: _sp6
 
         Rectangle {
-            width: 7
-            height: 7
-            radius: _radiusXs
+            Layout.alignment: Qt.AlignVCenter
+            width: dt.statusDotSize
+            height: dt.statusDotSize
+            radius: dt.statusDotSize / 2
             color: control.contentColor
             opacity: 0.8
         }
@@ -67,6 +68,7 @@ Rectangle {
             text: control.text
             visible: control.text.length > 0
             color: control.contentColor
+            verticalAlignment: Text.AlignVCenter
             font.pixelSize: _caption
             font.family: _fontFamily
             font.weight: Font.Medium

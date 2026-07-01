@@ -67,6 +67,9 @@ pub struct DailyStats {
     pub date: String,
     pub device_id: String,
     pub platform: String,
+    /// phone / tablet / desktop，用于按设备类别汇总
+    #[serde(default)]
+    pub device_class: String,
     pub total_human_typed_chars: u64,
     pub total_pasted_chars: u64,
     pub total_deleted_chars: u64,
@@ -421,10 +424,15 @@ impl StatsStore {
                 .first()
                 .map(|e| e.platform.to_string())
                 .unwrap_or_default();
+            let device_class = day_events
+                .first()
+                .map(|e| e.device_class.clone())
+                .unwrap_or_default();
             let mut stats = DailyStats {
                 date: date.format("%Y-%m-%d").to_string(),
                 device_id: device_id.to_string(),
                 platform,
+                device_class,
                 ..Default::default()
             };
 
@@ -588,6 +596,39 @@ impl StatsStore {
     }
 }
 
+/// 按设备类别汇总的统计数据
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DeviceClassSummary {
+    pub device_count: u32,
+    pub total_human_typed_chars: u64,
+    pub total_net_delta_chars: i64,
+    pub active_seconds: u64,
+}
+
+/// 按设备类别（phone / tablet / desktop）汇总统计。
+/// 对于旧数据没有 device_class 字段的情况，根据 platform 推断。
+pub fn aggregate_by_device_class(stats: &[DailyStats]) -> HashMap<String, DeviceClassSummary> {
+    let mut result: HashMap<String, DeviceClassSummary> = HashMap::new();
+    for stat in stats {
+        let class = if stat.device_class.is_empty() {
+            // 兼容旧数据：根据 platform 推断
+            if stat.platform.contains("android") {
+                "phone".to_string()
+            } else {
+                "desktop".to_string()
+            }
+        } else {
+            stat.device_class.clone()
+        };
+        let entry = result.entry(class).or_default();
+        entry.device_count += 1;
+        entry.total_human_typed_chars += stat.total_human_typed_chars;
+        entry.total_net_delta_chars += stat.total_net_delta_chars;
+        entry.active_seconds += stat.active_seconds;
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -605,6 +646,7 @@ mod tests {
             date: "2023-10-26".to_string(),
             device_id: "device_1".to_string(),
             platform: "desktop".to_string(),
+            device_class: "desktop".to_string(),
             total_human_typed_chars: 100,
             total_pasted_chars: 50,
             total_deleted_chars: 10,
@@ -629,6 +671,7 @@ mod tests {
             date: "2023-10-26".to_string(),
             device_id: "device_1".to_string(),
             platform: "desktop".to_string(),
+            device_class: "desktop".to_string(),
             total_human_typed_chars: 50,
             total_pasted_chars: 10,
             total_deleted_chars: 5,
@@ -753,5 +796,94 @@ mod tests {
         } else {
             panic!("Expected Error::Other");
         }
+    }
+
+    #[test]
+    fn test_aggregate_by_device_class() {
+        let stats = vec![
+            DailyStats {
+                date: "2024-01-01".to_string(),
+                device_id: "dev1".to_string(),
+                platform: "desktop".to_string(),
+                device_class: "desktop".to_string(),
+                total_human_typed_chars: 100,
+                total_net_delta_chars: 80,
+                active_seconds: 300,
+                ..Default::default()
+            },
+            DailyStats {
+                date: "2024-01-01".to_string(),
+                device_id: "dev2".to_string(),
+                platform: "desktop".to_string(),
+                device_class: "desktop".to_string(),
+                total_human_typed_chars: 200,
+                total_net_delta_chars: 150,
+                active_seconds: 600,
+                ..Default::default()
+            },
+            DailyStats {
+                date: "2024-01-01".to_string(),
+                device_id: "dev3".to_string(),
+                platform: "android".to_string(),
+                device_class: "phone".to_string(),
+                total_human_typed_chars: 50,
+                total_net_delta_chars: 40,
+                active_seconds: 120,
+                ..Default::default()
+            },
+        ];
+
+        let result = aggregate_by_device_class(&stats);
+        assert_eq!(result.len(), 2);
+
+        let desktop = result.get("desktop").unwrap();
+        assert_eq!(desktop.device_count, 2);
+        assert_eq!(desktop.total_human_typed_chars, 300);
+        assert_eq!(desktop.total_net_delta_chars, 230);
+        assert_eq!(desktop.active_seconds, 900);
+
+        let phone = result.get("phone").unwrap();
+        assert_eq!(phone.device_count, 1);
+        assert_eq!(phone.total_human_typed_chars, 50);
+        assert_eq!(phone.total_net_delta_chars, 40);
+        assert_eq!(phone.active_seconds, 120);
+    }
+
+    #[test]
+    fn test_aggregate_by_device_class_legacy_data() {
+        // 旧数据没有 device_class，应根据 platform 推断
+        let stats = vec![
+            DailyStats {
+                date: "2024-01-01".to_string(),
+                device_id: "dev1".to_string(),
+                platform: "desktop".to_string(),
+                device_class: String::new(), // 旧数据
+                total_human_typed_chars: 100,
+                total_net_delta_chars: 80,
+                active_seconds: 300,
+                ..Default::default()
+            },
+            DailyStats {
+                date: "2024-01-01".to_string(),
+                device_id: "dev2".to_string(),
+                platform: "android".to_string(),
+                device_class: String::new(), // 旧数据
+                total_human_typed_chars: 50,
+                total_net_delta_chars: 40,
+                active_seconds: 120,
+                ..Default::default()
+            },
+        ];
+
+        let result = aggregate_by_device_class(&stats);
+        assert_eq!(result.len(), 2);
+
+        let desktop = result.get("desktop").unwrap();
+        assert_eq!(desktop.device_count, 1);
+        assert_eq!(desktop.total_human_typed_chars, 100);
+
+        let phone = result.get("phone").unwrap();
+        assert_eq!(phone.device_count, 1);
+        assert_eq!(phone.total_human_typed_chars, 50);
     }
 }

@@ -27,7 +27,9 @@ class SettingsRepository(context: Context) {
     private val appContext = context.applicationContext
     private val settingsBridge = BridgeProvider.getSettingsBridge(context)
     private val syncBridge = BridgeProvider.getSyncBridge(context)
+    private val statsBridge = BridgeProvider.getStatsBridge(context)
     private val diagPrefs = appContext.getSharedPreferences("sujian_diagnostics", android.content.Context.MODE_PRIVATE)
+    private val devicePrefs = appContext.getSharedPreferences("sujian_device", android.content.Context.MODE_PRIVATE)
 
     @Volatile
     var lastWarning: String? = null
@@ -202,6 +204,35 @@ class SettingsRepository(context: Context) {
 
     fun performSync(config: SyncConfig): BridgeResult<SyncResult> {
         return syncBridge.performSync(config)
+    }
+
+    /**
+     * 保存设备信息到本地 SharedPreferences。
+     * 包含 deviceId、deviceClass、platform，供同步和统计使用。
+     */
+    fun saveDeviceInfo(deviceInfo: Map<String, String>) {
+        devicePrefs.edit().apply {
+            deviceInfo.forEach { (key, value) -> putString(key, value) }
+            apply()
+        }
+    }
+
+    /**
+     * 加载已保存的设备信息。
+     */
+    fun loadDeviceInfo(): Map<String, String> {
+        return mapOf(
+            "deviceId" to (devicePrefs.getString("device_id", null) ?: ""),
+            "deviceClass" to (devicePrefs.getString("device_class", null) ?: ""),
+            "platform" to (devicePrefs.getString("platform", null) ?: "android")
+        )
+    }
+
+    /**
+     * Flush 写作统计到磁盘，确保同步前数据已持久化。
+     */
+    fun flushWritingStats() {
+        statsBridge.flushWritingStats()
     }
 
 }

@@ -1,5 +1,5 @@
 use crate::error::Result;
-use crate::settings::{self, LocalSettings, SyncableSettings};
+use crate::settings::{self, DeviceInfo, LocalSettings, SyncableSettings};
 
 impl super::WriterCore {
     pub fn load_local_settings(&self) -> Result<LocalSettings> {
@@ -16,6 +16,18 @@ impl super::WriterCore {
 
     pub fn save_syncable_settings(&self, settings: &SyncableSettings) -> Result<()> {
         settings::save_syncable_settings(&self.workspace_path, settings)
+    }
+
+    pub fn load_device_info(&self) -> Result<DeviceInfo> {
+        settings::load_device_info(&self.workspace_path)
+    }
+
+    pub fn save_device_info(&self, info: &DeviceInfo) -> Result<()> {
+        settings::save_device_info(&self.workspace_path, info)
+    }
+
+    pub fn ensure_device_info(&self, platform: &str, device_class: &str) -> Result<DeviceInfo> {
+        settings::ensure_device_info(&self.workspace_path, platform, device_class)
     }
 
     pub fn list_registered_settings(&self) -> crate::settings_registry::SettingsRegistry {

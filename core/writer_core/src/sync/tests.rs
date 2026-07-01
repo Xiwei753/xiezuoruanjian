@@ -336,6 +336,48 @@ mod tests {
     }
 
     #[test]
+    fn test_stats_daily_whitelisted() {
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/stats/daily/2024-01-01.stats.json"
+        ));
+    }
+
+    #[test]
+    fn test_recent_whitelisted() {
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/recent/recent_edits.json"
+        ));
+    }
+
+    #[test]
+    fn test_device_info_whitelisted() {
+        assert!(SyncService::is_whitelisted_path(
+            "app-meta/device/device_info.json"
+        ));
+    }
+
+    #[test]
+    fn test_stats_events_local_blacklisted() {
+        assert!(SyncService::is_blacklisted_path(
+            "app-meta/stats/events.local/2024-01-01.events.jsonl"
+        ));
+    }
+
+    #[test]
+    fn test_device_info_not_blacklisted() {
+        assert!(!SyncService::is_blacklisted_path(
+            "app-meta/device/device_info.json"
+        ));
+    }
+
+    #[test]
+    fn test_recent_not_blacklisted() {
+        assert!(!SyncService::is_blacklisted_path(
+            "app-meta/recent/recent_edits.json"
+        ));
+    }
+
+    #[test]
     fn test_blacklist_ignores_local_json() {
         assert!(SyncService::is_blacklisted_path(
             "app-meta/settings/settings.local.json"

@@ -36,6 +36,7 @@ Rectangle {
             AppText {
                 anchors.centerIn: parent
                 text: "\u2B50"
+                dt: root.dt
                 font.pixelSize: 36
             }
         }
@@ -88,6 +89,7 @@ Rectangle {
                         AppText {
                             anchors.centerIn: parent
                             text: modelData.icon
+                            dt: root.dt
                             font.pixelSize: 18
                         }
                     }

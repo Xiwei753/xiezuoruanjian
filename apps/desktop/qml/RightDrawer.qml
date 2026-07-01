@@ -192,6 +192,7 @@ Rectangle {
 
                         AppText {
                             text: "\uD83E\uDD16"
+                            dt: root.dt
                             font.pixelSize: 32
                             Layout.alignment: Qt.AlignHCenter
                         }

@@ -369,6 +369,67 @@ pub fn save_syncable_settings(workspace_path: &Path, settings: &SyncableSettings
     crate::storage::atomic_write_string(&path, &content)
 }
 
+/// 粗粒度设备信息，用于同步和统计。
+/// 不包含详细硬件型号、序列号、用户名、系统账户路径等隐私信息。
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceInfo {
+    /// 本地持久化随机 UUID
+    #[serde(default)]
+    pub device_id: String,
+    /// phone / tablet / desktop
+    #[serde(default)]
+    pub device_class: String,
+    /// android / harmony / desktop
+    #[serde(default)]
+    pub platform: String,
+}
+
+pub fn load_device_info(workspace_path: &Path) -> Result<DeviceInfo> {
+    let path = workspace_path.join("app-meta/device/device_info.json");
+    if !path.exists() {
+        return Ok(DeviceInfo::default());
+    }
+    let content = fs::read_to_string(&path)?;
+    Ok(serde_json::from_str(&content)?)
+}
+
+pub fn save_device_info(workspace_path: &Path, info: &DeviceInfo) -> Result<()> {
+    let path = workspace_path.join("app-meta/device/device_info.json");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = serde_json::to_string_pretty(info)?;
+    crate::storage::atomic_write_string(&path, &content)
+}
+
+/// 确保设备信息存在，如果不存在则创建并持久化。
+/// 仅在字段为空时填充，已有值不会被覆盖。
+pub fn ensure_device_info(
+    workspace_path: &Path,
+    platform: &str,
+    device_class: &str,
+) -> Result<DeviceInfo> {
+    let mut info = load_device_info(workspace_path).unwrap_or_default();
+    let mut changed = false;
+    if info.device_id.is_empty() {
+        info.device_id = uuid::Uuid::new_v4().to_string();
+        changed = true;
+    }
+    if info.platform.is_empty() {
+        info.platform = platform.to_string();
+        changed = true;
+    }
+    if info.device_class.is_empty() {
+        info.device_class = device_class.to_string();
+        changed = true;
+    }
+    if changed {
+        save_device_info(workspace_path, &info)?;
+    }
+    Ok(info)
+}
+
 /// Returns the effective editor font size.
 /// Primary source: SyncableSettings.font_size
 /// Fallback: LocalSettings.editor_font_size (when syncable <= 0)
@@ -692,5 +753,62 @@ mod tests {
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
         assert_eq!(loaded2.auto_indent_width, 0.0, "indent width should persist as 0.0 after change");
+    }
+
+    #[test]
+    fn test_device_info_round_trip() {
+        let temp_dir = tempdir().unwrap();
+        let info = DeviceInfo {
+            device_id: "test-uuid-123".to_string(),
+            device_class: "desktop".to_string(),
+            platform: "desktop".to_string(),
+        };
+        save_device_info(temp_dir.path(), &info).unwrap();
+        let loaded = load_device_info(temp_dir.path()).unwrap();
+        assert_eq!(loaded.device_id, "test-uuid-123");
+        assert_eq!(loaded.device_class, "desktop");
+        assert_eq!(loaded.platform, "desktop");
+    }
+
+    #[test]
+    fn test_device_info_default_empty() {
+        let temp_dir = tempdir().unwrap();
+        let loaded = load_device_info(temp_dir.path()).unwrap();
+        assert!(loaded.device_id.is_empty());
+        assert!(loaded.device_class.is_empty());
+        assert!(loaded.platform.is_empty());
+    }
+
+    #[test]
+    fn test_ensure_device_info_creates_new() {
+        let temp_dir = tempdir().unwrap();
+        let info = ensure_device_info(temp_dir.path(), "desktop", "desktop").unwrap();
+        assert!(!info.device_id.is_empty());
+        assert_eq!(info.platform, "desktop");
+        assert_eq!(info.device_class, "desktop");
+
+        // 再次调用不应覆盖已有值
+        let info2 = ensure_device_info(temp_dir.path(), "android", "phone").unwrap();
+        assert_eq!(info2.device_id, info.device_id, "device_id should not change");
+        assert_eq!(info2.platform, "desktop", "platform should not change");
+        assert_eq!(info2.device_class, "desktop", "device_class should not change");
+    }
+
+    #[test]
+    fn test_device_info_camel_case_serialization() {
+        let temp_dir = tempdir().unwrap();
+        let info = DeviceInfo {
+            device_id: "uuid-456".to_string(),
+            device_class: "phone".to_string(),
+            platform: "android".to_string(),
+        };
+        save_device_info(temp_dir.path(), &info).unwrap();
+
+        // 验证 JSON 文件使用 camelCase
+        let path = temp_dir.path().join("app-meta/device/device_info.json");
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("\"deviceId\""), "should serialize as camelCase");
+        assert!(content.contains("\"deviceClass\""), "should serialize as camelCase");
+        assert!(!content.contains("\"device_id\""), "should not use snake_case");
     }
 }

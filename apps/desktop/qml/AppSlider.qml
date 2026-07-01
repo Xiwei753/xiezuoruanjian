@@ -39,6 +39,7 @@ Item {
     property alias stepSize: slider.stepSize
     property alias pressed: slider.pressed
     signal moved()
+    signal committed()
 
     implicitWidth: 240
     implicitHeight: content.implicitHeight
@@ -79,7 +80,13 @@ Item {
             leftPadding: 10
             rightPadding: 10
 
-            onMoved: root.moved()
+            onMoved: { root.moved(); root.committed() }
+
+            onPressedChanged: {
+                if (!slider.pressed) {
+                    root.committed()
+                }
+            }
 
             background: Rectangle {
                 x: slider.leftPadding

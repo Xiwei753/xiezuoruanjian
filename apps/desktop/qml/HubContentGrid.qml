@@ -64,6 +64,7 @@ Item {
 
             AppText {
                 text: root.emptyIcon
+                dt: root.dt
                 font.pixelSize: 36
                 visible: text.length > 0
                 anchors.horizontalCenter: parent.horizontalCenter

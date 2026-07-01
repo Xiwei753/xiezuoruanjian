@@ -56,6 +56,7 @@ Item {
 
         AppText {
             text: control.icon
+            dt: root.dt
             font.pixelSize: _fontMd
             Layout.preferredWidth: 20
             horizontalAlignment: Text.AlignHCenter

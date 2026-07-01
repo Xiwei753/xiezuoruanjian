@@ -83,8 +83,23 @@ Dialog {
         diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
         updatingValues = false
     }
-    onOpened: updateValues()
-    onClosed: flushSave()
+    onOpened: {
+        if (backendRef) backendRef.load_local_settings()
+        if (syncBackendRef) syncBackendRef.load_sync_config()
+        updateValues()
+    }
+    onClosed: {
+        // 写回所有 slider 当前值
+        if (backendRef && !root.updatingValues) {
+            backendRef.setting_font_size = fontSizeSlider.value
+            backendRef.setting_line_spacing = lineSpacingSlider.value
+            backendRef.setting_auto_indent_width = autoIndentWidth.value
+            backendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
+            backendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
+            backendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
+        }
+        flushSave()
+    }
 
     Rectangle {
         id: topBar
@@ -332,30 +347,6 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
-                    title: qsTr("导出诊断包")
-                    description: qsTr("打包日志和设备信息为 zip 文件")
-                    clickable: true
-                    onClicked: {
-                        if (!root.backendRef) return
-                        var result = root.backendRef.export_diagnostics_pack()
-                        if (result && result.length > 0) {
-                            diagnosticsFeedback.message = qsTr("已导出到: ") + result
-                        } else {
-                            diagnosticsFeedback.message = qsTr("导出失败")
-                        }
-                    }
-                    AppText {
-                        id: diagnosticsFeedback
-                        property string message: ""
-                        visible: message.length > 0
-                        text: diagnosticsFeedback.message
-                        color: dt.textSecondary
-                        font.pixelSize: dt.caption
-                        font.family: dt.fontFamily
-                    }
-                }
-                SettingsRow {
-                    dt: root.dt
                     title: qsTr("清空日志")
                     description: qsTr("删除所有日志文件")
                     clickable: true
@@ -363,6 +354,58 @@ Dialog {
                         if (!root.backendRef) return
                         root.backendRef.clear_logs()
                     }
+                }
+                // 导出诊断包：独立行，明确按钮
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: dt.sp12
+                    AppText {
+                        Layout.fillWidth: true
+                        text: qsTr("导出诊断包")
+                        color: dt.textSecondary
+                        font.pixelSize: dt.caption
+                        font.family: dt.fontFamily
+                    }
+                    AppButton {
+                        text: qsTr("导出")
+                        dt: root.dt
+                        variant: "secondary"
+                        small: true
+                        onClicked: {
+                            if (!root.backendRef) return
+                            var result = root.backendRef.export_diagnostics_pack()
+                            // parse JSON envelope
+                            try {
+                                var obj = JSON.parse(result)
+                                if (obj.success) {
+                                    diagnosticsFeedback.message = qsTr("已导出到: ") + obj.path
+                                    diagnosticsFeedback.isError = false
+                                } else {
+                                    diagnosticsFeedback.message = qsTr("导出失败：") + (obj.error || qsTr("未知错误"))
+                                    diagnosticsFeedback.isError = true
+                                }
+                            } catch(e) {
+                                // 兼容旧格式：纯路径字符串
+                                if (result && result.length > 0 && !result.startsWith("error.")) {
+                                    diagnosticsFeedback.message = qsTr("已导出到: ") + result
+                                    diagnosticsFeedback.isError = false
+                                } else {
+                                    diagnosticsFeedback.message = qsTr("导出失败")
+                                    diagnosticsFeedback.isError = true
+                                }
+                            }
+                        }
+                    }
+                }
+                AppText {
+                    id: diagnosticsFeedback
+                    property string message: ""
+                    property bool isError: false
+                    visible: message.length > 0
+                    text: diagnosticsFeedback.message
+                    color: isError ? dt.error : dt.textSecondary
+                    font.pixelSize: dt.caption
+                    font.family: dt.fontFamily
                 }
                 SettingsRow {
                     dt: root.dt

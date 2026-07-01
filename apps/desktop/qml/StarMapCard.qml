@@ -55,6 +55,7 @@ Rectangle {
                 AppText {
                     anchors.centerIn: parent
                     text: "\u2B50"
+                    dt: root.dt
                     font.pixelSize: isChild ? 14 : 18
                 }
             }
