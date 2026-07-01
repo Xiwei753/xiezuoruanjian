@@ -128,6 +128,10 @@ data class SujianGlyphRectData(
 data class SujianReflowGlyphRectData(
     /** 该 glyph 对应的字符 */
     val char: String,
+    /** 该 glyph 在新文本中的 UTF-16 起始偏移（用于静态层跳过 reflow range） */
+    val byteStart: Int,
+    /** 该 glyph 在新文本中的 UTF-16 结束偏移 */
+    val byteEnd: Int,
     /** 插入前的 x 坐标（文档坐标系，不含 scroll offset） */
     val oldX: Double,
     /** 插入前的 y 坐标（文档坐标系，不含 scroll offset） */

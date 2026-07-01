@@ -81,6 +81,10 @@ pub(crate) fn should_create_text_animation(
 pub(crate) struct ActiveTextAnimation {
     pub kind: TextAnimationKind,
     pub byte_range: (usize, usize),
+    /// Reflow hidden ranges：受插入影响的 glyph 在新文本中的 byte ranges。
+    /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画。
+    /// 动画结束后清除，正文层恢复完整绘制。
+    pub reflow_byte_ranges: Vec<(usize, usize)>,
     pub start_time: Instant,
     pub duration_ms: u64,
 }
@@ -104,10 +108,18 @@ impl TextAnimationState {
     }
 
     /// 开始一个 Insert 动画
-    pub fn start_insert(&mut self, byte_range: (usize, usize), duration_ms: u64) {
+    /// `reflow_byte_ranges`：受插入影响的 glyph 在新文本中的 byte ranges，
+    /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画。
+    pub fn start_insert(
+        &mut self,
+        byte_range: (usize, usize),
+        reflow_byte_ranges: Vec<(usize, usize)>,
+        duration_ms: u64,
+    ) {
         self.animations.push(ActiveTextAnimation {
             kind: TextAnimationKind::Insert,
             byte_range,
+            reflow_byte_ranges,
             start_time: Instant::now(),
             duration_ms,
         });
@@ -118,6 +130,7 @@ impl TextAnimationState {
         self.animations.push(ActiveTextAnimation {
             kind: TextAnimationKind::Delete,
             byte_range,
+            reflow_byte_ranges: Vec::new(),
             start_time: Instant::now(),
             duration_ms,
         });
@@ -183,6 +196,16 @@ impl TextAnimationState {
             .collect()
     }
 
+    /// 获取所有活跃 Insert 动画的 reflow byte ranges
+    /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画
+    pub fn active_reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
+        self.animations
+            .iter()
+            .filter(|a| a.kind == TextAnimationKind::Insert)
+            .flat_map(|a| a.reflow_byte_ranges.iter().copied())
+            .collect()
+    }
+
     /// 是否有活跃的 Insert 动画
     pub fn has_active_insert(&self) -> bool {
         self.animations
@@ -204,7 +227,7 @@ mod tests {
     #[test]
     fn test_insert_creates_active_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert!(state.has_active_insert());
         assert!(!state.is_empty());
@@ -224,7 +247,7 @@ mod tests {
     #[test]
     fn test_clear_removes_all() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         state.start_delete((30, 40), 100);
         assert!(!state.is_empty());
         state.clear();
@@ -236,7 +259,7 @@ mod tests {
     #[test]
     fn test_clear_on_typing_animation_disabled() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert!(state.has_active_insert());
         state.clear_on_typing_animation_disabled();
         assert!(state.is_empty());
@@ -246,7 +269,7 @@ mod tests {
     #[test]
     fn test_clear_on_scroll() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert!(state.has_active_insert());
         state.clear_on_scroll();
         assert!(state.is_empty());
@@ -256,7 +279,7 @@ mod tests {
     #[test]
     fn test_clear_on_reload() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert!(state.has_active_insert());
         state.clear_on_reload();
         assert!(state.is_empty());
@@ -266,7 +289,7 @@ mod tests {
     #[test]
     fn test_clear_on_visual_change() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert!(state.has_active_insert());
         state.clear_on_visual_change();
         assert!(state.is_empty());
@@ -276,7 +299,7 @@ mod tests {
     #[test]
     fn test_timeout_clears_animation() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         // duration=100, grace = 2*100 + 200 = 400ms
         // 超过宽限期后 tick 应清除
         let now = Instant::now() + Duration::from_millis(401);
@@ -289,7 +312,7 @@ mod tests {
     #[test]
     fn test_within_grace_period_not_cleared() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         // duration=100, grace = 2*100 + 200 = 400ms
         // 在宽限期内 tick 不应清除
         let now = Instant::now() + Duration::from_millis(300);
@@ -302,7 +325,7 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_removes_matching() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert!(state.has_active_insert());
         state.on_insert_animation_finished(10, 20);
         assert!(state.is_empty());
@@ -312,7 +335,7 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_keeps_others() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         state.start_delete((30, 40), 100);
         // 完成 Insert (10,20)，Delete (30,40) 应保留
         state.on_insert_animation_finished(10, 20);
@@ -324,7 +347,7 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_returns_true_when_removed() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         let removed = state.on_insert_animation_finished(10, 20);
         assert!(removed);
         assert!(state.is_empty());
@@ -333,7 +356,7 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_returns_false_when_no_match() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         let removed = state.on_insert_animation_finished(30, 40);
         assert!(!removed);
         assert!(!state.is_empty());
@@ -343,8 +366,8 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_multiple_inserts_repaints_each() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
-        state.start_insert((30, 40), 100);
+        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((30, 40), vec![], 100);
         // 完成第一个 Insert — removed=true，但还有另一个 Insert 活跃
         let removed1 = state.on_insert_animation_finished(10, 20);
         assert!(removed1);
@@ -359,8 +382,8 @@ mod tests {
     #[test]
     fn test_active_insert_byte_ranges_returns_all() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
-        state.start_insert((30, 40), 100);
+        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((30, 40), vec![], 100);
         // 两个活跃 Insert 动画都应返回
         let ranges = state.active_insert_byte_ranges();
         assert_eq!(ranges.len(), 2);
@@ -373,6 +396,47 @@ mod tests {
     }
 
     // --- Additional animation lifecycle tests ---
+
+    // --- Reflow range tests ---
+
+    #[test]
+    fn test_insert_with_reflow_ranges() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
+    }
+
+    #[test]
+    fn test_reflow_ranges_cleared_on_insert_finished() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25)], 100);
+        assert!(!state.active_reflow_byte_ranges().is_empty());
+        state.on_insert_animation_finished(10, 20);
+        assert!(state.active_reflow_byte_ranges().is_empty());
+    }
+
+    #[test]
+    fn test_reflow_ranges_cleared_on_clear() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25)], 100);
+        state.clear();
+        assert!(state.active_reflow_byte_ranges().is_empty());
+    }
+
+    #[test]
+    fn test_multiple_inserts_reflow_ranges_merged() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), vec![(20, 25)], 100);
+        state.start_insert((30, 40), vec![(40, 45)], 100);
+        let reflow = state.active_reflow_byte_ranges();
+        assert_eq!(reflow.len(), 2);
+        assert!(reflow.contains(&(20, 25)));
+        assert!(reflow.contains(&(40, 45)));
+        // 完成第一个 insert 后，只剩第二个的 reflow
+        state.on_insert_animation_finished(10, 20);
+        assert_eq!(state.active_reflow_byte_ranges(), vec![(40, 45)]);
+    }
 
     #[test]
     fn test_delete_animation_timeout_clears() {
@@ -407,7 +471,7 @@ mod tests {
     #[test]
     fn test_mixed_insert_delete_clear_all() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         state.start_delete((30, 40), 100);
         assert!(state.has_active_insert());
         assert!(!state.is_empty());

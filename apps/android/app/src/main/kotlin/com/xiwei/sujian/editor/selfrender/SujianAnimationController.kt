@@ -215,16 +215,48 @@ class SujianAnimationController(
             insertRange = insertRangeUtf16
         ))
         
-        // ── Reflow 处理（与 Desktop 方案 B 一致：暂不做 reflow 动画，右侧文字 snap） ──
-        // 检查 vt.reflowGlyphRects 是否存在，记录日志但不创建 reflow 动画
-        // 为未来启用 reflow 预留：数据已从 context 传入并存储在 vt 中
+        // ── Reflow 处理（方案 A：reflow ghost 动画） ──
+        // 中间插入时，插入点右侧文字做轻量位移动画（局部挤开）。
+        // 静态正文层在动画期间跳过 reflow ranges，由 overlay reflow ghost 显示位移动画。
+        // 动画结束后清除 reflow hidden ranges，正文层恢复完整绘制。
         val reflowRects = vt.reflowGlyphRects
         if (reflowRects.isNotEmpty()) {
-            DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: ${reflowRects.size} reflow glyphs detected, " +
-                "animation disabled (Plan B: snap to final position)")
-            // 未来启用 reflow 动画时，在此处将 reflowRects 转换为 Android 坐标格式
-            // 并调用 renderer.addAnimation(kind="reflow", ...)
-            // 当前：右侧文字直接 snap 到最终位置，不做位移动画
+            DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: ${reflowRects.size} reflow glyphs, creating reflow animation")
+            
+            // 收集 reflow ranges 并添加到静态层跳过列表
+            for (rr in reflowRects) {
+                val reflowRangeUtf16 = IntRange(rr.byteStart, rr.byteEnd)
+                renderer.addActiveInsertRange(reflowRangeUtf16)
+            }
+            
+            // 创建 reflow 动画
+            val reflowGlyphRects = reflowRects.map { rr ->
+                SujianGlyphRect(
+                    x = rr.oldX.toFloat(),
+                    y = rr.oldY.toFloat(),
+                    w = rr.w.toFloat(),
+                    h = rr.h.toFloat(),
+                    char = rr.char,
+                    baselineY = rr.oldBaselineY.toFloat()
+                )
+            }
+            
+            renderer.addAnimation(SujianOverlayAnim(
+                id = vt.id + 1u,  // 使用不同 id 避免与 insert 动画冲突
+                kind = "reflow",
+                text = "",
+                startX = 0f,
+                startY = 0f,
+                startBaselineY = 0f,
+                endX = 0f,
+                endY = 0f,
+                endBaselineY = 0f,
+                durationMs = vt.durationMs,
+                startTimeMs = System.currentTimeMillis(),
+                glyphRects = reflowGlyphRects,
+                insertRange = null,
+                reflowRects = reflowRects
+            ))
         }
     }
     

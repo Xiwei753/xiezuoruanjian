@@ -190,13 +190,30 @@ impl SujianEditorItem {
 
         // ── Layer 2: Base text ──
         // The static layer renders the full text, EXCEPT when Insert animations
-        // are active — in that case, all inserted ranges are clipped out so the
-        // QML overlay can show the glyphs "spitting out" from the cursor.
+        // are active — in that case, all inserted ranges AND reflow ranges are
+        // clipped out so the QML overlay can show the glyphs "spitting out" from
+        // the cursor (insert) and moving from old to new positions (reflow).
         // Uses QTextLine::draw() via layout::draw_line_text() to ensure
         // the text rendering uses the same shaping data as cursorToX(),
         // fixing mixed-script cursor issues (e.g. "]\"" where cursor
         // lands inside the Chinese quote).
         let insert_ranges = self.active_insert_byte_ranges();
+        let reflow_ranges = self.active_reflow_byte_ranges();
+        // 合并 insert ranges 和 reflow ranges，统一跳过
+        let mut all_skip_ranges: Vec<(usize, usize)> = insert_ranges;
+        all_skip_ranges.extend(reflow_ranges);
+        all_skip_ranges.sort_by_key(|r| r.0);
+        // 合并重叠/相邻的 ranges
+        let mut merged_skip_ranges: Vec<(usize, usize)> = Vec::new();
+        for (rs, re) in all_skip_ranges {
+            if let Some(last) = merged_skip_ranges.last_mut() {
+                if rs <= last.1 {
+                    last.1 = last.1.max(re);
+                    continue;
+                }
+            }
+            merged_skip_ranges.push((rs, re));
+        }
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
             let text_y = self
@@ -211,8 +228,8 @@ impl SujianEditorItem {
             // Use QTextLine::draw() for consistent shaping with cursor positions
             let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
 
-            // Find all insert ranges that intersect this line
-            let intersecting_ranges: Vec<(usize, usize)> = insert_ranges
+            // Find all skip ranges (insert + reflow) that intersect this line
+            let intersecting_ranges: Vec<(usize, usize)> = merged_skip_ranges
                 .iter()
                 .filter(|(rs, re)| *re > line.byte_start && *rs < line.byte_end)
                 .map(|&(rs, re)| {
@@ -221,7 +238,7 @@ impl SujianEditorItem {
                 .collect();
 
             if intersecting_ranges.is_empty() {
-                // No active Insert animation on this line — draw normally
+                // No active animation skip ranges on this line — draw normally
                 crate::editor::layout::draw_line_text(
                     painter,
                     &line.para_text,
@@ -235,9 +252,9 @@ impl SujianEditorItem {
                     &self.current_text_color.to_string(),
                 );
             } else {
-                // One or more insert ranges intersect this line.
+                // One or more skip ranges (insert + reflow) intersect this line.
                 // Compute the x-coordinates for each range boundary,
-                // then draw the line in segments that exclude all insert ranges.
+                // then draw the line in segments that exclude all skip ranges.
                 let line_top = line.y + paint_offset_y;
                 let line_left = line.x;
                 let line_right = line.x + line.width;

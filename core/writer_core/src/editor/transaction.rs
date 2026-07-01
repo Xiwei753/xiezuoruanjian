@@ -122,6 +122,10 @@ pub struct ReflowGlyphRect {
     /// 该 glyph 对应的字符（可能是多字节 UTF-8）
     #[serde(rename = "char")]
     pub char_: String,
+    /// 该 glyph 在新文本中的 UTF-8 byte 起始位置（用于静态层跳过 reflow range）
+    pub byte_start: usize,
+    /// 该 glyph 在新文本中的 UTF-8 byte 结束位置
+    pub byte_end: usize,
     /// 插入前的 x 坐标（文档坐标系，不含 scroll offset）
     pub old_x: f64,
     /// 插入前的 y 坐标（文档坐标系，不含 scroll offset）

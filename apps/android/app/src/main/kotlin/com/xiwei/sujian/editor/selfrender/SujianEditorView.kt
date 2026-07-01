@@ -969,6 +969,8 @@ class SujianEditorView @JvmOverloads constructor(
 
                 result.add(SujianReflowGlyphRectData(
                     char = oldGlyph.char,
+                    byteStart = newOffset,
+                    byteEnd = newCharEnd,
                     oldX = oldGlyph.x.toDouble(),
                     oldY = oldGlyph.y.toDouble(),
                     oldBaselineY = oldGlyph.baselineY.toDouble(),

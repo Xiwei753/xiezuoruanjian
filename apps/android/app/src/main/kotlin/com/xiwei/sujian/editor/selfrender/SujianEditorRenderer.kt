@@ -6,13 +6,14 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.text.Layout
 import android.text.TextPaint
+import com.xiwei.sujian.model.SujianReflowGlyphRectData
 
 /**
  * 动画中的 overlay 项
  */
 data class SujianOverlayAnim(
     val id: ULong,
-    val kind: String,          // "insert" | "delete" | "cursor"
+    val kind: String,          // "insert" | "delete" | "cursor" | "reflow"
     val text: String,
     val startX: Float,
     val startY: Float,
@@ -23,7 +24,8 @@ data class SujianOverlayAnim(
     val durationMs: Long,
     val startTimeMs: Long,
     val glyphRects: List<SujianGlyphRect>,
-    val insertRange: IntRange? = null  // insert 动画的跳过范围，动画完成时精确移除
+    val insertRange: IntRange? = null,  // insert 动画的跳过范围，动画完成时精确移除
+    val reflowRects: List<SujianReflowGlyphRectData> = emptyList()  // reflow 动画的新位置数据
 ) {
     val isFinished: Boolean
         get() = (System.currentTimeMillis() - startTimeMs) >= durationMs
@@ -161,6 +163,14 @@ class SujianEditorRenderer(
             val range = anim.insertRange
             if (range != null) {
                 activeInsertRanges.remove(range)
+            }
+        }
+        // 收集已完成的 reflow 动画的 range，精确移除对应的跳过范围
+        val finishedReflowAnims = activeAnimations.filter { it.kind == "reflow" && it.isFinished }
+        for (anim in finishedReflowAnims) {
+            for (rr in anim.reflowRects) {
+                val reflowRange = IntRange(rr.byteStart, rr.byteEnd)
+                activeInsertRanges.remove(reflowRange)
             }
         }
         activeAnimations.removeAll { it.isFinished }
@@ -500,9 +510,21 @@ class SujianEditorRenderer(
                 }
                 "reflow" -> {
                     // Reflow 动画：插入点右侧 glyph 的位移动画
-                    // 当前与 Desktop 方案 B 一致：暂不实现 reflow 动画，右侧文字 snap 到最终位置
-                    // 此分支为未来启用 reflow 预留，确保 reflow 类型动画不会导致崩溃
-                    // 未来启用时：从 anim.glyphRects 取 old/new 位置做插值绘制
+                    // 方案 A：静态层跳过 reflow ranges，overlay 从旧位置到新位置
+                    // opacity: 1.0（始终可见，因为静态层跳过了这些 glyph）
+                    // scale: 1.0（无缩放变化）
+                    // position: 旧位置 → 新位置
+                    if (anim.reflowRects.isNotEmpty() && anim.glyphRects.size == anim.reflowRects.size) {
+                        animTextPaint.alpha = 255
+                        for (i in anim.glyphRects.indices) {
+                            val oldGlyph = anim.glyphRects[i]
+                            val newRect = anim.reflowRects[i]
+                            // 从旧位置插值到新位置
+                            val currentX = oldGlyph.x + (newRect.newX.toFloat() - oldGlyph.x) * easedProgress
+                            val currentBaselineY = oldGlyph.baselineY + (newRect.newBaselineY.toFloat() - oldGlyph.baselineY) * easedProgress
+                            canvas.drawText(oldGlyph.char, currentX, currentBaselineY, animTextPaint)
+                        }
+                    }
                 }
             }
         }

@@ -568,6 +568,8 @@ class VisualTransactionPhase2Test {
     fun reflowGlyphRectData_allFieldsMapped() {
         val r = SujianReflowGlyphRectData(
             char = "a",
+            byteStart = 2,
+            byteEnd = 3,
             oldX = 10.0,
             oldY = 20.0,
             oldBaselineY = 35.0,
@@ -632,6 +634,8 @@ class VisualTransactionPhase2Test {
         val reflowRects = listOf(
             SujianReflowGlyphRectData(
                 char = "b",
+                byteStart = 2,
+                byteEnd = 3,
                 oldX = 15.0,
                 oldY = 20.0,
                 oldBaselineY = 35.0,
@@ -673,6 +677,8 @@ class VisualTransactionPhase2Test {
         val reflowRects = listOf(
             SujianReflowGlyphRectData(
                 char = "b",
+                byteStart = 2,
+                byteEnd = 3,
                 oldX = 15.0,
                 oldY = 20.0,
                 oldBaselineY = 35.0,
@@ -709,6 +715,8 @@ class VisualTransactionPhase2Test {
         // （在 computeReflowGlyphRects 中通过 dx/dy < 0.1 过滤）
         val r = SujianReflowGlyphRectData(
             char = "a",
+            byteStart = 2,
+            byteEnd = 3,
             oldX = 10.0,
             oldY = 20.0,
             oldBaselineY = 35.0,

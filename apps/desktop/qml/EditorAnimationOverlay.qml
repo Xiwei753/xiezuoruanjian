@@ -290,10 +290,48 @@ Item {
             _trackGhost(ghost, "insert", insertByteStart, insertByteEnd)
         }
 
-        // ── 局部 reflow 动画：方案 B — 暂不创建 reflow ghost ──
-        // 中间插入时，右侧文字直接 snap 到最终位置，不做位移动画。
-        // 原因：reflow ghost（opacity=1）和静态层最终 glyph 同时可见，产生重影。
-        // 未来如需恢复 reflow 动画，需要同时让静态层跳过 reflow range。
+        // ── 局部 reflow 动画：方案 A — reflow ghost ──
+        // 中间插入时，插入点右侧文字做轻量位移动画（局部挤开）。
+        // 静态正文层在动画期间跳过 reflow ranges，由 overlay reflow ghost 显示位移动画。
+        // 动画结束后清除 reflow hidden ranges，正文层恢复完整绘制。
+        var reflowRects = vt.reflowGlyphRects
+        if (reflowRects && Array.isArray(reflowRects) && reflowRects.length > 0) {
+            root._log("insert creating " + reflowRects.length + " reflow ghosts")
+            for (var ri = 0; ri < reflowRects.length; ri++) {
+                var rr = reflowRects[ri]
+                // 防御性检查：复杂字符不参与
+                if (isComplexGrapheme(rr.char)) {
+                    root._log("reflow skipped: complex grapheme at index=" + ri)
+                    continue
+                }
+                // 只有位置真正变化时才创建 reflow ghost
+                var dx = Math.abs(rr.newX - rr.oldX)
+                var dy = Math.abs(rr.newY - rr.oldY)
+                if (dx < 0.5 && dy < 0.5) {
+                    continue
+                }
+                var reflowGhost = component.createObject(root, {
+                    "animKind": "reflow",
+                    "startX": rr.oldX,
+                    "startY": rr.oldBaselineY || rr.oldY,
+                    "endX": rr.newX,
+                    "endY": rr.newBaselineY || rr.newY,
+                    "glyphWidth": rr.w,
+                    "glyphHeight": rr.h,
+                    "glyphBaselineY": rr.newBaselineY || 0,
+                    "width": rr.w,
+                    "height": rr.h,
+                    "duration": duration,
+                    "ghostColor": editorItem.text_color || root.dt.editorText,
+                    "glyphText": rr.char || "",
+                    "glyphFontFamily": editorItem.font_family || "",
+                    "glyphFontPixelSize": editorItem.font_pixel_size || 0
+                })
+
+                // reflow ghost 和 insert ghost 属于同一个 transaction，共用 pendingCount
+                _trackGhost(reflowGhost, "insert", insertByteStart, insertByteEnd)
+            }
+        }
     }
 
     /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。

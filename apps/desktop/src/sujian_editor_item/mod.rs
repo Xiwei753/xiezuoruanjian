@@ -431,6 +431,12 @@ impl SujianEditorItem {
         self.text_anim_state.active_insert_byte_ranges()
     }
 
+    /// 获取所有活跃 reflow byte ranges（受插入影响的 glyph 在新文本中的 byte ranges）
+    /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画
+    fn active_reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
+        self.text_anim_state.active_reflow_byte_ranges()
+    }
+
     fn bounding_width(&self) -> f64 {
         let obj = self.get_cpp_object();
         if obj.is_null() {
@@ -1299,11 +1305,25 @@ impl SujianEditorItem {
                             );
                             match decision {
                                 AnimationDecision::FullAnimation => {
-                                    self.text_anim_state.start_insert((range_start, range_end), vt.duration_ms);
+                                    // 从 vt.reflow_glyph_rects 收集 reflow byte ranges
+                                    let reflow_ranges: Vec<(usize, usize)> = vt
+                                        .reflow_glyph_rects
+                                        .as_ref()
+                                        .map(|rects| {
+                                            rects.iter().map(|r| (r.byte_start, r.byte_end)).collect()
+                                        })
+                                        .unwrap_or_default();
+                                    self.text_anim_state.start_insert(
+                                        (range_start, range_end),
+                                        reflow_ranges,
+                                        vt.duration_ms,
+                                    );
                                     if editor_animation_debug_enabled() {
                                         eprintln!(
-                                            "record_transaction: created Insert animation byte_range=({},{}), duration_ms={}",
-                                            range_start, range_end, vt.duration_ms
+                                            "record_transaction: created Insert animation byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
+                                            range_start, range_end,
+                                            vt.reflow_glyph_rects.as_ref().map(|r| r.len()).unwrap_or(0),
+                                            vt.duration_ms
                                         );
                                     }
                                 }
@@ -1550,11 +1570,142 @@ impl SujianEditorItem {
 
                 vt.insert_glyph_rects = Some(glyph_rects);
 
-                // ── 局部 reflow 动画：方案 B — 暂不收集 reflow rects ──
-                // 中间插入时，右侧文字直接 snap 到最终位置，不做位移动画。
-                // 原因：reflow ghost（opacity=1）和静态层最终 glyph 同时可见，产生重影。
-                // 未来如需恢复 reflow 动画，需要同时让静态层跳过 reflow range。
-                vt.reflow_glyph_rects = None;
+                // ── 局部 reflow 动画：方案 A — reflow ghost ──
+                // 中间插入时，插入点右侧文字做轻量位移动画（局部挤开）。
+                // 静态正文层在动画期间跳过 reflow ranges，由 overlay reflow ghost 显示位移动画。
+                // 动画结束后清除 reflow hidden ranges，正文层恢复完整绘制。
+                //
+                // 收集逻辑：
+                // 1. 使用 old_text 布局获取插入点右侧 glyph 的旧位置
+                // 2. 使用 new_text 布局获取同一批 glyph 的新位置
+                // 3. 只收集同一行中插入点右侧的 glyph，以及受影响的下一行（最多 2 行）
+                // 4. 复杂字符（emoji/ZWJ/variation selector/combining mark）不参与
+                if let Some((range_start, range_end)) = vt.inserted_range {
+                    let mut reflow_rects = Vec::new();
+                    let old_snapshot = self.layout_snapshot_for_text(old_text, width);
+
+                    // 收集受影响行：插入点所在行和下一行（最多 2 行）
+                    let mut affected_line_indices: Vec<usize> = Vec::new();
+                    for (line_idx, line) in insert_snapshot.lines.iter().enumerate() {
+                        if line.byte_end <= range_start || line.para_text.is_empty() {
+                            continue;
+                        }
+                        // 只收集插入点右侧的行（插入点所在行及之后的行）
+                        if line.byte_start >= range_end || line.byte_end > range_start {
+                            affected_line_indices.push(line_idx);
+                        }
+                        if affected_line_indices.len() >= max_affected_lines {
+                            break;
+                        }
+                    }
+
+                    for line_idx in affected_line_indices {
+                        let new_line = &insert_snapshot.lines[line_idx];
+                        if new_line.para_text.is_empty() {
+                            continue;
+                        }
+
+                        // 确定该行中需要做 reflow 的 glyph 范围：
+                        // 插入点右侧的所有 glyph（在新文本中的 byte range）
+                        let reflow_start = if new_line.byte_start < range_end {
+                            range_end
+                        } else {
+                            new_line.byte_start
+                        };
+                        let reflow_end = new_line.byte_end;
+
+                        if reflow_start >= reflow_end {
+                            continue;
+                        }
+
+                        // 在新布局中获取这些 glyph 的位置
+                        let new_glyph_data = self.editor_layout.glyph_positions_on_line(
+                            new_line,
+                            reflow_start,
+                            reflow_end,
+                            font_size,
+                            font_family,
+                        );
+
+                        // 在旧布局中找到对应的行
+                        let old_line = old_snapshot.lines.iter().find(|l| {
+                            // 匹配条件：旧布局中与插入点在同一行或之后的行
+                            l.byte_end > range_start && !l.para_text.is_empty()
+                        });
+
+                        for (abs_byte, new_x_pos, ch_w) in &new_glyph_data {
+                            if *abs_byte >= text.len() {
+                                continue;
+                            }
+                            let ch = text
+                                .get(*abs_byte..)
+                                .and_then(|s| s.chars().next())
+                                .unwrap_or(' ');
+                            // 复杂字符不参与 reflow 动画
+                            if is_complex_grapheme(ch) {
+                                continue;
+                            }
+
+                            let char_len = ch.len_utf8();
+                            let byte_start = *abs_byte;
+                            let byte_end = byte_start + char_len;
+
+                            // 在旧布局中查找该 glyph 的位置
+                            // 对于插入点右侧的 glyph，它在旧文本中的 byte offset 需要偏移
+                            let old_byte = if *abs_byte >= range_end {
+                                // 插入点右侧：旧文本中偏移量 = 新偏移量 - 插入长度
+                                abs_byte.saturating_sub(range_end - range_start)
+                            } else {
+                                *abs_byte
+                            };
+
+                            let (old_x, old_y, old_baseline_y) = if let Some(ol) = old_line {
+                                let old_glyph_data = self.editor_layout.glyph_positions_on_line(
+                                    ol,
+                                    old_byte.min(ol.byte_end),
+                                    (old_byte + char_len).min(ol.byte_end),
+                                    font_size,
+                                    font_family,
+                                );
+                                if let Some((_, ox, _)) = old_glyph_data.first() {
+                                    let old_line_baseline_y = text_baseline_y(ol, font_size, font_family) - scroll_y;
+                                    (*ox, ol.y - scroll_y, old_line_baseline_y)
+                                } else {
+                                    // fallback：使用新位置
+                                    (new_line.x + *new_x_pos, new_line.y - scroll_y, text_baseline_y(new_line, font_size, font_family) - scroll_y)
+                                }
+                            } else {
+                                // fallback：使用新位置
+                                (new_line.x + *new_x_pos, new_line.y - scroll_y, text_baseline_y(new_line, font_size, font_family) - scroll_y)
+                            };
+
+                            let new_baseline_y = text_baseline_y(new_line, font_size, font_family) - scroll_y;
+
+                            reflow_rects.push(ReflowGlyphRect {
+                                char_: ch.to_string(),
+                                byte_start,
+                                byte_end,
+                                old_x: old_x,
+                                old_y: old_y,
+                                old_baseline_y,
+                                new_x: new_line.x + *new_x_pos,
+                                new_y: new_line.y - scroll_y,
+                                new_baseline_y,
+                                w: *ch_w,
+                                h: new_line.height,
+                                line_index: line_idx,
+                            });
+                        }
+                    }
+
+                    vt.reflow_glyph_rects = if reflow_rects.is_empty() {
+                        None
+                    } else {
+                        Some(reflow_rects)
+                    };
+                } else {
+                    vt.reflow_glyph_rects = None;
+                }
             }
             EditorAnimationKind::Delete => {
                 // Delete: 使用 old_text 布局计算 deleted_glyph_rects
