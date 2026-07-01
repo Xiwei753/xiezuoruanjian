@@ -222,8 +222,8 @@ class SettingsRepository(context: Context) {
      */
     fun loadDeviceInfo(): Map<String, String> {
         return mapOf(
-            "deviceId" to (devicePrefs.getString("device_id", null) ?: ""),
-            "deviceClass" to (devicePrefs.getString("device_class", null) ?: ""),
+            "deviceId" to (devicePrefs.getString("deviceId", null) ?: ""),
+            "deviceClass" to (devicePrefs.getString("deviceClass", null) ?: ""),
             "platform" to (devicePrefs.getString("platform", null) ?: "android")
         )
     }
@@ -233,6 +233,21 @@ class SettingsRepository(context: Context) {
      */
     fun flushWritingStats() {
         statsBridge.flushWritingStats()
+    }
+
+    /**
+     * 确保设备信息已写入 app-meta/device/current_device.json。
+     * 通过 Core 层 ensure_device_info 实现，不依赖 SharedPreferences。
+     */
+    fun ensureDeviceInfo(platform: String, deviceClass: String): Boolean {
+        return when (val result = settingsBridge.ensureDeviceInfo(platform, deviceClass)) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("写入设备信息失败: ${result.message}")
+                false
+            }
+            BridgeResult.NotLoaded -> false
+        }
     }
 
 }
