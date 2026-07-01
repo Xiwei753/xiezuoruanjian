@@ -41,7 +41,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="总字数: 0"
+                android:text="@string/stats_total_words"
                 android:textAppearance="?attr/textAppearanceBodySmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -50,7 +50,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginEnd="16dp"
-                android:text="卷: 0"
+                android:text="@string/stats_volumes"
                 android:textAppearance="?attr/textAppearanceBodySmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
 
@@ -58,7 +58,7 @@
                 android:id="@+id/tvStatsChapters"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="章: 0"
+                android:text="@string/stats_chapters"
                 android:textAppearance="?attr/textAppearanceBodySmall"
                 android:textColor="?attr/colorOnSurfaceVariant" />
         </LinearLayout>
