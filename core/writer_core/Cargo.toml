@@ -51,3 +51,7 @@ harness = false
 name = "aggregate_events"
 harness = false
 
+
+[[bench]]
+name = "starmap_storage_bench"
+harness = false
