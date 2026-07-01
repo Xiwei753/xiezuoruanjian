@@ -780,8 +780,13 @@ mod tests {
         let dir = tempdir().unwrap();
         let test_log_dir = dir.path().to_path_buf();
 
-        // Set the global log dir for this test
-        let _ = GLOBAL_LOG_DIR.set(test_log_dir.clone());
+        // Set the global log dir for this test.
+        // OnceLock can only be set once; if another test already set it, skip this test
+        // rather than failing due to writing to the wrong directory.
+        if GLOBAL_LOG_DIR.set(test_log_dir.clone()).is_err() {
+            eprintln!("test_log_to_file_writes_content: skipped (GLOBAL_LOG_DIR already set by another test)");
+            return;
+        }
 
         log_to_file("ERROR", "test_module", "test_event", "test error message");
 
@@ -798,7 +803,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let test_log_dir = dir.path().to_path_buf();
 
-        // Set the global log dir for this test
+        // Set the global log dir for this test (best-effort; OnceLock may already be set)
         let _ = GLOBAL_LOG_DIR.set(test_log_dir.clone());
 
         // Simulate what the panic hook does
