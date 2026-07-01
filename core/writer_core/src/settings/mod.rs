@@ -475,6 +475,25 @@ mod tests {
     }
 
     #[test]
+    fn test_auto_indent_enabled_persists() {
+        let temp_dir = tempdir().unwrap();
+
+        let mut settings = LocalSettings::default();
+        settings.auto_indent_enabled = true;
+        save_local_settings(temp_dir.path(), &settings).unwrap();
+
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert!(loaded.auto_indent_enabled, "auto_indent_enabled should persist as true");
+
+        let mut settings2 = loaded;
+        settings2.auto_indent_enabled = false;
+        save_local_settings(temp_dir.path(), &settings2).unwrap();
+
+        let loaded2 = load_local_settings(temp_dir.path()).unwrap();
+        assert!(!loaded2.auto_indent_enabled, "auto_indent_enabled should persist as false after change");
+    }
+
+    #[test]
     fn test_get_effective_font_size_fallback_to_local() {
         let temp_dir = tempdir().unwrap();
         let mut local = LocalSettings::default();
