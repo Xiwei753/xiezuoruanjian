@@ -10,7 +10,6 @@ import com.xiwei.sujian.model.DeviceWritingStatsItem
 import com.xiwei.sujian.model.DeviceWritingStatsSummary
 import com.xiwei.sujian.model.FirstSyncMode
 import com.xiwei.sujian.model.LocalSettings
-import com.xiwei.sujian.model.NetworkProbeResult
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.ProjectStats
 import com.xiwei.sujian.model.ProjectWritingStatsItem
@@ -39,7 +38,6 @@ import uniffi.writer_core.DateRangeDto
 import uniffi.writer_core.DeviceStatsRecordDto
 import uniffi.writer_core.DeviceStatsSummaryDto
 import uniffi.writer_core.LocalSettingsDto
-import uniffi.writer_core.NetworkProbeResultDto
 import uniffi.writer_core.ProjectDto
 import uniffi.writer_core.ProjectStatsDto
 import uniffi.writer_core.ProjectStatsRecordDto
@@ -210,7 +208,6 @@ internal fun SyncStateDto.toModel() = SyncState(
 )
 
 internal fun SyncConflictDto.toModel() = SyncConflict(localPath, remotePath, localHash, remoteHash, baseHash, createdAt, description)
-internal fun NetworkProbeResultDto.toModel() = NetworkProbeResult(mode, success, status, message, rawError)
 
 internal fun SyncDiagnosticsResultDto.toModel() = SyncDiagnosticsResult(
     success = success,
@@ -230,9 +227,7 @@ internal fun SyncDiagnosticsResultDto.toModel() = SyncDiagnosticsResult(
     transport = transport,
     errorCategory = errorCategory,
     rawError = rawError,
-    chosenNetworkMode = chosenNetworkMode,
-    proxyPolicy = proxyPolicy,
-    networkProbeSummary = networkProbeSummary?.map { it.toModel() } ?: emptyList()
+    chosenNetworkMode = chosenNetworkMode
 )
 
 internal fun SyncPlanDto.toModel() = SyncPlan(
@@ -259,8 +254,7 @@ internal fun SyncResultDto.toModel() = SyncResult(
     error = error,
     errorCategory = errorCategory,
     firstSyncMode = firstSyncMode.toFirstSyncMode(),
-    chosenNetworkMode = chosenNetworkMode,
-    networkProbeSummary = networkProbeSummary?.map { it.toModel() } ?: emptyList()
+    chosenNetworkMode = chosenNetworkMode
 )
 
 internal fun String?.toBackendType(): BackendType = when (this) {
