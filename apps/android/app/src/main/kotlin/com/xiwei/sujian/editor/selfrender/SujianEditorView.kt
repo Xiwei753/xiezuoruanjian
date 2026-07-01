@@ -888,7 +888,7 @@ class SujianEditorView @JvmOverloads constructor(
                     val nextX = if (currentOffset + charCountUtf16 < text.length) {
                         layout.getPrimaryHorizontal(currentOffset + charCountUtf16)
                     } else {
-                        x + layoutEngine.textPaint.measureText(charStr)
+                        x + textPaint.measureText(charStr)
                     }
                     val width = nextX - x
 
