@@ -280,14 +280,15 @@ impl SearchIndex {
     }
 }
 
-fn scan_projects(projects_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
+fn scan_subdirs(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     let mut result = Vec::new();
-    if let Ok(entries) = fs::read_dir(projects_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    result.push((name.to_string(), path));
+    if let Ok(mut entries) = fs::read_dir(dir) {
+        while let Some(Ok(entry)) = entries.next() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    if let Ok(name) = entry.file_name().into_string() {
+                        result.push((name, entry.path()));
+                    }
                 }
             }
         }
@@ -295,19 +296,8 @@ fn scan_projects(projects_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(result)
 }
 
-fn scan_subdirs(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
-    let mut result = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    result.push((name.to_string(), path));
-                }
-            }
-        }
-    }
-    Ok(result)
+fn scan_projects(projects_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
+    scan_subdirs(projects_dir)
 }
 
 fn load_chapter_title(chapter_path: &Path, fallback_id: &str) -> String {
