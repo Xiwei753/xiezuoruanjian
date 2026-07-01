@@ -268,7 +268,7 @@ mod tests {
             "event_id": "evt-1",
             "timestamp_ms": 1000,
             "device_id": "dev-1",
-            "platform": "linux",
+            "platform": "desktop",
             "project_id": "p1",
             "volume_id": "v1",
             "chapter_id": "c1",
