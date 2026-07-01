@@ -720,11 +720,9 @@ class VisualTransactionPhase2Test {
             lineIndex = 0
         )
         // 位置变化极小，在实际代码中会被过滤掉
-        val dx = (r.newX - r.oldX).absoluteValue
-        val dy = (r.newY - r.oldY).absoluteValue
+        val dx = kotlin.math.abs(r.newX - r.oldX)
+        val dy = kotlin.math.abs(r.newY - r.oldY)
         assertTrue(dx < 0.1)
         assertTrue(dy < 0.1)
     }
-
-    private fun Double.absoluteValue(): Double = if (this < 0) -this else this
 }
