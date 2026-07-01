@@ -886,4 +886,77 @@ mod tests {
         assert_eq!(phone.device_count, 1);
         assert_eq!(phone.total_human_typed_chars, 50);
     }
+
+    fn create_mock_event() -> WritingInputEvent {
+        WritingInputEvent::new(
+            "device_1",
+            crate::writing_stats::Platform::Desktop,
+            "desktop",
+            "proj_1",
+            "vol_1",
+            "chap_1",
+            crate::writing_stats::EventSource::HumanTyped,
+            10,
+            0,
+            0,
+            0,
+            5,
+            "session_1",
+        )
+    }
+
+    #[test]
+    fn test_record_event_buffers_without_flushing() {
+        let store = create_mock_store();
+
+        let event = create_mock_event();
+        store.record_event(event).unwrap();
+
+        let buffer = store.event_buffer.lock().unwrap();
+        assert_eq!(buffer.len(), 1);
+    }
+
+    #[test]
+    fn test_record_event_flushes_on_max_buffer_size() {
+        let store = create_mock_store();
+
+        // Add MAX_BUFFER_SIZE - 1 events
+        for _ in 0..(MAX_BUFFER_SIZE - 1) {
+            let event = create_mock_event();
+            store.record_event(event).unwrap();
+        }
+
+        {
+            let buffer = store.event_buffer.lock().unwrap();
+            assert_eq!(buffer.len(), MAX_BUFFER_SIZE - 1);
+        }
+
+        // Add one more event to trigger flush
+        let event = create_mock_event();
+        store.record_event(event).unwrap();
+
+        // Buffer should be empty after flush
+        {
+            let buffer = store.event_buffer.lock().unwrap();
+            assert!(buffer.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_record_event_flushes_on_debounce_time() {
+        let store = create_mock_store();
+
+        // Set last_flush far in the past to trigger time-based flush
+        {
+            let mut last_flush = store.last_flush_ms.lock().unwrap();
+            *last_flush = chrono::Utc::now().timestamp_millis() - FLUSH_DEBOUNCE_MS - 1000;
+        }
+
+        let event = create_mock_event();
+        store.record_event(event).unwrap();
+
+        // Buffer should be empty after flush
+        let buffer = store.event_buffer.lock().unwrap();
+        assert!(buffer.is_empty());
+    }
 }
