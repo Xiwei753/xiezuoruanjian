@@ -262,8 +262,8 @@ class AppServiceBridge(workspacePath: String) {
         service.performSyncDryRun(config.toDto()).toModel()
     }
 
-    fun performSync(config: SyncConfig): BridgeResult<SyncResult> = wrapResult {
-        service.performSync(config.toDto()).toModel()
+    fun performSync(config: SyncConfig, forceSync: Boolean = false): BridgeResult<SyncResult> = wrapResult {
+        service.performSync(config.toDto(), forceSync).toModel()
     }
 
     fun getWritingStatsSummary(startDate: String, endDate: String): BridgeResult<WritingStatsSummary> = wrapResult {

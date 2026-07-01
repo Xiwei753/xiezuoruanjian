@@ -126,8 +126,9 @@ impl SyncService {
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        lww::perform_lww_sync(workspace_path, config, secrets)
+        lww::perform_lww_sync(workspace_path, config, secrets, force_sync)
     }
 }
 

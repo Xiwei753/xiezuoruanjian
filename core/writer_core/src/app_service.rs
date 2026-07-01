@@ -272,8 +272,8 @@ impl WriterAppService {
         self.api.perform_sync_dry_run(config)
     }
 
-    pub fn perform_sync(&self, config: SyncConfigDto) -> Result<SyncResultDto, WriterError> {
-        self.api.perform_sync(config)
+    pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> Result<SyncResultDto, WriterError> {
+        self.api.perform_sync(config, force_sync)
     }
 
     pub fn resolve_conflict_keep_local(&self, path: String) -> Result<bool, WriterError> {

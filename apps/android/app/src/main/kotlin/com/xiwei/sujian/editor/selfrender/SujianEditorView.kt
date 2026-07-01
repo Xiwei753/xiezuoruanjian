@@ -287,6 +287,8 @@ class SujianEditorView @JvmOverloads constructor(
             // 重算光标位置并 snap
             val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
             cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
+            // 字号变化影响 layout，通知 IME 候选框位置更新
+            imeController.notifyCursorAnchorInfoChanged()
             invalidate()
         }
     }
@@ -306,6 +308,8 @@ class SujianEditorView @JvmOverloads constructor(
             // 重算光标位置并 snap
             val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
             cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
+            // 行距变化影响 layout，通知 IME 候选框位置更新
+            imeController.notifyCursorAnchorInfoChanged()
             invalidate()
         }
     }
@@ -325,6 +329,8 @@ class SujianEditorView @JvmOverloads constructor(
             // 重算光标位置并 snap
             val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
             cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
+            // 首行缩进变化影响 layout，通知 IME 候选框位置更新
+            imeController.notifyCursorAnchorInfoChanged()
             invalidate()
         }
     }
@@ -399,6 +405,8 @@ class SujianEditorView @JvmOverloads constructor(
             spacingExtra = 0f,
             firstLineIndentPx = lastFirstLineIndentPx
         )
+        // View 尺寸变化（旋转/分屏/键盘弹出）影响 layout，通知 IME 候选框位置更新
+        imeController.notifyCursorAnchorInfoChanged()
     }
 
     override fun onDraw(canvas: Canvas) {

@@ -19,18 +19,21 @@ pub trait SyncBackend {
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        force_sync: bool,
     ) -> crate::Result<SyncResult>;
     fn push(
         &self,
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        force_sync: bool,
     ) -> crate::Result<SyncResult>;
     fn sync(
         &self,
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        force_sync: bool,
     ) -> crate::Result<SyncResult>;
 }
 
@@ -56,6 +59,7 @@ impl SyncBackend for UnavailableGitBackend {
         _workspace_path: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
             "git backend is unavailable in this build; use github_api".into(),
@@ -66,6 +70,7 @@ impl SyncBackend for UnavailableGitBackend {
         _workspace_path: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
             "git backend is unavailable in this build; use github_api".into(),
@@ -76,6 +81,7 @@ impl SyncBackend for UnavailableGitBackend {
         _workspace_path: &Path,
         _config: &SyncConfig,
         _secrets: &SyncSecrets,
+        _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         Err(crate::Error::Other(
             "git backend is unavailable in this build; use github_api".into(),
@@ -97,6 +103,7 @@ impl SyncBackend for GitSyncBackend {
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
@@ -107,6 +114,7 @@ impl SyncBackend for GitSyncBackend {
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;
@@ -117,6 +125,7 @@ impl SyncBackend for GitSyncBackend {
         workspace_path: &Path,
         config: &SyncConfig,
         secrets: &SyncSecrets,
+        _force_sync: bool,
     ) -> crate::Result<SyncResult> {
         use crate::sync::git_backend::Git2Backend;
         let backend = Git2Backend;

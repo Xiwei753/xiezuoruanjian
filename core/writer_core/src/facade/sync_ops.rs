@@ -63,11 +63,12 @@ impl super::WriterCore {
     pub fn perform_sync(
         &self,
         config: &crate::sync::SyncConfig,
+        force_sync: bool,
     ) -> crate::error::Result<crate::sync::SyncResult> {
         let secrets = self.load_sync_secrets().unwrap_or_default();
         let backend_type = crate::sync::resolved_backend_type(config);
         let backend = crate::sync::create_sync_backend(&backend_type);
-        backend.sync(&self.workspace_path, config, &secrets)
+        backend.sync(&self.workspace_path, config, &secrets, force_sync)
     }
 
     pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync::SyncSecrets> {

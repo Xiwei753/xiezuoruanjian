@@ -861,7 +861,7 @@ interface WriterAppService {
     SyncPlanDto perform_sync_dry_run(SyncConfigDto config);
 
     [Throws=WriterError]
-    SyncResultDto perform_sync(SyncConfigDto config);
+    SyncResultDto perform_sync(SyncConfigDto config, boolean force_sync);
 
     [Throws=WriterError]
     boolean resolve_conflict_keep_local(string path);

@@ -196,6 +196,9 @@ class SujianAnimationController(
         
         // 设置静态层跳过范围，避免插入动画期间重影
         // 每个 insert 动画独立添加 range，动画完成时只移除自己的 range
+        // 先映射已有 ranges 以响应本次插入
+        val rangeLenUtf16 = rangeEndUtf16 - rangeStartUtf16
+        renderer.mapActiveInsertRangesForInsert(rangeStartUtf16, rangeLenUtf16)
         val insertRangeUtf16 = IntRange(rangeStartUtf16, rangeEndUtf16)
         renderer.addActiveInsertRange(insertRangeUtf16)
         
@@ -224,9 +227,14 @@ class SujianAnimationController(
             DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: ${reflowRects.size} reflow glyphs, creating reflow animation")
             
             // 收集 reflow ranges 并添加到静态层跳过列表
+            // 修复：rr.byteStart/byteEnd 是 UTF-8 byte offset，需转换为 UTF-16 offset
+            val reflowInsertRanges = mutableListOf<IntRange>()
             for (rr in reflowRects) {
-                val reflowRangeUtf16 = IntRange(rr.byteStart, rr.byteEnd)
+                val reflowRangeStartUtf16 = buffer.utf8ToUtf16(rr.byteStart)
+                val reflowRangeEndUtf16 = buffer.utf8ToUtf16(rr.byteEnd)
+                val reflowRangeUtf16 = IntRange(reflowRangeStartUtf16, reflowRangeEndUtf16)
                 renderer.addActiveInsertRange(reflowRangeUtf16)
+                reflowInsertRanges.add(reflowRangeUtf16)
             }
             
             // 创建 reflow 动画
@@ -255,7 +263,8 @@ class SujianAnimationController(
                 startTimeMs = System.currentTimeMillis(),
                 glyphRects = reflowGlyphRects,
                 insertRange = null,
-                reflowRects = reflowRects
+                reflowRects = reflowRects,
+                reflowInsertRanges = reflowInsertRanges
             ))
         }
     }
@@ -269,6 +278,18 @@ class SujianAnimationController(
      */
     fun handleDeleteTransaction(vt: EditorVisualTransactionData) {
         if (!animationEnabled) return
+        
+        // 映射已有 activeInsertRanges 以响应本次删除
+        // 删除位置 = 当前光标位置（删除后光标在删除起始处），删除长度 = 被删文本 UTF-16 长度
+        val deletePosUtf16 = buffer.selection.head
+        val deleteLenUtf16 = if (vt.oldText.length >= vt.newText.length) {
+            vt.oldText.length - vt.newText.length
+        } else {
+            0 // 非纯删除（不应发生），跳过映射
+        }
+        if (deleteLenUtf16 > 0) {
+            renderer.mapActiveInsertRangesForDelete(deletePosUtf16, deleteLenUtf16)
+        }
         
         // 使用 lastDeleteSnapshotId 精确匹配最近的删除快照
         val snapshot = consumeDeleteSnapshot(lastDeleteSnapshotId)

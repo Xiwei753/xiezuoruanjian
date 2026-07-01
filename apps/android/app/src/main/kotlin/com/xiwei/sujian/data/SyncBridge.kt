@@ -10,5 +10,5 @@ class SyncBridge(private val appService: AppServiceBridge) {
     fun loadSyncState(): BridgeResult<SyncState> = appService.loadSyncState()
     fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> = appService.performSyncDiagnostics(config)
     fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> = appService.performSyncDryRun(config)
-    fun performSync(config: SyncConfig): BridgeResult<SyncResult> = appService.performSync(config)
+    fun performSync(config: SyncConfig, forceSync: Boolean = false): BridgeResult<SyncResult> = appService.performSync(config, forceSync)
 }

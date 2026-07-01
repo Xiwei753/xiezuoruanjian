@@ -288,7 +288,7 @@ internal class SyncSettingsHelper(
 
         Thread {
             val result = ErrorUtil.safeRun(activity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during sync"))) {
-                settingsRepository.performSync(currentSyncConfig)
+                settingsRepository.performSync(currentSyncConfig, true)
             }
             if (activity.isDestroyed || activity.isFinishing || SyncSession.currentTaskId.get() != taskId) {
                 SyncSession.lock.set(false)

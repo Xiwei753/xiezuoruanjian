@@ -115,6 +115,7 @@ pub(crate) fn perform_lww_sync(
     workspace_path: &Path,
     config: &SyncConfig,
     secrets: &SyncSecrets,
+    force_sync: bool,
 ) -> crate::Result<SyncResult> {
     eprintln!(
         "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync workspace={}",
@@ -156,22 +157,27 @@ pub(crate) fn perform_lww_sync(
     // P1-4: Core-level debounce. Even if clients call sync too often,
     // the core enforces a minimum interval to prevent network I/O flood.
     // This is a safety net; clients should also debounce.
-    let min_interval = config.sync_interval_seconds.max(60) as i64;
-    if let Some(last_sync) = state.last_sync_time {
-        let now = chrono::Utc::now().timestamp();
-        let elapsed = now - last_sync;
-        if elapsed >= 0 && elapsed < min_interval {
-            eprintln!(
-                "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
-                elapsed, min_interval
-            );
-            result.status = SyncStatus::Success;
-            return Ok(result);
+    // However, force_sync=true bypasses this debounce for manual sync,
+    // conflict resolution, and first configuration.
+    if !force_sync {
+        let min_interval = config.sync_interval_seconds.max(60) as i64;
+        if let Some(last_sync) = state.last_sync_time {
+            let now = chrono::Utc::now().timestamp();
+            let elapsed = now - last_sync;
+            if elapsed >= 0 && elapsed < min_interval {
+                eprintln!(
+                    "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
+                    elapsed, min_interval
+                );
+                result.status = SyncStatus::Success;
+                return Ok(result);
+            }
         }
     }
 
     let api_base = GitHubApiBackend::api_base_url(&config.remote_url);
-    let client = match GitHubApiBackend::build_direct_client() {
+    let network_mode = GitHubApiBackend::resolve_network_mode(config);
+    let client = match GitHubApiBackend::build_client(&network_mode) {
         Ok(c) => c,
         Err(e) => {
             result.error = Some(e.to_string());
@@ -179,7 +185,7 @@ pub(crate) fn perform_lww_sync(
             return Ok(result);
         }
     };
-    result.chosen_network_mode = Some("direct".to_string());
+    result.chosen_network_mode = Some(network_mode);
 
     let max_retries = 2;
     let mut attempt = 0;
@@ -879,7 +885,7 @@ fn execute_lww_sync_attempt(
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
     state.last_synced_commit = None;
     state.last_error = None;
-    state.last_successful_network_mode = Some("direct".to_string());
+    state.last_successful_network_mode = result.chosen_network_mode.clone().or_else(|| Some("direct".to_string()));
 
     let post_local_entries = scan_workspace_for_sync(workspace_path)?;
 

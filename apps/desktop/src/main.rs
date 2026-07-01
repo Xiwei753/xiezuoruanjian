@@ -70,6 +70,8 @@ cpp! {{
     #include <QtGlobal>
     #include <QTimer>
     #include <QWindow>
+    #include <memory>
+    #include <functional>
     #ifdef _WIN32
     #include <dwmapi.h>
     #pragma comment(lib, "dwmapi.lib")

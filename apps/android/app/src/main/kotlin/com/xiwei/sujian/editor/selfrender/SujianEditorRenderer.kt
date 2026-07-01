@@ -25,7 +25,8 @@ data class SujianOverlayAnim(
     val startTimeMs: Long,
     val glyphRects: List<SujianGlyphRect>,
     val insertRange: IntRange? = null,  // insert 动画的跳过范围，动画完成时精确移除
-    val reflowRects: List<SujianReflowGlyphRectData> = emptyList()  // reflow 动画的新位置数据
+    val reflowRects: List<SujianReflowGlyphRectData> = emptyList(),  // reflow 动画的新位置数据
+    val reflowInsertRanges: List<IntRange> = emptyList()  // reflow 动画的 UTF-16 跳过范围，用于 tickAnimations 精确移除
 ) {
     val isFinished: Boolean
         get() = (System.currentTimeMillis() - startTimeMs) >= durationMs
@@ -143,6 +144,48 @@ class SujianEditorRenderer(
     }
 
     /**
+     * 映射已有 activeInsertRanges 以响应文本插入（UTF-16 offset）。
+     *
+     * 遍历所有已有 range：
+     * - pos <= range.first：range 后移 len → IntRange(range.first + len, range.last + len)
+     * - pos >= range.last：不变
+     * - pos 在 range 内部（range.first < pos < range.last）：从列表中移除（相交取消策略）
+     */
+    fun mapActiveInsertRangesForInsert(pos: Int, len: Int) {
+        val newRanges = mutableListOf<IntRange>()
+        for (range in activeInsertRanges) {
+            when {
+                pos <= range.first -> newRanges.add(IntRange(range.first + len, range.last + len))
+                pos >= range.last -> newRanges.add(range)
+                else -> { /* range.first < pos < range.last：相交，取消 */ }
+            }
+        }
+        activeInsertRanges.clear()
+        activeInsertRanges.addAll(newRanges)
+    }
+
+    /**
+     * 映射已有 activeInsertRanges 以响应文本删除（UTF-16 offset）。
+     *
+     * 遍历所有已有 range：
+     * - 删除范围完全在 range 前（pos + len <= range.first）：range 前移 → IntRange(range.first - len, range.last - len)
+     * - 删除范围完全在 range 后（pos >= range.last）：不变
+     * - 删除范围和 range 相交：从列表中移除（相交取消策略）
+     */
+    fun mapActiveInsertRangesForDelete(pos: Int, len: Int) {
+        val newRanges = mutableListOf<IntRange>()
+        for (range in activeInsertRanges) {
+            when {
+                pos + len <= range.first -> newRanges.add(IntRange(range.first - len, range.last - len))
+                pos >= range.last -> newRanges.add(range)
+                else -> { /* 相交，取消 */ }
+            }
+        }
+        activeInsertRanges.clear()
+        activeInsertRanges.addAll(newRanges)
+    }
+
+    /**
      * @deprecated 使用 addActiveInsertRange / clearActiveInsertRanges 代替
      * 保留向后兼容，内部转为列表操作
      */
@@ -168,9 +211,8 @@ class SujianEditorRenderer(
         // 收集已完成的 reflow 动画的 range，精确移除对应的跳过范围
         val finishedReflowAnims = activeAnimations.filter { it.kind == "reflow" && it.isFinished }
         for (anim in finishedReflowAnims) {
-            for (rr in anim.reflowRects) {
-                val reflowRange = IntRange(rr.byteStart, rr.byteEnd)
-                activeInsertRanges.remove(reflowRange)
+            for (range in anim.reflowInsertRanges) {
+                activeInsertRanges.remove(range)
             }
         }
         activeAnimations.removeAll { it.isFinished }

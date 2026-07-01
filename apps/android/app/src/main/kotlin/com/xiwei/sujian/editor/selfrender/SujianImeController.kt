@@ -234,12 +234,20 @@ class SujianImeController(
         // 计算光标可见性 flags
         val flags = computeCursorVisibilityFlags(cursorRect)
         
+        // 内容坐标系 → View 本地坐标系转换
+        // getCursorRect 返回内容坐标系坐标，setInsertionMarkerLocation 需要 View 本地坐标系
+        val editorView = view as? SujianEditorView
+        val scrollX = editorView?.touchController?.scrollX?.toFloat() ?: 0f
+        val scrollY = editorView?.touchController?.scrollY?.toFloat() ?: 0f
+        val padLeft = editorView?.paddingLeft?.toFloat() ?: 0f
+        val padTop = editorView?.paddingTop?.toFloat() ?: 0f
+
         builder.setSelectionRange(buffer.selection.start, buffer.selection.end)
         builder.setInsertionMarkerLocation(
-            cursorRect.x,          // horizontal
-            cursorRect.top,        // top
-            cursorRect.baselineY,  // baseline — 文字基线 Y 坐标
-            cursorRect.bottom,     // bottom
+            cursorRect.x + padLeft - scrollX,          // horizontal
+            cursorRect.top + padTop - scrollY,         // top
+            cursorRect.baselineY + padTop - scrollY,   // baseline — 文字基线 Y 坐标
+            cursorRect.bottom + padTop - scrollY,       // bottom
             flags
         )
         

@@ -401,7 +401,7 @@ impl AppBackend {
                     &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
                 );
 
-                match api.perform_sync(config) {
+                match api.perform_sync(config, trigger == "manual") {
                     Ok(result) => {
                         let (status, msg) = match result.status.as_str() {
                             "success" => {

@@ -202,8 +202,8 @@ class SettingsRepository(context: Context) {
         return syncBridge.performSyncDryRun(config)
     }
 
-    fun performSync(config: SyncConfig): BridgeResult<SyncResult> {
-        return syncBridge.performSync(config)
+    fun performSync(config: SyncConfig, forceSync: Boolean = false): BridgeResult<SyncResult> {
+        return syncBridge.performSync(config, forceSync)
     }
 
     /**
