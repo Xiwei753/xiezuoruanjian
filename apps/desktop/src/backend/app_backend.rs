@@ -20,7 +20,7 @@
 
 use cpp::cpp;
 use qmetaobject::prelude::*;
-use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
+use qmetaobject::{QJsonArray, QJsonObject, QString};
 use rfd::FileDialog;
 use std::collections::HashSet;
 use std::sync::OnceLock;

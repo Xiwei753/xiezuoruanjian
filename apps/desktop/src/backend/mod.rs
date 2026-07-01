@@ -77,7 +77,7 @@ pub struct BackendRuntime {
 
 impl BackendRuntime {
     pub fn new() -> Self {
-        let mut app_backend = QObjectBox::new(AppBackend::default());
+        let app_backend = QObjectBox::new(AppBackend::default());
         // alpha 阶段 diagnostics 默认 true，覆盖 Default trait 的 false
         {
             let pinned = app_backend.pinned();

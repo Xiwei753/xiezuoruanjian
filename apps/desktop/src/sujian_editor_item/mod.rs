@@ -1594,6 +1594,7 @@ impl SujianEditorItem {
                         if line.byte_start >= range_end || line.byte_end > range_start {
                             affected_line_indices.push(line_idx);
                         }
+                        let max_affected_lines = 2;
                         if affected_line_indices.len() >= max_affected_lines {
                             break;
                         }
@@ -2286,7 +2287,7 @@ mod tests {
         // 模拟从 vt.inserted_range 读取的 hidden range
         let inserted_range = Some((5, 10));
         if let Some((range_start, range_end)) = inserted_range {
-            state.start_insert((range_start, range_end), 100);
+            state.start_insert((range_start, range_end), vec![], 100);
         }
         assert_eq!(state.active_insert_byte_ranges(), vec![(5, 10)]);
         assert!(state.has_active_insert());
@@ -2298,7 +2299,7 @@ mod tests {
     fn typing_animation_disabled_clears_hidden_range_immediately() {
         let mut state = TextAnimationState::new();
         // 模拟从 vt.inserted_range 创建的 Insert 动画
-        state.start_insert((10, 20), 100);
+        state.start_insert((10, 20), vec![], 100);
         assert!(state.has_active_insert());
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         // 关闭动画 — 立即清除，不依赖 timeout
@@ -2397,7 +2398,7 @@ mod tests {
         use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
             EditorAnimationKind};
 
-        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let engine = EditorEngine::with_animation_limits(8, 160);
         let idiom = "风和日丽";
         let old_text = "你好";
         let new_text = "你好风和日丽";
@@ -2438,7 +2439,7 @@ mod tests {
         if let Some((range_start, range_end)) = vt.inserted_range {
             match decision {
                 AnimationDecision::FullAnimation => {
-                    state.start_insert((range_start, range_end), vt.duration_ms);
+                    state.start_insert((range_start, range_end), vec![], vt.duration_ms);
                 }
                 _ => {}
             }
@@ -2461,7 +2462,7 @@ mod tests {
     fn ime_commit_long_candidate_no_text_animation_cursor_still_moves() {
         use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
 
-        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let engine = EditorEngine::with_animation_limits(8, 160);
         // 9 个汉字，超过 max_animated_chars(8)
         let long_candidate = "一二三四五六七八九";
         assert!(long_candidate.chars().count() > 8);
@@ -2498,7 +2499,7 @@ mod tests {
         match decision {
             AnimationDecision::FullAnimation => {
                 // 不会进入此分支
-                state.start_insert((0, long_candidate.len()), 160);
+                state.start_insert((0, long_candidate.len()), vec![], 160);
             }
             _ => {}
         }
@@ -2523,7 +2524,7 @@ mod tests {
     fn ime_commit_after_initials_cursor_moves_forward() {
         use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
 
-        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let engine = EditorEngine::with_animation_limits(8, 160);
 
         // 模拟：用户输入首字母 "fhrl"，commit 后得到 "风和日丽"
         // Step 1: preedit 阶段（ImeComposition cause，不产生动画）
@@ -2581,7 +2582,7 @@ mod tests {
         use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
             EditorAnimationKind};
 
-        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let engine = EditorEngine::with_animation_limits(8, 160);
 
         // 拼音 "fengherili" 有 10 个 ASCII 字符（视觉上可能比 4 个汉字宽）
         let pinyin = "fengherili";
@@ -2631,7 +2632,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         if let Some((rs, re)) = vt.inserted_range {
             if decision == AnimationDecision::FullAnimation {
-                state.start_insert((rs, re), vt.duration_ms);
+                state.start_insert((rs, re), vec![], vt.duration_ms);
             }
         }
         assert!(state.has_active_insert());
@@ -2644,9 +2645,9 @@ mod tests {
     #[test]
     fn newline_commit_cursor_vertical_animation() {
         use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
-            EditorAnimationKind, CursorRect};
+            CursorRect};
 
-        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let engine = EditorEngine::with_animation_limits(8, 160);
 
         // 插入换行
         let old_text = "你好";
@@ -2675,7 +2676,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         match decision {
             AnimationDecision::FullAnimation => {
-                state.start_insert((old_text.len(), new_text.len()), 160);
+                state.start_insert((old_text.len(), new_text.len()), vec![], 160);
             }
             _ => {} // CursorOnly 和 NoAnimation 都不创建 hidden range
         }
@@ -2722,7 +2723,7 @@ mod tests {
         // 插入后：A(0) B(1) X(2) Y(3) C(4) D(5) E(6)
         // reflow 应包含 C, D, E 的旧位置→新位置
 
-        let reflow_c = ReflowGlyphRect {
+        let reflow_c = ReflowGlyphRect { byte_start: 0, byte_end: 0,
             char_: "C".to_string(),
             old_x: 20.0,
             old_y: 0.0,
@@ -2734,7 +2735,7 @@ mod tests {
             h: 20.0,
             line_index: 0,
         };
-        let reflow_d = ReflowGlyphRect {
+        let reflow_d = ReflowGlyphRect { byte_start: 0, byte_end: 0,
             char_: "D".to_string(),
             old_x: 30.0,
             old_y: 0.0,
@@ -2746,7 +2747,7 @@ mod tests {
             h: 20.0,
             line_index: 0,
         };
-        let reflow_e = ReflowGlyphRect {
+        let reflow_e = ReflowGlyphRect { byte_start: 0, byte_end: 0,
             char_: "E".to_string(),
             old_x: 40.0,
             old_y: 0.0,
@@ -2805,7 +2806,7 @@ mod tests {
         // 场景：Rust 侧已经创建了 Insert 动画（hidden range）
         let mut state = TextAnimationState::new();
         let byte_range = (10, 22); // 模拟 "风和日丽" 的 byte range
-        state.start_insert(byte_range, 160);
+        state.start_insert(byte_range, vec![], 160);
         assert!(state.has_active_insert(),
             "Should have active insert before skip");
         assert_eq!(state.active_insert_byte_ranges(), vec![byte_range],
@@ -2822,7 +2823,7 @@ mod tests {
             "No active insert byte range should remain after skip");
 
         // 验证：跳过不匹配的 range 不影响现有 hidden range
-        state.start_insert((30, 42), 160);
+        state.start_insert((30, 42), vec![], 160);
         let removed_wrong = state.on_insert_animation_finished(50, 60);
         assert!(!removed_wrong, "Skipping non-matching range should return false");
         assert!(state.has_active_insert(),
@@ -2921,7 +2922,7 @@ impl QQuickItem for SujianEditorItem {
             self.render_dirty = true;
         }
 
-        let mut final_root = root_raw;
+        let _ = root_raw;
 
         // 第一步：确保 Layer 0 有基础 texture
         if !root_raw.is_null() && !item_ptr.is_null() {
@@ -2972,7 +2973,7 @@ impl QQuickItem for SujianEditorItem {
                             );
                         }
                     }
-                    final_root = root_raw;
+
                 }
             }
         } else {
@@ -2993,7 +2994,7 @@ impl QQuickItem for SujianEditorItem {
                     );
                 }
             }
-            final_root = root_raw;
+
         }
 
         // Animation lifecycle split:

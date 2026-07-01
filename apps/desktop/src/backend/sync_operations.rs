@@ -302,7 +302,8 @@ impl AppBackend {
         self.perform_sync_internal(reason, true);
     }
 
-    pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) -> QString {
+    pub(crate) fn perform_sync_internal(pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) -> QString {mut self, trigger: &str, silent_success: bool) -> QString {
+        let trigger = trigger.to_string();
         if self.current_sync_in_progress {
             self.debug_log("sync", "perform_sync_skipped", "sync already running");
             if trigger == "manual" {
@@ -405,7 +406,7 @@ impl AppBackend {
                     Ok(result) => {
                         let (status, msg) = match result.status.as_str() {
                             "success" => {
-                                let mut m = format!(
+                                let m = format!(
                                     "同步成功\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
                                     result.uploaded_files.len(),
                                     result.downloaded_files.len(),
@@ -417,7 +418,7 @@ impl AppBackend {
                                 ("success".to_string(), m)
                             }
                             "latest_wins_applied" => {
-                                let mut m = format!(
+                                let m = format!(
                                     "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
                                     result.uploaded_files.len(),
                                     result.downloaded_files.len(),
@@ -429,7 +430,7 @@ impl AppBackend {
                                 ("success".to_string(), m)
                             }
                             "no_changes" => {
-                                let mut m = format!(
+                                let m = format!(
                                     "同步完成：本地和远端均已是最新状态，无须更新。\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
                                     result.uploaded_files.len(),
                                     result.downloaded_files.len(),

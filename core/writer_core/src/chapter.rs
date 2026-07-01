@@ -82,13 +82,14 @@ pub fn list_valid_chapter_ids(
     // Iterate over volume directories
     if let Ok(entries) = fs::read_dir(volumes_dir) {
         for entry in entries.flatten() {
-            if entry.file_type().map_or(false, |ft| ft.is_dir()) {
+            if entry.path().is_dir() {
                 let chapters_dir = entry.path().join("chapters");
                 // Iterate over chapter directories within each volume
                 if let Ok(chapter_entries) = fs::read_dir(chapters_dir) {
                     for chapter_entry in chapter_entries.flatten() {
-                        if chapter_entry.file_type().map_or(false, |ft| ft.is_dir()) {
-                            if let Some(name) = chapter_entry.file_name().to_str() {
+                        let path = chapter_entry.path();
+                        if path.is_dir() {
+                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                                 chapter_ids.insert(name.to_string());
                             }
                         }
