@@ -189,14 +189,14 @@ impl SujianEditorItem {
         }
 
         // ── Layer 2: Base text ──
-        // The static layer renders the full text, EXCEPT when an Insert animation
-        // is active — in that case, the inserted range is clipped out so the
-        // QML overlay can show the glyph "spitting out" from the cursor.
+        // The static layer renders the full text, EXCEPT when Insert animations
+        // are active — in that case, all inserted ranges are clipped out so the
+        // QML overlay can show the glyphs "spitting out" from the cursor.
         // Uses QTextLine::draw() via layout::draw_line_text() to ensure
         // the text rendering uses the same shaping data as cursorToX(),
         // fixing mixed-script cursor issues (e.g. "]\"" where cursor
         // lands inside the Chinese quote).
-        let insert_range = self.active_insert_byte_range();
+        let insert_ranges = self.active_insert_byte_ranges();
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
             let text_y = self
@@ -211,77 +211,97 @@ impl SujianEditorItem {
             // Use QTextLine::draw() for consistent shaping with cursor positions
             let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
 
-            // Check if this line intersects with an active Insert animation range
-            let needs_clip = insert_range.is_some_and(|(rs, re)| {
-                re > line.byte_start && rs < line.byte_end
-            });
+            // Find all insert ranges that intersect this line
+            let intersecting_ranges: Vec<(usize, usize)> = insert_ranges
+                .iter()
+                .filter(|(rs, re)| *re > line.byte_start && *rs < line.byte_end)
+                .map(|&(rs, re)| {
+                    (rs.max(line.byte_start), re.min(line.byte_end))
+                })
+                .collect();
 
-            if needs_clip {
-                let (range_start, range_end) = insert_range.unwrap();
-                // Calculate x coordinates for the inserted range on this line
-                let x_start = self.editor_layout.cursor_x_for_line(
-                    &snapshot,
-                    line,
-                    range_start.max(line.byte_start),
-                    CaretAffinity::Downstream,
+            if intersecting_ranges.is_empty() {
+                // No active Insert animation on this line — draw normally
+                crate::editor::layout::draw_line_text(
+                    painter,
+                    &line.para_text,
+                    font_size,
+                    &font_family,
+                    paragraph_wrap_w,
+                    line.para_indent,
+                    line.qtextline_idx,
+                    line.x,
+                    text_y,
+                    &self.current_text_color.to_string(),
                 );
-                let x_end = self.editor_layout.cursor_x_for_line(
-                    &snapshot,
-                    line,
-                    range_end.min(line.byte_end),
-                    CaretAffinity::Downstream,
-                );
-
+            } else {
+                // One or more insert ranges intersect this line.
+                // Compute the x-coordinates for each range boundary,
+                // then draw the line in segments that exclude all insert ranges.
                 let line_top = line.y + paint_offset_y;
+                let line_left = line.x;
+                let line_right = line.x + line.width;
 
-                // Save painter state, set clip to exclude inserted range,
-                // draw the line, then restore.
+                // Build sorted list of (x_start, x_end) for each intersecting range
+                let mut x_ranges: Vec<(f64, f64)> = intersecting_ranges
+                    .iter()
+                    .map(|&(rs, re)| {
+                        let x_start = self.editor_layout.cursor_x_for_line(
+                            &snapshot,
+                            line,
+                            rs,
+                            CaretAffinity::Downstream,
+                        );
+                        let x_end = self.editor_layout.cursor_x_for_line(
+                            &snapshot,
+                            line,
+                            re,
+                            CaretAffinity::Downstream,
+                        );
+                        (x_start, x_end)
+                    })
+                    .collect();
+                x_ranges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+                // Merge overlapping x_ranges to avoid double-clipping
+                let mut merged: Vec<(f64, f64)> = Vec::new();
+                for (xs, xe) in x_ranges {
+                    if let Some(last) = merged.last_mut() {
+                        if xs <= last.1 + 0.01 {
+                            last.1 = last.1.max(xe);
+                            continue;
+                        }
+                    }
+                    merged.push((xs, xe));
+                }
+
+                // Compute visible segments: gaps between merged exclusion ranges
+                let mut segments: Vec<(f64, f64)> = Vec::new();
+                let mut cursor_x = line_left;
+                for (xs, xe) in &merged {
+                    if *xs > cursor_x + 0.01 {
+                        segments.push((cursor_x, *xs));
+                    }
+                    cursor_x = cursor_x.max(*xe);
+                }
+                if line_right > cursor_x + 0.01 {
+                    segments.push((cursor_x, line_right));
+                }
+
+                // Draw each visible segment with its own clip rect
                 cpp!(unsafe [painter as "QPainter*"] {
                     painter->save();
                 });
 
-                // Draw the line in two passes with separate clip rects:
-                // Left segment: [line_left, x_start)
-                // Right segment: [x_end, line_right)
-                let line_left = line.x;
-                let line_right = line.x + line.width.max(x_end);
-
-                // Left segment
-                if x_start > line_left + 0.01 {
-                    let clip_left = QRectF {
-                        x: line_left,
+                for (seg_x, seg_end) in &segments {
+                    let clip = QRectF {
+                        x: *seg_x,
                         y: line_top,
-                        width: x_start - line_left,
+                        width: seg_end - seg_x,
                         height: line.height,
                     };
-                    cpp!(unsafe [painter as "QPainter*", clip_left as "QRectF"] {
-                        painter->setClipRect(clip_left, Qt::ReplaceClip);
-                    });
-
-                    crate::editor::layout::draw_line_text(
-                        painter,
-                        &line.para_text,
-                        font_size,
-                        &font_family,
-                        paragraph_wrap_w,
-                        line.para_indent,
-                        line.qtextline_idx,
-                        line.x,
-                        text_y,
-                        &self.current_text_color.to_string(),
-                    );
-                }
-
-                // Right segment
-                if line_right > x_end + 0.01 {
-                    let clip_right = QRectF {
-                        x: x_end,
-                        y: line_top,
-                        width: line_right - x_end,
-                        height: line.height,
-                    };
-                    cpp!(unsafe [painter as "QPainter*", clip_right as "QRectF"] {
-                        painter->setClipRect(clip_right, Qt::ReplaceClip);
+                    cpp!(unsafe [painter as "QPainter*", clip as "QRectF"] {
+                        painter->setClipRect(clip, Qt::ReplaceClip);
                     });
 
                     crate::editor::layout::draw_line_text(
@@ -301,20 +321,6 @@ impl SujianEditorItem {
                 cpp!(unsafe [painter as "QPainter*"] {
                     painter->restore();
                 });
-            } else {
-                // No active Insert animation on this line — draw normally
-                crate::editor::layout::draw_line_text(
-                    painter,
-                    &line.para_text,
-                    font_size,
-                    &font_family,
-                    paragraph_wrap_w,
-                    line.para_indent,
-                    line.qtextline_idx,
-                    line.x,
-                    text_y,
-                    &self.current_text_color.to_string(),
-                );
             }
         }
 

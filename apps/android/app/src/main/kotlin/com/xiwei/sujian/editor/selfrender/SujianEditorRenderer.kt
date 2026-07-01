@@ -22,7 +22,8 @@ data class SujianOverlayAnim(
     val endBaselineY: Float,    // 新增：目标基线 Y
     val durationMs: Long,
     val startTimeMs: Long,
-    val glyphRects: List<SujianGlyphRect>
+    val glyphRects: List<SujianGlyphRect>,
+    val insertRange: IntRange? = null  // insert 动画的跳过范围，动画完成时精确移除
 ) {
     val isFinished: Boolean
         get() = (System.currentTimeMillis() - startTimeMs) >= durationMs
@@ -90,8 +91,8 @@ class SujianEditorRenderer(
     private val activeAnimations = mutableListOf<SujianOverlayAnim>()
     private var isScrolling = false
 
-    // ── 动画期间跳过的正文范围 ──
-    private var animatedInsertRange: IntRange? = null
+    // ── 动画期间跳过的正文范围（支持多个并发 insert 动画） ──
+    private val activeInsertRanges = mutableListOf<IntRange>()
 
     // ── 光标状态 ──
     var cursorVisible: Boolean = true
@@ -118,23 +119,51 @@ class SujianEditorRenderer(
     }
 
     /**
-     * 设置动画期间跳过的正文范围（UTF-16 offset IntRange）
-     * 插入动画期间设为 inserted range，动画结束后清除
+     * 添加一个动画期间跳过的正文范围（UTF-16 offset IntRange）
+     * 每个 insert 动画独立添加，动画结束后只移除自己的 range
+     */
+    fun addActiveInsertRange(range: IntRange) {
+        activeInsertRanges.add(range)
+    }
+
+    /**
+     * 移除指定跳过范围（insert 动画完成时调用）
+     */
+    fun removeActiveInsertRange(range: IntRange) {
+        activeInsertRanges.remove(range)
+    }
+
+    /**
+     * 清空所有跳过范围
+     */
+    fun clearActiveInsertRanges() {
+        activeInsertRanges.clear()
+    }
+
+    /**
+     * @deprecated 使用 addActiveInsertRange / clearActiveInsertRanges 代替
+     * 保留向后兼容，内部转为列表操作
      */
     fun setAnimatedInsertRange(range: IntRange?) {
-        animatedInsertRange = range
+        activeInsertRanges.clear()
+        if (range != null) {
+            activeInsertRanges.add(range)
+        }
     }
 
     /**
      * 清理已完成的动画
      */
     fun tickAnimations() {
-        activeAnimations.removeAll { it.isFinished }
-        // 如果没有活跃的插入动画，清除跳过范围
-        val hasActiveInsert = activeAnimations.any { it.kind == "insert" && !it.isFinished }
-        if (!hasActiveInsert) {
-            animatedInsertRange = null
+        // 先收集已完成的 insert 动画的 range，精确移除对应的跳过范围
+        val finishedInsertAnims = activeAnimations.filter { it.kind == "insert" && it.isFinished }
+        for (anim in finishedInsertAnims) {
+            val range = anim.insertRange
+            if (range != null) {
+                activeInsertRanges.remove(range)
+            }
         }
+        activeAnimations.removeAll { it.isFinished }
     }
 
     /**
@@ -144,7 +173,7 @@ class SujianEditorRenderer(
         isScrolling = scrolling
         if (scrolling) {
             activeAnimations.clear()
-            animatedInsertRange = null
+            activeInsertRanges.clear()
         }
     }
 
@@ -153,7 +182,7 @@ class SujianEditorRenderer(
      */
     fun clearAnimations() {
         activeAnimations.clear()
-        animatedInsertRange = null
+        activeInsertRanges.clear()
     }
 
     /**
@@ -212,16 +241,15 @@ class SujianEditorRenderer(
     ) {
         if (text.isEmpty()) return
 
-        val excludeRange = animatedInsertRange
+        val excludeRanges = activeInsertRanges
 
         // 计算可视行范围
         val firstVisLine = layout.getLineForVertical(scrollY.coerceAtLeast(0))
         val lastVisLine = layout.getLineForVertical((scrollY + viewportHeight).coerceAtLeast(0))
             .coerceAtMost(layout.lineCount - 1)
 
-        if (excludeRange == null) {
+        if (excludeRanges.isEmpty()) {
             // 快速路径：一次 layout.draw() + clipRect 限制到可视区域
-            // 相比逐行 clipRect + layout.draw()，只调用一次 layout.draw() 显著减少重复绘制
             val visTop = layout.getLineTop(firstVisLine).toFloat()
             val visBottom = layout.getLineBottom(lastVisLine).toFloat()
             val visLeft = 0f
@@ -233,17 +261,18 @@ class SujianEditorRenderer(
             return
         }
 
-        // 有 excludeRange 时的优化路径：
-        // 1. 不相交行：收集连续区间，批量 clipRect + layout.draw()，避免逐行 clipRect
-        // 2. 相交行：保持 before/after 分段绘制（drawLineSegment）
+        // 有 excludeRanges 时的路径：
+        // 对每条 line，收集所有与之相交的 exclude ranges，分段绘制排除这些 ranges
 
-        // 1. 收集不相交行的连续区间
-        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>() // (firstLine, lastLine) pairs
+        // 1. 收集不相交行的连续区间（与所有 exclude ranges 都不相交的行）
+        val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
         var rangeStart = -1
         for (lineIdx in firstVisLine..lastVisLine) {
             val lineStart = layout.getLineStart(lineIdx)
             val lineEnd = layout.getLineEnd(lineIdx)
-            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            val overlaps = excludeRanges.any { er ->
+                !(lineEnd <= er.first || lineStart >= er.last)
+            }
             if (!overlaps) {
                 if (rangeStart < 0) rangeStart = lineIdx
             } else {
@@ -257,7 +286,7 @@ class SujianEditorRenderer(
             nonOverlapLineRanges.add(Pair(rangeStart, lastVisLine))
         }
 
-        // 2. 批量绘制不相交行（一次 clipRect + layout.draw per 连续区间）
+        // 2. 批量绘制不相交行
         for ((rangeFirst, rangeLast) in nonOverlapLineRanges) {
             val visTop = layout.getLineTop(rangeFirst).toFloat()
             val visBottom = layout.getLineBottom(rangeLast).toFloat()
@@ -269,22 +298,55 @@ class SujianEditorRenderer(
             canvas.restore()
         }
 
-        // 3. 分段绘制相交行
+        // 3. 分段绘制相交行（排除所有 intersecting ranges）
         for (lineIdx in firstVisLine..lastVisLine) {
             val lineStart = layout.getLineStart(lineIdx)
             val lineEnd = layout.getLineEnd(lineIdx)
-            if (lineEnd <= excludeRange.first || lineStart >= excludeRange.last) {
-                continue // 已在批量绘制中处理
+
+            // 收集该行相交的 exclude ranges
+            val intersectingRanges = excludeRanges.filter { er ->
+                !(lineEnd <= er.first || lineStart >= er.last)
             }
-            // before segment
-            val beforeEnd = minOf(lineEnd, excludeRange.first)
-            if (beforeEnd > lineStart) {
-                drawLineSegment(canvas, layout, text, lineIdx, lineStart, beforeEnd)
+            if (intersectingRanges.isEmpty()) continue // 已在批量绘制中处理
+
+            // 计算该行需要排除的 offset 段，合并重叠区间
+            val excludeSegments = mutableListOf<Pair<Int, Int>>()
+            for (er in intersectingRanges) {
+                val segStart = maxOf(lineStart, er.first)
+                val segEnd = minOf(lineEnd, er.last)
+                if (segStart < segEnd) {
+                    excludeSegments.add(Pair(segStart, segEnd))
+                }
             }
-            // after segment
-            val afterStart = maxOf(lineStart, excludeRange.last)
-            if (afterStart < lineEnd) {
-                drawLineSegment(canvas, layout, text, lineIdx, afterStart, lineEnd)
+            // 按 start 排序并合并重叠
+            excludeSegments.sortBy { it.first }
+            val merged = mutableListOf<Pair<Int, Int>>()
+            for (seg in excludeSegments) {
+                if (merged.isNotEmpty() && merged.last().second >= seg.first) {
+                    // 重叠或相邻，合并
+                    val last = merged.removeLast()
+                    merged.add(Pair(last.first, maxOf(last.second, seg.second)))
+                } else {
+                    merged.add(seg)
+                }
+            }
+
+            // 计算可见段（排除 merged 后的区间）
+            val visibleSegments = mutableListOf<Pair<Int, Int>>()
+            var pos = lineStart
+            for ((exStart, exEnd) in merged) {
+                if (pos < exStart) {
+                    visibleSegments.add(Pair(pos, exStart))
+                }
+                pos = maxOf(pos, exEnd)
+            }
+            if (pos < lineEnd) {
+                visibleSegments.add(Pair(pos, lineEnd))
+            }
+
+            // 绘制每个可见段
+            for ((segStart, segEnd) in visibleSegments) {
+                drawLineSegment(canvas, layout, text, lineIdx, segStart, segEnd)
             }
         }
     }
@@ -435,6 +497,12 @@ class SujianEditorRenderer(
                         canvas.drawText(glyphRect.char, currentX, currentBaselineY, animTextPaint)
                         canvas.restore()
                     }
+                }
+                "reflow" -> {
+                    // Reflow 动画：插入点右侧 glyph 的位移动画
+                    // 当前与 Desktop 方案 B 一致：暂不实现 reflow 动画，右侧文字 snap 到最终位置
+                    // 此分支为未来启用 reflow 预留，确保 reflow 类型动画不会导致崩溃
+                    // 未来启用时：从 anim.glyphRects 取 old/new 位置做插值绘制
                 }
             }
         }

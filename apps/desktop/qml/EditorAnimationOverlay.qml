@@ -56,8 +56,8 @@ Item {
     visible: editorItem !== null
 
     property var _activeAnimations: []
-    // 当前活跃事务（替换旧的 _pendingInsertEvents）
-    property var _activeTransaction: null
+    // 当前活跃事务列表（每个 insert 动画一个事务，支持连续输入不覆盖）
+    property var _activeTransactions: []
     property Component _glyphGhostComponent: Qt.createComponent("EditorGlyphGhost.qml")
 
     /// 统一动画判定函数 — 与 Rust should_create_text_animation 使用相同规则
@@ -151,14 +151,20 @@ Item {
             var idx = root._activeAnimations.indexOf(ghost)
             if (idx >= 0) root._activeAnimations.splice(idx, 1)
 
-            if (animKind === "insert" && root._activeTransaction) {
-                var tx = root._activeTransaction
-                tx.pendingCount--
-                root._log("insert ghost finished, pendingCount=" + tx.pendingCount)
-                if (tx.pendingCount <= 0) {
-                    root._log("insert transaction finished, notifying Rust: byteStart=" + byteStart + " byteEnd=" + byteEnd)
-                    root.insertAnimationFinished(byteStart, byteEnd)
-                    root._activeTransaction = null
+            if (animKind === "insert") {
+                // 找到对应的事务（按 byteStart/byteEnd 匹配）
+                for (var ti = 0; ti < root._activeTransactions.length; ti++) {
+                    var tx = root._activeTransactions[ti]
+                    if (tx.byteStart === byteStart && tx.byteEnd === byteEnd) {
+                        tx.pendingCount--
+                        root._log("insert ghost finished, pendingCount=" + tx.pendingCount + " for byteRange=(" + byteStart + "," + byteEnd + ")")
+                        if (tx.pendingCount <= 0) {
+                            root._log("insert transaction finished, notifying Rust: byteStart=" + byteStart + " byteEnd=" + byteEnd)
+                            root.insertAnimationFinished(byteStart, byteEnd)
+                            root._activeTransactions.splice(ti, 1)
+                        }
+                        break
+                    }
                 }
             }
             ghost.destroy()
@@ -251,8 +257,8 @@ Item {
             return
         }
 
-        // 记录当前事务的 pending ghost 数量
-        root._activeTransaction = { pendingCount: ghostCount }
+        // 记录当前事务的 pending ghost 数量（push 到事务列表，支持连续输入不覆盖）
+        root._activeTransactions.push({ pendingCount: ghostCount, byteStart: insertByteStart, byteEnd: insertByteEnd })
 
         root._log("insert creating " + ghostCount + " ghosts, cursorRect=(" + startX + "," + startY + ") byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
 
@@ -284,51 +290,10 @@ Item {
             _trackGhost(ghost, "insert", insertByteStart, insertByteEnd)
         }
 
-        // ── 局部 reflow 动画：插入点右侧 glyph 的位移动画 ──
-        // reflow ghost 不计入 _activeTransaction.pendingCount（辅助动画，不影响 hidden range 生命周期）
-        if (vt.reflowGlyphRects && Array.isArray(vt.reflowGlyphRects) && vt.reflowGlyphRects.length > 0) {
-            var reflowRects = vt.reflowGlyphRects
-            root._log("insert creating " + reflowRects.length + " reflow ghosts")
-
-            // 创建单个 reflow ghost 的辅助函数（避免 for-var 闭包陷阱）
-            function createReflowGhost(rr) {
-                var reflowGhost = component.createObject(root, {
-                    "animKind": "reflow",
-                    "startX": rr.oldX,
-                    "startY": rr.oldBaselineY || rr.oldY,
-                    "endX": rr.newX,
-                    "endY": rr.newBaselineY || rr.newY,
-                    "glyphWidth": rr.w,
-                    "glyphHeight": rr.h,
-                    "glyphBaselineY": rr.newBaselineY || 0,
-                    "width": rr.w,
-                    "height": rr.h,
-                    "duration": duration,
-                    "ghostColor": editorItem.text_color || root.dt.editorText,
-                    "glyphText": rr.char || "",
-                    "glyphFontFamily": editorItem.font_family || "",
-                    "glyphFontPixelSize": editorItem.font_pixel_size || 0
-                })
-
-                // reflow ghost 不计入 pendingCount，但需要跟踪生命周期
-                root._activeAnimations.push(reflowGhost)
-                reflowGhost.animationFinished.connect(function() {
-                    var idx = root._activeAnimations.indexOf(reflowGhost)
-                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                    reflowGhost.destroy()
-                })
-                reflowGhost.startAnimation()
-            }
-
-            for (var ri = 0; ri < reflowRects.length; ri++) {
-                var rr = reflowRects[ri]
-                // 防御性检查：复杂字符不参与 reflow
-                if (isComplexGrapheme(rr.char)) {
-                    continue
-                }
-                createReflowGhost(rr)
-            }
-        }
+        // ── 局部 reflow 动画：方案 B — 暂不创建 reflow ghost ──
+        // 中间插入时，右侧文字直接 snap 到最终位置，不做位移动画。
+        // 原因：reflow ghost（opacity=1）和静态层最终 glyph 同时可见，产生重影。
+        // 未来如需恢复 reflow 动画，需要同时让静态层跳过 reflow range。
     }
 
     /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。
@@ -429,6 +394,6 @@ Item {
             if (root._activeAnimations[i]) root._activeAnimations[i].destroy()
         }
         root._activeAnimations = []
-        root._activeTransaction = null
+        root._activeTransactions = []
     }
 }

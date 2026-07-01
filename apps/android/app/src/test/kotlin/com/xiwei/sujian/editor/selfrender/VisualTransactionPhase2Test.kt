@@ -5,6 +5,7 @@ import com.xiwei.sujian.model.EditorVisualTransactionData
 import com.xiwei.sujian.model.SujianCursorRectData
 import com.xiwei.sujian.model.SujianEditCauseData
 import com.xiwei.sujian.model.SujianGlyphRectData
+import com.xiwei.sujian.model.SujianReflowGlyphRectData
 import com.xiwei.sujian.model.SujianVisualEditContext
 import com.xiwei.sujian.model.VisualCoordinateModeData
 import org.junit.Assert.*
@@ -304,6 +305,7 @@ class VisualTransactionPhase2Test {
         assertNull(vt.newCursorRect)
         assertTrue(vt.deletedGlyphRects.isEmpty())
         assertTrue(vt.insertGlyphRects.isEmpty())
+        assertTrue(vt.reflowGlyphRects.isEmpty())
     }
 
     @Test
@@ -559,4 +561,170 @@ class VisualTransactionPhase2Test {
         SujianEditCauseData.Format -> "Format"
         SujianEditCauseData.Programmatic -> "Programmatic"
     }
+
+    // ── 8. Reflow 数据模型 ──
+
+    @Test
+    fun reflowGlyphRectData_allFieldsMapped() {
+        val r = SujianReflowGlyphRectData(
+            char = "a",
+            oldX = 10.0,
+            oldY = 20.0,
+            oldBaselineY = 35.0,
+            newX = 25.0,
+            newY = 20.0,
+            newBaselineY = 35.0,
+            w = 15.0,
+            h = 20.0,
+            lineIndex = 0
+        )
+        assertEquals("a", r.char)
+        assertEquals(10.0, r.oldX, 0.01)
+        assertEquals(20.0, r.oldY, 0.01)
+        assertEquals(35.0, r.oldBaselineY, 0.01)
+        assertEquals(25.0, r.newX, 0.01)
+        assertEquals(20.0, r.newY, 0.01)
+        assertEquals(35.0, r.newBaselineY, 0.01)
+        assertEquals(15.0, r.w, 0.01)
+        assertEquals(20.0, r.h, 0.01)
+        assertEquals(0, r.lineIndex)
+    }
+
+    @Test
+    fun visualTransactionData_reflowGlyphRectsInitiallyEmpty() {
+        val vt = EditorVisualTransactionData(
+            id = 1u,
+            kind = EditorAnimationKindData.Insert,
+            cause = SujianEditCauseData.Typing,
+            oldText = "ab",
+            newText = "aXb",
+            oldSelectionAnchor = 1,
+            oldSelectionHead = 1,
+            newSelectionAnchor = 2,
+            newSelectionHead = 2,
+            insertedRangeStart = 1,
+            insertedRangeEnd = 2,
+            durationMs = 160L,
+            coordinateMode = VisualCoordinateModeData.Baseline
+        )
+
+        assertTrue(vt.reflowGlyphRects.isEmpty())
+    }
+
+    @Test
+    fun visualTransactionData_reflowGlyphRectsCanBeSet() {
+        val vt = EditorVisualTransactionData(
+            id = 1u,
+            kind = EditorAnimationKindData.Insert,
+            cause = SujianEditCauseData.Typing,
+            oldText = "ab",
+            newText = "aXb",
+            oldSelectionAnchor = 1,
+            oldSelectionHead = 1,
+            newSelectionAnchor = 2,
+            newSelectionHead = 2,
+            insertedRangeStart = 1,
+            insertedRangeEnd = 2,
+            durationMs = 160L,
+            coordinateMode = VisualCoordinateModeData.Baseline
+        )
+
+        val reflowRects = listOf(
+            SujianReflowGlyphRectData(
+                char = "b",
+                oldX = 15.0,
+                oldY = 20.0,
+                oldBaselineY = 35.0,
+                newX = 30.0,
+                newY = 20.0,
+                newBaselineY = 35.0,
+                w = 10.0,
+                h = 20.0,
+                lineIndex = 0
+            )
+        )
+        vt.reflowGlyphRects = reflowRects
+
+        assertEquals(1, vt.reflowGlyphRects.size)
+        assertEquals("b", vt.reflowGlyphRects[0].char)
+        assertEquals(15.0, vt.reflowGlyphRects[0].oldX, 0.01)
+        assertEquals(30.0, vt.reflowGlyphRects[0].newX, 0.01)
+    }
+
+    @Test
+    fun visualEditContext_reflowGlyphRectsDefaultEmpty() {
+        val context = SujianVisualEditContext(
+            oldText = "ab",
+            newText = "aXb",
+            oldSelectionAnchor = 1,
+            oldSelectionHead = 1,
+            newSelectionAnchor = 2,
+            newSelectionHead = 2,
+            oldCursorRect = null,
+            newCursorRect = null,
+            cause = SujianEditCauseData.Typing
+        )
+
+        assertTrue(context.reflowGlyphRects.isEmpty())
+    }
+
+    @Test
+    fun visualEditContext_reflowGlyphRectsCanBePassed() {
+        val reflowRects = listOf(
+            SujianReflowGlyphRectData(
+                char = "b",
+                oldX = 15.0,
+                oldY = 20.0,
+                oldBaselineY = 35.0,
+                newX = 30.0,
+                newY = 20.0,
+                newBaselineY = 35.0,
+                w = 10.0,
+                h = 20.0,
+                lineIndex = 0
+            )
+        )
+        val context = SujianVisualEditContext(
+            oldText = "ab",
+            newText = "aXb",
+            oldSelectionAnchor = 1,
+            oldSelectionHead = 1,
+            newSelectionAnchor = 2,
+            newSelectionHead = 2,
+            oldCursorRect = null,
+            newCursorRect = null,
+            cause = SujianEditCauseData.Typing,
+            reflowGlyphRects = reflowRects
+        )
+
+        assertEquals(1, context.reflowGlyphRects.size)
+        assertEquals("b", context.reflowGlyphRects[0].char)
+        assertEquals(15.0, context.reflowGlyphRects[0].oldX, 0.01)
+        assertEquals(30.0, context.reflowGlyphRects[0].newX, 0.01)
+    }
+
+    @Test
+    fun reflowGlyphRectData_noPositionChange_shouldNotBeReflow() {
+        // 当 old 和 new 位置相同时，不应被视为 reflow
+        // （在 computeReflowGlyphRects 中通过 dx/dy < 0.1 过滤）
+        val r = SujianReflowGlyphRectData(
+            char = "a",
+            oldX = 10.0,
+            oldY = 20.0,
+            oldBaselineY = 35.0,
+            newX = 10.05,  // 差异 < 0.1
+            newY = 20.05,  // 差异 < 0.1
+            newBaselineY = 35.0,
+            w = 15.0,
+            h = 20.0,
+            lineIndex = 0
+        )
+        // 位置变化极小，在实际代码中会被过滤掉
+        val dx = (r.newX - r.oldX).absoluteValue
+        val dy = (r.newY - r.oldY).absoluteValue
+        assertTrue(dx < 0.1)
+        assertTrue(dy < 0.1)
+    }
+
+    private fun Double.absoluteValue(): Double = if (this < 0) -this else this
 }

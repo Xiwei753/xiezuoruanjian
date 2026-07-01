@@ -5,6 +5,7 @@ import com.xiwei.sujian.model.EditorVisualTransactionData
 import com.xiwei.sujian.model.SujianCursorRectData
 import com.xiwei.sujian.model.SujianEditCauseData
 import com.xiwei.sujian.model.SujianGlyphRectData
+import com.xiwei.sujian.model.SujianReflowGlyphRectData
 import com.xiwei.sujian.model.SujianVisualEditContext
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
@@ -107,6 +108,9 @@ class SujianAnimationController(
         vt.oldCursorRect = context.oldCursorRect
         vt.newCursorRect = context.newCursorRect
         
+        // 填充 reflow 数据（由 runVisualEdit 计算并传入）
+        vt.reflowGlyphRects = context.reflowGlyphRects
+        
         when (vt.kind) {
             EditorAnimationKindData.Insert -> {
                 handleInsertTransaction(vt)
@@ -191,7 +195,9 @@ class SujianAnimationController(
         }
         
         // 设置静态层跳过范围，避免插入动画期间重影
-        renderer.setAnimatedInsertRange(IntRange(rangeStartUtf16, rangeEndUtf16))
+        // 每个 insert 动画独立添加 range，动画完成时只移除自己的 range
+        val insertRangeUtf16 = IntRange(rangeStartUtf16, rangeEndUtf16)
+        renderer.addActiveInsertRange(insertRangeUtf16)
         
         renderer.addAnimation(SujianOverlayAnim(
             id = vt.id,
@@ -205,8 +211,21 @@ class SujianAnimationController(
             endBaselineY = if (glyphRects.isNotEmpty()) glyphRects.first().baselineY else startBaselineY,
             durationMs = vt.durationMs,
             startTimeMs = System.currentTimeMillis(),
-            glyphRects = glyphRects
+            glyphRects = glyphRects,
+            insertRange = insertRangeUtf16
         ))
+        
+        // ── Reflow 处理（与 Desktop 方案 B 一致：暂不做 reflow 动画，右侧文字 snap） ──
+        // 检查 vt.reflowGlyphRects 是否存在，记录日志但不创建 reflow 动画
+        // 为未来启用 reflow 预留：数据已从 context 传入并存储在 vt 中
+        val reflowRects = vt.reflowGlyphRects
+        if (reflowRects.isNotEmpty()) {
+            DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: ${reflowRects.size} reflow glyphs detected, " +
+                "animation disabled (Plan B: snap to final position)")
+            // 未来启用 reflow 动画时，在此处将 reflowRects 转换为 Android 坐标格式
+            // 并调用 renderer.addAnimation(kind="reflow", ...)
+            // 当前：右侧文字直接 snap 到最终位置，不做位移动画
+        }
     }
     
     /**

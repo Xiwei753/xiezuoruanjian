@@ -426,9 +426,9 @@ impl SujianEditorItem {
         self.text_anim_state.has_active_insert()
     }
 
-    /// 获取活跃 Insert 动画的 byte range（如有多个取第一个）
-    fn active_insert_byte_range(&self) -> Option<(usize, usize)> {
-        self.text_anim_state.active_insert_byte_range()
+    /// 获取所有活跃 Insert 动画的 byte ranges
+    fn active_insert_byte_ranges(&self) -> Vec<(usize, usize)> {
+        self.text_anim_state.active_insert_byte_ranges()
     }
 
     fn bounding_width(&self) -> f64 {
@@ -1550,148 +1550,11 @@ impl SujianEditorItem {
 
                 vt.insert_glyph_rects = Some(glyph_rects);
 
-                // ── 局部 reflow 动画：插入点右侧 glyph 的旧位置 vs 新位置 ──
-                // 中间插入时，插入点右侧的文字做轻量位移动画（局部挤开），避免瞬间大跳。
-                // 只影响同一行中插入点右侧 + 相邻 1-2 行。
-                // 超过 2 行、跨段落、滚动中、格式化中、加载中时直接 snap。
-                if let Some((range_start, range_end)) = vt.inserted_range {
-                    let old_snapshot = self.layout_snapshot_for_text(old_text, width);
-
-                    // 找到插入点所在行（在新布局中）
-                    let insert_line_idx = insert_snapshot.lines.iter().position(|l| {
-                        l.byte_end > range_start && l.byte_start <= range_end
-                    });
-
-                    if let Some(first_line_idx) = insert_line_idx {
-                        // 收集受影响行：插入点所在行 + 后续最多 2 行
-                        let max_reflow_lines = 2;
-                        let mut reflow_lines: Vec<usize> = Vec::new();
-                        for i in first_line_idx..insert_snapshot.lines.len() {
-                            if reflow_lines.len() >= max_reflow_lines {
-                                break;
-                            }
-                            let new_line = &insert_snapshot.lines[i];
-                            // 跳过空行
-                            if new_line.para_text.is_empty() {
-                                continue;
-                            }
-                            // 检查是否跨段落：新行和插入行必须同一段落
-                            let first_line = &insert_snapshot.lines[first_line_idx];
-                            if new_line.para_start != first_line.para_start {
-                                break;
-                            }
-                            reflow_lines.push(i);
-                        }
-
-                        // 如果影响超过 2 行或正在滚动，直接 snap（不收集 reflow rects）
-                        let should_snap = reflow_lines.len() > max_reflow_lines
-                            || self.current_is_scrolling;
-
-                        if !should_snap && !reflow_lines.is_empty() {
-                            let mut reflow_rects: Vec<ReflowGlyphRect> = Vec::new();
-
-                            for line_idx in &reflow_lines {
-                                let new_line = &insert_snapshot.lines[*line_idx];
-
-                                // 确定该行需要做 reflow 动画的 byte 范围：
-                                // - 插入点所在行：range_end 之后的所有 glyph
-                                // - 后续行：整行所有 glyph
-                                let reflow_byte_start = if *line_idx == first_line_idx {
-                                    range_end
-                                } else {
-                                    new_line.byte_start
-                                };
-                                let reflow_byte_end = new_line.byte_end;
-
-                                if reflow_byte_start >= reflow_byte_end {
-                                    continue;
-                                }
-
-                                // 新布局中该行 glyph 位置
-                                let new_glyph_data = self.editor_layout.glyph_positions_on_line(
-                                    new_line,
-                                    reflow_byte_start.max(new_line.byte_start),
-                                    reflow_byte_end.min(new_line.byte_end),
-                                    font_size,
-                                    font_family,
-                                );
-                                let new_baseline_y = text_baseline_y(new_line, font_size, font_family) - scroll_y;
-
-                                // 在旧布局中找对应行（通过 para_start + qtextline_idx 匹配）
-                                let old_line = old_snapshot.lines.iter().find(|ol| {
-                                    ol.para_start == new_line.para_start
-                                        && ol.qtextline_idx == new_line.qtextline_idx
-                                });
-
-                                for (abs_byte, new_x_pos, ch_w) in &new_glyph_data {
-                                    if *abs_byte >= text.len() {
-                                        continue;
-                                    }
-                                    let ch = text
-                                        .get(*abs_byte..)
-                                        .and_then(|s| s.chars().next())
-                                        .unwrap_or(' ');
-                                    // 复杂字符不参与 reflow 动画
-                                    if is_complex_grapheme(ch) {
-                                        continue;
-                                    }
-                                    // 跳过插入范围内的 glyph（它们走 insert 动画）
-                                    if *abs_byte >= range_start && *abs_byte < range_end {
-                                        continue;
-                                    }
-
-                                    // 在旧布局中找该 glyph 的位置
-                                    let (old_x, old_y, old_baseline_y) = if let Some(ol) = old_line {
-                                        let old_glyph_data = self.editor_layout.glyph_positions_on_line(
-                                            ol,
-                                            (*abs_byte).max(ol.byte_start),
-                                            (*abs_byte + ch.len_utf8()).min(ol.byte_end),
-                                            font_size,
-                                            font_family,
-                                        );
-                                        let oby = text_baseline_y(ol, font_size, font_family) - scroll_y;
-                                        if let Some((_, ox, _)) = old_glyph_data.first() {
-                                            (*ox, ol.y - scroll_y, oby)
-                                        } else {
-                                            // 旧布局中找不到，用新位置（snap）
-                                            (new_line.x + *new_x_pos, new_line.y - scroll_y, new_baseline_y)
-                                        }
-                                    } else {
-                                        // 旧布局中找不到对应行，用新位置（snap）
-                                        (new_line.x + *new_x_pos, new_line.y - scroll_y, new_baseline_y)
-                                    };
-
-                                    let new_x = new_line.x + *new_x_pos;
-                                    let new_y = new_line.y - scroll_y;
-
-                                    // 只有位置实际发生变化才需要 reflow 动画
-                                    let dx = (new_x - old_x).abs();
-                                    let dy = (new_y - old_y).abs();
-                                    if dx < 0.1 && dy < 0.1 {
-                                        continue;
-                                    }
-
-                                    reflow_rects.push(ReflowGlyphRect {
-                                        char_: ch.to_string(),
-                                        old_x,
-                                        old_y,
-                                        old_baseline_y,
-                                        new_x,
-                                        new_y,
-                                        new_baseline_y,
-                                        w: *ch_w,
-                                        h: new_line.height,
-                                        line_index: *line_idx,
-                                    });
-                                }
-                            }
-
-                            if !reflow_rects.is_empty() {
-                                vt.reflow_glyph_rects = Some(reflow_rects);
-                            }
-                        }
-                    }
-                }
+                // ── 局部 reflow 动画：方案 B — 暂不收集 reflow rects ──
+                // 中间插入时，右侧文字直接 snap 到最终位置，不做位移动画。
+                // 原因：reflow ghost（opacity=1）和静态层最终 glyph 同时可见，产生重影。
+                // 未来如需恢复 reflow 动画，需要同时让静态层跳过 reflow range。
+                vt.reflow_glyph_rects = None;
             }
             EditorAnimationKind::Delete => {
                 // Delete: 使用 old_text 布局计算 deleted_glyph_rects
@@ -2274,7 +2137,7 @@ mod tests {
         if let Some((range_start, range_end)) = inserted_range {
             state.start_insert((range_start, range_end), 100);
         }
-        assert_eq!(state.active_insert_byte_range(), Some((5, 10)));
+        assert_eq!(state.active_insert_byte_ranges(), vec![(5, 10)]);
         assert!(state.has_active_insert());
     }
 
@@ -2286,11 +2149,11 @@ mod tests {
         // 模拟从 vt.inserted_range 创建的 Insert 动画
         state.start_insert((10, 20), 100);
         assert!(state.has_active_insert());
-        assert_eq!(state.active_insert_byte_range(), Some((10, 20)));
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         // 关闭动画 — 立即清除，不依赖 timeout
         state.clear_on_typing_animation_disabled();
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     // --- Additional animation scenario tests ---
@@ -2309,7 +2172,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         state.start_delete((5, 8), 100);
         // Delete 不产生 hidden range
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
         // 但状态机不为空
         assert!(!state.is_empty());
@@ -2430,7 +2293,7 @@ mod tests {
             }
         }
         assert!(state.has_active_insert(), "4-char idiom should create hidden range");
-        assert_eq!(state.active_insert_byte_range(), Some((6, 18))); // "你好"=6 bytes, "风和日丽"=12 bytes
+        assert_eq!(state.active_insert_byte_ranges(), vec![(6, 18)]); // "你好"=6 bytes, "风和日丽"=12 bytes
 
         // Cursor 动画事件：old_cursor.index != new_cursor.index → Cursor 事件产生
         assert_ne!(tx.old_selection.head.index, tx.new_selection.head.index,
@@ -2782,7 +2645,7 @@ mod tests {
     /// 测试 7：qml_overlay_skip_must_clear_hidden_range
     ///
     /// QML overlay 跳过动画时 Rust hidden range 必须立刻清掉。
-    /// 验证 on_insert_animation_skipped 清除 active_insert_byte_range。
+    /// 验证 on_insert_animation_skipped 清除 active_insert_byte_ranges。
     /// 这模拟了 QML 调用 on_insert_animation_skipped(byte_start, byte_end) 的场景：
     /// Rust 侧可能已经创建了 hidden range，但 QML 决定跳过动画，
     /// 此时必须立即清除 hidden range，否则正文层会永久跳过该 range 导致文字消失。
@@ -2794,7 +2657,7 @@ mod tests {
         state.start_insert(byte_range, 160);
         assert!(state.has_active_insert(),
             "Should have active insert before skip");
-        assert_eq!(state.active_insert_byte_range(), Some(byte_range),
+        assert_eq!(state.active_insert_byte_ranges(), vec![byte_range],
             "Hidden range should be (10, 22) before skip");
 
         // QML overlay 跳过动画 → 调用 on_insert_animation_finished（与 skip 共用逻辑）
@@ -2804,7 +2667,7 @@ mod tests {
         assert!(removed, "on_insert_animation_skipped should return true (removed matching animation)");
         assert!(state.is_empty(),
             "Hidden range must be immediately cleared after skip");
-        assert_eq!(state.active_insert_byte_range(), None,
+        assert!(state.active_insert_byte_ranges().is_empty(),
             "No active insert byte range should remain after skip");
 
         // 验证：跳过不匹配的 range 不影响现有 hidden range
@@ -2813,7 +2676,7 @@ mod tests {
         assert!(!removed_wrong, "Skipping non-matching range should return false");
         assert!(state.has_active_insert(),
             "Existing hidden range should remain when skip doesn't match");
-        assert_eq!(state.active_insert_byte_range(), Some((30, 42)));
+        assert_eq!(state.active_insert_byte_ranges(), vec![(30, 42)]);
 
         // 清理
         state.clear();

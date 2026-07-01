@@ -159,7 +159,7 @@ class SujianImeController(
      */
     fun onComposingChanged(composingText: String) {
         if (composingText.isNotEmpty()) {
-            renderer.setAnimatedInsertRange(null)
+            renderer.clearActiveInsertRanges()
         }
         DiagnosticsLogger.d(TAG, "Composing changed: len=${composingText.length}")
     }

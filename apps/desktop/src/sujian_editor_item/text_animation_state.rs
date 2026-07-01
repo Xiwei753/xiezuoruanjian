@@ -174,12 +174,13 @@ impl TextAnimationState {
         self.animations.len() != before
     }
 
-    /// 获取活跃 Insert 动画的 byte range
-    pub fn active_insert_byte_range(&self) -> Option<(usize, usize)> {
+    /// 获取所有活跃 Insert 动画的 byte ranges
+    pub fn active_insert_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.animations
             .iter()
-            .find(|a| a.kind == TextAnimationKind::Insert)
+            .filter(|a| a.kind == TextAnimationKind::Insert)
             .map(|a| a.byte_range)
+            .collect()
     }
 
     /// 是否有活跃的 Insert 动画
@@ -204,7 +205,7 @@ mod tests {
     fn test_insert_creates_active_range() {
         let mut state = TextAnimationState::new();
         state.start_insert((10, 20), 100);
-        assert_eq!(state.active_insert_byte_range(), Some((10, 20)));
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert!(state.has_active_insert());
         assert!(!state.is_empty());
     }
@@ -214,7 +215,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         state.start_delete((5, 15), 100);
         // Delete 动画不产生 hidden range
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
         // 但状态机不为空（有 Delete 动画在跟踪）
         assert!(!state.is_empty());
@@ -228,7 +229,7 @@ mod tests {
         assert!(!state.is_empty());
         state.clear();
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
     }
 
@@ -239,7 +240,7 @@ mod tests {
         assert!(state.has_active_insert());
         state.clear_on_typing_animation_disabled();
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     #[test]
@@ -249,7 +250,7 @@ mod tests {
         assert!(state.has_active_insert());
         state.clear_on_scroll();
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     #[test]
@@ -259,7 +260,7 @@ mod tests {
         assert!(state.has_active_insert());
         state.clear_on_reload();
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     #[test]
@@ -269,7 +270,7 @@ mod tests {
         assert!(state.has_active_insert());
         state.clear_on_visual_change();
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     #[test]
@@ -282,7 +283,7 @@ mod tests {
         let cleared = state.tick(now);
         assert!(cleared);
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     #[test]
@@ -295,7 +296,7 @@ mod tests {
         let cleared = state.tick(now);
         assert!(!cleared);
         assert!(!state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), Some((10, 20)));
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
     }
 
     #[test]
@@ -305,7 +306,7 @@ mod tests {
         assert!(state.has_active_insert());
         state.on_insert_animation_finished(10, 20);
         assert!(state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     #[test]
@@ -316,7 +317,7 @@ mod tests {
         // 完成 Insert (10,20)，Delete (30,40) 应保留
         state.on_insert_animation_finished(10, 20);
         assert!(!state.is_empty());
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
     }
 
@@ -353,6 +354,22 @@ mod tests {
         assert!(removed2);
         assert!(!state.has_active_insert());
         assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_active_insert_byte_ranges_returns_all() {
+        let mut state = TextAnimationState::new();
+        state.start_insert((10, 20), 100);
+        state.start_insert((30, 40), 100);
+        // 两个活跃 Insert 动画都应返回
+        let ranges = state.active_insert_byte_ranges();
+        assert_eq!(ranges.len(), 2);
+        assert!(ranges.contains(&(10, 20)));
+        assert!(ranges.contains(&(30, 40)));
+        // 完成第一个后，只剩一个
+        state.on_insert_animation_finished(10, 20);
+        let ranges2 = state.active_insert_byte_ranges();
+        assert_eq!(ranges2, vec![(30, 40)]);
     }
 
     // --- Additional animation lifecycle tests ---
@@ -396,7 +413,7 @@ mod tests {
         assert!(!state.is_empty());
         state.clear();
         assert!(state.is_empty(), "clear() should remove both Insert and Delete animations");
-        assert_eq!(state.active_insert_byte_range(), None);
+        assert!(state.active_insert_byte_ranges().is_empty());
     }
 
     // --- should_create_text_animation unified decision tests ---

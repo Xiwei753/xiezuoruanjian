@@ -89,7 +89,9 @@ data class EditorVisualTransactionData(
     /** 被删除的 glyph 矩形列表，由 onBeforeDelete 捕获 */
     var deletedGlyphRects: List<SujianGlyphRectData> = emptyList(),
     /** 被插入的 glyph 矩形列表，由 handleInsertTransaction 填充 */
-    var insertGlyphRects: List<SujianGlyphRectData> = emptyList()
+    var insertGlyphRects: List<SujianGlyphRectData> = emptyList(),
+    /** 受局部 reflow 影响的 glyph 旧/新位置列表，由 runVisualEdit 填充 */
+    var reflowGlyphRects: List<SujianReflowGlyphRectData> = emptyList()
 )
 
 /**
@@ -115,6 +117,38 @@ data class SujianGlyphRectData(
 )
 
 /**
+ * 受局部 reflow 影响的 glyph 的旧位置和新位置，与 Core ReflowGlyphRect 对齐。
+ *
+ * 中间插入时，插入点右侧的文字需要做轻量位移动画（局部挤开），
+ * 避免瞬间大跳。SujianReflowGlyphRectData 记录这些 glyph 在插入前后的位置。
+ *
+ * 只影响同一行中插入点右侧的 glyph，以及受影响的相邻 1-2 行。
+ * 超过 2 行、跨段落、滚动中、格式化中、加载中时直接 snap，不收集。
+ */
+data class SujianReflowGlyphRectData(
+    /** 该 glyph 对应的字符 */
+    val char: String,
+    /** 插入前的 x 坐标（文档坐标系，不含 scroll offset） */
+    val oldX: Double,
+    /** 插入前的 y 坐标（文档坐标系，不含 scroll offset） */
+    val oldY: Double,
+    /** 插入前的基线 Y 坐标 */
+    val oldBaselineY: Double,
+    /** 插入后的 x 坐标（文档坐标系，不含 scroll offset） */
+    val newX: Double,
+    /** 插入后的 y 坐标（文档坐标系，不含 scroll offset） */
+    val newY: Double,
+    /** 插入后的基线 Y 坐标 */
+    val newBaselineY: Double,
+    /** glyph 宽度 */
+    val w: Double,
+    /** glyph 高度 */
+    val h: Double,
+    /** 所在 visual line 索引（新布局中的索引） */
+    val lineIndex: Int
+)
+
+/**
  * 视觉编辑上下文，由 runVisualEdit 生成并传给 AnimationController。
  *
  * 包含编辑前后的完整快照：文本内容、选区位置（UTF-16 offset）、光标矩形。
@@ -130,5 +164,7 @@ data class SujianVisualEditContext(
     val newSelectionHead: Int,    // UTF-16 offset in newText
     val oldCursorRect: SujianCursorRectData?,
     val newCursorRect: SujianCursorRectData?,
-    val cause: SujianEditCauseData
+    val cause: SujianEditCauseData,
+    /** 受局部 reflow 影响的 glyph 旧/新位置列表，由 runVisualEdit 填充 */
+    val reflowGlyphRects: List<SujianReflowGlyphRectData> = emptyList()
 )
