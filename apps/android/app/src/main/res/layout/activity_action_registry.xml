@@ -33,7 +33,7 @@
                 android:id="@+id/tvLoading"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="加载中..."
+                android:text="@string/loading"
                 android:textSize="16sp"
                 android:gravity="center"
                 android:padding="32dp"/>
