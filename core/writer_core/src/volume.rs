@@ -19,6 +19,7 @@
 
 use crate::error::Result;
 use chrono::Utc;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -188,7 +189,7 @@ pub fn reorder_volumes(
         ));
     }
 
-    for (index, id) in ordered_ids.iter().enumerate() {
+    ordered_ids.par_iter().enumerate().try_for_each(|(index, id)| -> Result<()> {
         let volume_dir = workspace_path
             .join("projects")
             .join(project_id)
@@ -206,6 +207,7 @@ pub fn reorder_volumes(
         } else {
             return Err(crate::error::Error::VolumeNotFound);
         }
-    }
+        Ok(())
+    })?;
     Ok(())
 }
