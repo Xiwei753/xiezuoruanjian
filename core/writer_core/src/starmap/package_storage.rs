@@ -166,85 +166,54 @@ pub fn load_starmap_document(workspace: &Path, starmap_id: &str) -> Result<StarM
         )));
     };
 
-    // 2. 读取节点
-    let mut nodes = Vec::new();
-    let nodes_dir = nodes_dir(&dir);
-    if nodes_dir.exists() {
-        for entry in fs::read_dir(&nodes_dir)? {
+    // 辅助函数：并行读取目录中的 JSON 文件并解析
+    fn read_json_dir<T: serde::de::DeserializeOwned + Send + Sync + 'static>(
+        dir_path: &Path,
+    ) -> Result<Vec<T>> {
+        use rayon::prelude::*;
+
+        if !dir_path.exists() {
+            return Ok(Vec::new());
+        }
+
+        // 先收集所有 json 文件的路径
+        let mut paths = Vec::new();
+        for entry in fs::read_dir(dir_path)? {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(node) = serde_json::from_str::<StarMapNode>(&json_str) {
-                    nodes.push(node);
-                }
+                paths.push(path);
             }
         }
+
+        // 使用 rayon 并行读取和解析
+        let items_res: std::io::Result<Vec<Option<T>>> = paths
+            .into_par_iter()
+            .map(|path| {
+                let json_str = fs::read_to_string(&path)?;
+                Ok(serde_json::from_str::<T>(&json_str).ok())
+            })
+            .collect();
+
+        let items = items_res?.into_iter().flatten().collect();
+
+        Ok(items)
     }
+
+    // 2. 读取节点
+    let nodes: Vec<StarMapNode> = read_json_dir(&nodes_dir(&dir))?;
 
     // 3. 读取边
-    let mut edges = Vec::new();
-    let edges_dir_path = edges_dir(&dir);
-    if edges_dir_path.exists() {
-        for entry in fs::read_dir(&edges_dir_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(edge) = serde_json::from_str::<StarMapEdge>(&json_str) {
-                    edges.push(edge);
-                }
-            }
-        }
-    }
+    let edges: Vec<StarMapEdge> = read_json_dir(&edges_dir(&dir))?;
 
     // 4. 读取 embeds（子星图放置）
-    let mut embeds = Vec::new();
-    let cs_dir = child_starmaps_dir(&dir);
-    if cs_dir.exists() {
-        for entry in fs::read_dir(&cs_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(embed) = serde_json::from_str::<StarMapEmbed>(&json_str) {
-                    embeds.push(embed);
-                }
-            }
-        }
-    }
+    let embeds: Vec<StarMapEmbed> = read_json_dir(&child_starmaps_dir(&dir))?;
 
     // 5. 读取 links
-    let mut links = Vec::new();
-    let links_dir_path = links_dir(&dir);
-    if links_dir_path.exists() {
-        for entry in fs::read_dir(&links_dir_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(link) = serde_json::from_str::<StarMapLink>(&json_str) {
-                    links.push(link);
-                }
-            }
-        }
-    }
+    let links: Vec<StarMapLink> = read_json_dir(&links_dir(&dir))?;
 
     // 6. 读取超链接
-    let mut hyperlinks = Vec::new();
-    let hl_dir = hyperlinks_dir(&dir);
-    if hl_dir.exists() {
-        for entry in fs::read_dir(&hl_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(hl) = serde_json::from_str::<StarMapHyperlink>(&json_str) {
-                    hyperlinks.push(hl);
-                }
-            }
-        }
-    }
+    let hyperlinks: Vec<StarMapHyperlink> = read_json_dir(&hyperlinks_dir(&dir))?;
 
     // 7. 读取布局
     let layout = {
