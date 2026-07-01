@@ -17,14 +17,13 @@ Text {
     id: control
     property var dt: null
     property var theme: null
-    property var globalDt: null
     property string variant: "primary"
 
     // Unified token entry: prefer dt, then theme
     readonly property var tokens: dt || theme
 
     onTokensChanged: {
-        if (!tokens) console.warn("AppText: dt and theme are both null, falling back to globalDt or colorScheme")
+        if (!tokens) console.warn("AppText: dt and theme are both null — must pass dt or theme to AppText. variant=" + control.variant)
     }
 
     color: {
@@ -46,13 +45,9 @@ Text {
                     return tokens.textPrimary;
             }
         }
-        // Fallback: use globalDt if available
-        if (globalDt) return globalDt.textPrimary
-        // Last resort: use color scheme to pick a readable text color
-        // Values match DesignTokens.qml textPrimary definitions (dark: #E2E2E5, light: #1A1C1E)
-        return Qt.styleHints.colorScheme === Qt.ColorScheme.Dark
-            ? Qt.rgba(0.886, 0.886, 0.898, 1)
-            : Qt.rgba(0.102, 0.110, 0.118, 1)
+        // No fallback: dt/theme must be provided.
+        // If you see this color (magenta), pass dt or theme to AppText.
+        return "magenta"
     }
     font.pixelSize: tokens ? tokens.fontMd : 14
     wrapMode: Text.WordWrap
