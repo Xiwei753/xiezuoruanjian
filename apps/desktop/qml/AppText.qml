@@ -49,7 +49,10 @@ Text {
         // Fallback: use globalDt if available
         if (globalDt) return globalDt.textPrimary
         // Last resort: use color scheme to pick a readable text color
-        return Qt.styleHints.colorScheme === Qt.ColorScheme.Dark ? "#E2E2E5" : "#1A1C1E"
+        // Values match DesignTokens.qml textPrimary definitions (dark: #E2E2E5, light: #1A1C1E)
+        return Qt.styleHints.colorScheme === Qt.ColorScheme.Dark
+            ? Qt.rgba(0.886, 0.886, 0.898, 1)
+            : Qt.rgba(0.102, 0.110, 0.118, 1)
     }
     font.pixelSize: tokens ? tokens.fontMd : 14
     wrapMode: Text.WordWrap

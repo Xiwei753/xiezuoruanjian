@@ -63,6 +63,7 @@ cpp! {{
     #include <QFileInfo>
     #include <QGuiApplication>
     #include <QIcon>
+    #include <QStyleHints>
     #include <QStringList>
     #include <QTranslator>
     #include <QtGlobal>
