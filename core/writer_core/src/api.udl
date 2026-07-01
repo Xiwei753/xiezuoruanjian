@@ -897,6 +897,9 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean flush_writing_stats();
 
+    [Throws=WriterError]
+    boolean ensure_device_info(string platform, string device_class);
+
     // StarMap typed methods
     [Throws=WriterError]
     sequence<StarMapMetaDto> list_starmaps();
