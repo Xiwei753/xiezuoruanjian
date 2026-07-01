@@ -2,15 +2,17 @@
 
 pub enum PlatformDto {
     #[default]
-    Linux,
+    Desktop,
     Android,
+    Harmony,
 }
 
 impl From<crate::writing_stats::Platform> for PlatformDto {
     fn from(p: crate::writing_stats::Platform) -> Self {
         match p {
-            crate::writing_stats::Platform::Linux => Self::Linux,
+            crate::writing_stats::Platform::Desktop => Self::Desktop,
             crate::writing_stats::Platform::Android => Self::Android,
+            crate::writing_stats::Platform::Harmony => Self::Harmony,
         }
     }
 }
@@ -18,8 +20,9 @@ impl From<crate::writing_stats::Platform> for PlatformDto {
 impl From<PlatformDto> for crate::writing_stats::Platform {
     fn from(dto: PlatformDto) -> Self {
         match dto {
-            PlatformDto::Linux => Self::Linux,
+            PlatformDto::Desktop => Self::Desktop,
             PlatformDto::Android => Self::Android,
+            PlatformDto::Harmony => Self::Harmony,
         }
     }
 }

@@ -9,7 +9,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             event_id: i.to_string(),
             timestamp_ms: 1717800000000 + (i * 1000), // Some arbitrary time
             device_id: format!("device_{}", i % 5),
-            platform: Platform::Linux,
+            platform: Platform::Desktop,
             project_id: "project_1".to_string(),
             volume_id: "volume_1".to_string(),
             chapter_id: "chapter_1".to_string(),

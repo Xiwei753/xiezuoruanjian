@@ -237,7 +237,7 @@ impl AppBackend {
         if !has_remote || !self.current_sync_enabled {
             self.current_sync_status = "not_configured".to_string();
         } else {
-            self.current_sync_status = "configured_untested".to_string();
+            self.current_sync_status = "configured_not_tested".to_string();
         }
         self.sync_status_changed();
     }

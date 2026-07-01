@@ -546,7 +546,7 @@ fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) {
 
 fn write_device_info(dest_dir: &Path) {
     let json = device_info_json();
-    let _ = fs::write(dest_dir.join("device_info.json"), json);
+    let _ = fs::write(dest_dir.join("current_device.json"), json);
 }
 
 fn write_settings_snapshot(workspace_path: &Path, dest_dir: &Path) {

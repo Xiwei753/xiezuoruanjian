@@ -99,7 +99,7 @@ object DiagnosticsExporter {
         val info = collectDeviceInfo(context)
         val gson = GsonBuilder().setPrettyPrinting().create()
         val json = DiagnosticsLogger.redact(gson.toJson(info))
-        File(destDir, "device_info.json").writeText(json)
+        File(destDir, "current_device.json").writeText(json)
     }
 
     private fun writeAppSettingsSanitized(context: Context, destDir: File) {

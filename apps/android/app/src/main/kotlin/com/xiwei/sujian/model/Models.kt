@@ -187,7 +187,7 @@ enum class SyncStatus {
     @SerializedName("idle") Idle,
     @SerializedName("syncing") Syncing,
     @SerializedName("success") Success,
-    @SerializedName("configured_untested") ConfiguredUntested,
+    @SerializedName("configured_not_tested") ConfiguredNotTested,
     @SerializedName("conflict") Conflict,
     @SerializedName("partial_conflict") PartialConflict,
     @SerializedName("recoverable_error") RecoverableError,
@@ -211,7 +211,7 @@ class SyncStatusDeserializer : JsonDeserializer<SyncStatus> {
                 "idle" -> SyncStatus.Idle
                 "syncing" -> SyncStatus.Syncing
                 "success" -> SyncStatus.Success
-                "configured_untested" -> SyncStatus.ConfiguredUntested
+                "configured_not_tested" -> SyncStatus.ConfiguredNotTested
                 "conflict" -> SyncStatus.Conflict
                 "partial_conflict" -> SyncStatus.PartialConflict
                 "dirty_repo_blocked" -> SyncStatus.DirtyRepoBlocked

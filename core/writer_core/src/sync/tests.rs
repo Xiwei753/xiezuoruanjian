@@ -352,7 +352,7 @@ mod tests {
     #[test]
     fn test_device_info_whitelisted() {
         assert!(SyncService::is_whitelisted_path(
-            "app-meta/device/device_info.json"
+            "app-meta/device/current_device.json"
         ));
     }
 
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn test_device_info_not_blacklisted() {
         assert!(!SyncService::is_blacklisted_path(
-            "app-meta/device/device_info.json"
+            "app-meta/device/current_device.json"
         ));
     }
 

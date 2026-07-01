@@ -440,8 +440,8 @@ impl AppBackend {
                                 );
                                 ("success".to_string(), m)
                             }
-                            "configured_untested" => {
-                                ("configured_untested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
+                            "configured_not_tested" => {
+                                ("configured_not_tested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
                             }
                             "conflict" => {
                                 let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
@@ -499,7 +499,7 @@ impl AppBackend {
                                 (cat, m)
                             }
                             "idle" => {
-                                ("configured_untested".to_string(), "同步未执行".to_string())
+                                ("configured_not_tested".to_string(), "同步未执行".to_string())
                             }
                             other => {
                                 ("error".to_string(), format!("同步状态: {}", other))

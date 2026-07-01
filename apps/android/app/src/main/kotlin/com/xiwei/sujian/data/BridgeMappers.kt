@@ -288,7 +288,7 @@ internal fun String?.toSyncStatus(): SyncStatus = when (this) {
     "idle" -> SyncStatus.Idle
     "syncing" -> SyncStatus.Syncing
     "success" -> SyncStatus.Success
-    "configured_untested" -> SyncStatus.ConfiguredUntested
+    "configured_not_tested" -> SyncStatus.ConfiguredNotTested
     "conflict" -> SyncStatus.Conflict
     "partial_conflict" -> SyncStatus.PartialConflict
     "recoverable_error" -> SyncStatus.RecoverableError

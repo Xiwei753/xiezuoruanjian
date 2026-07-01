@@ -11,7 +11,7 @@ fn test_human_typed_counts_as_pure_input() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -47,7 +47,7 @@ fn test_pasted_does_not_count_as_human_typed() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -81,7 +81,7 @@ fn test_deleted_does_not_cancel_human_typed() {
 
     let event1 = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -98,7 +98,7 @@ fn test_deleted_does_not_cancel_human_typed() {
 
     let event2 = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -133,7 +133,7 @@ fn test_ai_inserted_not_counted_as_human() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -167,7 +167,7 @@ fn test_sync_remote_not_counted_as_local_input() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -201,7 +201,7 @@ fn test_daily_aggregation_idempotent() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -237,7 +237,7 @@ fn test_multi_device_no_overlap() {
 
     let event1 = WritingInputEvent::new(
         "dev-linux",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -304,7 +304,7 @@ fn test_speed_buckets_generation() {
             event_id: uuid::Uuid::new_v4().to_string(),
             timestamp_ms: now_ms + i * 1000,
             device_id: "dev-1".to_string(),
-            platform: Platform::Linux,
+            platform: Platform::Desktop,
             device_class: "desktop".to_string(),
             project_id: "proj1".to_string(),
             volume_id: "vol1".to_string(),
@@ -345,7 +345,7 @@ fn test_per_project_tracking() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-        Platform::Linux,
+        Platform::Desktop,
         "desktop",
         "proj-abc",
         "vol1",
@@ -380,7 +380,7 @@ fn test_per_chapter_tracking() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -415,7 +415,7 @@ fn test_event_file_written() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",
@@ -473,7 +473,7 @@ fn test_session_gap_detection() {
         event_id: uuid::Uuid::new_v4().to_string(),
         timestamp_ms: base_ms,
         device_id: "dev-1".to_string(),
-        platform: Platform::Linux,
+        platform: Platform::Desktop,
         device_class: "desktop".to_string(),
         project_id: "proj1".to_string(),
         volume_id: "vol1".to_string(),
@@ -493,7 +493,7 @@ fn test_session_gap_detection() {
         event_id: uuid::Uuid::new_v4().to_string(),
         timestamp_ms: base_ms + 10 * 60 * 1000,
         device_id: "dev-1".to_string(),
-        platform: Platform::Linux,
+        platform: Platform::Desktop,
         device_class: "desktop".to_string(),
         project_id: "proj1".to_string(),
         volume_id: "vol1".to_string(),
@@ -528,7 +528,7 @@ fn test_char_count_uses_unicode_scalar() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
         "vol1",

@@ -56,15 +56,17 @@ pub enum EventSource {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Platform {
-    Linux,
+    Desktop,
     Android,
+    Harmony,
 }
 
 impl std::fmt::Display for Platform {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Platform::Linux => write!(f, "linux"),
+            Platform::Desktop => write!(f, "desktop"),
             Platform::Android => write!(f, "android"),
+            Platform::Harmony => write!(f, "harmony"),
         }
     }
 }
@@ -152,7 +154,7 @@ mod tests {
     fn test_event_creation() {
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -177,7 +179,7 @@ mod tests {
     fn test_event_with_deletion() {
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -221,7 +223,7 @@ mod tests {
     fn test_event_with_ai_insert() {
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -243,7 +245,7 @@ mod tests {
     fn test_event_sync_remote() {
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",

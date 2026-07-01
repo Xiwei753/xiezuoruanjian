@@ -51,6 +51,15 @@ Item {
             root.currentSyncInProgress = root.backendRef.sync_in_progress || false;
             root.currentSyncOperationState = root.backendRef.sync_operation_state || "";
             root.updateSyncResultText();
+            // 同步失败时，如果结果区为空，则显示错误信息
+            if (root.isFailureStatus(root.currentSyncStatus) && syncResultArea.text.trim() === "") {
+                var opState = root.currentSyncOperationState.trim();
+                if (opState !== "") {
+                    syncResultArea.text = opState;
+                } else {
+                    syncResultArea.text = qsTr("同步失败");
+                }
+            }
         }
     }
 

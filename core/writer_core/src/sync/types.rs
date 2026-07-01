@@ -75,7 +75,7 @@ pub enum SyncStatus {
     Idle,
     Syncing,
     Success,
-    ConfiguredUntested,
+    ConfiguredNotTested,
     Conflict,
     PartialConflict,
     RecoverableError(String),

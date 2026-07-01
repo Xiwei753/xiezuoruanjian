@@ -421,6 +421,12 @@ impl AppBackend {
         self.reload_tree();
         self.load_sync_config();
         self.load_local_settings();
+
+        // 写入 current_device.json 设备信息
+        if let Err(e) = api.ensure_device_info("desktop", "desktop") {
+            self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
+        }
+
         self.workspace_opened();
         self.workspace_content_changed();
         self.workspace_state_changed();

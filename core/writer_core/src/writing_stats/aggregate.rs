@@ -151,7 +151,7 @@ mod tests {
 
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -183,7 +183,7 @@ mod tests {
 
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -213,7 +213,7 @@ mod tests {
 
         let event1 = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -230,7 +230,7 @@ mod tests {
 
         let event2 = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -260,7 +260,7 @@ mod tests {
 
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -290,7 +290,7 @@ mod tests {
 
         let event = WritingInputEvent::new(
             "device-1",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj-abc",
             "vol1",
@@ -320,7 +320,7 @@ mod tests {
 
         let event1 = WritingInputEvent::new(
             "device-linux",
-            Platform::Linux,
+            Platform::Desktop,
             "desktop",
             "proj1",
             "vol1",
@@ -380,7 +380,7 @@ mod tests {
             event_id: uuid::Uuid::new_v4().to_string(),
             timestamp_ms: now_ms,
             device_id: "device-1".to_string(),
-            platform: Platform::Linux,
+            platform: Platform::Desktop,
             device_class: "desktop".to_string(),
             project_id: "proj1".to_string(),
             volume_id: "vol1".to_string(),

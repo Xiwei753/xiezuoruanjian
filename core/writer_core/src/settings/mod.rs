@@ -386,7 +386,7 @@ pub struct DeviceInfo {
 }
 
 pub fn load_device_info(workspace_path: &Path) -> Result<DeviceInfo> {
-    let path = workspace_path.join("app-meta/device/device_info.json");
+    let path = workspace_path.join("app-meta/device/current_device.json");
     if !path.exists() {
         return Ok(DeviceInfo::default());
     }
@@ -395,7 +395,7 @@ pub fn load_device_info(workspace_path: &Path) -> Result<DeviceInfo> {
 }
 
 pub fn save_device_info(workspace_path: &Path, info: &DeviceInfo) -> Result<()> {
-    let path = workspace_path.join("app-meta/device/device_info.json");
+    let path = workspace_path.join("app-meta/device/current_device.json");
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -805,7 +805,7 @@ mod tests {
         save_device_info(temp_dir.path(), &info).unwrap();
 
         // 验证 JSON 文件使用 camelCase
-        let path = temp_dir.path().join("app-meta/device/device_info.json");
+        let path = temp_dir.path().join("app-meta/device/current_device.json");
         let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("\"deviceId\""), "should serialize as camelCase");
         assert!(content.contains("\"deviceClass\""), "should serialize as camelCase");

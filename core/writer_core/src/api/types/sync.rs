@@ -324,7 +324,7 @@ fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
         crate::sync::SyncStatus::Idle => "idle",
         crate::sync::SyncStatus::Syncing => "syncing",
         crate::sync::SyncStatus::Success => "success",
-        crate::sync::SyncStatus::ConfiguredUntested => "configured_untested",
+        crate::sync::SyncStatus::ConfiguredNotTested => "configured_not_tested",
         crate::sync::SyncStatus::Conflict => "conflict",
         crate::sync::SyncStatus::PartialConflict => "partial_conflict",
         crate::sync::SyncStatus::RecoverableError(_) => "recoverable_error",

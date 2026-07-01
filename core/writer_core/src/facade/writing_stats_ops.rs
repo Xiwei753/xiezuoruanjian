@@ -88,7 +88,8 @@ impl super::WriterCore {
     ) -> Result<()> {
         let platform = match platform_str {
             "android" => Platform::Android,
-            _ => Platform::Linux,
+            "harmony" => Platform::Harmony,
+            _ => Platform::Desktop,
         };
         let source = match source_str {
             "pasted" => EventSource::Pasted,
