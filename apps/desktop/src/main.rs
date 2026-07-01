@@ -270,43 +270,95 @@ pub(crate) fn apply_dwm_dark_mode(is_dark: bool) {
         // 对指定 HWND 应用 DWM 深色/浅色标题栏属性
         auto applyDwmAttrs = [dark_value](HWND hwnd) {
             // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-            DwmSetWindowAttribute(hwnd, 20, &dark_value, sizeof(dark_value));
+            HRESULT hr = DwmSetWindowAttribute(hwnd, 20, &dark_value, sizeof(dark_value));
+            #ifdef QT_DEBUG
+            if (hr == S_OK) {
+                qDebug("DWM: DWMWA_USE_IMMERSIVE_DARK_MODE=%d applied to hwnd=%p", dark_value, (void*)hwnd);
+            } else {
+                qDebug("DWM: DWMWA_USE_IMMERSIVE_DARK_MODE=%d FAILED for hwnd=%p, hr=0x%08lX", dark_value, (void*)hwnd, (unsigned long)hr);
+            }
+            #endif
+
             // DWMWA_CAPTION_COLOR = 35, DWMWA_TEXT_COLOR = 36
             // 仅 Windows 11 22H2+ 支持，失败时忽略
             if (dark_value) {
                 COLORREF caption_color = RGB(28, 27, 31);
-                DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                hr = DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                #ifdef QT_DEBUG
+                if (hr == S_OK) {
+                    qDebug("DWM: DWMWA_CAPTION_COLOR applied to hwnd=%p", (void*)hwnd);
+                } else {
+                    qDebug("DWM: DWMWA_CAPTION_COLOR FAILED for hwnd=%p, hr=0x%08lX", (void*)hwnd, (unsigned long)hr);
+                }
+                #endif
                 COLORREF text_color = RGB(224, 224, 224);
-                DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+                hr = DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+                #ifdef QT_DEBUG
+                if (hr == S_OK) {
+                    qDebug("DWM: DWMWA_TEXT_COLOR applied to hwnd=%p", (void*)hwnd);
+                } else {
+                    qDebug("DWM: DWMWA_TEXT_COLOR FAILED for hwnd=%p, hr=0x%08lX", (void*)hwnd, (unsigned long)hr);
+                }
+                #endif
             } else {
                 COLORREF caption_color = RGB(243, 243, 243);
-                DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                hr = DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                #ifdef QT_DEBUG
+                if (hr == S_OK) {
+                    qDebug("DWM: DWMWA_CAPTION_COLOR (light) applied to hwnd=%p", (void*)hwnd);
+                } else {
+                    qDebug("DWM: DWMWA_CAPTION_COLOR (light) FAILED for hwnd=%p, hr=0x%08lX", (void*)hwnd, (unsigned long)hr);
+                }
+                #endif
                 COLORREF text_color = RGB(0, 0, 0);
-                DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+                hr = DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+                #ifdef QT_DEBUG
+                if (hr == S_OK) {
+                    qDebug("DWM: DWMWA_TEXT_COLOR (light) applied to hwnd=%p", (void*)hwnd);
+                } else {
+                    qDebug("DWM: DWMWA_TEXT_COLOR (light) FAILED for hwnd=%p, hr=0x%08lX", (void*)hwnd, (unsigned long)hr);
+                }
+                #endif
             }
         };
 
-        // 尝试立即应用；若窗口尚未就绪则启动指数退避重试
+        // 对所有顶级窗口应用 DWM 属性；返回是否全部成功获得句柄
+        auto applyToAllWindows = [applyDwmAttrs]() -> bool {
+            QWindowList windows = QGuiApplication::topLevelWindows();
+            bool allGotHwnd = true;
+            for (QWindow* w : windows) {
+                HWND hwnd = (HWND)w->winId();
+                if (hwnd) {
+                    applyDwmAttrs(hwnd);
+                } else {
+                    allGotHwnd = false;
+                }
+            }
+            return allGotHwnd;
+        };
+
+        // 尝试立即应用；若部分窗口尚未就绪则启动指数退避重试
         QWindowList windows = QGuiApplication::topLevelWindows();
         if (!windows.isEmpty()) {
-            QWindow* window = windows.first();
-            HWND hwnd = (HWND)window->winId();
-            if (hwnd) {
-                applyDwmAttrs(hwnd);
-            } else {
-                // 窗口已创建但尚未获得原生句柄，启动重试
+            bool allGotHwnd = applyToAllWindows();
+            if (!allGotHwnd) {
+                // 部分窗口已创建但尚未获得原生句柄，启动重试
                 auto retryCount = std::make_shared<int>(0);
                 auto retryFn = std::make_shared<std::function<void()>>();
-                *retryFn = [dark_value, applyDwmAttrs, retryCount, retryFn]() {
+                *retryFn = [applyDwmAttrs, retryCount, retryFn]() {
                     QWindowList wins = QGuiApplication::topLevelWindows();
-                    if (!wins.isEmpty()) {
-                        QWindow* w = wins.first();
+                    bool allOk = true;
+                    for (QWindow* w : wins) {
                         HWND h = (HWND)w->winId();
                         if (h) {
                             applyDwmAttrs(h);
-                            *retryFn = nullptr; // 打破 shared_ptr 循环引用
-                            return;
+                        } else {
+                            allOk = false;
                         }
+                    }
+                    if (allOk && !wins.isEmpty()) {
+                        *retryFn = nullptr; // 打破 shared_ptr 循环引用
+                        return;
                     }
                     (*retryCount)++;
                     if (*retryCount < 5) {
@@ -323,16 +375,20 @@ pub(crate) fn apply_dwm_dark_mode(is_dark: bool) {
             // 窗口尚未创建，启动指数退避重试（最多 5 次）
             auto retryCount = std::make_shared<int>(0);
             auto retryFn = std::make_shared<std::function<void()>>();
-            *retryFn = [dark_value, applyDwmAttrs, retryCount, retryFn]() {
+            *retryFn = [applyDwmAttrs, retryCount, retryFn]() {
                 QWindowList wins = QGuiApplication::topLevelWindows();
-                if (!wins.isEmpty()) {
-                    QWindow* w = wins.first();
+                bool allOk = true;
+                for (QWindow* w : wins) {
                     HWND h = (HWND)w->winId();
                     if (h) {
                         applyDwmAttrs(h);
-                        *retryFn = nullptr;
-                        return;
+                    } else {
+                        allOk = false;
                     }
+                }
+                if (allOk && !wins.isEmpty()) {
+                    *retryFn = nullptr;
+                    return;
                 }
                 (*retryCount)++;
                 if (*retryCount < 5) {
