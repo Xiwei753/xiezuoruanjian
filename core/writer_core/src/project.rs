@@ -45,14 +45,19 @@ pub fn list_projects(workspace_path: &Path) -> Result<Vec<Project>> {
     let mut projects = Vec::new();
     for entry in fs::read_dir(projects_dir)? {
         let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            let meta_path = path.join("project.json");
-            if meta_path.exists() {
-                let content = fs::read_to_string(&meta_path)?;
-                if let Ok(project) = serde_json::from_str::<Project>(&content) {
-                    projects.push(project);
+        let ft = entry.file_type()?;
+        let is_dir = ft.is_dir() || (ft.is_symlink() && entry.path().is_dir());
+        if is_dir {
+            let meta_path = entry.path().join("project.json");
+            match fs::read_to_string(&meta_path) {
+                Ok(content) => {
+                    if let Ok(project) = serde_json::from_str::<Project>(&content) {
+                        projects.push(project);
+                    }
                 }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+                Err(e) => return Err(e.into()),
             }
         }
     }
