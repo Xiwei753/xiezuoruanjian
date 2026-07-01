@@ -2805,7 +2805,7 @@ mod tests {
         // 场景：Rust 侧已经创建了 Insert 动画（hidden range）
         let mut state = TextAnimationState::new();
         let byte_range = (10, 22); // 模拟 "风和日丽" 的 byte range
-        state.start_insert(byte_range, 160);
+        state.start_insert(byte_range, vec![], 160);
         assert!(state.has_active_insert(),
             "Should have active insert before skip");
         assert_eq!(state.active_insert_byte_ranges(), vec![byte_range],
@@ -2822,7 +2822,7 @@ mod tests {
             "No active insert byte range should remain after skip");
 
         // 验证：跳过不匹配的 range 不影响现有 hidden range
-        state.start_insert((30, 42), 160);
+        state.start_insert((30, 42), vec![], 160);
         let removed_wrong = state.on_insert_animation_finished(50, 60);
         assert!(!removed_wrong, "Skipping non-matching range should return false");
         assert!(state.has_active_insert(),

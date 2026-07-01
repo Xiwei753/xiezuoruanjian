@@ -29,7 +29,7 @@ permissions:
 jobs:
   windows-exe:
     name: Windows exe (${{ matrix.flavor }})
-    runs-on: windows-latest
+    runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
