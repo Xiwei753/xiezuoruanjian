@@ -298,6 +298,10 @@ class AppServiceBridge(workspacePath: String) {
         service.flushWritingStats()
     }
 
+    fun ensureDeviceInfo(platform: String, deviceClass: String): BridgeResult<Boolean> = wrapResult {
+        service.ensureDeviceInfo(platform, deviceClass)
+    }
+
     fun listStarMaps(): BridgeResult<List<uniffi.writer_core.StarMapMetaDto>> = wrapResult {
         service.listStarmaps()
     }
