@@ -47,6 +47,9 @@ class SujianImeController(
     
     /**
      * 通知 IMM 选区变化
+     *
+     * 同时更新 CursorAnchorInfo，确保候选框跟随光标。
+     * 每次 selection/cursor/layout/scroll 改变后都应调用此方法。
      */
     fun updateSelection() {
         val selStart = buffer.selection.start
@@ -61,6 +64,21 @@ class SujianImeController(
             composingStart,
             composingEnd
         )
+        
+        // 同步更新 CursorAnchorInfo，让候选框跟随光标
+        notifyCursorAnchorInfoChanged()
+    }
+    
+    /**
+     * 通知 IMM CursorAnchorInfo 已变化（scroll/layout 变化时调用）
+     */
+    fun notifyCursorAnchorInfoChanged() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            val info = buildCursorAnchorInfo()
+            if (info != null) {
+                imm.updateCursorAnchorInfo(view, info)
+            }
+        }
     }
     
     /**
@@ -213,15 +231,62 @@ class SujianImeController(
         val text = buffer.text
         val cursorRect = layout.getCursorRect(text, buffer.selection.head)
         
+        // 计算光标可见性 flags
+        val flags = computeCursorVisibilityFlags(cursorRect)
+        
         builder.setSelectionRange(buffer.selection.start, buffer.selection.end)
         builder.setInsertionMarkerLocation(
-            cursorRect.x,
-            cursorRect.top,
-            cursorRect.bottom,
-            cursorRect.bottom,
-            CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION
+            cursorRect.x,          // horizontal
+            cursorRect.top,        // top
+            cursorRect.baselineY,  // baseline — 文字基线 Y 坐标
+            cursorRect.bottom,     // bottom
+            flags
         )
         
         return builder.build()
+    }
+    
+    /**
+     * 计算光标可见性 flags
+     *
+     * 根据 Android 官方文档：
+     * - FLAG_HAS_VISIBLE_REGION：光标在可视区域内
+     * - FLAG_HAS_INVISIBLE_REGION：光标被裁剪/不可见
+     * - 两者可以组合（部分可见）
+     */
+    private fun computeCursorVisibilityFlags(cursorRect: SujianCursorRect): Int {
+        val editorView = view as? SujianEditorView
+        if (editorView == null) {
+            return CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION
+        }
+        
+        val scrollY = editorView.touchController.scrollY
+        val viewportTop = scrollY
+        val viewportBottom = scrollY + (editorView.height - editorView.paddingTop - editorView.paddingBottom)
+        val viewportLeft = editorView.touchController.scrollX
+        val viewportRight = viewportLeft + (editorView.width - editorView.paddingLeft - editorView.paddingRight)
+        
+        val cursorTop = cursorRect.top
+        val cursorBottom = cursorRect.bottom
+        val cursorLeft = cursorRect.x
+        val cursorRight = cursorRect.x + 2f  // 光标宽度约 2dp
+        
+        val verticallyVisible = cursorBottom > viewportTop && cursorTop < viewportBottom
+        val horizontallyVisible = cursorRight > viewportLeft && cursorLeft < viewportRight
+        
+        var flags = 0
+        if (verticallyVisible && horizontallyVisible) {
+            flags = flags or CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION
+        }
+        if (!verticallyVisible || !horizontallyVisible) {
+            flags = flags or CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION
+        }
+        
+        // 如果完全不可见，至少设置 INVISIBLE
+        if (flags == 0) {
+            flags = CursorAnchorInfo.FLAG_HAS_INVISIBLE_REGION
+        }
+        
+        return flags
     }
 }

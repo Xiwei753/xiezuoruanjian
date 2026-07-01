@@ -125,6 +125,11 @@ class SujianEditorView @JvmOverloads constructor(
             }
         }
 
+        // 滚动变化时更新 CursorAnchorInfo，确保候选框跟随光标
+        touchController.onScrollChanged = {
+            imeController.notifyCursorAnchorInfoChanged()
+        }
+
         // 可聚焦，可获取输入
         isFocusable = true
         isFocusableInTouchMode = true

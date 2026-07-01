@@ -27,6 +27,12 @@ class SujianTouchController(
 ) {
     private val TAG = "SujianTouchCtrl"
     
+    /**
+     * 滚动位置变化回调。
+     * 用于通知 IME 更新 CursorAnchorInfo，确保候选框跟随光标。
+     */
+    var onScrollChanged: (() -> Unit)? = null
+    
     private val touchConfig = ViewConfiguration.get(view.context)
     private val touchSlop = touchConfig.scaledTouchSlop
     private val minimumFlingVelocity = touchConfig.scaledMinimumFlingVelocity
@@ -137,6 +143,7 @@ class SujianTouchController(
             scrollX = newX
             scrollY = newY
             view.invalidate()
+            onScrollChanged?.invoke()
         }
     }
     
@@ -151,6 +158,7 @@ class SujianTouchController(
             scrollX = newX
             scrollY = newY
             view.invalidate()
+            onScrollChanged?.invoke()
         }
     }
     
