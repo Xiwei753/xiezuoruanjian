@@ -10,4 +10,5 @@ class SettingsBridge(private val appService: AppServiceBridge) {
     fun loadSyncableSettings(): BridgeResult<SyncableSettings> = appService.loadSyncableSettings()
     fun getSyncableSettings(): BridgeResult<SyncableSettings> = loadSyncableSettings()
     fun saveSyncableSettings(settings: SyncableSettings): BridgeResult<Boolean> = appService.saveSyncableSettings(settings)
+    fun ensureDeviceInfo(platform: String, deviceClass: String): BridgeResult<Boolean> = appService.ensureDeviceInfo(platform, deviceClass)
 }
