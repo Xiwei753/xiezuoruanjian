@@ -28,6 +28,7 @@
 use crate::error::{Error, Result};
 use crate::starmap::types::*;
 use crate::storage::atomic_write_string;
+use rayon::prelude::*;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -135,6 +136,37 @@ impl From<&StarMapGraph> for GraphMeta {
 // Load: 从拆分文件组装 StarMapDocument
 // ---------------------------------------------------------------------------
 
+fn read_json_items_from_dir<T: serde::de::DeserializeOwned + Send>(dir_path: &Path) -> Result<Vec<T>> {
+    if !dir_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(dir_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+
+    let items: Result<Vec<T>> = paths
+        .into_par_iter()
+        .filter_map(|path| {
+            // Only propagate I/O errors, ignore JSON parsing errors (legacy behavior)
+            match fs::read_to_string(&path) {
+                Ok(json_str) => match serde_json::from_str::<T>(&json_str) {
+                    Ok(item) => Some(Ok(item)),
+                    Err(_) => None,
+                },
+                Err(e) => Some(Err(Error::Io(e))),
+            }
+        })
+        .collect();
+
+    items
+}
+
 /// 从拆分文件存储加载完整的 StarMapDocument。
 ///
 /// 如果检测到旧格式单文件（`starmap.json`），会自动迁移到新格式。
@@ -167,84 +199,19 @@ pub fn load_starmap_document(workspace: &Path, starmap_id: &str) -> Result<StarM
     };
 
     // 2. 读取节点
-    let mut nodes = Vec::new();
-    let nodes_dir = nodes_dir(&dir);
-    if nodes_dir.exists() {
-        for entry in fs::read_dir(&nodes_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(node) = serde_json::from_str::<StarMapNode>(&json_str) {
-                    nodes.push(node);
-                }
-            }
-        }
-    }
+    let nodes = read_json_items_from_dir::<StarMapNode>(&nodes_dir(&dir))?;
 
     // 3. 读取边
-    let mut edges = Vec::new();
-    let edges_dir_path = edges_dir(&dir);
-    if edges_dir_path.exists() {
-        for entry in fs::read_dir(&edges_dir_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(edge) = serde_json::from_str::<StarMapEdge>(&json_str) {
-                    edges.push(edge);
-                }
-            }
-        }
-    }
+    let edges = read_json_items_from_dir::<StarMapEdge>(&edges_dir(&dir))?;
 
     // 4. 读取 embeds（子星图放置）
-    let mut embeds = Vec::new();
-    let cs_dir = child_starmaps_dir(&dir);
-    if cs_dir.exists() {
-        for entry in fs::read_dir(&cs_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(embed) = serde_json::from_str::<StarMapEmbed>(&json_str) {
-                    embeds.push(embed);
-                }
-            }
-        }
-    }
+    let embeds = read_json_items_from_dir::<StarMapEmbed>(&child_starmaps_dir(&dir))?;
 
     // 5. 读取 links
-    let mut links = Vec::new();
-    let links_dir_path = links_dir(&dir);
-    if links_dir_path.exists() {
-        for entry in fs::read_dir(&links_dir_path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(link) = serde_json::from_str::<StarMapLink>(&json_str) {
-                    links.push(link);
-                }
-            }
-        }
-    }
+    let links = read_json_items_from_dir::<StarMapLink>(&links_dir(&dir))?;
 
     // 6. 读取超链接
-    let mut hyperlinks = Vec::new();
-    let hl_dir = hyperlinks_dir(&dir);
-    if hl_dir.exists() {
-        for entry in fs::read_dir(&hl_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let json_str = fs::read_to_string(&path)?;
-                if let Ok(hl) = serde_json::from_str::<StarMapHyperlink>(&json_str) {
-                    hyperlinks.push(hl);
-                }
-            }
-        }
-    }
+    let hyperlinks = read_json_items_from_dir::<StarMapHyperlink>(&hyperlinks_dir(&dir))?;
 
     // 7. 读取布局
     let layout = {
