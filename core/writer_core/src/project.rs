@@ -319,6 +319,8 @@ pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result
         ));
     }
 
+    let now = Utc::now().to_rfc3339();
+
     for (index, id) in ordered_ids.iter().enumerate() {
         let project_dir = workspace_path.join("projects").join(id);
         let meta_path = project_dir.join("project.json");
@@ -326,10 +328,12 @@ pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result
         if meta_path.exists() {
             let meta_str = std::fs::read_to_string(&meta_path)?;
             let mut meta = serde_json::from_str::<Project>(&meta_str)?;
-            meta.order = index as i32;
-            meta.updated_at = Utc::now().to_rfc3339();
-            let updated_meta_str = serde_json::to_string_pretty(&meta)?;
-            crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+            if meta.order != index as i32 {
+                meta.order = index as i32;
+                meta.updated_at = now.clone();
+                let updated_meta_str = serde_json::to_string_pretty(&meta)?;
+                crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+            }
         } else {
             return Err(crate::error::Error::ProjectNotFound);
         }
