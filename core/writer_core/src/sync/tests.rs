@@ -3229,31 +3229,6 @@ mod tests {
     }
 
     #[test]
-    fn test_diagnostics_result_has_proxy_policy() {
-        // Verify that SyncDiagnosticsResult has proxy_policy field
-        let config = SyncConfig {
-            enabled: true,
-            backend_type: BackendType::GithubApi,
-            remote_url: "https://github.com/user/repo.git".to_string(),
-            transport: SyncTransport::HttpsToken,
-            branch: "main".to_string(),
-            auto_sync: false,
-            sync_interval_seconds: 0,
-            username: String::new(),
-            android_has_internet_permission: true,
-            android_has_access_network_state_permission: true,
-        };
-        let secrets = SyncSecrets {
-            token: None,
-            ssh_private_key: None,
-        };
-
-        let result = GitHubApiBackend.diagnose(&config, &secrets).unwrap();
-        // diagnose sets proxy_policy = "no_proxy" even when token is missing
-        assert_eq!(result.proxy_policy, "no_proxy");
-    }
-
-    #[test]
     fn test_git_backend_diagnostics_not_assumed_ok() {
         // Git 后端诊断不再假成功，应返回明确的"不支持"状态
         let config = SyncConfig {

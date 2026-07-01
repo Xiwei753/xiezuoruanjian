@@ -77,11 +77,6 @@ impl SyncBackend for GitHubApiBackend {
 
         let network_mode = Self::resolve_network_mode(config);
         result.chosen_network_mode = Some(network_mode.clone());
-        result.proxy_policy = if network_mode == "system" {
-            "system_proxy".to_string()
-        } else {
-            "no_proxy".to_string()
-        };
 
         if !config.android_has_internet_permission {
             result.error_category = "missing_permission".to_string();
@@ -219,7 +214,6 @@ impl SyncBackend for GitHubApiBackend {
                                 result.branch_ok = true;
                                 result.branch_status = "ok".to_string();
                                 result.chosen_network_mode = Some("system".to_string());
-                                result.proxy_policy = "system_proxy".to_string();
                             }
                             // 其他状态码保持 direct 模式的错误信息
                         }
@@ -263,9 +257,8 @@ impl SyncBackend for GitHubApiBackend {
     ) -> crate::Result<SyncResult> {
         let network_mode = Self::resolve_network_mode(config);
         eprintln!(
-            "[sync] backend_type=github_api sync_mode=lww_manifest chosen_network_mode={} proxy_policy={} force_sync={} entry=GitHubApiBackend::sync remote_url={}",
+            "[sync] backend_type=github_api sync_mode=lww_manifest chosen_network_mode={} force_sync={} entry=GitHubApiBackend::sync remote_url={}",
             network_mode,
-            if network_mode == "system" { "system_proxy" } else { "no_proxy" },
             force_sync,
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
         );

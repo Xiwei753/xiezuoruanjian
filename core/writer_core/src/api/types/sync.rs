@@ -139,27 +139,6 @@ impl From<crate::sync::SyncState> for SyncStateDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-pub struct NetworkProbeResultDto {
-    pub mode: String,
-    pub success: bool,
-    pub status: String,
-    pub message: String,
-    pub raw_error: Option<String>,
-}
-
-impl From<crate::sync::NetworkProbeResult> for NetworkProbeResultDto {
-    fn from(p: crate::sync::NetworkProbeResult) -> Self {
-        Self {
-            mode: p.mode,
-            success: p.success,
-            status: p.status,
-            message: p.message,
-            raw_error: p.raw_error,
-        }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncDiagnosticsResultDto {
     pub success: bool,
     pub backend_type: String,
@@ -179,26 +158,6 @@ pub struct SyncDiagnosticsResultDto {
     pub error_category: String,
     pub raw_error: Option<String>,
     pub chosen_network_mode: Option<String>,
-    /// [DEPRECATED] proxy_policy — 代理功能已移除，此字段固定为 "no_proxy"。
-    /// 保留仅为向后兼容，不应作为正式契约继续传播。
-    /// **禁止扩展**：不得新增任何 proxy 相关逻辑或字段。
-    /// TODO(破坏性版本 v2): 在下一个破坏性版本中删除 proxy_policy、network_probe_summary
-    /// 以及所有 DTO/文档/Android 模型中的代理探测残留，只保留 chosen_network_mode=direct 或不展示。
-    /// 删除范围：core types.rs、api types/sync.rs、Android Models.kt、Desktop sync_bridge.rs、
-    /// 以及 docs/ 中的代理探测文档残留。
-    pub proxy_policy: String,
-    /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
-    /// 保留仅为向后兼容，不应作为正式契约继续传播。
-    /// **禁止扩展**：不得新增任何代理探测逻辑或结果类型。
-    /// TODO(破坏性版本 v2): 与 proxy_policy 一起删除。删除范围：
-    /// - core writer_core::sync::types::SyncDiagnosticsResult.proxy_policy / network_probe_summary
-    /// - core writer_core::sync::types::SyncResult.network_probe_summary
-    /// - api writer_core::api::types::sync::SyncDiagnosticsResultDto.proxy_policy / network_probe_summary
-    /// - api writer_core::api::types::sync::SyncResultDto.network_probe_summary
-    /// - Android Models.kt 中对应的 proxy/network_probe 字段
-    /// - Desktop sync_bridge.rs 中对应的代理残留
-    /// - docs/ 中的代理探测文档残留
-    pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
 }
 
 impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
@@ -223,13 +182,6 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
             error_category: d.error_category,
             raw_error: d.raw_error,
             chosen_network_mode: d.chosen_network_mode,
-            proxy_policy: d.proxy_policy,
-            network_probe_summary: Some(
-                d.network_probe_summary
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            ),
         }
     }
 }
@@ -272,18 +224,6 @@ pub struct SyncResultDto {
     pub error_category: Option<String>,
     pub first_sync_mode: String,
     pub chosen_network_mode: Option<String>,
-    /// [DEPRECATED] network_probe_summary — 代理探测已移除，此字段固定为空。
-    /// 保留仅为向后兼容，不应作为正式契约继续传播。
-    /// **禁止扩展**：不得新增任何代理探测逻辑或结果类型。
-    /// TODO(破坏性版本 v2): 与 proxy_policy 一起删除。删除范围：
-    /// - core writer_core::sync::types::SyncDiagnosticsResult.proxy_policy / network_probe_summary
-    /// - core writer_core::sync::types::SyncResult.network_probe_summary
-    /// - api writer_core::api::types::sync::SyncDiagnosticsResultDto.proxy_policy / network_probe_summary
-    /// - api writer_core::api::types::sync::SyncResultDto.network_probe_summary
-    /// - Android Models.kt 中对应的 proxy/network_probe 字段
-    /// - Desktop sync_bridge.rs 中对应的代理残留
-    /// - docs/ 中的代理探测文档残留
-    pub network_probe_summary: Option<Vec<NetworkProbeResultDto>>,
 }
 
 impl From<crate::sync::SyncResult> for SyncResultDto {
@@ -302,12 +242,6 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
             error_category: r.error_category,
             first_sync_mode: first_sync_mode_to_wire(&r.first_sync_mode),
             chosen_network_mode: r.chosen_network_mode,
-            network_probe_summary: Some(
-                r.network_probe_summary
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-            ),
         }
     }
 }
