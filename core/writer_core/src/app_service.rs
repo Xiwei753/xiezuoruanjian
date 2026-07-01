@@ -394,6 +394,14 @@ impl WriterAppService {
         self.api.flush_writing_stats()
     }
 
+    pub fn ensure_device_info(
+        &self,
+        platform: String,
+        device_class: String,
+    ) -> Result<bool, WriterError> {
+        self.api.ensure_device_info(&platform, &device_class)
+    }
+
     // StarMap
     pub fn list_starmaps(&self) -> Result<Vec<crate::api::types::StarMapMetaDto>, WriterError> {
         self.api.list_starmaps()
