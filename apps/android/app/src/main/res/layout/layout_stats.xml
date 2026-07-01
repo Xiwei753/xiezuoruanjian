@@ -13,7 +13,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="写作统计"
+            android:text="@string/title_writing_stats"
             android:textAppearance="?attr/textAppearanceHeadlineMedium"
             android:textColor="?attr/colorPrimary"
             android:layout_marginBottom="16dp" />
@@ -36,7 +36,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="今日数据"
+                    android:text="@string/stats_today_data"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
                     android:layout_marginBottom="8dp"/>
 
@@ -44,9 +44,8 @@
                     android:id="@+id/tvTodayStats"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="加载中..."
+                    android:text="@string/loading"
                     android:textColor="?attr/colorOnSurfaceVariant"/>
-
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -68,7 +67,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="本周数据"
+                    android:text="@string/stats_week_data"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
                     android:layout_marginBottom="8dp"/>
 
@@ -76,9 +75,8 @@
                     android:id="@+id/tvWeekStats"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="加载中..."
+                    android:text="@string/loading"
                     android:textColor="?attr/colorOnSurfaceVariant"/>
-
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
@@ -99,7 +97,7 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="作品排行 (本周)"
+                    android:text="@string/stats_project_ranking_week"
                     android:textAppearance="?attr/textAppearanceTitleMedium"
                     android:layout_marginBottom="8dp"/>
 
@@ -107,9 +105,8 @@
                     android:id="@+id/tvProjectStats"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="加载中..."
+                    android:text="@string/loading"
                     android:textColor="?attr/colorOnSurfaceVariant"/>
-
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
