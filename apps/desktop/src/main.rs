@@ -67,6 +67,7 @@ cpp! {{
     #include <QStringList>
     #include <QTranslator>
     #include <QtGlobal>
+    #include <QTimer>
     #include <QWindow>
     #ifdef _WIN32
     #include <dwmapi.h>
@@ -286,6 +287,29 @@ pub(crate) fn apply_dwm_dark_mode(is_dark: bool) {
                     DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
                 }
             }
+        } else {
+            // 窗口尚未创建，延迟 100ms 重试一次
+            QTimer::singleShot(100, [dark_value]() {
+                QWindowList wins = QGuiApplication::topLevelWindows();
+                if (!wins.isEmpty()) {
+                    QWindow* w = wins.first();
+                    HWND h = (HWND)w->winId();
+                    if (h) {
+                        DwmSetWindowAttribute(h, 20, &dark_value, sizeof(dark_value));
+                        if (dark_value) {
+                            COLORREF cc = RGB(28, 27, 31);
+                            DwmSetWindowAttribute(h, 35, &cc, sizeof(cc));
+                            COLORREF tc = RGB(224, 224, 224);
+                            DwmSetWindowAttribute(h, 36, &tc, sizeof(tc));
+                        } else {
+                            COLORREF cc = RGB(243, 243, 243);
+                            DwmSetWindowAttribute(h, 35, &cc, sizeof(cc));
+                            COLORREF tc = RGB(0, 0, 0);
+                            DwmSetWindowAttribute(h, 36, &tc, sizeof(tc));
+                        }
+                    }
+                }
+            });
         }
         #else
         (void)dark_value;
