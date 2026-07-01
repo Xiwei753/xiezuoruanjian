@@ -267,50 +267,82 @@ pub(crate) fn apply_dwm_dark_mode(is_dark: bool) {
     let dark_value: i32 = if is_dark { 1 } else { 0 };
     cpp!(unsafe [dark_value as "int"] {
         #ifdef _WIN32
+        // 对指定 HWND 应用 DWM 深色/浅色标题栏属性
+        auto applyDwmAttrs = [dark_value](HWND hwnd) {
+            // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            DwmSetWindowAttribute(hwnd, 20, &dark_value, sizeof(dark_value));
+            // DWMWA_CAPTION_COLOR = 35, DWMWA_TEXT_COLOR = 36
+            // 仅 Windows 11 22H2+ 支持，失败时忽略
+            if (dark_value) {
+                COLORREF caption_color = RGB(28, 27, 31);
+                DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                COLORREF text_color = RGB(224, 224, 224);
+                DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+            } else {
+                COLORREF caption_color = RGB(243, 243, 243);
+                DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
+                COLORREF text_color = RGB(0, 0, 0);
+                DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
+            }
+        };
+
+        // 尝试立即应用；若窗口尚未就绪则启动指数退避重试
         QWindowList windows = QGuiApplication::topLevelWindows();
         if (!windows.isEmpty()) {
             QWindow* window = windows.first();
             HWND hwnd = (HWND)window->winId();
             if (hwnd) {
-                // DWMWA_USE_IMMERSIVE_DARK_MODE = 20
-                DwmSetWindowAttribute(hwnd, 20, &dark_value, sizeof(dark_value));
-                // DWMWA_CAPTION_COLOR = 35, DWMWA_TEXT_COLOR = 36
-                // 仅 Windows 11 22H2+ 支持，失败时忽略
-                if (dark_value) {
-                    COLORREF caption_color = RGB(28, 27, 31);
-                    DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
-                    COLORREF text_color = RGB(224, 224, 224);
-                    DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
-                } else {
-                    COLORREF caption_color = RGB(243, 243, 243);
-                    DwmSetWindowAttribute(hwnd, 35, &caption_color, sizeof(caption_color));
-                    COLORREF text_color = RGB(0, 0, 0);
-                    DwmSetWindowAttribute(hwnd, 36, &text_color, sizeof(text_color));
-                }
+                applyDwmAttrs(hwnd);
+            } else {
+                // 窗口已创建但尚未获得原生句柄，启动重试
+                auto retryCount = std::make_shared<int>(0);
+                auto retryFn = std::make_shared<std::function<void()>>();
+                *retryFn = [dark_value, applyDwmAttrs, retryCount, retryFn]() {
+                    QWindowList wins = QGuiApplication::topLevelWindows();
+                    if (!wins.isEmpty()) {
+                        QWindow* w = wins.first();
+                        HWND h = (HWND)w->winId();
+                        if (h) {
+                            applyDwmAttrs(h);
+                            *retryFn = nullptr; // 打破 shared_ptr 循环引用
+                            return;
+                        }
+                    }
+                    (*retryCount)++;
+                    if (*retryCount < 5) {
+                        // 指数退避：100, 200, 400, 800, 1600 ms
+                        int delay = 100 << *retryCount;
+                        QTimer::singleShot(delay, *retryFn);
+                    } else {
+                        *retryFn = nullptr; // 打破循环引用
+                    }
+                };
+                QTimer::singleShot(100, *retryFn);
             }
         } else {
-            // 窗口尚未创建，延迟 100ms 重试一次
-            QTimer::singleShot(100, [dark_value]() {
+            // 窗口尚未创建，启动指数退避重试（最多 5 次）
+            auto retryCount = std::make_shared<int>(0);
+            auto retryFn = std::make_shared<std::function<void()>>();
+            *retryFn = [dark_value, applyDwmAttrs, retryCount, retryFn]() {
                 QWindowList wins = QGuiApplication::topLevelWindows();
                 if (!wins.isEmpty()) {
                     QWindow* w = wins.first();
                     HWND h = (HWND)w->winId();
                     if (h) {
-                        DwmSetWindowAttribute(h, 20, &dark_value, sizeof(dark_value));
-                        if (dark_value) {
-                            COLORREF cc = RGB(28, 27, 31);
-                            DwmSetWindowAttribute(h, 35, &cc, sizeof(cc));
-                            COLORREF tc = RGB(224, 224, 224);
-                            DwmSetWindowAttribute(h, 36, &tc, sizeof(tc));
-                        } else {
-                            COLORREF cc = RGB(243, 243, 243);
-                            DwmSetWindowAttribute(h, 35, &cc, sizeof(cc));
-                            COLORREF tc = RGB(0, 0, 0);
-                            DwmSetWindowAttribute(h, 36, &tc, sizeof(tc));
-                        }
+                        applyDwmAttrs(h);
+                        *retryFn = nullptr;
+                        return;
                     }
                 }
-            });
+                (*retryCount)++;
+                if (*retryCount < 5) {
+                    int delay = 100 << *retryCount;
+                    QTimer::singleShot(delay, *retryFn);
+                } else {
+                    *retryFn = nullptr;
+                }
+            };
+            QTimer::singleShot(100, *retryFn);
         }
         #else
         (void)dark_value;
