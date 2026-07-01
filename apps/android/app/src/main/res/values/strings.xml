@@ -338,4 +338,11 @@
     <string name="about_version_detail">应用版本：%1$s\nCore 版本：%2$s\n平台：%3$s</string>
     <string name="about_version_section">版本信息</string>
     <string name="about_btn_text">关于素笺写作</string>
+
+    <!-- Stats page -->
+    <string name="title_writing_stats">写作统计</string>
+    <string name="stats_today_data">今日数据</string>
+    <string name="stats_week_data">本周数据</string>
+    <string name="stats_project_ranking_week">作品排行 (本周)</string>
+    <string name="loading">加载中...</string>
 </resources>
