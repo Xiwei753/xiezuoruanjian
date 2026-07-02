@@ -24,15 +24,22 @@ pub fn move_chapter_to_trash(workspace_path: &Path, chapter_id: &str) -> Result<
     }
 
     for project_entry in std::fs::read_dir(&projects_dir)?.filter_map(|e| e.ok()) {
-        let project_id = project_entry.file_name().to_string_lossy().to_string();
         let volumes_dir = project_entry.path().join("volumes");
-        if !volumes_dir.exists() {
-            continue;
-        }
-        for volume_entry in std::fs::read_dir(&volumes_dir)?.filter_map(|e| e.ok()) {
-            let volume_id = volume_entry.file_name().to_string_lossy().to_string();
+
+        let volumes = match std::fs::read_dir(&volumes_dir) {
+            Ok(iter) => iter,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e.into()),
+        };
+
+        for volume_entry in volumes.filter_map(|e| e.ok()) {
             let chapters_dir = volume_entry.path().join("chapters").join(chapter_id);
-            if chapters_dir.exists() {
+            if std::fs::metadata(&chapters_dir)
+                .map(|m| m.is_dir())
+                .unwrap_or(false)
+            {
+                let project_id = project_entry.file_name().to_string_lossy().into_owned();
+                let volume_id = volume_entry.file_name().to_string_lossy().into_owned();
                 return crate::chapter::delete_chapter(
                     workspace_path,
                     &project_id,
