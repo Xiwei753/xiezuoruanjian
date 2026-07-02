@@ -75,11 +75,15 @@ impl SaveTransaction {
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         crate::storage::atomic_write_string(&manifest_path, &manifest_json)?;
 
+        let mut created_dirs = std::collections::HashSet::new();
         for entry in &self.entries {
             let staging_path = self.tx_dir.join(&entry.staging_filename);
             let target_path = self.workspace_path.join(&entry.target_relative);
             if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent)?;
+                if !created_dirs.contains(parent) {
+                    fs::create_dir_all(parent)?;
+                    created_dirs.insert(parent.to_path_buf());
+                }
             }
             fs::rename(&staging_path, &target_path)?;
         }
@@ -155,13 +159,16 @@ pub fn recover_pending_transactions(workspace_path: &Path) -> Vec<TransactionRec
 
         let mut recovered_files = Vec::new();
         let mut missing_files = Vec::new();
+        let mut created_dirs = std::collections::HashSet::new();
 
         for tx_entry in &manifest.entries {
             let staging_path = tx_dir.join(&tx_entry.staging_filename);
             if staging_path.exists() {
                 let target_path = workspace_path.join(&tx_entry.target_relative);
                 if let Some(parent) = target_path.parent() {
-                    let _ = fs::create_dir_all(parent);
+                    if !created_dirs.contains(parent) && fs::create_dir_all(parent).is_ok() {
+                        created_dirs.insert(parent.to_path_buf());
+                    }
                 }
                 match fs::rename(&staging_path, &target_path) {
                     Ok(()) => recovered_files.push(tx_entry.target_relative.clone()),
