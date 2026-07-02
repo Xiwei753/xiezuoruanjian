@@ -241,21 +241,8 @@ Item {
 
         // decision === "fullAnimation"
 
-        // 统计实际会创建的 ghost 数量（排除复杂 grapheme）
-        var ghostCount = 0
-        for (var i = 0; i < glyphRects.length; i++) {
-            var gr = glyphRects[i]
-            if (!isComplexGrapheme(gr.char)) {
-                ghostCount++
-            }
-        }
-
-        if (ghostCount === 0) {
-            root._log("insert skipped: no valid ghosts after filtering")
-            // 通知 Rust 清除可能已创建的 hidden range
-            _notifySkippedIfHasRange(vt)
-            return
-        }
+        // 实际创建成功的 ghost 计数（替代理论统计）
+        var actualPending = 0
 
         // 先创建 insert ghost 和 reflow ghost，之后再统计总 pendingCount 并 push transaction
 
@@ -284,7 +271,12 @@ Item {
                 "glyphFontPixelSize": editorItem.font_pixel_size || 0
             })
 
-            _trackGhost(ghost, "insert", insertByteStart, insertByteEnd)
+            if (ghost !== null) {
+                actualPending++
+                _trackGhost(ghost, "insert", insertByteStart, insertByteEnd)
+            } else {
+                root._log("insert ghost createObject returned null at index=" + i)
+            }
         }
 
         // ── 局部 reflow 动画：方案 A — reflow ghost ──
@@ -325,28 +317,26 @@ Item {
                     "glyphFontPixelSize": editorItem.font_pixel_size || 0
                 })
 
-                // reflow ghost 和 insert ghost 属于同一个 transaction，共用 pendingCount
-                _trackGhost(reflowGhost, "insert", insertByteStart, insertByteEnd)
+                if (reflowGhost !== null) {
+                    actualPending++
+                    // reflow ghost 和 insert ghost 属于同一个 transaction，共用 pendingCount
+                    _trackGhost(reflowGhost, "insert", insertByteStart, insertByteEnd)
+                } else {
+                    root._log("reflow ghost createObject returned null at index=" + ri)
+                }
             }
         }
 
-        // 统计有效 reflow ghost 数量
-        var validReflowGhostCount = 0
-        if (reflowRects && Array.isArray(reflowRects) && reflowRects.length > 0) {
-            for (var ri = 0; ri < reflowRects.length; ri++) {
-                var rr = reflowRects[ri]
-                if (isComplexGrapheme(rr.char)) continue
-                var dx = Math.abs(rr.newX - rr.oldX)
-                var dy = Math.abs(rr.newY - rr.oldY)
-                if (dx < 0.5 && dy < 0.5) continue
-                validReflowGhostCount++
-            }
+        // 根据实际创建成功的 ghost 数量决定是否 push transaction
+        if (actualPending === 0) {
+            root._log("insert skipped: no ghosts actually created (actualPending=0)")
+            // 通知 Rust 清除可能已创建的 hidden range
+            _notifySkippedIfHasRange(vt)
+            return
         }
 
-        // 总 pendingCount = insert ghost + reflow ghost
-        var totalPending = ghostCount + validReflowGhostCount
-        root._activeTransactions.push({ pendingCount: totalPending, byteStart: insertByteStart, byteEnd: insertByteEnd })
-        root._log("insert creating " + ghostCount + " insert ghosts + " + validReflowGhostCount + " reflow ghosts, totalPending=" + totalPending + " byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
+        root._activeTransactions.push({ pendingCount: actualPending, byteStart: insertByteStart, byteEnd: insertByteEnd })
+        root._log("insert actualPending=" + actualPending + " byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
     }
 
     /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。
