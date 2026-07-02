@@ -189,7 +189,7 @@ pub fn reorder_volumes(
     project_id: &str,
     ordered_ids: &[String],
 ) -> Result<()> {
-    let volumes = list_volumes(workspace_path, project_id)?;
+    let mut volumes = list_volumes(workspace_path, project_id)?;
     let existing_ids: std::collections::HashSet<_> = volumes.iter().map(|v| v.id.clone()).collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
 
@@ -203,23 +203,28 @@ pub fn reorder_volumes(
     }
 
     for (index, id) in ordered_ids.iter().enumerate() {
-        let volume_dir = workspace_path
-            .join("projects")
-            .join(project_id)
-            .join("volumes")
-            .join(id);
-        let meta_path = volume_dir.join("volume.json");
-
-        if meta_path.exists() {
-            let meta_str = fs::read_to_string(&meta_path)?;
-            let mut meta = serde_json::from_str::<Volume>(&meta_str)?;
-            meta.order = index as i32;
-            meta.updated_at = Utc::now().to_rfc3339();
-            let updated_meta_str = serde_json::to_string_pretty(&meta)?;
-            crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+        if let Some(vol) = volumes.iter_mut().find(|v| &v.id == id) {
+            vol.order = index as i32;
+            vol.updated_at = Utc::now().to_rfc3339();
         } else {
             return Err(crate::error::Error::VolumeNotFound);
         }
     }
+
+    volumes
+        .into_par_iter()
+        .try_for_each(|meta| -> Result<()> {
+            let volume_dir = workspace_path
+                .join("projects")
+                .join(project_id)
+                .join("volumes")
+                .join(&meta.id);
+            let meta_path = volume_dir.join("volume.json");
+
+            let updated_meta_str = serde_json::to_string_pretty(&meta)?;
+            crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+            Ok(())
+        })?;
+
     Ok(())
 }
