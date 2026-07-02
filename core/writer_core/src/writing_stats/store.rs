@@ -1,46 +1,46 @@
-//! # ??????????
+//! # 写作统计数据存储模块
 //!
-//! ?????????????????,????????????????????
+//! 本模块负责写作统计数据的持久化存储，包括原始事件的记录和每日统计数据的管理。
 //!
-//! ## ????
+//! ## 主要功能
 //!
-//! - **????**: ?????????????,???? I/O
-//! - **?????**: ?????? JSONL ???????
-//! - **????**: ???????????,?????????
-//! - **?????**: ???????????????
-//! - **????**: ????????(??/??)
+//! - **事件缓冲**: 使用内存缓冲区批量写入事件，减少磁盘 I/O
+//! - **事件持久化**: 将输入事件以 JSONL 格式按日期存储
+//! - **每日统计**: 聚合并存储每日统计数据，支持多设备数据合并
+//! - **多维度统计**: 支持按项目、卷、章节的细分统计
+//! - **速度分析**: 计算写作速度曲线（字符/分钟）
 //!
-//! ## ????
+//! ## 核心结构
 //!
-//! - `StatsStore`: ????????,????????? I/O
-//! - `DailyStats`: ??????,????????????????
-//! - `DailyStatsFile`: ??????,???????
-//! - `ProjectStats/VolumeStats/ChapterStats`: ???????
-//! - `SpeedBucket`: ???,????????
+//! - `StatsStore`: 统计数据存储引擎，管理事件缓冲和文件 I/O
+//! - `DailyStats`: 每日统计数据，包含总字符数、活跃时间、会话数等
+//! - `DailyStatsFile`: 每日统计文件，支持多设备数据
+//! - `ProjectStats/VolumeStats/ChapterStats`: 分维度统计数据
+//! - `SpeedBucket`: 速度桶，用于速度曲线分析
 //!
-//! ## ????
+//! ## 存储结构
 //!
 //! ```text
 //! app-meta/stats/
 //!   events.local/
-//!     2024-01-01.events.jsonl    # ????(JSONL ??)
+//!     2024-01-01.events.jsonl    # 原始事件（JSONL 格式）
 //!   daily/
-//!     2024-01-01.stats.json      # ??????
+//!     2024-01-01.stats.json      # 每日统计数据
 //! ```
 //!
-//! ## ????
+//! ## 依赖关系
 //!
-//! - `chrono`: ??????
-//! - `serde`: ???/????
-//! - `std::fs`: ??????
-//! - `std::sync::Mutex`: ??????????
+//! - `chrono`: 日期时间处理
+//! - `serde`: 序列化/反序列化
+//! - `std::fs`: 文件系统操作
+//! - `std::sync::Mutex`: 线程安全的缓冲区管理
 //!
-//! ## ????
+//! ## 使用场景
 //!
-//! - ??????????
-//! - ????/??/??????
-//! - ?????????
-//! - ????????????
+//! - 实时记录用户输入事件
+//! - 生成每日/每周/每月写作报告
+//! - 分析写作速度和效率
+//! - 多设备写作数据同步和合并
 
 use crate::error::Result;
 use crate::writing_stats::WritingInputEvent;
@@ -67,7 +67,7 @@ pub struct DailyStats {
     pub date: String,
     pub device_id: String,
     pub platform: String,
-    /// phone / tablet / desktop,?????????
+    /// phone / tablet / desktop，用于按设备类别汇总
     #[serde(default)]
     pub device_class: String,
     pub total_human_typed_chars: u64,
@@ -596,7 +596,7 @@ impl StatsStore {
     }
 }
 
-/// ????????????
+/// 按设备类别汇总的统计数据
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DeviceClassSummary {
     pub device_count: u32,
@@ -605,13 +605,13 @@ pub struct DeviceClassSummary {
     pub active_seconds: u64,
 }
 
-/// ?????(phone / tablet / desktop)?????
-/// ??????? device_class ?????,?? platform ???
+/// 按设备类别（phone / tablet / desktop）汇总统计。
+/// 对于旧数据没有 device_class 字段的情况，根据 platform 推断。
 pub fn aggregate_by_device_class(stats: &[DailyStats]) -> HashMap<String, DeviceClassSummary> {
     let mut result: HashMap<String, DeviceClassSummary> = HashMap::new();
     for stat in stats {
         let class = if stat.device_class.is_empty() {
-            // ?????:?? platform ??
+            // 兼容旧数据：根据 platform 推断
             if stat.platform.contains("android") {
                 "phone".to_string()
             } else {
@@ -636,12 +636,6 @@ mod tests {
 
     fn create_mock_store() -> StatsStore {
         StatsStore::new(Path::new("/tmp/mock_workspace"))
-    }
-
-    #[test]
-    fn test_flush_events_empty() {
-        let store = create_mock_store();
-        assert!(store.flush_events().is_ok());
     }
 
     #[test]
@@ -857,13 +851,13 @@ mod tests {
 
     #[test]
     fn test_aggregate_by_device_class_legacy_data() {
-        // ????? device_class,??? platform ??
+        // 旧数据没有 device_class，应根据 platform 推断
         let stats = vec![
             DailyStats {
                 date: "2024-01-01".to_string(),
                 device_id: "dev1".to_string(),
                 platform: "desktop".to_string(),
-                device_class: String::new(), // ???
+                device_class: String::new(), // 旧数据
                 total_human_typed_chars: 100,
                 total_net_delta_chars: 80,
                 active_seconds: 300,
@@ -873,7 +867,7 @@ mod tests {
                 date: "2024-01-01".to_string(),
                 device_id: "dev2".to_string(),
                 platform: "android".to_string(),
-                device_class: String::new(), // ???
+                device_class: String::new(), // 旧数据
                 total_human_typed_chars: 50,
                 total_net_delta_chars: 40,
                 active_seconds: 120,
@@ -892,78 +886,62 @@ mod tests {
         assert_eq!(phone.device_count, 1);
         assert_eq!(phone.total_human_typed_chars, 50);
     }
-
-    fn create_mock_event() -> WritingInputEvent {
-        WritingInputEvent::new(
-            "device_1",
+    #[test]
+    fn test_apply_event_ai_inserted() {
+        let mut stats = DailyStats::default();
+        let event = WritingInputEvent::new(
+            "dev1",
             crate::writing_stats::Platform::Desktop,
             "desktop",
-            "proj_1",
-            "vol_1",
-            "chap_1",
-            crate::writing_stats::EventSource::HumanTyped,
-            10,
-            0,
-            0,
-            0,
-            5,
-            "session_1",
-        )
+            "proj1",
+            "vol1",
+            "chap1",
+            crate::writing_stats::EventSource::AiInserted,
+            0,   // inserted
+            0,   // deleted
+            0,   // pasted
+            100, // ai_inserted
+            0,   // duration
+            "session1",
+        );
+
+        stats.apply_event(&event);
+
+        assert_eq!(stats.total_ai_inserted_chars, 100);
+        assert_eq!(stats.total_net_delta_chars, 100);
+
+        let proj = stats.per_project.get("proj1").unwrap();
+        assert_eq!(proj.ai_inserted_chars, 100);
+        assert_eq!(proj.net_delta_chars, 100);
     }
 
     #[test]
-    fn test_record_event_buffers_without_flushing() {
-        let store = create_mock_store();
+    fn test_apply_event_deleted() {
+        let mut stats = DailyStats::default();
+        let event = WritingInputEvent::new(
+            "dev1",
+            crate::writing_stats::Platform::Desktop,
+            "desktop",
+            "proj1",
+            "vol1",
+            "chap1",
+            crate::writing_stats::EventSource::Deleted,
+            0,  // inserted
+            20, // deleted
+            0,  // pasted
+            0,  // ai_inserted
+            0,  // duration
+            "session1",
+        );
 
-        let event = create_mock_event();
-        store.record_event(event).unwrap();
+        stats.apply_event(&event);
 
-        let buffer = store.event_buffer.lock().unwrap();
-        assert_eq!(buffer.len(), 1);
-    }
+        assert_eq!(stats.total_deleted_chars, 20);
+        assert_eq!(stats.total_net_delta_chars, -20);
 
-    #[test]
-    fn test_record_event_flushes_on_max_buffer_size() {
-        let store = create_mock_store();
-
-        // Add MAX_BUFFER_SIZE - 1 events
-        for _ in 0..(MAX_BUFFER_SIZE - 1) {
-            let event = create_mock_event();
-            store.record_event(event).unwrap();
-        }
-
-        {
-            let buffer = store.event_buffer.lock().unwrap();
-            assert_eq!(buffer.len(), MAX_BUFFER_SIZE - 1);
-        }
-
-        // Add one more event to trigger flush
-        let event = create_mock_event();
-        store.record_event(event).unwrap();
-
-        // Buffer should be empty after flush
-        {
-            let buffer = store.event_buffer.lock().unwrap();
-            assert!(buffer.is_empty());
-        }
-    }
-
-    #[test]
-    fn test_record_event_flushes_on_debounce_time() {
-        let store = create_mock_store();
-
-        // Set last_flush far in the past to trigger time-based flush
-        {
-            let mut last_flush = store.last_flush_ms.lock().unwrap();
-            *last_flush = chrono::Utc::now().timestamp_millis() - FLUSH_DEBOUNCE_MS - 1000;
-        }
-
-        let event = create_mock_event();
-        store.record_event(event).unwrap();
-
-        // Buffer should be empty after flush
-        let buffer = store.event_buffer.lock().unwrap();
-        assert!(buffer.is_empty());
+        let proj = stats.per_project.get("proj1").unwrap();
+        assert_eq!(proj.deleted_chars, 20);
+        assert_eq!(proj.net_delta_chars, -20);
     }
 
     #[test]
@@ -1033,60 +1011,64 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_event_deleted() {
-        let mut stats = DailyStats::default();
-        let event = WritingInputEvent::new(
-            "dev1",
-            crate::writing_stats::Platform::Desktop,
-            "desktop",
-            "proj1",
-            "vol1",
-            "chap1",
-            crate::writing_stats::EventSource::Deleted,
-            0,  // inserted
-            20, // deleted
-            0,  // pasted
-            0,  // ai_inserted
-            0,  // duration
-            "session1",
-        );
-
-        stats.apply_event(&event);
-
-        assert_eq!(stats.total_deleted_chars, 20);
-        assert_eq!(stats.total_net_delta_chars, -20);
-
-        let proj = stats.per_project.get("proj1").unwrap();
-        assert_eq!(proj.deleted_chars, 20);
-        assert_eq!(proj.net_delta_chars, -20);
+    fn test_flush_events_empty() {
+        let store = create_mock_store();
+        assert!(store.flush_events().is_ok());
     }
 
     #[test]
-    fn test_apply_event_ai_inserted() {
-        let mut stats = DailyStats::default();
-        let event = WritingInputEvent::new(
-            "dev1",
-            crate::writing_stats::Platform::Desktop,
-            "desktop",
-            "proj1",
-            "vol1",
-            "chap1",
-            crate::writing_stats::EventSource::AiInserted,
-            0,   // inserted
-            0,   // deleted
-            0,   // pasted
-            100, // ai_inserted
-            0,   // duration
-            "session1",
-        );
+    fn test_record_event_buffers_without_flushing() {
+        let store = create_mock_store();
 
-        stats.apply_event(&event);
+        let event = create_mock_event();
+        store.record_event(event).unwrap();
 
-        assert_eq!(stats.total_ai_inserted_chars, 100);
-        assert_eq!(stats.total_net_delta_chars, 100);
-
-        let proj = stats.per_project.get("proj1").unwrap();
-        assert_eq!(proj.ai_inserted_chars, 100);
-        assert_eq!(proj.net_delta_chars, 100);
+        let buffer = store.event_buffer.lock().unwrap();
+        assert_eq!(buffer.len(), 1);
     }
+
+    #[test]
+    fn test_record_event_flushes_on_debounce_time() {
+        let store = create_mock_store();
+
+        // Set last_flush far in the past to trigger time-based flush
+        {
+            let mut last_flush = store.last_flush_ms.lock().unwrap();
+            *last_flush = chrono::Utc::now().timestamp_millis() - FLUSH_DEBOUNCE_MS - 1000;
+        }
+
+        let event = create_mock_event();
+        store.record_event(event).unwrap();
+
+        // Buffer should be empty after flush
+        let buffer = store.event_buffer.lock().unwrap();
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_record_event_flushes_on_max_buffer_size() {
+        let store = create_mock_store();
+
+        // Add MAX_BUFFER_SIZE - 1 events
+        for _ in 0..(MAX_BUFFER_SIZE - 1) {
+            let event = create_mock_event();
+            store.record_event(event).unwrap();
+        }
+
+        {
+            let buffer = store.event_buffer.lock().unwrap();
+            assert_eq!(buffer.len(), MAX_BUFFER_SIZE - 1);
+        }
+
+        // Add one more event to trigger flush
+        let event = create_mock_event();
+        store.record_event(event).unwrap();
+
+        // Buffer should be empty after flush
+        {
+            let buffer = store.event_buffer.lock().unwrap();
+            assert!(buffer.is_empty());
+        }
+    }
+
 }

@@ -23,13 +23,13 @@ fn setup_test_workspace(dir: &Path) {
 
     fs::write(
         ch_dir.join("chapter.md"),
-        "????????\n???????\n???????\n??????\n????????",
+        "这是第一章的内容\n主角走进了森林\n远处传来狼嚎声\n他加快了脚步\n终于到达了目的地",
     )
     .unwrap();
 
     fs::write(
         ch_dir.join("chapter.meta.json"),
-        r#"{"id": "ch1", "title": "??? ??", "created_at": 0, "updated_at": 0}"#,
+        r#"{"id": "ch1", "title": "第一章 启程", "created_at": 0, "updated_at": 0}"#,
     )
     .unwrap();
 
@@ -45,13 +45,13 @@ fn setup_test_workspace(dir: &Path) {
 
     fs::write(
         ch2_dir.join("chapter.md"),
-        "??????\n???????\n?????????\n????????",
+        "第二章开始了\n主角来到了城市\n在酒馆里遇到了伙伴\n他们决定一起冒险",
     )
     .unwrap();
 
     fs::write(
         ch2_dir.join("chapter.meta.json"),
-        r#"{"id": "ch2", "title": "??? ??", "created_at": 0, "updated_at": 0}"#,
+        r#"{"id": "ch2", "title": "第二章 相遇", "created_at": 0, "updated_at": 0}"#,
     )
     .unwrap();
 }
@@ -66,7 +66,7 @@ fn test_build_index_and_search() {
     assert_eq!(stats.chapter_count, 2);
 
     let options = SearchOptions::default();
-    let hits = index.search("??", &options);
+    let hits = index.search("主角", &options);
     assert_eq!(hits.len(), 2); // line 2 ch1, line 2 ch2
 }
 
@@ -77,9 +77,9 @@ fn test_search_case_insensitive() {
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let options = SearchOptions::default();
-    let hits = index.search("??", &options);
+    let hits = index.search("森林", &options);
     assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].chapter_title, "??? ??");
+    assert_eq!(hits[0].chapter_title, "第一章 启程");
     assert_eq!(hits[0].line_number, 2);
 }
 
@@ -93,12 +93,12 @@ fn test_search_with_context() {
         context_lines: 1,
         ..Default::default()
     };
-    let hits = index.search("??", &options);
+    let hits = index.search("狼嚎", &options);
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].context_before.len(), 1);
-    assert_eq!(hits[0].context_before[0], "???????");
+    assert_eq!(hits[0].context_before[0], "主角走进了森林");
     assert_eq!(hits[0].context_after.len(), 1);
-    assert_eq!(hits[0].context_after[0], "??????");
+    assert_eq!(hits[0].context_after[0], "他加快了脚步");
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn test_search_max_results() {
         max_results: 1,
         ..Default::default()
     };
-    let hits = index.search("??", &options);
+    let hits = index.search("主角", &options);
     assert_eq!(hits.len(), 1);
 }
 
@@ -122,10 +122,10 @@ fn test_search_in_project() {
 
     let index = SearchIndex::build(dir.path()).unwrap();
     let options = SearchOptions::default();
-    let hits = index.search_in_project("proj1", "??", &options);
+    let hits = index.search_in_project("proj1", "主角", &options);
     assert_eq!(hits.len(), 2);
 
-    let hits_empty = index.search_in_project("nonexistent", "??", &options);
+    let hits_empty = index.search_in_project("nonexistent", "主角", &options);
     assert_eq!(hits_empty.len(), 0);
 }
 
@@ -153,7 +153,6 @@ fn test_empty_workspace() {
     let hits = index.search("test", &options);
     assert_eq!(hits.len(), 0);
 }
-
 
 #[test]
 fn test_build_missing_projects_dir() {

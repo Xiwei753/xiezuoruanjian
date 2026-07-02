@@ -1,51 +1,51 @@
-//! # ????????
+//! # 全文搜索索引模块
 //!
-//! ????????????????
+//! 提供工作区内章节的全文搜索功能。
 //!
-//! ## ????
+//! ## 设计说明
 //!
-//! - ????????????? `.md` ??
-//! - ?????????????
-//! - ????????????
-//! - ?????,?????
+//! - 扫描工作区中所有项目的章节 `.md` 文件
+//! - 基于大小写不敏感的子串匹配
+//! - 返回匹配位置及其上下文行
+//! - 纯内存索引，无外部依赖
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// ??????
+/// 搜索命中结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
-    /// ?? ID
+    /// 项目 ID
     pub project_id: String,
-    /// ? ID
+    /// 卷 ID
     pub volume_id: String,
-    /// ?? ID
+    /// 章节 ID
     pub chapter_id: String,
-    /// ????
+    /// 章节标题
     pub chapter_title: String,
-    /// ????(1-based)
+    /// 匹配行号（1-based）
     pub line_number: usize,
-    /// ?????
+    /// 匹配行内容
     pub line_text: String,
-    /// ????????
+    /// 匹配前的上下文行
     pub context_before: Vec<String>,
-    /// ????????
+    /// 匹配后的上下文行
     pub context_after: Vec<String>,
-    /// ??????
+    /// 文件相对路径
     pub relative_path: String,
 }
 
-/// ????
+/// 搜索选项
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
-    /// ???????
+    /// 是否区分大小写
     pub case_sensitive: bool,
-    /// ?????
+    /// 上下文行数
     pub context_lines: usize,
-    /// ?????
+    /// 最大结果数
     pub max_results: usize,
 }
 
@@ -59,21 +59,21 @@ impl Default for SearchOptions {
     }
 }
 
-/// ??????
+/// 索引统计信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexStats {
-    /// ??????
+    /// 已索引章节数
     pub chapter_count: usize,
-    /// ??????
+    /// 已索引总行数
     pub total_lines: usize,
-    /// ??????
+    /// 已索引总字数
     pub total_words: usize,
-    /// ??????(??)
+    /// 索引构建耗时（毫秒）
     pub build_time_ms: u64,
 }
 
-/// ?????????
+/// 工作区全文搜索索引
 pub struct SearchIndex {
     entries: Vec<IndexEntry>,
 }
@@ -89,7 +89,7 @@ struct IndexEntry {
 }
 
 impl SearchIndex {
-    /// ????:??????????
+    /// 构建索引：扫描工作区中所有章节
     pub fn build(workspace: &Path) -> Result<Self> {
         let start = std::time::Instant::now();
         let mut entries = Vec::new();
@@ -157,7 +157,7 @@ impl SearchIndex {
         Ok(Self { entries })
     }
 
-    /// ??
+    /// 搜索
     pub fn search(&self, query: &str, options: &SearchOptions) -> Vec<SearchHit> {
         if query.is_empty() {
             return Vec::new();
@@ -207,7 +207,7 @@ impl SearchIndex {
         hits
     }
 
-    /// ??????
+    /// 获取索引统计
     pub fn stats(&self) -> IndexStats {
         let total_lines = self.entries.iter().map(|e| e.lines.len()).sum();
         let total_words = self
@@ -228,7 +228,7 @@ impl SearchIndex {
         }
     }
 
-    /// ???????
+    /// 按项目过滤搜索
     pub fn search_in_project(
         &self,
         project_id: &str,
@@ -337,8 +337,8 @@ fn load_chapter_title(chapter_path: &Path, fallback_id: &str) -> String {
     fallback_id.to_string()
 }
 
-/// ????:????(?????)
+/// 便捷函数：更新索引（桩实现兼容）
 pub fn update_index() -> Result<()> {
-    // ????????,???????
+    // 索引是按需构建的，不需要主动更新
     Ok(())
 }
