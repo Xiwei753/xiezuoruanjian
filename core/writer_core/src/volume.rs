@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
+use rayon::prelude::*;
 
 /// Normalize path for tombstone, safely handling paths that are not prefixed
 pub(crate) fn normalize_rel_path(path: &Path, base: &Path) -> String {
@@ -52,20 +53,33 @@ pub fn list_volumes(workspace_path: &Path, project_id: &str) -> Result<Vec<Volum
         return Ok(Vec::new());
     }
 
-    let mut volumes = Vec::new();
+    let mut dir_paths = Vec::new();
     for entry in fs::read_dir(volumes_dir)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
+            dir_paths.push(path);
+        }
+    }
+
+    let volumes_result: Result<Vec<Option<Volume>>> = dir_paths
+        .into_par_iter()
+        .map(|path| {
             let meta_path = path.join("volume.json");
             if meta_path.exists() {
                 let content = fs::read_to_string(&meta_path)?;
                 if let Ok(volume) = serde_json::from_str::<Volume>(&content) {
-                    volumes.push(volume);
+                    Ok(Some(volume))
+                } else {
+                    Ok(None)
                 }
+            } else {
+                Ok(None)
             }
-        }
-    }
+        })
+        .collect();
+
+    let mut volumes: Vec<Volume> = volumes_result?.into_iter().flatten().collect();
     volumes.sort_by_key(|v| v.order);
     Ok(volumes)
 }
