@@ -26,35 +26,8 @@ cpp! {{
     public:
         void* rust_item;
         bool ime_composing;
-
-        // ── Deferred insertion for IME first-key leak protection ──
-        // On Windows, QKeyEvent arrives BEFORE QInputMethodEvent for the same
-        // physical key press. If we insert the key text immediately, the first
-        // pinyin key (e.g. 'n') leaks into the document as an English letter.
-        // Solution: defer plain-text insertion by one event loop iteration.
-        // If QInputMethodEvent arrives before the deferred callback fires,
-        // the pending key is discarded (IME consumed it). Otherwise the key
-        // is inserted normally (genuine non-IME input).
-        bool has_pending_key;
-        QString pending_key_text;
-        int pending_key_key;
-        int pending_key_modifiers;
-
         SujianEventFilter(QObject* parent, void* item)
-            : QObject(parent), rust_item(item), ime_composing(false),
-              has_pending_key(false), pending_key_key(0), pending_key_modifiers(0) {}
-
-        void flush_pending_key() {
-            if (!has_pending_key) return;
-            has_pending_key = false;
-            if (pending_key_text.isEmpty()) return;
-            // Safe to insert: no InputMethodEvent came to consume this key
-            sujian_handle_key_and_text(
-                rust_item, pending_key_key, pending_key_modifiers,
-                reinterpret_cast<const ushort*>(pending_key_text.utf16()),
-                static_cast<int>(pending_key_text.size())
-            );
-        }
+            : QObject(parent), rust_item(item), ime_composing(false) {}
 
         bool eventFilter(QObject* obj, QEvent* event) override {
             if (!rust_item) return false;
@@ -190,12 +163,7 @@ cpp! {{
                 }
 
                 // ── Plain text insertion (non-shortcut, non-IME) ──
-                // Deferred insertion: on Windows, QKeyEvent arrives before
-                // QInputMethodEvent for the same physical key. To prevent the
-                // first pinyin key from leaking as an English letter, we defer
-                // plain-text insertion by one event loop iteration.
-                // If QInputMethodEvent arrives first (IME consumed the key),
-                // the pending key is discarded. Otherwise it's inserted normally.
+                // Only block when IME is actively composing (ime_composing == true).
                 // Do NOT use QInputMethod::isVisible() — it's unreliable and blocks
                 // space, +, and other symbols from being inserted.
                 bool ime_active = ime_composing;
@@ -215,22 +183,19 @@ cpp! {{
                     && ke->key() != Qt::Key_Home
                     && ke->key() != Qt::Key_End
                     && ke->key() != Qt::Key_PageUp
-                    && ke->key() != Qt::Key_PageDown
-                    && !has_pending_key) {
-                    // Defer insertion: store key data and schedule flush
-                    pending_key_text = ke->text();
-                    pending_key_key = ke->key();
-                    pending_key_modifiers = static_cast<int>(ke->modifiers());
-                    has_pending_key = true;
-                    // QueuedConnection: callback fires after current event loop
-                    // iteration, by which time QInputMethodEvent has already been
-                    // dispatched (if IME is active). If IME started composing,
-                    // has_pending_key is already false and flush is a no-op.
-                    QMetaObject::invokeMethod(this, [this]() {
-                        flush_pending_key();
-                    }, Qt::QueuedConnection);
-                    event->accept();
-                    return true;
+                    && ke->key() != Qt::Key_PageDown) {
+                    QString text = ke->text();
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item,
+                        ke->key(),
+                        static_cast<int>(ke->modifiers()),
+                        reinterpret_cast<const ushort*>(text.utf16()),
+                        static_cast<int>(text.size())
+                    );
+                    if (accepted) {
+                        event->accept();
+                        return true;
+                    }
                 }
                 // Handle navigation, deletion, and shortcut keys (no text).
                 bool accepted = sujian_handle_key_and_text(
@@ -255,9 +220,6 @@ cpp! {{
                            static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()));
                 }
                 if (!commit.isEmpty()) {
-                    // IME commit: discard any pending key (shouldn't happen normally,
-                    // but defensive)
-                    has_pending_key = false;
                     sujian_ime_commit(
                         rust_item,
                         reinterpret_cast<const ushort*>(commit.utf16()),
@@ -266,11 +228,6 @@ cpp! {{
                     ime_composing = false;
                 }
                 if (!preedit.isEmpty()) {
-                    // IME started composing: discard the pending key — IME consumed it.
-                    // This is the critical fix for the first-key leak: the QKeyEvent
-                    // for the first pinyin letter was deferred, and now QInputMethodEvent
-                    // has arrived, so we discard the pending key instead of inserting it.
-                    has_pending_key = false;
                     ime_composing = true;
                     // Preedit cursor position: determined by Cursor attribute (type=1),
                     // NOT by replacementStart/replacementLength (which are for commit replacement).
@@ -309,8 +266,6 @@ cpp! {{
                         attr_count
                     );
                 } else if (commit.isEmpty()) {
-                    // IME cancelled: also discard any pending key
-                    has_pending_key = false;
                     sujian_ime_cancel(rust_item);
                     ime_composing = false;
                 }

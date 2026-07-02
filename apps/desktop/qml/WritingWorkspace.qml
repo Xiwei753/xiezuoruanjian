@@ -790,9 +790,6 @@ Rectangle {
                         scroll_y: editorScroll.contentItem ? editorScroll.contentItem.contentY : 0
                         viewport_height: sujianEditor.height
                         is_scrolling: editorScroll.editorAnimationSuppressed
-                        is_loading: editorController.isLoadingChapter
-                        is_applying_format: editorController.isApplyingFormat
-                        is_applying_settings: editorController.isApplyingSettings
 
                         onWidthChanged: {
                             Qt.callLater(sujianEditor.flush_content_height)
