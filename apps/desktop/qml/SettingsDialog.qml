@@ -385,8 +385,13 @@ Dialog {
                             try {
                                 var obj = JSON.parse(result)
                                 if (obj.success) {
-                                    diagnosticsFeedback.message = qsTr("已导出到: ") + obj.path
+                                    // 使用 nativePath 显示路径（原生分隔符），使用 fileUrl 打开目录
+                                    diagnosticsFeedback.message = qsTr("已导出到: ") + (obj.nativePath || obj.path)
                                     diagnosticsFeedback.isError = false
+                                    // 如果有 fileUrl，用 Qt.openUrlExternally 打开目录
+                                    if (obj.fileUrl) {
+                                        Qt.openUrlExternally(obj.fileUrl)
+                                    }
                                 } else {
                                     diagnosticsFeedback.message = qsTr("导出失败：") + (obj.error || qsTr("未知错误"))
                                     diagnosticsFeedback.isError = true

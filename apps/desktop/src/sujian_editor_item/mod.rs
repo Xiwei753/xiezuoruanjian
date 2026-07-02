@@ -234,6 +234,7 @@ pub struct SujianEditorItem {
     suppress_next_ime_commit: bool,
     editor_layout: EditorLayout,
     text_revision: u64,
+    visual_revision: u64,
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
@@ -356,6 +357,7 @@ impl Default for SujianEditorItem {
             suppress_next_ime_commit: false,
             editor_layout: EditorLayout::default(),
             text_revision: 0,
+            visual_revision: 0,
             render_dirty: true,
             scroll_buffer: None,
             last_slow_paint_log: None,
@@ -375,6 +377,10 @@ impl SujianEditorItem {
     fn request_frame_update(&mut self) {
         let item = self as &dyn QQuickItem;
         item.update();
+    }
+
+    fn bump_visual_revision(&mut self) {
+        self.visual_revision = self.visual_revision.wrapping_add(1);
     }
 
     /// 清空所有活跃文本动画，并触发静态正文重绘恢复完整绘制
@@ -599,7 +605,8 @@ impl SujianEditorItem {
     }
 
     fn set_text_color(&mut self, value: QString) {
-        if self.current_text_color.to_string() == value.to_string() {
+        let v = value.to_string();
+        if self.current_text_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
         self.current_text_color = value;
@@ -611,7 +618,8 @@ impl SujianEditorItem {
     }
 
     fn set_selection_color(&mut self, value: QString) {
-        if self.current_selection_color.to_string() == value.to_string() {
+        let v = value.to_string();
+        if self.current_selection_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
         self.current_selection_color = value;
@@ -623,7 +631,8 @@ impl SujianEditorItem {
     }
 
     fn set_selected_text_color(&mut self, value: QString) {
-        if self.current_selected_text_color.to_string() == value.to_string() {
+        let v = value.to_string();
+        if self.current_selected_text_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
         self.current_selected_text_color = value;
@@ -635,7 +644,8 @@ impl SujianEditorItem {
     }
 
     fn set_cursor_color(&mut self, value: QString) {
-        if self.current_cursor_color.to_string() == value.to_string() {
+        let v = value.to_string();
+        if self.current_cursor_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
         self.current_cursor_color = value;
@@ -995,6 +1005,7 @@ impl SujianEditorItem {
 
     fn select_all(&mut self) {
         self.buffer.select_all();
+        self.bump_visual_revision();
         self.adjust_affinity_at_wrap_boundary();
         self.cursor_position_changed();
         self.selection_changed();
@@ -1039,6 +1050,7 @@ impl SujianEditorItem {
             );
         }
         self.buffer.move_cursor(index, extend);
+        self.bump_visual_revision();
         self.preedit_text.clear();
         self.preedit_cursor = 0;
         self.preedit_attributes.clear();
@@ -1057,6 +1069,7 @@ impl SujianEditorItem {
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
         self.buffer.move_cursor(index, true);
+        self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
@@ -1071,6 +1084,7 @@ impl SujianEditorItem {
         if !self.buffer.has_selection() {
             self.select_word_at_impl(index);
         }
+        self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
@@ -1083,6 +1097,7 @@ impl SujianEditorItem {
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
         self.select_word_at_impl(index);
+        self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
@@ -1202,6 +1217,7 @@ impl SujianEditorItem {
             CaretAffinity::Upstream
         };
         self.buffer.move_cursor(next, extend);
+        self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
@@ -1227,6 +1243,7 @@ impl SujianEditorItem {
             .editor_layout
             .affinity_for_index_on_line(&lines[target_idx], index);
         self.buffer.move_cursor(index, extend);
+        self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
@@ -1247,6 +1264,7 @@ impl SujianEditorItem {
         };
         self.cursor_ctrl.affinity = affinity;
         self.buffer.move_cursor(index, extend);
+        self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
@@ -2027,12 +2045,14 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.bump_visual_revision();
     }
 
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
         self.preedit_old_text = self.preedit_text.clone();
         self.preedit_text = text;
         self.preedit_cursor = cursor;
+        self.bump_visual_revision();
         // Generate preedit visual transaction for animation
         self.update_preedit_visual_state();
         // Update IME cursor rectangle so Windows input method candidate
@@ -2046,6 +2066,7 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_text = text;
         self.preedit_cursor = cursor;
         self.preedit_attributes = attributes;
+        self.bump_visual_revision();
         // Generate preedit visual transaction for animation
         self.update_preedit_visual_state();
         // Update IME cursor rectangle so Windows input method candidate

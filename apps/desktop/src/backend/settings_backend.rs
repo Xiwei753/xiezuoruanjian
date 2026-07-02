@@ -281,9 +281,20 @@ impl SettingsBackend {
                 &log_dir,
             ) {
                 Ok(path) => {
+                    let path_str = path.to_string_lossy().to_string();
+                    // Construct file:// URL for QML consumption.
+                    // On Windows, convert backslashes to forward slashes for URL.
+                    let url_path = path_str.replace('\\', "/");
+                    let file_url = if url_path.starts_with('/') {
+                        format!("file://{}", url_path)
+                    } else {
+                        format!("file:///{}", url_path)
+                    };
                     let envelope = serde_json::json!({
                         "success": true,
-                        "path": path.to_string_lossy().to_string()
+                        "path": path_str,
+                        "nativePath": path_str,
+                        "fileUrl": file_url
                     });
                     envelope.to_string().into()
                 }

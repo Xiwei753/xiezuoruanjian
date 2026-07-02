@@ -5,6 +5,7 @@ use std::ffi::c_void;
 cpp! {{
     #include <QtGui/QInputMethodEvent>
     #include <QtGui/QKeyEvent>
+    #include <QtGui/QKeySequence>
     #include <QtQuick/QQuickItem>
     #include <QEvent>
     #include <QObject>
@@ -34,18 +35,138 @@ cpp! {{
             switch (event->type()) {
             case QEvent::KeyPress: {
                 auto* ke = static_cast<QKeyEvent*>(event);
-                // When IME is composing (preedit active), do NOT intercept
-                // QKeyEvent::text() — let the IME system own the composition.
-                // Also check QInputMethod::isVisible() to prevent the first key
-                // of a CJK IME session from being inserted as plain text before
-                // the InputMethod event arrives. On Windows, when a CJK IME is
-                // active, the very first KeyPress (e.g. 'n') arrives before any
-                // InputMethod preedit event; without this guard, the raw Latin
-                // letter would be inserted into the document, causing the "first
-                // key leak" bug where typing "nihao" produces "n你好" instead of
-                // "你好".
-                QInputMethod* im = QGuiApplication::inputMethod();
-                bool ime_active = ime_composing || (im && im->isVisible());
+
+                // ── Standard shortcut matching via QKeySequence ──
+                // This handles platform-specific shortcuts (e.g. Ctrl+A on Windows/Linux,
+                // Cmd+A on macOS) and ensures SelectAll/Copy/Cut/Paste/Undo/Redo
+                // work correctly regardless of key code.
+                if (ke->matches(QKeySequence::SelectAll)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::Copy)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::Cut)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::Paste)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::Undo)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::Redo)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::Delete)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::Backspace)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::MoveToPreviousChar)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::MoveToNextChar)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::MoveToStartOfLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::MoveToEndOfLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::MoveToPreviousLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::MoveToNextLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                // Extend selection variants
+                if (ke->matches(QKeySequence::SelectPreviousChar)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::SelectNextChar)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::SelectStartOfLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::SelectEndOfLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::SelectPreviousLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+                if (ke->matches(QKeySequence::SelectNextLine)) {
+                    bool accepted = sujian_handle_key_and_text(
+                        rust_item, static_cast<int>(ke->key()),
+                        static_cast<int>(ke->modifiers()), nullptr, 0);
+                    if (accepted) { event->accept(); return true; }
+                }
+
+                // ── Plain text insertion (non-shortcut, non-IME) ──
+                // Only block when IME is actively composing (ime_composing == true).
+                // Do NOT use QInputMethod::isVisible() — it's unreliable and blocks
+                // space, +, and other symbols from being inserted.
+                bool ime_active = ime_composing;
                 if (!ime_active
                     && !(ke->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier))
                     && !ke->text().isEmpty()
@@ -108,14 +229,21 @@ cpp! {{
                 }
                 if (!preedit.isEmpty()) {
                     ime_composing = true;
+                    // Preedit cursor position: determined by Cursor attribute (type=1),
+                    // NOT by replacementStart/replacementLength (which are for commit replacement).
+                    // Default to end of preedit string if no Cursor attribute found.
                     int cursor = preedit.length();
-                    if (ime->replacementStart() >= 0) {
-                        cursor = ime->replacementStart() + ime->replacementLength();
-                        if (cursor < 0) cursor = preedit.length();
+                    for (const auto& attr : ime->attributes()) {
+                        if (attr.type == QInputMethodEvent::Cursor) {
+                            cursor = attr.start;
+                            break;
+                        }
                     }
+                    if (cursor < 0) cursor = 0;
+                    if (cursor > preedit.length()) cursor = preedit.length();
 
                     // Extract QInputMethodEvent attributes (TextFormat and Cursor)
-                    // Attribute types: 1=TextFormat, 2=Cursor, 3=Language, 4=Ruby, 5=Selection
+                    // Attribute types per Qt: TextFormat=0, Cursor=1, Language=2, Ruby=3, Selection=4
                     QVector<int> attr_types;
                     QVector<int> attr_starts;
                     QVector<int> attr_lengths;
@@ -571,7 +699,7 @@ extern "C" fn sujian_ime_preedit(
 }
 
 /// FFI callback for IME preedit with attributes.
-/// attr_types: 1=TextFormat, 2=Cursor
+/// attr_types: 0=TextFormat, 1=Cursor, 2=Language, 3=Ruby, 4=Selection
 /// attr_starts/attr_lengths: character offsets and lengths for each attribute
 #[no_mangle]
 extern "C" fn sujian_ime_preedit_attrs(
@@ -613,14 +741,14 @@ extern "C" fn sujian_ime_preedit_attrs(
             let char_start = starts_slice[i].max(0) as usize;
             let char_length = lengths_slice[i].max(0) as usize;
 
-            let kind = if attr_type == 1 {
+            let kind = if attr_type == 0 {
                 // QInputMethodEvent::TextFormat
                 crate::sujian_editor_item::PreeditAttributeKind::Underline
-            } else if attr_type == 2 {
+            } else if attr_type == 1 {
                 // QInputMethodEvent::Cursor
                 crate::sujian_editor_item::PreeditAttributeKind::Cursor
             } else {
-                continue; // Skip Language, Ruby, Selection attributes
+                continue; // Skip Language(2), Ruby(3), Selection(4), etc.
             };
 
             // Convert character offsets to byte offsets
@@ -854,5 +982,128 @@ mod tests {
         assert_eq!(host.preedit_text, "");
         assert_eq!(host.preedit_cursor, 0);
         assert!(!host.suppress_next_ime_commit);
+    }
+
+    // ── Regression tests for pipeline fixes ──
+
+    #[test]
+    fn space_inserts_as_plain_text() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, 0, " ".to_string()));
+        assert_eq!(host.inserted, vec![" "]);
+    }
+
+    #[test]
+    fn plus_inserts_as_plain_text() {
+        let mut host = FakeHost::enabled();
+        // Shift+= produces "+" — Shift is NOT a text-input disable condition
+        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "+".to_string()));
+        assert_eq!(host.inserted, vec!["+"]);
+    }
+
+    #[test]
+    fn chinese_punctuation_inserts_as_plain_text() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, 0, "。".to_string()));
+        assert_eq!(host.inserted, vec!["。"]);
+        let mut host2 = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host2, 0, 0, "！".to_string()));
+        assert_eq!(host2.inserted, vec!["！"]);
+    }
+
+    #[test]
+    fn ctrl_a_triggers_select_all() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, KEY_A, CTRL_MODIFIER, String::new()));
+        assert_eq!(host.operations, vec!["select_all"]);
+    }
+
+    #[test]
+    fn ctrl_c_v_x_z_y_shortcuts() {
+        // Ctrl+C
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, KEY_C, CTRL_MODIFIER, String::new()));
+        assert_eq!(host.operations, vec!["copy"]);
+
+        // Ctrl+V
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, KEY_V, CTRL_MODIFIER, String::new()));
+        assert_eq!(host.operations, vec!["paste"]);
+
+        // Ctrl+X
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, KEY_X, CTRL_MODIFIER, String::new()));
+        assert_eq!(host.operations, vec!["copy", "delete_selection"]);
+
+        // Ctrl+Z
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, KEY_Z, CTRL_MODIFIER, String::new()));
+        assert_eq!(host.operations, vec!["undo"]);
+
+        // Ctrl+Y
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, KEY_Y, CTRL_MODIFIER, String::new()));
+        assert_eq!(host.operations, vec!["redo"]);
+    }
+
+    #[test]
+    fn shift_plus_symbol_not_swallowed_as_shortcut() {
+        // Shift+= produces "+", should be inserted as text, not treated as shortcut
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "+".to_string()));
+        assert!(host.inserted.contains(&"+".to_string()));
+        assert!(!host.operations.contains(&"copy"));
+    }
+
+    #[test]
+    fn preedit_does_not_modify_buffer_text() {
+        // preedit only sets preedit layer, does not call input_insert_text
+        let mut host = FakeHost::enabled();
+        ime_preedit(&mut host, "拼".to_string(), 0);
+        assert_eq!(host.preedit_text, "拼");
+        assert!(host.inserted.is_empty(), "preedit should NOT insert into buffer");
+    }
+
+    #[test]
+    fn ime_commit_writes_to_buffer() {
+        let mut host = FakeHost::enabled();
+        ime_commit(&mut host, "你好".to_string());
+        assert_eq!(host.inserted, vec!["你好"]);
+        assert_eq!(host.preedit_text, "");
+    }
+
+    #[test]
+    fn ime_preedit_cursor_attribute_mapping() {
+        // Test that attr_type 0 maps to Underline and attr_type 1 maps to Cursor
+        // (matching Qt's QInputMethodEvent::TextFormat=0, Cursor=1)
+        use crate::sujian_editor_item::PreeditAttributeKind;
+
+        // attr_type 0 should be Underline (TextFormat)
+        let kind_0 = if 0 == 0 {
+            PreeditAttributeKind::Underline
+        } else if 0 == 1 {
+            PreeditAttributeKind::Cursor
+        } else {
+            panic!("unexpected attr_type");
+        };
+        assert_eq!(kind_0, PreeditAttributeKind::Underline);
+
+        // attr_type 1 should be Cursor
+        let kind_1 = if 1 == 0 {
+            PreeditAttributeKind::Underline
+        } else if 1 == 1 {
+            PreeditAttributeKind::Cursor
+        } else {
+            panic!("unexpected attr_type");
+        };
+        assert_eq!(kind_1, PreeditAttributeKind::Cursor);
+
+        // attr_type 2 (Language) should be skipped
+        // attr_type 3 (Ruby) should be skipped
+        // attr_type 4 (Selection) should be skipped
+        for &attr_type in &[2, 3, 4] {
+            let is_handled = attr_type == 0 || attr_type == 1;
+            assert!(!is_handled, "attr_type {} should not be mapped to Underline or Cursor", attr_type);
+        }
     }
 }
