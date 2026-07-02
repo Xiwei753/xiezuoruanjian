@@ -49,3 +49,6 @@ jobs:
 
       - name: Check UI tokens
         run: bash scripts/check_ui_tokens.sh
+
+      - name: Check QML DesignTokens (dt) passing
+        run: python3 tools/check_qml_dt.py

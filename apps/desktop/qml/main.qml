@@ -226,6 +226,10 @@ ApplicationWindow {
     }
 
     Component.onCompleted: {
+        // 启动守卫：确保 DesignTokens 已初始化
+        if (!designTokens) {
+            console.error("[STARTUP GUARD] designTokens is null!")
+        }
         window.verifyBackendRuntime();
         window.debugLog("app", "qml_completed", "QML components fully loaded");
         window.logThemeDiagnostics("startup");

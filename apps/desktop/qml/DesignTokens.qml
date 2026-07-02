@@ -17,6 +17,10 @@ QtObject {
 
     property bool isDark: true
 
+    onIsDarkChanged: {
+        console.log("[DesignTokens] isDark changed to=" + isDark)
+    }
+
     // Deprecated: use themePaletteJson instead. Retained for backward-compatible reading.
     property string monetColor: ""
     property color _monetColorObj: monetColor

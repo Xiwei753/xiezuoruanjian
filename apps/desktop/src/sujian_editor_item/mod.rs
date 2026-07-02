@@ -633,6 +633,7 @@ impl SujianEditorItem {
         if self.current_text_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
+        eprintln!("[editor] text_color changed old={} new={}", self.current_text_color, v);
         self.current_text_color = value;
         self.visual_changed();
     }
@@ -646,6 +647,7 @@ impl SujianEditorItem {
         if self.current_selection_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
+        eprintln!("[editor] selection_color changed old={} new={}", self.current_selection_color, v);
         self.current_selection_color = value;
         self.visual_changed();
     }
@@ -659,6 +661,7 @@ impl SujianEditorItem {
         if self.current_selected_text_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
+        eprintln!("[editor] selected_text_color changed old={} new={}", self.current_selected_text_color, v);
         self.current_selected_text_color = value;
         self.visual_changed();
     }
@@ -672,6 +675,7 @@ impl SujianEditorItem {
         if self.current_cursor_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
+        eprintln!("[editor] cursor_color changed old={} new={}", self.current_cursor_color, v);
         self.current_cursor_color = value;
         self.visual_changed();
     }
