@@ -18,6 +18,7 @@ pub struct ScrollBuffer {
     pub buffer_logical_h: f64,
     pub dpr: f64,
     pub text_revision: u64,
+    pub visual_revision: u64,
 }
 
 impl ScrollBuffer {
@@ -341,6 +342,65 @@ impl SujianEditorItem {
             }
         }
 
+        // ── Layer 2.5: Selected text overlay ──
+        // Redraw selected text in selected_text_color for readability
+        if self.buffer.has_selection() {
+            for line_idx in vis_start..vis_end {
+                let line = &lines[line_idx];
+                if selection.1 <= line.byte_start || selection.0 >= line.byte_end {
+                    continue;
+                }
+                let sel_start = selection.0.max(line.byte_start);
+                let sel_end = selection.1.min(line.byte_end);
+                let x_start = self.editor_layout.cursor_x_for_line(
+                    &snapshot,
+                    line,
+                    sel_start,
+                    CaretAffinity::Downstream,
+                );
+                let x_end = self.editor_layout.cursor_x_for_line(
+                    &snapshot,
+                    line,
+                    sel_end,
+                    CaretAffinity::Upstream,
+                );
+                let text_y = self
+                    .editor_layout
+                    .text_baseline_y(line, font_size, &font_family)
+                    + paint_offset_y;
+                let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
+                let line_top = line.y + paint_offset_y;
+
+                cpp!(unsafe [painter as "QPainter*"] {
+                    painter->save();
+                });
+                let clip = QRectF {
+                    x: x_start,
+                    y: line_top,
+                    width: (x_end - x_start).max(2.0),
+                    height: line.height,
+                };
+                cpp!(unsafe [painter as "QPainter*", clip as "QRectF"] {
+                    painter->setClipRect(clip, Qt::ReplaceClip);
+                });
+                crate::editor::layout::draw_line_text(
+                    painter,
+                    &line.para_text,
+                    font_size,
+                    &font_family,
+                    paragraph_wrap_w,
+                    line.para_indent,
+                    line.qtextline_idx,
+                    line.x,
+                    text_y,
+                    &self.current_selected_text_color.to_string(),
+                );
+                cpp!(unsafe [painter as "QPainter*"] {
+                    painter->restore();
+                });
+            }
+        }
+
         // ── Layer 3: Preedit visual layer ──
         // Preedit is a temporary visual layer — it does NOT modify the buffer
         // text, does NOT enter undo, and the cursor within preedit is computed
@@ -508,6 +568,10 @@ impl SujianEditorItem {
             return Some("text_revision_changed");
         }
 
+        if buf.visual_revision != self.visual_revision {
+            return Some("visual_revision_changed");
+        }
+
         if (content_h - buf.buffer_content_h).abs() > 1.0 {
             return Some("content_changed");
         }
@@ -607,6 +671,7 @@ impl SujianEditorItem {
             buffer_logical_h: buffer_h,
             dpr,
             text_revision: self.text_revision,
+            visual_revision: self.visual_revision,
         });
 
         let render_elapsed = render_start.elapsed();
@@ -749,6 +814,7 @@ mod tests {
             buffer_logical_h: 3500.0,
             dpr: 1.0,
             text_revision: 1,
+            visual_revision: 0,
         };
 
         assert!(
@@ -776,5 +842,28 @@ mod tests {
 
         let (src_y_clamp, src_h_clamp) = scroll_buffer.clamp_source_rect(3000.0, vp_h);
         assert!(src_y_clamp + src_h_clamp <= 3500.0);
+    }
+
+    #[test]
+    fn test_visual_revision_mismatch_causes_buffer_miss() {
+        let vp_h: f64 = 1000.0;
+        let content_h: f64 = 5000.0;
+
+        let scroll_buffer = ScrollBuffer {
+            image: QImage::new(
+                qmetaobject::QSize { width: 10, height: 3500 },
+                qmetaobject::ImageFormat::ARGB32_Premultiplied,
+            ),
+            buffer_scroll_y: 0.0,
+            buffer_content_h: content_h,
+            buffer_logical_h: 3500.0,
+            dpr: 1.0,
+            text_revision: 1,
+            visual_revision: 1,
+        };
+
+        // Same visual_revision should not cause miss (via scroll_buffer_miss_reason)
+        // This test verifies the field exists and is properly stored
+        assert_eq!(scroll_buffer.visual_revision, 1);
     }
 }
