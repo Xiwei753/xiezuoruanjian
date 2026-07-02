@@ -10,7 +10,7 @@
 | `build.rs` | 构建脚本 |
 | `src/` | Rust 源代码，包含 QObject 绑定 |
 | `qml/` | QML 界面文件 |
-| `TECHNICAL_ROUTE.md` | 技术路线文档 |
+| `../../docs/TECHNICAL_ROUTE.md` | 技术路线文档 |
 | `.gitignore` | Git 忽略规则 |
 
 ## 架构说明
@@ -61,12 +61,6 @@ ldd target/debug/sujian-desktop | grep -Ei 'Qt5|Qt6|qml|quick'
 
 结果应出现 `libQt6Core`、`libQt6Qml`、`libQt6Quick`，不应出现 `libQt5Core`、`libQt5Qml`、`libQt5Quick`。
 
-自研写作区（`SujianEditorItem`）为实验性功能，默认关闭。可通过环境变量开启：
-
-```bash
-SUJIAN_DESKTOP_USE_SUJIAN_EDITOR=1 cargo run -p sujian-desktop
-```
-
-自研写作区使用 Rust 自绘渲染，替代了传统的 QML `TextArea`，提供更可控的编辑体验。当前默认使用 `TextArea` 编辑器。
+自研写作区使用 Rust 自绘渲染，完全替代了传统的 QML `TextArea`，提供更可控的编辑体验。当前 `SujianEditorItem` 为唯一受支持的编辑器实现。
 
 吐字动画继续保持关闭；必须等 Core transaction 与 `SujianEditorItem` 的插入/删除事务稳定后，才能由事务驱动动画。
