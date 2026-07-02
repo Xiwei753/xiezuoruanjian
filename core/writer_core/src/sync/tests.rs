@@ -49,6 +49,25 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_manifest_deserializes_with_deleted_at_ms() {
+        let raw = r#"{
+            "files": [{
+                "path": "projects/p1/project.json",
+                "content_hash": "abc",
+                "updated_at_ms": 1000,
+                "deleted_at_ms": 2000,
+                "device_id": "device_a",
+                "op": "delete",
+                "schema_version": 1
+            }]
+        }"#;
+
+        let manifest: SyncManifest = serde_json::from_str(raw).unwrap();
+        assert_eq!(manifest.files.len(), 1);
+        assert_eq!(manifest.files[0].deleted_at_ms, Some(2000));
+    }
+
+    #[test]
     fn test_sync_manifest_deserializes_without_deleted_at_ms() {
         let raw = r#"{
             "files": [{
@@ -2449,6 +2468,25 @@ mod tests {
 
         shutdown2.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = server_thread2.join();
+    }
+
+    #[test]
+    fn test_semantic_merge_json_basic() {
+        let mut base = serde_json::Map::new();
+        base.insert("a".to_string(), serde_json::json!(1));
+        base.insert("b".to_string(), serde_json::json!(2));
+
+        let mut local = serde_json::Map::new();
+        local.insert("a".to_string(), serde_json::json!(10));
+        local.insert("b".to_string(), serde_json::json!(2));
+
+        let mut remote = serde_json::Map::new();
+        remote.insert("a".to_string(), serde_json::json!(1));
+        remote.insert("b".to_string(), serde_json::json!(20));
+
+        let merged = SyncService::semantic_merge_json(&base, &local, &remote).unwrap();
+        assert_eq!(merged.get("a"), Some(&serde_json::json!(10)));
+        assert_eq!(merged.get("b"), Some(&serde_json::json!(20)));
     }
 
     /// P0-1: Test that resolve_conflict_keep_local properly clears the conflict
