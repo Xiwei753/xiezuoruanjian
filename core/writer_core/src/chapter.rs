@@ -27,8 +27,8 @@
 
 use crate::error::Result;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -118,8 +118,7 @@ pub fn list_chapters(
         return Ok(Vec::new());
     }
 
-    let entries: Vec<_> = fs::read_dir(chapters_dir)?
-        .collect::<std::io::Result<Vec<_>>>()?;
+    let entries: Vec<_> = fs::read_dir(chapters_dir)?.collect::<std::io::Result<Vec<_>>>()?;
 
     let mut chapters: Vec<Chapter> = entries
         .into_par_iter()

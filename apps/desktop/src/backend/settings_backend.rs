@@ -187,10 +187,14 @@ impl SettingsBackend {
         self.settings_changed();
     }
     fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_coordinated_text_cursor_animation_enabled())
+        self.with_app(true, |app| {
+            app.setting_coordinated_text_cursor_animation_enabled()
+        })
     }
     fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_coordinated_text_cursor_animation_enabled(val));
+        self.with_app_mut((), |app| {
+            app.set_setting_coordinated_text_cursor_animation_enabled(val)
+        });
         self.settings_changed();
     }
     fn ai_available(&self) -> bool {
@@ -273,37 +277,40 @@ impl SettingsBackend {
     }
 
     fn export_diagnostics_pack(&self) -> QString {
-        self.with_app("{\"success\":false,\"error\":\"no workspace\"}".into(), |app| {
-            let workspace_path = std::path::PathBuf::from(&app.current_workspace);
-            let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
-            match crate::backend::diagnostics::export_diagnostics_pack(
-                &workspace_path,
-                &log_dir,
-            ) {
-                Ok(path) => {
-                    let envelope = serde_json::json!({
-                        "success": true,
-                        "path": path.to_string_lossy().to_string()
-                    });
-                    envelope.to_string().into()
+        self.with_app(
+            "{\"success\":false,\"error\":\"no workspace\"}".into(),
+            |app| {
+                let workspace_path = std::path::PathBuf::from(&app.current_workspace);
+                let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
+                match crate::backend::diagnostics::export_diagnostics_pack(
+                    &workspace_path,
+                    &log_dir,
+                ) {
+                    Ok(path) => {
+                        let envelope = serde_json::json!({
+                            "success": true,
+                            "path": path.to_string_lossy().to_string()
+                        });
+                        envelope.to_string().into()
+                    }
+                    Err(e) => {
+                        eprintln!("[SettingsBackend] export_diagnostics_pack failed: {}", e);
+                        let envelope = serde_json::json!({
+                            "success": false,
+                            "error": e
+                        });
+                        envelope.to_string().into()
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[SettingsBackend] export_diagnostics_pack failed: {}", e);
-                    let envelope = serde_json::json!({
-                        "success": false,
-                        "error": e
-                    });
-                    envelope.to_string().into()
-                }
-            }
-        })
+            },
+        )
     }
 
     fn clear_logs(&self) -> QString {
         self.with_app("".into(), |app| {
-            let log_dir = crate::backend::diagnostics::get_log_dir(
-                &std::path::PathBuf::from(&app.current_workspace),
-            );
+            let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
+                &app.current_workspace,
+            ));
             match crate::backend::diagnostics::clear_logs(&log_dir) {
                 Ok(()) => "ok".into(),
                 Err(e) => {
@@ -320,9 +327,9 @@ impl SettingsBackend {
 
     fn open_log_directory(&self) -> QString {
         self.with_app("".into(), |app| {
-            let log_dir = crate::backend::diagnostics::get_log_dir(
-                &std::path::PathBuf::from(&app.current_workspace),
-            );
+            let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
+                &app.current_workspace,
+            ));
             match crate::backend::diagnostics::open_log_directory(&log_dir) {
                 Ok(()) => "ok".into(),
                 Err(e) => {

@@ -54,7 +54,11 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> ApiResult<SyncResultDto> {
+    pub fn perform_sync(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+    ) -> ApiResult<SyncResultDto> {
         self.core()
             .perform_sync(&config.into(), force_sync)
             .map(Into::into)
@@ -81,7 +85,6 @@ impl WriterCoreApi {
             .map(|_| true)
             .map_err(Into::into)
     }
-
 }
 
 #[cfg(test)]

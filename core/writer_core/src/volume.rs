@@ -19,11 +19,11 @@
 
 use crate::error::Result;
 use chrono::Utc;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
-use rayon::prelude::*;
 
 /// Normalize path for tombstone, safely handling paths that are not prefixed
 pub(crate) fn normalize_rel_path(path: &Path, base: &Path) -> String {

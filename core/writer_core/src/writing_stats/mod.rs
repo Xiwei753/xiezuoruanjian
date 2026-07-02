@@ -283,6 +283,9 @@ mod tests {
         }"#;
         let event: WritingInputEvent = serde_json::from_str(json).unwrap();
         assert_eq!(event.device_id, "dev-1");
-        assert_eq!(event.device_class, "", "device_class should default to empty string for old data");
+        assert_eq!(
+            event.device_class, "",
+            "device_class should default to empty string for old data"
+        );
     }
 }

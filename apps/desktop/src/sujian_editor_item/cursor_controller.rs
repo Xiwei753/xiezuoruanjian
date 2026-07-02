@@ -138,10 +138,7 @@ impl CursorController {
         // Determine if we should snap (no animation)
         // force_snap_next is NOT here: it only gates large_distance below,
         // so small-distance clicks still animate, while huge jumps snap.
-        let should_snap = is_scrolling
-            || is_selecting
-            || !old_visible
-            || scroll_changed;
+        let should_snap = is_scrolling || is_selecting || !old_visible || scroll_changed;
 
         // Large-distance snap: only when force_snap_next is true AND the
         // cursor moved a large distance. This prevents animating across

@@ -49,10 +49,10 @@ use std::sync::{Mutex, OnceLock};
 
 mod backend;
 mod editor;
+mod platform_utils;
 mod starmap_bridge;
 mod sujian_editor_item;
 mod sync_bridge;
-mod platform_utils;
 mod writing_bridge;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
@@ -462,7 +462,11 @@ fn install_translator() {
     if loaded {
         debug_log_static("app", "i18n", "QTranslator loaded successfully (zh_CN)");
     } else {
-        debug_log_static("app", "i18n", "QTranslator not loaded; running with source strings");
+        debug_log_static(
+            "app",
+            "i18n",
+            "QTranslator not loaded; running with source strings",
+        );
     }
 }
 
@@ -474,23 +478,27 @@ fn main() {
     diagnostics::install_panic_hook();
 
     debug_log_static("app", "app_startup", "Sujian application starting...");
-    diagnostics::log_to_file("INFO", "app", "app_startup", "Sujian application starting...");
+    diagnostics::log_to_file(
+        "INFO",
+        "app",
+        "app_startup",
+        "Sujian application starting...",
+    );
 
     // 注入 Qt 运行时版本到 diagnostics 模块（避免运行时调用 qmake 命令）
     let qt_ver = qt_runtime_version();
     diagnostics::set_qt_version(&qt_ver);
-    debug_log_static("app", "qt_version", &format!("Qt runtime version: {}", qt_ver));
+    debug_log_static(
+        "app",
+        "qt_version",
+        &format!("Qt runtime version: {}", qt_ver),
+    );
 
     fail_if_not_qt6();
     std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     probe_hub_header_resource();
-    qmetaobject::qml_register_type::<AppBackend>(
-        c"SujianApp",
-        1,
-        0,
-        c"AppBackend",
-    );
+    qmetaobject::qml_register_type::<AppBackend>(c"SujianApp", 1, 0, c"AppBackend");
     qmetaobject::qml_register_type::<sujian_editor_item::SujianEditorItem>(
         c"Sujian",
         1,

@@ -282,10 +282,23 @@ pub struct AppBackend {
     pub(crate) current_setting_diagnostics_verbose: bool,
 
     // ── Layout Policy ──
-    resolve_layout: qt_method!(fn(&self, width_vp: f64, height_vp: f64, safe_top_vp: f64, safe_bottom_vp: f64, keyboard_visible: bool, fold_posture: QString, orientation: QString, pointer: QString) -> QJsonObject),
+    resolve_layout: qt_method!(
+        fn(
+            &self,
+            width_vp: f64,
+            height_vp: f64,
+            safe_top_vp: f64,
+            safe_bottom_vp: f64,
+            keyboard_visible: bool,
+            fold_posture: QString,
+            orientation: QString,
+            pointer: QString,
+        ) -> QJsonObject
+    ),
 
     // ── Screen Policy ──
-    resolve_screen_policy: qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
+    resolve_screen_policy:
+        qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
 }
 
 impl AppBackend {
@@ -448,7 +461,7 @@ impl AppBackend {
         pointer: QString,
     ) -> QJsonObject {
         use writer_core::layout_policy::{
-            FoldPosture, Orientation, PointerKind, WindowMetrics, resolve_layout,
+            resolve_layout, FoldPosture, Orientation, PointerKind, WindowMetrics,
         };
 
         let fp = match fold_posture.to_string().as_str() {
@@ -490,13 +503,9 @@ impl AppBackend {
     ///
     /// QML 调用：backend.resolve_screen_policy("Writing", "SinglePane")
     /// 返回：{ screenRole: "Writing", actionSlots: [...] }
-    fn resolve_screen_policy(
-        &self,
-        screen_role: QString,
-        shell_mode: QString,
-    ) -> QJsonObject {
-        use writer_core::screen_policy::{ScreenRole, resolve_screen_policy};
+    fn resolve_screen_policy(&self, screen_role: QString, shell_mode: QString) -> QJsonObject {
         use writer_core::layout_policy::ShellMode;
+        use writer_core::screen_policy::{resolve_screen_policy, ScreenRole};
 
         let role = match screen_role.to_string().as_str() {
             "Home" => ScreenRole::Home,
@@ -583,8 +592,7 @@ mod tests {
         backend.current_workspace = ws_path.clone();
         backend.current_has_workspace = true;
 
-        WriterCoreApi::new(&ws_path)
-            .create_workspace_if_needed()?;
+        WriterCoreApi::new(&ws_path).create_workspace_if_needed()?;
 
         // Create 3 projects
         for i in 1..=3 {

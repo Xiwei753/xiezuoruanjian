@@ -1,7 +1,10 @@
 #[cfg(test)]
 mod tests {
     use crate::project::create_project;
-    use crate::volume::{create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume, reorder_volumes};
+    use crate::volume::{
+        create_volume, delete_volume, list_volumes, normalize_rel_path, rename_volume,
+        reorder_volumes,
+    };
     use crate::workspace::create_workspace;
     use tempfile::tempdir;
 
@@ -47,7 +50,12 @@ mod tests {
 
         let project = create_project(workspace_path, "Test Project").unwrap();
 
-        let result = rename_volume(workspace_path, &project.id, "non-existent-volume-id", "New Title");
+        let result = rename_volume(
+            workspace_path,
+            &project.id,
+            "non-existent-volume-id",
+            "New Title",
+        );
         match result {
             Err(crate::error::Error::VolumeNotFound) => (),
             _ => panic!("Expected Error::VolumeNotFound, got {:?}", result),

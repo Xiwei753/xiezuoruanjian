@@ -578,7 +578,10 @@ mod tests {
         state.start_delete((5, 15), 100);
         assert!(!state.is_empty());
         state.clear_on_scroll();
-        assert!(state.is_empty(), "Delete animation should be cleared on scroll");
+        assert!(
+            state.is_empty(),
+            "Delete animation should be cleared on scroll"
+        );
     }
 
     #[test]
@@ -587,7 +590,10 @@ mod tests {
         state.start_delete((5, 15), 100);
         assert!(!state.is_empty());
         state.clear_on_typing_animation_disabled();
-        assert!(state.is_empty(), "Delete animation should be cleared when typing animation disabled");
+        assert!(
+            state.is_empty(),
+            "Delete animation should be cleared when typing animation disabled"
+        );
     }
 
     #[test]
@@ -598,7 +604,10 @@ mod tests {
         assert!(state.has_active_insert());
         assert!(!state.is_empty());
         state.clear();
-        assert!(state.is_empty(), "clear() should remove both Insert and Delete animations");
+        assert!(
+            state.is_empty(),
+            "clear() should remove both Insert and Delete animations"
+        );
         assert!(state.active_insert_byte_ranges().is_empty());
     }
 
@@ -607,7 +616,7 @@ mod tests {
     #[test]
     fn test_should_create_animation_full() {
         let decision = should_create_text_animation(
-            3,    // glyph_count
+            3,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -622,7 +631,7 @@ mod tests {
     #[test]
     fn test_should_create_animation_empty_glyphs() {
         let decision = should_create_text_animation(
-            0,    // glyph_count
+            0,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -637,7 +646,7 @@ mod tests {
     #[test]
     fn test_should_create_animation_glyph_over_limit() {
         let decision = should_create_text_animation(
-            9,    // glyph_count > 8
+            9,     // glyph_count > 8
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -652,8 +661,8 @@ mod tests {
     #[test]
     fn test_should_create_animation_contains_newline() {
         let decision = should_create_text_animation(
-            1,    // glyph_count
-            true, // contains_newline
+            1,     // glyph_count
+            true,  // contains_newline
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -667,9 +676,9 @@ mod tests {
     #[test]
     fn test_should_create_animation_scrolling() {
         let decision = should_create_text_animation(
-            1,    // glyph_count
+            1,     // glyph_count
             false, // contains_newline
-            true, // is_scrolling
+            true,  // is_scrolling
             false, // is_loading
             false, // is_applying_format
             false, // is_applying_settings
@@ -682,10 +691,10 @@ mod tests {
     #[test]
     fn test_should_create_animation_loading() {
         let decision = should_create_text_animation(
-            1,    // glyph_count
+            1,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
-            true, // is_loading
+            true,  // is_loading
             false, // is_applying_format
             false, // is_applying_settings
             true,  // animation_enabled
@@ -697,7 +706,7 @@ mod tests {
     #[test]
     fn test_should_create_animation_disabled() {
         let decision = should_create_text_animation(
-            1,    // glyph_count
+            1,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -712,7 +721,7 @@ mod tests {
     #[test]
     fn test_should_create_animation_component_not_ready() {
         let decision = should_create_text_animation(
-            1,    // glyph_count
+            1,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -728,7 +737,7 @@ mod tests {
     fn test_should_create_animation_exactly_at_limit() {
         // glyph_count == 8 should still be FullAnimation
         let decision = should_create_text_animation(
-            8,    // glyph_count == MAX_GLYPH_COUNT
+            8,     // glyph_count == MAX_GLYPH_COUNT
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -743,11 +752,11 @@ mod tests {
     #[test]
     fn test_should_create_animation_applying_format() {
         let decision = should_create_text_animation(
-            1,    // glyph_count
+            1,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
-            true, // is_applying_format
+            true,  // is_applying_format
             false, // is_applying_settings
             true,  // animation_enabled
             true,  // component_ready
@@ -758,12 +767,12 @@ mod tests {
     #[test]
     fn test_should_create_animation_applying_settings() {
         let decision = should_create_text_animation(
-            1,    // glyph_count
+            1,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
-            true, // is_applying_settings
+            true,  // is_applying_settings
             true,  // animation_enabled
             true,  // component_ready
         );
@@ -774,8 +783,8 @@ mod tests {
     fn test_should_create_animation_newline_overrides_glyph_count() {
         // Even with valid glyph_count, newline means CursorOnly
         let decision = should_create_text_animation(
-            5,    // glyph_count
-            true, // contains_newline
+            5,     // glyph_count
+            true,  // contains_newline
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -1116,7 +1125,10 @@ mod tests {
         assert!(state.has_active_insert());
         // insert 在 range 内部，取消动画 → has_active_insert 变为 false（需要 repaint）
         state.map_ranges_for_insert(15, 3);
-        assert!(!state.has_active_insert(), "Insert inside range should cancel animation, triggering repaint");
+        assert!(
+            !state.has_active_insert(),
+            "Insert inside range should cancel animation, triggering repaint"
+        );
     }
 
     #[test]
@@ -1126,7 +1138,10 @@ mod tests {
         assert!(state.has_active_insert());
         // delete 和 range 相交，取消动画 → has_active_insert 变为 false（需要 repaint）
         state.map_ranges_for_delete(8, 5);
-        assert!(!state.has_active_insert(), "Delete intersecting range should cancel animation, triggering repaint");
+        assert!(
+            !state.has_active_insert(),
+            "Delete intersecting range should cancel animation, triggering repaint"
+        );
     }
 
     #[test]
@@ -1136,7 +1151,10 @@ mod tests {
         assert!(state.has_active_insert());
         // insert 在 range 之前，不取消 → has_active_insert 仍为 true（无需 repaint）
         state.map_ranges_for_insert(5, 3);
-        assert!(state.has_active_insert(), "Insert before range should not cancel animation");
+        assert!(
+            state.has_active_insert(),
+            "Insert before range should not cancel animation"
+        );
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
     }
 
@@ -1147,7 +1165,10 @@ mod tests {
         assert!(state.has_active_insert());
         // delete 在 range 之后，不取消 → has_active_insert 仍为 true（无需 repaint）
         state.map_ranges_for_delete(25, 5);
-        assert!(state.has_active_insert(), "Delete after range should not cancel animation");
+        assert!(
+            state.has_active_insert(),
+            "Delete after range should not cancel animation"
+        );
     }
 
     #[test]
@@ -1178,8 +1199,14 @@ mod tests {
         state.start_insert((10, 20), vec![(20, 25)], 100);
         // insert 在 byte_range 内部，取消整个动画（包括 reflow）
         state.map_ranges_for_insert(15, 3);
-        assert!(state.is_empty(), "Insert inside byte_range should cancel entire animation");
-        assert!(state.active_reflow_byte_ranges().is_empty(), "Reflow ranges should be cleared when animation is cancelled");
+        assert!(
+            state.is_empty(),
+            "Insert inside byte_range should cancel entire animation"
+        );
+        assert!(
+            state.active_reflow_byte_ranges().is_empty(),
+            "Reflow ranges should be cleared when animation is cancelled"
+        );
     }
 
     #[test]
@@ -1197,7 +1224,13 @@ mod tests {
         state.map_ranges_for_insert(11, 1);
         let ranges = state.active_insert_byte_ranges();
         assert_eq!(ranges.len(), 2);
-        assert!(ranges.contains(&(5, 10)), "First animation range should remain (5, 10)");
-        assert!(ranges.contains(&(10, 11)), "Second animation range should remain (10, 11)");
+        assert!(
+            ranges.contains(&(5, 10)),
+            "First animation range should remain (5, 10)"
+        );
+        assert!(
+            ranges.contains(&(10, 11)),
+            "Second animation range should remain (10, 11)"
+        );
     }
 }

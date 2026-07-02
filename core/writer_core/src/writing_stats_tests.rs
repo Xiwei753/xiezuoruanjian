@@ -11,9 +11,9 @@ fn test_human_typed_counts_as_pure_input() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -47,9 +47,9 @@ fn test_pasted_does_not_count_as_human_typed() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::Pasted,
@@ -81,9 +81,9 @@ fn test_deleted_does_not_cancel_human_typed() {
 
     let event1 = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -98,9 +98,9 @@ fn test_deleted_does_not_cancel_human_typed() {
 
     let event2 = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::Deleted,
@@ -133,9 +133,9 @@ fn test_ai_inserted_not_counted_as_human() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::AiInserted,
@@ -167,9 +167,9 @@ fn test_sync_remote_not_counted_as_local_input() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::SyncRemote,
@@ -201,9 +201,9 @@ fn test_daily_aggregation_idempotent() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -237,9 +237,9 @@ fn test_multi_device_no_overlap() {
 
     let event1 = WritingInputEvent::new(
         "dev-linux",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -254,9 +254,9 @@ fn test_multi_device_no_overlap() {
 
     let event2 = WritingInputEvent::new(
         "dev-android",
-            Platform::Android,
-            "phone",
-            "proj1",
+        Platform::Android,
+        "phone",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -380,9 +380,9 @@ fn test_per_chapter_tracking() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap-xyz",
         EventSource::HumanTyped,
@@ -415,9 +415,9 @@ fn test_event_file_written() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,
@@ -528,9 +528,9 @@ fn test_char_count_uses_unicode_scalar() {
 
     let event = WritingInputEvent::new(
         "dev-1",
-            Platform::Desktop,
-            "desktop",
-            "proj1",
+        Platform::Desktop,
+        "desktop",
+        "proj1",
         "vol1",
         "chap1",
         EventSource::HumanTyped,

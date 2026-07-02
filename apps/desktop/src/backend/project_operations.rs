@@ -2,7 +2,6 @@
 // project_operations.rs — AppBackend 项目/分卷/章节 CRUD 操作
 // =============================================================================
 
-
 use super::*;
 use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
 use writer_core::api::{ChangedEntityDto, ChapterMetaDto, ResultEnvelope, VolumeDto, WriterError};
@@ -287,7 +286,11 @@ impl AppBackend {
     ) -> QString {
         match serde_json::from_str::<serde_json::Value>(envelope_str) {
             Ok(mut envelope) => {
-                if envelope.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
+                if envelope
+                    .get("success")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+                {
                     on_success(self, &envelope);
                     envelope["state"] = self.current_app_state_value();
                     envelope.to_string().into()
@@ -298,7 +301,8 @@ impl AppBackend {
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     let resolved_key = if !message_key.is_empty() {
-                        crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
+                        crate::backend::message_key_mapper::resolve_message_key(message_key)
+                            .to_string()
                     } else {
                         "error.other".to_string()
                     };
@@ -323,11 +327,17 @@ impl AppBackend {
         let title_str = title.to_string();
 
         if title_str.trim().is_empty() {
-            return self.mutation_error_json("error.empty_title".to_string(), "作品名不能为空".to_string());
+            return self.mutation_error_json(
+                "error.empty_title".to_string(),
+                "作品名不能为空".to_string(),
+            );
         }
 
         if !self.current_has_workspace || self.current_workspace.is_empty() {
-            return self.mutation_error_json("error.invalid_workspace".to_string(), "未打开工作区，无法创建作品。请先新建或打开一个工作区。".to_string());
+            return self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "未打开工作区，无法创建作品。请先新建或打开一个工作区。".to_string(),
+            );
         }
 
         if let Some(api) = self.core_api() {
@@ -338,11 +348,15 @@ impl AppBackend {
                     ResultEnvelope::success_with_changes(
                         project,
                         Vec::new(),
-                        vec![ChangedEntityDto { entity_type: "ProjectCreated".to_string(), entity_id: Some(project_id) }],
+                        vec![ChangedEntityDto {
+                            entity_type: "ProjectCreated".to_string(),
+                            entity_id: Some(project_id),
+                        }],
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::ProjectDto>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, value| {
                 if let Some(proj_id) = value
                     .get("data")
@@ -370,7 +384,10 @@ impl AppBackend {
                 }
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -399,11 +416,15 @@ impl AppBackend {
                     ResultEnvelope::success_with_changes(
                         volume,
                         Vec::new(),
-                        vec![ChangedEntityDto { entity_type: "VolumeCreated".to_string(), entity_id: Some(volume_id) }],
+                        vec![ChangedEntityDto {
+                            entity_type: "VolumeCreated".to_string(),
+                            entity_id: Some(volume_id),
+                        }],
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::VolumeDto>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, value| {
                 if let Some(vol_id) = value
                     .get("data")
@@ -424,7 +445,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -448,18 +472,26 @@ impl AppBackend {
             ),
         );
         if let Some(api) = self.core_api() {
-            let result = api.create_chapter(&project_id.to_string(), &volume_id.to_string(), &title.to_string());
+            let result = api.create_chapter(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &title.to_string(),
+            );
             let envelope = match result {
                 Ok(chapter) => {
                     let chapter_id = chapter.id.clone();
                     ResultEnvelope::success_with_changes(
                         chapter,
                         Vec::new(),
-                        vec![ChangedEntityDto { entity_type: "ChapterCreated".to_string(), entity_id: Some(chapter_id) }],
+                        vec![ChangedEntityDto {
+                            entity_type: "ChapterCreated".to_string(),
+                            entity_id: Some(chapter_id),
+                        }],
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::ChapterMetaDto>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, value| {
                 if let Some(chap_id) = value
                     .get("data")
@@ -480,7 +512,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -502,10 +537,14 @@ impl AppBackend {
                 Ok(_) => ResultEnvelope::success_with_changes(
                     true,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ProjectDeleted".to_string(), entity_id: Some(project_id_str.clone()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ProjectDeleted".to_string(),
+                        entity_id: Some(project_id_str.clone()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 if app.selected_project_id.as_deref() == Some(&project_id_str) {
                     app.selected_project_id = None;
@@ -521,7 +560,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -548,10 +590,14 @@ impl AppBackend {
                 Ok(_) => ResultEnvelope::success_with_changes(
                     true,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "VolumeDeleted".to_string(), entity_id: Some(volume_id_str.clone()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "VolumeDeleted".to_string(),
+                        entity_id: Some(volume_id_str.clone()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 if app.selected_volume_id.as_deref() == Some(&volume_id_str) {
                     app.selected_volume_id = None;
@@ -566,7 +612,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -595,10 +644,14 @@ impl AppBackend {
                 Ok(_) => ResultEnvelope::success_with_changes(
                     true,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ChapterDeleted".to_string(), entity_id: Some(chapter_id_str.clone()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ChapterDeleted".to_string(),
+                        entity_id: Some(chapter_id_str.clone()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 if app.selected_chapter_id.as_deref() == Some(&chapter_id_str) {
                     app.clear_editor_state();
@@ -612,7 +665,10 @@ impl AppBackend {
                 );
             })
         } else {
-            self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
+            self.mutation_error_json(
+                "error.invalid_workspace".to_string(),
+                "核心模块未初始化".to_string(),
+            )
         }
     }
 
@@ -671,10 +727,14 @@ impl AppBackend {
                 Ok(data) => ResultEnvelope::success_with_changes(
                     data,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project_id.to_string()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ProjectRenamed".to_string(),
+                        entity_id: Some(project_id.to_string()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
@@ -727,15 +787,23 @@ impl AppBackend {
         new_title: QString,
     ) -> QString {
         if let Some(api) = self.core_api() {
-            let result = api.rename_volume(&project_id.to_string(), &volume_id.to_string(), &new_title.to_string());
+            let result = api.rename_volume(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &new_title.to_string(),
+            );
             let envelope = match result {
                 Ok(data) => ResultEnvelope::success_with_changes(
                     data,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume_id.to_string()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "VolumeRenamed".to_string(),
+                        entity_id: Some(volume_id.to_string()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
@@ -793,15 +861,24 @@ impl AppBackend {
         new_title: QString,
     ) -> QString {
         if let Some(api) = self.core_api() {
-            let result = api.rename_chapter(&project_id.to_string(), &volume_id.to_string(), &chapter_id.to_string(), &new_title.to_string());
+            let result = api.rename_chapter(
+                &project_id.to_string(),
+                &volume_id.to_string(),
+                &chapter_id.to_string(),
+                &new_title.to_string(),
+            );
             let envelope = match result {
                 Ok(data) => ResultEnvelope::success_with_changes(
                     data,
                     Vec::new(),
-                    vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter_id.to_string()) }],
+                    vec![ChangedEntityDto {
+                        entity_type: "ChapterRenamed".to_string(),
+                        entity_id: Some(chapter_id.to_string()),
+                    }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
+            }
+            .to_json_string();
             self.core_envelope_to_result(&envelope, |app, _value| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();

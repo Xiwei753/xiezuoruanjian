@@ -75,9 +75,7 @@ impl AppBackend {
         branch: &str,
         token: &str,
     ) -> SyncTaskOutcome {
-        use writer_core::sync::{
-            sanitize_remote_url, BackendType, SyncConfig, SyncSecrets,
-        };
+        use writer_core::sync::{sanitize_remote_url, BackendType, SyncConfig, SyncSecrets};
 
         let parsed = sanitize_remote_url(remote_url);
         let sanitized_url = parsed.sanitized_url;
@@ -142,17 +140,11 @@ impl AppBackend {
                                     action_result: format!("克隆成功但工作区初始化失败: {}", e),
                                 };
                             }
-                            let push_backend = writer_core::sync::create_sync_backend(
-                                &config.backend_type,
-                            );
+                            let push_backend =
+                                writer_core::sync::create_sync_backend(&config.backend_type);
                             let push_result = push_backend.sync(path_obj, &config, &secrets, true);
                             let save_first = match &push_result {
-                                Ok(r)
-                                    if r.status
-                                        != writer_core::sync::SyncStatus::Success =>
-                                {
-                                    true
-                                }
+                                Ok(r) if r.status != writer_core::sync::SyncStatus::Success => true,
                                 Err(_) => true,
                                 _ => false,
                             };

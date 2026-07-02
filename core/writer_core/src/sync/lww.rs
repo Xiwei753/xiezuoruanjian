@@ -120,6 +120,35 @@ enum ThreeWayResult {
     BothChanged,
 }
 
+fn save_conflict_copy(
+    workspace_path: &Path,
+    path: &str,
+    remote_content: &[u8],
+) -> crate::Result<String> {
+    let full_path = workspace_path.join(path);
+    let filename = full_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let conflict_filename = format!("{}.remote-conflict-{}", filename, timestamp);
+    let conflict_path = full_path
+        .parent()
+        .unwrap_or(&full_path)
+        .join(&conflict_filename);
+    if let Some(parent) = conflict_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    std::fs::write(&conflict_path, remote_content).map_err(|e| {
+        crate::Error::Other(format!(
+            "local_io_error: write conflict copy {}: {}",
+            path, e
+        ))
+    })?;
+    Ok(conflict_filename)
+}
+
 pub(crate) fn perform_lww_sync(
     workspace_path: &Path,
     config: &SyncConfig,
@@ -501,8 +530,7 @@ fn execute_lww_sync_attempt(
             pending_paths
                 .par_iter()
                 .map(|path| {
-                    let remote =
-                        github_get_content(client, api_base, token, &config.branch, path)?;
+                    let remote = github_get_content(client, api_base, token, &config.branch, path)?;
                     let Some((content, _sha)) = remote else {
                         return Ok((path.clone(), None));
                     };
@@ -676,30 +704,8 @@ fn execute_lww_sync_attempt(
                                     &config.branch,
                                     &path,
                                 )? {
-                                    let full_path = workspace_path.join(&path);
-                                    let filename = full_path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                        .to_string();
-                                    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
                                     let conflict_filename =
-                                        format!("{}.remote-conflict-{}", filename, timestamp);
-                                    let conflict_path = full_path
-                                        .parent()
-                                        .unwrap_or(&full_path)
-                                        .join(&conflict_filename);
-                                    if let Some(parent) = conflict_path.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
-                                    }
-                                    std::fs::write(&conflict_path, &remote_content).map_err(
-                                        |e| {
-                                            crate::Error::Other(format!(
-                                                "local_io_error: write conflict copy {}: {}",
-                                                path, e
-                                            ))
-                                        },
-                                    )?;
+                                        save_conflict_copy(workspace_path, &path, &remote_content)?;
 
                                     Some(SyncConflict {
                                         local_path: path.clone(),
@@ -851,14 +857,11 @@ fn execute_lww_sync_attempt(
                         crate::Error::Other(format!("local_io_error: {}: {}", path, e))
                     })?;
                 }
-                let tmp_path =
-                    full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                std::fs::write(&tmp_path, content).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
-                })?;
-                std::fs::rename(tmp_path, &full_path).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
-                })?;
+                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                std::fs::write(&tmp_path, content)
+                    .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
+                std::fs::rename(tmp_path, &full_path)
+                    .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
                 Ok(())
             })
         });
@@ -950,7 +953,7 @@ fn execute_lww_sync_attempt(
             state
                 .known_files_updated_at
                 .get(p)
-                .map(|v| (p.clone(), v.clone()))
+                .map(|v| (p.clone(), *v))
         })
         .collect();
 

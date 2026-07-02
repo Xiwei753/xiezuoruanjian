@@ -188,7 +188,8 @@ impl Default for LocalSettings {
             editor_smooth_cursor_enabled: default_editor_smooth_cursor_enabled(),
             editor_typing_animation_duration_ms: default_editor_typing_animation_duration_ms(),
             editor_smooth_cursor_duration_ms: default_editor_smooth_cursor_duration_ms(),
-            editor_coordinated_text_cursor_animation_enabled: default_editor_coordinated_text_cursor_animation_enabled(),
+            editor_coordinated_text_cursor_animation_enabled:
+                default_editor_coordinated_text_cursor_animation_enabled(),
             ai_enabled: false,
             stats_device_id: None,
             desktop_sidebar_width: default_desktop_sidebar_width(),
@@ -483,14 +484,20 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded.auto_indent_enabled, "auto_indent_enabled should persist as true");
+        assert!(
+            loaded.auto_indent_enabled,
+            "auto_indent_enabled should persist as true"
+        );
 
         let mut settings2 = loaded;
         settings2.auto_indent_enabled = false;
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded2.auto_indent_enabled, "auto_indent_enabled should persist as false after change");
+        assert!(
+            !loaded2.auto_indent_enabled,
+            "auto_indent_enabled should persist as false after change"
+        );
     }
 
     #[test]
@@ -615,13 +622,19 @@ mod tests {
     #[test]
     fn diagnostics_enabled_default_true() {
         let settings = LocalSettings::default();
-        assert!(settings.diagnostics_enabled, "diagnostics_enabled should default to true (alpha)");
+        assert!(
+            settings.diagnostics_enabled,
+            "diagnostics_enabled should default to true (alpha)"
+        );
     }
 
     #[test]
     fn diagnostics_verbose_default_true() {
         let settings = LocalSettings::default();
-        assert!(settings.diagnostics_verbose, "diagnostics_verbose should default to true (alpha)");
+        assert!(
+            settings.diagnostics_verbose,
+            "diagnostics_verbose should default to true (alpha)"
+        );
     }
 
     #[test]
@@ -633,8 +646,14 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded.diagnostics_enabled, "diagnostics_enabled should persist as true");
-        assert!(loaded.diagnostics_verbose, "diagnostics_verbose should persist as true");
+        assert!(
+            loaded.diagnostics_enabled,
+            "diagnostics_enabled should persist as true"
+        );
+        assert!(
+            loaded.diagnostics_verbose,
+            "diagnostics_verbose should persist as true"
+        );
 
         // Test round-trip with false
         settings.diagnostics_enabled = false;
@@ -656,7 +675,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.diagnostics_enabled, "diagnostics_enabled=false should persist correctly");
+        assert!(
+            !loaded.diagnostics_enabled,
+            "diagnostics_enabled=false should persist correctly"
+        );
     }
 
     #[test]
@@ -667,7 +689,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.diagnostics_verbose, "diagnostics_verbose=false should persist correctly");
+        assert!(
+            !loaded.diagnostics_verbose,
+            "diagnostics_verbose=false should persist correctly"
+        );
     }
 
     #[test]
@@ -676,12 +701,18 @@ mod tests {
 
         // Default is true, toggle to false
         let mut settings = LocalSettings::default();
-        assert!(settings.editor_typing_animation_enabled, "default should be true");
+        assert!(
+            settings.editor_typing_animation_enabled,
+            "default should be true"
+        );
         settings.editor_typing_animation_enabled = false;
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.editor_typing_animation_enabled, "typing animation should persist as false after toggle");
+        assert!(
+            !loaded.editor_typing_animation_enabled,
+            "typing animation should persist as false after toggle"
+        );
 
         // Toggle back to true
         let mut settings2 = loaded;
@@ -689,7 +720,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded2.editor_typing_animation_enabled, "typing animation should persist as true after toggle back");
+        assert!(
+            loaded2.editor_typing_animation_enabled,
+            "typing animation should persist as true after toggle back"
+        );
     }
 
     #[test]
@@ -698,12 +732,18 @@ mod tests {
 
         // Default is true, toggle to false
         let mut settings = LocalSettings::default();
-        assert!(settings.editor_smooth_cursor_enabled, "default should be true");
+        assert!(
+            settings.editor_smooth_cursor_enabled,
+            "default should be true"
+        );
         settings.editor_smooth_cursor_enabled = false;
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert!(!loaded.editor_smooth_cursor_enabled, "smooth cursor should persist as false after toggle");
+        assert!(
+            !loaded.editor_smooth_cursor_enabled,
+            "smooth cursor should persist as false after toggle"
+        );
 
         // Toggle back to true
         let mut settings2 = loaded;
@@ -711,7 +751,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert!(loaded2.editor_smooth_cursor_enabled, "smooth cursor should persist as true after toggle back");
+        assert!(
+            loaded2.editor_smooth_cursor_enabled,
+            "smooth cursor should persist as true after toggle back"
+        );
     }
 
     #[test]
@@ -723,7 +766,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded.editor_font_size, 24.0, "font size should persist as 24.0");
+        assert_eq!(
+            loaded.editor_font_size, 24.0,
+            "font size should persist as 24.0"
+        );
 
         // Change again
         let mut settings2 = loaded;
@@ -731,7 +777,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded2.editor_font_size, 18.0, "font size should persist as 18.0 after change");
+        assert_eq!(
+            loaded2.editor_font_size, 18.0,
+            "font size should persist as 18.0 after change"
+        );
     }
 
     #[test]
@@ -743,7 +792,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded.editor_line_spacing_multiplier, 2.0, "line spacing should persist as 2.0");
+        assert_eq!(
+            loaded.editor_line_spacing_multiplier, 2.0,
+            "line spacing should persist as 2.0"
+        );
 
         // Change again
         let mut settings2 = loaded;
@@ -751,7 +803,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded2.editor_line_spacing_multiplier, 1.2, "line spacing should persist as 1.2 after change");
+        assert_eq!(
+            loaded2.editor_line_spacing_multiplier, 1.2,
+            "line spacing should persist as 1.2 after change"
+        );
     }
 
     #[test]
@@ -763,7 +818,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings).unwrap();
 
         let loaded = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded.auto_indent_width, 4.0, "indent width should persist as 4.0");
+        assert_eq!(
+            loaded.auto_indent_width, 4.0,
+            "indent width should persist as 4.0"
+        );
 
         // Change again
         let mut settings2 = loaded;
@@ -771,7 +829,10 @@ mod tests {
         save_local_settings(temp_dir.path(), &settings2).unwrap();
 
         let loaded2 = load_local_settings(temp_dir.path()).unwrap();
-        assert_eq!(loaded2.auto_indent_width, 0.0, "indent width should persist as 0.0 after change");
+        assert_eq!(
+            loaded2.auto_indent_width, 0.0,
+            "indent width should persist as 0.0 after change"
+        );
     }
 
     #[test]
@@ -808,9 +869,15 @@ mod tests {
 
         // 再次调用不应覆盖已有值
         let info2 = ensure_device_info(temp_dir.path(), "android", "phone").unwrap();
-        assert_eq!(info2.device_id, info.device_id, "device_id should not change");
+        assert_eq!(
+            info2.device_id, info.device_id,
+            "device_id should not change"
+        );
         assert_eq!(info2.platform, "desktop", "platform should not change");
-        assert_eq!(info2.device_class, "desktop", "device_class should not change");
+        assert_eq!(
+            info2.device_class, "desktop",
+            "device_class should not change"
+        );
     }
 
     #[test]
@@ -826,8 +893,17 @@ mod tests {
         // 验证 JSON 文件使用 camelCase
         let path = temp_dir.path().join("app-meta/device/current_device.json");
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("\"deviceId\""), "should serialize as camelCase");
-        assert!(content.contains("\"deviceClass\""), "should serialize as camelCase");
-        assert!(!content.contains("\"device_id\""), "should not use snake_case");
+        assert!(
+            content.contains("\"deviceId\""),
+            "should serialize as camelCase"
+        );
+        assert!(
+            content.contains("\"deviceClass\""),
+            "should serialize as camelCase"
+        );
+        assert!(
+            !content.contains("\"device_id\""),
+            "should not use snake_case"
+        );
     }
 }

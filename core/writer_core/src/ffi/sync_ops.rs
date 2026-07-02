@@ -141,8 +141,7 @@ pub unsafe extern "C" fn writer_core_save_device_info(
         if let Some(v) = val.get("platform").and_then(|v| v.as_str()) {
             info.platform = v.to_string();
         }
-        core.save_device_info(&info)
-            .map_err(|e| format!("{}", e))?;
+        core.save_device_info(&info).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),

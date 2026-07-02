@@ -15,7 +15,6 @@
 // - 被 apps/desktop/src/backend/starmap_backend.rs 引用，作为后端 QObject 完成星图数据管理的执行模块。
 // =============================================================================
 
-
 use writer_core::api::types::{
     StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
     StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchDto, StarMapNodeContentDto, StarMapNodeDto,
@@ -279,11 +278,11 @@ pub fn find_starmap_references(api: &WriterCoreApi, target_starmap_id: &str) -> 
 }
 
 pub fn compute_edge_renders_json(edges_json: &str, nodes_json: &str) -> String {
-    let edges: Vec<writer_core::starmap::render::EdgeInput> =
-        match serde_json::from_str(edges_json) {
-            Ok(v) => v,
-            Err(e) => return envelope_err_str(&format!("Invalid edges JSON: {}", e)),
-        };
+    let edges: Vec<writer_core::starmap::render::EdgeInput> = match serde_json::from_str(edges_json)
+    {
+        Ok(v) => v,
+        Err(e) => return envelope_err_str(&format!("Invalid edges JSON: {}", e)),
+    };
 
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "camelCase")]

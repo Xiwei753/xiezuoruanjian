@@ -229,7 +229,12 @@ impl SyncResult {
         }
     }
 
-    pub fn error(status: SyncStatus, first_sync_mode: FirstSyncMode, error: String, error_category: Option<String>) -> Self {
+    pub fn error(
+        status: SyncStatus,
+        first_sync_mode: FirstSyncMode,
+        error: String,
+        error_category: Option<String>,
+    ) -> Self {
         Self {
             status,
             uploaded_files: Vec::new(),
@@ -248,7 +253,11 @@ impl SyncResult {
         }
     }
 
-    pub fn conflict(conflicts: Vec<SyncConflict>, error: String, error_category: Option<String>) -> Self {
+    pub fn conflict(
+        conflicts: Vec<SyncConflict>,
+        error: String,
+        error_category: Option<String>,
+    ) -> Self {
         Self {
             status: SyncStatus::Conflict,
             uploaded_files: Vec::new(),

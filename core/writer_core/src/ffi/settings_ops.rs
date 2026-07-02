@@ -242,7 +242,10 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             if let Some(v) = tp.get("lightOnSurfaceVariant").and_then(|v| v.as_str()) {
                 palette.light_on_surface_variant = v.to_string();
             }
-            if let Some(v) = tp.get("lightSurfaceContainerLowest").and_then(|v| v.as_str()) {
+            if let Some(v) = tp
+                .get("lightSurfaceContainerLowest")
+                .and_then(|v| v.as_str())
+            {
                 palette.light_surface_container_lowest = v.to_string();
             }
             if let Some(v) = tp.get("lightSurfaceContainerLow").and_then(|v| v.as_str()) {
@@ -254,7 +257,10 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             if let Some(v) = tp.get("lightSurfaceContainerHigh").and_then(|v| v.as_str()) {
                 palette.light_surface_container_high = v.to_string();
             }
-            if let Some(v) = tp.get("lightSurfaceContainerHighest").and_then(|v| v.as_str()) {
+            if let Some(v) = tp
+                .get("lightSurfaceContainerHighest")
+                .and_then(|v| v.as_str())
+            {
                 palette.light_surface_container_highest = v.to_string();
             }
             if let Some(v) = tp.get("lightOutline").and_then(|v| v.as_str()) {
@@ -317,7 +323,10 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             if let Some(v) = tp.get("darkOnSurfaceVariant").and_then(|v| v.as_str()) {
                 palette.dark_on_surface_variant = v.to_string();
             }
-            if let Some(v) = tp.get("darkSurfaceContainerLowest").and_then(|v| v.as_str()) {
+            if let Some(v) = tp
+                .get("darkSurfaceContainerLowest")
+                .and_then(|v| v.as_str())
+            {
                 palette.dark_surface_container_lowest = v.to_string();
             }
             if let Some(v) = tp.get("darkSurfaceContainerLow").and_then(|v| v.as_str()) {
@@ -329,7 +338,10 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             if let Some(v) = tp.get("darkSurfaceContainerHigh").and_then(|v| v.as_str()) {
                 palette.dark_surface_container_high = v.to_string();
             }
-            if let Some(v) = tp.get("darkSurfaceContainerHighest").and_then(|v| v.as_str()) {
+            if let Some(v) = tp
+                .get("darkSurfaceContainerHighest")
+                .and_then(|v| v.as_str())
+            {
                 palette.dark_surface_container_highest = v.to_string();
             }
             if let Some(v) = tp.get("darkOutline").and_then(|v| v.as_str()) {

@@ -14,8 +14,8 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
     let forbidden_emojis = ["📁", "📄", "📝", "📦", "☁️", "⚙️", "📂", "✏️", "💡", "⚠️"];
     // Hardcoded colors we want to forbid
     let forbidden_colors = [
-        "#000000", "#111111", "#1a1c1e", "#1A1C1E", "black", "#2C2E36", "#2c2e36",
-        "#ffffff", "#FFFFFF", "white",
+        "#000000", "#111111", "#1a1c1e", "#1A1C1E", "black", "#2C2E36", "#2c2e36", "#ffffff",
+        "#FFFFFF", "white",
     ];
     // Forbidden qml binding usages
     let forbidden_bindings = [
@@ -105,9 +105,12 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     // All other components must use semantic tokens from DesignTokens.
                     // Note: _inferDark and isDark exemptions have been removed — components should
                     // no longer infer dark/light mode themselves; use DesignTokens instead.
-                    let is_system_palette_fallback = trimmed.contains("Application.styleHints.colorScheme")
+                    let is_system_palette_fallback = trimmed
+                        .contains("Application.styleHints.colorScheme")
                         || trimmed.contains("Qt.ColorScheme.Dark");
-                    let is_whitelisted = file_name == "DesignTokens.qml" || file_name == "main.qml" || file_name == "AppText.qml";
+                    let is_whitelisted = file_name == "DesignTokens.qml"
+                        || file_name == "main.qml"
+                        || file_name == "AppText.qml";
                     let is_scrim_or_shadow = trimmed.contains("scrim")
                         || trimmed.contains("shadow")
                         || trimmed.contains("Shadow");
@@ -120,9 +123,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             || lower.contains(&c)
                         {
                             // Exempt #1A1C1E/#1a1c1e in SystemPalette fallback or whitelisted files
-                            if (c == "#1a1c1e")
-                                && (is_system_palette_fallback || is_whitelisted)
-                            {
+                            if (c == "#1a1c1e") && (is_system_palette_fallback || is_whitelisted) {
                                 continue;
                             }
                             // Exempt #000000 in scrim/shadow contexts
@@ -188,7 +189,9 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                         // Check if the only hex match is #000000 in scrim/shadow context
                         let hex_matches: Vec<_> = hex_re.find_iter(trimmed).collect();
                         let all_allowed = is_scrim_or_shadow
-                            && hex_matches.iter().all(|m| m.as_str().eq_ignore_ascii_case("#000000"));
+                            && hex_matches
+                                .iter()
+                                .all(|m| m.as_str().eq_ignore_ascii_case("#000000"));
 
                         if !all_allowed {
                             // TRANSITION: warning only — do NOT set has_errors = true yet.
@@ -257,7 +260,10 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
             }
 
             // Reverse check: no QML file should reference SmoothCursor / smoothCursorOverlay / snapNextCursorUpdate
-            if content.contains("SmoothCursor.qml") || content.contains("smoothCursorOverlay") || content.contains("snapNextCursorUpdate") {
+            if content.contains("SmoothCursor.qml")
+                || content.contains("smoothCursorOverlay")
+                || content.contains("snapNextCursorUpdate")
+            {
                 eprintln!(
                     "{}: QML must not reference SmoothCursor.qml / smoothCursorOverlay / snapNextCursorUpdate after deletion",
                     file_name
@@ -1097,11 +1103,7 @@ fn test_editor_route_doc_no_legacy_full_render_claim() {
     }
 
     // 允许的正确表述
-    let allowed = [
-        "临时跳过 inserted range",
-        "临时渲染状态",
-        "内部渲染状态",
-    ];
+    let allowed = ["临时跳过 inserted range", "临时渲染状态", "内部渲染状态"];
     let has_correct = allowed.iter().any(|phrase| route_doc.contains(phrase));
     assert!(
         has_correct,

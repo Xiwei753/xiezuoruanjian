@@ -75,9 +75,9 @@ pub mod chapter_tests;
 pub mod dto_contract_tests;
 pub mod facade;
 #[cfg(test)]
-pub mod index_tests;
-#[cfg(test)]
 pub mod fixture_tests;
+#[cfg(test)]
+pub mod index_tests;
 #[cfg(test)]
 pub mod project_tests;
 #[cfg(test)]

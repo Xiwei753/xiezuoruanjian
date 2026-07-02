@@ -274,7 +274,12 @@ pub(crate) trait EditorInputHost {
     fn input_move_to_line_edge(&mut self, end: bool, extend: bool);
     fn input_clear_preedit(&mut self);
     fn input_set_preedit(&mut self, text: String, cursor: usize);
-    fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, attributes: Vec<crate::sujian_editor_item::PreeditAttribute>);
+    fn input_set_preedit_with_attrs(
+        &mut self,
+        text: String,
+        cursor: usize,
+        attributes: Vec<crate::sujian_editor_item::PreeditAttribute>,
+    );
     fn input_set_suppress_next_ime_commit(&mut self, value: bool);
     fn input_take_suppress_next_ime_commit(&mut self) -> bool;
     fn input_request_repaint(&mut self);
@@ -591,10 +596,12 @@ extern "C" fn sujian_ime_preedit_attrs(
 
     // Convert character-offset attributes to byte-offset PreeditAttribute
     let mut attributes = Vec::new();
-    if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0 {
+    if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0
+    {
         let types_slice = unsafe { std::slice::from_raw_parts(attr_types, attr_count as usize) };
         let starts_slice = unsafe { std::slice::from_raw_parts(attr_starts, attr_count as usize) };
-        let lengths_slice = unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
+        let lengths_slice =
+            unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
 
         // Pre-compute char-to-byte mapping for the preedit text
         let char_offsets: Vec<usize> = {
@@ -764,7 +771,12 @@ mod tests {
             self.preedit_cursor = cursor;
         }
 
-        fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, _attributes: Vec<crate::sujian_editor_item::PreeditAttribute>) {
+        fn input_set_preedit_with_attrs(
+            &mut self,
+            text: String,
+            cursor: usize,
+            _attributes: Vec<crate::sujian_editor_item::PreeditAttribute>,
+        ) {
             self.preedit_text = text;
             self.preedit_cursor = cursor;
         }

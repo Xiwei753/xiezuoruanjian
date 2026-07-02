@@ -415,7 +415,11 @@ fn compile_translations() -> Vec<PathBuf> {
                 match output {
                     Ok(out) => {
                         if out.status.success() {
-                            println!("cargo:warning=Compiled {} → {}", path.display(), qm_path.display());
+                            println!(
+                                "cargo:warning=Compiled {} → {}",
+                                path.display(),
+                                qm_path.display()
+                            );
                             qm_files.push(qm_path);
                         } else {
                             let stderr = String::from_utf8_lossy(&out.stderr);
@@ -504,7 +508,10 @@ fn main() {
     if let Ok(entries) = fs::read_dir("i18n") {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "ts" || ext == "qm") {
+            if path
+                .extension()
+                .is_some_and(|ext| ext == "ts" || ext == "qm")
+            {
                 println!("cargo:rerun-if-changed={}", path.display());
             }
         }

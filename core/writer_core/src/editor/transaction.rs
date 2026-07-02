@@ -380,7 +380,7 @@ impl EditorEngine {
     }
 
     /// 从 transaction 生成 EditorVisualTransaction。
-    /// 
+    ///
     /// Core 只填充语义字段（id, kind, cause, old/new text, selection, inserted_range, duration, coordinate_mode）。
     /// 平台层负责填充坐标字段（glyph_rects, cursor_rect）。
     pub fn visual_transaction(
@@ -457,7 +457,9 @@ fn should_animate_changes(
 ) -> bool {
     if !matches!(
         cause,
-        EditorTransactionCause::Typing | EditorTransactionCause::Delete | EditorTransactionCause::TypingCommit
+        EditorTransactionCause::Typing
+            | EditorTransactionCause::Delete
+            | EditorTransactionCause::TypingCommit
     ) {
         return false;
     }
@@ -783,7 +785,12 @@ mod tests {
 
     #[test]
     fn cursor_rect_serializes_camel_case() {
-        let cr = CursorRect { x: 10.5, top: 5.0, bottom: 25.0, baseline_y: 20.0 };
+        let cr = CursorRect {
+            x: 10.5,
+            top: 5.0,
+            bottom: 25.0,
+            baseline_y: 20.0,
+        };
         let json = serde_json::to_string(&cr).unwrap();
         assert!(json.contains("\"x\":"));
         assert!(json.contains("\"top\":"));
@@ -803,8 +810,18 @@ mod tests {
             new_cursor: EditorCursor { index: 1 },
             duration_ms: 160,
             glyph_rects: Vec::new(),
-            old_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            new_cursor_rect: Some(CursorRect { x: 30.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            old_cursor_rect: Some(CursorRect {
+                x: 10.0,
+                top: 5.0,
+                bottom: 25.0,
+                baseline_y: 20.0,
+            }),
+            new_cursor_rect: Some(CursorRect {
+                x: 30.0,
+                top: 5.0,
+                bottom: 25.0,
+                baseline_y: 20.0,
+            }),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("oldCursorRect"));
@@ -983,7 +1000,10 @@ mod tests {
             EditorSelection::collapsed("nihao", 5),
             EditorTransactionCause::ImeComposition,
         );
-        assert!(!tx.should_animate, "ImeComposition cause should not animate");
+        assert!(
+            !tx.should_animate,
+            "ImeComposition cause should not animate"
+        );
         // ImeComposition with cursor movement should only produce Cursor event
         let events = engine.animation_events(&tx);
         for event in &events {
@@ -1028,7 +1048,10 @@ mod tests {
             EditorSelection::collapsed("abc", 3),
             EditorTransactionCause::Typing,
         );
-        assert!(tx_on.should_animate, "Typing should animate when animation is on");
+        assert!(
+            tx_on.should_animate,
+            "Typing should animate when animation is on"
+        );
 
         // When typing animation is OFF: should_animate_changes still returns true for Typing cause,
         // but the caller (platform) should check the setting and skip creating animation events.
@@ -1042,7 +1065,10 @@ mod tests {
             EditorTransactionCause::Typing,
         );
         // Core always returns true for Typing cause — platform is responsible for checking the toggle
-        assert!(tx_off.should_animate, "Core should_animate_changes is cause-based, not toggle-based");
+        assert!(
+            tx_off.should_animate,
+            "Core should_animate_changes is cause-based, not toggle-based"
+        );
 
         // Non-typing causes should never animate regardless of toggle
         let tx_paste = engine.create_transaction(
@@ -1052,7 +1078,10 @@ mod tests {
             EditorSelection::collapsed("a pasted text", "a pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(!tx_paste.should_animate, "Paste should never animate regardless of toggle");
+        assert!(
+            !tx_paste.should_animate,
+            "Paste should never animate regardless of toggle"
+        );
     }
 
     #[test]
@@ -1084,7 +1113,10 @@ mod tests {
             EditorTransactionCause::Typing,
         );
         let events2 = engine.animation_events(&tx2);
-        assert_eq!(events2[0].duration_ms, 5, "Core stores whatever duration is set; clamping is the caller's responsibility");
+        assert_eq!(
+            events2[0].duration_ms, 5,
+            "Core stores whatever duration is set; clamping is the caller's responsibility"
+        );
 
         // Very large duration
         engine.set_animation_duration_ms(9999);
@@ -1096,7 +1128,10 @@ mod tests {
             EditorTransactionCause::Typing,
         );
         let events3 = engine.animation_events(&tx3);
-        assert_eq!(events3[0].duration_ms, 9999, "Core stores whatever duration is set; clamping is the caller's responsibility");
+        assert_eq!(
+            events3[0].duration_ms, 9999,
+            "Core stores whatever duration is set; clamping is the caller's responsibility"
+        );
     }
 
     #[test]
@@ -1114,8 +1149,16 @@ mod tests {
         assert!(!tx_undo.should_animate, "Undo should not animate");
         let events_undo = engine.animation_events(&tx_undo);
         for event in &events_undo {
-            assert_ne!(event.kind, EditorAnimationKind::Insert, "Undo should not produce Insert animation");
-            assert_ne!(event.kind, EditorAnimationKind::Delete, "Undo should not produce Delete animation");
+            assert_ne!(
+                event.kind,
+                EditorAnimationKind::Insert,
+                "Undo should not produce Insert animation"
+            );
+            assert_ne!(
+                event.kind,
+                EditorAnimationKind::Delete,
+                "Undo should not produce Delete animation"
+            );
         }
 
         // Redo with text change should NOT animate
@@ -1129,8 +1172,16 @@ mod tests {
         assert!(!tx_redo.should_animate, "Redo should not animate");
         let events_redo = engine.animation_events(&tx_redo);
         for event in &events_redo {
-            assert_ne!(event.kind, EditorAnimationKind::Insert, "Redo should not produce Insert animation");
-            assert_ne!(event.kind, EditorAnimationKind::Delete, "Redo should not produce Delete animation");
+            assert_ne!(
+                event.kind,
+                EditorAnimationKind::Insert,
+                "Redo should not produce Insert animation"
+            );
+            assert_ne!(
+                event.kind,
+                EditorAnimationKind::Delete,
+                "Redo should not produce Delete animation"
+            );
         }
     }
 
@@ -1146,11 +1197,22 @@ mod tests {
             EditorSelection::collapsed("ab", 2),
             EditorTransactionCause::Paste,
         );
-        assert!(!tx.should_animate, "Paste should not animate even for single char");
+        assert!(
+            !tx.should_animate,
+            "Paste should not animate even for single char"
+        );
         let events = engine.animation_events(&tx);
         for event in &events {
-            assert_ne!(event.kind, EditorAnimationKind::Insert, "Paste should not produce Insert animation");
-            assert_ne!(event.kind, EditorAnimationKind::Delete, "Paste should not produce Delete animation");
+            assert_ne!(
+                event.kind,
+                EditorAnimationKind::Insert,
+                "Paste should not produce Insert animation"
+            );
+            assert_ne!(
+                event.kind,
+                EditorAnimationKind::Delete,
+                "Paste should not produce Delete animation"
+            );
         }
 
         // Paste with multi-char text should NOT animate
@@ -1161,7 +1223,10 @@ mod tests {
             EditorSelection::collapsed("a long pasted text", "a long pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(!tx2.should_animate, "Paste should not animate for multi-char text");
+        assert!(
+            !tx2.should_animate,
+            "Paste should not animate for multi-char text"
+        );
     }
 
     #[test]
@@ -1178,7 +1243,10 @@ mod tests {
         );
         assert!(!tx.should_animate, "Load should not animate");
         let events = engine.animation_events(&tx);
-        assert!(events.is_empty(), "Load should produce zero animation events (not even Cursor)");
+        assert!(
+            events.is_empty(),
+            "Load should produce zero animation events (not even Cursor)"
+        );
 
         // Load with same cursor position (0→0) should also produce no events
         let tx2 = engine.create_transaction(
@@ -1242,7 +1310,12 @@ mod tests {
 
     #[test]
     fn cursor_rect_has_baseline_y() {
-        let cr = CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 };
+        let cr = CursorRect {
+            x: 10.0,
+            top: 5.0,
+            bottom: 25.0,
+            baseline_y: 20.0,
+        };
         let json = serde_json::to_string(&cr).unwrap();
         assert!(json.contains("\"baselineY\":"));
         assert!(json.contains("\"top\":"));
@@ -1252,8 +1325,12 @@ mod tests {
     #[test]
     fn glyph_rect_has_baseline_y() {
         let gr = GlyphRect {
-            x: 10.5, y: 20.0, w: 16.0, h: 24.0,
-            char_: "你".to_string(), baseline_y: 40.0,
+            x: 10.5,
+            y: 20.0,
+            w: 16.0,
+            h: 24.0,
+            char_: "你".to_string(),
+            baseline_y: 40.0,
         };
         let json = serde_json::to_string(&gr).unwrap();
         assert!(json.contains("\"baselineY\":"));

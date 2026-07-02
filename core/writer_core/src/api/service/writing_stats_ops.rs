@@ -117,22 +117,38 @@ impl WriterCoreApi {
         let duration_seconds = Self::non_negative_counter("duration_seconds", duration_seconds)?;
 
         // 读取 current_device.json 获取 platform 和 device_class
-        let (platform, device_class) = if let Ok(info) = crate::settings::load_device_info(
-            &self.workspace_path,
-        ) {
-            let p = if info.platform.is_empty() { "android" } else { &info.platform };
-            let dc = if info.device_class.is_empty() { "phone" } else { &info.device_class };
-            (p.to_string(), dc.to_string())
-        } else {
-            ("android".to_string(), "phone".to_string())
-        };
+        let (platform, device_class) =
+            if let Ok(info) = crate::settings::load_device_info(&self.workspace_path) {
+                let p = if info.platform.is_empty() {
+                    "android"
+                } else {
+                    &info.platform
+                };
+                let dc = if info.device_class.is_empty() {
+                    "phone"
+                } else {
+                    &info.device_class
+                };
+                (p.to_string(), dc.to_string())
+            } else {
+                ("android".to_string(), "phone".to_string())
+            };
 
         self.core()
             .record_writing_event(
-                device_id, &platform, &device_class,
-                project_id, volume_id, chapter_id, source,
-                inserted_chars, deleted_chars, pasted_chars,
-                ai_inserted_chars, duration_seconds, session_id,
+                device_id,
+                &platform,
+                &device_class,
+                project_id,
+                volume_id,
+                chapter_id,
+                source,
+                inserted_chars,
+                deleted_chars,
+                pasted_chars,
+                ai_inserted_chars,
+                duration_seconds,
+                session_id,
             )
             .map(|_| true)
             .map_err(WriterError::from)
@@ -161,9 +177,8 @@ impl WriterCoreApi {
         let duration_seconds = Self::non_negative_counter("duration_seconds", duration_seconds)?;
 
         // 优先从 current_device.json 读取 device_class
-        let device_class = if let Ok(info) = crate::settings::load_device_info(
-            &self.workspace_path,
-        ) {
+        let device_class = if let Ok(info) = crate::settings::load_device_info(&self.workspace_path)
+        {
             if info.device_class.is_empty() {
                 // fallback：根据 platform 推断
                 if platform == "android" {

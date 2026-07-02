@@ -807,10 +807,22 @@ fn theme_palette_dto_parses_snake_case_json() {
     assert_eq!(dto.updated_at_ms, 1234567890i64);
     assert_eq!(dto.device_id, "test_device");
     assert_eq!(dto.variant, "tonal_spot");
-    assert!(!dto.light_primary.is_empty(), "light_primary must not be empty");
-    assert!(!dto.dark_primary.is_empty(), "dark_primary must not be empty");
-    assert!(!dto.light_surface_container_high.is_empty(), "light_surface_container_high must not be empty");
-    assert!(!dto.dark_surface_container_high.is_empty(), "dark_surface_container_high must not be empty");
+    assert!(
+        !dto.light_primary.is_empty(),
+        "light_primary must not be empty"
+    );
+    assert!(
+        !dto.dark_primary.is_empty(),
+        "dark_primary must not be empty"
+    );
+    assert!(
+        !dto.light_surface_container_high.is_empty(),
+        "light_surface_container_high must not be empty"
+    );
+    assert!(
+        !dto.dark_surface_container_high.is_empty(),
+        "dark_surface_container_high must not be empty"
+    );
 }
 
 #[test]
@@ -826,22 +838,56 @@ fn theme_palette_dto_rejects_camel_case_json() {
     map.insert("variant".into(), json!("tonal_spot"));
     // Provide all required snake_case fields as empty strings
     let snake_case_color_keys = [
-        "light_primary", "light_on_primary", "light_primary_container", "light_on_primary_container",
-        "light_secondary", "light_on_secondary", "light_secondary_container", "light_on_secondary_container",
-        "light_tertiary", "light_on_tertiary", "light_tertiary_container", "light_on_tertiary_container",
-        "light_background", "light_on_background", "light_surface", "light_on_surface",
-        "light_surface_variant", "light_on_surface_variant",
-        "light_surface_container_lowest", "light_surface_container_low",
-        "light_surface_container", "light_surface_container_high", "light_surface_container_highest",
-        "light_outline", "light_outline_variant",
-        "dark_primary", "dark_on_primary", "dark_primary_container", "dark_on_primary_container",
-        "dark_secondary", "dark_on_secondary", "dark_secondary_container", "dark_on_secondary_container",
-        "dark_tertiary", "dark_on_tertiary", "dark_tertiary_container", "dark_on_tertiary_container",
-        "dark_background", "dark_on_background", "dark_surface", "dark_on_surface",
-        "dark_surface_variant", "dark_on_surface_variant",
-        "dark_surface_container_lowest", "dark_surface_container_low",
-        "dark_surface_container", "dark_surface_container_high", "dark_surface_container_highest",
-        "dark_outline", "dark_outline_variant",
+        "light_primary",
+        "light_on_primary",
+        "light_primary_container",
+        "light_on_primary_container",
+        "light_secondary",
+        "light_on_secondary",
+        "light_secondary_container",
+        "light_on_secondary_container",
+        "light_tertiary",
+        "light_on_tertiary",
+        "light_tertiary_container",
+        "light_on_tertiary_container",
+        "light_background",
+        "light_on_background",
+        "light_surface",
+        "light_on_surface",
+        "light_surface_variant",
+        "light_on_surface_variant",
+        "light_surface_container_lowest",
+        "light_surface_container_low",
+        "light_surface_container",
+        "light_surface_container_high",
+        "light_surface_container_highest",
+        "light_outline",
+        "light_outline_variant",
+        "dark_primary",
+        "dark_on_primary",
+        "dark_primary_container",
+        "dark_on_primary_container",
+        "dark_secondary",
+        "dark_on_secondary",
+        "dark_secondary_container",
+        "dark_on_secondary_container",
+        "dark_tertiary",
+        "dark_on_tertiary",
+        "dark_tertiary_container",
+        "dark_on_tertiary_container",
+        "dark_background",
+        "dark_on_background",
+        "dark_surface",
+        "dark_on_surface",
+        "dark_surface_variant",
+        "dark_on_surface_variant",
+        "dark_surface_container_lowest",
+        "dark_surface_container_low",
+        "dark_surface_container",
+        "dark_surface_container_high",
+        "dark_surface_container_highest",
+        "dark_outline",
+        "dark_outline_variant",
     ];
     for key in &snake_case_color_keys {
         map.insert((*key).into(), json!(""));
@@ -855,8 +901,14 @@ fn theme_palette_dto_rejects_camel_case_json() {
     let json_val = serde_json::Value::Object(map);
     let dto: crate::api::types::ThemePaletteDto = serde_json::from_value(json_val).unwrap();
     // These fields should be empty because camelCase keys don't match snake_case fields
-    assert!(dto.light_primary.is_empty(), "camelCase lightPrimary should not populate snake_case light_primary");
-    assert!(dto.dark_primary.is_empty(), "camelCase darkPrimary should not populate snake_case dark_primary");
+    assert!(
+        dto.light_primary.is_empty(),
+        "camelCase lightPrimary should not populate snake_case light_primary"
+    );
+    assert!(
+        dto.dark_primary.is_empty(),
+        "camelCase darkPrimary should not populate snake_case dark_primary"
+    );
     assert!(dto.light_surface_container_high.is_empty(), "camelCase lightSurfaceContainerHigh should not populate snake_case light_surface_container_high");
     assert!(dto.dark_surface_container_high.is_empty(), "camelCase darkSurfaceContainerHigh should not populate snake_case dark_surface_container_high");
 }
@@ -928,19 +980,34 @@ fn theme_palette_dto_round_trip() {
         serde_json::from_str(&json_str).expect("ThemePaletteDto JSON should deserialize");
 
     // Round-trip must be lossless
-    assert_eq!(original, round_tripped, "ThemePaletteDto round-trip must be lossless");
+    assert_eq!(
+        original, round_tripped,
+        "ThemePaletteDto round-trip must be lossless"
+    );
 
     // Key fields must not be empty
-    assert!(!original.light_primary.is_empty(), "light_primary must not be empty");
-    assert!(!original.dark_surface.is_empty(), "dark_surface must not be empty");
-    assert!(!original.light_outline_variant.is_empty(), "light_outline_variant must not be empty");
-    assert!(!original.dark_outline_variant.is_empty(), "dark_outline_variant must not be empty");
+    assert!(
+        !original.light_primary.is_empty(),
+        "light_primary must not be empty"
+    );
+    assert!(
+        !original.dark_surface.is_empty(),
+        "dark_surface must not be empty"
+    );
+    assert!(
+        !original.light_outline_variant.is_empty(),
+        "light_outline_variant must not be empty"
+    );
+    assert!(
+        !original.dark_outline_variant.is_empty(),
+        "dark_outline_variant must not be empty"
+    );
 }
 
 #[test]
 fn syncable_settings_persistence_round_trip() {
     use crate::settings::{SyncableSettings, ThemePalette};
-    
+
     #[allow(deprecated)]
     let original = SyncableSettings {
         font_size: 18.0,
@@ -1003,13 +1070,13 @@ fn syncable_settings_persistence_round_trip() {
             dark_outline_variant: "#434750".to_string(),
         },
     };
-    
+
     // Serialize to JSON (camelCase, as persisted to disk)
     let json_str = serde_json::to_string_pretty(&original).unwrap();
-    
+
     // Deserialize back
     let restored: SyncableSettings = serde_json::from_str(&json_str).unwrap();
-    
+
     // Verify all fields preserved
     assert_eq!(restored.font_size, 18.0);
     assert_eq!(restored.theme_mode, "dark");
@@ -1019,32 +1086,71 @@ fn syncable_settings_persistence_round_trip() {
     assert_eq!(restored.theme_palette.device_id, "device-abc");
     assert_eq!(restored.theme_palette.variant, "tonal_spot");
     // Verify all 5 surface_container levels
-    assert_eq!(restored.theme_palette.light_surface_container_lowest, "#FFFFFF");
-    assert_eq!(restored.theme_palette.light_surface_container_low, "#F3F4FA");
+    assert_eq!(
+        restored.theme_palette.light_surface_container_lowest,
+        "#FFFFFF"
+    );
+    assert_eq!(
+        restored.theme_palette.light_surface_container_low,
+        "#F3F4FA"
+    );
     assert_eq!(restored.theme_palette.light_surface_container, "#EDEEF4");
-    assert_eq!(restored.theme_palette.light_surface_container_high, "#E7E8EF");
-    assert_eq!(restored.theme_palette.light_surface_container_highest, "#E2E3E9");
-    assert_eq!(restored.theme_palette.dark_surface_container_lowest, "#0E1114");
+    assert_eq!(
+        restored.theme_palette.light_surface_container_high,
+        "#E7E8EF"
+    );
+    assert_eq!(
+        restored.theme_palette.light_surface_container_highest,
+        "#E2E3E9"
+    );
+    assert_eq!(
+        restored.theme_palette.dark_surface_container_lowest,
+        "#0E1114"
+    );
     assert_eq!(restored.theme_palette.dark_surface_container_low, "#1A1D21");
     assert_eq!(restored.theme_palette.dark_surface_container, "#1E2125");
-    assert_eq!(restored.theme_palette.dark_surface_container_high, "#282B30");
-    assert_eq!(restored.theme_palette.dark_surface_container_highest, "#33363A");
-    
+    assert_eq!(
+        restored.theme_palette.dark_surface_container_high,
+        "#282B30"
+    );
+    assert_eq!(
+        restored.theme_palette.dark_surface_container_highest,
+        "#33363A"
+    );
+
     // Verify camelCase keys in JSON
     let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     let tp = &json_val["themePalette"];
-    assert!(tp.get("lightSurfaceContainerLowest").is_some(), "camelCase key lightSurfaceContainerLowest must exist in persisted JSON");
-    assert!(tp.get("lightSurfaceContainerLow").is_some(), "camelCase key lightSurfaceContainerLow must exist in persisted JSON");
-    assert!(tp.get("lightSurfaceContainerHighest").is_some(), "camelCase key lightSurfaceContainerHighest must exist in persisted JSON");
-    assert!(tp.get("darkSurfaceContainerLowest").is_some(), "camelCase key darkSurfaceContainerLowest must exist in persisted JSON");
-    assert!(tp.get("darkSurfaceContainerLow").is_some(), "camelCase key darkSurfaceContainerLow must exist in persisted JSON");
-    assert!(tp.get("darkSurfaceContainerHighest").is_some(), "camelCase key darkSurfaceContainerHighest must exist in persisted JSON");
+    assert!(
+        tp.get("lightSurfaceContainerLowest").is_some(),
+        "camelCase key lightSurfaceContainerLowest must exist in persisted JSON"
+    );
+    assert!(
+        tp.get("lightSurfaceContainerLow").is_some(),
+        "camelCase key lightSurfaceContainerLow must exist in persisted JSON"
+    );
+    assert!(
+        tp.get("lightSurfaceContainerHighest").is_some(),
+        "camelCase key lightSurfaceContainerHighest must exist in persisted JSON"
+    );
+    assert!(
+        tp.get("darkSurfaceContainerLowest").is_some(),
+        "camelCase key darkSurfaceContainerLowest must exist in persisted JSON"
+    );
+    assert!(
+        tp.get("darkSurfaceContainerLow").is_some(),
+        "camelCase key darkSurfaceContainerLow must exist in persisted JSON"
+    );
+    assert!(
+        tp.get("darkSurfaceContainerHighest").is_some(),
+        "camelCase key darkSurfaceContainerHighest must exist in persisted JSON"
+    );
 }
 
 #[test]
 fn theme_palette_dto_snake_case_round_trip_full() {
     use crate::api::types::ThemePaletteDto;
-    
+
     let original = ThemePaletteDto {
         source: "android_dynamic_color".to_string(),
         updated_at_ms: 1700000000000,
@@ -1101,22 +1207,40 @@ fn theme_palette_dto_snake_case_round_trip_full() {
         dark_outline: "#8D9199".to_string(),
         dark_outline_variant: "#434750".to_string(),
     };
-    
+
     // Serialize to JSON (snake_case, as used in cross-platform themePaletteJson)
     let json_str = serde_json::to_string(&original).unwrap();
-    
+
     // Verify snake_case keys
     let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
-    assert!(json_val.get("light_surface_container_lowest").is_some(), "snake_case key light_surface_container_lowest must exist");
-    assert!(json_val.get("light_surface_container_low").is_some(), "snake_case key light_surface_container_low must exist");
-    assert!(json_val.get("light_surface_container_highest").is_some(), "snake_case key light_surface_container_highest must exist");
-    assert!(json_val.get("dark_surface_container_lowest").is_some(), "snake_case key dark_surface_container_lowest must exist");
-    assert!(json_val.get("dark_surface_container_low").is_some(), "snake_case key dark_surface_container_low must exist");
-    assert!(json_val.get("dark_surface_container_highest").is_some(), "snake_case key dark_surface_container_highest must exist");
-    
+    assert!(
+        json_val.get("light_surface_container_lowest").is_some(),
+        "snake_case key light_surface_container_lowest must exist"
+    );
+    assert!(
+        json_val.get("light_surface_container_low").is_some(),
+        "snake_case key light_surface_container_low must exist"
+    );
+    assert!(
+        json_val.get("light_surface_container_highest").is_some(),
+        "snake_case key light_surface_container_highest must exist"
+    );
+    assert!(
+        json_val.get("dark_surface_container_lowest").is_some(),
+        "snake_case key dark_surface_container_lowest must exist"
+    );
+    assert!(
+        json_val.get("dark_surface_container_low").is_some(),
+        "snake_case key dark_surface_container_low must exist"
+    );
+    assert!(
+        json_val.get("dark_surface_container_highest").is_some(),
+        "snake_case key dark_surface_container_highest must exist"
+    );
+
     // Deserialize back
     let restored: ThemePaletteDto = serde_json::from_str(&json_str).unwrap();
-    
+
     // Verify all fields preserved
     assert_eq!(restored.light_surface_container_lowest, "#FFFFFF");
     assert_eq!(restored.light_surface_container_low, "#F3F4FA");

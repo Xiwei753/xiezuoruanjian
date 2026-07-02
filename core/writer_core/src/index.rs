@@ -167,7 +167,7 @@ impl SearchIndex {
 
         let ac = match aho_corasick::AhoCorasick::builder()
             .ascii_case_insensitive(!options.case_sensitive)
-            .build(&[query])
+            .build([query])
         {
             Ok(ac) => ac,
             Err(_) => return hits, // Fallback for empty/invalid patterns, though build rarely fails for string slices
@@ -188,7 +188,9 @@ impl SearchIndex {
                         chapter_id: entry.chapter_id.clone(),
                         chapter_title: entry
                             .chapter_title
-                            .get_or_init(|| load_chapter_title(&entry.chapter_path, &entry.chapter_id))
+                            .get_or_init(|| {
+                                load_chapter_title(&entry.chapter_path, &entry.chapter_id)
+                            })
                             .clone(),
                         line_number: line_idx + 1,
                         line_text: line.clone(),
@@ -243,7 +245,7 @@ impl SearchIndex {
 
         let ac = match aho_corasick::AhoCorasick::builder()
             .ascii_case_insensitive(!options.case_sensitive)
-            .build(&[query])
+            .build([query])
         {
             Ok(ac) => ac,
             Err(_) => return hits,
@@ -267,7 +269,9 @@ impl SearchIndex {
                         chapter_id: entry.chapter_id.clone(),
                         chapter_title: entry
                             .chapter_title
-                            .get_or_init(|| load_chapter_title(&entry.chapter_path, &entry.chapter_id))
+                            .get_or_init(|| {
+                                load_chapter_title(&entry.chapter_path, &entry.chapter_id)
+                            })
                             .clone(),
                         line_number: line_idx + 1,
                         line_text: line.clone(),

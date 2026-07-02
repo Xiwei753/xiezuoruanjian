@@ -272,7 +272,11 @@ impl WriterAppService {
         self.api.perform_sync_dry_run(config)
     }
 
-    pub fn perform_sync(&self, config: SyncConfigDto, force_sync: bool) -> Result<SyncResultDto, WriterError> {
+    pub fn perform_sync(
+        &self,
+        config: SyncConfigDto,
+        force_sync: bool,
+    ) -> Result<SyncResultDto, WriterError> {
         self.api.perform_sync(config, force_sync)
     }
 

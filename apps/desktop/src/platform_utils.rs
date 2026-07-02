@@ -26,11 +26,7 @@ pub fn open_directory(path: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         for cmd in &["xdg-open", "nautilus", "dolphin"] {
-            if std::process::Command::new(cmd)
-                .arg(path)
-                .spawn()
-                .is_ok()
-            {
+            if std::process::Command::new(cmd).arg(path).spawn().is_ok() {
                 return Ok(());
             }
         }

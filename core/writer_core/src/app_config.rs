@@ -112,7 +112,11 @@ pub fn save_last_navigation_state(
     starmap_id: Option<&str>,
 ) -> Result<(), String> {
     let mut config = load_app_config();
-    config.last_route = if route.is_empty() { None } else { Some(route.to_string()) };
+    config.last_route = if route.is_empty() {
+        None
+    } else {
+        Some(route.to_string())
+    };
     config.last_project_id = project_id.map(|s| s.to_string());
     config.last_volume_id = volume_id.map(|s| s.to_string());
     config.last_chapter_id = chapter_id.map(|s| s.to_string());

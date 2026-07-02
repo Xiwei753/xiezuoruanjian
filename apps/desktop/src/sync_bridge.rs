@@ -140,10 +140,7 @@ mod tests {
     #[test]
     fn test_sync_error_category_fallback_parsing() {
         // token_missing
-        assert_eq!(
-            sync_error_category("token is missing"),
-            "token_missing"
-        );
+        assert_eq!(sync_error_category("token is missing"), "token_missing");
         assert_eq!(sync_error_category("TOKEN is EMPTY"), "token_missing");
         assert_eq!(
             sync_error_category("token not provided here"),
@@ -391,10 +388,16 @@ mod tests {
         assert_eq!(determine_diagnostics_status(&result), "token_invalid");
 
         result.error_category = "token_permission_denied".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "token_permission_denied");
+        assert_eq!(
+            determine_diagnostics_status(&result),
+            "token_permission_denied"
+        );
 
         result.error_category = "repo_not_found_or_no_permission".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "repo_not_found_or_no_permission");
+        assert_eq!(
+            determine_diagnostics_status(&result),
+            "repo_not_found_or_no_permission"
+        );
     }
 
     #[test]
