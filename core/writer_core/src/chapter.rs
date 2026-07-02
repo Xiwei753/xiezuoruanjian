@@ -28,6 +28,7 @@
 use crate::error::Result;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use rayon::prelude::*;
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -117,20 +118,35 @@ pub fn list_chapters(
         return Ok(Vec::new());
     }
 
-    let mut chapters = Vec::new();
-    for entry in fs::read_dir(chapters_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.is_dir() {
-            let meta_path = path.join("chapter.meta.json");
-            if meta_path.exists() {
-                let content = fs::read_to_string(&meta_path)?;
-                if let Ok(chapter) = serde_json::from_str::<Chapter>(&content) {
-                    chapters.push(chapter);
+    let entries: Vec<_> = fs::read_dir(chapters_dir)?
+        .collect::<std::io::Result<Vec<_>>>()?;
+
+    let mut chapters: Vec<Chapter> = entries
+        .into_par_iter()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                let meta_path = path.join("chapter.meta.json");
+                if meta_path.exists() {
+                    match fs::read_to_string(&meta_path) {
+                        Ok(content) => {
+                            if let Ok(chapter) = serde_json::from_str::<Chapter>(&content) {
+                                Some(Ok(chapter))
+                            } else {
+                                None
+                            }
+                        }
+                        Err(e) => Some(Err(e)),
+                    }
+                } else {
+                    None
                 }
+            } else {
+                None
             }
-        }
-    }
+        })
+        .collect::<std::result::Result<Vec<_>, std::io::Error>>()?;
+
     chapters.sort_by_key(|c| c.order);
     Ok(chapters)
 }
