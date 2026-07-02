@@ -82,7 +82,8 @@ struct IndexEntry {
     project_id: String,
     volume_id: String,
     chapter_id: String,
-    chapter_title: String,
+    chapter_path: PathBuf,
+    chapter_title: std::sync::OnceLock<String>,
     relative_path: String,
     lines: Vec<String>,
 }
@@ -133,7 +134,6 @@ impl SearchIndex {
             .filter_map(
                 |(project_id, volume_id, chapter_id, chapter_path, md_path)| {
                     let content = fs::read_to_string(&md_path).ok()?;
-                    let chapter_title = load_chapter_title(&chapter_path, &chapter_id);
                     let relative_path = format!(
                         "projects/{}/volumes/{}/chapters/{}/chapter.md",
                         project_id, volume_id, chapter_id
@@ -144,7 +144,8 @@ impl SearchIndex {
                         project_id,
                         volume_id,
                         chapter_id,
-                        chapter_title,
+                        chapter_path,
+                        chapter_title: std::sync::OnceLock::new(),
                         relative_path,
                         lines,
                     })
@@ -185,7 +186,10 @@ impl SearchIndex {
                         project_id: entry.project_id.clone(),
                         volume_id: entry.volume_id.clone(),
                         chapter_id: entry.chapter_id.clone(),
-                        chapter_title: entry.chapter_title.clone(),
+                        chapter_title: entry
+                            .chapter_title
+                            .get_or_init(|| load_chapter_title(&entry.chapter_path, &entry.chapter_id))
+                            .clone(),
                         line_number: line_idx + 1,
                         line_text: line.clone(),
                         context_before,
@@ -261,7 +265,10 @@ impl SearchIndex {
                         project_id: entry.project_id.clone(),
                         volume_id: entry.volume_id.clone(),
                         chapter_id: entry.chapter_id.clone(),
-                        chapter_title: entry.chapter_title.clone(),
+                        chapter_title: entry
+                            .chapter_title
+                            .get_or_init(|| load_chapter_title(&entry.chapter_path, &entry.chapter_id))
+                            .clone(),
                         line_number: line_idx + 1,
                         line_text: line.clone(),
                         context_before,
