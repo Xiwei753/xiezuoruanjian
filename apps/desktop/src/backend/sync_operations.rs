@@ -449,18 +449,7 @@ impl AppBackend {
                                 files.sort();
                                 files.dedup();
 
-                                let file_str = if files.is_empty() {
-                                    "未能列出具体冲突文件".to_string()
-                                } else {
-                                    let display_files = if files.len() > 100 {
-                                        let mut subset = files[0..100].to_vec();
-                                        subset.push(format!("...等共 {} 个文件", files.len()));
-                                        subset
-                                    } else {
-                                        files.clone()
-                                    };
-                                    display_files.join("\n  - ")
-                                };
+                                let file_str = format_conflict_files(&files);
 
                                 let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
                                 debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
@@ -569,5 +558,20 @@ impl AppBackend {
         });
 
         op_id.into()
+    }
+}
+
+fn format_conflict_files(files: &[String]) -> String {
+    if files.is_empty() {
+        "未能列出具体冲突文件".to_string()
+    } else {
+        let display_files = if files.len() > 100 {
+            let mut subset = files[0..100].to_vec();
+            subset.push(format!("...等共 {} 个文件", files.len()));
+            subset
+        } else {
+            files.to_vec()
+        };
+        display_files.join("\n  - ")
     }
 }
