@@ -7,7 +7,14 @@ pub(crate) fn github_api_error(
 ) -> crate::Error {
     let status_u16 = status.as_u16();
     let category = match status_u16 {
-        401 | 403 => "auth_error",
+        401 => "token_invalid",
+        403 => {
+            if body.contains("Resource not accessible by personal access token") {
+                "token_permission_denied"
+            } else {
+                "auth_error"
+            }
+        }
         404 => {
             // 404 语义取决于请求上下文：
             // - get ref / get recursive tree → 仓库不存在或无权限，或分支不存在
@@ -330,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn test_github_api_error_401_classified_as_auth_error() {
+    fn test_github_api_error_401_classified_as_token_invalid() {
         let err = github_api_error(
             "get ref heads/main",
             reqwest::StatusCode::UNAUTHORIZED,
@@ -338,14 +345,29 @@ mod tests {
         );
         let msg = err.to_string();
         assert!(
-            msg.contains("auth_error:"),
-            "401 should be auth_error, got: {}",
+            msg.contains("token_invalid:"),
+            "401 should be token_invalid, got: {}",
             msg
         );
     }
 
     #[test]
-    fn test_github_api_error_403_classified_as_auth_error() {
+    fn test_github_api_error_403_with_permission_denied_body() {
+        let err = github_api_error(
+            "get ref heads/main",
+            reqwest::StatusCode::FORBIDDEN,
+            "Resource not accessible by personal access token".to_string(),
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("token_permission_denied:"),
+            "403 with permission denied body should be token_permission_denied, got: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_github_api_error_403_without_permission_denied_body() {
         let err = github_api_error(
             "get ref heads/main",
             reqwest::StatusCode::FORBIDDEN,
@@ -354,7 +376,7 @@ mod tests {
         let msg = err.to_string();
         assert!(
             msg.contains("auth_error:"),
-            "403 should be auth_error, got: {}",
+            "403 without permission denied body should be auth_error, got: {}",
             msg
         );
     }

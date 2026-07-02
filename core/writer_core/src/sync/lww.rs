@@ -256,8 +256,19 @@ pub(crate) fn perform_lww_sync(
                     let err = e.to_string();
                     result.status = if err.contains("local_io_error") {
                         SyncStatus::Error("local_io_error".to_string())
-                    } else if err.contains("auth_error") {
-                        SyncStatus::Error("auth_error".to_string())
+                    } else if err.contains("auth_error")
+                        || err.contains("token_invalid")
+                        || err.contains("token_permission_denied")
+                    {
+                        // 保留原始分类字符串：auth_error / token_invalid / token_permission_denied
+                        let category = if err.contains("token_invalid") {
+                            "token_invalid"
+                        } else if err.contains("token_permission_denied") {
+                            "token_permission_denied"
+                        } else {
+                            "auth_error"
+                        };
+                        SyncStatus::Error(category.to_string())
                     } else if err.contains("api_rate_limited") {
                         SyncStatus::RecoverableError("api_rate_limited".to_string())
                     } else if err.contains("network_error") {

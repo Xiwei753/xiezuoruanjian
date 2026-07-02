@@ -41,6 +41,7 @@ pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str)
         "token_missing" => "token_missing".to_string(),
         "token_invalid" => "token_invalid".to_string(),
         "token_permission_denied" => "token_permission_denied".to_string(),
+        "auth_error" => "auth_failed".to_string(),
         "repo_not_found_or_no_permission" => "repo_not_found_or_no_permission".to_string(),
         "github_unauthorized" | "github_forbidden" => "auth_failed".to_string(),
         "empty_url" => "not_configured".to_string(),
@@ -72,6 +73,9 @@ pub fn sync_error_category(msg: &str) -> String {
         && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided"))
     {
         return "token_missing".to_string();
+    }
+    if lower.contains("resource not accessible by personal access token") {
+        return "token_permission_denied".to_string();
     }
     if lower.contains("repository not found")
         || (lower.contains("not found") && lower.contains("repo"))
@@ -332,6 +336,26 @@ mod tests {
         );
         assert_eq!(
             sync_error_category_from_code(Some("token_permission_denied"), "any message"),
+            "token_permission_denied"
+        );
+    }
+
+    #[test]
+    fn test_auth_error_maps_to_auth_failed() {
+        assert_eq!(
+            sync_error_category_from_code(Some("auth_error"), "any message"),
+            "auth_failed"
+        );
+    }
+
+    #[test]
+    fn test_sync_error_category_resource_not_accessible() {
+        assert_eq!(
+            sync_error_category("Resource not accessible by personal access token"),
+            "token_permission_denied"
+        );
+        assert_eq!(
+            sync_error_category("error: Resource not accessible by personal access token for some repo"),
             "token_permission_denied"
         );
     }
