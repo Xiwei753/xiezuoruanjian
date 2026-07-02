@@ -306,6 +306,8 @@ impl Default for SujianEditorItem {
             cursor_rect_changed: Default::default(),
             explicit_clear_requested: Default::default(),
             visual_transaction_changed: Default::default(),
+            preedit_visual_transaction_json: Default::default(),
+            preedit_visual_transaction_changed: Default::default(),
             context_menu_requested: Default::default(),
             cursor_rect_x: Default::default(),
             cursor_rect_y: Default::default(),
