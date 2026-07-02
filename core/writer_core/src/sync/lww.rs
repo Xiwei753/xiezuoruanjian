@@ -9,9 +9,18 @@ use crate::sync::types::{
     SyncResult, SyncSecrets, SyncState, SyncStatus,
 };
 use crate::sync::SyncService;
+use rayon::prelude::*;
 use std::path::Path;
 
 const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
+const MAX_PARALLEL_DOWNLOADS: usize = 4;
+
+fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(task_count.clamp(1, MAX_PARALLEL_DOWNLOADS))
+        .build()
+        .map_err(|e| crate::Error::Other(format!("sync_parallel_pool_error: {}", e)))
+}
 
 fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     if record.op == "delete" {
@@ -487,28 +496,47 @@ fn execute_lww_sync_attempt(
             state.pending_take_remote.len()
         );
         let pending_paths: Vec<String> = state.pending_take_remote.iter().cloned().collect();
-        for path in &pending_paths {
-            if let Some((content, _sha)) =
-                github_get_content(client, api_base, token, &config.branch, path)?
-            {
-                let full_path = workspace_path.join(path);
-                if let Some(parent) = full_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                std::fs::write(&tmp_path, &content).map_err(|e| {
-                    crate::Error::Other(format!(
-                        "local_io_error: write pending_take_remote {}: {}",
-                        path, e
-                    ))
-                })?;
-                std::fs::rename(&tmp_path, &full_path).map_err(|e| {
-                    crate::Error::Other(format!(
-                        "local_io_error: rename pending_take_remote {}: {}",
-                        path, e
-                    ))
-                })?;
-                // Update known_files to the hash of the newly written content
+        let download_pool = sync_download_pool(pending_paths.len())?;
+        let pending_results: crate::Result<Vec<_>> = download_pool.install(|| {
+            pending_paths
+                .par_iter()
+                .map(|path| {
+                    let remote =
+                        github_get_content(client, api_base, token, &config.branch, path)?;
+                    let Some((content, _sha)) = remote else {
+                        return Ok((path.clone(), None));
+                    };
+
+                    let full_path = workspace_path.join(path);
+                    if let Some(parent) = full_path.parent() {
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            crate::Error::Other(format!(
+                                "local_io_error: create pending_take_remote dir {}: {}",
+                                path, e
+                            ))
+                        })?;
+                    }
+                    let tmp_path =
+                        full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                    std::fs::write(&tmp_path, &content).map_err(|e| {
+                        crate::Error::Other(format!(
+                            "local_io_error: write pending_take_remote {}: {}",
+                            path, e
+                        ))
+                    })?;
+                    std::fs::rename(&tmp_path, &full_path).map_err(|e| {
+                        crate::Error::Other(format!(
+                            "local_io_error: rename pending_take_remote {}: {}",
+                            path, e
+                        ))
+                    })?;
+                    Ok((path.clone(), Some(content)))
+                })
+                .collect()
+        });
+
+        for (path, content) in pending_results? {
+            if let Some(content) = content {
                 let hash = format!("{:x}", md5::compute(&content));
                 state.known_files.insert(path.clone(), hash);
                 let now_ts = chrono::Utc::now().timestamp_millis();
@@ -520,7 +548,7 @@ fn execute_lww_sync_attempt(
                     "[sync] pending_take_remote: remote file missing for path={}, keeping in pending",
                     path
                 );
-                pending_take_remote_failed.push(path.clone());
+                pending_take_remote_failed.push(path);
             }
         }
         // Only clear paths that were successfully downloaded;
@@ -804,26 +832,37 @@ fn execute_lww_sync_attempt(
         }
     }
 
-    eprintln!("[sync] github_api step=正在下载远端较新文件");
-    for path in &to_download {
-        let Some((content, _sha)) =
-            github_get_content(client, api_base, token, &config.branch, path)?
-        else {
-            return Err(crate::Error::Other(format!(
-                "api_error: remote file missing while downloading {}",
-                path
-            )));
-        };
-        let full_path = workspace_path.join(path);
-        if let Some(parent) = full_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
-        }
-        let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-        std::fs::write(&tmp_path, content)
-            .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
-        std::fs::rename(tmp_path, &full_path)
-            .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
+    eprintln!("[sync] github_api step=download newer remote files");
+    if !to_download.is_empty() {
+        let download_pool = sync_download_pool(to_download.len())?;
+        let download_result: crate::Result<()> = download_pool.install(|| {
+            to_download.par_iter().try_for_each(|path| {
+                let Some((content, _sha)) =
+                    github_get_content(client, api_base, token, &config.branch, path)?
+                else {
+                    return Err(crate::Error::Other(format!(
+                        "api_error: remote file missing while downloading {}",
+                        path
+                    )));
+                };
+                let full_path = workspace_path.join(path);
+                if let Some(parent) = full_path.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        crate::Error::Other(format!("local_io_error: {}: {}", path, e))
+                    })?;
+                }
+                let tmp_path =
+                    full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                std::fs::write(&tmp_path, content).map_err(|e| {
+                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
+                })?;
+                std::fs::rename(tmp_path, &full_path).map_err(|e| {
+                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
+                })?;
+                Ok(())
+            })
+        });
+        download_result?;
     }
 
     let purge_time = now_ms - 30 * 24 * 3600 * 1000;
