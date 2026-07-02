@@ -214,7 +214,7 @@ class ChapterListActivity : AppCompatActivity() {
         val pid = projectId ?: return
 
         // 预填默认标题：按当前卷章节数量生成
-        val chapterCount = listItems.count { it is ListItem.ChapterItem && it.volumeId == volumeId }
+        val chapterCount = listItems.count { it is ListItem.Chapter && it.volumeId == volumeId }
         val defaultTitle = "第${chapterCount + 1}章"
 
         val editText = EditText(this)
