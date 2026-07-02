@@ -11,17 +11,6 @@ on:
       - '.github/workflows/windows_build.yml'
       - 'Cargo.lock'
       - 'Cargo.toml'
-  pull_request:
-    branches:
-      - main
-    paths:
-      - 'apps/desktop/**'
-      - 'core/writer_core/**'
-      - 'packaging/windows/**'
-      - '.github/workflows/windows_build.yml'
-      - 'Cargo.lock'
-      - 'Cargo.toml'
-  workflow_dispatch:
 
 permissions:
   contents: read
