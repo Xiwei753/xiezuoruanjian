@@ -146,6 +146,9 @@ pub struct SujianEditorItem {
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
+    is_loading: qt_property!(bool; READ is_loading WRITE set_is_loading NOTIFY visual_settings_changed),
+    is_applying_format: qt_property!(bool; READ is_applying_format WRITE set_is_applying_format NOTIFY visual_settings_changed),
+    is_applying_settings: qt_property!(bool; READ is_applying_settings WRITE set_is_applying_settings NOTIFY visual_settings_changed),
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
@@ -217,6 +220,9 @@ pub struct SujianEditorItem {
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
+    current_is_loading: bool,
+    current_is_applying_format: bool,
+    current_is_applying_settings: bool,
     last_summary: QString,
     last_event_count: u32,
     last_visual_transaction_json: QString,
@@ -345,6 +351,9 @@ impl Default for SujianEditorItem {
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,
+            current_is_loading: false,
+            current_is_applying_format: false,
+            current_is_applying_settings: false,
             last_summary: "".into(),
             last_event_count: 0,
             last_visual_transaction_json: "".into(),
@@ -774,6 +783,69 @@ impl SujianEditorItem {
         }
     }
 
+    fn is_loading(&self) -> bool {
+        self.current_is_loading
+    }
+
+    fn set_is_loading(&mut self, value: bool) {
+        if self.current_is_loading == value {
+            return;
+        }
+        self.current_is_loading = value;
+        if value {
+            self.clear_active_text_animations();
+            self.cursor_ctrl.animation = None;
+            self.cursor_ctrl.force_snap_next = true;
+            self.request_static_repaint();
+            return;
+        }
+        self.cursor_ctrl.force_snap_next = true;
+        self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    fn is_applying_format(&self) -> bool {
+        self.current_is_applying_format
+    }
+
+    fn set_is_applying_format(&mut self, value: bool) {
+        if self.current_is_applying_format == value {
+            return;
+        }
+        self.current_is_applying_format = value;
+        if value {
+            self.clear_active_text_animations();
+            self.cursor_ctrl.animation = None;
+            self.cursor_ctrl.force_snap_next = true;
+            self.request_static_repaint();
+            return;
+        }
+        self.cursor_ctrl.force_snap_next = true;
+        self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    fn is_applying_settings(&self) -> bool {
+        self.current_is_applying_settings
+    }
+
+    fn set_is_applying_settings(&mut self, value: bool) {
+        if self.current_is_applying_settings == value {
+            return;
+        }
+        self.current_is_applying_settings = value;
+        if value {
+            self.clear_active_text_animations();
+            self.cursor_ctrl.animation = None;
+            self.cursor_ctrl.force_snap_next = true;
+            self.request_static_repaint();
+            return;
+        }
+        self.cursor_ctrl.force_snap_next = true;
+        self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
     fn last_transaction_summary(&self) -> QString {
         self.last_summary.clone()
     }
@@ -846,6 +918,7 @@ impl SujianEditorItem {
 
     fn visual_changed(&mut self) {
         self.invalidate_layout_cache();
+        self.bump_visual_revision();
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -1323,9 +1396,9 @@ impl SujianEditorItem {
                                 glyph_count,
                                 contains_newline,
                                 self.current_is_scrolling,
-                                false, // is_loading — record_transaction 不会在 loading 时调用
-                                false, // is_applying_format
-                                false, // is_applying_settings
+                                self.current_is_loading,
+                                self.current_is_applying_format,
+                                self.current_is_applying_settings,
                                 self.current_typing_animation_enabled,
                                 true,  // component_ready — Rust 侧始终为 true
                             );
@@ -1386,9 +1459,9 @@ impl SujianEditorItem {
                             glyph_count,
                             contains_newline,
                             self.current_is_scrolling,
-                            false, // is_loading
-                            false, // is_applying_format
-                            false, // is_applying_settings
+                            self.current_is_loading,
+                            self.current_is_applying_format,
+                            self.current_is_applying_settings,
                             self.current_typing_animation_enabled,
                             true,  // component_ready
                         );
