@@ -45,6 +45,7 @@ Rectangle {
         spacing: _sp16
 
         AppText {
+            dt: root.dt
             text: root.title
             color: _accent
             font.pixelSize: _fontMd

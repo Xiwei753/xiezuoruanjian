@@ -29,8 +29,8 @@ Rectangle {
         anchors.margins: dt.sp12
         spacing: dt.sp6
 
-        AppText { text: root.title; color: dt.onSurfaceVariant; font.pixelSize: dt.label; font.family: dt.fontFamily }
-        AppText { text: root.value; color: root.tone; font.pixelSize: dt.title; font.family: dt.fontFamily; font.weight: Font.Bold }
-        AppText { text: root.caption; color: dt.textMuted; font.pixelSize: dt.caption; font.family: dt.fontFamily }
+        AppText { dt: root.dt; text: root.title; color: dt.onSurfaceVariant; font.pixelSize: dt.label; font.family: dt.fontFamily }
+        AppText { dt: root.dt; text: root.value; color: root.tone; font.pixelSize: dt.title; font.family: dt.fontFamily; font.weight: Font.Bold }
+        AppText { dt: root.dt; text: root.caption; color: dt.textMuted; font.pixelSize: dt.caption; font.family: dt.fontFamily }
     }
 }

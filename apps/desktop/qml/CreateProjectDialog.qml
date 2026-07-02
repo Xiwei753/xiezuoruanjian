@@ -41,6 +41,7 @@ Dialog {
         spacing: theme.sp16
 
         AppText {
+            dt: root.theme
             text: qsTr("新建作品")
             color: theme.textPrimary
             font.pixelSize: theme.subtitle
@@ -49,6 +50,7 @@ Dialog {
         }
 
         AppText {
+            dt: root.theme
             text: qsTr("请输入作品名称：")
             color: theme.onSurfaceVariant
             font.pixelSize: theme.body

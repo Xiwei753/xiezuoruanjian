@@ -112,6 +112,7 @@ Rectangle {
 
         // Title
         AppText {
+            dt: root.dt
             Layout.fillWidth: true
             Layout.topMargin: _sp12
             text: root.title || qsTr("未命名作品")
@@ -134,6 +135,7 @@ Rectangle {
             Column {
                 spacing: 2
                 AppText {
+                    dt: root.dt
                     text: root.wordCount >= 10000 ? (root.wordCount / 10000).toFixed(1) + "w" : root.wordCount.toLocaleString()
                     color: _textPrimary
                     font.pixelSize: _body
@@ -141,6 +143,7 @@ Rectangle {
                     font.weight: Font.Medium
                 }
                 AppText {
+                    dt: root.dt
                     text: qsTr("总字数")
                     color: _textMuted
                     font.pixelSize: _caption
@@ -152,6 +155,7 @@ Rectangle {
                 spacing: 2
                 visible: root.todayInput > 0
                 AppText {
+                    dt: root.dt
                     text: "+" + (root.todayInput >= 1000 ? (root.todayInput / 1000).toFixed(1) + "k" : root.todayInput.toLocaleString())
                     color: _primary
                     font.pixelSize: _body
@@ -159,6 +163,7 @@ Rectangle {
                     font.weight: Font.Medium
                 }
                 AppText {
+                    dt: root.dt
                     text: qsTr("今日")
                     color: _textMuted
                     font.pixelSize: _caption
@@ -169,6 +174,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
 
             AppText {
+                dt: root.dt
                 text: root.lastEdited || ""
                 color: _textMuted
                 font.pixelSize: _caption

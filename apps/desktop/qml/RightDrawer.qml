@@ -108,6 +108,7 @@ Rectangle {
 
                             AppText {
                                 id: tabLabel
+                                dt: root.dt
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
@@ -136,6 +137,7 @@ Rectangle {
                         color: closeHover.containsMouse ? _card : "transparent"
 
                         AppText {
+                            dt: root.dt
                             anchors.centerIn: parent
                             text: "\u2715"
                             color: _textMuted
@@ -198,6 +200,7 @@ Rectangle {
                         }
                         AppText {
                             text: qsTr("AI 助手")
+                            dt: root.dt
                             color: _textPrimary
                             font.pixelSize: _fontLg
                             font.weight: Font.DemiBold
@@ -205,6 +208,7 @@ Rectangle {
                         }
                         AppText {
                             text: qsTr("AI 功能将在后续版本实现")
+                            dt: root.dt
                             color: _textMuted
                             font.pixelSize: _fontSm
                             Layout.alignment: Qt.AlignHCenter

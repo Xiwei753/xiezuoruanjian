@@ -63,13 +63,14 @@ Item {
             spacing: dt.sp8
 
             AppText {
-                text: root.emptyIcon
                 dt: root.dt
+                text: root.emptyIcon
                 font.pixelSize: 36
                 visible: text.length > 0
                 anchors.horizontalCenter: parent.horizontalCenter
             }
             AppText {
+                dt: root.dt
                 text: root.emptyTitle
                 color: dt.textPrimary
                 font.pixelSize: dt.fontXl
@@ -77,6 +78,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
             }
             AppText {
+                dt: root.dt
                 text: root.emptySubtitle
                 color: dt.textSecondary
                 font.pixelSize: dt.fontMd

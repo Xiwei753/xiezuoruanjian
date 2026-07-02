@@ -29,6 +29,7 @@ Menu {
         text: qsTr("复制")
         enabled: editorItem && editorItem.has_selection
         contentItem: AppText {
+            dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.textPrimary : dt.textMuted
             font.pixelSize: dt.label
@@ -47,6 +48,7 @@ Menu {
         text: qsTr("粘贴")
         enabled: editorItem && editorItem.editor_enabled
         contentItem: AppText {
+            dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.textPrimary : dt.textMuted
             font.pixelSize: dt.label
@@ -65,6 +67,7 @@ Menu {
         text: qsTr("全选")
         enabled: editorItem && editorItem.editor_enabled
         contentItem: AppText {
+            dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.textPrimary : dt.textMuted
             font.pixelSize: dt.label
@@ -83,6 +86,7 @@ Menu {
         text: qsTr("删除")
         enabled: editorItem && editorItem.has_selection
         contentItem: AppText {
+            dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.error : dt.textMuted
             font.pixelSize: dt.label

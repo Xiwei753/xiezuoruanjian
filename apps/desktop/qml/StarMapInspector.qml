@@ -33,6 +33,7 @@ Rectangle {
         spacing: 16
 
         AppText {
+            dt: root.dt
             text: qsTr("属性")
             font.pixelSize: 16
             font.bold: true
@@ -41,6 +42,7 @@ Rectangle {
         }
 
         AppText {
+            dt: root.dt
             text: qsTr("请在左侧选择节点或连线")
             color: dt.textSecondary
             visible: selectedNode === null && selectedEdge === null
@@ -53,7 +55,7 @@ Rectangle {
             spacing: 12
             visible: selectedNode !== null
 
-            AppText { text: qsTr("标题"); color: dt.textSecondary }
+            AppText { dt: root.dt; text: qsTr("标题"); color: dt.textSecondary }
             AppTextField {
                 id: titleInput
                 Layout.fillWidth: true
@@ -68,6 +70,7 @@ Rectangle {
             Item { Layout.fillHeight: true }
 
             AppButton {
+                dt: root.dt
                 text: qsTr("删除节点")
                 Layout.fillWidth: true
                 onClicked: {
@@ -82,7 +85,7 @@ Rectangle {
             spacing: 12
             visible: selectedEdge !== null
 
-            AppText { text: qsTr("标签"); color: dt.textSecondary }
+            AppText { dt: root.dt; text: qsTr("标签"); color: dt.textSecondary }
             AppTextField {
                 id: labelInput
                 Layout.fillWidth: true
@@ -100,6 +103,7 @@ Rectangle {
             Item { Layout.fillHeight: true }
 
             AppButton {
+                dt: root.dt
                 text: qsTr("删除连线")
                 Layout.fillWidth: true
                 onClicked: {

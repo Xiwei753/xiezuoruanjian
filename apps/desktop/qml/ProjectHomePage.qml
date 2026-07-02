@@ -117,6 +117,7 @@ Rectangle {
             spacing: dt.sp12
 
             AppText {
+                dt: root.dt
                 text: qsTr("重命名作品")
                 color: dt.onSurface
                 font.pixelSize: dt.subtitle

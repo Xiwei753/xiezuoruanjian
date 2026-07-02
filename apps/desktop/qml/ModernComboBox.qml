@@ -44,6 +44,7 @@ Item {
             spacing: dt.sp8
 
             AppText {
+                dt: root.dt
                 Layout.fillWidth: true
                 text: root.currentText
                 color: dt.textPrimary
@@ -53,6 +54,7 @@ Item {
                 verticalAlignment: Text.AlignVCenter
             }
             AppText {
+                dt: root.dt
                 text: "v"
                 color: dt.textMuted
                 font.pixelSize: dt.fontXs
@@ -99,6 +101,7 @@ Item {
                            : "transparent"
 
                     AppText {
+                        dt: root.dt
                         anchors {
                             left: parent.left
                             leftMargin: dt.sp10

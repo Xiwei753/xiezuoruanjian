@@ -67,6 +67,7 @@ ScrollView {
                     }
                 }
                 contentItem: AppText {
+                    dt: root.appTheme
                     text: parent.text
                     color: root.appTheme.primaryText
                     font.pixelSize: root.appTheme.fontSm
@@ -90,6 +91,7 @@ ScrollView {
                     actionResultText.text = ""
                 }
                 contentItem: AppText {
+                    dt: root.appTheme
                     text: parent.text
                     color: root.appTheme.textSecondary
                     font.pixelSize: root.appTheme.fontSm
@@ -186,6 +188,7 @@ ScrollView {
                                 }
                             }
                             contentItem: AppText {
+                                dt: root.appTheme
                                 text: parent.text
                                 color: root.appTheme.primaryText
                                 font.pixelSize: root.appTheme.fontSm
@@ -235,6 +238,7 @@ ScrollView {
                                 }
                             }
                             contentItem: AppText {
+                                dt: root.appTheme
                                 text: parent.text
                                 color: root.appTheme.primaryText
                                 font.pixelSize: root.appTheme.fontSm
@@ -325,6 +329,7 @@ ScrollView {
                             }
                         }
                         contentItem: AppText {
+                            dt: root.appTheme
                             text: parent.text
                             color: root.appTheme.primaryText
                             font.pixelSize: root.appTheme.fontSm
@@ -346,6 +351,7 @@ ScrollView {
                             }
                         }
                         contentItem: AppText {
+                            dt: root.appTheme
                             text: parent.text
                             color: root.appTheme.textSecondary
                             font.pixelSize: root.appTheme.fontSm

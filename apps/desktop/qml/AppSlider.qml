@@ -55,6 +55,7 @@ Item {
             spacing: _sp12
 
             AppText {
+                dt: root.dt
                 Layout.fillWidth: true
                 text: root.label
                 color: _textPrimary
@@ -64,6 +65,7 @@ Item {
             }
 
             AppText {
+                dt: root.dt
                 text: root.valueText
                 color: _textSecondary
                 font.pixelSize: _caption
@@ -119,6 +121,7 @@ Item {
         }
 
         AppText {
+            dt: root.dt
             Layout.fillWidth: true
             text: root.description
             color: _textSecondary

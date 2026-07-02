@@ -65,6 +65,7 @@ Rectangle {
         }
 
         AppText {
+            dt: control.dt
             text: control.text
             visible: control.text.length > 0
             color: control.contentColor

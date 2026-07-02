@@ -66,6 +66,7 @@ Rectangle {
             radius: _radiusXs
 
             AppText {
+                dt: root.dt
                 anchors.centerIn: parent
                 text: root.kind
                 color: _onPrimary
@@ -75,6 +76,7 @@ Rectangle {
         }
 
         AppText {
+            dt: root.dt
             Layout.fillWidth: true
             Layout.fillHeight: true
             text: root.title

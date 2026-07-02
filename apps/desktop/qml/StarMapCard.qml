@@ -65,6 +65,7 @@ Rectangle {
                 spacing: 2
 
                 AppText {
+                    dt: root.dt
                     text: starmapData.title || qsTr("未命名星图")
                     color: dt.textPrimary
                     font.pixelSize: root.isChild ? dt.fontSm : dt.fontMd
@@ -75,6 +76,7 @@ Rectangle {
                 }
 
                 AppText {
+                    dt: root.dt
                     text: {
                         if (starmapData.isMainForProject) return qsTr("主星图");
                         if (starmapData.projectId) return qsTr("已绑定");
@@ -105,12 +107,14 @@ Rectangle {
                     visible: !root.isChild || index < 2
 
                     AppText {
+                        dt: root.dt
                         text: modelData.value
                         color: dt.textPrimary
                         font.pixelSize: root.isChild ? dt.fontSm : dt.fontMd
                         font.weight: Font.Bold
                     }
                     AppText {
+                        dt: root.dt
                         text: modelData.label
                         color: dt.textMuted
                         font.pixelSize: dt.fontXs
@@ -138,12 +142,14 @@ Rectangle {
                     anchors.centerIn: parent
                     spacing: dt.sp4
                     AppText {
+                        dt: root.dt
                         text: "\u25BC"
                         color: dt.accentText
                         font.pixelSize: dt.fontXs
                         Layout.alignment: Qt.AlignVCenter
                     }
                     AppText {
+                        dt: root.dt
                         text: (starmapData.childStarmapCount || 0) + " " + qsTr("子星图")
                         color: dt.accentText
                         font.pixelSize: dt.fontXs
@@ -155,6 +161,7 @@ Rectangle {
             Item { Layout.fillWidth: true }
 
             AppText {
+                dt: root.dt
                 text: {
                     if (!starmapData.updatedAt) return "";
                     var d = new Date(starmapData.updatedAt);

@@ -90,8 +90,8 @@ Item {
         if (s === "dry_run_success") return qsTr("检查成功")
         if (s === "diagnostics_success") return qsTr("诊断成功")
         if (s === "token_missing") return qsTr("未设置 Token")
-        if (s === "token_invalid") return qsTr("Token 无效")
-        if (s === "token_permission_denied") return qsTr("Token 权限不足")
+        if (s === "token_invalid") return qsTr("GitHub token 无效或已过期。请检查 token 是否正确。")
+        if (s === "token_permission_denied") return qsTr("GitHub token 权限不足。请给该 token 勾选目标仓库，并授予 Contents: Read and write。")
         if (s === "repo_not_found_or_no_permission") return qsTr("仓库不存在或无权限")
         if (s === "remote_branch_missing" || s === "branch_missing") return qsTr("远程分支不存在")
         if (s === "network_failed") return qsTr("网络连接失败")
@@ -148,6 +148,7 @@ Item {
                 Layout.fillWidth: true
                 spacing: theme.sp4
                 AppText {
+                    dt: root.theme
                     text: qsTr("同步设置")
                     color: theme.onBackground
                     font.pixelSize: theme.title
@@ -155,6 +156,7 @@ Item {
                     font.weight: Font.Bold
                 }
                 AppText {
+                    dt: root.theme
                     text: qsTr("配置远端仓库并查看同步状态")
                     color: theme.onSurfaceVariant
                     font.pixelSize: theme.body

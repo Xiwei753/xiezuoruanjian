@@ -64,6 +64,7 @@ Item {
         }
 
         AppText {
+            dt: control.dt
             text: control.text
             color: {
                 if (control.active) return _onPrimaryContainer

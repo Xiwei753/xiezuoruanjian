@@ -33,6 +33,7 @@ Rectangle {
         spacing: dt.sp12
 
         AppText {
+            dt: root.dt
             text: root.title
             color: dt.textSecondary
             font.pixelSize: dt.fontSm

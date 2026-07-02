@@ -42,6 +42,7 @@ Rectangle {
         }
 
         AppText {
+            dt: root.dt
             text: qsTr("星图")
             color: dt.textPrimary
             font.pixelSize: dt.fontTitle
@@ -50,6 +51,7 @@ Rectangle {
         }
 
         AppText {
+            dt: root.dt
             text: qsTr("构建你的创作宇宙，可视化人物关系与故事脉络")
             color: dt.textSecondary
             font.pixelSize: dt.fontMd
@@ -87,9 +89,9 @@ Rectangle {
                         color: dt.accentSoft
 
                         AppText {
+                            dt: root.dt
                             anchors.centerIn: parent
                             text: modelData.icon
-                            dt: root.dt
                             font.pixelSize: 18
                         }
                     }
@@ -98,12 +100,14 @@ Rectangle {
                         Layout.fillWidth: true
                         spacing: 2
                         AppText {
+                            dt: root.dt
                             text: modelData.label
                             color: dt.textPrimary
                             font.pixelSize: dt.fontMd
                             font.weight: Font.Medium
                         }
                         AppText {
+                            dt: root.dt
                             text: modelData.desc
                             color: dt.textMuted
                             font.pixelSize: dt.fontXs
@@ -111,6 +115,7 @@ Rectangle {
                     }
 
                     AppText {
+                        dt: root.dt
                         text: "\u2192"
                         color: dt.textMuted
                         font.pixelSize: dt.fontLg
@@ -121,6 +126,7 @@ Rectangle {
 
         // Placeholder hint
         AppText {
+            dt: root.dt
             text: qsTr("完整星图渲染将在后续版本实现")
             color: dt.textMuted
             font.pixelSize: dt.fontXs

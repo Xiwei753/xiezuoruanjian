@@ -14,7 +14,7 @@ import QtQuick.Controls
 
 Button {
     id: control
-    property var dt: null
+    required property var dt
 
     readonly property color _primary: dt.primary
     readonly property color _onPrimary: dt.onPrimary
@@ -63,6 +63,7 @@ Button {
     TextMetrics { id: tm; text: control.text; font.pixelSize: _label }
 
     contentItem: AppText {
+        dt: control.dt
         text: control.text
         color: control.contentColor
         font.pixelSize: _label

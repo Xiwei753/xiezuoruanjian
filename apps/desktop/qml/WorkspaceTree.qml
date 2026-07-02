@@ -104,6 +104,7 @@ Rectangle {
                     spacing: 8
 
                     AppText {
+                        dt: root.theme
                         text: {
                             if (model.type === "project") return "[P]";
                             if (model.type === "volume") return "■";
@@ -118,6 +119,7 @@ Rectangle {
                     }
 
                     AppText {
+                        dt: root.theme
                         Layout.fillWidth: true
                         text: model.title || ""
                         color: {
@@ -154,6 +156,7 @@ Rectangle {
     }
 
     AppText {
+        dt: root.theme
         anchors.centerIn: parent
         visible: treeModel.count === 0
         text: qsTr("暂无作品")
@@ -176,6 +179,7 @@ Rectangle {
             text: qsTr("新建卷")
             visible: contextMenu.itemData && contextMenu.itemData.type === "project"
             contentItem: AppText {
+                dt: root.theme
                 text: menuCreateVolume.text
                 color: theme.textPrimary
                 font.pixelSize: theme.label
@@ -197,6 +201,7 @@ Rectangle {
             text: qsTr("新建章节")
             visible: contextMenu.itemData && contextMenu.itemData.type === "volume"
             contentItem: AppText {
+                dt: root.theme
                 text: menuCreateChapter.text
                 color: theme.textPrimary
                 font.pixelSize: theme.label
@@ -220,6 +225,7 @@ Rectangle {
             id: menuRename
             text: qsTr("重命名")
             contentItem: AppText {
+                dt: root.theme
                 text: menuRename.text
                 color: theme.textPrimary
                 font.pixelSize: theme.label
@@ -248,6 +254,7 @@ Rectangle {
             id: menuDelete
             text: qsTr("删除")
             contentItem: AppText {
+                dt: root.theme
                 text: menuDelete.text
                 color: theme.error
                 font.pixelSize: theme.label

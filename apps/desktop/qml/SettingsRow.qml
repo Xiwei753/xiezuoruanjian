@@ -44,6 +44,7 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
             spacing: 2
             AppText {
+                dt: root.dt
                 text: root.title
                 color: dt.textPrimary
                 font.pixelSize: dt.body
@@ -52,6 +53,7 @@ Rectangle {
                 Layout.fillWidth: true
             }
             AppText {
+                dt: root.dt
                 text: root.description
                 color: dt.textSecondary
                 font.pixelSize: dt.caption

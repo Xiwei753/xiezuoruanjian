@@ -14,7 +14,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    property var dt: null
+    required property var dt
     property string title: ""
     property string subtitle: ""
     property string actionText: ""
@@ -29,6 +29,7 @@ Item {
             spacing: dt.sp6
 
             AppText {
+                dt: root.dt
                 text: root.title
                 color: dt.onBackground
                 font.pixelSize: dt.fontTitle
@@ -37,6 +38,7 @@ Item {
             }
 
             AppText {
+                dt: root.dt
                 text: root.subtitle
                 color: dt.textSecondary
                 font.pixelSize: dt.body

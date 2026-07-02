@@ -67,6 +67,7 @@ Dialog {
             spacing: _sp16
 
             AppText {
+                dt: root.dt
                 Layout.fillWidth: true
                 text: root.heading
                 visible: text.length > 0

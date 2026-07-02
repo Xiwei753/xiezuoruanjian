@@ -119,6 +119,7 @@ Rectangle {
             anchors.margins: dt.sp24
             spacing: dt.sp16
             AppText {
+                dt: root.dt
                 text: qsTr("保存被阻止")
                 color: dt.textPrimary
                 font.pixelSize: dt.subtitle
@@ -126,6 +127,7 @@ Rectangle {
                 font.weight: Font.DemiBold
             }
             AppText {
+                dt: root.dt
                 id: emptySaveDialogText
                 Layout.fillWidth: true
                 text: qsTr("空内容保存被阻止，请输入内容后重试")
@@ -258,6 +260,7 @@ Rectangle {
                                 color: backHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                                 AppText {
+                                    dt: root.dt
                                     anchors.centerIn: parent
                                     text: "\u2190"
                                     color: dt.textSecondary
@@ -274,6 +277,7 @@ Rectangle {
                             }
 
                             AppText {
+                                dt: root.dt
                                 text: root.projectTitle || qsTr("作品")
                                 color: dt.textPrimary
                                 font.pixelSize: dt.fontMd
@@ -329,6 +333,7 @@ Rectangle {
                                         }
 
                                         AppText {
+                                            dt: root.dt
                                             text: model.itemTitle || ""
                                             color: {
                                                 if (delegateBg.isSelected) return dt.onPrimaryContainer;
@@ -377,6 +382,7 @@ Rectangle {
                                         anchors.verticalCenter: parent.verticalCenter
 
                                         AppText {
+                                            dt: root.dt
                                             anchors.centerIn: parent
                                             text: "+"
                                             color: dt.primary
@@ -410,12 +416,14 @@ Rectangle {
                             anchors.centerIn: parent
                             spacing: dt.sp4
                             AppText {
+                                dt: root.dt
                                 text: "+"
                                 color: dt.primary
                                 font.pixelSize: dt.fontMd
                                 font.weight: Font.Bold
                             }
                             AppText {
+                                dt: root.dt
                                 text: qsTr("新卷")
                                 color: dt.primary
                                 font.pixelSize: dt.label
@@ -452,6 +460,7 @@ Rectangle {
                             text: qsTr("新建卷")
                             visible: treeContextMenu.itemType === "project"
                             contentItem: AppText {
+                                dt: root.dt
                                 text: createVolumeMenuItem.text
                                 color: dt.textPrimary
                                 font.pixelSize: dt.label
@@ -468,6 +477,7 @@ Rectangle {
                             text: qsTr("新建章节")
                             visible: treeContextMenu.itemType === "volume"
                             contentItem: AppText {
+                                dt: root.dt
                                 text: createChapterMenuItem.text
                                 color: dt.textPrimary
                                 font.pixelSize: dt.label
@@ -487,6 +497,7 @@ Rectangle {
                             text: qsTr("重命名")
                             visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
                             contentItem: AppText {
+                                dt: root.dt
                                 text: renameMenuItem.text
                                 color: dt.textPrimary
                                 font.pixelSize: dt.label
@@ -509,6 +520,7 @@ Rectangle {
                 text: qsTr("删除")
                             visible: treeContextMenu.itemType === "project" || treeContextMenu.itemType === "volume" || treeContextMenu.itemType === "chapter"
                             contentItem: AppText {
+                                dt: root.dt
                                 text: deleteMenuItem.text
                                 color: dt.error
                                 font.pixelSize: dt.label
@@ -930,6 +942,7 @@ Rectangle {
                         Layout.alignment: Qt.AlignHCenter
                     }
                     AppText {
+                        dt: root.dt
                         text: qsTr("请选择或新建章节")
                         color: dt.textSecondary
                         font.pixelSize: dt.fontLg
@@ -956,6 +969,7 @@ Rectangle {
                             color: drawerBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                             AppText {
+                                dt: root.dt
                                 anchors.centerIn: parent
                                 text: "\u25C0" // Left arrow to indicate it opens from the right
                                 color: dt.textMuted

@@ -62,6 +62,7 @@ Rectangle {
                     spacing: dt.sp10
                     Layout.alignment: Qt.AlignVCenter
                     AppText {
+                        dt: root.dt
                         text: qsTr("素笺写作")
                         color: dt.primary
                         font.pixelSize: dt.fontXl
@@ -92,6 +93,7 @@ Rectangle {
 
                             AppText {
                                 id: navLabel
+                                dt: root.dt
                                 anchors.centerIn: parent
                                 text: modelData.label
                                 color: root.currentTab === modelData.idx ?
@@ -145,23 +147,24 @@ Rectangle {
                                 Layout.alignment: Qt.AlignVCenter
                             }
 
-                            AppText {
-                                 text: {
-                                     var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
-                                     if (s === "success") return qsTr("已同步");
-                                     if (s === "syncing") return qsTr("同步中");
-                                     if (s === "error") return qsTr("同步失败");
-                                     if (s === "conflict") return qsTr("同步冲突");
-                                     if (s === "partial_conflict") return qsTr("同步冲突");
-                                     // 已配置但无特定状态时显示"同步"
-                                     return qsTr("同步");
-                                 }
-                                 color: dt.onSurfaceVariant
-                                 font.pixelSize: dt.caption
-                                 font.family: dt.fontFamily
-                                 Layout.alignment: Qt.AlignVCenter
-                                 visible: root.width > 700
-                            }
+                             AppText {
+                                 dt: root.dt
+                                  text: {
+                                      var s = root.appState && root.appState.sync ? root.appState.sync.status : "none";
+                                      if (s === "success") return qsTr("已同步");
+                                      if (s === "syncing") return qsTr("同步中");
+                                      if (s === "error") return qsTr("同步失败");
+                                      if (s === "conflict") return qsTr("同步冲突");
+                                      if (s === "partial_conflict") return qsTr("同步冲突");
+                                      // 已配置但无特定状态时显示"同步"
+                                      return qsTr("同步");
+                                  }
+                                  color: dt.onSurfaceVariant
+                                  font.pixelSize: dt.caption
+                                  font.family: dt.fontFamily
+                                  Layout.alignment: Qt.AlignVCenter
+                                  visible: root.width > 700
+                             }
                         }
 
                         MouseArea {
@@ -187,6 +190,7 @@ Rectangle {
 
                         AppText {
                             id: settingsText
+                            dt: root.dt
                             anchors.centerIn: parent
                             text: qsTr("设置")
                             color: dt.onSurfaceVariant
@@ -214,6 +218,7 @@ Rectangle {
                             anchors.centerIn: parent
                             spacing: dt.sp6
                             AppText {
+                                dt: root.dt
                                 text: qsTr("切换工作区")
                                 color: dt.onSurfaceVariant
                                 font.pixelSize: dt.caption

@@ -408,6 +408,7 @@ Item {
 
 
     AppText {
+        dt: canvasArea.dt
         anchors.centerIn: parent
         text: qsTr("还没有节点，点击新增节点开始构建星图")
         color: _textSecondary
@@ -428,6 +429,7 @@ Item {
         z: 100
 
         AppText {
+            dt: canvasArea.dt
             anchors.centerIn: parent
             text: errorMessage
             color: _onError
@@ -530,6 +532,7 @@ Item {
             id: bgMenuItem1
             text: qsTr("新建节点")
             contentItem: AppText {
+                dt: canvasArea.dt
                 text: bgMenuItem1.text
                 color: bgMenuItem1.hovered ? _accent : _textPrimary
                 font.pixelSize: 13
@@ -560,6 +563,7 @@ Item {
             id: nodeMenuItem1
             text: qsTr("重命名")
             contentItem: AppText {
+                dt: canvasArea.dt
                 text: nodeMenuItem1.text
                 color: nodeMenuItem1.hovered ? _accent : _textPrimary
                 font.pixelSize: 13
@@ -581,6 +585,7 @@ Item {
             id: nodeMenuItem2
             text: qsTr("删除节点")
             contentItem: AppText {
+                dt: canvasArea.dt
                 text: nodeMenuItem2.text
                 color: nodeMenuItem2.hovered ? _danger : _textPrimary
                 font.pixelSize: 13
@@ -614,6 +619,7 @@ Item {
             id: edgeMenuItem1
             text: qsTr("重命名连线")
             contentItem: AppText {
+                dt: canvasArea.dt
                 text: edgeMenuItem1.text
                 color: edgeMenuItem1.hovered ? _accent : _textPrimary
                 font.pixelSize: 13
@@ -635,6 +641,7 @@ Item {
             id: edgeMenuItem2
             text: qsTr("删除连线")
             contentItem: AppText {
+                dt: canvasArea.dt
                 text: edgeMenuItem2.text
                 color: edgeMenuItem2.hovered ? _danger : _textPrimary
                 font.pixelSize: 13
@@ -683,6 +690,7 @@ Item {
                 spacing: 16
 
                 AppText {
+                    dt: canvasArea.dt
                     text: renameDialog.targetType === "node" ? qsTr("修改节点标题") : qsTr("修改连线标签")
                     font.pixelSize: 16
                     font.bold: true
@@ -718,6 +726,7 @@ Item {
                         text: qsTr("取消")
                         onClicked: renameDialog.close()
                         contentItem: AppText {
+                            dt: canvasArea.dt
                             text: cancelBtn.text
                             color: _textSecondary
                             font.pixelSize: 13
@@ -734,6 +743,7 @@ Item {
                         text: qsTr("确定")
                         onClicked: renameDialog.confirm()
                         contentItem: AppText {
+                            dt: canvasArea.dt
                             text: confirmBtn.text
                             color: _onPrimary
                             font.bold: true

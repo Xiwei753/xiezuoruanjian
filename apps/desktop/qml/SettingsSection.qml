@@ -35,6 +35,7 @@ Rectangle {
         spacing: dt.sp12
 
         AppText {
+            dt: root.dt
             text: root.title
             color: dt.textPrimary
             font.pixelSize: dt.subtitle

@@ -96,6 +96,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt.sp4
                 AppText {
+                    dt: root.dt
                     text: "A"
                     color: dt.textSecondary
                     font.pixelSize: dt.label
@@ -103,12 +104,14 @@ Rectangle {
                     font.weight: Font.Bold
                 }
                 AppText {
+                    dt: root.dt
                     text: Math.round(root.currentFontSize) + "px"
                     color: dt.textPrimary
                     font.pixelSize: dt.label
                     font.family: dt.fontFamily
                 }
                 AppText {
+                    dt: root.dt
                     text: "\u25BE"
                     color: dt.textSecondary
                     font.pixelSize: dt.fontXs
@@ -141,18 +144,21 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt.sp4
                 AppText {
+                    dt: root.dt
                     text: "\u2630"
                     color: dt.textSecondary
                     font.pixelSize: dt.label
                     font.family: dt.fontFamily
                 }
                 AppText {
+                    dt: root.dt
                     text: Number(root.currentLineSpacing).toFixed(1) + "x"
                     color: dt.textPrimary
                     font.pixelSize: dt.label
                     font.family: dt.fontFamily
                 }
                 AppText {
+                    dt: root.dt
                     text: "\u25BE"
                     color: dt.textSecondary
                     font.pixelSize: dt.fontXs
@@ -185,6 +191,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt.sp4
                 AppText {
+                    dt: root.dt
                     text: "\u21E5"
                     color: dt.textSecondary
                     font.pixelSize: dt.label
@@ -192,12 +199,14 @@ Rectangle {
                     font.weight: Font.Bold
                 }
                 AppText {
+                    dt: root.dt
                     text: qsTr("段落")
                     color: dt.textPrimary
                     font.pixelSize: dt.label
                     font.family: dt.fontFamily
                 }
                 AppText {
+                    dt: root.dt
                     text: "\u25BE"
                     color: dt.textSecondary
                     font.pixelSize: dt.fontXs
@@ -232,6 +241,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt.sp4
                 AppText {
+                    dt: root.dt
                     text: qsTr("一键排版")
                     color: dt.textSecondary
                     font.pixelSize: dt.label
@@ -265,6 +275,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt.sp4
                 AppText {
+                    dt: root.dt
                     text: qsTr("星图")
                     color: dt.textSecondary
                     font.pixelSize: dt.label
@@ -296,6 +307,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt.sp4
                 AppText {
+                    dt: root.dt
                     text: qsTr("统计")
                     color: dt.textSecondary
                     font.pixelSize: dt.label
@@ -327,6 +339,7 @@ Rectangle {
                 anchors.centerIn: parent
                 spacing: dt.sp4
                 AppText {
+                    dt: root.dt
                     text: qsTr("设置")
                     color: dt.textSecondary
                     font.pixelSize: dt.label
@@ -347,6 +360,7 @@ Rectangle {
 
         // Save status
         AppText {
+            dt: root.dt
             text: root.saveStatus || ""
             color: dt.textSecondary
             font.pixelSize: dt.caption
@@ -374,6 +388,7 @@ Rectangle {
             spacing: dt.sp12
 
             AppText {
+                dt: root.dt
                 text: qsTr("字号")
                 color: dt.textPrimary
                 font.pixelSize: dt.subtitle
@@ -397,6 +412,7 @@ Rectangle {
                                presetHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                         AppText {
+                            dt: root.dt
                             anchors.centerIn: parent
                             text: modelData
                             color: Math.round(root.currentFontSize) === modelData ?
@@ -427,6 +443,7 @@ Rectangle {
                 spacing: dt.sp8
 
                 AppText {
+                    dt: root.dt
                     text: "10"
                     color: dt.textMuted
                     font.pixelSize: dt.fontXs
@@ -444,6 +461,7 @@ Rectangle {
                 }
 
                 AppText {
+                    dt: root.dt
                     text: "72"
                     color: dt.textMuted
                     font.pixelSize: dt.fontXs
@@ -484,6 +502,7 @@ Rectangle {
                 }
 
                 AppText {
+                    dt: root.dt
                     text: "px"
                     color: dt.textSecondary
                     font.pixelSize: dt.fontSm
@@ -513,6 +532,7 @@ Rectangle {
             spacing: dt.sp12
 
             AppText {
+                dt: root.dt
                 text: qsTr("行距倍数")
                 color: dt.textPrimary
                 font.pixelSize: dt.subtitle
@@ -536,6 +556,7 @@ Rectangle {
                                presetHover.containsMouse ? dt.surfaceVariant : "transparent"
 
                         AppText {
+                            dt: root.dt
                             anchors.centerIn: parent
                             text: Number(modelData).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")
                             color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
@@ -566,6 +587,7 @@ Rectangle {
                 spacing: dt.sp8
 
                 AppText {
+                    dt: root.dt
                     text: "1.0"
                     color: dt.textMuted
                     font.pixelSize: dt.fontXs
@@ -583,6 +605,7 @@ Rectangle {
                 }
 
                 AppText {
+                    dt: root.dt
                     text: "3.0"
                     color: dt.textMuted
                     font.pixelSize: dt.fontXs
@@ -590,6 +613,7 @@ Rectangle {
             }
 
             AppText {
+                dt: root.dt
                 text: Number(root.currentLineSpacing).toFixed(1) + " x"
                 color: dt.textSecondary
                 font.pixelSize: dt.fontSm
@@ -617,6 +641,7 @@ Rectangle {
             spacing: dt.sp12
 
             AppText {
+                dt: root.dt
                 text: qsTr("段落设置")
                 color: dt.textPrimary
                 font.pixelSize: dt.subtitle
@@ -630,6 +655,7 @@ Rectangle {
                 spacing: dt.sp4
 
                 AppText {
+                    dt: root.dt
                     text: qsTr("正文宽度")
                     color: dt.textSecondary
                     font.pixelSize: dt.fontSm
@@ -640,6 +666,7 @@ Rectangle {
                     spacing: dt.sp8
 
                     AppText {
+                        dt: root.dt
                         text: "480"
                         color: dt.textMuted
                         font.pixelSize: dt.fontXs
@@ -662,6 +689,7 @@ Rectangle {
                     }
 
                     AppText {
+                        dt: root.dt
                         text: "3840"
                         color: dt.textMuted
                         font.pixelSize: dt.fontXs
@@ -669,6 +697,7 @@ Rectangle {
                 }
 
                 AppText {
+                    dt: root.dt
                     text: Math.round(widthSlider.value) + " px"
                     color: dt.textSecondary
                     font.pixelSize: dt.fontSm
@@ -688,11 +717,13 @@ Rectangle {
                     Layout.fillWidth: true
                     spacing: 2
                     AppText {
+                        dt: root.dt
                         text: qsTr("首行缩进")
                         color: dt.textPrimary
                         font.pixelSize: dt.fontMd
                     }
                     AppText {
+                        dt: root.dt
                         text: qsTr("段落开头缩进两个字符")
                         color: dt.textMuted
                         font.pixelSize: dt.fontXs

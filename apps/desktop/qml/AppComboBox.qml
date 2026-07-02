@@ -55,6 +55,7 @@ ComboBox {
     }
 
     contentItem: AppText {
+        dt: control.theme
         text: control.displayText
         color: control.enabled ? control.normalTextColor : control.disabledTextColor
         font.pixelSize: control.theme.label
@@ -97,6 +98,7 @@ ComboBox {
     delegate: ItemDelegate {
         width: control.width
         contentItem: AppText {
+            dt: control.theme
             text: modelData
             color: control.highlightedIndex === index ? control.highlightedTextColor : control.normalTextColor
             font.pixelSize: control.theme.fontMd

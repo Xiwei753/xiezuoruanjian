@@ -35,6 +35,7 @@ Button {
     TextMetrics { id: tm; text: control.text; font.pixelSize: _fontSm }
 
     contentItem: AppText {
+        dt: control.dt
         text: control.text
         color: control.active ? _onPrimaryContainer : (control.hovered ? _primary : _onSurfaceVariant)
         font.pixelSize: _label
