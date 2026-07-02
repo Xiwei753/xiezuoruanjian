@@ -22,6 +22,40 @@ fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
         .map_err(|e| crate::Error::Other(format!("sync_parallel_pool_error: {}", e)))
 }
 
+fn save_conflict_copy(
+    workspace_path: &Path,
+    path: &str,
+    remote_content: &[u8],
+) -> crate::Result<String> {
+    let full_path = workspace_path.join(path);
+    let filename = full_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let conflict_filename = format!("{}.remote-conflict-{}", filename, timestamp);
+
+    let conflict_path = full_path
+        .parent()
+        .unwrap_or(&full_path)
+        .join(&conflict_filename);
+
+    if let Some(parent) = conflict_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    std::fs::write(&conflict_path, remote_content).map_err(|e| {
+        crate::Error::Other(format!(
+            "local_io_error: write conflict copy {}: {}",
+            path, e
+        ))
+    })?;
+
+    Ok(conflict_filename)
+}
+
 fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     if record.op == "delete" {
         record.deleted_at_ms.unwrap_or(record.updated_at_ms)
@@ -676,30 +710,8 @@ fn execute_lww_sync_attempt(
                                     &config.branch,
                                     &path,
                                 )? {
-                                    let full_path = workspace_path.join(&path);
-                                    let filename = full_path
-                                        .file_name()
-                                        .unwrap_or_default()
-                                        .to_string_lossy()
-                                        .to_string();
-                                    let timestamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
                                     let conflict_filename =
-                                        format!("{}.remote-conflict-{}", filename, timestamp);
-                                    let conflict_path = full_path
-                                        .parent()
-                                        .unwrap_or(&full_path)
-                                        .join(&conflict_filename);
-                                    if let Some(parent) = conflict_path.parent() {
-                                        let _ = std::fs::create_dir_all(parent);
-                                    }
-                                    std::fs::write(&conflict_path, &remote_content).map_err(
-                                        |e| {
-                                            crate::Error::Other(format!(
-                                                "local_io_error: write conflict copy {}: {}",
-                                                path, e
-                                            ))
-                                        },
-                                    )?;
+                                        save_conflict_copy(workspace_path, &path, &remote_content)?;
 
                                     Some(SyncConflict {
                                         local_path: path.clone(),

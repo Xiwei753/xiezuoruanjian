@@ -74,7 +74,9 @@ impl AppBackend {
         let sync_success = matches!(status_str, "success" | "branch_missing_recovered");
         if sync_success && self.has_workspace() {
             self.handle_successful_sync_refresh();
-        } else if (status_str == "conflict" || status_str == "unrelated_histories")
+        } else if (status_str == "conflict"
+            || status_str == "partial_conflict"
+            || status_str == "unrelated_histories")
             && self.has_workspace()
         {
             self.reload_tree();
@@ -459,6 +461,26 @@ impl AppBackend {
                                     file_str
                                 );
                                 ("conflict".to_string(), m)
+                            }
+                            "partial_conflict" => {
+                                let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
+                                files.sort();
+                                files.dedup();
+
+                                let file_str = format_conflict_files(&files);
+
+                                let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
+                                debug_log_static("sync", "partial_conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
+
+                                let m = format!(
+                                    "部分同步成功，存在正文冲突\n\n已同步:\n  上传: {} 个文件\n  下载: {} 个文件\n  本地删除: {} 个文件\n  远端删除: {} 个文件\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 手动处理冲突文件后重新同步",
+                                    result.uploaded_files.len(),
+                                    result.downloaded_files.len(),
+                                    result.local_deletes.len(),
+                                    result.remote_deletes.len(),
+                                    file_str
+                                );
+                                ("partial_conflict".to_string(), m)
                             }
                             "recoverable_error" => {
                                 let e = result.error.as_deref().unwrap_or("未知错误");
