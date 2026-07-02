@@ -442,43 +442,120 @@ impl SujianEditorItem {
                         self.editor_layout
                             .text_width(&self.preedit_text, font_size, &font_family);
 
-                    // Draw underline based on preedit_attributes
+                    // Draw underline and format attributes based on preedit_attributes
                     // If no attributes, draw a default underline for the full preedit
-                    let has_underline_attr = self.preedit_attributes.iter()
-                        .any(|a| a.kind == super::PreeditAttributeKind::Underline);
+                    let has_text_format_attr = self.preedit_attributes.iter()
+                        .any(|a| matches!(a.kind, super::PreeditAttributeKind::Underline
+                            | super::PreeditAttributeKind::FontUnderline
+                            | super::PreeditAttributeKind::TextColor { .. }
+                            | super::PreeditAttributeKind::BackgroundColor { .. }));
 
-                    if has_underline_attr {
-                        // Draw underlines for each TextFormat attribute
+                    if has_text_format_attr {
+                        // Draw format attributes for each TextFormat attribute
                         for attr in &self.preedit_attributes {
-                            if attr.kind == super::PreeditAttributeKind::Underline {
-                                let attr_start = attr.start.min(self.preedit_text.len());
-                                let attr_end = (attr.start + attr.length).min(self.preedit_text.len());
-                                if attr_start >= attr_end {
-                                    continue;
+                            let attr_start = attr.start.min(self.preedit_text.len());
+                            let attr_end = (attr.start + attr.length).min(self.preedit_text.len());
+                            if attr_start >= attr_end {
+                                continue;
+                            }
+                            let before_w = self.editor_layout.text_width(
+                                &self.preedit_text[..attr_start],
+                                font_size,
+                                &font_family,
+                            );
+                            let attr_text = &self.preedit_text[attr_start..attr_end];
+                            let attr_w = self.editor_layout.text_width(
+                                attr_text,
+                                font_size,
+                                &font_family,
+                            );
+
+                            match &attr.kind {
+                                super::PreeditAttributeKind::Underline => {
+                                    // Draw underline
+                                    painter.set_pen(QPen::from_color(renderer::color_from_qstring(
+                                        self.current_text_color.clone(),
+                                    )));
+                                    let underline_y = baseline + 2.0;
+                                    let line_f = QLineF {
+                                        pt1: QPointF { x: x + before_w, y: underline_y },
+                                        pt2: QPointF {
+                                            x: x + before_w + attr_w,
+                                            y: underline_y,
+                                        },
+                                    };
+                                    painter.draw_line(line_f);
                                 }
-                                let before_w = self.editor_layout.text_width(
-                                    &self.preedit_text[..attr_start],
-                                    font_size,
-                                    &font_family,
-                                );
-                                let attr_text = &self.preedit_text[attr_start..attr_end];
-                                let attr_w = self.editor_layout.text_width(
-                                    attr_text,
-                                    font_size,
-                                    &font_family,
-                                );
-                                painter.set_pen(QPen::from_color(renderer::color_from_qstring(
-                                    self.current_text_color.clone(),
-                                )));
-                                let underline_y = baseline + 2.0;
-                                let line_f = QLineF {
-                                    pt1: QPointF { x: x + before_w, y: underline_y },
-                                    pt2: QPointF {
-                                        x: x + before_w + attr_w,
-                                        y: underline_y,
-                                    },
-                                };
-                                painter.draw_line(line_f);
+                                super::PreeditAttributeKind::FontUnderline => {
+                                    // Draw font underline (thicker)
+                                    let mut pen = QPen::from_color(renderer::color_from_qstring(
+                                        self.current_text_color.clone(),
+                                    ));
+                                    cpp!(unsafe [pen as "QPen*"] {
+                                        pen->setWidth(2);
+                                    });
+                                    painter.set_pen(pen);
+                                    let underline_y = baseline + 2.0;
+                                    let line_f = QLineF {
+                                        pt1: QPointF { x: x + before_w, y: underline_y },
+                                        pt2: QPointF {
+                                            x: x + before_w + attr_w,
+                                            y: underline_y,
+                                        },
+                                    };
+                                    painter.draw_line(line_f);
+                                }
+                                super::PreeditAttributeKind::TextColor { color } => {
+                                    // Draw text with overridden color
+                                    let text_color = if color.is_empty() {
+                                        self.current_text_color.clone()
+                                    } else {
+                                        QString::from(color.clone())
+                                    };
+                                    // Redraw the attribute segment with the text color
+                                    cpp!(unsafe [painter as "QPainter*"] {
+                                        painter->save();
+                                    });
+                                    let clip = QRectF {
+                                        x: x + before_w,
+                                        y: line.y + paint_offset_y,
+                                        width: attr_w,
+                                        height: line.height,
+                                    };
+                                    cpp!(unsafe [painter as "QPainter*", clip as "QRectF"] {
+                                        painter->setClipRect(clip, Qt::ReplaceClip);
+                                    });
+                                    renderer::draw_text(
+                                        painter,
+                                        x,
+                                        baseline,
+                                        fs,
+                                        text_color,
+                                        self.preedit_text.clone().into(),
+                                    );
+                                    cpp!(unsafe [painter as "QPainter*"] {
+                                        painter->restore();
+                                    });
+                                }
+                                super::PreeditAttributeKind::BackgroundColor { color } => {
+                                    // Draw background highlight
+                                    let bg_color = if color.is_empty() {
+                                        QString::from("#33FFFFFF")
+                                    } else {
+                                        QString::from(color.clone())
+                                    };
+                                    renderer::draw_rect(
+                                        painter,
+                                        x + before_w,
+                                        line.y + paint_offset_y,
+                                        attr_w,
+                                        line.height,
+                                        bg_color,
+                                    );
+                                }
+                                super::PreeditAttributeKind::Cursor => {
+                                    // Cursor attribute handled separately below
+                                }
                             }
                         }
                     } else {

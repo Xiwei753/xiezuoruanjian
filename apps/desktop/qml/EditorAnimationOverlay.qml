@@ -103,6 +103,16 @@ Item {
             root._log("vt kind=" + vt.kind + " durationMs=" + vt.durationMs)
             root._handleTransaction(vt)
         }
+
+        function onPreeditVisualTransactionChanged() {
+            if (!root.animationEnabled || root.suppressed) return
+            var jsonStr = editorItem.preedit_visual_transaction_json
+            if (!jsonStr || jsonStr === "{}") return
+            var vt
+            try { vt = JSON.parse(jsonStr) } catch(e) { return }
+            if (!vt) return
+            root._handlePreeditTransaction(vt)
+        }
     }
 
     onSuppressedChanged: {
@@ -425,6 +435,132 @@ Item {
             })
 
             _trackGhost(ghost, "delete", 0, 0)
+        }
+    }
+
+    function _handlePreeditTransaction(vt) {
+        // Preedit transaction 只做轻量动画
+        // 新增字符 → 从 preedit cursor 位置飞到目标位置
+        // 删除字符 → 从当前位置飞回 preedit cursor
+        // 不涉及 hidden range（preedit 是独立视觉层）
+
+        var newLen = vt.newPreeditText ? vt.newPreeditText.length : 0
+        var oldLen = vt.oldPreeditText ? vt.oldPreeditText.length : 0
+
+        root._log("preedit transaction: oldLen=" + oldLen + " newLen=" + newLen)
+
+        if (newLen > oldLen) {
+            // 插入动画
+            _createPreeditInsertAnimation(vt)
+        } else if (newLen < oldLen) {
+            // 删除动画
+            _createPreeditDeleteAnimation(vt)
+        }
+        // 长度相同但内容不同 → 替换动画（简化为 delete + insert）
+    }
+
+    function _createPreeditInsertAnimation(vt) {
+        // Preedit insert: new characters fly from preedit cursor position
+        var startX = vt.preeditCursorRect ? vt.preeditCursorRect.x : editorItem.cursor_rect_x
+        var startY = vt.preeditCursorRect ? (vt.preeditCursorRect.baselineY || vt.preeditCursorRect.top) : editorItem.cursor_rect_y
+        var duration = Math.max(30, Math.min(1000, vt.durationMs || 100))
+
+        // Use insertedPreeditGlyphRects if available
+        var glyphRects = vt.insertedPreeditGlyphRects
+        if (!glyphRects || !Array.isArray(glyphRects) || glyphRects.length === 0) {
+            root._log("preedit insert skipped: insertedPreeditGlyphRects empty")
+            return
+        }
+
+        var component = root._glyphGhostComponent
+        if (!component || component.status !== Component.Ready) {
+            root._log("preedit insert skipped: component not ready")
+            return
+        }
+
+        for (var i = 0; i < glyphRects.length; i++) {
+            var gr = glyphRects[i]
+            if (isComplexGrapheme(gr.char)) continue
+
+            var ghost = component.createObject(root, {
+                "animKind": "insert",
+                "startX": startX,
+                "startY": startY,
+                "endX": gr.x,
+                "endY": gr.baselineY || gr.y,
+                "glyphWidth": gr.w,
+                "glyphHeight": gr.h,
+                "glyphBaselineY": gr.baselineY || 0,
+                "width": gr.w,
+                "height": gr.h,
+                "duration": duration,
+                "ghostColor": editorItem.text_color || root.dt.editorText,
+                "glyphText": gr.char || "",
+                "glyphFontFamily": editorItem.font_family || "",
+                "glyphFontPixelSize": editorItem.font_pixel_size || 0
+            })
+
+            if (ghost !== null) {
+                root._activeAnimations.push(ghost)
+                ghost.animationFinished.connect(function() {
+                    var idx = root._activeAnimations.indexOf(ghost)
+                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                    ghost.destroy()
+                })
+                ghost.startAnimation()
+            }
+        }
+    }
+
+    function _createPreeditDeleteAnimation(vt) {
+        // Preedit delete: removed characters fly back toward preedit cursor
+        var endX = vt.preeditCursorRect ? vt.preeditCursorRect.x : editorItem.cursor_rect_x
+        var endY = vt.preeditCursorRect ? (vt.preeditCursorRect.baselineY || vt.preeditCursorRect.top) : editorItem.cursor_rect_y
+        var duration = Math.max(30, Math.min(1000, vt.durationMs || 100))
+
+        var glyphRects = vt.deletedPreeditGlyphRects
+        if (!glyphRects || !Array.isArray(glyphRects) || glyphRects.length === 0) {
+            root._log("preedit delete skipped: deletedPreeditGlyphRects empty")
+            return
+        }
+
+        var component = root._glyphGhostComponent
+        if (!component || component.status !== Component.Ready) {
+            root._log("preedit delete skipped: component not ready")
+            return
+        }
+
+        for (var i = 0; i < glyphRects.length; i++) {
+            var gr = glyphRects[i]
+            if (isComplexGrapheme(gr.char)) continue
+
+            var ghost = component.createObject(root, {
+                "animKind": "delete",
+                "startX": gr.x,
+                "startY": gr.baselineY || gr.y,
+                "endX": endX,
+                "endY": endY,
+                "glyphWidth": gr.w,
+                "glyphHeight": gr.h,
+                "glyphBaselineY": gr.baselineY || 0,
+                "width": gr.w,
+                "height": gr.h,
+                "duration": duration,
+                "ghostColor": editorItem.text_color || root.dt.editorText,
+                "glyphText": gr.char || "",
+                "glyphFontFamily": editorItem.font_family || "",
+                "glyphFontPixelSize": editorItem.font_pixel_size || 0
+            })
+
+            if (ghost !== null) {
+                root._activeAnimations.push(ghost)
+                ghost.animationFinished.connect(function() {
+                    var idx = root._activeAnimations.indexOf(ghost)
+                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                    ghost.destroy()
+                })
+                ghost.startAnimation()
+            }
         }
     }
 

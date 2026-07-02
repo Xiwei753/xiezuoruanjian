@@ -6,6 +6,8 @@ cpp! {{
     #include <QtGui/QInputMethodEvent>
     #include <QtGui/QKeyEvent>
     #include <QtGui/QKeySequence>
+    #include <QtGui/QTextCharFormat>
+    #include <QtGui/QTextFormat>
     #include <QtQuick/QQuickItem>
     #include <QEvent>
     #include <QObject>
@@ -18,7 +20,7 @@ cpp! {{
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
     extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
     extern "C" void sujian_ime_preedit(void* rust_item, const ushort* text, int text_len, int cursor);
-    extern "C" void sujian_ime_preedit_attrs(void* rust_item, const ushort* text, int text_len, int cursor, const int* attr_types, const int* attr_starts, const int* attr_lengths, int attr_count);
+    extern "C" void sujian_ime_preedit_attrs(void* rust_item, const ushort* text, int text_len, int cursor, const int* attr_types, const int* attr_starts, const int* attr_lengths, int attr_count, const int* attr_formats);
     extern "C" void sujian_ime_cancel(void* rust_item);
     extern "C" void sujian_request_repaint(void* rust_item);
 
@@ -290,11 +292,27 @@ cpp! {{
                     QVector<int> attr_types;
                     QVector<int> attr_starts;
                     QVector<int> attr_lengths;
+                    QVector<int> attr_formats;
                     for (const auto& attr : ime->attributes()) {
                         if (attr.type == QInputMethodEvent::TextFormat || attr.type == QInputMethodEvent::Cursor) {
                             attr_types.append(static_cast<int>(attr.type));
                             attr_starts.append(attr.start);
                             attr_lengths.append(attr.length);
+                            // Extract format info from QTextCharFormat for TextFormat attributes
+                            // 0 = underline (default), 1 = textColor, 2 = backgroundColor, 3 = fontUnderline
+                            int format_code = 0; // default: underline
+                            if (attr.type == QInputMethodEvent::TextFormat) {
+                                QTextCharFormat fmt = qvariant_cast<QTextCharFormat>(attr.value);
+                                if (fmt.fontUnderline()) {
+                                    format_code = 3; // fontUnderline
+                                } else if (fmt.hasProperty(QTextFormat::BackgroundBrush)) {
+                                    format_code = 2; // backgroundColor
+                                } else if (fmt.hasProperty(QTextFormat::ForegroundBrush)) {
+                                    format_code = 1; // textColor
+                                }
+                                // Default TextFormat without specific properties → underline (0)
+                            }
+                            attr_formats.append(format_code);
                         }
                     }
                     int attr_count = attr_types.size();
@@ -306,7 +324,8 @@ cpp! {{
                         attr_types.constData(),
                         attr_starts.constData(),
                         attr_lengths.constData(),
-                        attr_count
+                        attr_count,
+                        attr_formats.constData()
                     );
                 } else if (commit.isEmpty()) {
                     // IME cancelled: also discard any pending key
@@ -451,6 +470,18 @@ pub(crate) trait EditorInputHost {
     fn input_set_suppress_next_ime_commit(&mut self, value: bool);
     fn input_take_suppress_next_ime_commit(&mut self) -> bool;
     fn input_request_repaint(&mut self);
+
+    /// 获取当前 preedit 文本（用于 inputMethodQuery）
+    fn input_preedit_text(&self) -> String { String::new() }
+
+    /// 获取当前 preedit 光标位置（用于 inputMethodQuery）
+    fn input_preedit_cursor(&self) -> usize { 0 }
+
+    /// 获取当前 preedit 属性（用于 inputMethodQuery）
+    fn input_preedit_attributes(&self) -> Vec<crate::sujian_editor_item::PreeditAttribute> { Vec::new() }
+
+    /// 通知 host preedit 视觉事务已生成（用于日志守卫）
+    fn input_preedit_transaction_created(&self, _old_text: &str, _new_text: &str) {}
 }
 
 pub(crate) fn install_event_filter(item: *mut c_void, rust_item: *mut c_void) {
@@ -746,6 +777,7 @@ extern "C" fn sujian_ime_preedit(
 /// FFI callback for IME preedit with attributes.
 /// attr_types: 0=TextFormat, 1=Cursor, 2=Language, 3=Ruby, 4=Selection
 /// attr_starts/attr_lengths: character offsets and lengths for each attribute
+/// attr_formats: format code for TextFormat attributes (0=underline, 1=textColor, 2=backgroundColor, 3=fontUnderline)
 #[no_mangle]
 extern "C" fn sujian_ime_preedit_attrs(
     rust_item: *mut c_void,
@@ -756,6 +788,7 @@ extern "C" fn sujian_ime_preedit_attrs(
     attr_starts: *const i32,
     attr_lengths: *const i32,
     attr_count: i32,
+    attr_formats: *const i32,
 ) {
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
@@ -768,6 +801,12 @@ extern "C" fn sujian_ime_preedit_attrs(
         let types_slice = unsafe { std::slice::from_raw_parts(attr_types, attr_count as usize) };
         let starts_slice = unsafe { std::slice::from_raw_parts(attr_starts, attr_count as usize) };
         let lengths_slice = unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
+        let formats_slice = if !attr_formats.is_null() {
+            unsafe { std::slice::from_raw_parts(attr_formats, attr_count as usize) }
+        } else {
+            // Fallback: treat all as underline
+            &vec![0i32; attr_count as usize]
+        };
 
         // Pre-compute char-to-byte mapping for the preedit text
         let char_offsets: Vec<usize> = {
@@ -785,10 +824,20 @@ extern "C" fn sujian_ime_preedit_attrs(
             let attr_type = types_slice[i];
             let char_start = starts_slice[i].max(0) as usize;
             let char_length = lengths_slice[i].max(0) as usize;
+            let format_code = formats_slice[i];
 
             let kind = if attr_type == 0 {
                 // QInputMethodEvent::TextFormat
-                crate::sujian_editor_item::PreeditAttributeKind::Underline
+                match format_code {
+                    1 => crate::sujian_editor_item::PreeditAttributeKind::TextColor {
+                        color: String::new(), // 平台层无法提取具体颜色值，使用空字符串标记
+                    },
+                    2 => crate::sujian_editor_item::PreeditAttributeKind::BackgroundColor {
+                        color: String::new(),
+                    },
+                    3 => crate::sujian_editor_item::PreeditAttributeKind::FontUnderline,
+                    _ => crate::sujian_editor_item::PreeditAttributeKind::Underline,
+                }
             } else if attr_type == 1 {
                 // QInputMethodEvent::Cursor
                 crate::sujian_editor_item::PreeditAttributeKind::Cursor
@@ -1123,15 +1172,47 @@ mod tests {
         // (matching Qt's QInputMethodEvent::TextFormat=0, Cursor=1)
         use crate::sujian_editor_item::PreeditAttributeKind;
 
-        // attr_type 0 should be Underline (TextFormat)
+        // attr_type 0, format_code 0 should be Underline (TextFormat default)
         let kind_0 = if 0 == 0 {
-            PreeditAttributeKind::Underline
+            match 0 {
+                1 => PreeditAttributeKind::TextColor { color: String::new() },
+                2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+                3 => PreeditAttributeKind::FontUnderline,
+                _ => PreeditAttributeKind::Underline,
+            }
         } else if 0 == 1 {
             PreeditAttributeKind::Cursor
         } else {
             panic!("unexpected attr_type");
         };
         assert_eq!(kind_0, PreeditAttributeKind::Underline);
+
+        // attr_type 0, format_code 1 should be TextColor
+        let kind_tc = match 1 {
+            1 => PreeditAttributeKind::TextColor { color: String::new() },
+            2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+            3 => PreeditAttributeKind::FontUnderline,
+            _ => PreeditAttributeKind::Underline,
+        };
+        assert!(matches!(kind_tc, PreeditAttributeKind::TextColor { .. }));
+
+        // attr_type 0, format_code 2 should be BackgroundColor
+        let kind_bc = match 2 {
+            1 => PreeditAttributeKind::TextColor { color: String::new() },
+            2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+            3 => PreeditAttributeKind::FontUnderline,
+            _ => PreeditAttributeKind::Underline,
+        };
+        assert!(matches!(kind_bc, PreeditAttributeKind::BackgroundColor { .. }));
+
+        // attr_type 0, format_code 3 should be FontUnderline
+        let kind_fu = match 3 {
+            1 => PreeditAttributeKind::TextColor { color: String::new() },
+            2 => PreeditAttributeKind::BackgroundColor { color: String::new() },
+            3 => PreeditAttributeKind::FontUnderline,
+            _ => PreeditAttributeKind::Underline,
+        };
+        assert_eq!(kind_fu, PreeditAttributeKind::FontUnderline);
 
         // attr_type 1 should be Cursor
         let kind_1 = if 1 == 0 {

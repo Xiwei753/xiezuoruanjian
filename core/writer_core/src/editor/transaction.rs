@@ -262,6 +262,55 @@ pub struct EditorVisualTransaction {
     pub coordinate_mode: VisualCoordinateMode,
 }
 
+/// IME preedit 文本格式属性
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PreeditTextFormat {
+    Underline,
+    TextColor { color: String },
+    BackgroundColor { color: String },
+    FontUnderline,
+}
+
+/// 预输入（IME composition）视觉事务。
+///
+/// Preedit 是临时视觉层，不修改 buffer text，不进入 undo。
+/// 每次 preedit 变化时生成此事务，驱动 overlay 做轻量吐字/吞字动画。
+/// commit 时清空 preedit layer，正式 buffer 插入 commitString，
+/// 生成正式 EditorVisualTransaction。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreeditVisualTransaction {
+    /// 事务唯一 ID
+    pub id: u64,
+    /// 旧 preedit 文本
+    pub old_preedit_text: String,
+    /// 新 preedit 文本
+    pub new_preedit_text: String,
+    /// 旧 preedit 光标矩形（preedit 变化前）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_preedit_cursor_rect: Option<CursorRect>,
+    /// 新 preedit 光标矩形（preedit 变化后）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_preedit_cursor_rect: Option<CursorRect>,
+    /// preedit 中每个 glyph 的矩形（由平台层填充）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preedit_glyph_rects: Option<Vec<GlyphRect>>,
+    /// 被删除的 preedit glyph 矩形（由平台层填充）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_preedit_glyph_rects: Option<Vec<GlyphRect>>,
+    /// 新插入的 preedit glyph 矩形（由平台层填充）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inserted_preedit_glyph_rects: Option<Vec<GlyphRect>>,
+    /// preedit 光标矩形
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preedit_cursor_rect: Option<CursorRect>,
+    /// 动画时长（毫秒）
+    pub duration_ms: u64,
+    /// 坐标模式
+    pub coordinate_mode: VisualCoordinateMode,
+}
+
 #[derive(Debug, Clone)]
 pub struct EditorEngine {
     next_animation_id: u64,
@@ -1257,5 +1306,54 @@ mod tests {
         };
         let json = serde_json::to_string(&gr).unwrap();
         assert!(json.contains("\"baselineY\":"));
+    }
+
+    #[test]
+    fn preedit_visual_transaction_serializes_camel_case() {
+        let vt = PreeditVisualTransaction {
+            id: 1,
+            old_preedit_text: "n".to_string(),
+            new_preedit_text: "ni".to_string(),
+            old_preedit_cursor_rect: None,
+            new_preedit_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            preedit_glyph_rects: None,
+            deleted_preedit_glyph_rects: None,
+            inserted_preedit_glyph_rects: None,
+            preedit_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            duration_ms: 160,
+            coordinate_mode: VisualCoordinateMode::Baseline,
+        };
+        let json = serde_json::to_string(&vt).unwrap();
+        assert!(json.contains("\"oldPreeditText\":"));
+        assert!(json.contains("\"newPreeditText\":"));
+        assert!(json.contains("\"newPreeditCursorRect\":"));
+        assert!(json.contains("\"preeditCursorRect\":"));
+        assert!(json.contains("\"durationMs\":"));
+        assert!(json.contains("\"coordinateMode\":"));
+        // None fields should be skipped
+        assert!(!json.contains("\"oldPreeditCursorRect\":"));
+        assert!(!json.contains("\"preeditGlyphRects\":"));
+        assert!(!json.contains("\"deletedPreeditGlyphRects\":"));
+        assert!(!json.contains("\"insertedPreeditGlyphRects\":"));
+    }
+
+    #[test]
+    fn preedit_text_format_serializes_camel_case() {
+        let fmt = PreeditTextFormat::TextColor { color: "#FF0000".to_string() };
+        let json = serde_json::to_string(&fmt).unwrap();
+        assert!(json.contains("\"textColor\":"));
+        assert!(json.contains("\"color\":"));
+
+        let fmt2 = PreeditTextFormat::Underline;
+        let json2 = serde_json::to_string(&fmt2).unwrap();
+        assert!(json2.contains("\"underline\""));
+
+        let fmt3 = PreeditTextFormat::BackgroundColor { color: "#00FF00".to_string() };
+        let json3 = serde_json::to_string(&fmt3).unwrap();
+        assert!(json3.contains("\"backgroundColor\":"));
+
+        let fmt4 = PreeditTextFormat::FontUnderline;
+        let json4 = serde_json::to_string(&fmt4).unwrap();
+        assert!(json4.contains("\"fontUnderline\""));
     }
 }

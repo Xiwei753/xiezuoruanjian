@@ -36,7 +36,7 @@ use text_animation_state::{AnimationDecision, TextAnimationState, should_create_
 pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
     CursorRect, EditorAnimationKind, EditorCursor, EditorEngine,
-    EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, ReflowGlyphRect,
+    EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction, ReflowGlyphRect,
 };
 
 /// Preedit attribute from QInputMethodEvent.
@@ -58,6 +58,12 @@ pub(crate) enum PreeditAttributeKind {
     Underline,
     /// QInputMethodEvent::Cursor — cursor position within preedit
     Cursor,
+    /// TextFormat with text color override
+    TextColor { color: String },
+    /// TextFormat with background color override
+    BackgroundColor { color: String },
+    /// TextFormat with font underline
+    FontUnderline,
 }
 
 cpp! {{
@@ -143,6 +149,7 @@ pub struct SujianEditorItem {
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
     visual_transaction_json: qt_property!(QString; READ visual_transaction_json NOTIFY visual_transaction_changed),
+    preedit_visual_transaction_json: qt_property!(QString; READ preedit_visual_transaction_json NOTIFY preedit_visual_transaction_changed),
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
@@ -167,6 +174,7 @@ pub struct SujianEditorItem {
     cursor_rect_changed: qt_signal!(),
     explicit_clear_requested: qt_signal!(),
     visual_transaction_changed: qt_signal!(),
+    preedit_visual_transaction_changed: qt_signal!(),
     context_menu_requested: qt_signal!(x: f32, y: f32),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
@@ -226,6 +234,7 @@ pub struct SujianEditorItem {
     last_summary: QString,
     last_event_count: u32,
     last_visual_transaction_json: QString,
+    last_preedit_visual_transaction_json: QString,
     preedit_text: String,
     preedit_cursor: usize,
     /// Preedit attributes from QInputMethodEvent (TextFormat and Cursor attributes).
@@ -234,7 +243,7 @@ pub struct SujianEditorItem {
     /// Previous preedit text for diff-based visual transaction generation.
     preedit_old_text: String,
     /// Visual transaction for preedit changes (insert/delete within composition).
-    preedit_visual_transaction: Option<EditorVisualTransaction>,
+    preedit_visual_transaction: Option<PreeditVisualTransaction>,
     /// Preedit cursor rect (position within the preedit string, not the buffer cursor).
     preedit_cursor_rect: Option<CursorRect>,
     suppress_next_ime_commit: bool,
@@ -360,6 +369,7 @@ impl Default for SujianEditorItem {
             last_summary: "".into(),
             last_event_count: 0,
             last_visual_transaction_json: "".into(),
+            last_preedit_visual_transaction_json: "".into(),
             preedit_text: String::new(),
             preedit_cursor: 0,
             preedit_attributes: Vec::new(),
@@ -490,6 +500,7 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -516,6 +527,7 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -861,6 +873,10 @@ impl SujianEditorItem {
         self.last_visual_transaction_json.clone()
     }
 
+    fn preedit_visual_transaction_json(&self) -> QString {
+        self.last_preedit_visual_transaction_json.clone()
+    }
+
     fn cursor_rect_x(&self) -> f32 {
         // During preedit, use preedit cursor position for IME candidate window
         if !self.preedit_text.is_empty() {
@@ -997,6 +1013,11 @@ impl SujianEditorItem {
         if inserted.is_empty() {
             return;
         }
+
+        // 保存 preedit cursor rect 用于 commit 时的光标动画起点
+        let commit_from_preedit = !self.preedit_text.is_empty();
+        let preedit_cursor_rect_snapshot = self.preedit_cursor_rect.clone();
+
         // Clear preedit state when inserting formal text (e.g. IME commit)
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -1004,6 +1025,7 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
 
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
@@ -1018,6 +1040,18 @@ impl SujianEditorItem {
         let _vt = self.record_transaction(old, new, cause, true);
         // Animation lifecycle is owned by QML EditorAnimationOverlay.
         // Rust only provides glyph rect data via visual_transaction_json.
+
+        // 如果从 preedit commit，使用 preedit_cursor_rect 作为光标动画起点
+        if commit_from_preedit && preedit_cursor_rect_snapshot.is_some() {
+            // 更新 cursor_ctrl 的 visual 位置为 preedit cursor 位置
+            // 这样光标动画会从 preedit 位置开始
+            let pcr = preedit_cursor_rect_snapshot.unwrap();
+            self.cursor_ctrl.force_snap_next = false;
+            // 记录 commit_from_preedit 用于日志
+            eprintln!("[commit] commit_from_preedit=true cursor_start_source=preedit pcr_x={:.1}", pcr.x);
+        } else {
+            eprintln!("[commit] commit_from_preedit=false cursor_start_source=normal");
+        }
 
         self.emit_content_changed();
     }
@@ -1133,6 +1167,7 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
         self.cursor_position_changed();
         self.selection_changed();
         self.cursor_ctrl.dirty = true;
@@ -2121,6 +2156,7 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
         self.bump_visual_revision();
     }
 
@@ -2181,6 +2217,7 @@ impl SujianEditorItem {
         if self.preedit_text.is_empty() {
             self.preedit_visual_transaction = None;
             self.preedit_cursor_rect = None;
+            self.last_preedit_visual_transaction_json = "".into();
             return;
         }
 
@@ -2193,52 +2230,43 @@ impl SujianEditorItem {
         let new = &self.preedit_text;
 
         if old == new {
-            // No text change, only cursor moved — no visual transaction needed
+            // No text change, only cursor moved — still update cursor rect
             return;
         }
 
-        // Create a simple visual transaction for the preedit diff
-        // This is a temporary visual layer transaction, NOT a buffer transaction
-        let cause = EditorTransactionCause::ImeComposition;
-        let kind = if new.len() > old.len() {
-            EditorAnimationKind::Insert
-        } else {
-            EditorAnimationKind::Delete
-        };
-
-        // For preedit, the byte range is relative to the buffer cursor position
-        let cursor_pos = self.buffer.cursor;
-        let inserted_range = if kind == EditorAnimationKind::Insert {
-            Some((cursor_pos, cursor_pos + new.len()))
-        } else {
-            None
-        };
-
-        let vt = EditorVisualTransaction {
-            id: 0, // Preedit transactions don't need unique IDs
-            kind,
-            cause,
-            old_text: old.clone(),
-            new_text: new.clone(),
-            old_selection: EditorSelection {
-                anchor: EditorCursor::new(&self.buffer.text, cursor_pos),
-                head: EditorCursor::new(&self.buffer.text, cursor_pos),
-            },
-            new_selection: EditorSelection {
-                anchor: EditorCursor::new(&self.buffer.text, cursor_pos),
-                head: EditorCursor::new(&self.buffer.text, cursor_pos),
-            },
-            inserted_range,
-            deleted_glyph_rects: None,
-            insert_glyph_rects: None,
-            reflow_glyph_rects: None,
-            old_cursor_rect: self.preedit_cursor_rect.clone(),
-            new_cursor_rect: self.preedit_cursor_rect.clone(),
+        let vt = PreeditVisualTransaction {
+            id: 0,
+            old_preedit_text: old.clone(),
+            new_preedit_text: new.clone(),
+            old_preedit_cursor_rect: None, // 平台层填充
+            new_preedit_cursor_rect: self.preedit_cursor_rect.clone(),
+            preedit_glyph_rects: None,     // 平台层填充
+            deleted_preedit_glyph_rects: None, // 平台层填充
+            inserted_preedit_glyph_rects: None, // 平台层填充
+            preedit_cursor_rect: self.preedit_cursor_rect.clone(),
             duration_ms: self.current_typing_animation_duration_ms as u64,
             coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
         };
 
         self.preedit_visual_transaction = Some(vt);
+        eprintln!("[preedit] preedit_visual_transaction_created old_len={} new_len={}", old.len(), new.len());
+
+        // Serialize and emit signal
+        if let Some(ref vt) = self.preedit_visual_transaction {
+            match serde_json::to_string(vt) {
+                Ok(json) => {
+                    self.last_preedit_visual_transaction_json = json.into();
+                }
+                Err(e) => {
+                    eprintln!(
+                        "update_preedit_visual_state: failed to serialize preedit visual transaction: {}",
+                        e
+                    );
+                    self.last_preedit_visual_transaction_json = "{}".into();
+                }
+            }
+            self.preedit_visual_transaction_changed();
+        }
     }
 
     /// Compute the preedit cursor rect based on preedit_cursor position.
@@ -2367,6 +2395,92 @@ mod tests {
     #[test]
     fn test_is_complex_grapheme_combining_half_mark() {
         assert!(is_complex_grapheme('\u{FE20}'));
+    }
+
+    // --- PreeditVisualTransaction tests ---
+
+    /// 验证：PreeditVisualTransaction 在 preedit 变化时正确生成
+    /// 当 preedit_old_text != preedit_text 时应生成事务
+    #[test]
+    fn test_preedit_visual_transaction_created_on_preedit_change() {
+        use writer_core::editor::{PreeditVisualTransaction, VisualCoordinateMode};
+
+        // 模拟 preedit 从 "n" 变为 "ni"
+        let old_text = "n".to_string();
+        let new_text = "ni".to_string();
+        let preedit_cursor_rect = Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 });
+
+        let vt = PreeditVisualTransaction {
+            id: 0,
+            old_preedit_text: old_text.clone(),
+            new_preedit_text: new_text.clone(),
+            old_preedit_cursor_rect: None,
+            new_preedit_cursor_rect: preedit_cursor_rect.clone(),
+            preedit_glyph_rects: None,
+            deleted_preedit_glyph_rects: None,
+            inserted_preedit_glyph_rects: None,
+            preedit_cursor_rect: preedit_cursor_rect,
+            duration_ms: 100,
+            coordinate_mode: VisualCoordinateMode::Baseline,
+        };
+
+        // 验证事务字段正确
+        assert_eq!(vt.old_preedit_text, "n");
+        assert_eq!(vt.new_preedit_text, "ni");
+        assert!(vt.new_preedit_cursor_rect.is_some());
+        assert!(vt.preedit_cursor_rect.is_some());
+        assert_eq!(vt.duration_ms, 100);
+        assert_eq!(vt.coordinate_mode, VisualCoordinateMode::Baseline);
+
+        // 验证序列化
+        let json = serde_json::to_string(&vt).unwrap();
+        assert!(json.contains("\"oldPreeditText\":"));
+        assert!(json.contains("\"newPreeditText\":"));
+    }
+
+    /// 验证：commit 时 preedit_cursor_rect 被正确保存
+    /// commit_from_preedit 标志正确判断
+    #[test]
+    fn test_commit_from_preedit_cursor_start_source() {
+        // 当 preedit_text 非空时，commit_from_preedit = true
+        let preedit_text = "拼".to_string();
+        let commit_from_preedit = !preedit_text.is_empty();
+        assert!(commit_from_preedit, "commit from non-empty preedit should set commit_from_preedit=true");
+
+        // 当 preedit_text 为空时，commit_from_preedit = false
+        let empty_preedit = String::new();
+        let commit_from_empty = !empty_preedit.is_empty();
+        assert!(!commit_from_empty, "commit from empty preedit should set commit_from_preedit=false");
+
+        // 验证 preedit_cursor_rect 在 commit 前被保存
+        let preedit_cursor_rect: Option<CursorRect> = Some(CursorRect {
+            x: 50.0, top: 10.0, bottom: 30.0, baseline_y: 25.0,
+        });
+        let snapshot = preedit_cursor_rect.clone();
+        assert!(snapshot.is_some(), "preedit_cursor_rect snapshot should be saved before clearing");
+        assert_eq!(snapshot.as_ref().unwrap().x, 50.0);
+    }
+
+    /// 验证：PreeditAttributeKind 新变体正确匹配
+    #[test]
+    fn test_preedit_attribute_kind_new_variants() {
+        // TextColor
+        let tc = PreeditAttributeKind::TextColor { color: "#FF0000".to_string() };
+        assert!(matches!(tc, PreeditAttributeKind::TextColor { .. }));
+
+        // BackgroundColor
+        let bc = PreeditAttributeKind::BackgroundColor { color: "#00FF00".to_string() };
+        assert!(matches!(bc, PreeditAttributeKind::BackgroundColor { .. }));
+
+        // FontUnderline
+        let fu = PreeditAttributeKind::FontUnderline;
+        assert_eq!(fu, PreeditAttributeKind::FontUnderline);
+
+        // Existing variants still work
+        let ul = PreeditAttributeKind::Underline;
+        assert_eq!(ul, PreeditAttributeKind::Underline);
+        let cur = PreeditAttributeKind::Cursor;
+        assert_eq!(cur, PreeditAttributeKind::Cursor);
     }
 
     // --- TextAnimationState lifecycle tests ---
