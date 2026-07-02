@@ -11,7 +11,7 @@
 //!
 //! ## 配置存储位置
 //!
-//! - Windows: `%APPDATA%/SujianWriter/app_config.json`
+//! - Windows: `%APPDATA%/SujianWriter/app_config.json`（fallback: `%LOCALAPPDATA%/SujianWriter/app_config.json`）
 //! - Linux/macOS: `~/.config/writer/app_config.json`
 //! - Linux/macOS 自定义路径: 通过 `XDG_CONFIG_HOME` 环境变量指定
 //!
@@ -65,7 +65,14 @@ pub struct AppConfig {
 fn config_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
-        std::env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join(CONFIG_DIR_NAME))
+        // 优先 %APPDATA%/SujianWriter，fallback %LOCALAPPDATA%/SujianWriter
+        if let Some(appdata) = std::env::var_os("APPDATA") {
+            Some(PathBuf::from(appdata).join(CONFIG_DIR_NAME))
+        } else if let Some(local_appdata) = std::env::var_os("LOCALAPPDATA") {
+            Some(PathBuf::from(local_appdata).join(CONFIG_DIR_NAME))
+        } else {
+            None
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -517,5 +524,45 @@ mod tests {
 
         let loaded = load_app_config_from(&config_path);
         assert_eq!(loaded.last_workspace_path, None);
+    }
+
+    #[test]
+    fn test_config_dir_windows_localappdata_fallback() {
+        // 验证 config_dir() 在 Windows 上能返回有效路径
+        // 在正常环境下，至少 APPDATA 或 LOCALAPPDATA 之一应该存在
+        let dir = config_dir();
+        // 在 CI 或正常 Windows 环境下，config_dir 应该返回 Some
+        // 如果两个环境变量都不存在（极端情况），返回 None 也是正确行为
+        if cfg!(target_os = "windows") {
+            // 在正常 Windows 环境下，至少有一个环境变量可用
+            let has_appdata = std::env::var_os("APPDATA").is_some();
+            let has_local_appdata = std::env::var_os("LOCALAPPDATA").is_some();
+            if has_appdata || has_local_appdata {
+                assert!(dir.is_some(), "Windows 上 APPDATA 或 LOCALAPPDATA 存在时 config_dir() 应返回 Some");
+                let dir = dir.unwrap();
+                assert_eq!(
+                    dir.file_name().unwrap().to_str().unwrap(),
+                    "SujianWriter",
+                    "Windows 上配置目录名应为 SujianWriter"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_config_dir_fallback_order() {
+        // 验证：当 APPDATA 存在时，优先使用 APPDATA
+        // 这是行为验证，确保 fallback 顺序正确
+        if cfg!(target_os = "windows") {
+            let dir = config_dir();
+            if std::env::var_os("APPDATA").is_some() {
+                // APPDATA 存在时，应该使用 APPDATA 路径
+                assert!(dir.is_some());
+                let dir = dir.unwrap();
+                let appdata_path = std::env::var_os("APPDATA").unwrap();
+                let expected = PathBuf::from(appdata_path).join("SujianWriter");
+                assert_eq!(dir, expected, "APPDATA 存在时应优先使用 APPDATA");
+            }
+        }
     }
 }

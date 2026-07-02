@@ -82,14 +82,14 @@ Rectangle {
                 Layout.fillWidth: true
                 height: statsError ? 40 : 0
                 visible: statsError !== ""
-                color: dt.errorBg
+                color: dt.errorContainer
                 radius: dt.radiusSm
 
                 AppText {
                     anchors.centerIn: parent
                     dt: root.dt
                     text: statsError
-                    color: dt.errorText
+                    color: dt.onErrorContainer
                     font.pixelSize: dt.caption
                 }
             }

@@ -348,6 +348,7 @@ Rectangle {
 
                                         // "⋯" menu button — visible for both volume and chapter
                                         Rectangle {
+                                            z: 10
                                             width: 24; height: 24
                                             radius: 12
                                             color: menuBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
@@ -372,7 +373,7 @@ Rectangle {
                                                     treeContextMenu.itemTitle = model.itemTitle;
                                                     treeContextMenu.itemProjectId = model.itemProjectId || "";
                                                     treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                                    treeContextMenu.popup();
+                                                    treeContextMenu.popup(menuBtnHover, 0, menuBtnHover.height);
                                                 }
                                             }
                                         }
@@ -380,7 +381,11 @@ Rectangle {
 
                                     MouseArea {
                                         id: delegateHover
-                                        anchors.fill: parent
+                                        anchors.left: parent.left
+                                        anchors.top: parent.top
+                                        anchors.bottom: parent.bottom
+                                        anchors.right: parent.right
+                                        anchors.rightMargin: 32
                                         hoverEnabled: true
                                         acceptedButtons: Qt.LeftButton | Qt.RightButton
                                         cursorShape: Qt.PointingHandCursor
@@ -408,7 +413,7 @@ Rectangle {
                                             treeContextMenu.itemTitle = model.itemTitle;
                                             treeContextMenu.itemProjectId = model.itemProjectId || "";
                                             treeContextMenu.itemVolumeId = model.itemVolumeId || "";
-                                            treeContextMenu.popup();
+                                            treeContextMenu.popup(delegateBg, point.position.x, point.position.y);
                                         }
                                     }
 

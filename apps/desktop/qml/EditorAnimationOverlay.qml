@@ -528,12 +528,14 @@ Item {
 
             if (ghost !== null) {
                 root._activeAnimations.push(ghost)
-                ghost.animationFinished.connect(function() {
-                    var idx = root._activeAnimations.indexOf(ghost)
-                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                    ghost.destroy()
-                })
-                ghost.startAnimation()
+                ;(function(g) {
+                    g.animationFinished.connect(function() {
+                        var idx = root._activeAnimations.indexOf(g)
+                        if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                        g.destroy()
+                    })
+                    g.startAnimation()
+                })(ghost)
             }
         }
     }
@@ -580,12 +582,14 @@ Item {
 
             if (ghost !== null) {
                 root._activeAnimations.push(ghost)
-                ghost.animationFinished.connect(function() {
-                    var idx = root._activeAnimations.indexOf(ghost)
-                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
-                    ghost.destroy()
-                })
-                ghost.startAnimation()
+                ;(function(g) {
+                    g.animationFinished.connect(function() {
+                        var idx = root._activeAnimations.indexOf(g)
+                        if (idx >= 0) root._activeAnimations.splice(idx, 1)
+                        g.destroy()
+                    })
+                    g.startAnimation()
+                })(ghost)
             }
         }
     }

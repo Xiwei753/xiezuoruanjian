@@ -68,6 +68,20 @@ Dialog {
         typingAnim.checked = backendRef.setting_typing_animation_enabled
         smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
         coordinatedCursorAnim.checked = backendRef.setting_coordinated_text_cursor_animation_enabled
+        // 兜底：协同动画开启时，底层 typing/smooth 必须也开（修复旧配置坏状态）
+        var coordinatedFixed = false
+        if (coordinatedCursorAnim.checked) {
+            if (!typingAnim.checked) {
+                backendRef.setting_typing_animation_enabled = true
+                typingAnim.checked = true
+                coordinatedFixed = true
+            }
+            if (!smoothCursor.checked) {
+                backendRef.setting_smooth_cursor_enabled = true
+                smoothCursor.checked = true
+                coordinatedFixed = true
+            }
+        }
         aiSwitch.checked = backendRef.ai_enabled
         autoSaveDelay.value = backendRef.setting_auto_save_delay_ms / 1000.0
         fontSizeSlider.value = backendRef.setting_font_size || 16.0
@@ -83,6 +97,10 @@ Dialog {
         diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
         diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
         updatingValues = false
+        if (coordinatedFixed) {
+            root.settingsDirty = true
+            root.debouncedSave()
+        }
     }
     onOpened: {
         if (backendRef) backendRef.load_local_settings()
