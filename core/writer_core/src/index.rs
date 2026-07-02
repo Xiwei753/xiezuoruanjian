@@ -75,17 +75,17 @@ pub struct IndexStats {
 
 /// 工作区全文搜索索引
 pub struct SearchIndex {
-    entries: Vec<IndexEntry>,
+    pub(crate) entries: Vec<IndexEntry>,
 }
 
-struct IndexEntry {
-    project_id: String,
-    volume_id: String,
-    chapter_id: String,
-    chapter_path: PathBuf,
-    chapter_title: std::sync::OnceLock<String>,
-    relative_path: String,
-    lines: Vec<String>,
+pub(crate) struct IndexEntry {
+    pub(crate) project_id: String,
+    pub(crate) volume_id: String,
+    pub(crate) chapter_id: String,
+    pub(crate) chapter_path: PathBuf,
+    pub(crate) chapter_title: std::sync::OnceLock<String>,
+    pub(crate) relative_path: String,
+    pub(crate) lines: Vec<String>,
 }
 
 impl SearchIndex {

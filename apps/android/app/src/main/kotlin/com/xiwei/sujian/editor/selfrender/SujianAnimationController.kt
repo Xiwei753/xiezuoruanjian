@@ -206,7 +206,7 @@ class SujianAnimationController(
         renderer.addActiveInsertRange(insertRangeUtf16)
         
         val insertAnim = SujianOverlayAnim(
-            id = vt.id,
+            id = (vt.id shl 1),
             kind = "insert",
             text = vt.newText.substring(rangeStartUtf16, rangeEndUtf16.coerceAtMost(vt.newText.length)),
             startX = startX,
@@ -259,7 +259,7 @@ class SujianAnimationController(
             }
             
             val reflowAnim = SujianOverlayAnim(
-                id = vt.id + 1u,  // 使用不同 id 避免与 insert 动画冲突
+                id = (vt.id shl 1) or 1u,  // 复合 id：奇数区分 reflow，不占用 Core 事务 id 空间
                 kind = "reflow",
                 text = "",
                 startX = 0f,
@@ -318,7 +318,7 @@ class SujianAnimationController(
         
         if (snapshot != null) {
             renderer.addAnimation(SujianOverlayAnim(
-                id = vt.id,
+                id = (vt.id shl 1),
                 kind = "delete",
                 text = snapshot.deletedText,
                 startX = snapshot.oldCursorRect.x,
@@ -337,7 +337,7 @@ class SujianAnimationController(
             if (fallbackSnapshot != null) {
                 deleteSnapshots.remove(fallbackSnapshot)
                 renderer.addAnimation(SujianOverlayAnim(
-                    id = vt.id,
+                    id = (vt.id shl 1),
                     kind = "delete",
                     text = fallbackSnapshot.deletedText,
                     startX = fallbackSnapshot.oldCursorRect.x,
@@ -354,7 +354,7 @@ class SujianAnimationController(
                 // 完全没有快照时，使用 Core 事件信息创建简化动画
                 DiagnosticsLogger.d(TAG, "No delete snapshot for transaction ${vt.id}, using fallback")
                 renderer.addAnimation(SujianOverlayAnim(
-                    id = vt.id,
+                    id = (vt.id shl 1),
                     kind = "delete",
                     text = vt.oldText,
                     startX = endX,

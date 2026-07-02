@@ -638,6 +638,24 @@ mod tests {
         StatsStore::new(Path::new("/tmp/mock_workspace"))
     }
 
+    fn create_mock_event() -> WritingInputEvent {
+        WritingInputEvent::new(
+            "device_1",
+            crate::writing_stats::Platform::Desktop,
+            "desktop",
+            "proj_1",
+            "vol_1",
+            "ch_1",
+            crate::writing_stats::EventSource::HumanTyped,
+            10,
+            0,
+            0,
+            0,
+            5,
+            "session_1"
+        )
+    }
+
     #[test]
     fn test_merge_daily_stats_success() {
         let store = create_mock_store();
@@ -1020,6 +1038,12 @@ mod tests {
     fn test_record_event_buffers_without_flushing() {
         let store = create_mock_store();
 
+        // Set last_flush to now so debounce doesn't trigger
+        {
+            let mut last_flush = store.last_flush_ms.lock().unwrap();
+            *last_flush = chrono::Utc::now().timestamp_millis();
+        }
+
         let event = create_mock_event();
         store.record_event(event).unwrap();
 
@@ -1048,6 +1072,12 @@ mod tests {
     #[test]
     fn test_record_event_flushes_on_max_buffer_size() {
         let store = create_mock_store();
+
+        // Set last_flush to now so debounce doesn't trigger early
+        {
+            let mut last_flush = store.last_flush_ms.lock().unwrap();
+            *last_flush = chrono::Utc::now().timestamp_millis();
+        }
 
         // Add MAX_BUFFER_SIZE - 1 events
         for _ in 0..(MAX_BUFFER_SIZE - 1) {

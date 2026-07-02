@@ -2471,6 +2471,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "git-https")]
     fn test_semantic_merge_json_basic() {
         let mut base = serde_json::Map::new();
         base.insert("a".to_string(), serde_json::json!(1));

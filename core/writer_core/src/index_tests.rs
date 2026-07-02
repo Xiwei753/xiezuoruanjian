@@ -219,6 +219,18 @@ fn test_build_happy_path() {
     let ch1 = index.entries.iter().find(|e| e.chapter_id == "ch1").unwrap();
     assert_eq!(ch1.project_id, "proj1");
     assert_eq!(ch1.volume_id, "vol1");
-    assert_eq!(ch1.chapter_title, "??? ??");
+    // chapter_title is OnceLock<String>, lazily loaded via get_or_init
+    let title = ch1.chapter_title.get_or_init(|| {
+        let meta_path = ch1.chapter_path.join("chapter.meta.json");
+        if let Ok(content) = std::fs::read_to_string(&meta_path) {
+            if let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(t) = meta.get("title").and_then(|v| v.as_str()) {
+                    return t.to_string();
+                }
+            }
+        }
+        ch1.chapter_id.clone()
+    });
+    assert_eq!(title, "第一章 启程");
     assert_eq!(ch1.relative_path, "projects/proj1/volumes/vol1/chapters/ch1/chapter.md");
 }

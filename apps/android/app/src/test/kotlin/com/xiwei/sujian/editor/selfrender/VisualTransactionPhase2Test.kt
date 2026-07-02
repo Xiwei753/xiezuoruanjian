@@ -549,6 +549,23 @@ class VisualTransactionPhase2Test {
         return charIdx
     }
 
+    private fun utf16ToUtf8(text: String, utf16Offset: Int): Int {
+        var byteOffset = 0
+        var charIdx = 0
+        val safeOffset = utf16Offset.coerceIn(0, text.length)
+        for (char in text) {
+            if (charIdx >= safeOffset) break
+            byteOffset += when {
+                char.code <= 0x7F -> 1
+                char.code <= 0x7FF -> 2
+                char.code <= 0xFFFF -> 3
+                else -> 4
+            }
+            charIdx++
+        }
+        return byteOffset
+    }
+
     private fun SujianEditCauseData.toCoreCauseString(): String = when (this) {
         SujianEditCauseData.Typing -> "Typing"
         SujianEditCauseData.Delete -> "Delete"
@@ -732,5 +749,96 @@ class VisualTransactionPhase2Test {
         val dy = kotlin.math.abs(r.newY - r.oldY)
         assertTrue(dx < 0.1)
         assertTrue(dy < 0.1)
+    }
+
+    // ── 9. Reflow byteStart/byteEnd 必须是 UTF-8 byte offset ──
+
+    @Test
+    fun reflowGlyphRectData_byteStartEnd_mustBeUtf8Offsets_chinese() {
+        // 中文文本 "你好世界"，在 "好" 后插入 "的"
+        // 新文本 "你好的世界"
+        val newText = "你好的世界"
+        // "的" 在 UTF-16 offset 2
+        // "世" 在 UTF-16 offset 3，UTF-8 byte offset = 3*3 = 9
+        // "界" 在 UTF-16 offset 4，UTF-8 byte offset = 4*3 = 12
+        // reflow glyph "世" 的 byteStart 应为 9（UTF-8），byteEnd 应为 12（UTF-8）
+        val reflowRect = SujianReflowGlyphRectData(
+            char = "世",
+            byteStart = utf16ToUtf8(newText, 3),  // UTF-8 byte offset of "世"
+            byteEnd = utf16ToUtf8(newText, 4),     // UTF-8 byte offset after "世"
+            oldX = 30.0,
+            oldY = 20.0,
+            oldBaselineY = 35.0,
+            newX = 45.0,
+            newY = 20.0,
+            newBaselineY = 35.0,
+            w = 15.0,
+            h = 20.0,
+            lineIndex = 0
+        )
+        assertEquals(9, reflowRect.byteStart)  // UTF-8 byte offset
+        assertEquals(12, reflowRect.byteEnd)   // UTF-8 byte offset
+
+        // 验证：从 UTF-8 byte offset 转回 UTF-16 offset 必须正确
+        val utf16Start = utf8ToUtf16(newText, reflowRect.byteStart)
+        val utf16End = utf8ToUtf16(newText, reflowRect.byteEnd)
+        assertEquals(3, utf16Start)  // "世" 的 UTF-16 offset
+        assertEquals(4, utf16End)    // "界" 的 UTF-16 offset
+    }
+
+    @Test
+    fun reflowGlyphRectData_byteStartEnd_mustBeUtf8Offsets_ascii() {
+        val newText = "aXb"
+        // "b" 在 UTF-16 offset 2，UTF-8 byte offset 也是 2
+        val reflowRect = SujianReflowGlyphRectData(
+            char = "b",
+            byteStart = utf16ToUtf8(newText, 2),
+            byteEnd = utf16ToUtf8(newText, 3),
+            oldX = 15.0,
+            oldY = 20.0,
+            oldBaselineY = 35.0,
+            newX = 30.0,
+            newY = 20.0,
+            newBaselineY = 35.0,
+            w = 10.0,
+            h = 20.0,
+            lineIndex = 0
+        )
+        assertEquals(2, reflowRect.byteStart)
+        assertEquals(3, reflowRect.byteEnd)
+    }
+
+    // ── 10. Reflow 动画 id 不与 Core 事务 id 碰撞 ──
+
+    @Test
+    fun reflowAnimationId_doesNotCollideWithNextInsertId() {
+        // vt.id = 10 时：
+        // insert overlay id = (10 shl 1) = 20（偶数）
+        // reflow overlay id = (10 shl 1) or 1 = 21（奇数）
+        // 下一次 vt.id = 11 时：
+        // insert overlay id = (11 shl 1) = 22（偶数）
+        // 22 != 21，不会碰撞
+        val vtId1 = 10u
+        val insertOverlayId1 = (vtId1 shl 1)
+        val reflowOverlayId1 = (vtId1 shl 1) or 1u
+
+        val vtId2 = 11u
+        val insertOverlayId2 = (vtId2 shl 1)
+
+        assertNotEquals(insertOverlayId1, reflowOverlayId1)
+        assertNotEquals(reflowOverlayId1, insertOverlayId2)
+        assertNotEquals(insertOverlayId1, insertOverlayId2)
+    }
+
+    @Test
+    fun reflowAnimationId_compositeScheme_evenOdd() {
+        // 所有 insert/delete overlay id 是偶数，reflow overlay id 是奇数
+        for (vtId in 1u..100u) {
+            val insertId = (vtId shl 1)
+            val reflowId = (vtId shl 1) or 1u
+            assertEquals(0u, insertId % 2u)  // 偶数
+            assertEquals(1u, reflowId % 2u)  // 奇数
+            assertNotEquals(insertId, reflowId)
+        }
     }
 }
