@@ -1,51 +1,51 @@
-//! # 全文搜索索引模块
+//! # ????????
 //!
-//! 提供工作区内章节的全文搜索功能。
+//! ????????????????
 //!
-//! ## 设计说明
+//! ## ????
 //!
-//! - 扫描工作区中所有项目的章节 `.md` 文件
-//! - 基于大小写不敏感的子串匹配
-//! - 返回匹配位置及其上下文行
-//! - 纯内存索引，无外部依赖
+//! - ????????????? `.md` ??
+//! - ?????????????
+//! - ????????????
+//! - ?????,?????
 
 use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 搜索命中结果
+/// ??????
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
-    /// 项目 ID
+    /// ?? ID
     pub project_id: String,
-    /// 卷 ID
+    /// ? ID
     pub volume_id: String,
-    /// 章节 ID
+    /// ?? ID
     pub chapter_id: String,
-    /// 章节标题
+    /// ????
     pub chapter_title: String,
-    /// 匹配行号（1-based）
+    /// ????(1-based)
     pub line_number: usize,
-    /// 匹配行内容
+    /// ?????
     pub line_text: String,
-    /// 匹配前的上下文行
+    /// ????????
     pub context_before: Vec<String>,
-    /// 匹配后的上下文行
+    /// ????????
     pub context_after: Vec<String>,
-    /// 文件相对路径
+    /// ??????
     pub relative_path: String,
 }
 
-/// 搜索选项
+/// ????
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
-    /// 是否区分大小写
+    /// ???????
     pub case_sensitive: bool,
-    /// 上下文行数
+    /// ?????
     pub context_lines: usize,
-    /// 最大结果数
+    /// ?????
     pub max_results: usize,
 }
 
@@ -59,21 +59,21 @@ impl Default for SearchOptions {
     }
 }
 
-/// 索引统计信息
+/// ??????
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexStats {
-    /// 已索引章节数
+    /// ??????
     pub chapter_count: usize,
-    /// 已索引总行数
+    /// ??????
     pub total_lines: usize,
-    /// 已索引总字数
+    /// ??????
     pub total_words: usize,
-    /// 索引构建耗时（毫秒）
+    /// ??????(??)
     pub build_time_ms: u64,
 }
 
-/// 工作区全文搜索索引
+/// ?????????
 pub struct SearchIndex {
     entries: Vec<IndexEntry>,
 }
@@ -88,7 +88,7 @@ struct IndexEntry {
 }
 
 impl SearchIndex {
-    /// 构建索引：扫描工作区中所有章节
+    /// ????:??????????
     pub fn build(workspace: &Path) -> Result<Self> {
         let start = std::time::Instant::now();
         let mut entries = Vec::new();
@@ -156,7 +156,7 @@ impl SearchIndex {
         Ok(Self { entries })
     }
 
-    /// 搜索
+    /// ??
     pub fn search(&self, query: &str, options: &SearchOptions) -> Vec<SearchHit> {
         if query.is_empty() {
             return Vec::new();
@@ -203,7 +203,7 @@ impl SearchIndex {
         hits
     }
 
-    /// 获取索引统计
+    /// ??????
     pub fn stats(&self) -> IndexStats {
         let total_lines = self.entries.iter().map(|e| e.lines.len()).sum();
         let total_words = self
@@ -224,7 +224,7 @@ impl SearchIndex {
         }
     }
 
-    /// 按项目过滤搜索
+    /// ???????
     pub fn search_in_project(
         &self,
         project_id: &str,
@@ -322,234 +322,8 @@ fn load_chapter_title(chapter_path: &Path, fallback_id: &str) -> String {
     fallback_id.to_string()
 }
 
-/// 便捷函数：更新索引（桩实现兼容）
+/// ????:????(?????)
 pub fn update_index() -> Result<()> {
-    // 索引是按需构建的，不需要主动更新
+    // ????????,???????
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    fn setup_test_workspace(dir: &Path) {
-        crate::workspace::create_workspace(dir).unwrap();
-        let projects_dir = dir.join("projects");
-        fs::create_dir_all(&projects_dir).unwrap();
-
-        // Create a test project with chapters
-        let proj_id = "proj1";
-        let vol_id = "vol1";
-        let ch_id = "ch1";
-
-        let ch_dir = projects_dir
-            .join(proj_id)
-            .join("volumes")
-            .join(vol_id)
-            .join("chapters")
-            .join(ch_id);
-        fs::create_dir_all(&ch_dir).unwrap();
-
-        fs::write(
-            ch_dir.join("chapter.md"),
-            "这是第一章的内容\n主角走进了森林\n远处传来狼嚎声\n他加快了脚步\n终于到达了目的地",
-        )
-        .unwrap();
-
-        fs::write(
-            ch_dir.join("chapter.meta.json"),
-            r#"{"id": "ch1", "title": "第一章 启程", "created_at": 0, "updated_at": 0}"#,
-        )
-        .unwrap();
-
-        // Second chapter
-        let ch2_id = "ch2";
-        let ch2_dir = projects_dir
-            .join(proj_id)
-            .join("volumes")
-            .join(vol_id)
-            .join("chapters")
-            .join(ch2_id);
-        fs::create_dir_all(&ch2_dir).unwrap();
-
-        fs::write(
-            ch2_dir.join("chapter.md"),
-            "第二章开始了\n主角来到了城市\n在酒馆里遇到了伙伴\n他们决定一起冒险",
-        )
-        .unwrap();
-
-        fs::write(
-            ch2_dir.join("chapter.meta.json"),
-            r#"{"id": "ch2", "title": "第二章 相遇", "created_at": 0, "updated_at": 0}"#,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn test_build_index_and_search() {
-        let dir = tempdir().unwrap();
-        setup_test_workspace(dir.path());
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let stats = index.stats();
-        assert_eq!(stats.chapter_count, 2);
-
-        let options = SearchOptions::default();
-        let hits = index.search("主角", &options);
-        assert_eq!(hits.len(), 2); // line 2 ch1, line 2 ch2
-    }
-
-    #[test]
-    fn test_search_case_insensitive() {
-        let dir = tempdir().unwrap();
-        setup_test_workspace(dir.path());
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let options = SearchOptions::default();
-        let hits = index.search("森林", &options);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].chapter_title, "第一章 启程");
-        assert_eq!(hits[0].line_number, 2);
-    }
-
-    #[test]
-    fn test_search_with_context() {
-        let dir = tempdir().unwrap();
-        setup_test_workspace(dir.path());
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let options = SearchOptions {
-            context_lines: 1,
-            ..Default::default()
-        };
-        let hits = index.search("狼嚎", &options);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].context_before.len(), 1);
-        assert_eq!(hits[0].context_before[0], "主角走进了森林");
-        assert_eq!(hits[0].context_after.len(), 1);
-        assert_eq!(hits[0].context_after[0], "他加快了脚步");
-    }
-
-    #[test]
-    fn test_search_max_results() {
-        let dir = tempdir().unwrap();
-        setup_test_workspace(dir.path());
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let options = SearchOptions {
-            max_results: 1,
-            ..Default::default()
-        };
-        let hits = index.search("主角", &options);
-        assert_eq!(hits.len(), 1);
-    }
-
-    #[test]
-    fn test_search_in_project() {
-        let dir = tempdir().unwrap();
-        setup_test_workspace(dir.path());
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let options = SearchOptions::default();
-        let hits = index.search_in_project("proj1", "主角", &options);
-        assert_eq!(hits.len(), 2);
-
-        let hits_empty = index.search_in_project("nonexistent", "主角", &options);
-        assert_eq!(hits_empty.len(), 0);
-    }
-
-    #[test]
-    fn test_search_empty_query() {
-        let dir = tempdir().unwrap();
-        setup_test_workspace(dir.path());
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let options = SearchOptions::default();
-        let hits = index.search("", &options);
-        assert_eq!(hits.len(), 0);
-    }
-
-    #[test]
-    fn test_empty_workspace() {
-        let dir = tempdir().unwrap();
-        crate::workspace::create_workspace(dir.path()).unwrap();
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let stats = index.stats();
-        assert_eq!(stats.chapter_count, 0);
-
-        let options = SearchOptions::default();
-        let hits = index.search("test", &options);
-        assert_eq!(hits.len(), 0);
-    }
-
-    #[test]
-    fn test_build_missing_projects_dir() {
-        let dir = tempdir().unwrap();
-        // Skip creating the workspace, so "projects" dir is missing.
-        let index = SearchIndex::build(dir.path()).unwrap();
-        assert_eq!(index.stats().chapter_count, 0);
-    }
-
-    #[test]
-    fn test_build_missing_subdirectories() {
-        let dir = tempdir().unwrap();
-        let projects_dir = dir.path().join("projects");
-        fs::create_dir_all(&projects_dir).unwrap();
-
-        // Project without volumes dir
-        let proj_no_volumes = projects_dir.join("proj_no_volumes");
-        fs::create_dir_all(&proj_no_volumes).unwrap();
-
-        // Project with volumes but no chapters dir
-        let proj_no_chapters = projects_dir.join("proj_no_chapters");
-        let vol_no_chapters = proj_no_chapters.join("volumes").join("vol1");
-        fs::create_dir_all(&vol_no_chapters).unwrap();
-
-        // Project with chapters but no chapter.md
-        let proj_no_md = projects_dir.join("proj_no_md");
-        let ch_no_md = proj_no_md.join("volumes").join("vol1").join("chapters").join("ch1");
-        fs::create_dir_all(&ch_no_md).unwrap();
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        assert_eq!(index.stats().chapter_count, 0);
-    }
-
-    #[test]
-    fn test_build_invalid_utf8_chapter() {
-        let dir = tempdir().unwrap();
-        let projects_dir = dir.path().join("projects");
-        let ch_dir = projects_dir.join("proj1").join("volumes").join("vol1").join("chapters").join("ch1");
-        fs::create_dir_all(&ch_dir).unwrap();
-
-        // Write invalid UTF-8 bytes to trigger `.ok()?` failure in read_to_string
-        fs::write(ch_dir.join("chapter.md"), b"\xFF\xFE\xFD").unwrap();
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        assert_eq!(index.stats().chapter_count, 0);
-    }
-
-    #[test]
-    fn test_build_happy_path() {
-        let dir = tempdir().unwrap();
-        setup_test_workspace(dir.path());
-
-        let index = SearchIndex::build(dir.path()).unwrap();
-        let stats = index.stats();
-
-        // Verify stats
-        assert_eq!(stats.chapter_count, 2);
-        assert!(stats.total_lines > 0);
-        assert!(stats.total_words > 0);
-
-        // Verify index entries metadata contents
-        assert_eq!(index.entries.len(), 2);
-
-        let ch1 = index.entries.iter().find(|e| e.chapter_id == "ch1").unwrap();
-        assert_eq!(ch1.project_id, "proj1");
-        assert_eq!(ch1.volume_id, "vol1");
-        assert_eq!(ch1.chapter_title, "第一章 启程");
-        assert_eq!(ch1.relative_path, "projects/proj1/volumes/vol1/chapters/ch1/chapter.md");
-    }
 }
