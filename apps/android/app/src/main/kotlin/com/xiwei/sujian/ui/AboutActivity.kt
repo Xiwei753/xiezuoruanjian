@@ -20,21 +20,16 @@ class AboutActivity : AppCompatActivity() {
         val tvAppName: TextView = findViewById(R.id.tvAppName)
         val tvAuthor: TextView = findViewById(R.id.tvAuthor)
         val tvGitHub: TextView = findViewById(R.id.tvGitHub)
-        val tvGitee: TextView = findViewById(R.id.tvGitee)
         val tvLicense: TextView = findViewById(R.id.tvLicense)
-        val tvMirrorNote: TextView = findViewById(R.id.tvMirrorNote)
         val tvVersionDetail: TextView = findViewById(R.id.tvVersionDetail)
 
         tvAppName.text = getString(R.string.about_app_name)
         tvAuthor.text = getString(R.string.about_author)
         tvGitHub.text = getString(R.string.about_github)
-        tvGitee.text = getString(R.string.about_gitee)
         tvLicense.text = getString(R.string.about_license)
-        tvMirrorNote.text = getString(R.string.about_mirror_note)
 
         // Make links clickable
         tvGitHub.movementMethod = LinkMovementMethod.getInstance()
-        tvGitee.movementMethod = LinkMovementMethod.getInstance()
 
         // Version info
         val appVersion = try {

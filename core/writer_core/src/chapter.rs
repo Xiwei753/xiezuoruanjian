@@ -169,11 +169,18 @@ pub fn create_chapter(
         .map(|m| m + 1)
         .unwrap_or(0);
 
+    // 空标题兜底：按当前卷章节数量生成默认标题
+    let effective_title = if title.trim().is_empty() {
+        format!("第{}章", chapters.len() + 1)
+    } else {
+        title.to_string()
+    };
+
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let chapter = Chapter {
         id: id.clone(),
-        title: title.to_string(),
+        title: effective_title,
         created_at: now.clone(),
         updated_at: now,
         order,
@@ -769,5 +776,33 @@ mod tests {
         );
 
         assert!(matches!(result, Err(crate::error::Error::ChapterNotFound)));
+    }
+
+    /// 验证空标题时自动生成默认标题"第N章"
+    #[test]
+    fn test_create_chapter_empty_title_generates_default() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        crate::workspace::create_workspace(workspace_path).unwrap();
+        let project = crate::project::create_project(workspace_path, "TestProject").unwrap();
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        let volume = &volumes[0];
+
+        // 空标题应生成"第1章"
+        let chapter1 = create_chapter(workspace_path, &project.id, &volume.id, "").unwrap();
+        assert_eq!(chapter1.title, "第1章");
+
+        // 纯空格标题也应生成默认标题
+        let chapter2 = create_chapter(workspace_path, &project.id, &volume.id, "   ").unwrap();
+        assert_eq!(chapter2.title, "第2章");
+
+        // 有标题时不应被覆盖
+        let chapter3 = create_chapter(workspace_path, &project.id, &volume.id, "自定义标题").unwrap();
+        assert_eq!(chapter3.title, "自定义标题");
+
+        // 再创建空标题应生成"第4章"（因为已有3个章节）
+        let chapter4 = create_chapter(workspace_path, &project.id, &volume.id, "").unwrap();
+        assert_eq!(chapter4.title, "第4章");
     }
 }

@@ -251,10 +251,8 @@ Item {
 
         // decision === "fullAnimation"
 
-        // 实际创建成功的 ghost 计数（替代理论统计）
-        var actualPending = 0
-
-        // 先创建 insert ghost 和 reflow ghost，之后再统计总 pendingCount 并 push transaction
+        // ── 阶段1：创建 ghost 对象但不启动 ──
+        var createdGhosts = []
 
         for (var i = 0; i < glyphRects.length; i++) {
             var gr = glyphRects[i]
@@ -282,8 +280,7 @@ Item {
             })
 
             if (ghost !== null) {
-                actualPending++
-                _trackGhost(ghost, "insert", insertByteStart, insertByteEnd)
+                createdGhosts.push(ghost)
             } else {
                 root._log("insert ghost createObject returned null at index=" + i)
             }
@@ -328,25 +325,54 @@ Item {
                 })
 
                 if (reflowGhost !== null) {
-                    actualPending++
-                    // reflow ghost 和 insert ghost 属于同一个 transaction，共用 pendingCount
-                    _trackGhost(reflowGhost, "insert", insertByteStart, insertByteEnd)
+                    createdGhosts.push(reflowGhost)
                 } else {
                     root._log("reflow ghost createObject returned null at index=" + ri)
                 }
             }
         }
 
-        // 根据实际创建成功的 ghost 数量决定是否 push transaction
-        if (actualPending === 0) {
-            root._log("insert skipped: no ghosts actually created (actualPending=0)")
-            // 通知 Rust 清除可能已创建的 hidden range
+        // 如果没有 ghost 被创建，立即通知 Rust 清除 hidden range
+        if (createdGhosts.length === 0) {
+            root._log("insert skipped: no ghosts actually created (createdGhosts.length=0)")
             _notifySkippedIfHasRange(vt)
             return
         }
 
-        root._activeTransactions.push({ pendingCount: actualPending, byteStart: insertByteStart, byteEnd: insertByteEnd })
-        root._log("insert actualPending=" + actualPending + " byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
+        // ── 阶段2：先注册 transaction，再统一连接 finished 并 start ──
+        root._activeTransactions.push({ pendingCount: createdGhosts.length, byteStart: insertByteStart, byteEnd: insertByteEnd })
+        root._log("insert pendingCount=" + createdGhosts.length + " byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
+
+        for (var gi = 0; gi < createdGhosts.length; gi++) {
+            var g = createdGhosts[gi]
+            root._activeAnimations.push(g)
+            // 使用 IIFE 捕获当前 ghost 引用和参数
+            ;(function(ghost, animKind, byteStart, byteEnd) {
+                ghost.animationFinished.connect(function() {
+                    var idx = root._activeAnimations.indexOf(ghost)
+                    if (idx >= 0) root._activeAnimations.splice(idx, 1)
+
+                    if (animKind === "insert" || animKind === "reflow") {
+                        // 找到对应的事务（按 byteStart/byteEnd 匹配）
+                        for (var ti = 0; ti < root._activeTransactions.length; ti++) {
+                            var tx = root._activeTransactions[ti]
+                            if (tx.byteStart === byteStart && tx.byteEnd === byteEnd) {
+                                tx.pendingCount--
+                                root._log("insert ghost finished, pendingCount=" + tx.pendingCount + " for byteRange=(" + byteStart + "," + byteEnd + ")")
+                                if (tx.pendingCount <= 0) {
+                                    root._log("insert transaction finished, notifying Rust: byteStart=" + byteStart + " byteEnd=" + byteEnd)
+                                    root.insertAnimationFinished(byteStart, byteEnd)
+                                    root._activeTransactions.splice(ti, 1)
+                                }
+                                break
+                            }
+                        }
+                    }
+                    ghost.destroy()
+                })
+                ghost.startAnimation()
+            })(g, g.animKind, insertByteStart, insertByteEnd)
+        }
     }
 
     /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。

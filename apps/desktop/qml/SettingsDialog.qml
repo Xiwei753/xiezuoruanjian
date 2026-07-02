@@ -76,6 +76,7 @@ Dialog {
         autoIndentWidth.value = backendRef.setting_auto_indent_width || 2.0
         typingAnimDuration.value = backendRef.setting_typing_animation_duration_ms || 100
         smoothCursorDuration.value = backendRef.setting_smooth_cursor_duration_ms || 80
+        coordinatedDuration.value = backendRef.setting_typing_animation_duration_ms || 100
         var mode = backendRef.setting_theme_mode
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
@@ -95,8 +96,13 @@ Dialog {
             backendRef.setting_line_spacing = lineSpacingSlider.value
             backendRef.setting_auto_indent_width = autoIndentWidth.value
             backendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
-            backendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
-            backendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
+            if (coordinatedCursorAnim.checked) {
+                backendRef.setting_typing_animation_duration_ms = coordinatedDuration.value
+                backendRef.setting_smooth_cursor_duration_ms = coordinatedDuration.value
+            } else {
+                backendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
+                backendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
+            }
             root.settingsDirty = true
         }
         flushSave()
@@ -186,10 +192,10 @@ Dialog {
                 }
             }
 
-            // ── 2. 编辑器 (editor) ──
+            // ── 2. 编辑器和动画 (editor + animation) ──
             SettingsSection {
                 dt: root.dt
-                title: qsTr("编辑器")
+                title: qsTr("编辑器和动画")
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -213,6 +219,7 @@ Dialog {
                     onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.debouncedSave() }
                 }
                 SettingsRow {
+                    visible: !coordinatedCursorAnim.checked
                     dt: root.dt
                     title: qsTr("打字动画")
                     description: qsTr("输入时字符从光标处吐出")
@@ -222,6 +229,7 @@ Dialog {
                 }
                 AppSlider {
                     id: typingAnimDuration
+                    visible: !coordinatedCursorAnim.checked
                     Layout.fillWidth: true
                     dt: root.dt
                     label: qsTr("打字动画持续时间")
@@ -234,6 +242,7 @@ Dialog {
                     onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
                 }
                 SettingsRow {
+                    visible: !coordinatedCursorAnim.checked
                     dt: root.dt
                     title: qsTr("平滑光标")
                     description: qsTr("光标移动更顺滑")
@@ -243,6 +252,7 @@ Dialog {
                 }
                 AppSlider {
                     id: smoothCursorDuration
+                    visible: !coordinatedCursorAnim.checked
                     Layout.fillWidth: true
                     dt: root.dt
                     label: qsTr("平滑光标持续时间")
@@ -260,14 +270,48 @@ Dialog {
                     description: qsTr("光标与吐字动画协同移动")
                     clickable: true
                     onClicked: root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", !coordinatedCursorAnim.checked)
-                    ModernSwitch { id: coordinatedCursorAnim; dt: root.dt; onToggled: function(v) { root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", v) } }
+                    ModernSwitch { id: coordinatedCursorAnim; dt: root.dt; onToggled: function(v) {
+                        root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", v)
+                        // 开启协同时强制启用打字动画和平滑光标
+                        if (v && backendRef && !root.updatingValues) {
+                            backendRef.setting_typing_animation_enabled = true
+                            backendRef.setting_smooth_cursor_enabled = true
+                            typingAnim.checked = true
+                            smoothCursor.checked = true
+                            root.settingsDirty = true
+                            root.debouncedSave()
+                        }
+                    } }
+                }
+                // 协同模式下的整体动画时长滑条
+                AppSlider {
+                    id: coordinatedDuration
+                    visible: coordinatedCursorAnim.checked
+                    Layout.fillWidth: true
+                    dt: root.dt
+                    label: qsTr("整体动画时长")
+                    valueText: Math.round(value) + " ms"
+                    from: 30
+                    to: 1000
+                    stepSize: 10
+                    onMoved: function() {
+                        if (!backendRef || root.updatingValues) return
+                        backendRef.setting_typing_animation_duration_ms = value
+                        backendRef.setting_smooth_cursor_duration_ms = value
+                    }
+                    onCommitted: function() {
+                        if (!backendRef || root.updatingValues) return
+                        backendRef.setting_typing_animation_duration_ms = value
+                        backendRef.setting_smooth_cursor_duration_ms = value
+                        root.debouncedSave()
+                    }
                 }
             }
 
-            // ── 3. 保存 (save) ──
+            // ── 3. 保存和同步 (save + sync) ──
             SettingsSection {
                 dt: root.dt
-                title: qsTr("保存")
+                title: qsTr("保存和同步")
                 Layout.fillWidth: true
                 SettingsRow {
                     dt: root.dt
@@ -290,13 +334,6 @@ Dialog {
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000 }
                     onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_save_delay_ms = value * 1000; root.debouncedSave() }
                 }
-            }
-
-            // ── 4. 同步 (sync) ──
-            SettingsSection {
-                dt: root.dt
-                title: qsTr("同步")
-                Layout.fillWidth: true
                 SyncPage {
                     Layout.fillWidth: true
                     theme: root.dt
@@ -491,17 +528,12 @@ Dialog {
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("项目地址")
-                    description: qsTr("GitHub: github.com/Xiwei753/xiezuoruanjian\nGitee 镜像: gitee.com/wei-xi753/xiezuoruanjian")
+                    description: "github.com/Xiwei753/xiezuoruanjian"
                 }
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("开源协议")
                     description: "GPLv3"
-                }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("镜像说明")
-                    description: qsTr("GitHub 为主仓库。Gitee 为镜像同步仓库，方便国内访问。")
                 }
                 SettingsRow {
                     dt: root.dt

@@ -164,14 +164,38 @@ Rectangle {
                 Layout.fillHeight: true
                 clip: true
 
-                // Star Map tab
-                StarMapPage {
-                    dt: root.dt
-                    backendRef: root.backendRef
-                    starMapController: root.starMapController
-                    appState: ({})
+                // Star Map tab — 施工占位
+                Rectangle {
                     visible: root.currentTab === 0
                     anchors.fill: parent
+                    color: "transparent"
+
+                    ColumnLayout {
+                        anchors.centerIn: parent
+                        spacing: _sp16
+
+                        AppText {
+                            text: "\uD83C\uDF0C"
+                            dt: root.dt
+                            font.pixelSize: 32
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        AppText {
+                            text: qsTr("星图正在施工")
+                            dt: root.dt
+                            color: _textPrimary
+                            font.pixelSize: _fontLg
+                            font.weight: Font.DemiBold
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                        AppText {
+                            text: qsTr("星图功能将在后续版本实现")
+                            dt: root.dt
+                            color: _textMuted
+                            font.pixelSize: _fontSm
+                            Layout.alignment: Qt.AlignHCenter
+                        }
+                    }
                 }
 
                 // Stats tab

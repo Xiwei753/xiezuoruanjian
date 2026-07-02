@@ -213,8 +213,13 @@ class ChapterListActivity : AppCompatActivity() {
     private fun showNewChapterDialog(volumeId: String) {
         val pid = projectId ?: return
 
+        // 预填默认标题：按当前卷章节数量生成
+        val chapterCount = listItems.count { it is ListItem.ChapterItem && it.volumeId == volumeId }
+        val defaultTitle = "第${chapterCount + 1}章"
+
         val editText = EditText(this)
         editText.hint = getString(R.string.hint_chapter_title)
+        editText.setText(defaultTitle)
         editText.setPadding(48, 48, 48, 48)
 
         AlertDialog.Builder(this)
@@ -222,12 +227,11 @@ class ChapterListActivity : AppCompatActivity() {
             .setView(editText)
             .setPositiveButton(R.string.action_create) { _, _ ->
                 val title = editText.text.toString().trim()
-                if (title.isNotEmpty()) {
-                    ErrorUtil.safeRun(this) {
-                        workspaceRepository.createChapter(pid, volumeId, title)
-                        loadChapters()
-                        loadProjectStats()
-                    }
+                // 允许空标题通过，后端会兜底生成"第N章"
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.createChapter(pid, volumeId, title)
+                    loadChapters()
+                    loadProjectStats()
                 }
             }
             .setNegativeButton(R.string.action_cancel, null)

@@ -102,10 +102,13 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             match core.get_writing_stats_summary_json(&sd, &ed) {
                 Ok(val) => val.into(),
-                Err(_) => "{}".into(),
+                Err(e) => {
+                    self.debug_error("stats", "get_writing_stats_summary_failed", &e.to_string());
+                    format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
+                }
             }
         } else {
-            "{}".into()
+            "{\"error\":\"core not available\"}".into()
         }
     }
 
@@ -148,10 +151,13 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             match core.get_writing_stats_by_project_json(&sd, &ed) {
                 Ok(val) => val.into(),
-                Err(_) => "{}".into(),
+                Err(e) => {
+                    self.debug_error("stats", "get_writing_stats_by_project_failed", &e.to_string());
+                    format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
+                }
             }
         } else {
-            "{}".into()
+            "{\"error\":\"core not available\"}".into()
         }
     }
 
@@ -182,10 +188,13 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             match core.get_writing_stats_by_chapter_json(&sd, &ed) {
                 Ok(val) => val.into(),
-                Err(_) => "{}".into(),
+                Err(e) => {
+                    self.debug_error("stats", "get_writing_stats_by_chapter_failed", &e.to_string());
+                    format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
+                }
             }
         } else {
-            "{}".into()
+            "{\"error\":\"core not available\"}".into()
         }
     }
 
@@ -216,10 +225,13 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             match core.get_writing_stats_by_device_json(&sd, &ed) {
                 Ok(val) => val.into(),
-                Err(_) => "{}".into(),
+                Err(e) => {
+                    self.debug_error("stats", "get_writing_stats_by_device_failed", &e.to_string());
+                    format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
+                }
             }
         } else {
-            "{}".into()
+            "{\"error\":\"core not available\"}".into()
         }
     }
 
@@ -251,10 +263,13 @@ impl AppBackend {
         if let Some(core) = self.core_api() {
             match core.get_writing_speed_curve_json(&sd, &ed, bucket_minutes) {
                 Ok(val) => val.into(),
-                Err(_) => "{}".into(),
+                Err(e) => {
+                    self.debug_error("stats", "get_writing_speed_curve_failed", &e.to_string());
+                    format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
+                }
             }
         } else {
-            "{}".into()
+            "{\"error\":\"core not available\"}".into()
         }
     }
 

@@ -345,6 +345,37 @@ Rectangle {
                                             Layout.fillWidth: true
                                             elide: Text.ElideRight
                                         }
+
+                                        // "⋯" menu button — visible for both volume and chapter
+                                        Rectangle {
+                                            width: 24; height: 24
+                                            radius: 12
+                                            color: menuBtnHover.containsMouse ? dt.surfaceVariant : "transparent"
+                                            Layout.alignment: Qt.AlignVCenter
+
+                                            AppText {
+                                                dt: root.dt
+                                                anchors.centerIn: parent
+                                                text: "⋯"
+                                                color: dt.textSecondary
+                                                font.pixelSize: dt.fontMd
+                                            }
+
+                                            MouseArea {
+                                                id: menuBtnHover
+                                                anchors.fill: parent
+                                                hoverEnabled: true
+                                                cursorShape: Qt.PointingHandCursor
+                                                onClicked: {
+                                                    treeContextMenu.itemType = model.itemType;
+                                                    treeContextMenu.itemId = model.itemId;
+                                                    treeContextMenu.itemTitle = model.itemTitle;
+                                                    treeContextMenu.itemProjectId = model.itemProjectId || "";
+                                                    treeContextMenu.itemVolumeId = model.itemVolumeId || "";
+                                                    treeContextMenu.popup();
+                                                }
+                                            }
+                                        }
                                     }
 
                                     MouseArea {
@@ -366,6 +397,18 @@ Rectangle {
                                                 treeContextMenu.itemVolumeId = model.itemVolumeId || "";
                                                 treeContextMenu.popup(delegateHover, mouse.x, mouse.y);
                                             }
+                                        }
+                                    }
+
+                                    // 长按弹出菜单（触屏支持）
+                                    TapHandler {
+                                        onLongPressed: {
+                                            treeContextMenu.itemType = model.itemType;
+                                            treeContextMenu.itemId = model.itemId;
+                                            treeContextMenu.itemTitle = model.itemTitle;
+                                            treeContextMenu.itemProjectId = model.itemProjectId || "";
+                                            treeContextMenu.itemVolumeId = model.itemVolumeId || "";
+                                            treeContextMenu.popup();
                                         }
                                     }
 

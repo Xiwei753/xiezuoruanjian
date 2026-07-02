@@ -472,7 +472,15 @@ ApplicationWindow {
                     inputDialog.projectId = projectId;
                     inputDialog.volumeId = volumeId;
                     inputDialog.dialogTitle = qsTr("新建章节");
-                    inputDialog.defaultText = "";
+                    // 从树数据中统计当前卷的章节数量，生成默认标题
+                    var chapterCount = 0;
+                    var treeData = window.appState ? (window.appState.tree || []) : [];
+                    for (var i = 0; i < treeData.length; i++) {
+                        if (treeData[i].type === "chapter" && treeData[i].volumeId === volumeId) {
+                            chapterCount++;
+                        }
+                    }
+                    inputDialog.defaultText = qsTr("第%1章").arg(chapterCount + 1);
                     inputDialog.open();
                 }
 
@@ -706,22 +714,24 @@ ApplicationWindow {
                     dt: designTokens
                     variant: "primary"
                     onClicked: {
-                        var title = inputField.text.trim();
-                        if (title !== "") {
-                            if (inputDialog.actionType === "volume") {
-                                projectController.createVolume(inputDialog.projectId, title);
-                            } else if (inputDialog.actionType === "chapter") {
-                                projectController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
-                            } else if (inputDialog.actionType === "rename_project") {
-                                projectController.renameProject(inputDialog.projectId, title);
-                            } else if (inputDialog.actionType === "rename_volume") {
-                                projectController.renameVolume(inputDialog.projectId, inputDialog.volumeId, title);
-                            } else if (inputDialog.actionType === "rename_chapter") {
-                                projectController.renameChapter(inputDialog.projectId, inputDialog.volumeId, inputDialog.chapterId, title);
-                            }
-                        }
-                        inputDialog.close();
-                    }
+                         var title = inputField.text.trim();
+                         // 章节允许空标题，后端会兜底生成默认标题
+                         var allowEmpty = (inputDialog.actionType === "chapter");
+                         if (title !== "" || allowEmpty) {
+                             if (inputDialog.actionType === "volume") {
+                                 projectController.createVolume(inputDialog.projectId, title);
+                             } else if (inputDialog.actionType === "chapter") {
+                                 projectController.createChapter(inputDialog.projectId, inputDialog.volumeId, title);
+                             } else if (inputDialog.actionType === "rename_project") {
+                                 projectController.renameProject(inputDialog.projectId, title);
+                             } else if (inputDialog.actionType === "rename_volume") {
+                                 projectController.renameVolume(inputDialog.projectId, inputDialog.volumeId, title);
+                             } else if (inputDialog.actionType === "rename_chapter") {
+                                 projectController.renameChapter(inputDialog.projectId, inputDialog.volumeId, inputDialog.chapterId, title);
+                             }
+                         }
+                         inputDialog.close();
+                     }
                 }
             }
         }
