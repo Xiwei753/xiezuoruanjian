@@ -153,6 +153,9 @@ class SujianAnimationController(
     fun handleInsertTransaction(vt: EditorVisualTransactionData) {
         if (!animationEnabled) return
         
+        // 滚动中直接不建 hidden range、不建动画，避免 activeInsertRange 残留
+        if (renderer.isScrolling()) return
+        
         val text = buffer.text
         
         // UTF-8 → UTF-16 转换 insertedRange
@@ -202,7 +205,7 @@ class SujianAnimationController(
         val insertRangeUtf16 = IntRange(rangeStartUtf16, rangeEndUtf16)
         renderer.addActiveInsertRange(insertRangeUtf16)
         
-        renderer.addAnimation(SujianOverlayAnim(
+        val insertAnim = SujianOverlayAnim(
             id = vt.id,
             kind = "insert",
             text = vt.newText.substring(rangeStartUtf16, rangeEndUtf16.coerceAtMost(vt.newText.length)),
@@ -216,7 +219,13 @@ class SujianAnimationController(
             startTimeMs = System.currentTimeMillis(),
             glyphRects = glyphRects,
             insertRange = insertRangeUtf16
-        ))
+        )
+        
+        if (!renderer.addAnimation(insertAnim)) {
+            // 动画未成功加入（如滚动中），立即清除刚添加的 hidden range
+            renderer.removeActiveInsertRange(insertRangeUtf16)
+            return
+        }
         
         // ── Reflow 处理（方案 A：reflow ghost 动画） ──
         // 中间插入时，插入点右侧文字做轻量位移动画（局部挤开）。
@@ -249,7 +258,7 @@ class SujianAnimationController(
                 )
             }
             
-            renderer.addAnimation(SujianOverlayAnim(
+            val reflowAnim = SujianOverlayAnim(
                 id = vt.id + 1u,  // 使用不同 id 避免与 insert 动画冲突
                 kind = "reflow",
                 text = "",
@@ -265,7 +274,14 @@ class SujianAnimationController(
                 insertRange = null,
                 reflowRects = reflowRects,
                 reflowInsertRanges = reflowInsertRanges
-            ))
+            )
+            
+            if (!renderer.addAnimation(reflowAnim)) {
+                // reflow 动画未成功加入，立即清除刚添加的 reflow hidden ranges
+                for (range in reflowInsertRanges) {
+                    renderer.removeActiveInsertRange(range)
+                }
+            }
         }
     }
     

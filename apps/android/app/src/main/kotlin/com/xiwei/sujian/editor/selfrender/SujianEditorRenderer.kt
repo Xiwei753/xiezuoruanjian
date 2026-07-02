@@ -114,11 +114,12 @@ class SujianEditorRenderer(
     /**
      * 添加动画 overlay
      */
-    fun addAnimation(anim: SujianOverlayAnim) {
-        if (isScrolling) return
+    fun addAnimation(anim: SujianOverlayAnim): Boolean {
+        if (isScrolling) return false
         // 移除同 id 的旧动画
         activeAnimations.removeAll { it.id == anim.id }
         activeAnimations.add(anim)
+        return true
     }
 
     /**
@@ -217,6 +218,11 @@ class SujianEditorRenderer(
         }
         activeAnimations.removeAll { it.isFinished }
     }
+
+    /**
+     * 查询当前是否正在滚动
+     */
+    fun isScrolling(): Boolean = isScrolling
 
     /**
      * 设置滚动状态

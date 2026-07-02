@@ -429,10 +429,16 @@ Item {
     }
 
     function clearAll() {
+        // 遍历所有活跃事务，对每个 insert byte range 发 insertAnimationSkipped
+        // 通知 Rust 清除 hidden range，避免文字短暂消失
+        for (var ti = 0; ti < root._activeTransactions.length; ti++) {
+            var tx = root._activeTransactions[ti]
+            if (tx.byteStart !== undefined && tx.byteEnd !== undefined && tx.byteEnd > tx.byteStart) {
+                root._log("clearAll: sending insertAnimationSkipped for byteRange=(" + tx.byteStart + "," + tx.byteEnd + ")")
+                root.insertAnimationSkipped(tx.byteStart, tx.byteEnd)
+            }
+        }
         // 销毁所有活跃动画
-        // 注意：此函数不发射 insertAnimationFinished 信号
-        // Rust 侧需要在 suppressed/component not ready/animation disabled 场景下
-        // 自行确保不创建或立即清理 hidden range
         for (var i = 0; i < root._activeAnimations.length; i++) {
             if (root._activeAnimations[i]) root._activeAnimations[i].destroy()
         }

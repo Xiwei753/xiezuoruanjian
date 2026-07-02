@@ -1649,12 +1649,6 @@ impl SujianEditorItem {
                             font_family,
                         );
 
-                        // 在旧布局中找到对应的行
-                        let old_line = old_snapshot.lines.iter().find(|l| {
-                            // 匹配条件：旧布局中与插入点在同一行或之后的行
-                            l.byte_end > range_start && !l.para_text.is_empty()
-                        });
-
                         for (abs_byte, new_x_pos, ch_w) in &new_glyph_data {
                             if *abs_byte >= text.len() {
                                 continue;
@@ -1672,8 +1666,7 @@ impl SujianEditorItem {
                             let byte_start = *abs_byte;
                             let byte_end = byte_start + char_len;
 
-                            // 在旧布局中查找该 glyph 的位置
-                            // 对于插入点右侧的 glyph，它在旧文本中的 byte offset 需要偏移
+                            // 每个 reflow glyph 单独计算 old_byte
                             let old_byte = if *abs_byte >= range_end {
                                 // 插入点右侧：旧文本中偏移量 = 新偏移量 - 插入长度
                                 abs_byte.saturating_sub(range_end - range_start)
@@ -1681,24 +1674,30 @@ impl SujianEditorItem {
                                 *abs_byte
                             };
 
-                            let (old_x, old_y, old_baseline_y) = if let Some(ol) = old_line {
-                                let old_glyph_data = self.editor_layout.glyph_positions_on_line(
-                                    ol,
-                                    old_byte.min(ol.byte_end),
-                                    (old_byte + char_len).min(ol.byte_end),
-                                    font_size,
-                                    font_family,
-                                );
-                                if let Some((_, ox, _)) = old_glyph_data.first() {
-                                    let old_line_baseline_y = text_baseline_y(ol, font_size, font_family) - scroll_y;
-                                    (*ox, ol.y - scroll_y, old_line_baseline_y)
-                                } else {
-                                    // fallback：使用新位置
-                                    (new_line.x + *new_x_pos, new_line.y - scroll_y, text_baseline_y(new_line, font_size, font_family) - scroll_y)
+                            // 在旧布局中找真正包含 old_byte 的旧行
+                            let old_line = old_snapshot.lines.iter().find(|l| {
+                                l.byte_start <= old_byte && l.byte_end > old_byte && !l.para_text.is_empty()
+                            });
+
+                            // 找不到旧行时直接 snap（不 push reflow glyph）
+                            let (old_x, old_y, old_baseline_y) = match old_line {
+                                Some(ol) => {
+                                    let old_glyph_data = self.editor_layout.glyph_positions_on_line(
+                                        ol,
+                                        old_byte.min(ol.byte_end),
+                                        (old_byte + char_len).min(ol.byte_end),
+                                        font_size,
+                                        font_family,
+                                    );
+                                    match old_glyph_data.first() {
+                                        Some((_, ox, _)) => {
+                                            let old_line_baseline_y = text_baseline_y(ol, font_size, font_family) - scroll_y;
+                                            (*ox, ol.y - scroll_y, old_line_baseline_y)
+                                        }
+                                        None => continue, // 找不到旧 glyph，snap
+                                    }
                                 }
-                            } else {
-                                // fallback：使用新位置
-                                (new_line.x + *new_x_pos, new_line.y - scroll_y, text_baseline_y(new_line, font_size, font_family) - scroll_y)
+                                None => continue, // 找不到旧行，snap
                             };
 
                             let new_baseline_y = text_baseline_y(new_line, font_size, font_family) - scroll_y;
