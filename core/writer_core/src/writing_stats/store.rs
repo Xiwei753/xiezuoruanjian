@@ -639,6 +639,12 @@ mod tests {
     }
 
     #[test]
+    fn test_flush_events_empty() {
+        let store = create_mock_store();
+        assert!(store.flush_events().is_ok());
+    }
+
+    #[test]
     fn test_merge_daily_stats_success() {
         let store = create_mock_store();
 
