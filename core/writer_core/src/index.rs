@@ -284,10 +284,14 @@ fn scan_projects(projects_dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     let mut result = Vec::new();
     if let Ok(entries) = fs::read_dir(projects_dir) {
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    result.push((name.to_string(), path));
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() || file_type.is_symlink() {
+                    let path = entry.path();
+                    if file_type.is_dir() || path.is_dir() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            result.push((name.to_string(), path));
+                        }
+                    }
                 }
             }
         }
@@ -299,10 +303,14 @@ fn scan_subdirs(dir: &Path) -> Result<Vec<(String, PathBuf)>> {
     let mut result = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    result.push((name.to_string(), path));
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() || file_type.is_symlink() {
+                    let path = entry.path();
+                    if file_type.is_dir() || path.is_dir() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            result.push((name.to_string(), path));
+                        }
+                    }
                 }
             }
         }
