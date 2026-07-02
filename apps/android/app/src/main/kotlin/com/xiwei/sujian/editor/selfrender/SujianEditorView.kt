@@ -211,11 +211,20 @@ class SujianEditorView @JvmOverloads constructor(
                 null
             }
 
-            // 步骤 3.5：编辑后计算 reflow 数据（仅 Insert 场景）
+            // 步骤 3.5：编辑后计算 reflow 数据（仅纯插入场景）
+            // 纯插入：旧选区无范围（anchor == head），即没有选区替换
+            val isPureInsert = oldSelection.anchor == oldSelection.head
             val reflowGlyphRects = if ((cause == SujianEditCauseData.Typing || cause == SujianEditCauseData.TypingCommit)
                 && reflowOldGlyphs.isNotEmpty() && newText.isNotEmpty()
             ) {
-                computeReflowGlyphRects(reflowOldGlyphs, oldText.length, newText, newSelection.head)
+                computeReflowGlyphRects(
+                    reflowOldGlyphs,
+                    oldSelection.head,
+                    newSelection.head,
+                    isPureInsert,
+                    newText,
+                    newSelection.head
+                )
             } else {
                 emptyList()
             }
@@ -931,34 +940,47 @@ class SujianEditorView @JvmOverloads constructor(
     /**
      * 编辑后计算 reflow 数据：对比旧 glyph 位置和新布局中的位置。
      *
-     * 与 Desktop 方案 B 一致：当前暂不做 reflow 动画，但计算并记录 reflow 数据
-     * 供未来启用。右侧文字 snap 到最终位置。
+     * Android 已启用 reflow ghost 动画。中间插入时，插入点右侧文字做轻量位移动画（局部挤开）。
+     * 静态正文层在动画期间跳过 reflow ranges，由 overlay reflow ghost 显示位移动画。
+     * 动画结束后清除 reflow hidden ranges，正文层恢复完整绘制。
+     *
+     * 只对纯插入做 reflow；选区替换、composition 替换、多 change 直接 snap，不做右侧挤字动画。
      *
      * @param oldGlyphs 编辑前捕获的 glyph 位置列表
-     * @param oldTextLength 编辑前文本长度（UTF-16），用于计算插入字符数
+     * @param insertStartUtf16 纯插入的起始位置（UTF-16 offset）
+     * @param insertEndUtf16 纯插入的结束位置（UTF-16 offset）
+     * @param isPureInsert 是否为纯插入（非选区替换、非 composition 替换、非多 change）
      * @param newText 编辑后文本
      * @param newCursorHead 编辑后光标位置（UTF-16 offset）
      * @return reflow glyph rect 数据列表
      */
     private fun computeReflowGlyphRects(
         oldGlyphs: List<ReflowOldGlyph>,
-        oldTextLength: Int,
+        insertStartUtf16: Int,
+        insertEndUtf16: Int,
+        isPureInsert: Boolean,
         newText: String,
         newCursorHead: Int
     ): List<SujianReflowGlyphRectData> {
         if (newText.isEmpty() || oldGlyphs.isEmpty()) return emptyList()
+        // 只对纯插入做 reflow；选区替换、composition 替换、多 change 直接 snap
+        if (!isPureInsert) return emptyList()
 
         try {
             val newLayout = layoutEngine.getLayout(newText)
             val result = mutableListOf<SujianReflowGlyphRectData>()
 
-            // 插入的字符数 = 新文本长度 - 旧文本长度
-            val insertedCharCount = newText.length - oldTextLength
+            // 精确计算插入长度（UTF-16），不使用全文长度差泛化
+            val insertedCharCount = insertEndUtf16 - insertStartUtf16
 
             for (oldGlyph in oldGlyphs) {
                 // 在新文本中找对应字符的位置
-                // 插入后，插入点之前的字符 offset 不变，之后的字符 offset += insertedCharCount
-                val newOffset = oldGlyph.utf16Offset + insertedCharCount
+                // 插入点之前的字符 offset 不变，插入点之后的字符 offset += insertedCharCount
+                val newOffset = if (oldGlyph.utf16Offset >= insertStartUtf16) {
+                    oldGlyph.utf16Offset + insertedCharCount
+                } else {
+                    oldGlyph.utf16Offset
+                }
 
                 // 安全检查：新 offset 必须在新文本范围内，且字符匹配
                 if (newOffset < 0 || newOffset >= newText.length) continue
@@ -997,7 +1019,7 @@ class SujianEditorView @JvmOverloads constructor(
             }
 
             if (result.isNotEmpty()) {
-                DiagnosticsLogger.d(TAG, "computeReflowGlyphRects: ${result.size} reflow glyphs detected (animation disabled, snap to final position)")
+                DiagnosticsLogger.d(TAG, "computeReflowGlyphRects: ${result.size} reflow glyphs detected")
             }
 
             return result
