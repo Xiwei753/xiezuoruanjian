@@ -310,9 +310,13 @@ pub fn get_project_updated_at_aggregated(
 }
 
 pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result<()> {
-    let projects = list_projects(workspace_path)?;
-    let existing_ids: std::collections::HashSet<_> =
-        projects.iter().map(|p| p.id.clone()).collect();
+    let mut projects = list_projects(workspace_path)?;
+    let mut projects_map = std::collections::HashMap::new();
+    for p in projects.drain(..) {
+        projects_map.insert(p.id.clone(), p);
+    }
+
+    let existing_ids: std::collections::HashSet<_> = projects_map.keys().cloned().collect();
     let new_ids: std::collections::HashSet<_> = ordered_ids.iter().cloned().collect();
 
     if existing_ids.len() != new_ids.len()
@@ -327,15 +331,12 @@ pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result
     let now = Utc::now().to_rfc3339();
 
     for (index, id) in ordered_ids.iter().enumerate() {
-        let project_dir = workspace_path.join("projects").join(id);
-        let meta_path = project_dir.join("project.json");
-
-        if meta_path.exists() {
-            let meta_str = std::fs::read_to_string(&meta_path)?;
-            let mut meta = serde_json::from_str::<Project>(&meta_str)?;
+        if let Some(meta) = projects_map.get_mut(id) {
             if meta.order != index as i32 {
                 meta.order = index as i32;
                 meta.updated_at = now.clone();
+                let project_dir = workspace_path.join("projects").join(id);
+                let meta_path = project_dir.join("project.json");
                 let updated_meta_str = serde_json::to_string_pretty(&meta)?;
                 crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
             }
