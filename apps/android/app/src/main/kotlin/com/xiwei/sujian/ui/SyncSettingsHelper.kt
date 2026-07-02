@@ -229,16 +229,6 @@ internal class SyncSettingsHelper(
                             msgBuilder.append(activity.getString(R.string.diag_repo_access, mapStatus(diag.repoStatus))).append("\n")
                             msgBuilder.append(activity.getString(R.string.diag_branch_exists, mapStatus(diag.branchStatus))).append("\n\n")
 
-                            if (!diag.networkProbeSummary.isNullOrEmpty()) {
-                                msgBuilder.append(activity.getString(R.string.diag_auto_probe_section)).append("\n")
-                                msgBuilder.append(activity.getString(R.string.diag_chosen_mode, diag.chosenNetworkMode ?: activity.getString(R.string.diag_unknown_mode))).append("\n")
-                                diag.networkProbeSummary.forEach { probe ->
-                                    val mark = if (probe.success) "✅" else "❌"
-                                    msgBuilder.append("$mark ${probe.mode}: ${probe.message}\n")
-                                }
-                                msgBuilder.append("\n")
-                            }
-
                             msgBuilder.append(errorMessageFromCategory(diag.errorCategory))
 
                             if (diag.rawError != null && diag.rawError.isNotEmpty()) {
