@@ -2840,8 +2840,7 @@ mod tests {
             "Hidden range should be (10, 22) before skip");
 
         // QML overlay 跳过动画 → 调用 on_insert_animation_finished（与 skip 共用逻辑）
-        // 这模拟了 SujianEditorItem::on_insert_animation_skipped 的行为：
-        //   let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
+        // 这模拟了 SujianEditorItem::on_insert_animation_skipped 的行为
         let removed = state.on_insert_animation_finished(10, 22);
         assert!(removed, "on_insert_animation_skipped should return true (removed matching animation)");
         assert!(state.is_empty(),
