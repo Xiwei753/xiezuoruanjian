@@ -428,14 +428,16 @@ fn log_input_method_diagnostics() {
         return matches.join(QStringLiteral(";"));
     });
 
-    eprintln!(
-        "[QtInputMethodDiagnostics] QT_IM_MODULE={} XMODIFIERS={} XDG_SESSION_TYPE={} qt_library_paths={} fcitx5_qt6_plugins={}",
-        qt_im_module,
-        xmodifiers,
-        xdg_session_type,
-        qt_library_paths,
-        fcitx_plugins
-    );
+    if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
+        eprintln!(
+            "[QtInputMethodDiagnostics] QT_IM_MODULE={} XMODIFIERS={} XDG_SESSION_TYPE={} qt_library_paths={} fcitx5_qt6_plugins={}",
+            qt_im_module,
+            xmodifiers,
+            xdg_session_type,
+            qt_library_paths,
+            fcitx_plugins
+        );
+    }
 }
 
 fn install_translator() {
