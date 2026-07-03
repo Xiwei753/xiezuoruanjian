@@ -75,6 +75,15 @@ cpp! {{
     #include <QMetaObject>
 }}
 
+/// 编辑器颜色 fallback 常量 — QML 初始化时必须注入主题色覆盖这些值
+/// 这些值仅作为最后安全兜底，不应在正常流程中被使用
+mod editor_color_fallback {
+    pub const TEXT_COLOR: &str = "#E2E2E5";
+    pub const SELECTION_COLOR: &str = "#006497";
+    pub const SELECTED_TEXT_COLOR: &str = "#CCE5FF";
+    pub const CURSOR_COLOR: &str = "#006497";
+}
+
 pub fn editor_animation_debug_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_ANIMATION_DEBUG").is_some()
 }
@@ -358,10 +367,10 @@ impl Default for SujianEditorItem {
             current_line_spacing: 1.5,
             current_text_indent: 0.0,
             current_padding: 16.0,
-            current_text_color: "#E2E2E5".into(),
-            current_selection_color: "#006497".into(),
-            current_selected_text_color: "#CCE5FF".into(),
-            current_cursor_color: "#006497".into(),
+            current_text_color: editor_color_fallback::TEXT_COLOR.into(),
+            current_selection_color: editor_color_fallback::SELECTION_COLOR.into(),
+            current_selected_text_color: editor_color_fallback::SELECTED_TEXT_COLOR.into(),
+            current_cursor_color: editor_color_fallback::CURSOR_COLOR.into(),
             current_smooth_cursor_enabled: true,
             current_cursor_animation_duration_ms: 80,
             current_typing_animation_enabled: true,
@@ -638,6 +647,7 @@ impl SujianEditorItem {
         self.current_text_color.clone()
     }
 
+    /// QML 必须注入主题色覆盖此值，editor_color_fallback 仅作为安全兜底
     fn set_text_color(&mut self, value: QString) {
         let v = value.to_string();
         if self.current_text_color.to_string().eq_ignore_ascii_case(&v) {
@@ -657,6 +667,7 @@ impl SujianEditorItem {
         self.current_selection_color.clone()
     }
 
+    /// QML 必须注入主题色覆盖此值，editor_color_fallback 仅作为安全兜底
     fn set_selection_color(&mut self, value: QString) {
         let v = value.to_string();
         if self
@@ -680,6 +691,7 @@ impl SujianEditorItem {
         self.current_selected_text_color.clone()
     }
 
+    /// QML 必须注入主题色覆盖此值，editor_color_fallback 仅作为安全兜底
     fn set_selected_text_color(&mut self, value: QString) {
         let v = value.to_string();
         if self
@@ -703,6 +715,7 @@ impl SujianEditorItem {
         self.current_cursor_color.clone()
     }
 
+    /// QML 必须注入主题色覆盖此值，editor_color_fallback 仅作为安全兜底
     fn set_cursor_color(&mut self, value: QString) {
         let v = value.to_string();
         if self
@@ -1103,6 +1116,135 @@ impl SujianEditorItem {
             if editor_animation_debug_enabled() {
                 eprintln!("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
             }
+        }
+
+        self.emit_content_changed();
+    }
+
+    /// IME commit with replacement semantics.
+    ///
+    /// Handles `QInputMethodEvent::replacementStart()` and
+    /// `replacementLength()`.  Some input methods (fcitx5 pinyin correction,
+    /// Japanese IM backspace correction) replace characters around the cursor
+    /// instead of simply inserting at the cursor position.
+    ///
+    /// `replace_start` and `replace_length` are UTF-16 code-unit offsets
+    /// relative to the current cursor position.  We convert them to UTF-8
+    /// byte offsets before operating on the buffer.
+    fn ime_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        let inserted = normalize_plain_text(&text);
+        if inserted.is_empty() {
+            return;
+        }
+
+        // Take pending preedit cursor rect (same as insert_text)
+        let pending_pcr = self.pending_preedit_cursor_rect.take();
+
+        // Clear preedit state when inserting formal text
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
+
+        // Convert UTF-16 replacement offsets to UTF-8 byte offsets relative to cursor
+        let cursor_byte = self.buffer.cursor;
+        let text_str = &self.buffer.text;
+
+        // Helper: convert a UTF-16 code-unit offset (relative to cursor) to
+        // a UTF-8 byte offset (absolute in buffer text).
+        fn utf16_offset_to_utf8_byte(text: &str, base: usize, utf16_offset: i32) -> usize {
+            if utf16_offset == 0 {
+                return base;
+            }
+            let start = base;
+            // Walk forward or backward from `base` by `utf16_offset` UTF-16 code units
+            if utf16_offset > 0 {
+                let mut utf16_count = 0i32;
+                let mut byte_pos = start;
+                for ch in text[start..].chars() {
+                    if utf16_count >= utf16_offset {
+                        break;
+                    }
+                    utf16_count += ch.len_utf16() as i32;
+                    byte_pos += ch.len_utf8();
+                }
+                byte_pos
+            } else {
+                // Negative offset: walk backward from cursor
+                let abs_offset = (-utf16_offset) as usize;
+                let mut utf16_count = 0usize;
+                let mut byte_pos = start;
+                // Collect chars before cursor
+                let before_cursor: Vec<char> = text[..start].chars().collect();
+                for &ch in before_cursor.iter().rev() {
+                    if utf16_count >= abs_offset {
+                        break;
+                    }
+                    utf16_count += ch.len_utf16();
+                    byte_pos -= ch.len_utf8();
+                }
+                byte_pos
+            }
+        }
+
+        let replace_start_byte = utf16_offset_to_utf8_byte(text_str, cursor_byte, replace_start);
+        // Clamp to valid range
+        let replace_start_byte = replace_start_byte.min(text_str.len());
+
+        // Now compute the end of the replacement range by walking forward
+        // `replace_length` UTF-16 code units from `replace_start_byte`
+        let replace_end_byte = if replace_length > 0 {
+            let mut utf16_count = 0i32;
+            let mut byte_pos = replace_start_byte;
+            for ch in text_str[replace_start_byte..].chars() {
+                if utf16_count >= replace_length {
+                    break;
+                }
+                utf16_count += ch.len_utf16() as i32;
+                byte_pos += ch.len_utf8();
+            }
+            byte_pos
+        } else {
+            replace_start_byte
+        };
+        let replace_end_byte = replace_end_byte.min(text_str.len());
+
+        // Ensure start <= end
+        let (del_start, del_end) = if replace_start_byte <= replace_end_byte {
+            (replace_start_byte, replace_end_byte)
+        } else {
+            (replace_end_byte, replace_start_byte)
+        };
+
+        let old = self.buffer.snapshot();
+        self.buffer.push_undo(old.clone());
+
+        // Delete the replacement range and insert the commit text
+        self.buffer.text.replace_range(del_start..del_end, &inserted);
+        self.buffer.cursor = del_start + inserted.len();
+        self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, self.buffer.cursor);
+        self.buffer.selection_anchor = self.buffer.cursor;
+
+        self.adjust_affinity_at_wrap_boundary();
+        let cause = if inserted.chars().count() == 1 {
+            EditorTransactionCause::Typing
+        } else {
+            EditorTransactionCause::TypingCommit
+        };
+        let new = self.buffer.snapshot();
+        let _vt = self.record_transaction(old, new, cause, true);
+
+        // Use pending preedit cursor rect as cursor animation start point
+        if let Some(pcr) = pending_pcr {
+            self.cursor_ctrl.visual_x = pcr.x;
+            self.cursor_ctrl.visual_y = pcr.top;
+            self.cursor_ctrl.force_snap_next = false;
         }
 
         self.emit_content_changed();
@@ -2232,6 +2374,10 @@ impl EditorInputHost for SujianEditorItem {
 
     fn input_insert_text(&mut self, text: String) {
         self.insert_text(text.into());
+    }
+
+    fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
+        self.ime_replace_and_insert(replace_start, replace_length, text);
     }
 
     fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool) {

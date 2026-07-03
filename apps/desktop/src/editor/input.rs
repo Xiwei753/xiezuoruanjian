@@ -19,6 +19,7 @@ cpp! {{
 
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
     extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
+    extern "C" void sujian_ime_replace_and_commit(void* rust_item, const ushort* text, int text_len, int replace_start, int replace_length);
     extern "C" void sujian_ime_preedit(void* rust_item, const ushort* text, int text_len, int cursor);
     extern "C" void sujian_ime_preedit_attrs(void* rust_item, const ushort* text, int text_len, int cursor, const int* attr_types, const int* attr_starts, const int* attr_lengths, int attr_count, const int* attr_formats);
     extern "C" void sujian_ime_cancel(void* rust_item);
@@ -260,11 +261,28 @@ cpp! {{
                     // IME commit: discard any pending key (shouldn't happen normally,
                     // but defensive)
                     has_pending_key = false;
-                    sujian_ime_commit(
-                        rust_item,
-                        reinterpret_cast<const ushort*>(commit.utf16()),
-                        static_cast<int>(commit.size())
-                    );
+                    int replace_start = ime->replacementStart();
+                    int replace_length = ime->replacementLength();
+                    if (replace_length != 0) {
+                        // Replacement semantics: delete the range specified by
+                        // replacementStart/replacementLength, then insert commitString.
+                        // This handles IME correction scenarios (e.g. fcitx5 pinyin
+                        // correction, Japanese input method backspace correction).
+                        sujian_ime_replace_and_commit(
+                            rust_item,
+                            reinterpret_cast<const ushort*>(commit.utf16()),
+                            static_cast<int>(commit.size()),
+                            replace_start,
+                            replace_length
+                        );
+                    } else {
+                        // No replacement: standard commit (most common case)
+                        sujian_ime_commit(
+                            rust_item,
+                            reinterpret_cast<const ushort*>(commit.utf16()),
+                            static_cast<int>(commit.size())
+                        );
+                    }
                     ime_composing = false;
                 }
                 if (!preedit.isEmpty()) {
@@ -461,6 +479,7 @@ pub(crate) trait EditorInputHost {
     fn input_delete_backward(&mut self);
     fn input_delete_forward(&mut self);
     fn input_insert_text(&mut self, text: String);
+    fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String);
     fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool);
     fn input_move_cursor_vertical(&mut self, down: bool, extend: bool);
     fn input_move_to_line_edge(&mut self, end: bool, extend: bool);
@@ -638,6 +657,37 @@ pub(crate) fn ime_commit<H: EditorInputHost + ?Sized>(host: &mut H, text: String
     host.input_insert_text(text);
 }
 
+/// IME commit with replacement semantics.
+///
+/// Some input methods (e.g. fcitx5 pinyin correction, Japanese IM backspace
+/// correction) send `QInputMethodEvent` with non-zero `replacementStart` and
+/// `replacementLength`. This means: before inserting the commit string, delete
+/// the text range `[cursor + replacementStart, cursor + replacementStart +
+/// replacementLength)` (in UTF-16 code units).
+///
+/// The replacement offsets are relative to the current cursor position and
+/// expressed in UTF-16 code units. The host's `input_replace_and_insert`
+/// method is responsible for converting them to UTF-8 byte offsets before
+/// operating on the buffer.
+pub(crate) fn ime_replace_and_commit<H: EditorInputHost + ?Sized>(
+    host: &mut H,
+    text: String,
+    replace_start: i32,
+    replace_length: i32,
+) {
+    if !host.input_enabled() || text.is_empty() {
+        return;
+    }
+    if host.input_take_suppress_next_ime_commit() {
+        host.input_clear_preedit();
+        return;
+    }
+    // 1. Clear preedit temporary layer
+    host.input_clear_preedit();
+    // 2. Delete the replacement range, then insert commit text
+    host.input_replace_and_insert(replace_start, replace_length, text);
+}
+
 pub(crate) fn ime_preedit<H: EditorInputHost + ?Sized>(host: &mut H, text: String, cursor: i32) {
     if !host.input_enabled() {
         return;
@@ -755,6 +805,23 @@ extern "C" fn sujian_ime_commit(rust_item: *mut c_void, text: *const u16, text_l
     let text = decode_utf16_ptr(text, text_len);
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_commit(item, text);
+    }));
+}
+
+#[no_mangle]
+extern "C" fn sujian_ime_replace_and_commit(
+    rust_item: *mut c_void,
+    text: *const u16,
+    text_len: i32,
+    replace_start: i32,
+    replace_length: i32,
+) {
+    let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
+        return;
+    };
+    let text = decode_utf16_ptr(text, text_len);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ime_replace_and_commit(item, text, replace_start, replace_length);
     }));
 }
 
@@ -952,6 +1019,11 @@ mod tests {
         }
 
         fn input_insert_text(&mut self, text: String) {
+            self.inserted.push(text);
+        }
+
+        fn input_replace_and_insert(&mut self, _replace_start: i32, _replace_length: i32, text: String) {
+            // Simplified test impl: just insert (no actual replacement in FakeHost)
             self.inserted.push(text);
         }
 
