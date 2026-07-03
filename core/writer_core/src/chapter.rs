@@ -328,7 +328,7 @@ fn save_chapter_verified_with_options(
 
     if !allow_empty_overwrite && !old_content.trim().is_empty() && content.trim().is_empty() {
         let reason = "new_content_empty_or_whitespace_without_allow_empty_overwrite".to_string();
-        eprintln!(
+        log::warn!(
             "blocked_empty_overwrite chapter_id={} old_len={} new_len={} reason={}",
             chapter_id,
             old_content.len(),
