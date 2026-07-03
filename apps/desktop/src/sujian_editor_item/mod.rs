@@ -643,10 +643,12 @@ impl SujianEditorItem {
         if self.current_text_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
-        eprintln!(
-            "[editor] text_color changed old={} new={}",
-            self.current_text_color, v
-        );
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "[editor] text_color changed old={} new={}",
+                self.current_text_color, v
+            );
+        }
         self.current_text_color = value;
         self.visual_changed();
     }
@@ -664,10 +666,12 @@ impl SujianEditorItem {
         {
             return;
         }
-        eprintln!(
-            "[editor] selection_color changed old={} new={}",
-            self.current_selection_color, v
-        );
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "[editor] selection_color changed old={} new={}",
+                self.current_selection_color, v
+            );
+        }
         self.current_selection_color = value;
         self.visual_changed();
     }
@@ -685,10 +689,12 @@ impl SujianEditorItem {
         {
             return;
         }
-        eprintln!(
-            "[editor] selected_text_color changed old={} new={}",
-            self.current_selected_text_color, v
-        );
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "[editor] selected_text_color changed old={} new={}",
+                self.current_selected_text_color, v
+            );
+        }
         self.current_selected_text_color = value;
         self.visual_changed();
     }
@@ -706,10 +712,12 @@ impl SujianEditorItem {
         {
             return;
         }
-        eprintln!(
-            "[editor] cursor_color changed old={} new={}",
-            self.current_cursor_color, v
-        );
+        if sujian_editor_debug_enabled() {
+            eprintln!(
+                "[editor] cursor_color changed old={} new={}",
+                self.current_cursor_color, v
+            );
+        }
         self.current_cursor_color = value;
         self.visual_changed();
     }
@@ -1088,9 +1096,13 @@ impl SujianEditorItem {
             self.cursor_ctrl.visual_x = pcr.x;
             self.cursor_ctrl.visual_y = pcr.top;
             self.cursor_ctrl.force_snap_next = false;
-            eprintln!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top);
+            if editor_animation_debug_enabled() {
+                eprintln!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top);
+            }
         } else {
-            eprintln!("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
+            if editor_animation_debug_enabled() {
+                eprintln!("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
+            }
         }
 
         self.emit_content_changed();
@@ -1616,10 +1628,12 @@ impl SujianEditorItem {
                     self.last_visual_transaction_json = json.into();
                 }
                 Err(e) => {
-                    eprintln!(
-                        "record_transaction: failed to serialize visual transaction: {}",
-                        e
-                    );
+                    if editor_animation_debug_enabled() {
+                        eprintln!(
+                            "record_transaction: failed to serialize visual transaction: {}",
+                            e
+                        );
+                    }
                     self.last_visual_transaction_json = "{}".into();
                 }
             }
@@ -2503,11 +2517,13 @@ impl SujianEditorItem {
         };
 
         self.preedit_visual_transaction = Some(vt);
-        eprintln!(
-            "[preedit] preedit_visual_transaction_created old_len={} new_len={}",
-            old_text.len(),
-            new_text.len()
-        );
+        if editor_animation_debug_enabled() {
+            eprintln!(
+                "[preedit] preedit_visual_transaction_created old_len={} new_len={}",
+                old_text.len(),
+                new_text.len()
+            );
+        }
 
         // Serialize and emit signal
         if let Some(ref vt) = self.preedit_visual_transaction {
@@ -2516,10 +2532,12 @@ impl SujianEditorItem {
                     self.last_preedit_visual_transaction_json = json.into();
                 }
                 Err(e) => {
-                    eprintln!(
-                        "update_preedit_visual_state: failed to serialize preedit visual transaction: {}",
-                        e
-                    );
+                    if editor_animation_debug_enabled() {
+                        eprintln!(
+                            "update_preedit_visual_state: failed to serialize preedit visual transaction: {}",
+                            e
+                        );
+                    }
                     self.last_preedit_visual_transaction_json = "{}".into();
                 }
             }
@@ -3654,10 +3672,12 @@ impl QQuickItem for SujianEditorItem {
 
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {
-            eprintln!(
-                "sujian_update_paint_node: total_ms={}",
-                total_elapsed.as_millis(),
-            );
+            if sujian_editor_debug_enabled() {
+                eprintln!(
+                    "sujian_update_paint_node: total_ms={}",
+                    total_elapsed.as_millis(),
+                );
+            }
         }
 
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
