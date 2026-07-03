@@ -577,8 +577,9 @@ impl SujianEditorItem {
                     // Draw preedit cursor if Cursor attribute is present
                     // The preedit cursor shows the insertion point within the
                     // composition string (e.g. between pinyin segments)
+                    // Allow cursor at end of preedit (common case: cursor after last pinyin letter)
                     let preedit_cursor_pos = self.preedit_cursor;
-                    if preedit_cursor_pos > 0 && preedit_cursor_pos < self.preedit_text.len() {
+                    if preedit_cursor_pos > 0 && preedit_cursor_pos <= self.preedit_text.len() {
                         // Check if there's an explicit Cursor attribute
                         let has_cursor_attr = self.preedit_attributes.iter()
                             .any(|a| a.kind == super::PreeditAttributeKind::Cursor);
