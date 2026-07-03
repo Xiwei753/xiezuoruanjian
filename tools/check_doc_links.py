@@ -153,7 +153,7 @@ def check_links():
             # Strip fenced code blocks to avoid false positives in code snippets/scripts
             content_no_code = re.sub(r'```.*?```', '', content, flags=re.DOTALL)
             
-            # Strip HTML comments to avoid checking placeholder/TODO links
+            # Strip HTML comments to avoid checking placeholder links
             content_no_code = re.sub(r'<!--.*?-->', '', content_no_code, flags=re.DOTALL)
             
             # 1. Check standard markdown links [text](link)
