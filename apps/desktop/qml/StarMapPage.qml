@@ -68,9 +68,11 @@ Rectangle {
             AppText {
                 dt: root.dt
                 Layout.alignment: Qt.AlignHCenter
-                text: "🚧"
-                font.pixelSize: dt.display
+                text: qsTr("[ 施工中 ]")
+                color: dt.onSurfaceVariant
+                font.pixelSize: dt.headline
                 font.family: dt.fontFamily
+                font.weight: Font.DemiBold
             }
 
             AppText {
