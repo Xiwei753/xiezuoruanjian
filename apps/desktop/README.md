@@ -63,4 +63,4 @@ ldd target/debug/sujian-desktop | grep -Ei 'Qt5|Qt6|qml|quick'
 
 自研写作区使用 Rust 自绘渲染，完全替代了传统的 QML `TextArea`，提供更可控的编辑体验。当前 `SujianEditorItem` 为唯一受支持的编辑器实现。
 
-吐字动画继续保持关闭；必须等 Core transaction 与 `SujianEditorItem` 的插入/删除事务稳定后，才能由事务驱动动画。
+吐字动画已可通过 Core transaction 与 animation_events_json 驱动，由 QML EditorAnimationOverlay 负责叠加渲染。
