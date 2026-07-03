@@ -45,6 +45,13 @@ Item {
         }
     }
 
+    function showConfigFeedback(message, isError) {
+        syncConfigFeedback.message = message
+        syncConfigFeedback.isError = isError
+        syncConfigFeedback.visible = true
+        configFeedbackTimer.restart()
+    }
+
     function refreshLocalSyncState() {
         if (root.backendRef) {
             root.currentSyncStatus = root.backendRef.sync_status || "not_configured";
@@ -237,6 +244,9 @@ Item {
                         root.refreshLocalSyncState()
                         tokenField.text = ""
                         root.settingsChanged()
+                        root.showConfigFeedback(qsTr("配置已保存"), false)
+                    } else {
+                        root.showConfigFeedback(qsTr("保存配置失败"), true)
                     }
                 }
             }
@@ -287,6 +297,10 @@ Item {
                         var opId = root.backendRef.perform_sync_diagnostics()
                         root.activeOperationId = opId
                         root.activeOperationKind = "dry_run"
+                        // 如果 opId 为空，显示即时错误
+                        if (!opId || opId.length === 0) {
+                            syncResultArea.text = root.backendRef.sync_operation_state || qsTr("诊断启动失败")
+                        }
                     }
                 }
             }
@@ -305,6 +319,28 @@ Item {
                 variant: "danger"
                 visible: root.backendRef && root.isConflictStatus(root.currentSyncStatus)
                 onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncResultArea.text)
+            }
+        }
+
+        AppText {
+            id: syncConfigFeedback
+            dt: root.theme
+            property string message: ""
+            property bool isError: false
+            visible: message.length > 0
+            text: syncConfigFeedback.message
+            color: isError ? theme.error : theme.onSurfaceVariant
+            font.pixelSize: theme.caption
+            font.family: theme.fontFamily
+            Layout.fillWidth: true
+        }
+
+        Timer {
+            id: configFeedbackTimer
+            interval: 3000
+            onTriggered: {
+                syncConfigFeedback.message = ""
+                syncConfigFeedback.visible = false
             }
         }
 

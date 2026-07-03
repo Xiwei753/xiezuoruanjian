@@ -78,6 +78,7 @@
     <string name="btn_test_connection">Test GitHub Connection</string>
     <string name="btn_perform_sync">Sync Now</string>
     <string name="sync_success">Sync succeeded.</string>
+    <string name="sync_config_saved">Sync configuration saved.</string>
     <string name="sync_error_no_token">Missing GitHub token.</string>
     <string name="sync_error_unrelated">The remote repository is not empty and cannot be merged automatically. Use an empty private GitHub repository.</string>
     <string name="sync_error_conflict">Conflicting files exist and need manual resolution.</string>

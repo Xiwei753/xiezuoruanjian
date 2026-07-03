@@ -1,8 +1,22 @@
 use crate::sync::types::SyncState;
 use std::path::Path;
 
+/// Normalize a relative path to use forward slashes.
+///
+/// On Windows, local paths may contain backslashes. All sync path matching
+/// logic expects forward-slash-separated paths (matching the remote/Git convention).
+/// This function ensures consistent comparison regardless of platform.
+fn normalize_rel_path(rel_path: &str) -> std::borrow::Cow<'_, str> {
+    if rel_path.contains('\\') {
+        std::borrow::Cow::Owned(rel_path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(rel_path)
+    }
+}
+
 impl crate::sync::SyncService {
     pub fn is_blacklisted_path(rel_path: &str) -> bool {
+        let rel_path = normalize_rel_path(rel_path);
         let ignored_patterns = [
             "app-meta/settings/settings.local.json",
             "app-meta/sync/sync_secrets.local.json",
@@ -36,7 +50,7 @@ impl crate::sync::SyncService {
 
         // Keep 'trash' pattern if it's anywhere else?
         // Let's just avoid a blanket "trash" ignore. We used to ignore "trash".
-        // Instead of ignoring all "trash", we only ignore it if it matches something else, but since we removed it from ignored_patterns, it won't.
+        // Instead of it from ignored_patterns, it won't.
         for pattern in ignored_patterns {
             if rel_path.contains(pattern) {
                 return true;
@@ -49,7 +63,8 @@ impl crate::sync::SyncService {
 
 impl crate::sync::SyncService {
     pub fn is_whitelisted_path(rel_path: &str) -> bool {
-        if Self::is_blacklisted_path(rel_path) {
+        let rel_path = normalize_rel_path(rel_path);
+        if Self::is_blacklisted_path(&rel_path) {
             return false;
         }
 

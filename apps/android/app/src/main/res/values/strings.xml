@@ -102,6 +102,7 @@
 
     <!-- Sync Prompts & Errors -->
     <string name="sync_success">同步成功。</string>
+    <string name="sync_config_saved">同步配置已保存。</string>
     <string name="sync_error_no_token">缺少 GitHub Token。</string>
     <string name="sync_error_unrelated">远端仓库不是空仓库，不能自动合并。建议使用空 GitHub 私人仓库。</string>
     <string name="sync_error_conflict">存在冲突文件，需要手动处理。</string>
