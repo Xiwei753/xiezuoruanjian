@@ -68,7 +68,7 @@ object ThemePaletteHelper {
                 if (colorInt == 0) null
                 else String.format("#%06X", 0xFFFFFF and colorInt)
             } catch (e: Exception) {
-                DiagnosticsLogger.d(TAG, "Semantic attr 0x${attrResId.toString(16)} not available", e)
+                DiagnosticsLogger.w(TAG, "Semantic attr 0x${attrResId.toString(16)} not available", e)
                 null
             }
         }
