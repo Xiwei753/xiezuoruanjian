@@ -93,14 +93,14 @@ pub fn sujian_editor_debug_enabled() -> bool {
 }
 
 /// 编辑器调试日志：仅当 SUJIAN_EDITOR_DEBUG 或 WRITER_DEBUG 环境变量存在时输出
-fn editor_debug_log(msg: &str) {
+pub(crate) fn editor_debug_log(msg: &str) {
     if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() || std::env::var("WRITER_DEBUG").is_ok() {
         eprintln!("{}", msg);
     }
 }
 
 /// 编辑器动画调试日志：仅当 SUJIAN_EDITOR_ANIMATION_DEBUG 或 SUJIAN_EDITOR_DEBUG 或 WRITER_DEBUG 环境变量存在时输出
-fn editor_animation_debug_log(msg: &str) {
+pub(crate) fn editor_animation_debug_log(msg: &str) {
     if std::env::var("SUJIAN_EDITOR_ANIMATION_DEBUG").is_ok() 
         || std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() 
         || std::env::var("WRITER_DEBUG").is_ok() {
