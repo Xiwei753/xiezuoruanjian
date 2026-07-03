@@ -28,6 +28,7 @@ git2 = { version = "0.20.4", optional = true, default-features = false, features
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 base64 = "0.22.1"
 rayon = "1.12.0"
+log = "0.4"
 
 [dependencies.uniffi]
 version = "0.28.0"
