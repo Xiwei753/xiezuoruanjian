@@ -89,13 +89,11 @@ end;
 // 逻辑：
 //   1. 核心文件（sujian.exe、writer_core.dll）→ 始终安装
 //   2. 目标文件不存在 → 安装
-//   3. 源文件与目标文件大小不同 → 安装
-//   4. 大小相同但 SHA-256 哈希不同 → 安装
-//   5. 大小和哈希均相同 → 跳过安装（复用已有文件）
+//   3. SHA-256 哈希相同 → 跳过安装（复用已有文件）
+//   4. SHA-256 哈希不同或计算失败 → 安装
 function ShouldInstallFile: Boolean;
 var
   SrcFile, DestFile, RelPath, DeployDirPath: string;
-  SrcSize, DestSize: Integer;
 begin
   // 默认安装
   Result := True;
@@ -136,32 +134,7 @@ begin
     Exit;
   end;
 
-  // 比较文件大小
-  SrcSize := GetFileSize(SrcFile);
-  DestSize := GetFileSize(DestFile);
-
-  // 无法获取源文件大小，安全起见安装
-  if SrcSize = -1 then
-  begin
-    Log(Format('无法获取源文件大小，强制安装: %s', [DestFile]));
-    Exit;
-  end;
-
-  // 无法获取目标文件大小，安全起见安装
-  if DestSize = -1 then
-  begin
-    Log(Format('无法获取目标文件大小，强制安装: %s', [DestFile]));
-    Exit;
-  end;
-
-  // 大小不同，需要安装
-  if SrcSize <> DestSize then
-  begin
-    Log(Format('文件大小不同 (%d vs %d)，更新: %s', [SrcSize, DestSize, DestFile]));
-    Exit;
-  end;
-
-  // 大小相同，比较 SHA-256 哈希
+  // 比较 SHA-256 哈希
   try
     if GetSHA256OfFile(SrcFile) = GetSHA256OfFile(DestFile) then
     begin
