@@ -112,6 +112,10 @@ class SujianInputConnection(
     override fun finishComposingText(): Boolean {
         if (isClosed) return false
 
+        // finishComposingText 只清除 composing 状态，不提交文本到正文，不移动光标。
+        // composing 文本是 IME 临时状态，不应进入 undo/保存。
+        // IME 通常在 finishComposingText 之前或之后调用 commitText 来正式提交文本。
+        // 如果 IME 不调用 commitText（如用户点击取消），composing 文本应被丢弃。
         buffer.finishComposing()
         imeController.onComposingFinished()
         imeController.updateSelection()
@@ -374,6 +378,7 @@ class SujianInputConnection(
     override fun closeConnection() {
         isClosed = true
         batchEditCount = 0
+        // 关闭连接时丢弃未提交的 composing 文本，不提交到正文
         buffer.finishComposing()
         super.closeConnection()
     }
