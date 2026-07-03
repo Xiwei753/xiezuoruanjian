@@ -6,6 +6,7 @@ check_i18n.py — QML i18n 完整性检查脚本
 1. QML 中文文本必须被 qsTr() 包裹
 2. zh_CN.ts 不含 unfinished/vanished 长期漏项
 3. qsTr 中的中文文本必须在 zh_CN.ts 中有对应条目
+4. lupdate 可用时，临时 ts 与仓库 ts 的 source 差异对比
 
 返回码：0=通过，1=有错误
 输出格式：PASS: ... / FAIL: ...，便于 CI 阅读
@@ -13,7 +14,10 @@ check_i18n.py — QML i18n 完整性检查脚本
 
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import xml.etree.ElementTree as ET
 
 # ── 路径配置 ──────────────────────────────────────────────
@@ -152,6 +156,50 @@ def check_qstr_in_ts(
 
 
 # ─────────────────────────────────────────────────────────
+# 检查 4：lupdate 可用时，临时 ts 与仓库 ts 的 source 差异
+# ─────────────────────────────────────────────────────────
+def check_lupdate_ts_comparison(qml_dir: str, repo_ts_path: str) -> tuple[list[str], bool]:
+    """检查 lupdate 生成的临时 ts 与仓库 ts 的 source 差异。
+
+    Returns:
+        (errors, skipped) - errors 为新增 source 列表，skipped 为是否跳过
+    """
+    # 检查 lupdate 是否可用（先试 lupdate，再试 lupdate6）
+    lupdate_cmd = shutil.which("lupdate")
+    if lupdate_cmd is None:
+        lupdate_cmd = shutil.which("lupdate6")
+    if lupdate_cmd is None:
+        return ([], True)  # skipped
+
+    # 创建临时目录
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_ts_path = os.path.join(tmpdir, "zh_CN.ts")
+
+        # 运行 lupdate
+        try:
+            result = subprocess.run(
+                [lupdate_cmd, qml_dir, "-ts", tmp_ts_path],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode != 0:
+                verbose(f"  lupdate 返回码 {result.returncode}: {result.stderr}")
+                return ([], True)  # lupdate 失败也跳过
+        except (subprocess.TimeoutExpired, OSError) as e:
+            verbose(f"  lupdate 执行失败: {e}")
+            return ([], True)
+
+        # 从临时 ts 提取 source 集合
+        tmp_sources = collect_sources_from_ts(tmp_ts_path)
+
+        # 从仓库 ts 提取 source 集合
+        repo_sources = collect_sources_from_ts(repo_ts_path)
+
+        # 找出临时 ts 有但仓库 ts 没有的 source
+        missing = tmp_sources - repo_sources
+        return (sorted(missing), False)
+
+
+# ─────────────────────────────────────────────────────────
 # 主流程
 # ─────────────────────────────────────────────────────────
 def main() -> int:
@@ -197,6 +245,19 @@ def main() -> int:
             print(f'  qsTr("{m}")')
     else:
         print("PASS: 所有 qsTr 中文文本均在 zh_CN.ts 中有对应条目")
+
+    # ── 检查 4 ──
+    verbose("\n=== 检查 4: lupdate 临时 ts 与仓库 ts 的 source 差异 ===")
+    errs4, skipped4 = check_lupdate_ts_comparison(QML_DIR, TS_FILE)
+    if skipped4:
+        print("SKIP: lupdate not found, ts comparison check skipped")
+    elif errs4:
+        has_error = True
+        print(f"FAIL: 仓库 zh_CN.ts 缺少 {len(errs4)} 条 lupdate 发现的 source")
+        for e in errs4:
+            print(f'  source="{e}"')
+    else:
+        print("PASS: 仓库 zh_CN.ts 包含 lupdate 发现的所有 source")
 
     return 1 if has_error else 0
 
