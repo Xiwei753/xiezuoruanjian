@@ -66,6 +66,13 @@ class SujianEditorBuffer {
         private set
     var composingEnd: Int = -1
         private set
+    /**
+     * Composing 光标在 composing 文本内的相对位置（UTF-16 offset）。
+     * 0 = composing 开头，composingText.length = composing 末尾。
+     * 由 setComposingText 的 newCursorPosition 参数设置。
+     */
+    var composingCursor: Int = 0
+        private set
     val hasComposing: Boolean get() = composingStart >= 0 && composingEnd >= 0 && composingStart != composingEnd
 
     // ── 配置 ──
@@ -114,11 +121,22 @@ class SujianEditorBuffer {
 
     /**
      * 删除光标周围的文本
+     *
+     * beforeLength/afterLength 为 UTF-16 code unit 数量。
+     * 删除范围必须对齐到 code point 边界，避免拆开 surrogate pair 导致乱码。
      */
     fun deleteSurrounding(beforeLength: Int, afterLength: Int): SujianEditResult {
         val cursorPos = selection.head
-        val deleteStart = (cursorPos - beforeLength).coerceAtLeast(0)
-        val deleteEnd = (cursorPos + afterLength).coerceAtMost(text.length)
+        var deleteStart = (cursorPos - beforeLength).coerceAtLeast(0)
+        var deleteEnd = (cursorPos + afterLength).coerceAtMost(text.length)
+
+        // 钳位到 code point 边界：如果 deleteStart 落在低代理上，回退到高代理
+        deleteStart = clampToCharBoundary(text, deleteStart)
+        // 如果 deleteEnd 落在低代理上，前进到高代理之后（完整删除该 code point）
+        if (deleteEnd < text.length && Character.isLowSurrogate(text[deleteEnd])
+            && deleteEnd > 0 && Character.isHighSurrogate(text[deleteEnd - 1])) {
+            deleteEnd += 1
+        }
 
         if (deleteStart >= deleteEnd) return SujianEditResult(text, selection, SujianEditCause.Delete)
 
@@ -154,6 +172,10 @@ class SujianEditorBuffer {
     /**
      * 设置 composing 文本（替换当前 composing 区域）
      * 只更新 composing 状态，不修改正文 buffer
+     *
+     * @param composing composing 文本
+     * @param newCursorPos 新光标位置（相对于 composing 文本开头的偏移，UTF-16 offset）
+     *   1 = 光标在第一个字符后（默认），0 = 光标在开头
      */
     fun setComposingText(composing: String?, newCursorPos: Int) {
         if (composing.isNullOrEmpty()) {
@@ -164,6 +186,16 @@ class SujianEditorBuffer {
         // 实际的 preedit 显示由 SujianEditorView 的 preedit 层处理
         composingStart = selection.head
         composingEnd = selection.head + composing.length
+        // 记录 composing 内光标位置
+        // Android API: newCursorPosition > 0 表示从 composing 开头算的偏移
+        // newCursorPosition < 0 表示从 composing 末尾算的偏移
+        if (newCursorPos > 0) {
+            composingCursor = (newCursorPos - 1).coerceIn(0, composing.length)
+        } else if (newCursorPos < 0) {
+            composingCursor = (composing.length + newCursorPos + 1).coerceIn(0, composing.length)
+        } else {
+            composingCursor = 0
+        }
     }
 
     /**
@@ -299,6 +331,7 @@ class SujianEditorBuffer {
     private fun clearComposing() {
         composingStart = -1
         composingEnd = -1
+        composingCursor = 0
     }
 
 }
