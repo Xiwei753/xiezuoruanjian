@@ -1,6 +1,6 @@
 package com.xiwei.sujian.data
 
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.ActionPlacement
 import com.xiwei.sujian.model.ActionRole
 import com.xiwei.sujian.model.ActionSlot
@@ -31,7 +31,7 @@ class ScreenPolicyBridge(private val appServiceBridge: AppServiceBridge) {
                 else -> null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "resolveScreenPolicy failed: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "resolveScreenPolicy failed: ${e.message}", e)
             null
         }
     }
