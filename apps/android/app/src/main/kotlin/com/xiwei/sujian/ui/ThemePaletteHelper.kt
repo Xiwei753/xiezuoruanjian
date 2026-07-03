@@ -2,7 +2,7 @@ package com.xiwei.sujian.ui
 
 import android.content.Context
 import android.os.Build
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.google.android.material.R.attr as M3Attr
 import com.google.android.material.color.MaterialColors
 
@@ -68,7 +68,7 @@ object ThemePaletteHelper {
                 if (colorInt == 0) null
                 else String.format("#%06X", 0xFFFFFF and colorInt)
             } catch (e: Exception) {
-                Log.d(TAG, "Semantic attr 0x${attrResId.toString(16)} not available", e)
+                DiagnosticsLogger.d(TAG, "Semantic attr 0x${attrResId.toString(16)} not available", e)
                 null
             }
         }
@@ -215,7 +215,7 @@ object ThemePaletteHelper {
             sb.append("}")
             sb.toString()
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to extract theme palette", e)
+            DiagnosticsLogger.w(TAG, "Failed to extract theme palette", e)
             null
         }
     }
