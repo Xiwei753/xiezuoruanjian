@@ -53,7 +53,7 @@ class SujianInputConnectionTest {
         val result = buffer.commitText("拼")
         assertEquals("拼", buffer.text)
         assertFalse(buffer.hasComposing)
-        assertEquals(1, result.selection.head)
+        assertEquals(1, result.newSelection.head)
     }
 
     // ── 3. testCloseConnectionDiscardsComposing ──

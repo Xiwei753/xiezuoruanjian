@@ -27,7 +27,7 @@ class SujianEditorBufferTest {
         buffer.setSelection(0, 3) // 选中 "abc"
         val result = buffer.commitText("你")
         assertEquals("你", buffer.text)
-        assertEquals(1, result.selection.head) // 光标在 "你" 之后
+        assertEquals(1, result.newSelection.head) // 光标在 "你" 之后
     }
 
     // ── 2. testCommitTextEmptyWithSelection ──
@@ -38,7 +38,7 @@ class SujianEditorBufferTest {
         buffer.setSelection(2, 5) // 选中 "cde"
         val result = buffer.commitText("")
         assertEquals("abf", buffer.text)
-        assertEquals(2, result.selection.head)
+        assertEquals(2, result.newSelection.head)
     }
 
     // ── 3. testBackspaceWithSelection ──
@@ -49,7 +49,7 @@ class SujianEditorBufferTest {
         buffer.setSelection(1, 4) // 选中 "bcd"
         val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
         assertEquals("aef", buffer.text)
-        assertEquals(1, result.selection.head)
+        assertEquals(1, result.newSelection.head)
     }
 
     // ── 4. testForwardDeleteWithSelection ──
@@ -60,7 +60,7 @@ class SujianEditorBufferTest {
         buffer.setSelection(1, 4) // 选中 "bcd"
         val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
         assertEquals("aef", buffer.text)
-        assertEquals(1, result.selection.head)
+        assertEquals(1, result.newSelection.head)
     }
 
     // ── 5. testCutCopiesAndDeletesSelection ──
@@ -83,7 +83,7 @@ class SujianEditorBufferTest {
         buffer.setSelection(1, 4) // 选中 "bcd"
         val result = buffer.replaceSelectionOrInsert("XYZ", SujianEditCause.Paste)
         assertEquals("aXYZef", buffer.text)
-        assertEquals(4, result.selection.head) // 光标在 "XYZ" 之后
+        assertEquals(4, result.newSelection.head) // 光标在 "XYZ" 之后
     }
 
     // ── 7. testCommitTextReturnsCorrectSelection ──
@@ -95,8 +95,8 @@ class SujianEditorBufferTest {
         buffer.setSelection(5, 5)
         val result = buffer.commitText("世界")
         assertEquals("hello世界", buffer.text)
-        assertEquals(buffer.text.length, result.selection.head)
-        assertEquals(buffer.text.length, result.selection.anchor)
+        assertEquals(buffer.text.length, result.newSelection.head)
+        assertEquals(buffer.text.length, result.newSelection.anchor)
     }
 
     // ── 8. testTypingCommitReturnsCorrectResult ──
@@ -106,7 +106,7 @@ class SujianEditorBufferTest {
         buffer.loadText("")
         val result = buffer.commitText("风和日丽")
         assertEquals("风和日丽", buffer.text)
-        assertEquals(buffer.text.length, result.selection.head)
+        assertEquals(buffer.text.length, result.newSelection.head)
         assertEquals(SujianEditCause.TypingCommit, result.cause)
     }
 
@@ -121,7 +121,7 @@ class SujianEditorBufferTest {
         // Delete 1 char before cursor — should delete the entire emoji, not half
         val result = buffer.deleteSurrounding(1, 0)
         assertEquals("AB", buffer.text)
-        assertEquals(1, result.selection.head)
+        assertEquals(1, result.newSelection.head)
     }
 
     // ── 10. testDeleteSurroundingForwardClampsToCharBoundary ──
@@ -134,6 +134,6 @@ class SujianEditorBufferTest {
         // Delete 1 char after cursor — should delete the entire emoji
         val result = buffer.deleteSurrounding(0, 1)
         assertEquals("AB", buffer.text)
-        assertEquals(1, result.selection.head)
+        assertEquals(1, result.newSelection.head)
     }
 }
