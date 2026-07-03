@@ -5,93 +5,146 @@ import org.junit.Before
 import org.junit.Test
 
 /**
- * SujianInputConnection 单元测试
+ * SujianEditorBuffer composing 行为单元测试
  *
- * 验证 IME 输入法连接行为：composing 状态、commit、close、
- * getTextBefore/AfterCursor 等。
+ * 验证 IME composing 相关行为：
+ * - finishComposing 只清 composing，不提交正文
+ * - commitText 才进入正文
+ * - setComposingText 不修改正文 buffer
+ * - composing 期间 getTextBefore/AfterCursor 返回正确内容
+ * - closeConnection 语义：丢弃未提交 composing
+ *
+ * 注意：SujianInputConnection 依赖 View/SujianImeController，
+ * 无法在纯单元测试中构造，因此通过直接测试 buffer 来验证核心语义。
+ * IC 层的集成测试需要 Android instrumentation。
  */
 class SujianInputConnectionTest {
 
     private lateinit var buffer: SujianEditorBuffer
-    private lateinit var ic: SujianInputConnection
 
     @Before
     fun setUp() {
         buffer = SujianEditorBuffer()
-        ic = SujianInputConnection(buffer)
     }
 
     // ── 1. testFinishComposingDoesNotCommitText ──
-    // finishComposingText 不应 commit composing 文本
+    // finishComposing 只清 composing 状态，不提交 composing 文本到正文
     @Test
     fun testFinishComposingDoesNotCommitText() {
-        buffer.text = "abc"
-        buffer.setCursor(3)
-        ic.setComposingText("拼", 1)
-        // finishComposingText 应清除 composing 状态但不 commit
-        ic.finishComposingText()
-        // composing 文本不应出现在 buffer 中
-        // （composing 是临时视觉层，不进入正式文本）
-        assertFalse(ic.hasComposing())
+        buffer.loadText("abc")
+        buffer.setSelection(3, 3)
+        // 设置 composing（不修改正文）
+        buffer.setComposingText("拼", 1)
+        // finishComposing 只清 composing，不 commit
+        buffer.finishComposing()
+        // 正文不变
+        assertEquals("abc", buffer.text)
+        // composing 已清除
+        assertFalse(buffer.hasComposing)
     }
 
     // ── 2. testCommitTextAfterComposing ──
-    // composing 后 commit 正式文本
+    // composing 后 commitText 正确进入正文
     @Test
     fun testCommitTextAfterComposing() {
-        buffer.text = ""
-        buffer.setCursor(0)
-        ic.setComposingText("拼", 1)
-        // commit 正式文本
-        ic.commitText("拼", 1)
+        buffer.loadText("")
+        buffer.setComposingText("拼", 1)
+        // commitText 才进入正文
+        val result = buffer.commitText("拼")
         assertEquals("拼", buffer.text)
-        assertFalse(ic.hasComposing())
+        assertFalse(buffer.hasComposing)
+        assertEquals(1, result.selection.head)
     }
 
     // ── 3. testCloseConnectionDiscardsComposing ──
-    // 关闭连接时丢弃 composing
+    // 关闭连接时丢弃未提交 composing（通过 finishComposing 模拟）
     @Test
     fun testCloseConnectionDiscardsComposing() {
-        buffer.text = "abc"
-        buffer.setCursor(3)
-        ic.setComposingText("拼", 1)
-        ic.closeConnection()
-        assertFalse(ic.hasComposing())
+        buffer.loadText("abc")
+        buffer.setSelection(3, 3)
+        buffer.setComposingText("拼", 1)
+        // 模拟 closeConnection：调用 finishComposing 丢弃 composing
+        buffer.finishComposing()
+        // composing 文本不应出现在 buffer 中
+        assertEquals("abc", buffer.text)
+        assertFalse(buffer.hasComposing)
     }
 
     // ── 4. testSetComposingTextDoesNotModifyBuffer ──
-    // setComposingText 不修改 buffer 正式文本
+    // setComposingText 不修改正文 buffer
     @Test
     fun testSetComposingTextDoesNotModifyBuffer() {
-        buffer.text = "abc"
-        buffer.setCursor(3)
+        buffer.loadText("abc")
+        buffer.setSelection(3, 3)
         val textBefore = buffer.text
-        ic.setComposingText("拼", 1)
+        buffer.setComposingText("拼", 1)
         // composing 不应修改 buffer 的正式文本
         assertEquals(textBefore, buffer.text)
     }
 
     // ── 5. testGetTextBeforeCursorDuringComposing ──
-    // composing 期间 getTextBeforeCursor 返回正确内容
+    // composing 期间 getTextBeforeCursor 返回正文中的内容
     @Test
     fun testGetTextBeforeCursorDuringComposing() {
-        buffer.text = "你好"
-        buffer.setCursor(2) // cursor after "你好"
-        ic.setComposingText("世界", 2)
-        val before = ic.getTextBeforeCursor(10)
-        // 应包含正式文本中光标前的内容
+        buffer.loadText("你好")
+        buffer.setSelection(2, 2) // cursor after "你好"
+        buffer.setComposingText("世界", 2)
+        // getTextBeforeCursor 应返回正文中的内容
+        val before = buffer.getTextBeforeCursor(10)
         assertTrue(before.contains("你好"))
     }
 
     // ── 6. testGetTextAfterCursorDuringComposing ──
-    // composing 期间 getTextAfterCursor 返回正确内容
+    // composing 期间 getTextAfterCursor 返回正文中的内容
     @Test
     fun testGetTextAfterCursorDuringComposing() {
-        buffer.text = "你好世界"
-        buffer.setCursor(2) // cursor after "你好"
-        ic.setComposingText("的", 1)
-        val after = ic.getTextAfterCursor(10)
-        // 应包含正式文本中光标后的内容
+        buffer.loadText("你好世界")
+        buffer.setSelection(2, 2) // cursor after "你好"
+        buffer.setComposingText("的", 1)
+        // getTextAfterCursor 应返回正文中的内容
+        val after = buffer.getTextAfterCursor(10)
         assertTrue(after.contains("世界"))
+    }
+
+    // ── 7. testEmptyComposingClearsState ──
+    // 空 composing 文本清除 composing 状态
+    @Test
+    fun testEmptyComposingClearsState() {
+        buffer.loadText("abc")
+        buffer.setSelection(3, 3)
+        buffer.setComposingText("拼", 1)
+        assertTrue(buffer.hasComposing)
+        // 空 composing 等同于清除
+        buffer.setComposingText("", 1)
+        assertFalse(buffer.hasComposing)
+    }
+
+    // ── 8. testCommitTextAfterComposingWithSelection ──
+    // composing 后 commitText 替换选区
+    @Test
+    fun testCommitTextAfterComposingWithSelection() {
+        buffer.loadText("abcdef")
+        buffer.setSelection(2, 5) // 选中 "cde"
+        buffer.setComposingText("拼", 1)
+        val result = buffer.commitText("你")
+        assertEquals("ab你f", buffer.text)
+        assertFalse(buffer.hasComposing)
+    }
+
+    // ── 9. testConsecutiveComposingDoesNotModifyBuffer ──
+    // 连续 composing 不修改正文
+    @Test
+    fun testConsecutiveComposingDoesNotModifyBuffer() {
+        buffer.loadText("abc")
+        buffer.setSelection(3, 3)
+        buffer.setComposingText("n", 1)
+        assertEquals("abc", buffer.text)
+        buffer.setComposingText("ni", 1)
+        assertEquals("abc", buffer.text)
+        buffer.setComposingText("你", 1)
+        assertEquals("abc", buffer.text)
+        // 只有 commitText 才进入正文
+        buffer.commitText("你")
+        assertEquals("abc你", buffer.text)
     }
 }
