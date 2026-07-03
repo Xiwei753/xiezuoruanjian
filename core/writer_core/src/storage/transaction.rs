@@ -173,7 +173,7 @@ pub fn recover_pending_transactions(workspace_path: &Path) -> Vec<TransactionRec
                 match fs::rename(&staging_path, &target_path) {
                     Ok(()) => recovered_files.push(tx_entry.target_relative.clone()),
                     Err(e) => {
-                        eprintln!(
+                        log::warn!(
                             "[transaction] recovery rename failed: {} -> {}: {}",
                             tx_entry.staging_filename, tx_entry.target_relative, e
                         );
@@ -186,7 +186,7 @@ pub fn recover_pending_transactions(workspace_path: &Path) -> Vec<TransactionRec
         }
 
         if recovered_files.is_empty() && !missing_files.is_empty() {
-            eprintln!(
+            log::warn!(
                 "[transaction] all staging files lost for tx={}, dropping",
                 manifest.transaction_id
             );
