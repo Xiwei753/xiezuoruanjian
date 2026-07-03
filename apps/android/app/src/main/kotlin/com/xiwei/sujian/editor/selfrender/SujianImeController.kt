@@ -114,8 +114,15 @@ class SujianImeController(
         if (text.isEmpty()) return 0u
 
         val cursorPos = buffer.selection.head
-        val deleteStart = (cursorPos - beforeLength).coerceAtLeast(0)
-        val deleteEnd = (cursorPos + afterLength).coerceAtMost(text.length)
+        var deleteStart = (cursorPos - beforeLength).coerceAtLeast(0)
+        var deleteEnd = (cursorPos + afterLength).coerceAtMost(text.length)
+
+        // 钳位到 code point 边界，避免拆开 surrogate pair
+        deleteStart = SujianEditorBuffer.clampToCharBoundary(text, deleteStart)
+        if (deleteEnd < text.length && Character.isLowSurrogate(text[deleteEnd])
+            && deleteEnd > 0 && Character.isHighSurrogate(text[deleteEnd - 1])) {
+            deleteEnd += 1
+        }
 
         if (deleteStart < deleteEnd) {
             val deletedGlyphRects = layout.getGlyphRects(text, deleteStart, deleteEnd)
