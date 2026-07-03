@@ -77,12 +77,6 @@ Item {
     Connections {
         target: editorItem
         function onVisualTransactionChanged() {
-            if (!root.animationEnabled || root.suppressed) {
-                root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
-                // 当动画被跳过时，不会有 insert 动画创建，因此不会有 hidden range 需要清理
-                // Rust 侧在 suppressed/animationDisabled 场景下不应创建 hidden range
-                return
-            }
             var jsonStr = editorItem.visual_transaction_json
             if (!jsonStr || jsonStr === "{}") {
                 root._log("skipped: jsonStr empty or {}")
@@ -100,6 +94,15 @@ Item {
                 root._log("skipped: vt missing kind field")
                 return
             }
+            if (!root.animationEnabled || root.suppressed) {
+                root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
+                // 动画被跳过，但 Rust 可能已创建 hidden range，必须立即通知清除
+                // 否则正文层会永久跳过该 range 导致文字消失
+                if (vt.kind === "insert") {
+                    _notifySkippedIfHasRange(vt)
+                }
+                return
+            }
             root._log("vt kind=" + vt.kind + " durationMs=" + vt.durationMs)
             root._handleTransaction(vt)
         }
@@ -115,12 +118,19 @@ Item {
         }
     }
 
+    onAnimationEnabledChanged: {
+        if (!animationEnabled) {
+            // 动画被关闭时必须立即清理所有活跃动画和 pending 状态
+            // 通知 Rust 清除 hidden range，避免文字永久消失
+            root._log("animationEnabled changed to false, clearing all animations")
+            root.clearAll()
+        }
+    }
+
     onSuppressedChanged: {
         if (suppressed) {
             // suppressed 时必须立即清理所有动画和 pending 状态
-            // 确保 Rust 侧的 hidden range 也被清除（通过 clearAll → 不发射 insertAnimationFinished）
-            // 注意：clearAll 不会发射 insertAnimationFinished，所以 Rust 侧的 hidden range
-            // 需要在 suppressed 场景下由 Rust 侧自行清理
+            // clearAll 会为每个 insert 事务发送 insertAnimationSkipped 通知 Rust 清除 hidden range
             root.clearAll()
         }
     }
