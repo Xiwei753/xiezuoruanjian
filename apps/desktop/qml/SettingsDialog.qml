@@ -90,7 +90,16 @@ Dialog {
         autoIndentWidth.value = backendRef.setting_auto_indent_width || 2.0
         typingAnimDuration.value = backendRef.setting_typing_animation_duration_ms || 100
         smoothCursorDuration.value = backendRef.setting_smooth_cursor_duration_ms || 80
-        coordinatedDuration.value = backendRef.setting_typing_animation_duration_ms || 100
+        // 协同开启时，统一使用 typing duration 并同步 smooth duration
+        var coordDur = backendRef.setting_typing_animation_duration_ms || 100
+        coordinatedDuration.value = coordDur
+        if (coordinatedCursorAnim.checked) {
+            // 确保 smooth cursor duration 与 typing duration 一致
+            if (Math.abs((backendRef.setting_smooth_cursor_duration_ms || 80) - coordDur) > 1) {
+                backendRef.setting_smooth_cursor_duration_ms = coordDur
+                smoothCursorDuration.value = coordDur
+            }
+        }
         var mode = backendRef.setting_theme_mode
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
@@ -290,12 +299,17 @@ Dialog {
                     onClicked: root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", !coordinatedCursorAnim.checked)
                     ModernSwitch { id: coordinatedCursorAnim; dt: root.dt; onToggled: function(v) {
                         root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", v)
-                        // 开启协同时强制启用打字动画和平滑光标
+                        // 开启协同时强制启用打字动画和平滑光标，并同步时长
                         if (v && backendRef && !root.updatingValues) {
                             backendRef.setting_typing_animation_enabled = true
                             backendRef.setting_smooth_cursor_enabled = true
                             typingAnim.checked = true
                             smoothCursor.checked = true
+                            // 同步 smooth duration 为 typing duration，确保一致
+                            var dur = backendRef.setting_typing_animation_duration_ms || 100
+                            backendRef.setting_smooth_cursor_duration_ms = dur
+                            coordinatedDuration.value = dur
+                            smoothCursorDuration.value = dur
                             root.settingsDirty = true
                             root.debouncedSave()
                         }

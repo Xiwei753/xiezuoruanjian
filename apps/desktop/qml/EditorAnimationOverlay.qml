@@ -472,8 +472,10 @@ Item {
 
         var newLen = vt.newPreeditText ? vt.newPreeditText.length : 0
         var oldLen = vt.oldPreeditText ? vt.oldPreeditText.length : 0
+        var oldText = vt.oldPreeditText || ""
+        var newText = vt.newPreeditText || ""
 
-        root._log("preedit transaction: oldLen=" + oldLen + " newLen=" + newLen)
+        root._log("preedit transaction: oldLen=" + oldLen + " newLen=" + newLen + " oldText=" + oldText + " newText=" + newText)
 
         if (newLen > oldLen) {
             // 插入动画
@@ -481,8 +483,11 @@ Item {
         } else if (newLen < oldLen) {
             // 删除动画
             _createPreeditDeleteAnimation(vt)
+        } else if (oldText !== newText) {
+            // 长度相同但内容不同（如 ni→你、候选替换）：先删旧再插新
+            _createPreeditDeleteAnimation(vt)
+            _createPreeditInsertAnimation(vt)
         }
-        // 长度相同但内容不同 → 替换动画（简化为 delete + insert）
     }
 
     function _createPreeditInsertAnimation(vt) {

@@ -1049,12 +1049,13 @@ impl SujianEditorItem {
 
         // 如果从 preedit commit，使用 preedit_cursor_rect 作为光标动画起点
         if commit_from_preedit && preedit_cursor_rect_snapshot.is_some() {
-            // 更新 cursor_ctrl 的 visual 位置为 preedit cursor 位置
-            // 这样光标动画会从 preedit 位置开始
+            // 设置光标动画起点为 preedit cursor 位置
+            // 这样 update_cursor_visual_position() 会从 preedit 位置动画到正式上屏后位置
             let pcr = preedit_cursor_rect_snapshot.unwrap();
+            self.cursor_ctrl.visual_x = pcr.x;
+            self.cursor_ctrl.visual_y = pcr.top;
             self.cursor_ctrl.force_snap_next = false;
-            // 记录 commit_from_preedit 用于日志
-            eprintln!("[commit] commit_from_preedit=true cursor_start_source=preedit pcr_x={:.1}", pcr.x);
+            eprintln!("[commit] commit_from_preedit=true cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top);
         } else {
             eprintln!("[commit] commit_from_preedit=false cursor_start_source=normal");
         }
@@ -1827,7 +1828,7 @@ impl SujianEditorItem {
                                     match old_glyph_data.first() {
                                         Some((_, ox, _)) => {
                                             let old_line_baseline_y = text_baseline_y(ol, font_size, font_family) - scroll_y;
-                                            (*ox, ol.y - scroll_y, old_line_baseline_y)
+                                            (ol.x + *ox, ol.y - scroll_y, old_line_baseline_y)
                                         }
                                         None => continue, // 找不到旧 glyph，snap
                                     }
@@ -2240,15 +2241,140 @@ impl SujianEditorItem {
             return;
         }
 
+        // --- Compute preedit glyph rects ---
+        let width = self.bounding_width();
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+        let scroll_y = self.current_scroll_y as f64;
+
+        // Get the buffer cursor position (where preedit starts)
+        let cursor_byte = self.buffer.cursor;
+        let snapshot = self.layout_snapshot(width);
+
+        // Find the line containing the cursor
+        let cursor_line = snapshot.lines.iter().find(|l| {
+            l.byte_end >= cursor_byte && l.byte_start <= cursor_byte
+        });
+
+        let (preedit_start_x, line_y, line_h, line_baseline_y) = if let Some(line) = cursor_line {
+            let start_x = self.editor_layout.cursor_x_for_line(
+                &snapshot, line, cursor_byte, self.cursor_ctrl.affinity,
+            );
+            let baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
+            (start_x, line.y - scroll_y, line.height, baseline_y)
+        } else {
+            // fallback
+            (0.0, 0.0, font_size, font_size * 0.8)
+        };
+
+        // Build full glyph rects for new preedit text
+        let preedit_glyph_rects = {
+            let mut rects = Vec::new();
+            let mut cum_x = preedit_start_x;
+            for ch in new.chars() {
+                if is_complex_grapheme(ch) {
+                    let ch_str = ch.to_string();
+                    let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                    cum_x += ch_w;
+                    continue;
+                }
+                let ch_str = ch.to_string();
+                let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                rects.push(GlyphRect {
+                    x: cum_x,
+                    y: line_y,
+                    w: ch_w,
+                    h: line_h,
+                    char_: ch_str,
+                    baseline_y: line_baseline_y,
+                });
+                cum_x += ch_w;
+            }
+            rects
+        };
+
+        // Character-level diff: find common prefix and suffix, middle is the change
+        let old_chars: Vec<char> = old.chars().collect();
+        let new_chars: Vec<char> = new.chars().collect();
+        let prefix_len = old_chars.iter().zip(new_chars.iter()).take_while(|(a, b)| a == b).count();
+        let suffix_len = old_chars[prefix_len..].iter().rev()
+            .zip(new_chars[prefix_len..].iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+
+        // Inserted glyph rects (new characters in new preedit)
+        let inserted_preedit_glyph_rects = {
+            let mut rects = Vec::new();
+            let mut cum_x = preedit_start_x;
+            // Skip prefix
+            for ch in new_chars[..prefix_len].iter() {
+                let ch_str = ch.to_string();
+                cum_x += self.editor_layout.text_width(&ch_str, font_size, font_family);
+            }
+            // Inserted part
+            for ch in new_chars[prefix_len..new_chars.len().saturating_sub(suffix_len)].iter() {
+                if is_complex_grapheme(*ch) {
+                    let ch_str = ch.to_string();
+                    let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                    cum_x += ch_w;
+                    continue;
+                }
+                let ch_str = ch.to_string();
+                let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                rects.push(GlyphRect {
+                    x: cum_x,
+                    y: line_y,
+                    w: ch_w,
+                    h: line_h,
+                    char_: ch_str,
+                    baseline_y: line_baseline_y,
+                });
+                cum_x += ch_w;
+            }
+            if rects.is_empty() { None } else { Some(rects) }
+        };
+
+        // Deleted glyph rects (removed characters in old preedit)
+        let deleted_preedit_glyph_rects = {
+            let mut rects = Vec::new();
+            let mut cum_x = preedit_start_x;
+            // Skip prefix
+            for ch in old_chars[..prefix_len].iter() {
+                let ch_str = ch.to_string();
+                cum_x += self.editor_layout.text_width(&ch_str, font_size, font_family);
+            }
+            // Deleted part
+            for ch in old_chars[prefix_len..old_chars.len().saturating_sub(suffix_len)].iter() {
+                if is_complex_grapheme(*ch) {
+                    let ch_str = ch.to_string();
+                    let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                    cum_x += ch_w;
+                    continue;
+                }
+                let ch_str = ch.to_string();
+                let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                rects.push(GlyphRect {
+                    x: cum_x,
+                    y: line_y,
+                    w: ch_w,
+                    h: line_h,
+                    char_: ch_str,
+                    baseline_y: line_baseline_y,
+                });
+                cum_x += ch_w;
+            }
+            if rects.is_empty() { None } else { Some(rects) }
+        };
+
         let vt = PreeditVisualTransaction {
             id: 0,
             old_preedit_text: old.clone(),
             new_preedit_text: new.clone(),
-            old_preedit_cursor_rect: None, // 平台层填充
+            old_preedit_cursor_rect: None,
             new_preedit_cursor_rect: self.preedit_cursor_rect.clone(),
-            preedit_glyph_rects: None,     // 平台层填充
-            deleted_preedit_glyph_rects: None, // 平台层填充
-            inserted_preedit_glyph_rects: None, // 平台层填充
+            preedit_glyph_rects: Some(preedit_glyph_rects),
+            deleted_preedit_glyph_rects,
+            inserted_preedit_glyph_rects,
             preedit_cursor_rect: self.preedit_cursor_rect.clone(),
             duration_ms: self.current_typing_animation_duration_ms as u64,
             coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
