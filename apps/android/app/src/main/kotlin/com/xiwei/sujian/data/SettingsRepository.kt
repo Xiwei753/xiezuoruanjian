@@ -50,7 +50,7 @@ class SettingsRepository(context: Context) {
         val fromCore = when (val result = settingsBridge.getLocalSettings()) {
             is BridgeResult.Success -> result.data ?: LocalSettings()
             is BridgeResult.Error -> {
-                warn("加载本地设置失败: ${result.message}")
+                warn("Failed to load local settings: ${result.message}")
                 LocalSettings()
             }
             BridgeResult.NotLoaded -> LocalSettings()
@@ -78,7 +78,7 @@ class SettingsRepository(context: Context) {
                 result.data
             }
             is BridgeResult.Error -> {
-                warn("保存本地设置失败: ${result.message}")
+                warn("Failed to save local settings: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -89,7 +89,7 @@ class SettingsRepository(context: Context) {
         return when (val result = settingsBridge.getSyncableSettings()) {
             is BridgeResult.Success -> result.data ?: SyncableSettings()
             is BridgeResult.Error -> {
-                warn("加载同步设置失败: ${result.message}")
+                warn("Failed to load syncable settings: ${result.message}")
                 val defaultSettings = SyncableSettings()
                 defaultSettings
             }
@@ -104,7 +104,7 @@ class SettingsRepository(context: Context) {
                 result.data
             }
             is BridgeResult.Error -> {
-                warn("保存同步设置失败: ${result.message}")
+                warn("Failed to save syncable settings: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -132,7 +132,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.loadSyncState()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("加载同步状态失败: ${result.message}")
+                warn("Failed to load sync state: ${result.message}")
                 SyncState()
             }
             BridgeResult.NotLoaded -> SyncState()
@@ -143,7 +143,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.loadSyncConfig()) {
             is BridgeResult.Success -> result.data.normalize()
             is BridgeResult.Error -> {
-                warn("加载同步配置失败: ${result.message}")
+                warn("Failed to load sync config: ${result.message}")
                 SyncConfig().normalize()
             }
             BridgeResult.NotLoaded -> SyncConfig().normalize()
@@ -157,7 +157,7 @@ class SettingsRepository(context: Context) {
                 result.data
             }
             is BridgeResult.Error -> {
-                warn("保存同步配置失败: ${result.message}")
+                warn("Failed to save sync config: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -168,7 +168,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.loadSyncSecrets()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("加载同步密钥失败: ${result.message}")
+                warn("Failed to load sync secrets: ${result.message}")
                 SyncSecrets()
             }
             BridgeResult.NotLoaded -> SyncSecrets()
@@ -179,7 +179,7 @@ class SettingsRepository(context: Context) {
         return when (val result = syncBridge.saveSyncSecrets(secrets)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("保存同步密钥失败: ${result.message}")
+                warn("Failed to save sync secrets: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
@@ -243,7 +243,7 @@ class SettingsRepository(context: Context) {
         return when (val result = settingsBridge.ensureDeviceInfo(platform, deviceClass)) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                warn("写入设备信息失败: ${result.message}")
+                warn("Failed to write device info: ${result.message}")
                 false
             }
             BridgeResult.NotLoaded -> false
