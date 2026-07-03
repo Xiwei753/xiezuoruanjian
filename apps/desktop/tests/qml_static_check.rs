@@ -167,12 +167,9 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                 }
 
                 // 5. Check for hex colors in non-whitelisted QML files
-                // Only DesignTokens.qml and main.qml are allowed to define hex colors directly.
+                // Only whitelisted files are allowed to define hex colors directly.
                 // All other components must use semantic tokens from DesignTokens.
-                // TRANSITION PERIOD: This check is currently warning-only (no has_errors = true).
-                // Once all components have been migrated to use DesignTokens semantic tokens,
-                // change the eprintln! to also set has_errors = true.
-                let hex_color_whitelist = ["DesignTokens.qml", "main.qml", "AppText.qml"];
+                let hex_color_whitelist = ["DesignTokens.qml", "main.qml", "AppText.qml", "AppShadow.qml"];
                 if !hex_color_whitelist.contains(&file_name) {
                     // Match hex colors: #RRGGBB or #AARRGGBB (6 or 8 hex digits after #)
                     let hex_re = regex::Regex::new(r#"#[0-9A-Fa-f]{6,8}"#).unwrap();
@@ -186,17 +183,18 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                             || trimmed.contains("shadow")
                             || trimmed.contains("Shadow");
                         // Check if the only hex match is #000000 in scrim/shadow context
+                        // Exception: "transparent" is structural, not a color value
+                        let is_transparent = trimmed.contains("\"transparent\"");
                         let hex_matches: Vec<_> = hex_re.find_iter(trimmed).collect();
-                        let all_allowed = is_scrim_or_shadow
+                        let all_hex_are_scrim_shadow = is_scrim_or_shadow
                             && hex_matches.iter().all(|m| m.as_str().eq_ignore_ascii_case("#000000"));
 
-                        if !all_allowed {
-                            // TRANSITION: warning only — do NOT set has_errors = true yet.
-                            // Change to has_errors = true after all components are migrated.
+                        if !all_hex_are_scrim_shadow && !is_transparent {
                             eprintln!(
                                 "{}:{}: Hex color found in non-whitelisted component. Use DesignTokens semantic tokens instead: {}",
                                 file_name, line_num, trimmed
                             );
+                            has_errors = true;
                         }
                     }
                 }

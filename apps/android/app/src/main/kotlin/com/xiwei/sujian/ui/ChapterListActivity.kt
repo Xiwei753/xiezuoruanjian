@@ -215,7 +215,7 @@ class ChapterListActivity : AppCompatActivity() {
 
         // 预填默认标题：按当前卷章节数量生成
         val chapterCount = listItems.count { it is ListItem.Chapter && it.volumeId == volumeId }
-        val defaultTitle = "第${chapterCount + 1}章"
+        val defaultTitle = getString(R.string.default_chapter_name_format, chapterCount + 1)
 
         val editText = EditText(this)
         editText.hint = getString(R.string.hint_chapter_title)

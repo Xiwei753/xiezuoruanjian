@@ -53,5 +53,8 @@ jobs:
       - name: Check QML DesignTokens (dt) passing
         run: python3 tools/check_qml_dt.py
 
+      - name: Check Android i18n (no Chinese in Kotlin)
+        run: python3 tools/check_android_i18n.py
+
       - name: Check i18n completeness
         run: python3 tools/check_i18n.py

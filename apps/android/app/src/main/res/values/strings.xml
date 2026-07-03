@@ -76,6 +76,7 @@
     <string name="error_missing_chapter_identifiers">章节参数缺失，无法打开编辑器</string>
     <string name="default_volume_title">第一卷</string>
     <string name="default_chapter_title">新章节</string>
+    <string name="default_chapter_name_format">第%1$d章</string>
 
     <string name="stats_word_count">字数: %1$d</string>
     <string name="stats_session_added">新增: %1$d</string>
