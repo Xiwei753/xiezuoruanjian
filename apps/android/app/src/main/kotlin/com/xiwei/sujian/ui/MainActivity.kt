@@ -44,7 +44,7 @@ import com.xiwei.sujian.model.ActionRole
 import com.xiwei.sujian.model.ActionPlacement
 import androidx.appcompat.app.AppCompatDelegate
 import android.os.Build
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -394,7 +394,7 @@ class MainActivity : AppCompatActivity() {
                     ShellMode.SinglePane -> applySinglePaneLayout(plan, density, safeBottomInsetPx)
                 }
 
-                Log.d("MainActivity", "LayoutPlan applied: shellMode=${plan.shellMode}, " +
+                DiagnosticsLogger.d("MainActivity", "LayoutPlan applied: shellMode=${plan.shellMode}, " +
                     "widthClass=${plan.widthClass}, showBottomBar=${plan.showBottomBar}, " +
                     "contentMaxWidth=${plan.contentMaxWidthVp}vp, pagePadding=${plan.pagePaddingVp}vp")
 
@@ -402,7 +402,7 @@ class MainActivity : AppCompatActivity() {
                 applyWorkspaceScreenPolicy(plan.shellMode)
             }
         } catch (e: Exception) {
-            Log.w("MainActivity", "Failed to apply LayoutPlan, using defaults", e)
+            DiagnosticsLogger.w("MainActivity", "Failed to apply LayoutPlan, using defaults", e)
             // 降级为 SinglePane
             applySinglePaneLayout(null, resources.displayMetrics.density, 0)
         }
@@ -587,7 +587,7 @@ class MainActivity : AppCompatActivity() {
 
             currentWorkspacePolicy?.let { policy ->
                 for (slot in policy.actionSlots) {
-                    Log.d("MainActivity", "Workspace ActionSlot: actionId=${slot.actionId}, " +
+                    DiagnosticsLogger.d("MainActivity", "Workspace ActionSlot: actionId=${slot.actionId}, " +
                         "role=${slot.role}, placement=${slot.placement}, " +
                         "visibleIn=${slot.visibleIn}, requiresConfirmation=${slot.requiresConfirmation}")
                 }
@@ -597,7 +597,7 @@ class MainActivity : AppCompatActivity() {
                 applyCreateProjectPlacement(createProjectSlot, shellMode)
             }
         } catch (e: Exception) {
-            Log.w("MainActivity", "Failed to apply Workspace ScreenPolicy", e)
+            DiagnosticsLogger.w("MainActivity", "Failed to apply Workspace ScreenPolicy", e)
         }
     }
 
@@ -639,7 +639,7 @@ class MainActivity : AppCompatActivity() {
                 // 其他 placement 降级为 FAB
                 fabNewProject.show()
                 createProjectMenuItem?.isVisible = false
-                Log.d("MainActivity", "create_project placement=${slot.placement}, fallback to FAB")
+                DiagnosticsLogger.d("MainActivity", "create_project placement=${slot.placement}, fallback to FAB")
             }
         }
     }
@@ -804,7 +804,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 } catch (e: Exception) {
-                    Log.w("MainActivity", "Failed to sync Android theme palette", e)
+                    DiagnosticsLogger.w("MainActivity", "Failed to sync Android theme palette", e)
                 }
             }
         }
