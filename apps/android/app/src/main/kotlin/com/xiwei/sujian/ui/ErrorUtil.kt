@@ -1,7 +1,7 @@
 package com.xiwei.sujian.ui
 
 import android.content.Context
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import android.widget.Toast
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.RepositoryException
@@ -26,11 +26,11 @@ object ErrorUtil {
         return try {
             action()
         } catch (e: RepositoryException) {
-            Log.e(TAG, e.message ?: "Repository error", e)
+            DiagnosticsLogger.e(TAG, e.message ?: "Repository error", e)
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
             fallback
         } catch (e: Throwable) {
-            Log.e(TAG, "Unexpected error", e)
+            DiagnosticsLogger.e(TAG, "Unexpected error", e)
             Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
             fallback
         }
@@ -40,11 +40,11 @@ object ErrorUtil {
         return try {
             action()
         } catch (e: RepositoryException) {
-            Log.e(TAG, e.message ?: "Repository error", e)
+            DiagnosticsLogger.e(TAG, e.message ?: "Repository error", e)
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
             fallback
         } catch (e: Throwable) {
-            Log.e(TAG, "Unexpected error", e)
+            DiagnosticsLogger.e(TAG, "Unexpected error", e)
             Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
             fallback
         }
@@ -54,10 +54,10 @@ object ErrorUtil {
         try {
             action()
         } catch (e: RepositoryException) {
-            Log.e(TAG, e.message ?: "Repository error", e)
+            DiagnosticsLogger.e(TAG, e.message ?: "Repository error", e)
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
         } catch (e: Throwable) {
-            Log.e(TAG, "Unexpected error", e)
+            DiagnosticsLogger.e(TAG, "Unexpected error", e)
             Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
         }
     }
@@ -66,10 +66,10 @@ object ErrorUtil {
         try {
             action()
         } catch (e: RepositoryException) {
-            Log.e(TAG, e.message ?: "Repository error", e)
+            DiagnosticsLogger.e(TAG, e.message ?: "Repository error", e)
             Toast.makeText(context, e.message, Toast.LENGTH_LONG).show()
         } catch (e: Throwable) {
-            Log.e(TAG, "Unexpected error", e)
+            DiagnosticsLogger.e(TAG, "Unexpected error", e)
             Toast.makeText(context, context.getString(R.string.error_internal), Toast.LENGTH_LONG).show()
         }
     }
