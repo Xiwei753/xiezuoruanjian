@@ -17,14 +17,14 @@ class WorkspaceRepository(private val context: Context) {
     init {
         when (val result = workspaceBridge.createWorkspaceIfNeeded()) {
             is BridgeResult.Error -> {
-                DiagnosticsLogger.e("WorkspaceRepository", "工作区初始化失败: ${result.localizedMessage()}")
+                DiagnosticsLogger.e("WorkspaceRepository", context.getString(R.string.repo_workspace_init_failed, result.localizedMessage()))
                 throw RepositoryException(context.getString(R.string.repo_workspace_init_failed, result.localizedMessage()))
             }
             BridgeResult.NotLoaded -> {
                 DiagnosticsLogger.e("WorkspaceRepository", context.getString(R.string.repo_native_not_loaded_init))
             }
             is BridgeResult.Success -> {
-                DiagnosticsLogger.d("WorkspaceRepository", "工作区初始化成功")
+                DiagnosticsLogger.d("WorkspaceRepository", "Workspace initialized successfully")
             }
         }
     }
