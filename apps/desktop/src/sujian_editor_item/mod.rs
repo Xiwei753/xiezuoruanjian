@@ -2233,10 +2233,11 @@ impl SujianEditorItem {
         self.compute_preedit_cursor_rect();
 
         // Generate visual transaction for preedit changes
-        let old = &self.preedit_old_text;
-        let new = &self.preedit_text;
+        // Clone old/new before calling &mut self methods (layout_snapshot)
+        let old_text = self.preedit_old_text.clone();
+        let new_text = self.preedit_text.clone();
 
-        if old == new {
+        if old_text == new_text {
             // No text change, only cursor moved — still update cursor rect
             return;
         }
@@ -2271,7 +2272,7 @@ impl SujianEditorItem {
         let preedit_glyph_rects = {
             let mut rects = Vec::new();
             let mut cum_x = preedit_start_x;
-            for ch in new.chars() {
+            for ch in new_text.chars() {
                 if is_complex_grapheme(ch) {
                     let ch_str = ch.to_string();
                     let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
@@ -2294,8 +2295,8 @@ impl SujianEditorItem {
         };
 
         // Character-level diff: find common prefix and suffix, middle is the change
-        let old_chars: Vec<char> = old.chars().collect();
-        let new_chars: Vec<char> = new.chars().collect();
+        let old_chars: Vec<char> = old_text.chars().collect();
+        let new_chars: Vec<char> = new_text.chars().collect();
         let prefix_len = old_chars.iter().zip(new_chars.iter()).take_while(|(a, b)| a == b).count();
         let suffix_len = old_chars[prefix_len..].iter().rev()
             .zip(new_chars[prefix_len..].iter().rev())
@@ -2368,8 +2369,8 @@ impl SujianEditorItem {
 
         let vt = PreeditVisualTransaction {
             id: 0,
-            old_preedit_text: old.clone(),
-            new_preedit_text: new.clone(),
+            old_preedit_text: old_text.clone(),
+            new_preedit_text: new_text.clone(),
             old_preedit_cursor_rect: None,
             new_preedit_cursor_rect: self.preedit_cursor_rect.clone(),
             preedit_glyph_rects: Some(preedit_glyph_rects),
@@ -2381,7 +2382,7 @@ impl SujianEditorItem {
         };
 
         self.preedit_visual_transaction = Some(vt);
-        eprintln!("[preedit] preedit_visual_transaction_created old_len={} new_len={}", old.len(), new.len());
+        eprintln!("[preedit] preedit_visual_transaction_created old_len={} new_len={}", old_text.len(), new_text.len());
 
         // Serialize and emit signal
         if let Some(ref vt) = self.preedit_visual_transaction {
