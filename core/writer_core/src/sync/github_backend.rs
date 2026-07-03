@@ -191,7 +191,7 @@ impl SyncBackend for GitHubApiBackend {
         secrets: &SyncSecrets,
         force_sync: bool,
     ) -> crate::Result<SyncResult> {
-        eprintln!(
+        log::debug!(
             "[sync] backend_type=github_api sync_mode=lww_manifest force_sync={} entry=GitHubApiBackend::sync remote_url={}",
             force_sync,
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
