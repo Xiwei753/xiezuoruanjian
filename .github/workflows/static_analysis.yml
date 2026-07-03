@@ -60,4 +60,4 @@ jobs:
         run: python3 tools/check_i18n.py
 
       - name: Run i18n check script tests
-        run: python3 -m pytest tools/test_check_i18n.py -v
+        run: python3 tools/test_check_i18n.py
