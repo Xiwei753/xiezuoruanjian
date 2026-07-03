@@ -486,11 +486,155 @@ class SelfRenderAnimationLogicTest {
         assertFalse("but scrolling overrides and clears the animation", hasAnimations)
     }
 
+    // ── ActiveInsertRange ID 追踪与映射 ──
+
+    @Test
+    fun activeInsertRange_mapForInsert_shiftsRangeCorrectly() {
+        // 场景：已有 range [5,8)，在位置 3 插入 2 字符 → range 应变为 [7,10)
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(5, 8)))
+        val pos = 3
+        val len = 2
+
+        val newEntries = mutableListOf<ActiveInsertRangeEntryForTest>()
+        for (entry in entries) {
+            val range = entry.range
+            when {
+                pos <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
+                pos >= range.last -> newEntries.add(entry)
+                // else: intersect → cancel (not added)
+            }
+        }
+
+        assertEquals(1, newEntries.size)
+        assertEquals(IntRange(7, 10), newEntries[0].range)
+        assertEquals(1u, newEntries[0].id) // ID 保留不变
+    }
+
+    @Test
+    fun activeInsertRange_mapForInsert_intersectCancelsRange() {
+        // 场景：已有 range [5,8)，在位置 6 插入 → 相交，range 被取消
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(5, 8)))
+        val pos = 6
+        val len = 1
+
+        val canceledIds = mutableListOf<ULong>()
+        val newEntries = mutableListOf<ActiveInsertRangeEntryForTest>()
+        for (entry in entries) {
+            val range = entry.range
+            when {
+                pos <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
+                pos >= range.last -> newEntries.add(entry)
+                else -> { canceledIds.add(entry.id) }
+            }
+        }
+
+        assertEquals(0, newEntries.size) // range 被取消
+        assertEquals(listOf(1u), canceledIds) // 取消的 ID 被收集
+    }
+
+    @Test
+    fun activeInsertRange_mapForDelete_shiftsRangeCorrectly() {
+        // 场景：已有 range [8,11)，在位置 3 删除 2 字符 → range 应变为 [6,9)
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(8, 11)))
+        val pos = 3
+        val len = 2
+
+        val newEntries = mutableListOf<ActiveInsertRangeEntryForTest>()
+        for (entry in entries) {
+            val range = entry.range
+            when {
+                pos + len <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first - len, range.last - len)))
+                pos >= range.last -> newEntries.add(entry)
+                // else: intersect → cancel
+            }
+        }
+
+        assertEquals(1, newEntries.size)
+        assertEquals(IntRange(6, 9), newEntries[0].range)
+        assertEquals(1u, newEntries[0].id)
+    }
+
+    @Test
+    fun activeInsertRange_mapForDelete_intersectCancelsRange() {
+        // 场景：已有 range [5,8)，在位置 6 删除 3 字符 → 相交，range 被取消
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(5, 8)))
+        val pos = 6
+        val len = 3
+
+        val canceledIds = mutableListOf<ULong>()
+        val newEntries = mutableListOf<ActiveInsertRangeEntryForTest>()
+        for (entry in entries) {
+            val range = entry.range
+            when {
+                pos + len <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first - len, range.last - len)))
+                pos >= range.last -> newEntries.add(entry)
+                else -> { canceledIds.add(entry.id) }
+            }
+        }
+
+        assertEquals(0, newEntries.size)
+        assertEquals(listOf(1u), canceledIds)
+    }
+
+    @Test
+    fun activeInsertRange_tickRemovesById_notByValue() {
+        // 关键场景：range 被映射后值已变化，但 ID 不变
+        // tickAnimations 应按 ID 移除，而非按 IntRange 值移除
+        // 1. 插入 "A" 在位置 5，range = [5,6), id = 1
+        // 2. 插入 "B" 在位置 3，映射后 range 变为 [6,7), id 仍为 1
+        // 3. 动画 A 完成，按 id=1 移除 → 正确移除 [6,7)
+        val entries = mutableListOf(
+            ActiveInsertRangeEntryForTest(1u, IntRange(6, 7)),  // 映射后的 range
+            ActiveInsertRangeEntryForTest(2u, IntRange(3, 4))   // 第二个插入的 range
+        )
+
+        // 模拟 tickAnimations：按 ID 移除
+        val finishedAnimRangeId = 1u  // 动画 A 持有的 range ID
+        entries.removeAll { it.id == finishedAnimRangeId }
+
+        assertEquals(1, entries.size)
+        assertEquals(2u, entries[0].id)
+        assertEquals(IntRange(3, 4), entries[0].range)
+    }
+
+    @Test
+    fun activeInsertRange_multipleConcurrentRanges_independentTracking() {
+        // 多个并发 insert 动画各自独立追踪 range
+        val entries = mutableListOf(
+            ActiveInsertRangeEntryForTest(1u, IntRange(5, 6)),
+            ActiveInsertRangeEntryForTest(2u, IntRange(10, 12)),
+            ActiveInsertRangeEntryForTest(3u, IntRange(15, 16))
+        )
+
+        // 在位置 7 插入 1 字符 → 只有 range1 不变，range2 和 range3 后移
+        val pos = 7
+        val len = 1
+        val newEntries = mutableListOf<ActiveInsertRangeEntryForTest>()
+        for (entry in entries) {
+            val range = entry.range
+            when {
+                pos <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
+                pos >= range.last -> newEntries.add(entry)
+                else -> {} // cancel
+            }
+        }
+
+        assertEquals(3, newEntries.size)
+        assertEquals(IntRange(5, 6), newEntries[0].range)   // 不变
+        assertEquals(IntRange(11, 13), newEntries[1].range) // 后移
+        assertEquals(IntRange(16, 17), newEntries[2].range) // 后移
+    }
+
     // ── 辅助方法 ──
 
     private data class DeleteSnapshotForTest(
         val id: ULong,
         val text: String
+    )
+
+    private data class ActiveInsertRangeEntryForTest(
+        val id: ULong,
+        val range: IntRange
     )
 
     /**

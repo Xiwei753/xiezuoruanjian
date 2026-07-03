@@ -203,7 +203,7 @@ class SujianAnimationController(
         val rangeLenUtf16 = rangeEndUtf16 - rangeStartUtf16
         renderer.mapActiveInsertRangesForInsert(rangeStartUtf16, rangeLenUtf16)
         val insertRangeUtf16 = IntRange(rangeStartUtf16, rangeEndUtf16)
-        renderer.addActiveInsertRange(insertRangeUtf16)
+        val insertRangeId = renderer.addActiveInsertRange(insertRangeUtf16)
         
         val insertAnim = SujianOverlayAnim(
             id = (vt.id shl 1),
@@ -218,12 +218,13 @@ class SujianAnimationController(
             durationMs = vt.durationMs,
             startTimeMs = System.currentTimeMillis(),
             glyphRects = glyphRects,
-            insertRange = insertRangeUtf16
+            insertRange = insertRangeUtf16,
+            insertRangeId = insertRangeId
         )
         
         if (!renderer.addAnimation(insertAnim)) {
             // 动画未成功加入（如滚动中），立即清除刚添加的 hidden range
-            renderer.removeActiveInsertRange(insertRangeUtf16)
+            renderer.removeActiveInsertRangeById(insertRangeId)
             return
         }
         
@@ -238,12 +239,14 @@ class SujianAnimationController(
             // 收集 reflow ranges 并添加到静态层跳过列表
             // 修复：rr.byteStart/byteEnd 是 UTF-8 byte offset，需转换为 UTF-16 offset
             val reflowInsertRanges = mutableListOf<IntRange>()
+            val reflowRangeIds = mutableListOf<ULong>()
             for (rr in reflowRects) {
                 val reflowRangeStartUtf16 = buffer.utf8ToUtf16(rr.byteStart)
                 val reflowRangeEndUtf16 = buffer.utf8ToUtf16(rr.byteEnd)
                 val reflowRangeUtf16 = IntRange(reflowRangeStartUtf16, reflowRangeEndUtf16)
-                renderer.addActiveInsertRange(reflowRangeUtf16)
+                val rangeId = renderer.addActiveInsertRange(reflowRangeUtf16)
                 reflowInsertRanges.add(reflowRangeUtf16)
+                reflowRangeIds.add(rangeId)
             }
             
             // 创建 reflow 动画
@@ -272,14 +275,16 @@ class SujianAnimationController(
                 startTimeMs = System.currentTimeMillis(),
                 glyphRects = reflowGlyphRects,
                 insertRange = null,
+                insertRangeId = null,
                 reflowRects = reflowRects,
-                reflowInsertRanges = reflowInsertRanges
+                reflowInsertRanges = reflowInsertRanges,
+                reflowRangeIds = reflowRangeIds
             )
             
             if (!renderer.addAnimation(reflowAnim)) {
                 // reflow 动画未成功加入，立即清除刚添加的 reflow hidden ranges
-                for (range in reflowInsertRanges) {
-                    renderer.removeActiveInsertRange(range)
+                for (rangeId in reflowRangeIds) {
+                    renderer.removeActiveInsertRangeById(rangeId)
                 }
             }
         }
@@ -430,6 +435,14 @@ class SujianAnimationController(
     fun hasActiveAnimations(): Boolean = renderer.hasActiveAnimations()
     
     fun onDetachedFromWindow() {
+        renderer.clearAnimations()
+        deleteSnapshots.clear()
+    }
+    
+    /**
+     * 清除所有动画状态（动画关闭、章节加载等场景调用）
+     */
+    fun clearState() {
         renderer.clearAnimations()
         deleteSnapshots.clear()
     }

@@ -261,6 +261,8 @@ class SujianEditorView @JvmOverloads constructor(
      * 设置文本内容（加载章节），不触发动画
      */
     fun setText(text: String) {
+        // 章节加载时清除所有动画和 hidden range，防止旧章节的动画残留导致重影
+        animationController.clearState()
         buffer.loadText(text)
         layoutEngine.invalidate()
         cursorController.onChapterLoaded()
@@ -277,8 +279,7 @@ class SujianEditorView @JvmOverloads constructor(
             lastFontSize = sizePx
             // 字号变化时：清动画、清 hidden range、snap 光标
             animationController.tick() // 先 tick 确保动画状态一致
-            renderer.clearAnimations()
-            renderer.clearActiveInsertRanges()
+            animationController.clearState()
             textPaint.textSize = sizePx
             // 重算首行缩进像素值（字号变化后字符宽度变了）
             if (autoIndentEnabled && autoIndentWidthChars > 0) {
@@ -353,10 +354,9 @@ class SujianEditorView @JvmOverloads constructor(
         animationController.animationDurationMs = durationMs
         buffer.maxAnimatedChars = 8
         buffer.animationDurationMs = durationMs
-        // 关闭 typingAnimation 时清除 hidden range 和动画
+        // 关闭 typingAnimation 时清除 hidden range、动画和删除快照
         if (!enabled && wasEnabled) {
-            renderer.clearAnimations()
-            renderer.clearActiveInsertRanges()
+            animationController.clearState()
         }
     }
 

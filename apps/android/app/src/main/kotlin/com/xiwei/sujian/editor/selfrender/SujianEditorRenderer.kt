@@ -24,9 +24,11 @@ data class SujianOverlayAnim(
     val durationMs: Long,
     val startTimeMs: Long,
     val glyphRects: List<SujianGlyphRect>,
-    val insertRange: IntRange? = null,  // insert 动画的跳过范围，动画完成时精确移除
+    val insertRange: IntRange? = null,  // insert 动画的跳过范围（保留用于调试）
+    val insertRangeId: ULong? = null,   // insert 动画的跳过范围 ID，用于映射后精确移除
     val reflowRects: List<SujianReflowGlyphRectData> = emptyList(),  // reflow 动画的新位置数据
-    val reflowInsertRanges: List<IntRange> = emptyList()  // reflow 动画的 UTF-16 跳过范围，用于 tickAnimations 精确移除
+    val reflowInsertRanges: List<IntRange> = emptyList(),  // reflow 动画的 UTF-16 跳过范围（保留用于调试）
+    val reflowRangeIds: List<ULong> = emptyList()  // reflow 动画的跳过范围 ID，用于映射后精确移除
 ) {
     val isFinished: Boolean
         get() = (System.currentTimeMillis() - startTimeMs) >= durationMs
@@ -94,8 +96,10 @@ class SujianEditorRenderer(
     private val activeAnimations = mutableListOf<SujianOverlayAnim>()
     private var isScrolling = false
 
-    // ── 动画期间跳过的正文范围（支持多个并发 insert 动画） ──
-    private val activeInsertRanges = mutableListOf<IntRange>()
+    // ── 动画期间跳过的正文范围（支持多个并发 insert 动画，用 ID 追踪防止映射后残留） ──
+    private data class ActiveInsertRangeEntry(val id: ULong, val range: IntRange)
+    private val activeInsertRanges = mutableListOf<ActiveInsertRangeEntry>()
+    private var nextInsertRangeId: ULong = 1u
 
     // ── 光标状态 ──
     var cursorVisible: Boolean = true
@@ -125,23 +129,44 @@ class SujianEditorRenderer(
     /**
      * 添加一个动画期间跳过的正文范围（UTF-16 offset IntRange）
      * 每个 insert 动画独立添加，动画结束后只移除自己的 range
+     * @return 该 range 的唯一 ID，用于后续精确移除
      */
-    fun addActiveInsertRange(range: IntRange) {
-        activeInsertRanges.add(range)
+    fun addActiveInsertRange(range: IntRange): ULong {
+        val id = nextInsertRangeId++
+        activeInsertRanges.add(ActiveInsertRangeEntry(id, range))
+        return id
     }
 
     /**
-     * 移除指定跳过范围（insert 动画完成时调用）
+     * 移除指定跳过范围（insert 动画完成时按 ID 调用）
+     */
+    fun removeActiveInsertRangeById(id: ULong) {
+        activeInsertRanges.removeAll { it.id == id }
+    }
+
+    /**
+     * 移除指定跳过范围（按 IntRange 值匹配，用于向后兼容）
      */
     fun removeActiveInsertRange(range: IntRange) {
-        activeInsertRanges.remove(range)
+        activeInsertRanges.removeAll { it.range == range }
     }
 
     /**
-     * 清空所有跳过范围
+     * 清空所有跳过范围，同时取消拥有这些 range 的动画（防止重影）
      */
     fun clearActiveInsertRanges() {
+        val clearedIds = activeInsertRanges.map { it.id }.toSet()
         activeInsertRanges.clear()
+        // 取消拥有被清除 range 的动画，否则静态层已显示文字但动画层还在画 ghost
+        if (clearedIds.isNotEmpty()) {
+            activeAnimations.removeAll { anim ->
+                when (anim.kind) {
+                    "insert" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
+                    "reflow" -> anim.reflowRangeIds.any { it in clearedIds }
+                    else -> false
+                }
+            }
+        }
     }
 
     /**
@@ -151,18 +176,24 @@ class SujianEditorRenderer(
      * - pos <= range.first：range 后移 len → IntRange(range.first + len, range.last + len)
      * - pos >= range.last：不变
      * - pos 在 range 内部（range.first < pos < range.last）：从列表中移除（相交取消策略）
+     *
+     * 相交取消时同时取消对应动画，防止静态层已显示文字但动画层还在画 ghost。
      */
     fun mapActiveInsertRangesForInsert(pos: Int, len: Int) {
-        val newRanges = mutableListOf<IntRange>()
-        for (range in activeInsertRanges) {
+        val canceledIds = mutableListOf<ULong>()
+        val newRanges = mutableListOf<ActiveInsertRangeEntry>()
+        for (entry in activeInsertRanges) {
+            val range = entry.range
             when {
-                pos <= range.first -> newRanges.add(IntRange(range.first + len, range.last + len))
-                pos >= range.last -> newRanges.add(range)
-                else -> { /* range.first < pos < range.last：相交，取消 */ }
+                pos <= range.first -> newRanges.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
+                pos >= range.last -> newRanges.add(entry)
+                else -> { canceledIds.add(entry.id) /* 相交，取消 */ }
             }
         }
         activeInsertRanges.clear()
         activeInsertRanges.addAll(newRanges)
+        // 相交取消的 range 对应的动画也必须取消
+        cancelAnimationsByRangeIds(canceledIds)
     }
 
     /**
@@ -172,18 +203,24 @@ class SujianEditorRenderer(
      * - 删除范围完全在 range 前（pos + len <= range.first）：range 前移 → IntRange(range.first - len, range.last - len)
      * - 删除范围完全在 range 后（pos >= range.last）：不变
      * - 删除范围和 range 相交：从列表中移除（相交取消策略）
+     *
+     * 相交取消时同时取消对应动画，防止静态层已显示文字但动画层还在画 ghost。
      */
     fun mapActiveInsertRangesForDelete(pos: Int, len: Int) {
-        val newRanges = mutableListOf<IntRange>()
-        for (range in activeInsertRanges) {
+        val canceledIds = mutableListOf<ULong>()
+        val newRanges = mutableListOf<ActiveInsertRangeEntry>()
+        for (entry in activeInsertRanges) {
+            val range = entry.range
             when {
-                pos + len <= range.first -> newRanges.add(IntRange(range.first - len, range.last - len))
-                pos >= range.last -> newRanges.add(range)
-                else -> { /* 相交，取消 */ }
+                pos + len <= range.first -> newRanges.add(entry.copy(range = IntRange(range.first - len, range.last - len)))
+                pos >= range.last -> newRanges.add(entry)
+                else -> { canceledIds.add(entry.id) /* 相交，取消 */ }
             }
         }
         activeInsertRanges.clear()
         activeInsertRanges.addAll(newRanges)
+        // 相交取消的 range 对应的动画也必须取消
+        cancelAnimationsByRangeIds(canceledIds)
     }
 
     /**
@@ -191,9 +228,21 @@ class SujianEditorRenderer(
      * 保留向后兼容，内部转为列表操作
      */
     fun setAnimatedInsertRange(range: IntRange?) {
+        val clearedIds = activeInsertRanges.map { it.id }.toSet()
         activeInsertRanges.clear()
         if (range != null) {
-            activeInsertRanges.add(range)
+            val id = nextInsertRangeId++
+            activeInsertRanges.add(ActiveInsertRangeEntry(id, range))
+        }
+        // 取消拥有被清除 range 的动画
+        if (clearedIds.isNotEmpty()) {
+            activeAnimations.removeAll { anim ->
+                when (anim.kind) {
+                    "insert" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
+                    "reflow" -> anim.reflowRangeIds.any { it in clearedIds }
+                    else -> false
+                }
+            }
         }
     }
 
@@ -201,19 +250,19 @@ class SujianEditorRenderer(
      * 清理已完成的动画
      */
     fun tickAnimations() {
-        // 先收集已完成的 insert 动画的 range，精确移除对应的跳过范围
+        // 先收集已完成的 insert 动画的 range ID，精确移除对应的跳过范围
         val finishedInsertAnims = activeAnimations.filter { it.kind == "insert" && it.isFinished }
         for (anim in finishedInsertAnims) {
-            val range = anim.insertRange
-            if (range != null) {
-                activeInsertRanges.remove(range)
+            val rangeId = anim.insertRangeId
+            if (rangeId != null) {
+                activeInsertRanges.removeAll { it.id == rangeId }
             }
         }
-        // 收集已完成的 reflow 动画的 range，精确移除对应的跳过范围
+        // 收集已完成的 reflow 动画的 range ID，精确移除对应的跳过范围
         val finishedReflowAnims = activeAnimations.filter { it.kind == "reflow" && it.isFinished }
         for (anim in finishedReflowAnims) {
-            for (range in anim.reflowInsertRanges) {
-                activeInsertRanges.remove(range)
+            for (rangeId in anim.reflowRangeIds) {
+                activeInsertRanges.removeAll { it.id == rangeId }
             }
         }
         activeAnimations.removeAll { it.isFinished }
@@ -247,6 +296,37 @@ class SujianEditorRenderer(
      * 是否有活跃动画
      */
     fun hasActiveAnimations(): Boolean = activeAnimations.isNotEmpty()
+
+    /**
+     * 取消拥有指定 range ID 的动画，同时移除这些动画拥有的所有 range。
+     *
+     * 当 range 因相交被取消时调用，确保静态层和动画层状态一致，防止重影。
+     * 如果 reflow 动画的某个 range 被取消，整个 reflow 动画及其所有 range 都会被移除。
+     */
+    private fun cancelAnimationsByRangeIds(rangeIds: List<ULong>) {
+        if (rangeIds.isEmpty()) return
+        val idSet = rangeIds.toSet()
+
+        // 找到所有拥有被取消 range 的动画
+        val animationsToCancel = activeAnimations.filter { anim ->
+            when (anim.kind) {
+                "insert" -> anim.insertRangeId != null && anim.insertRangeId in idSet
+                "reflow" -> anim.reflowRangeIds.any { it in idSet }
+                else -> false
+            }
+        }
+
+        // 收集这些动画拥有的所有 range ID（包括未被直接取消的），防止孤立 range
+        val allRangeIdsToRemove = mutableSetOf<ULong>()
+        for (anim in animationsToCancel) {
+            if (anim.insertRangeId != null) allRangeIdsToRemove.add(anim.insertRangeId)
+            allRangeIdsToRemove.addAll(anim.reflowRangeIds)
+        }
+        activeInsertRanges.removeAll { it.id in allRangeIdsToRemove }
+
+        // 移除被取消的动画
+        activeAnimations.removeAll { it in animationsToCancel }
+    }
 
     /**
      * 主绘制入口
@@ -299,7 +379,7 @@ class SujianEditorRenderer(
     ) {
         if (text.isEmpty()) return
 
-        val excludeRanges = activeInsertRanges
+        val excludeRanges = activeInsertRanges.map { it.range }
 
         // 计算可视行范围
         val firstVisLine = layout.getLineForVertical(scrollY.coerceAtLeast(0))
