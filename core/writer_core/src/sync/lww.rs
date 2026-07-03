@@ -64,6 +64,48 @@ fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::types::ManifestFileRecord;
+
+    #[test]
+    fn test_lww_record_time_non_delete() {
+        let record = ManifestFileRecord {
+            path: "test.md".to_string(),
+            file_hash: "hash".to_string(),
+            op: "upsert".to_string(),
+            updated_at_ms: 1000,
+            deleted_at_ms: Some(2000), // Should be ignored
+        };
+        assert_eq!(lww_record_time(&record), 1000);
+    }
+
+    #[test]
+    fn test_lww_record_time_delete_with_deleted_at_ms() {
+        let record = ManifestFileRecord {
+            path: "test.md".to_string(),
+            file_hash: "hash".to_string(),
+            op: "delete".to_string(),
+            updated_at_ms: 1000,
+            deleted_at_ms: Some(2000),
+        };
+        assert_eq!(lww_record_time(&record), 2000);
+    }
+
+    #[test]
+    fn test_lww_record_time_delete_without_deleted_at_ms() {
+        let record = ManifestFileRecord {
+            path: "test.md".to_string(),
+            file_hash: "hash".to_string(),
+            op: "delete".to_string(),
+            updated_at_ms: 1000,
+            deleted_at_ms: None,
+        };
+        assert_eq!(lww_record_time(&record), 1000); // Fallback to updated_at_ms
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ContentClass {
     /// User-authored text: chapter.md, note.md, outline.md, scene.md, etc.
