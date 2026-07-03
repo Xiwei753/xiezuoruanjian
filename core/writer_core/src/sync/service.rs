@@ -621,7 +621,7 @@ impl SyncService {
         // remote branch so the local file matches the remote version.
         let mut state_for_pending = Self::load_sync_state(workspace_path).unwrap_or_default();
         if !state_for_pending.pending_take_remote.is_empty() {
-            eprintln!(
+            log::debug!(
                 "[sync] processing pending_take_remote count={}",
                 state_for_pending.pending_take_remote.len()
             );
@@ -645,14 +645,14 @@ impl SyncService {
                                     let tmp_path = full_path
                                         .with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                                     if let Err(e) = std::fs::write(&tmp_path, content) {
-                                        eprintln!(
+                                        log::warn!(
                                             "[sync] pending_take_remote: write failed path={} err={}",
                                             path, e
                                         );
                                         continue;
                                     }
                                     if let Err(e) = std::fs::rename(&tmp_path, &full_path) {
-                                        eprintln!(
+                                        log::warn!(
                                             "[sync] pending_take_remote: rename failed path={} err={}",
                                             path, e
                                         );
@@ -667,26 +667,26 @@ impl SyncService {
                                         .insert(path.clone(), now_ts);
                                     result.downloaded_files.push(path.clone());
                                     succeeded.insert(path.clone());
-                                    eprintln!(
+                                    log::debug!(
                                         "[sync] pending_take_remote checked out path={}",
                                         path
                                     );
                                 }
                             } else {
-                                eprintln!(
+                                log::debug!(
                                     "[sync] pending_take_remote: remote file missing for path={}, keeping in pending",
                                     path
                                 );
                             }
                         } else {
-                            eprintln!(
+                            log::debug!(
                                 "[sync] pending_take_remote: could not get remote tree for path={}, keeping in pending",
                                 path
                             );
                         }
                     }
                 } else {
-                    eprintln!(
+                    log::warn!(
                         "[sync] pending_take_remote: could not resolve remote branch ref={}, keeping all in pending",
                         remote_branch_ref
                     );
