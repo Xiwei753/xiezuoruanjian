@@ -6,6 +6,7 @@ import android.os.Build
 import android.util.DisplayMetrics
 import androidx.core.content.FileProvider
 import com.google.gson.GsonBuilder
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.SettingsRepository
 import java.io.File
 import java.io.FileInputStream
