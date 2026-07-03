@@ -2,6 +2,7 @@ package com.xiwei.sujian.data
 
 import android.content.Context
 import com.xiwei.sujian.R
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.*
 
 class WorkspaceRepository(private val context: Context) {
@@ -16,14 +17,14 @@ class WorkspaceRepository(private val context: Context) {
     init {
         when (val result = workspaceBridge.createWorkspaceIfNeeded()) {
             is BridgeResult.Error -> {
-                android.util.Log.e("WorkspaceRepository", "工作区初始化失败: ${result.localizedMessage()}")
+                DiagnosticsLogger.e("WorkspaceRepository", "工作区初始化失败: ${result.localizedMessage()}")
                 throw RepositoryException(context.getString(R.string.repo_workspace_init_failed, result.localizedMessage()))
             }
             BridgeResult.NotLoaded -> {
-                android.util.Log.e("WorkspaceRepository", context.getString(R.string.repo_native_not_loaded_init))
+                DiagnosticsLogger.e("WorkspaceRepository", context.getString(R.string.repo_native_not_loaded_init))
             }
             is BridgeResult.Success -> {
-                android.util.Log.d("WorkspaceRepository", "工作区初始化成功")
+                DiagnosticsLogger.d("WorkspaceRepository", "工作区初始化成功")
             }
         }
     }
@@ -40,7 +41,7 @@ class WorkspaceRepository(private val context: Context) {
         return when (val result = workspaceBridge.getRecentEdits()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                android.util.Log.w("WorkspaceRepository", context.getString(R.string.repo_get_recent_edits_failed, result.localizedMessage()))
+                DiagnosticsLogger.w("WorkspaceRepository", context.getString(R.string.repo_get_recent_edits_failed, result.localizedMessage()))
                 emptyList()
             }
             BridgeResult.NotLoaded -> emptyList()
