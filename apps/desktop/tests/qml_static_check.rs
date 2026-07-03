@@ -569,7 +569,9 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                         }
                     }
                     if sv_end > 0 {
-                        let sv_block = &after_sv[..sv_end];
+                        // sv_end 是字符索引，需要转换为字节索引才能切片
+                        let sv_end_byte = after_sv.char_indices().nth(sv_end).map(|(b, _)| b).unwrap_or(after_sv.len());
+                        let sv_block = &after_sv[..sv_end_byte];
                         if sv_block.contains("SmoothWheelScroller") {
                             found_smooth_in_sv = true;
                         }
