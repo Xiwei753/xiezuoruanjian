@@ -209,14 +209,16 @@ cpp! {{
             if (cur_idx == qtextline_idx) {
                 int line_start = line.textStart();
                 int line_end = line_start + line.textLength();
-                qDebug("[debug_line_metrics] qtextline=%d exists=1 textStart=%d textLength=%d lineEnd=%d width=%.4f naturalTextWidth=%.4f cursorToX(textStart,Leading)=%.4f cursorToX(lineEnd,Leading)=%.4f cursorToX(lineEnd,Trailing)=%.4f xToCursor(naturalTextWidth)=%d xToCursor(width)=%d",
-                    qtextline_idx, line_start, line.textLength(), line_end,
-                    line.width(), line.naturalTextWidth(),
-                    line.cursorToX(line_start, QTextLine::Leading),
-                    line.cursorToX(line_end, QTextLine::Leading),
-                    line.cursorToX(line_end, QTextLine::Trailing),
-                    line.xToCursor(line.naturalTextWidth()),
-                    line.xToCursor(line.width()));
+                if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG")) {
+                    qDebug("[debug_line_metrics] qtextline=%d exists=1 textStart=%d textLength=%d lineEnd=%d width=%.4f naturalTextWidth=%.4f cursorToX(textStart,Leading)=%.4f cursorToX(lineEnd,Leading)=%.4f cursorToX(lineEnd,Trailing)=%.4f xToCursor(naturalTextWidth)=%d xToCursor(width)=%d",
+                        qtextline_idx, line_start, line.textLength(), line_end,
+                        line.width(), line.naturalTextWidth(),
+                        line.cursorToX(line_start, QTextLine::Leading),
+                        line.cursorToX(line_end, QTextLine::Leading),
+                        line.cursorToX(line_end, QTextLine::Trailing),
+                        line.xToCursor(line.naturalTextWidth()),
+                        line.xToCursor(line.width()));
+                }
                 break;
             }
             first = false;
