@@ -71,8 +71,19 @@ pub(crate) fn generate_tombstones(
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace("\\", "/");
-        let original_file_path = format!("{}/{}", rel_original_dir, rel_file_path);
-        let new_trash_path = format!("{}/{}", rel_trash_path, rel_file_path);
+        // Tombstone paths use forward-slash (remote/Git convention).
+        // Using [..] slice join to avoid format!("/{}/{}") which could
+        // produce double-slash if rel_original_dir already ends with '/'.
+        let original_file_path = if rel_original_dir.ends_with('/') {
+            format!("{}{}", rel_original_dir, rel_file_path)
+        } else {
+            format!("{}/{}", rel_original_dir, rel_file_path)
+        };
+        let new_trash_path = if rel_trash_path.ends_with('/') {
+            format!("{}{}", rel_trash_path, rel_file_path)
+        } else {
+            format!("{}/{}", rel_trash_path, rel_file_path)
+        };
 
         let tombstone = crate::sync::Tombstone {
             original_path: original_file_path.clone(),
