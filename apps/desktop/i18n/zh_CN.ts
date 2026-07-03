@@ -1419,8 +1419,19 @@
         <source>配置远端仓库并查看同步状态</source>
         <translation>配置远端仓库并查看同步状态</translation>
     </message>
+    <message>
+        <source>保存配置失败</source>
+        <translation>保存配置失败</translation>
+    </message>
+    <message>
+        <source>诊断启动失败</source>
+        <translation>诊断启动失败</translation>
+    </message>
+    <message>
+        <source>配置已保存</source>
+        <translation>配置已保存</translation>
+    </message>
 </context>
-<context>
     <name>TopWritingToolbar</name>
     <message>
         <source>一键排版</source>
