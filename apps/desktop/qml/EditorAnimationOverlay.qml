@@ -74,6 +74,29 @@ Item {
         return "fullAnimation"
     }
 
+    /// 公共 ghost 创建函数 — 统一参数构建，避免漂移
+    function createGlyphGhost(animKind, startX, startY, endX, endY, glyphWidth, glyphHeight, glyphBaselineY, duration, ghostColor, glyphText, glyphFontFamily, glyphFontPixelSize) {
+        var component = root._glyphGhostComponent
+        if (!component || component.status !== Component.Ready) return null
+        return component.createObject(root, {
+            "animKind": animKind,
+            "startX": startX,
+            "startY": startY,
+            "endX": endX,
+            "endY": endY,
+            "glyphWidth": glyphWidth,
+            "glyphHeight": glyphHeight,
+            "glyphBaselineY": glyphBaselineY,
+            "width": glyphWidth,
+            "height": glyphHeight,
+            "duration": duration,
+            "ghostColor": ghostColor,
+            "glyphText": glyphText,
+            "glyphFontFamily": glyphFontFamily,
+            "glyphFontPixelSize": glyphFontPixelSize
+        })
+    }
+
     Connections {
         target: editorItem
         function onVisualTransactionChanged() {
@@ -271,23 +294,21 @@ Item {
                 root._log("insert skipped: complex grapheme at index=" + i)
                 continue
             }
-            var ghost = component.createObject(root, {
-                "animKind": "insert",
-                "startX": startX,
-                "startY": startY,
-                "endX": gr.x,
-                "endY": gr.baselineY || gr.y,
-                "glyphWidth": gr.w,
-                "glyphHeight": gr.h,
-                "glyphBaselineY": gr.baselineY || 0,
-                "width": gr.w,
-                "height": gr.h,
-                "duration": duration,
-                "ghostColor": editorItem.text_color || root.dt.editorText,
-                "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
-                "glyphFontFamily": editorItem.font_family || "",
-                "glyphFontPixelSize": editorItem.font_pixel_size || 0
-            })
+            var ghost = createGlyphGhost(
+                "insert",
+                startX,
+                startY,
+                gr.x,
+                gr.baselineY || gr.y,
+                gr.w,
+                gr.h,
+                gr.baselineY || 0,
+                duration,
+                editorItem.text_color || root.dt.editorText,
+                isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
+                editorItem.font_family || "",
+                editorItem.font_pixel_size || 0
+            )
 
             if (ghost !== null) {
                 createdGhosts.push(ghost)
@@ -316,23 +337,21 @@ Item {
                 if (dx < 0.5 && dy < 0.5) {
                     continue
                 }
-                var reflowGhost = component.createObject(root, {
-                    "animKind": "reflow",
-                    "startX": rr.oldX,
-                    "startY": rr.oldBaselineY || rr.oldY,
-                    "endX": rr.newX,
-                    "endY": rr.newBaselineY || rr.newY,
-                    "glyphWidth": rr.w,
-                    "glyphHeight": rr.h,
-                    "glyphBaselineY": rr.newBaselineY || 0,
-                    "width": rr.w,
-                    "height": rr.h,
-                    "duration": duration,
-                    "ghostColor": editorItem.text_color || root.dt.editorText,
-                    "glyphText": rr.char || "",
-                    "glyphFontFamily": editorItem.font_family || "",
-                    "glyphFontPixelSize": editorItem.font_pixel_size || 0
-                })
+                var reflowGhost = createGlyphGhost(
+                    "reflow",
+                    rr.oldX,
+                    rr.oldBaselineY || rr.oldY,
+                    rr.newX,
+                    rr.newBaselineY || rr.newY,
+                    rr.w,
+                    rr.h,
+                    rr.newBaselineY || 0,
+                    duration,
+                    editorItem.text_color || root.dt.editorText,
+                    rr.char || "",
+                    editorItem.font_family || "",
+                    editorItem.font_pixel_size || 0
+                )
 
                 if (reflowGhost !== null) {
                     createdGhosts.push(reflowGhost)
@@ -450,25 +469,21 @@ Item {
                 root._log("delete skipped: complex grapheme at index=" + i)
                 continue
             }
-            var ghost = component.createObject(root, {
-                "animKind": "delete",
-                "startX": gr.x,
-                "startY": gr.baselineY || gr.y,
-                "endX": endX,
-                "endY": endY,
-                "glyphWidth": gr.w,
-                "glyphHeight": gr.h,
-                "glyphBaselineY": gr.baselineY || 0,
-                "glyphWidth": gr.w,
-                "glyphHeight": gr.h,
-                "width": gr.w,
-                "height": gr.h,
-                "duration": duration,
-                "ghostColor": editorItem.text_color || root.dt.editorText,
-                "glyphText": isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
-                "glyphFontFamily": editorItem.font_family || "",
-                "glyphFontPixelSize": editorItem.font_pixel_size || 0
-            })
+            var ghost = createGlyphGhost(
+                "delete",
+                gr.x,
+                gr.baselineY || gr.y,
+                endX,
+                endY,
+                gr.w,
+                gr.h,
+                gr.baselineY || 0,
+                duration,
+                editorItem.text_color || root.dt.editorText,
+                isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
+                editorItem.font_family || "",
+                editorItem.font_pixel_size || 0
+            )
 
             _trackGhost(ghost, "delete", 0, 0)
         }
@@ -523,23 +538,21 @@ Item {
             var gr = glyphRects[i]
             if (isComplexGrapheme(gr.char)) continue
 
-            var ghost = component.createObject(root, {
-                "animKind": "insert",
-                "startX": startX,
-                "startY": startY,
-                "endX": gr.x,
-                "endY": gr.baselineY || gr.y,
-                "glyphWidth": gr.w,
-                "glyphHeight": gr.h,
-                "glyphBaselineY": gr.baselineY || 0,
-                "width": gr.w,
-                "height": gr.h,
-                "duration": duration,
-                "ghostColor": editorItem.text_color || root.dt.editorText,
-                "glyphText": gr.char || "",
-                "glyphFontFamily": editorItem.font_family || "",
-                "glyphFontPixelSize": editorItem.font_pixel_size || 0
-            })
+            var ghost = createGlyphGhost(
+                "insert",
+                startX,
+                startY,
+                gr.x,
+                gr.baselineY || gr.y,
+                gr.w,
+                gr.h,
+                gr.baselineY || 0,
+                duration,
+                editorItem.text_color || root.dt.editorText,
+                gr.char || "",
+                editorItem.font_family || "",
+                editorItem.font_pixel_size || 0
+            )
 
             if (ghost !== null) {
                 root._activeAnimations.push(ghost)
@@ -577,23 +590,21 @@ Item {
             var gr = glyphRects[i]
             if (isComplexGrapheme(gr.char)) continue
 
-            var ghost = component.createObject(root, {
-                "animKind": "delete",
-                "startX": gr.x,
-                "startY": gr.baselineY || gr.y,
-                "endX": endX,
-                "endY": endY,
-                "glyphWidth": gr.w,
-                "glyphHeight": gr.h,
-                "glyphBaselineY": gr.baselineY || 0,
-                "width": gr.w,
-                "height": gr.h,
-                "duration": duration,
-                "ghostColor": editorItem.text_color || root.dt.editorText,
-                "glyphText": gr.char || "",
-                "glyphFontFamily": editorItem.font_family || "",
-                "glyphFontPixelSize": editorItem.font_pixel_size || 0
-            })
+            var ghost = createGlyphGhost(
+                "delete",
+                gr.x,
+                gr.baselineY || gr.y,
+                endX,
+                endY,
+                gr.w,
+                gr.h,
+                gr.baselineY || 0,
+                duration,
+                editorItem.text_color || root.dt.editorText,
+                gr.char || "",
+                editorItem.font_family || "",
+                editorItem.font_pixel_size || 0
+            )
 
             if (ghost !== null) {
                 root._activeAnimations.push(ghost)

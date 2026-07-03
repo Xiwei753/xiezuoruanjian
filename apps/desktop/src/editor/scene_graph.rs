@@ -154,7 +154,7 @@ pub fn update_texture_node(
         imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
         static bool logged_once = false;
-        if (!logged_once) {
+        if (!logged_once && qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG")) {
             logged_once = true;
             qDebug("update_texture_node: dpr=%.2f img=%dx%d texSize=%dx%d srcRect=(%.1f,%.1f %.1fx%.1f) destRect=(0,%.1f %.1fx%.1f)",
                 dpr, img_ptr->width(), img_ptr->height(),

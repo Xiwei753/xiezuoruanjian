@@ -611,7 +611,7 @@ impl SujianEditorItem {
 
         let now_cleanup = Instant::now();
         let elapsed = paint_start.elapsed();
-        if elapsed.as_millis() > 4 && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup) {
+        if elapsed.as_millis() > 4 && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup) && sujian_editor_debug_enabled() {
             self.last_slow_paint_log = Some(now_cleanup);
             eprintln!(
                 "sujian_paint_onto: elapsed_ms={}, vis_lines=[{}..{}]={}, scrolling={}, buffer_h={:.1}",
@@ -753,7 +753,7 @@ impl SujianEditorItem {
         });
 
         let render_elapsed = render_start.elapsed();
-        if renderer::should_log_slow_paint(self.last_slow_paint_log, render_start) {
+        if renderer::should_log_slow_paint(self.last_slow_paint_log, render_start) && sujian_editor_debug_enabled() {
             self.last_slow_paint_log = Some(render_start);
             let vis_lines = self
                 .editor_layout

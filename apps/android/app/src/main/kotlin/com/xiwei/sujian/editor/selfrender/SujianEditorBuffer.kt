@@ -97,23 +97,74 @@ class SujianEditorBuffer {
 
     /**
      * 插入文本（commitText），触发 TypingCommit 或 Typing
+     *
+     * - 如果有选区，先删除选区内容，再在原 selection.start 处插入新文本
+     * - 如果插入文本为空但有选区，等同于删除选区
+     * - 如果插入文本为空且无选区，直接返回（无操作）
      */
     fun commitText(inserted: String, cause: SujianEditCause = SujianEditCause.TypingCommit): SujianEditResult {
-        if (inserted.isEmpty()) return SujianEditResult(text, selection, cause)
-
-        // 如果有选区，先删除选中内容
-        val effectiveText = if (!selection.isCollapsed) {
-            deleteSelection()
-        } else {
-            text
+        // 空字符串且无选区：无操作
+        if (inserted.isEmpty() && selection.isCollapsed) {
+            return SujianEditResult(text, selection, cause)
         }
 
+        // 空字符串但有选区：等同于删除选区
+        if (inserted.isEmpty() && !selection.isCollapsed) {
+            return deleteSelectionAsEdit(cause)
+        }
+
+        // 有文本要插入：先删除选区（如果有），再插入
+        if (!selection.isCollapsed) {
+            deleteSelection() // 修改 this.text 并折叠光标到 selection.start
+        }
+
+        // 此处选区已折叠，使用 this.text（删除后的全文）作为基础文本插入
         val insertPos = selection.head
-        text = effectiveText.substring(0, insertPos) + inserted + effectiveText.substring(insertPos)
+        text = text.substring(0, insertPos) + inserted + text.substring(insertPos)
         val newCursorPos = insertPos + inserted.length
         selection = SujianSelection.collapsed(newCursorPos)
         clearComposing()
 
+        val result = SujianEditResult(text, selection, cause)
+        onTextChanged?.invoke(result)
+        return result
+    }
+
+    /**
+     * 有选区就删除选区后在 selection.start 插入；没有选区就在 selection.head 插入。
+     */
+    fun replaceSelectionOrInsert(inserted: String, cause: SujianEditCause = SujianEditCause.TypingCommit): SujianEditResult {
+        if (!selection.isCollapsed) {
+            deleteSelection() // 修改 this.text，光标折叠到 selection.start
+        }
+
+        if (inserted.isEmpty()) {
+            // 选区已删除（如果有的话），直接返回结果
+            val result = SujianEditResult(text, selection, cause)
+            onTextChanged?.invoke(result)
+            return result
+        }
+
+        val insertPos = selection.head
+        text = text.substring(0, insertPos) + inserted + text.substring(insertPos)
+        val newCursorPos = insertPos + inserted.length
+        selection = SujianSelection.collapsed(newCursorPos)
+        clearComposing()
+
+        val result = SujianEditResult(text, selection, cause)
+        onTextChanged?.invoke(result)
+        return result
+    }
+
+    /**
+     * 专门删除选区并返回 SujianEditResult。
+     * 如果选区已折叠，返回无变更结果。
+     */
+    fun deleteSelectionAsEdit(cause: SujianEditCause = SujianEditCause.Delete): SujianEditResult {
+        if (selection.isCollapsed) {
+            return SujianEditResult(text, selection, cause)
+        }
+        deleteSelection() // 修改 this.text，折叠光标到 selection.start
         val result = SujianEditResult(text, selection, cause)
         onTextChanged?.invoke(result)
         return result

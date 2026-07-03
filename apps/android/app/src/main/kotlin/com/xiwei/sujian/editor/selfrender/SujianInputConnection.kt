@@ -52,7 +52,25 @@ class SujianInputConnection(
         if (isClosed || text == null) return false
 
         val textStr = text.toString()
-        if (textStr.isEmpty()) return true
+
+        // 空字符串：如果有选区，删除选区；否则无操作
+        if (textStr.isEmpty()) {
+            if (!buffer.selection.isCollapsed) {
+                val editorView = view as? SujianEditorView
+                if (editorView != null) {
+                    editorView.runVisualEdit(SujianEditCauseData.Delete) {
+                        val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
+                        imeController.onEditResult(result)
+                        imeController.updateSelection()
+                    }
+                } else {
+                    val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
+                    imeController.onEditResult(result)
+                    imeController.updateSelection()
+                }
+            }
+            return true
+        }
 
         // 判断是 Typing 还是 TypingCommit
         val wasComposing = buffer.hasComposing
@@ -68,13 +86,13 @@ class SujianInputConnection(
         val editorView = view as? SujianEditorView
         if (editorView != null) {
             editorView.runVisualEdit(cause) {
-                val result = buffer.commitText(textStr, cause.toLegacyCause())
+                val result = buffer.replaceSelectionOrInsert(textStr, cause.toLegacyCause())
                 imeController.onEditResult(result)
                 imeController.updateSelection()
             }
         } else {
             // fallback：旧版 WriterEditText 不修改
-            val result = buffer.commitText(textStr, cause.toLegacyCause())
+            val result = buffer.replaceSelectionOrInsert(textStr, cause.toLegacyCause())
             imeController.onEditResult(result)
             imeController.updateSelection()
         }
@@ -254,12 +272,12 @@ class SujianInputConnection(
                         val editorView = view as? SujianEditorView
                         if (editorView != null) {
                             editorView.runVisualEdit(SujianEditCauseData.Delete) {
-                                val result = buffer.commitText("", SujianEditCause.Delete)
+                                val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
                                 imeController.onEditResult(result)
                                 imeController.updateSelection()
                             }
                         } else {
-                            val result = buffer.commitText("", SujianEditCause.Delete)
+                            val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
                             imeController.onEditResult(result)
                             imeController.updateSelection()
                         }
@@ -275,12 +293,12 @@ class SujianInputConnection(
                         val editorView = view as? SujianEditorView
                         if (editorView != null) {
                             editorView.runVisualEdit(SujianEditCauseData.Delete) {
-                                val result = buffer.commitText("", SujianEditCause.Delete)
+                                val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
                                 imeController.onEditResult(result)
                                 imeController.updateSelection()
                             }
                         } else {
-                            val result = buffer.commitText("", SujianEditCause.Delete)
+                            val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
                             imeController.onEditResult(result)
                             imeController.updateSelection()
                         }
@@ -325,12 +343,12 @@ class SujianInputConnection(
                     val editorView = view as? SujianEditorView
                     if (editorView != null) {
                         editorView.runVisualEdit(SujianEditCauseData.Delete) {
-                            val result = buffer.commitText("", SujianEditCause.Delete)
+                            val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
                             imeController.onEditResult(result)
                             imeController.updateSelection()
                         }
                     } else {
-                        val result = buffer.commitText("", SujianEditCause.Delete)
+                        val result = buffer.deleteSelectionAsEdit(SujianEditCause.Delete)
                         imeController.onEditResult(result)
                         imeController.updateSelection()
                     }
@@ -350,12 +368,12 @@ class SujianInputConnection(
                     val editorView = view as? SujianEditorView
                     if (editorView != null) {
                         editorView.runVisualEdit(SujianEditCauseData.Paste) {
-                            val result = buffer.commitText(pasteText, SujianEditCause.Paste)
+                            val result = buffer.replaceSelectionOrInsert(pasteText, SujianEditCause.Paste)
                             imeController.onEditResult(result)
                             imeController.updateSelection()
                         }
                     } else {
-                        val result = buffer.commitText(pasteText, SujianEditCause.Paste)
+                        val result = buffer.replaceSelectionOrInsert(pasteText, SujianEditCause.Paste)
                         imeController.onEditResult(result)
                         imeController.updateSelection()
                     }

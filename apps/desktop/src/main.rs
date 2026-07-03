@@ -162,7 +162,13 @@ fn qt_runtime_version() -> String {
 
 fn fail_if_not_qt6() {
     let version = qt_runtime_version();
-    eprintln!("[QtDiagnostics] linked Qt runtime version: {}", version);
+    // 只在调试模式或版本异常时输出 Qt 版本信息
+    if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok()
+        || std::env::var("WRITER_DEBUG").is_ok()
+        || !version.starts_with("6.")
+    {
+        eprintln!("[QtDiagnostics] linked Qt runtime version: {}", version);
+    }
     if version.starts_with("5.") {
         eprintln!("Linux binary requires Qt6; Qt5 is no longer supported.");
         std::process::exit(1);
