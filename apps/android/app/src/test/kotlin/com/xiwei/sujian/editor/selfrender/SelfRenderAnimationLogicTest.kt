@@ -491,7 +491,7 @@ class SelfRenderAnimationLogicTest {
     @Test
     fun activeInsertRange_mapForInsert_shiftsRangeCorrectly() {
         // 场景：已有 range [5,8)，在位置 3 插入 2 字符 → range 应变为 [7,10)
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(5, 8)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(5, 8)))
         val pos = 3
         val len = 2
 
@@ -507,13 +507,13 @@ class SelfRenderAnimationLogicTest {
 
         assertEquals(1, newEntries.size)
         assertEquals(IntRange(7, 10), newEntries[0].range)
-        assertEquals(1u, newEntries[0].id) // ID 保留不变
+        assertEquals(1uL, newEntries[0].id) // ID 保留不变
     }
 
     @Test
     fun activeInsertRange_mapForInsert_intersectCancelsRange() {
         // 场景：已有 range [5,8)，在位置 6 插入 → 相交，range 被取消
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(5, 8)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(5, 8)))
         val pos = 6
         val len = 1
 
@@ -529,13 +529,13 @@ class SelfRenderAnimationLogicTest {
         }
 
         assertEquals(0, newEntries.size) // range 被取消
-        assertEquals(listOf(1u), canceledIds) // 取消的 ID 被收集
+        assertEquals(listOf(1uL), canceledIds) // 取消的 ID 被收集
     }
 
     @Test
     fun activeInsertRange_mapForDelete_shiftsRangeCorrectly() {
         // 场景：已有 range [8,11)，在位置 3 删除 2 字符 → range 应变为 [6,9)
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(8, 11)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(8, 11)))
         val pos = 3
         val len = 2
 
@@ -551,13 +551,13 @@ class SelfRenderAnimationLogicTest {
 
         assertEquals(1, newEntries.size)
         assertEquals(IntRange(6, 9), newEntries[0].range)
-        assertEquals(1u, newEntries[0].id)
+        assertEquals(1uL, newEntries[0].id)
     }
 
     @Test
     fun activeInsertRange_mapForDelete_intersectCancelsRange() {
         // 场景：已有 range [5,8)，在位置 6 删除 3 字符 → 相交，range 被取消
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1u, IntRange(5, 8)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(5, 8)))
         val pos = 6
         val len = 3
 
@@ -573,7 +573,7 @@ class SelfRenderAnimationLogicTest {
         }
 
         assertEquals(0, newEntries.size)
-        assertEquals(listOf(1u), canceledIds)
+        assertEquals(listOf(1uL), canceledIds)
     }
 
     @Test
@@ -584,16 +584,16 @@ class SelfRenderAnimationLogicTest {
         // 2. 插入 "B" 在位置 3，映射后 range 变为 [6,7), id 仍为 1
         // 3. 动画 A 完成，按 id=1 移除 → 正确移除 [6,7)
         val entries = mutableListOf(
-            ActiveInsertRangeEntryForTest(1u, IntRange(6, 7)),  // 映射后的 range
-            ActiveInsertRangeEntryForTest(2u, IntRange(3, 4))   // 第二个插入的 range
+            ActiveInsertRangeEntryForTest(1uL, IntRange(6, 7)),  // 映射后的 range
+            ActiveInsertRangeEntryForTest(2uL, IntRange(3, 4))   // 第二个插入的 range
         )
 
         // 模拟 tickAnimations：按 ID 移除
-        val finishedAnimRangeId = 1u  // 动画 A 持有的 range ID
+        val finishedAnimRangeId = 1uL  // 动画 A 持有的 range ID
         entries.removeAll { it.id == finishedAnimRangeId }
 
         assertEquals(1, entries.size)
-        assertEquals(2u, entries[0].id)
+        assertEquals(2uL, entries[0].id)
         assertEquals(IntRange(3, 4), entries[0].range)
     }
 
@@ -601,9 +601,9 @@ class SelfRenderAnimationLogicTest {
     fun activeInsertRange_multipleConcurrentRanges_independentTracking() {
         // 多个并发 insert 动画各自独立追踪 range
         val entries = mutableListOf(
-            ActiveInsertRangeEntryForTest(1u, IntRange(5, 6)),
-            ActiveInsertRangeEntryForTest(2u, IntRange(10, 12)),
-            ActiveInsertRangeEntryForTest(3u, IntRange(15, 16))
+            ActiveInsertRangeEntryForTest(1uL, IntRange(5, 6)),
+            ActiveInsertRangeEntryForTest(2uL, IntRange(10, 12)),
+            ActiveInsertRangeEntryForTest(3uL, IntRange(15, 16))
         )
 
         // 在位置 7 插入 1 字符 → 只有 range1 不变，range2 和 range3 后移
