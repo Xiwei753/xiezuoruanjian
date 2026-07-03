@@ -1,6 +1,7 @@
 name: Sujian Static Analysis & Audit
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main

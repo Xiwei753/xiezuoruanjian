@@ -1,6 +1,7 @@
 name: Sujian Windows Build
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
