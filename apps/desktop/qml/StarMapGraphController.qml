@@ -35,7 +35,7 @@ QtObject {
 
     function setError(msg) {
         errorMessage = msg || "";
-        if (errorMessage) console.warn("[StarMapGraphController]", errorMessage);
+        if (errorMessage) { /* error tracked via errorMessage property */ }
     }
 
     function clearError() { errorMessage = ""; }
