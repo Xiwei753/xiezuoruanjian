@@ -3,7 +3,7 @@ use qmetaobject::{QColor, QPainter, QPointF, QRectF, QString};
 use std::time::{Duration, Instant};
 
 use crate::editor::layout::EditorLayout;
-use crate::sujian_editor_item::{editor_animation_debug_enabled, AnimatedGlyph};
+use crate::sujian_editor_item::AnimatedGlyph;
 
 cpp! {{
     #include <QtGui/QPainter>
@@ -225,15 +225,13 @@ pub fn log_animation_created(
     current_is_scrolling: bool,
     current_typing_animation_enabled: bool,
 ) {
-    if editor_animation_debug_enabled() {
-        eprintln!(
-            "{}: offset={}, glyph_count={}, visible_line_hit={}, scrolling={}, enabled={}",
-            label,
-            offset,
-            glyph_count,
-            visible_line_hit,
-            current_is_scrolling,
-            current_typing_animation_enabled,
-        );
-    }
+    crate::sujian_editor_item::editor_animation_debug_log(&format!(
+        "{}: offset={}, glyph_count={}, visible_line_hit={}, scrolling={}, enabled={}",
+        label,
+        offset,
+        glyph_count,
+        visible_line_hit,
+        current_is_scrolling,
+        current_typing_animation_enabled,
+    ));
 }

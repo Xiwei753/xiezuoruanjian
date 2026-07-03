@@ -92,6 +92,22 @@ pub fn sujian_editor_debug_enabled() -> bool {
     cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
 }
 
+/// 编辑器调试日志：仅当 SUJIAN_EDITOR_DEBUG 或 WRITER_DEBUG 环境变量存在时输出
+fn editor_debug_log(msg: &str) {
+    if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() || std::env::var("WRITER_DEBUG").is_ok() {
+        eprintln!("{}", msg);
+    }
+}
+
+/// 编辑器动画调试日志：仅当 SUJIAN_EDITOR_ANIMATION_DEBUG 或 SUJIAN_EDITOR_DEBUG 或 WRITER_DEBUG 环境变量存在时输出
+fn editor_animation_debug_log(msg: &str) {
+    if std::env::var("SUJIAN_EDITOR_ANIMATION_DEBUG").is_ok() 
+        || std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() 
+        || std::env::var("WRITER_DEBUG").is_ok() {
+        eprintln!("{}", msg);
+    }
+}
+
 /// 判断字符是否为复杂 grapheme（emoji / ZWJ / variation selector / combining mark）。
 /// 与 Android `OverlayAnim.containsComplexGrapheme` 和 QML `isComplexGrapheme` 对齐。
 /// 复杂字符不参与 glyph ghost 动画，避免渲染异常和资源浪费。
@@ -129,7 +145,28 @@ fn is_complex_grapheme(ch: char) -> bool {
     if cp >= 0xFE20 && cp <= 0xFE2F {
         return true;
     }
+    // Emoji code points (common ranges)
+    // Emoticons: U+1F600-U+1F64F
+    if cp >= 0x1F600 && cp <= 0x1F64F {
+        return true;
+    }
+    // Miscellaneous Symbols and Pictographs: U+1F300-U+1F5FF
+    if cp >= 0x1F300 && cp <= 0x1F5FF {
+        return true;
+    }
+    // Transport and Map Symbols: U+1F680-U+1F6FF
+    if cp >= 0x1F680 && cp <= 0x1F6FF {
+        return true;
+    }
+    // Supplemental Symbols and Pictographs: U+1F900-U+1F9FF
+    if cp >= 0x1F900 && cp <= 0x1F9FF {
+        return true;
+    }
     false
+}
+
+fn text_contains_complex_grapheme(text: &str) -> bool {
+    text.chars().any(|ch| is_complex_grapheme(ch))
 }
 
 #[allow(dead_code)]
@@ -438,12 +475,10 @@ impl SujianEditorItem {
         let be = byte_end as usize;
         let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
         if removed {
-            if editor_animation_debug_enabled() {
-                eprintln!(
-                    "on_insert_animation_finished: byte_range=({},{}), removed, has_active_insert={}",
-                    bs, be, self.text_anim_state.has_active_insert()
-                );
-            }
+            editor_animation_debug_log(&format!(
+                "on_insert_animation_finished: byte_range=({},{}), removed, has_active_insert={}",
+                bs, be, self.text_anim_state.has_active_insert()
+            ));
             self.request_static_repaint();
         }
     }
@@ -456,12 +491,10 @@ impl SujianEditorItem {
         let be = byte_end as usize;
         let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
         if removed {
-            if editor_animation_debug_enabled() {
-                eprintln!(
-                    "on_insert_animation_skipped: byte_range=({},{}), cleared hidden range, has_active_insert={}",
-                    bs, be, self.text_anim_state.has_active_insert()
-                );
-            }
+            editor_animation_debug_log(&format!(
+                "on_insert_animation_skipped: byte_range=({},{}), cleared hidden range, has_active_insert={}",
+                bs, be, self.text_anim_state.has_active_insert()
+            ));
             self.request_static_repaint();
         }
     }
@@ -653,12 +686,10 @@ impl SujianEditorItem {
         if self.current_text_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
-        if sujian_editor_debug_enabled() {
-            eprintln!(
+        editor_debug_log(&format!(
                 "[editor] text_color changed old={} new={}",
                 self.current_text_color, v
-            );
-        }
+            ));
         self.current_text_color = value;
         self.visual_changed();
     }
@@ -677,12 +708,10 @@ impl SujianEditorItem {
         {
             return;
         }
-        if sujian_editor_debug_enabled() {
-            eprintln!(
+        editor_debug_log(&format!(
                 "[editor] selection_color changed old={} new={}",
                 self.current_selection_color, v
-            );
-        }
+            ));
         self.current_selection_color = value;
         self.visual_changed();
     }
@@ -701,12 +730,10 @@ impl SujianEditorItem {
         {
             return;
         }
-        if sujian_editor_debug_enabled() {
-            eprintln!(
+        editor_debug_log(&format!(
                 "[editor] selected_text_color changed old={} new={}",
                 self.current_selected_text_color, v
-            );
-        }
+            ));
         self.current_selected_text_color = value;
         self.visual_changed();
     }
@@ -725,12 +752,10 @@ impl SujianEditorItem {
         {
             return;
         }
-        if sujian_editor_debug_enabled() {
-            eprintln!(
+        editor_debug_log(&format!(
                 "[editor] cursor_color changed old={} new={}",
                 self.current_cursor_color, v
-            );
-        }
+            ));
         self.current_cursor_color = value;
         self.visual_changed();
     }
@@ -768,9 +793,7 @@ impl SujianEditorItem {
             self.clear_active_text_animations();
             self.request_static_repaint();
         }
-        if editor_animation_debug_enabled() {
-            eprintln!("typing_animation_enabled_changed: {}", value);
-        }
+        editor_animation_debug_log(&format!("typing_animation_enabled_changed: {}", value));
         self.visual_settings_changed();
     }
 
@@ -785,9 +808,7 @@ impl SujianEditorItem {
         }
         self.current_typing_animation_duration_ms = clamped;
         self.engine.set_animation_duration_ms(clamped as u64);
-        if editor_animation_debug_enabled() {
-            eprintln!("typing_animation_duration_ms_changed: {}", clamped);
-        }
+        editor_animation_debug_log(&format!("typing_animation_duration_ms_changed: {}", clamped));
         self.visual_settings_changed();
     }
 
@@ -1048,9 +1069,7 @@ impl SujianEditorItem {
     fn tick_text_animations(&mut self) {
         let now = Instant::now();
         if self.text_anim_state.tick(now) {
-            if editor_animation_debug_enabled() {
-                eprintln!("tick_text_animations: cleared timed-out animations");
-            }
+            editor_animation_debug_log("tick_text_animations: cleared timed-out animations");
             self.request_static_repaint();
         }
     }
@@ -1109,13 +1128,9 @@ impl SujianEditorItem {
             self.cursor_ctrl.visual_x = pcr.x;
             self.cursor_ctrl.visual_y = pcr.top;
             self.cursor_ctrl.force_snap_next = false;
-            if editor_animation_debug_enabled() {
-                eprintln!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top);
-            }
+            editor_animation_debug_log(&format!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top));
         } else {
-            if editor_animation_debug_enabled() {
-                eprintln!("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
-            }
+            editor_animation_debug_log("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
         }
 
         self.emit_content_changed();
@@ -1347,12 +1362,10 @@ impl SujianEditorItem {
         self.cursor_ctrl.affinity = affinity;
         // All click operations must snap — click, extend, drag, etc.
         self.cursor_ctrl.force_snap_next = true;
-        if sujian_editor_debug_enabled() {
-            eprintln!(
-                "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
-                x, y, self.current_scroll_y, index, affinity, extend
-            );
-        }
+        editor_debug_log(&format!(
+            "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
+            x, y, self.current_scroll_y, index, affinity, extend
+        ));
         self.buffer.move_cursor(index, extend);
         self.bump_visual_revision();
         self.preedit_text.clear();
@@ -1625,11 +1638,13 @@ impl SujianEditorItem {
                             // 统一动画判定：与 QML 使用相同规则
                             let glyph_rects = vt.insert_glyph_rects.as_ref();
                             let glyph_count = glyph_rects.map_or(0, |g| g.len());
-                            let contains_newline =
-                                vt.new_text[range_start..range_end].contains('\n');
+                            let inserted_text = &vt.new_text[range_start..range_end];
+                            let contains_newline = inserted_text.contains('\n');
+                            let contains_complex_grapheme = text_contains_complex_grapheme(inserted_text);
                             let decision = should_create_text_animation(
                                 glyph_count,
                                 contains_newline,
+                                contains_complex_grapheme,
                                 self.current_is_scrolling,
                                 self.current_is_loading,
                                 self.current_is_applying_format,
@@ -1655,33 +1670,27 @@ impl SujianEditorItem {
                                         reflow_ranges,
                                         vt.duration_ms,
                                     );
-                                    if editor_animation_debug_enabled() {
-                                        eprintln!(
-                                            "record_transaction: created Insert animation byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
-                                            range_start, range_end,
-                                            vt.reflow_glyph_rects.as_ref().map(|r| r.len()).unwrap_or(0),
-                                            vt.duration_ms
-                                        );
-                                    }
+                                    editor_animation_debug_log(&format!(
+                                        "record_transaction: created Insert animation byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
+                                        range_start, range_end,
+                                        vt.reflow_glyph_rects.as_ref().map(|r| r.len()).unwrap_or(0),
+                                        vt.duration_ms
+                                    ));
                                 }
                                 AnimationDecision::CursorOnly => {
                                     // 换行场景：不创建 hidden range，光标仍可动画
                                     // 不调用 start_insert，正文层正常绘制
-                                    if editor_animation_debug_enabled() {
-                                        eprintln!(
-                                            "record_transaction: Insert CursorOnly (newline), byte_range=({},{}), no hidden range",
-                                            range_start, range_end
-                                        );
-                                    }
+                                    editor_animation_debug_log(&format!(
+                                        "record_transaction: Insert CursorOnly (newline), byte_range=({},{}), no hidden range",
+                                        range_start, range_end
+                                    ));
                                 }
                                 AnimationDecision::NoAnimation => {
                                     // 不创建 hidden range，正文层正常绘制
-                                    if editor_animation_debug_enabled() {
-                                        eprintln!(
-                                            "record_transaction: Insert NoAnimation, byte_range=({},{}), no hidden range",
-                                            range_start, range_end
-                                        );
-                                    }
+                                    editor_animation_debug_log(&format!(
+                                        "record_transaction: Insert NoAnimation, byte_range=({},{}), no hidden range",
+                                        range_start, range_end
+                                    ));
                                 }
                             }
                         }
@@ -1693,9 +1702,17 @@ impl SujianEditorItem {
                         let glyph_count = glyph_rects.map_or(0, |g| g.len());
                         let contains_newline = vt.old_text != vt.new_text
                             && (vt.old_text.contains('\n') || vt.new_text.contains('\n'));
+                        // 检测删除的文本中是否包含复杂 grapheme
+                        let deleted_text = if vt.old_text.len() > vt.new_text.len() {
+                            &vt.old_text
+                        } else {
+                            ""
+                        };
+                        let contains_complex_grapheme = text_contains_complex_grapheme(deleted_text);
                         let decision = should_create_text_animation(
                             glyph_count,
                             contains_newline,
+                            contains_complex_grapheme,
                             self.current_is_scrolling,
                             self.current_is_loading,
                             self.current_is_applying_format,
@@ -1752,17 +1769,15 @@ impl SujianEditorItem {
             transaction.should_animate
         )
         .into();
-        if editor_animation_debug_enabled() {
-            eprintln!(
-                "record_transaction: cause={:?}, changes={}, vt={}, animate={}, typing_anim_enabled={}, is_scrolling={}",
-                transaction.cause,
-                transaction.changes.len(),
-                vt.is_some(),
-                transaction.should_animate,
-                self.current_typing_animation_enabled,
-                self.current_is_scrolling,
-            );
-        }
+        editor_animation_debug_log(&format!(
+            "record_transaction: cause={:?}, changes={}, vt={}, animate={}, typing_anim_enabled={}, is_scrolling={}",
+            transaction.cause,
+            transaction.changes.len(),
+            vt.is_some(),
+            transaction.should_animate,
+            self.current_typing_animation_enabled,
+            self.current_is_scrolling,
+        ));
         // 序列化单个 EditorVisualTransaction 而非 Vec<EditorAnimationEvent>
         if let Some(ref vt) = vt {
             match serde_json::to_string(vt) {
@@ -1770,12 +1785,10 @@ impl SujianEditorItem {
                     self.last_visual_transaction_json = json.into();
                 }
                 Err(e) => {
-                    if editor_animation_debug_enabled() {
-                        eprintln!(
-                            "record_transaction: failed to serialize visual transaction: {}",
-                            e
-                        );
-                    }
+                    editor_animation_debug_log(&format!(
+                        "record_transaction: failed to serialize visual transaction: {}",
+                        e
+                    ));
                     self.last_visual_transaction_json = "{}".into();
                 }
             }
@@ -2296,12 +2309,10 @@ impl SujianEditorItem {
         let snapshot = self.layout_snapshot(width);
         let scroll_y = self.current_scroll_y as f64;
         let (index, affinity) = self.editor_layout.hit_test(&snapshot, x, y, scroll_y);
-        if sujian_editor_debug_enabled() {
-            eprintln!(
-                "hit_test: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, clamped_index={}, affinity={:?}",
-                x, y, self.current_scroll_y, index, affinity
-            );
-        }
+        editor_debug_log(&format!(
+            "hit_test: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, clamped_index={}, affinity={:?}",
+            x, y, self.current_scroll_y, index, affinity
+        ));
         (index, affinity)
     }
 
@@ -2663,13 +2674,11 @@ impl SujianEditorItem {
         };
 
         self.preedit_visual_transaction = Some(vt);
-        if editor_animation_debug_enabled() {
-            eprintln!(
-                "[preedit] preedit_visual_transaction_created old_len={} new_len={}",
-                old_text.len(),
-                new_text.len()
-            );
-        }
+        editor_animation_debug_log(&format!(
+            "[preedit] preedit_visual_transaction_created old_len={} new_len={}",
+            old_text.len(),
+            new_text.len()
+        ));
 
         // Serialize and emit signal
         if let Some(ref vt) = self.preedit_visual_transaction {
@@ -2678,12 +2687,10 @@ impl SujianEditorItem {
                     self.last_preedit_visual_transaction_json = json.into();
                 }
                 Err(e) => {
-                    if editor_animation_debug_enabled() {
-                        eprintln!(
-                            "update_preedit_visual_state: failed to serialize preedit visual transaction: {}",
-                            e
-                        );
-                    }
+                    editor_animation_debug_log(&format!(
+                        "update_preedit_visual_state: failed to serialize preedit visual transaction: {}",
+                        e
+                    ));
                     self.last_preedit_visual_transaction_json = "{}".into();
                 }
             }
@@ -3146,6 +3153,7 @@ mod tests {
         let decision = should_create_text_animation(
             4,     // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -3218,6 +3226,7 @@ mod tests {
         let decision = should_create_text_animation(
             9,     // glyph_count > MAX_GLYPH_COUNT
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -3389,7 +3398,7 @@ mod tests {
 
         // should_create_text_animation → FullAnimation (4 glyphs, no newline)
         let decision =
-            should_create_text_animation(4, false, false, false, false, false, true, true);
+            should_create_text_animation(4, false, false, false, false, false, false, true, true);
         assert_eq!(decision, AnimationDecision::FullAnimation);
 
         // TextAnimationState 创建 hidden range
@@ -3435,6 +3444,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count (the newline char)
             true, // contains_newline
+            false, // contains_complex_grapheme
             false, false, false, false, true, true,
         );
         assert_eq!(
@@ -3818,12 +3828,10 @@ impl QQuickItem for SujianEditorItem {
 
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {
-            if sujian_editor_debug_enabled() {
-                eprintln!(
-                    "sujian_update_paint_node: total_ms={}",
-                    total_elapsed.as_millis(),
-                );
-            }
+            editor_debug_log(&format!(
+                "sujian_update_paint_node: total_ms={}",
+                total_elapsed.as_millis(),
+            ));
         }
 
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }

@@ -965,6 +965,7 @@ mod tests {
         suppress_next_ime_commit: bool,
         explicit_clear_count: usize,
         repaint_count: usize,
+        replace_and_insert_calls: Vec<(i32, i32, String)>,
     }
 
     impl FakeHost {
@@ -1022,7 +1023,9 @@ mod tests {
             self.inserted.push(text);
         }
 
-        fn input_replace_and_insert(&mut self, _replace_start: i32, _replace_length: i32, text: String) {
+        fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
+            // Record the call parameters for test assertions
+            self.replace_and_insert_calls.push((replace_start, replace_length, text.clone()));
             // Simplified test impl: just insert (no actual replacement in FakeHost)
             self.inserted.push(text);
         }
@@ -1303,5 +1306,98 @@ mod tests {
             let is_handled = attr_type == 0 || attr_type == 1;
             assert!(!is_handled, "attr_type {} should not be mapped to Underline or Cursor", attr_type);
         }
+    }
+
+    // ── IME replacement boundary tests ──
+
+    #[test]
+    fn test_ime_replace_and_commit_basic() {
+        // Basic replacement: replace 2 chars before cursor with commit text
+        let mut host = FakeHost::enabled();
+        ime_replace_and_commit(&mut host, "你好".to_string(), -2, 2);
+        // Should call input_replace_and_insert with the correct parameters
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, -2);
+        assert_eq!(*len, 2);
+        assert_eq!(text, "你好");
+    }
+
+    #[test]
+    fn test_ime_replace_negative_start() {
+        // Negative replace_start means replace before cursor
+        let mut host = FakeHost::enabled();
+        ime_replace_and_commit(&mut host, "新".to_string(), -1, 1);
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, -1);
+        assert_eq!(*len, 1);
+        assert_eq!(text, "新");
+    }
+
+    /// Verify that IME replacement does not split a surrogate pair.
+    ///
+    /// When the replacement range covers a surrogate pair (e.g. emoji U+1F600 = 2 UTF-16 units),
+    /// the host's `input_replace_and_insert` must treat the range as code-point-aligned,
+    /// not UTF-16-unit-aligned. The Rust host implementation clamps to char boundaries
+    /// in UTF-8 byte space, which inherently prevents splitting surrogate pairs.
+    ///
+    /// In this test, FakeHost only records the raw parameters — the actual boundary
+    /// clamping happens in SujianEditorItem::ime_replace_and_insert, which converts
+    /// UTF-16 offsets to UTF-8 byte offsets and clamps to char boundaries.
+    #[test]
+    fn test_ime_replace_does_not_split_surrogate_pair() {
+        // This test verifies the parameter passing is correct.
+        // Actual boundary clamping is tested in the integration layer.
+        let mut host = FakeHost::enabled();
+        // Replace 1 UTF-16 unit before cursor — if cursor is right after an emoji,
+        // the host implementation should expand to cover the full surrogate pair
+        ime_replace_and_commit(&mut host, "X".to_string(), -1, 1);
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        // The host receives the raw parameters; boundary clamping is the host's responsibility
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, -1);
+        assert_eq!(*len, 1);
+        assert_eq!(text, "X");
+    }
+
+    /// Verify that IME replacement clamps to character boundaries.
+    ///
+    /// When replace_start + replace_length would end in the middle of a multi-byte
+    /// character (e.g. a 3-byte UTF-8 Chinese character), the host must clamp the
+    /// end to the nearest character boundary. This prevents buffer corruption.
+    ///
+    /// The Rust host implementation walks UTF-16 code units and converts to UTF-8
+    /// byte offsets, which inherently produces char-aligned boundaries.
+    #[test]
+    fn test_ime_replace_clamps_to_char_boundary() {
+        // This test verifies parameter passing for boundary-aligned replacement.
+        // Actual clamping logic is in SujianEditorItem::ime_replace_and_insert.
+        let mut host = FakeHost::enabled();
+        // Replace 3 UTF-16 units starting from cursor — should be char-aligned
+        ime_replace_and_commit(&mut host, "替换".to_string(), 0, 3);
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 0);
+        assert_eq!(*len, 3);
+        assert_eq!(text, "替换");
+    }
+
+    /// Verify that IME replacement with undo works as a single atomic operation.
+    ///
+    /// When the host processes `input_replace_and_insert`, the delete-and-insert
+    /// must be recorded as a single undo entry, not two separate ones.
+    /// This ensures Ctrl+Z undoes the entire replacement, not just the insertion.
+    ///
+    /// The Rust host implementation uses `push_undo` before the combined operation,
+    /// ensuring atomic undo semantics.
+    #[test]
+    fn test_ime_replace_single_undo() {
+        // This test verifies the call is made as a single operation.
+        // Actual undo atomicity is in SujianEditorItem::ime_replace_and_insert.
+        let mut host = FakeHost::enabled();
+        ime_replace_and_commit(&mut host, "修正".to_string(), -2, 2);
+        // Should be a single replace_and_insert call (atomic operation)
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
     }
 }

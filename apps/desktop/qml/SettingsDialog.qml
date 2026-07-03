@@ -312,6 +312,10 @@ Dialog {
                             smoothCursorDuration.value = dur
                             root.settingsDirty = true
                             root.debouncedSave()
+                        } else if (!v && backendRef && !root.updatingValues) {
+                            // 关闭协同时，同步独立滑条的值为后端当前值
+                            typingAnimDuration.value = backendRef.setting_typing_animation_duration_ms
+                            smoothCursorDuration.value = backendRef.setting_smooth_cursor_duration_ms
                         }
                     } }
                 }
@@ -330,11 +334,15 @@ Dialog {
                         if (!backendRef || root.updatingValues) return
                         backendRef.setting_typing_animation_duration_ms = value
                         backendRef.setting_smooth_cursor_duration_ms = value
+                        typingAnimDuration.value = value
+                        smoothCursorDuration.value = value
                     }
                     onCommitted: function() {
                         if (!backendRef || root.updatingValues) return
                         backendRef.setting_typing_animation_duration_ms = value
                         backendRef.setting_smooth_cursor_duration_ms = value
+                        typingAnimDuration.value = value
+                        smoothCursorDuration.value = value
                         root.debouncedSave()
                     }
                 }

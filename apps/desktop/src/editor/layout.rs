@@ -1,8 +1,6 @@
 use cpp::cpp;
 use qmetaobject::QString;
 
-use crate::sujian_editor_item::sujian_editor_debug_enabled;
-
 cpp! {{
     #include <QtGlobal>
     #include <QtGui/QFont>
@@ -1136,12 +1134,10 @@ pub fn calculate_cursor_x_for_line(
             && line.x_end_trailing > 0.0
         {
             let fallback_x = line.x + line.x_end_trailing;
-            if sujian_editor_debug_enabled() {
-                eprintln!(
+            crate::sujian_editor_item::editor_debug_log(&format!(
                     "[calculate_cursor_x] fallback to cached x_end_trailing: cursor={}, line.byte_end={}, x_end_trailing={:.4}, realtime_x={:.4}, fallback_x={:.4}",
                     cursor, line.byte_end, line.x_end_trailing, x, fallback_x
-                );
-            }
+                ));
             return fallback_x;
         }
 

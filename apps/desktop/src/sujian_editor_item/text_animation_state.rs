@@ -29,6 +29,7 @@ pub(crate) enum AnimationDecision {
 /// 规则：
 /// - glyph 为空：不动画
 /// - glyph 超过上限（8）：不动画
+/// - 包含复杂 grapheme（emoji/ZWJ/variation selector/combining mark）：不动画
 /// - 包含换行：文字不动画，但光标仍可动画（CursorOnly）
 /// - scrolling/loading/settings/applyingFormat：不动画
 /// - component not ready：不动画
@@ -37,6 +38,7 @@ pub(crate) enum AnimationDecision {
 pub(crate) fn should_create_text_animation(
     glyph_count: usize,
     contains_newline: bool,
+    contains_complex_grapheme: bool,
     is_scrolling: bool,
     is_loading: bool,
     is_applying_format: bool,
@@ -64,6 +66,12 @@ pub(crate) fn should_create_text_animation(
 
     // Glyph 超过上限：不动画
     if glyph_count > MAX_GLYPH_COUNT {
+        return AnimationDecision::NoAnimation;
+    }
+
+    // 包含复杂 grapheme（emoji/ZWJ/variation selector/combining mark）：不动画
+    // 复杂 grapheme 不能安全拆分为独立 glyph 做动画
+    if contains_complex_grapheme {
         return AnimationDecision::NoAnimation;
     }
 
@@ -609,6 +617,7 @@ mod tests {
         let decision = should_create_text_animation(
             3,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -624,6 +633,7 @@ mod tests {
         let decision = should_create_text_animation(
             0,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -639,6 +649,7 @@ mod tests {
         let decision = should_create_text_animation(
             9,    // glyph_count > 8
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -654,6 +665,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count
             true, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -669,6 +681,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             true, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -684,6 +697,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             true, // is_loading
             false, // is_applying_format
@@ -699,6 +713,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -714,6 +729,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -730,6 +746,7 @@ mod tests {
         let decision = should_create_text_animation(
             8,    // glyph_count == MAX_GLYPH_COUNT
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -745,6 +762,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             true, // is_applying_format
@@ -760,6 +778,7 @@ mod tests {
         let decision = should_create_text_animation(
             1,    // glyph_count
             false, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -776,6 +795,7 @@ mod tests {
         let decision = should_create_text_animation(
             5,    // glyph_count
             true, // contains_newline
+            false, // contains_complex_grapheme
             false, // is_scrolling
             false, // is_loading
             false, // is_applying_format
@@ -1199,5 +1219,35 @@ mod tests {
         assert_eq!(ranges.len(), 2);
         assert!(ranges.contains(&(5, 10)), "First animation range should remain (5, 10)");
         assert!(ranges.contains(&(10, 11)), "Second animation range should remain (10, 11)");
+    }
+
+    // --- Complex grapheme tests ---
+
+    #[test]
+    fn test_complex_grapheme_no_animation() {
+        let decision = should_create_text_animation(
+            1,     // glyph_count
+            false, // contains_newline
+            true,  // contains_complex_grapheme
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
+    }
+
+    #[test]
+    fn test_complex_grapheme_overrides_normal_glyph() {
+        // 即使 glyph_count 在正常范围内，复杂 grapheme 也不做动画
+        let decision = should_create_text_animation(
+            3,     // glyph_count
+            false, // contains_newline
+            true,  // contains_complex_grapheme
+            false, false, false, false, true, true,
+        );
+        assert_eq!(decision, AnimationDecision::NoAnimation);
     }
 }

@@ -9,6 +9,7 @@
 // Unified animation decision rules (must match Rust should_create_text_animation):
 // - glyph 为空：不动画
 // - glyph 超过上限（8）：不动画
+// - 包含复杂 grapheme（emoji/ZWJ/variation selector/combining mark）：不动画
 // - 包含换行：文字不动画，但光标仍可动画
 // - scrolling/loading/settings/applyingFormat：不动画
 // - component not ready：不动画
@@ -62,7 +63,7 @@ Item {
 
     /// 统一动画判定函数 — 与 Rust should_create_text_animation 使用相同规则
     /// 返回值: "noAnimation" / "cursorOnly" / "fullAnimation"
-    function shouldCreateTextAnimation(glyphCount, containsNewline, isScrolling, isLoading, isApplyingFormat, isApplyingSettings, animEnabled, componentReady) {
+    function shouldCreateTextAnimation(glyphCount, containsNewline, containsComplexGrapheme, isScrolling, isLoading, isApplyingFormat, isApplyingSettings, animEnabled, componentReady) {
         var MAX_GLYPH_COUNT = 8
 
         if (!animEnabled) return "noAnimation"
@@ -70,6 +71,7 @@ Item {
         if (!componentReady) return "noAnimation"
         if (glyphCount === 0) return "noAnimation"
         if (glyphCount > MAX_GLYPH_COUNT) return "noAnimation"
+        if (containsComplexGrapheme) return "noAnimation"
         if (containsNewline) return "cursorOnly"
         return "fullAnimation"
     }
@@ -249,6 +251,15 @@ Item {
             }
         }
 
+        // 检测是否包含复杂 grapheme
+        var containsComplexGrapheme = false
+        for (var ci = 0; ci < glyphRects.length; ci++) {
+            if (isComplexGrapheme(glyphRects[ci].char)) {
+                containsComplexGrapheme = true
+                break
+            }
+        }
+
         // ── 统一动画判定 ──
         // 必须与 Rust should_create_text_animation 使用相同规则
         var component = root._glyphGhostComponent
@@ -257,6 +268,7 @@ Item {
         var decision = root.shouldCreateTextAnimation(
             glyphRects.length,    // glyphCount
             containsNewline,      // containsNewline
+            containsComplexGrapheme, // containsComplexGrapheme
             false,                // isScrolling (handled via suppressed on QML side)
             root.suppressed,      // isLoading (suppressed covers loading)
             false,                // isApplyingFormat (suppressed covers this)
@@ -439,12 +451,22 @@ Item {
             }
         }
 
+        // 检测是否包含复杂 grapheme
+        var containsComplexGrapheme = false
+        for (var ci = 0; ci < glyphRects.length; ci++) {
+            if (isComplexGrapheme(glyphRects[ci].char)) {
+                containsComplexGrapheme = true
+                break
+            }
+        }
+
         var component = root._glyphGhostComponent
         var componentReady = component && component.status === Component.Ready
 
         var decision = root.shouldCreateTextAnimation(
             glyphRects.length,
             containsNewline,
+            containsComplexGrapheme,
             false,
             root.suppressed,
             false,

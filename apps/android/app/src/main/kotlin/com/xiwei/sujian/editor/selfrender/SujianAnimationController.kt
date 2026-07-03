@@ -162,16 +162,31 @@ class SujianAnimationController(
         val rangeStartUtf16 = buffer.utf8ToUtf16(vt.insertedRangeStart)
         val rangeEndUtf16 = buffer.utf8ToUtf16(vt.insertedRangeEnd)
         
-        // 跳过复杂 grapheme（emoji/ZWJ/variation selector/combining mark）
-        if (shouldSkipGlyphAnimation(text, rangeStartUtf16, rangeEndUtf16)) {
-            DiagnosticsLogger.d(TAG, "Skipping glyph animation for complex grapheme at [$rangeStartUtf16, $rangeEndUtf16)")
-            return
-        }
-        
         // 获取插入的 glyph rects（从新文本的新布局中获取）
         val glyphRects = layout.getGlyphRects(text, rangeStartUtf16, rangeEndUtf16)
         
-        // 防御：glyphRects 为空时直接 return，不设置 animatedInsertRange/hidden range，不 addAnimation
+        // 使用统一动画判定方法
+        val insertedText = text.substring(rangeStartUtf16, rangeEndUtf16.coerceAtMost(text.length))
+        val containsNewline = insertedText.contains("\n") || insertedText.contains("\r")
+        val containsComplexGrapheme = shouldSkipGlyphAnimation(text, rangeStartUtf16, rangeEndUtf16)
+        val decision = shouldCreateTextAnimation(
+            glyphCount = glyphRects.size,
+            containsNewline = containsNewline,
+            containsComplexGrapheme = containsComplexGrapheme,
+            isScrolling = renderer.isScrolling(),
+            isLoading = false,
+            isApplyingFormat = false,
+            isApplyingSettings = false,
+            animEnabled = animationEnabled,
+            componentReady = true
+        )
+        
+        if (decision != "fullAnimation") {
+            DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: decision=$decision, skipping animation")
+            return
+        }
+        
+        // 防御：glyphRects 为空时直接 return
         if (glyphRects.isEmpty()) {
             DiagnosticsLogger.d(TAG, "No glyph rects for insert transaction at [$rangeStartUtf16, $rangeEndUtf16), skipping animation")
             return
@@ -413,6 +428,32 @@ class SujianAnimationController(
             DiagnosticsLogger.d(TAG, "fetchVisualTransaction failed: ${e.message}")
             null
         }
+    }
+    
+    /**
+     * 统一动画判定方法 — 与 Rust should_create_text_animation 和 QML shouldCreateTextAnimation 使用相同规则
+     * 返回值: "noAnimation" / "cursorOnly" / "fullAnimation"
+     */
+    fun shouldCreateTextAnimation(
+        glyphCount: Int,
+        containsNewline: Boolean,
+        containsComplexGrapheme: Boolean,
+        isScrolling: Boolean,
+        isLoading: Boolean,
+        isApplyingFormat: Boolean,
+        isApplyingSettings: Boolean,
+        animEnabled: Boolean,
+        componentReady: Boolean
+    ): String {
+        val MAX_GLYPH_COUNT = 8
+        if (!animEnabled) return "noAnimation"
+        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return "noAnimation"
+        if (!componentReady) return "noAnimation"
+        if (glyphCount == 0) return "noAnimation"
+        if (glyphCount > MAX_GLYPH_COUNT) return "noAnimation"
+        if (containsComplexGrapheme) return "noAnimation"
+        if (containsNewline) return "cursorOnly"
+        return "fullAnimation"
     }
     
     /**

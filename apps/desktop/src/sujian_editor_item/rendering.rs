@@ -8,7 +8,7 @@ use qmetaobject::{
 };
 use std::time::Instant;
 
-use super::{sujian_editor_debug_enabled, SujianEditorItem};
+use super::SujianEditorItem;
 use super::cursor_controller::CursorUpdateResult;
 
 pub struct ScrollBuffer {
@@ -611,16 +611,16 @@ impl SujianEditorItem {
 
         let now_cleanup = Instant::now();
         let elapsed = paint_start.elapsed();
-        if elapsed.as_millis() > 4 && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup) && sujian_editor_debug_enabled() {
+        if elapsed.as_millis() > 4 && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup) {
             self.last_slow_paint_log = Some(now_cleanup);
-            eprintln!(
+            crate::sujian_editor_item::editor_debug_log(&format!(
                 "sujian_paint_onto: elapsed_ms={}, vis_lines=[{}..{}]={}, scrolling={}, buffer_h={:.1}",
                 elapsed.as_millis(),
                 vis_start, vis_end,
                 vis_end.saturating_sub(vis_start),
                 self.current_is_scrolling,
                 self.current_content_height,
-            );
+            ));
         }
     }
 
@@ -703,12 +703,10 @@ impl SujianEditorItem {
             return None;
         };
 
-        if sujian_editor_debug_enabled() {
-            eprintln!(
+        crate::sujian_editor_item::editor_debug_log(&format!(
                 "render_to_image: rebuilding buffer, miss_reason={}, scroll_y={:.1}, content_h={:.1}, vp_h={:.1}",
                 miss_reason, scroll_y, content_h, vp_h
-            );
-        }
+            ));
 
         let phys_w = ((img_w as f64 * dpr) as i32).max(1);
         let phys_h = ((buffer_h * dpr) as i32).max(1);
@@ -753,7 +751,7 @@ impl SujianEditorItem {
         });
 
         let render_elapsed = render_start.elapsed();
-        if renderer::should_log_slow_paint(self.last_slow_paint_log, render_start) && sujian_editor_debug_enabled() {
+        if renderer::should_log_slow_paint(self.last_slow_paint_log, render_start) {
             self.last_slow_paint_log = Some(render_start);
             let vis_lines = self
                 .editor_layout
@@ -768,13 +766,13 @@ impl SujianEditorItem {
                     end.saturating_sub(start)
                 })
                 .unwrap_or(0);
-            eprintln!(
+            crate::sujian_editor_item::editor_debug_log(&format!(
                 "sujian_render_to_image: elapsed_ms={}, img={}x{}(phys {}x{}, dpr={}), vis_lines={}, scroll_y={:.1}, buf_scroll={:.1}, buf_h={:.1}",
                 render_elapsed.as_millis(),
                 img_w, (buffer_h as i32), phys_w, phys_h, dpr,
                 vis_lines,
                 scroll_y, min_y, buffer_h,
-            );
+            ));
         }
 
         Some((image, min_y, buffer_h))
@@ -833,7 +831,7 @@ impl SujianEditorItem {
             }
         }
 
-        if sujian_editor_debug_enabled() {
+        {
             let mut line_info = String::new();
             if let Some(snapshot) = self.editor_layout.cache() {
                 if let Some(line) = snapshot.lines.iter().find(|l| l.id == visual_line_id) {
@@ -853,10 +851,10 @@ impl SujianEditorItem {
                     );
                 }
             }
-            eprintln!(
+            crate::sujian_editor_item::editor_debug_log(&format!(
                 "update_cursor_visual_position: cursor={}, target_x={:.1}, target_y={:.1}, visual_x={:.1}, visual_y={:.1}, is_animating={}, scroll_y={:.1}{}",
                 self.buffer.cursor, self.cursor_ctrl.target_x, self.cursor_ctrl.target_y, self.cursor_ctrl.visual_x, self.cursor_ctrl.visual_y, self.cursor_ctrl.animation.is_some(), scroll_y, line_info
-            );
+            ));
         }
 
         if self.cursor_ctrl.animation.is_some() {

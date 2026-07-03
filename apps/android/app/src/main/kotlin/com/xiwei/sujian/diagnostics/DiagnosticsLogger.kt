@@ -2,6 +2,7 @@ package com.xiwei.sujian.diagnostics
 
 import android.content.Context
 import android.util.Log
+import com.xiwei.sujian.BuildConfig
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
@@ -127,6 +128,7 @@ object DiagnosticsLogger {
     fun isVerbose(): Boolean = verbose.get()
 
     fun d(tag: String, message: String) {
+        if (!BuildConfig.DEBUG) return
         if (!enabled.get() || !verbose.get()) return
         val redacted = redact(message)
         Log.d(tag, redacted)
