@@ -80,7 +80,16 @@ pub(crate) enum ContentClass {
 /// Classify a workspace-relative path into a content category.
 ///
 /// Uses suffix-based rules so it works for any project/volume/chapter ID.
-pub(crate) fn classify_content_path(path: &str) -> ContentClass {
+/// The path is normalized to forward slashes before matching to ensure
+/// correct behavior on Windows where local paths may contain backslashes.
+pub(crate) fn classify_content_path(raw_path: &str) -> ContentClass {
+    // Normalize backslashes to forward slashes for consistent matching on Windows
+    let path = if raw_path.contains('\\') {
+        std::borrow::Cow::Owned(raw_path.replace('\\', "/"))
+    } else {
+        std::borrow::Cow::Borrowed(raw_path)
+    };
+
     // Local-only directories
     if path.starts_with("backups/") || path.starts_with("app-meta/") {
         return ContentClass::LocalOnly;
@@ -93,7 +102,7 @@ pub(crate) fn classify_content_path(path: &str) -> ContentClass {
         if path.contains("/chapters/") {
             return ContentClass::UserTextDocument;
         }
-        let filename = path.rsplit('/').next().unwrap_or(path);
+        let filename = path.rsplit('/').next().unwrap_or(&path);
         if matches!(
             filename,
             "note.md"
@@ -110,7 +119,7 @@ pub(crate) fn classify_content_path(path: &str) -> ContentClass {
 
     // Metadata JSON files
     if path.ends_with(".json") {
-        let filename = path.rsplit('/').next().unwrap_or(path);
+        let filename = path.rsplit('/').next().unwrap_or(&path);
         if matches!(
             filename,
             "project.json"
@@ -160,7 +169,7 @@ pub(crate) fn perform_lww_sync(
     secrets: &SyncSecrets,
     force_sync: bool,
 ) -> crate::Result<SyncResult> {
-    eprintln!(
+    log::debug!(
         "[sync] backend_type=github_api sync_mode=lww_manifest entry=perform_lww_sync workspace={}",
         workspace_path.display()
     );
@@ -211,12 +220,12 @@ pub(crate) fn perform_lww_sync(
                 // 冲突解决后（pending_take_remote 非空）必须绕过 debounce，
                 // 否则用户解决冲突后可能要等 60 秒才能同步到远端内容
                 if !state.pending_take_remote.is_empty() {
-                    eprintln!(
+                    log::debug!(
                         "[sync] debounce bypassed: pending_take_remote has {} entries",
                         state.pending_take_remote.len()
                     );
                 } else {
-                    eprintln!(
+                    log::debug!(
                         "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
                         elapsed, min_interval
                     );
@@ -294,7 +303,7 @@ fn execute_lww_sync_attempt(
     state: &mut SyncState,
     result: &mut SyncResult,
 ) -> crate::Result<SyncResult> {
-    eprintln!("[sync] github_api step=正在拉取远端清单");
+    log::debug!("[sync] github_api step=正在拉取远端清单");
     let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, config.branch);
     let resp = client
         .get(&tree_url)
@@ -340,7 +349,7 @@ fn execute_lww_sync_attempt(
         let ref_status = ref_resp.status().as_u16();
         if ref_status == 200 {
             // 仓库和分支都存在，tree 404 说明是空仓库，remote_tree_files 保持为空
-            eprintln!(
+            log::debug!(
                 "[sync] tree 404 but ref 200: branch {} exists with empty tree, treating as empty remote",
                 config.branch
             );
@@ -402,7 +411,7 @@ fn execute_lww_sync_attempt(
         }
     }
 
-    eprintln!("[sync] github_api step=正在比较本地和远端");
+    log::debug!("[sync] github_api step=正在比较本地和远端");
     let local_entries = scan_workspace_for_sync(workspace_path)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut local_records = std::collections::HashMap::new();
@@ -536,7 +545,7 @@ fn execute_lww_sync_attempt(
     let mut pending_take_remote_downloaded: Vec<String> = Vec::new();
     let mut pending_take_remote_failed: Vec<String> = Vec::new();
     if !state.pending_take_remote.is_empty() {
-        eprintln!(
+        log::debug!(
             "[sync] processing pending_take_remote count={}",
             state.pending_take_remote.len()
         );
@@ -587,9 +596,9 @@ fn execute_lww_sync_attempt(
                 let now_ts = chrono::Utc::now().timestamp_millis();
                 state.known_files_updated_at.insert(path.clone(), now_ts);
                 pending_take_remote_downloaded.push(path.clone());
-                eprintln!("[sync] pending_take_remote downloaded path={}", path);
+                log::debug!("[sync] pending_take_remote downloaded path={}", path);
             } else {
-                eprintln!(
+                log::debug!(
                     "[sync] pending_take_remote: remote file missing for path={}, keeping in pending",
                     path
                 );
@@ -646,7 +655,7 @@ fn execute_lww_sync_attempt(
         // Skip paths that have unresolved conflicts — do not auto-upload,
         // auto-download, or apply LWW/three-way resolution.
         if unresolved_conflict_paths.contains(&path) {
-            eprintln!(
+            log::debug!(
                 "[sync] skipping unresolved_conflict path={} (awaiting user resolution)",
                 path
             );
@@ -708,7 +717,7 @@ fn execute_lww_sync_attempt(
                             }
                         }
                         ThreeWayResult::BothChanged => {
-                            eprintln!(
+                            log::warn!(
                                 "[sync] document_conflict path={} local_hash={} remote_hash={} base_hash={}",
                                 path, local_hash, remote_hash, base_hash
                             );
@@ -788,7 +797,7 @@ fn execute_lww_sync_attempt(
                             continue;
                         }
                         remote_wins = remote_rec.device_id > local_rec.device_id;
-                        eprintln!(
+                        log::debug!(
                             "[sync] lww_tie_breaker path={} winner={} local_device={} remote_device={}",
                             path,
                             if remote_wins { "remote" } else { "local" },
@@ -855,7 +864,7 @@ fn execute_lww_sync_attempt(
         }
     }
 
-    eprintln!("[sync] github_api step=download newer remote files");
+    log::debug!("[sync] github_api step=download newer remote files");
     if !to_download.is_empty() {
         let download_pool = sync_download_pool(to_download.len())?;
         let download_result: crate::Result<()> = download_pool.install(|| {
@@ -907,7 +916,7 @@ fn execute_lww_sync_attempt(
     std::fs::write(&full_manifest_path, &manifest_json)
         .map_err(|e| crate::Error::Other(format!("local_io_error: write manifest: {}", e)))?;
 
-    eprintln!("[sync] github_api step=正在上传本地较新文件");
+    log::debug!("[sync] github_api step=正在上传本地较新文件");
     for path in &to_upload {
         let full_path = workspace_path.join(path);
         if !full_path.exists() {
@@ -1062,6 +1071,6 @@ fn execute_lww_sync_attempt(
     result.commit_hash = None;
     result.first_sync_mode = FirstSyncMode::AlreadyGitRepo;
 
-    eprintln!("[sync] github_api step=同步完成");
+    log::debug!("[sync] github_api step=同步完成");
     Ok(result.clone())
 }
