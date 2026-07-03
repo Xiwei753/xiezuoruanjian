@@ -2,7 +2,7 @@ package com.xiwei.sujian.ui
 
 import android.content.Intent
 import android.os.Bundle
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import android.view.Menu
 import android.view.MenuItem
 import android.view.LayoutInflater
@@ -144,7 +144,7 @@ class ChapterListActivity : AppCompatActivity() {
                     tvStatsChapters.text = getString(R.string.stats_chapters, stats.chapterCount)
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Failed to load project stats", e)
+                DiagnosticsLogger.w(TAG, "Failed to load project stats", e)
             }
         }
     }
@@ -531,7 +531,7 @@ class ChapterListActivity : AppCompatActivity() {
                         try {
                             startActivity(intent)
                         } catch (e: Exception) {
-                            Log.e(TAG, "Failed to open editor", e)
+                            DiagnosticsLogger.e(TAG, "Failed to open editor", e)
                             android.widget.Toast.makeText(this@ChapterListActivity, getString(R.string.error_open_editor, e.message ?: ""), android.widget.Toast.LENGTH_LONG).show()
                         }
                     }
