@@ -203,7 +203,6 @@ QtObject {
 
     function logWriterWarning(event, message) {
         var msg = message || "";
-        console.warn("[SujianDebug][WARN][qml][module=editor][event=" + event + "] " + msg);
         if (backendRef && backendRef.log_qml) {
             backendRef.log_qml("warn", "editor", event, msg);
         }
