@@ -1432,6 +1432,7 @@
         <translation>配置已保存</translation>
     </message>
 </context>
+<context>
     <name>TopWritingToolbar</name>
     <message>
         <source>一键排版</source>
