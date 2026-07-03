@@ -1,6 +1,6 @@
 package com.xiwei.sujian.data
 
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.EditorMode
 import com.xiwei.sujian.model.FoldPosture
 import com.xiwei.sujian.model.HeightClass
@@ -50,7 +50,7 @@ class LayoutPolicyBridge(private val appServiceBridge: AppServiceBridge) {
                 else -> null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "resolveLayout failed: ${e.message}", e)
+            DiagnosticsLogger.e(TAG, "resolveLayout failed: ${e.message}", e)
             null
         }
     }
