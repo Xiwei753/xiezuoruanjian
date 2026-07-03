@@ -40,7 +40,7 @@ pub fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
 
     if let Err(e) = write_and_sync_tmp() {
         if let Err(cleanup_err) = fs::remove_file(&tmp_path) {
-            eprintln!(
+            log::warn!(
                 "[storage] failed to cleanup tmp file {}: {}",
                 tmp_path.display(),
                 cleanup_err
@@ -51,7 +51,7 @@ pub fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
 
     if let Err(e) = fs::rename(&tmp_path, path) {
         if let Err(cleanup_err) = fs::remove_file(&tmp_path) {
-            eprintln!(
+            log::warn!(
                 "[storage] failed to cleanup tmp file {}: {}",
                 tmp_path.display(),
                 cleanup_err
