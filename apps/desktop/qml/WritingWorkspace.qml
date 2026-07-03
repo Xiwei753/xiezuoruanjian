@@ -67,7 +67,6 @@ Rectangle {
     function requestEditorFocus() {
         Qt.callLater(function() {
             if (sujianEditor && sujianEditor.visible && sujianEditor.editor_enabled) {
-                console.log("[QML] editor_request_text_input_focus");
                 sujianEditor.request_text_input_focus();
             }
         });
@@ -157,7 +156,6 @@ Rectangle {
                 ""
             );
         }
-        console.log("[QML] enter_writing_focus_requested");
         root.requestEditorFocus();
     }
 
@@ -182,7 +180,6 @@ Rectangle {
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
             sujianEditor.snap_next_cursor_update();
-            console.log("[QML] chapter_loaded_focus_requested chapterId=" + (d.chapterId || cId));
             root.requestEditorFocus();
         }
     }
@@ -1083,7 +1080,6 @@ Rectangle {
         target: editorController
         function onChapterIdChanged() {
             if (editorController.chapterId) {
-                console.log("[QML] chapter_id_changed_focus_requested chapterId=" + editorController.chapterId);
                 root.requestEditorFocus();
                 // 保存导航状态（包含当前章节信息）
                 if (workspaceBackend) {
