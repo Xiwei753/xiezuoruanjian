@@ -104,7 +104,7 @@ impl SettingsRegistry {
     }
 
     pub fn default_registry() -> Self {
-        let items = vec![
+        let mut items = vec![
             SettingItem {
                 id: "editor.font_size".to_string(),
                 title: "字体大小".to_string(),
