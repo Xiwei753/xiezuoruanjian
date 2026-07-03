@@ -318,6 +318,7 @@
     <string name="btn_export_diagnostics">导出诊断包</string>
     <string name="btn_clear_logs">清空日志</string>
     <string name="btn_copy_device_info">复制设备信息</string>
+    <string name="share_diagnostics_title">分享诊断包</string>
     <string name="diagnostics_export_success">诊断包已生成，正在分享…</string>
     <string name="diagnostics_export_failed">导出诊断包失败</string>
     <string name="diagnostics_cleared">日志已清空</string>

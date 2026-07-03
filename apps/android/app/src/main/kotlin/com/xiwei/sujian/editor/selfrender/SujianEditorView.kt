@@ -282,7 +282,7 @@ class SujianEditorView @JvmOverloads constructor(
             textPaint.textSize = sizePx
             // 重算首行缩进像素值（字号变化后字符宽度变了）
             if (autoIndentEnabled && autoIndentWidthChars > 0) {
-                val newIndentPx = textPaint.measureText("中") * autoIndentWidthChars
+                val newIndentPx = textPaint.measureText("中") * autoIndentWidthChars // i18n-exempt
                 lastFirstLineIndentPx = newIndentPx
             }
             // 更新 layout 参数
@@ -380,7 +380,7 @@ class SujianEditorView @JvmOverloads constructor(
         autoIndentEnabled = enabled
         autoIndentWidthChars = widthChars
         val indentPx = if (enabled && widthChars > 0) {
-            textPaint.measureText("中") * widthChars
+            textPaint.measureText("中") * widthChars // i18n-exempt
         } else {
             0f
         }

@@ -76,13 +76,24 @@ pub enum SettingValue {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SettingItem {
     pub id: String,
-    pub title: String,
+    /// i18n key for the setting title (e.g. "settings.item.editor_font_size")
+    #[serde(alias = "title")]
+    pub title_key: String,
+    /// Fallback display text when i18n is unavailable
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title_fallback: Option<String>,
-    pub description: String,
+    /// i18n key for the setting description (e.g. "settings.item.editor_font_size.desc")
+    #[serde(alias = "description")]
+    pub description_key: String,
+    /// Fallback display text when i18n is unavailable
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description_fallback: Option<String>,
-    pub category: SettingCategory,
+    /// i18n key for the setting category (e.g. "settings.category.editor")
+    #[serde(alias = "category")]
+    pub category_key: String,
+    /// Fallback display text when i18n is unavailable
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub category_fallback: Option<String>,
     pub sub_category: SettingSubCategory,
     pub value_type: SettingValueType,
     pub default_value: SettingValue,
@@ -112,11 +123,12 @@ impl SettingsRegistry {
         let mut items = vec![
             SettingItem {
                 id: "editor.font_size".to_string(),
-                title: "settings.item.editor_font_size".to_string(),
+                title_key: "settings.item.editor_font_size".to_string(),
                 title_fallback: Some("字体大小".to_string()),
-                description: "settings.item.editor_font_size.desc".to_string(),
+                description_key: "settings.item.editor_font_size.desc".to_string(),
                 description_fallback: Some("编辑器正文的字体大小".to_string()),
-                category: SettingCategory::Editor,
+                category_key: "settings.category.editor".to_string(),
+                category_fallback: Some("编辑器".to_string()),
                 sub_category: SettingSubCategory::Appearance,
                 value_type: SettingValueType::Number,
                 default_value: SettingValue::Number(16.0),
@@ -132,11 +144,12 @@ impl SettingsRegistry {
             },
             SettingItem {
                 id: "sync.git.token".to_string(),
-                title: "settings.item.token".to_string(),
+                title_key: "settings.item.token".to_string(),
                 title_fallback: Some("Git 同步 Token".to_string()),
-                description: "settings.item.token.desc".to_string(),
+                description_key: "settings.item.token.desc".to_string(),
                 description_fallback: Some("用于 Git 同步的凭证".to_string()),
-                category: SettingCategory::Sync,
+                category_key: "settings.category.sync".to_string(),
+                category_fallback: Some("同步".to_string()),
                 sub_category: SettingSubCategory::Network,
                 value_type: SettingValueType::String,
                 default_value: SettingValue::String("".to_string()),
@@ -158,11 +171,12 @@ impl SettingsRegistry {
                 1,
                 SettingItem {
                     id: "ai.deepseek.api_key".to_string(),
-                    title: "settings.item.ai_api_key".to_string(),
+                    title_key: "settings.item.ai_api_key".to_string(),
                     title_fallback: Some("DeepSeek API 密钥".to_string()),
-                    description: "settings.item.ai_api_key.desc".to_string(),
+                    description_key: "settings.item.ai_api_key.desc".to_string(),
                     description_fallback: Some("用于调用 DeepSeek 服务的凭证".to_string()),
-                    category: SettingCategory::DeepSeekAi,
+                    category_key: "settings.category.deepseek_ai".to_string(),
+                    category_fallback: Some("DeepSeek AI".to_string()),
                     sub_category: SettingSubCategory::Network,
                     value_type: SettingValueType::String,
                     default_value: SettingValue::String("".to_string()),
@@ -198,18 +212,22 @@ mod tests {
         let registry = SettingsRegistry::default_registry();
         assert!(!registry.items.is_empty());
 
-        // Verify i18n key pattern for title/description and fallback presence
+        // Verify i18n key pattern for title_key/description_key and fallback presence
         let font_size_item = registry.items.iter().find(|i| i.id == "editor.font_size").unwrap();
-        assert!(font_size_item.title.starts_with("settings.item."));
-        assert!(font_size_item.description.starts_with("settings.item."));
+        assert!(font_size_item.title_key.starts_with("settings.item."));
+        assert!(font_size_item.description_key.starts_with("settings.item."));
         assert!(font_size_item.title_fallback.is_some());
         assert!(font_size_item.description_fallback.is_some());
+        assert!(font_size_item.category_key.starts_with("settings.category."));
+        assert!(font_size_item.category_fallback.is_some());
 
         let token_item = registry.items.iter().find(|i| i.id == "sync.git.token").unwrap();
-        assert!(token_item.title.starts_with("settings.item."));
-        assert!(token_item.description.starts_with("settings.item."));
+        assert!(token_item.title_key.starts_with("settings.item."));
+        assert!(token_item.description_key.starts_with("settings.item."));
         assert!(token_item.title_fallback.is_some());
         assert!(token_item.description_fallback.is_some());
+        assert!(token_item.category_key.starts_with("settings.category."));
+        assert!(token_item.category_fallback.is_some());
     }
 
     #[test]
@@ -217,11 +235,12 @@ mod tests {
         // When fallback is None, it should be skipped in serialization
         let item = SettingItem {
             id: "test".to_string(),
-            title: "settings.item.test".to_string(),
+            title_key: "settings.item.test".to_string(),
             title_fallback: None,
-            description: "settings.item.test.desc".to_string(),
+            description_key: "settings.item.test.desc".to_string(),
             description_fallback: None,
-            category: SettingCategory::Editor,
+            category_key: "settings.category.editor".to_string(),
+            category_fallback: None,
             sub_category: SettingSubCategory::General,
             value_type: SettingValueType::Boolean,
             default_value: SettingValue::Boolean(true),
@@ -238,5 +257,33 @@ mod tests {
         let json = serde_json::to_string(&item).unwrap();
         assert!(!json.contains("title_fallback"));
         assert!(!json.contains("description_fallback"));
+        assert!(!json.contains("category_fallback"));
+        // Verify new field names appear in serialized output
+        assert!(json.contains("\"title_key\""));
+        assert!(json.contains("\"description_key\""));
+        assert!(json.contains("\"category_key\""));
+    }
+
+    #[test]
+    fn test_setting_item_deserialize_old_field_names() {
+        // Verify that old JSON with "title", "description", "category" fields
+        // can still be deserialized via serde alias
+        let old_json = r#"{
+            "id": "test",
+            "title": "settings.item.test",
+            "description": "settings.item.test.desc",
+            "category": "Editor",
+            "sub_category": "General",
+            "value_type": "Boolean",
+            "default_value": {"Boolean": true},
+            "is_syncable": false,
+            "is_sensitive": false,
+            "requires_restart": false,
+            "is_experimental": false
+        }"#;
+        let item: SettingItem = serde_json::from_str(old_json).unwrap();
+        assert_eq!(item.title_key, "settings.item.test");
+        assert_eq!(item.description_key, "settings.item.test.desc");
+        assert_eq!(item.category_key, "Editor");
     }
 }

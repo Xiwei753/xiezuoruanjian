@@ -2,7 +2,10 @@
 """Android Kotlin 中文硬编码检查脚本。
 
 扫描 Android Kotlin 源码，检测字符串字面量中的中文字符（Unicode \u4e00-\u9fff），
-防止新增中文硬编码 UI 文案。注释、日志、测试文件、白名单文件中的中文不报错。
+防止新增中文硬编码 UI 文案。注释、日志（Log/warn）、测试文件、行级豁免标记中的中文不报错。
+
+行级豁免：在 Kotlin 代码行末添加 `// i18n-exempt` 注释，该行的中文字符串不报错。
+自动豁免：注释行、Log.d/e/w/i/v 调用行、warn() 调用行自动跳过，无需标记。
 
 同时检查 strings.xml 格式有效性。
 
@@ -44,21 +47,17 @@ STRING_LITERAL_RE = re.compile(r'"((?:[^"\\]|\\.)*)"', re.DOTALL)
 # Log 调用正则（Log.d / Log.e / Log.w / Log.i / Log.v）
 LOG_CALL_RE = re.compile(r"\bLog\.[dewiv]\s*\(")
 
+# warn() 调用正则（DiagnosticsLogger.warn，与 Log 同理属于诊断日志）
+WARN_CALL_RE = re.compile(r"\bwarn\s*\(")
+
 # 注释行正则（行首空白后以 // 或 /* 或 * 开头）
 COMMENT_LINE_RE = re.compile(r"^\s*(//|/\*|\*)")
 
 # 行尾注释正则（匹配 // 及其后的所有内容，但不在字符串字面量内）
 TRAILING_COMMENT_RE = re.compile(r'(?<!\\)//.*$')
 
-# 文件名白名单（基名匹配，允许这些文件中的中文字符串）
-FILENAME_WHITELIST = {
-    "DiagnosticsExporter.kt",
-    "DiagnosticsLogger.kt",
-    "EditorEventRingBuffer.kt",
-    "BridgeResult.kt",          # @Deprecated 注解中的中文是技术说明，非 UI 文案
-    "SettingsRepository.kt",    # warn() → DiagnosticsLogger 日志输出，非用户可见
-    "SujianEditorView.kt",      # "中" 用于排版测量字符宽度，非 UI 文案
-}
+# 行级豁免标记正则（行末 // i18n-exempt 表示该行中文字符串允许豁免）
+I18N_EXEMPT_RE = re.compile(r"//\s*i18n-exempt\s*$")
 
 # 文件名包含 Test/test 的视为测试文件，跳过检查
 TEST_FILE_RE = re.compile(r"[Tt]est")
@@ -99,12 +98,6 @@ def check_kotlin_file(filepath: Path, verbose: bool = False) -> list[tuple[int, 
     """
     errors = []
 
-    # 白名单文件跳过
-    if filepath.name in FILENAME_WHITELIST:
-        if verbose:
-            print(f"  SKIP (whitelist): {filepath.name}")
-        return errors
-
     # 测试文件跳过
     if TEST_FILE_RE.search(filepath.name):
         if verbose:
@@ -128,6 +121,14 @@ def check_kotlin_file(filepath: Path, verbose: bool = False) -> list[tuple[int, 
 
         # 跳过 Log 调用行（日志允许中文）
         if LOG_CALL_RE.search(line):
+            continue
+
+        # 跳过 warn() 调用行（DiagnosticsLogger.warn 诊断日志，允许中文）
+        if WARN_CALL_RE.search(line):
+            continue
+
+        # 跳过行级豁免标记（行末 // i18n-exempt）
+        if I18N_EXEMPT_RE.search(line):
             continue
 
         # 移除行尾注释后再检查字符串字面量
@@ -180,7 +181,7 @@ def check_all_kotlin_files(verbose: bool = False) -> int:
     if total_errors > 0:
         print(f"\nFAIL: 发现 {total_errors} 处 Kotlin 中文字符串硬编码 "
               f"（涉及 {error_files} 个文件）")
-        print("提示: UI 文案应放入 strings.xml，注释/日志/白名单文件除外")
+        print("提示: UI 文案应放入 strings.xml，注释/日志/warn()/i18n-exempt 除外")
     else:
         print(f"PASS: {len(kt_files)} 个 Kotlin 文件无中文字符串硬编码")
 
