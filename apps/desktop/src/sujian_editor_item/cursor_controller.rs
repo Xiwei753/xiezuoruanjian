@@ -138,12 +138,9 @@ impl CursorController {
         // Determine if we should snap (no animation)
         // force_snap_next is NOT here: it only gates large_distance below,
         // so small-distance clicks still animate, while huge jumps snap.
-        let should_snap = is_scrolling
-            || is_selecting
-            || !old_visible
-            || scroll_changed;
+        let should_snap = is_scrolling || is_selecting || !old_visible || scroll_changed;
 
-        // Large-distance snap: only when force_snap_next is true AND the
+        // Large-distance snap: when force_snap_next is true AND the
         // cursor moved a large distance. This prevents animating across
         // huge jumps (click far away, chapter switch) while allowing
         // normal typing / IME / Enter to animate even across lines.
@@ -151,6 +148,14 @@ impl CursorController {
         let dx = (cursor_x - self.visual_x).abs();
         let dy = (cursor_y - self.visual_y).abs();
         let large_distance = self.force_snap_next && (dx > 80.0 || dy > cursor_h * 1.5);
+
+        // Safety snap: even without force_snap_next, if the cursor moves
+        // more than 3 lines vertically, snap instead of animating.
+        // This covers IME commit scenarios where preedit was on a different
+        // line (e.g. cross-line preedit, candidate replacement with large
+        // cursor retreat/advance). 3 lines = 3 * cursor_h is a reasonable
+        // threshold — normal typing/IME/Enter stays within 1-2 lines.
+        let safety_snap = dy > cursor_h * 3.0;
 
         let now = Instant::now();
 
@@ -162,46 +167,46 @@ impl CursorController {
             0
         };
 
-        let (visual_x, visual_y, new_animation) = if should_snap
-            || !smooth_enabled
-            || large_distance
-        {
-            (cursor_x, cursor_y, None)
-        } else if let Some(ref anim) = self.animation {
-            if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
-                let (cur_x, cur_y) = anim.current_position(now);
-                let new_anim = CursorAnimationState {
-                    start_x: cur_x,
-                    start_y: cur_y,
-                    target_x: cursor_x,
-                    target_y: cursor_y,
-                    start_time: now,
-                    duration_ms: effective_duration_ms,
-                };
-                (cur_x, cur_y, Some(new_anim))
-            } else if anim.is_finished(now) {
-                (anim.target_x, anim.target_y, None)
-            } else {
-                let (cur_x, cur_y) = anim.current_position(now);
-                (cur_x, cur_y, Some(anim.clone()))
-            }
-        } else {
-            let prev_vx = self.visual_x;
-            let prev_vy = self.visual_y;
-            if (prev_vx - cursor_x).abs() > 0.01 || (prev_vy - cursor_y).abs() > 0.01 {
-                let new_anim = CursorAnimationState {
-                    start_x: prev_vx,
-                    start_y: prev_vy,
-                    target_x: cursor_x,
-                    target_y: cursor_y,
-                    start_time: now,
-                    duration_ms: effective_duration_ms,
-                };
-                (prev_vx, prev_vy, Some(new_anim))
-            } else {
+        let (visual_x, visual_y, new_animation) =
+            if should_snap || !smooth_enabled || large_distance || safety_snap {
                 (cursor_x, cursor_y, None)
-            }
-        };
+            } else if let Some(ref anim) = self.animation {
+                if (anim.target_x - cursor_x).abs() > 0.01
+                    || (anim.target_y - cursor_y).abs() > 0.01
+                {
+                    let (cur_x, cur_y) = anim.current_position(now);
+                    let new_anim = CursorAnimationState {
+                        start_x: cur_x,
+                        start_y: cur_y,
+                        target_x: cursor_x,
+                        target_y: cursor_y,
+                        start_time: now,
+                        duration_ms: effective_duration_ms,
+                    };
+                    (cur_x, cur_y, Some(new_anim))
+                } else if anim.is_finished(now) {
+                    (anim.target_x, anim.target_y, None)
+                } else {
+                    let (cur_x, cur_y) = anim.current_position(now);
+                    (cur_x, cur_y, Some(anim.clone()))
+                }
+            } else {
+                let prev_vx = self.visual_x;
+                let prev_vy = self.visual_y;
+                if (prev_vx - cursor_x).abs() > 0.01 || (prev_vy - cursor_y).abs() > 0.01 {
+                    let new_anim = CursorAnimationState {
+                        start_x: prev_vx,
+                        start_y: prev_vy,
+                        target_x: cursor_x,
+                        target_y: cursor_y,
+                        start_time: now,
+                        duration_ms: effective_duration_ms,
+                    };
+                    (prev_vx, prev_vy, Some(new_anim))
+                } else {
+                    (cursor_x, cursor_y, None)
+                }
+            };
 
         self.animation = new_animation;
         self.visual_x = visual_x;

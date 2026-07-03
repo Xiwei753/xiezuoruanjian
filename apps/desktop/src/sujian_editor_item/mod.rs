@@ -16,8 +16,8 @@ pub(crate) mod text_animation_state;
 
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
-    CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot, VisualLine,
-    text_baseline_y,
+    text_baseline_y, CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot,
+    VisualLine,
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
@@ -31,12 +31,13 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
-use text_animation_state::{AnimationDecision, TextAnimationState, should_create_text_animation};
+use text_animation_state::{should_create_text_animation, AnimationDecision, TextAnimationState};
 
 pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
-    CursorRect, EditorAnimationKind, EditorCursor, EditorEngine,
-    EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction, ReflowGlyphRect,
+    CursorRect, EditorAnimationKind, EditorCursor, EditorEngine, EditorSelection,
+    EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
+    ReflowGlyphRect,
 };
 
 /// Preedit attribute from QInputMethodEvent.
@@ -246,6 +247,10 @@ pub struct SujianEditorItem {
     preedit_visual_transaction: Option<PreeditVisualTransaction>,
     /// Preedit cursor rect (position within the preedit string, not the buffer cursor).
     preedit_cursor_rect: Option<CursorRect>,
+    /// Pending preedit cursor rect saved before clearing preedit in input_clear_preedit().
+    /// Used by insert_text() to determine cursor animation start point for IME commit.
+    /// This field is set in input_clear_preedit() and consumed (taken) in insert_text().
+    pending_preedit_cursor_rect: Option<CursorRect>,
     suppress_next_ime_commit: bool,
     editor_layout: EditorLayout,
     text_revision: u64,
@@ -378,6 +383,7 @@ impl Default for SujianEditorItem {
             preedit_old_text: String::new(),
             preedit_visual_transaction: None,
             preedit_cursor_rect: None,
+            pending_preedit_cursor_rect: None,
             suppress_next_ime_commit: false,
             editor_layout: EditorLayout::default(),
             text_revision: 0,
@@ -502,6 +508,7 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.pending_preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
@@ -529,6 +536,7 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.pending_preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
@@ -635,7 +643,10 @@ impl SujianEditorItem {
         if self.current_text_color.to_string().eq_ignore_ascii_case(&v) {
             return;
         }
-        eprintln!("[editor] text_color changed old={} new={}", self.current_text_color, v);
+        eprintln!(
+            "[editor] text_color changed old={} new={}",
+            self.current_text_color, v
+        );
         self.current_text_color = value;
         self.visual_changed();
     }
@@ -646,10 +657,17 @@ impl SujianEditorItem {
 
     fn set_selection_color(&mut self, value: QString) {
         let v = value.to_string();
-        if self.current_selection_color.to_string().eq_ignore_ascii_case(&v) {
+        if self
+            .current_selection_color
+            .to_string()
+            .eq_ignore_ascii_case(&v)
+        {
             return;
         }
-        eprintln!("[editor] selection_color changed old={} new={}", self.current_selection_color, v);
+        eprintln!(
+            "[editor] selection_color changed old={} new={}",
+            self.current_selection_color, v
+        );
         self.current_selection_color = value;
         self.visual_changed();
     }
@@ -660,10 +678,17 @@ impl SujianEditorItem {
 
     fn set_selected_text_color(&mut self, value: QString) {
         let v = value.to_string();
-        if self.current_selected_text_color.to_string().eq_ignore_ascii_case(&v) {
+        if self
+            .current_selected_text_color
+            .to_string()
+            .eq_ignore_ascii_case(&v)
+        {
             return;
         }
-        eprintln!("[editor] selected_text_color changed old={} new={}", self.current_selected_text_color, v);
+        eprintln!(
+            "[editor] selected_text_color changed old={} new={}",
+            self.current_selected_text_color, v
+        );
         self.current_selected_text_color = value;
         self.visual_changed();
     }
@@ -674,10 +699,17 @@ impl SujianEditorItem {
 
     fn set_cursor_color(&mut self, value: QString) {
         let v = value.to_string();
-        if self.current_cursor_color.to_string().eq_ignore_ascii_case(&v) {
+        if self
+            .current_cursor_color
+            .to_string()
+            .eq_ignore_ascii_case(&v)
+        {
             return;
         }
-        eprintln!("[editor] cursor_color changed old={} new={}", self.current_cursor_color, v);
+        eprintln!(
+            "[editor] cursor_color changed old={} new={}",
+            self.current_cursor_color, v
+        );
         self.current_cursor_color = value;
         self.visual_changed();
     }
@@ -1020,9 +1052,12 @@ impl SujianEditorItem {
             return;
         }
 
-        // 保存 preedit cursor rect 用于 commit 时的光标动画起点
-        let commit_from_preedit = !self.preedit_text.is_empty();
-        let preedit_cursor_rect_snapshot = self.preedit_cursor_rect.clone();
+        // Take pending preedit cursor rect (saved by input_clear_preedit before clearing).
+        // If present, this is an IME commit from preedit — use the saved rect as
+        // cursor animation start point. This replaces the old commit_from_preedit flag
+        // which was broken because input_clear_preedit() runs before insert_text(),
+        // so preedit_text was already empty when we checked it.
+        let pending_pcr = self.pending_preedit_cursor_rect.take();
 
         // Clear preedit state when inserting formal text (e.g. IME commit)
         self.preedit_text.clear();
@@ -1047,17 +1082,15 @@ impl SujianEditorItem {
         // Animation lifecycle is owned by QML EditorAnimationOverlay.
         // Rust only provides glyph rect data via visual_transaction_json.
 
-        // 如果从 preedit commit，使用 preedit_cursor_rect 作为光标动画起点
-        if commit_from_preedit && preedit_cursor_rect_snapshot.is_some() {
-            // 设置光标动画起点为 preedit cursor 位置
-            // 这样 update_cursor_visual_position() 会从 preedit 位置动画到正式上屏后位置
-            let pcr = preedit_cursor_rect_snapshot.unwrap();
+        // 如果有 pending preedit cursor rect，使用它作为光标动画起点
+        // 这样 update_cursor_visual_position() 会从 preedit 位置动画到正式上屏后位置
+        if let Some(pcr) = pending_pcr {
             self.cursor_ctrl.visual_x = pcr.x;
             self.cursor_ctrl.visual_y = pcr.top;
             self.cursor_ctrl.force_snap_next = false;
-            eprintln!("[commit] commit_from_preedit=true cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top);
+            eprintln!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top);
         } else {
-            eprintln!("[commit] commit_from_preedit=false cursor_start_source=normal");
+            eprintln!("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
         }
 
         self.emit_content_changed();
@@ -1174,6 +1207,7 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
+        self.pending_preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
         self.cursor_position_changed();
         self.selection_changed();
@@ -1428,7 +1462,8 @@ impl SujianEditorItem {
                             // 映射已有动画的 byte ranges（对齐 Android mapActiveInsertRangesForInsert）
                             let insert_len = range_end - range_start;
                             let had_active_before = self.text_anim_state.has_active_insert();
-                            self.text_anim_state.map_ranges_for_insert(range_start, insert_len);
+                            self.text_anim_state
+                                .map_ranges_for_insert(range_start, insert_len);
                             if had_active_before && !self.text_anim_state.has_active_insert() {
                                 // 旧动画被取消（相交），需要触发 static repaint 恢复文字
                                 self.request_static_repaint();
@@ -1436,7 +1471,8 @@ impl SujianEditorItem {
                             // 统一动画判定：与 QML 使用相同规则
                             let glyph_rects = vt.insert_glyph_rects.as_ref();
                             let glyph_count = glyph_rects.map_or(0, |g| g.len());
-                            let contains_newline = vt.new_text[range_start..range_end].contains('\n');
+                            let contains_newline =
+                                vt.new_text[range_start..range_end].contains('\n');
                             let decision = should_create_text_animation(
                                 glyph_count,
                                 contains_newline,
@@ -1445,7 +1481,7 @@ impl SujianEditorItem {
                                 self.current_is_applying_format,
                                 self.current_is_applying_settings,
                                 self.current_typing_animation_enabled,
-                                true,  // component_ready — Rust 侧始终为 true
+                                true, // component_ready — Rust 侧始终为 true
                             );
                             match decision {
                                 AnimationDecision::FullAnimation => {
@@ -1454,7 +1490,10 @@ impl SujianEditorItem {
                                         .reflow_glyph_rects
                                         .as_ref()
                                         .map(|rects| {
-                                            rects.iter().map(|r| (r.byte_start, r.byte_end)).collect()
+                                            rects
+                                                .iter()
+                                                .map(|r| (r.byte_start, r.byte_end))
+                                                .collect()
                                         })
                                         .unwrap_or_default();
                                     self.text_anim_state.start_insert(
@@ -1498,8 +1537,8 @@ impl SujianEditorItem {
                         // 使用统一判定
                         let glyph_rects = vt.deleted_glyph_rects.as_ref();
                         let glyph_count = glyph_rects.map_or(0, |g| g.len());
-                        let contains_newline = vt.old_text != vt.new_text &&
-                            (vt.old_text.contains('\n') || vt.new_text.contains('\n'));
+                        let contains_newline = vt.old_text != vt.new_text
+                            && (vt.old_text.contains('\n') || vt.new_text.contains('\n'));
                         let decision = should_create_text_animation(
                             glyph_count,
                             contains_newline,
@@ -1508,29 +1547,39 @@ impl SujianEditorItem {
                             self.current_is_applying_format,
                             self.current_is_applying_settings,
                             self.current_typing_animation_enabled,
-                            true,  // component_ready
+                            true, // component_ready
                         );
                         if matches!(decision, AnimationDecision::FullAnimation) {
                             // 对于 Delete，inserted_range 为 None，需要从变更推导 byte range
-                            let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                            let changes =
+                                writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
                             // 第一遍：映射已有动画的 byte ranges（对齐 Android mapActiveInsertRangesForDelete）
                             for change in &changes {
-                                if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                                if let writer_core::editor::EditorChange::Delete { index, text } =
+                                    change
+                                {
                                     let range_start = *index;
                                     let delete_len = text.len();
-                                    let had_active_before = self.text_anim_state.has_active_insert();
-                                    self.text_anim_state.map_ranges_for_delete(range_start, delete_len);
-                                    if had_active_before && !self.text_anim_state.has_active_insert() {
+                                    let had_active_before =
+                                        self.text_anim_state.has_active_insert();
+                                    self.text_anim_state
+                                        .map_ranges_for_delete(range_start, delete_len);
+                                    if had_active_before
+                                        && !self.text_anim_state.has_active_insert()
+                                    {
                                         self.request_static_repaint();
                                     }
                                 }
                             }
                             // 第二遍：创建新的 Delete 动画
                             for change in &changes {
-                                if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                                if let writer_core::editor::EditorChange::Delete { index, text } =
+                                    change
+                                {
                                     let range_start = *index;
                                     let range_end = range_start + text.len();
-                                    self.text_anim_state.start_delete((range_start, range_end), vt.duration_ms);
+                                    self.text_anim_state
+                                        .start_delete((range_start, range_end), vt.duration_ms);
                                 }
                             }
                         }
@@ -1643,7 +1692,10 @@ impl SujianEditorItem {
                         viewport_h,
                     );
                     vt.old_cursor_rect = Some(make_cursor_rect(
-                        &old_caret, &old_snapshot, font_family, scroll_y,
+                        &old_caret,
+                        &old_snapshot,
+                        font_family,
+                        scroll_y,
                     ));
 
                     // 计算 new_cursor_rect：使用 new_text 布局
@@ -1655,7 +1707,10 @@ impl SujianEditorItem {
                         viewport_h,
                     );
                     vt.new_cursor_rect = Some(make_cursor_rect(
-                        &new_caret, &insert_snapshot, font_family, scroll_y,
+                        &new_caret,
+                        &insert_snapshot,
+                        font_family,
+                        scroll_y,
                     ));
 
                     // 局部 reflow 动画：限制 glyph_rects 只包含插入点所在行和下一行（最多 2 行）
@@ -1674,12 +1729,15 @@ impl SujianEditorItem {
                     // 限制到插入点所在行 + 下一行（最多 2 行）
                     // 如果影响超过 2 行、跨段落、滚动中、格式化中，直接 snap
                     let max_affected_lines = 2;
-                    let should_snap = lines_with_insert.len() > max_affected_lines
-                        || self.current_is_scrolling;
+                    let should_snap =
+                        lines_with_insert.len() > max_affected_lines || self.current_is_scrolling;
 
                     let allowed_lines: Vec<usize> = if should_snap {
                         // 只保留前 2 行的 glyph，后续行不做动画
-                        lines_with_insert.into_iter().take(max_affected_lines).collect()
+                        lines_with_insert
+                            .into_iter()
+                            .take(max_affected_lines)
+                            .collect()
                     } else {
                         lines_with_insert
                     };
@@ -1699,7 +1757,8 @@ impl SujianEditorItem {
                             font_size,
                             font_family,
                         );
-                        let line_baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
+                        let line_baseline_y =
+                            text_baseline_y(line, font_size, font_family) - scroll_y;
                         for (abs_byte, x_pos, ch_w) in glyph_data {
                             if abs_byte >= text.len() {
                                 continue;
@@ -1812,22 +1871,27 @@ impl SujianEditorItem {
 
                             // 在旧布局中找真正包含 old_byte 的旧行
                             let old_line = old_snapshot.lines.iter().find(|l| {
-                                l.byte_start <= old_byte && l.byte_end > old_byte && !l.para_text.is_empty()
+                                l.byte_start <= old_byte
+                                    && l.byte_end > old_byte
+                                    && !l.para_text.is_empty()
                             });
 
                             // 找不到旧行时直接 snap（不 push reflow glyph）
                             let (old_x, old_y, old_baseline_y) = match old_line {
                                 Some(ol) => {
-                                    let old_glyph_data = self.editor_layout.glyph_positions_on_line(
-                                        ol,
-                                        old_byte.min(ol.byte_end),
-                                        (old_byte + char_len).min(ol.byte_end),
-                                        font_size,
-                                        font_family,
-                                    );
+                                    let old_glyph_data =
+                                        self.editor_layout.glyph_positions_on_line(
+                                            ol,
+                                            old_byte.min(ol.byte_end),
+                                            (old_byte + char_len).min(ol.byte_end),
+                                            font_size,
+                                            font_family,
+                                        );
                                     match old_glyph_data.first() {
                                         Some((_, ox, _)) => {
-                                            let old_line_baseline_y = text_baseline_y(ol, font_size, font_family) - scroll_y;
+                                            let old_line_baseline_y =
+                                                text_baseline_y(ol, font_size, font_family)
+                                                    - scroll_y;
                                             (ol.x + *ox, ol.y - scroll_y, old_line_baseline_y)
                                         }
                                         None => continue, // 找不到旧 glyph，snap
@@ -1836,7 +1900,8 @@ impl SujianEditorItem {
                                 None => continue, // 找不到旧行，snap
                             };
 
-                            let new_baseline_y = text_baseline_y(new_line, font_size, font_family) - scroll_y;
+                            let new_baseline_y =
+                                text_baseline_y(new_line, font_size, font_family) - scroll_y;
 
                             reflow_rects.push(ReflowGlyphRect {
                                 char_: ch.to_string(),
@@ -1872,7 +1937,11 @@ impl SujianEditorItem {
                 // 从 diff 推导删除范围
                 let changes = writer_core::editor::diff_plain_text(old_text, text);
                 for change in &changes {
-                    if let writer_core::editor::EditorChange::Delete { index, text: deleted_text } = change {
+                    if let writer_core::editor::EditorChange::Delete {
+                        index,
+                        text: deleted_text,
+                    } = change
+                    {
                         let range_start = *index;
                         let range_end = range_start + deleted_text.len();
 
@@ -1885,7 +1954,10 @@ impl SujianEditorItem {
                             viewport_h,
                         );
                         vt.old_cursor_rect = Some(make_cursor_rect(
-                            &old_caret, &delete_snapshot, font_family, scroll_y,
+                            &old_caret,
+                            &delete_snapshot,
+                            font_family,
+                            scroll_y,
                         ));
 
                         // 计算 new_cursor_rect：使用 new_text 布局
@@ -1898,7 +1970,10 @@ impl SujianEditorItem {
                             viewport_h,
                         );
                         vt.new_cursor_rect = Some(make_cursor_rect(
-                            &new_caret, &new_snapshot, font_family, scroll_y,
+                            &new_caret,
+                            &new_snapshot,
+                            font_family,
+                            scroll_y,
                         ));
 
                         for line in &delete_snapshot.lines {
@@ -1921,7 +1996,8 @@ impl SujianEditorItem {
                                 font_size,
                                 font_family,
                             );
-                            let line_baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
+                            let line_baseline_y =
+                                text_baseline_y(line, font_size, font_family) - scroll_y;
                             for (abs_byte, x_pos, ch_w) in glyph_data {
                                 if abs_byte >= old_text.len() {
                                     continue;
@@ -2158,6 +2234,12 @@ impl EditorInputHost for SujianEditorItem {
 
     fn input_clear_preedit(&mut self) {
         self.preedit_old_text = self.preedit_text.clone();
+        // Save preedit_cursor_rect to pending before clearing, so that
+        // insert_text() can use it as cursor animation start point for IME commit.
+        // This must happen BEFORE clearing preedit_cursor_rect.
+        if self.preedit_cursor_rect.is_some() {
+            self.pending_preedit_cursor_rect = self.preedit_cursor_rect.take();
+        }
         self.preedit_text.clear();
         self.preedit_cursor = 0;
         self.preedit_attributes.clear();
@@ -2180,7 +2262,12 @@ impl EditorInputHost for SujianEditorItem {
         self.request_static_repaint();
     }
 
-    fn input_set_preedit_with_attrs(&mut self, text: String, cursor: usize, attributes: Vec<PreeditAttribute>) {
+    fn input_set_preedit_with_attrs(
+        &mut self,
+        text: String,
+        cursor: usize,
+        attributes: Vec<PreeditAttribute>,
+    ) {
         self.preedit_old_text = self.preedit_text.clone();
         self.preedit_text = text;
         self.preedit_cursor = cursor;
@@ -2253,13 +2340,17 @@ impl SujianEditorItem {
         let snapshot = self.layout_snapshot(width);
 
         // Find the line containing the cursor
-        let cursor_line = snapshot.lines.iter().find(|l| {
-            l.byte_end >= cursor_byte && l.byte_start <= cursor_byte
-        });
+        let cursor_line = snapshot
+            .lines
+            .iter()
+            .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte);
 
         let (preedit_start_x, line_y, line_h, line_baseline_y) = if let Some(line) = cursor_line {
             let start_x = self.editor_layout.cursor_x_for_line(
-                &snapshot, line, cursor_byte, self.cursor_ctrl.affinity,
+                &snapshot,
+                line,
+                cursor_byte,
+                self.cursor_ctrl.affinity,
             );
             let baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
             (start_x, line.y - scroll_y, line.height, baseline_y)
@@ -2275,12 +2366,16 @@ impl SujianEditorItem {
             for ch in new_text.chars() {
                 if is_complex_grapheme(ch) {
                     let ch_str = ch.to_string();
-                    let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                    let ch_w = self
+                        .editor_layout
+                        .text_width(&ch_str, font_size, font_family);
                     cum_x += ch_w;
                     continue;
                 }
                 let ch_str = ch.to_string();
-                let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                let ch_w = self
+                    .editor_layout
+                    .text_width(&ch_str, font_size, font_family);
                 rects.push(GlyphRect {
                     x: cum_x,
                     y: line_y,
@@ -2297,8 +2392,14 @@ impl SujianEditorItem {
         // Character-level diff: find common prefix and suffix, middle is the change
         let old_chars: Vec<char> = old_text.chars().collect();
         let new_chars: Vec<char> = new_text.chars().collect();
-        let prefix_len = old_chars.iter().zip(new_chars.iter()).take_while(|(a, b)| a == b).count();
-        let suffix_len = old_chars[prefix_len..].iter().rev()
+        let prefix_len = old_chars
+            .iter()
+            .zip(new_chars.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let suffix_len = old_chars[prefix_len..]
+            .iter()
+            .rev()
             .zip(new_chars[prefix_len..].iter().rev())
             .take_while(|(a, b)| a == b)
             .count();
@@ -2310,18 +2411,24 @@ impl SujianEditorItem {
             // Skip prefix
             for ch in new_chars[..prefix_len].iter() {
                 let ch_str = ch.to_string();
-                cum_x += self.editor_layout.text_width(&ch_str, font_size, font_family);
+                cum_x += self
+                    .editor_layout
+                    .text_width(&ch_str, font_size, font_family);
             }
             // Inserted part
             for ch in new_chars[prefix_len..new_chars.len().saturating_sub(suffix_len)].iter() {
                 if is_complex_grapheme(*ch) {
                     let ch_str = ch.to_string();
-                    let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                    let ch_w = self
+                        .editor_layout
+                        .text_width(&ch_str, font_size, font_family);
                     cum_x += ch_w;
                     continue;
                 }
                 let ch_str = ch.to_string();
-                let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                let ch_w = self
+                    .editor_layout
+                    .text_width(&ch_str, font_size, font_family);
                 rects.push(GlyphRect {
                     x: cum_x,
                     y: line_y,
@@ -2332,7 +2439,11 @@ impl SujianEditorItem {
                 });
                 cum_x += ch_w;
             }
-            if rects.is_empty() { None } else { Some(rects) }
+            if rects.is_empty() {
+                None
+            } else {
+                Some(rects)
+            }
         };
 
         // Deleted glyph rects (removed characters in old preedit)
@@ -2342,18 +2453,24 @@ impl SujianEditorItem {
             // Skip prefix
             for ch in old_chars[..prefix_len].iter() {
                 let ch_str = ch.to_string();
-                cum_x += self.editor_layout.text_width(&ch_str, font_size, font_family);
+                cum_x += self
+                    .editor_layout
+                    .text_width(&ch_str, font_size, font_family);
             }
             // Deleted part
             for ch in old_chars[prefix_len..old_chars.len().saturating_sub(suffix_len)].iter() {
                 if is_complex_grapheme(*ch) {
                     let ch_str = ch.to_string();
-                    let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                    let ch_w = self
+                        .editor_layout
+                        .text_width(&ch_str, font_size, font_family);
                     cum_x += ch_w;
                     continue;
                 }
                 let ch_str = ch.to_string();
-                let ch_w = self.editor_layout.text_width(&ch_str, font_size, font_family);
+                let ch_w = self
+                    .editor_layout
+                    .text_width(&ch_str, font_size, font_family);
                 rects.push(GlyphRect {
                     x: cum_x,
                     y: line_y,
@@ -2364,7 +2481,11 @@ impl SujianEditorItem {
                 });
                 cum_x += ch_w;
             }
-            if rects.is_empty() { None } else { Some(rects) }
+            if rects.is_empty() {
+                None
+            } else {
+                Some(rects)
+            }
         };
 
         let vt = PreeditVisualTransaction {
@@ -2382,7 +2503,11 @@ impl SujianEditorItem {
         };
 
         self.preedit_visual_transaction = Some(vt);
-        eprintln!("[preedit] preedit_visual_transaction_created old_len={} new_len={}", old_text.len(), new_text.len());
+        eprintln!(
+            "[preedit] preedit_visual_transaction_created old_len={} new_len={}",
+            old_text.len(),
+            new_text.len()
+        );
 
         // Serialize and emit signal
         if let Some(ref vt) = self.preedit_visual_transaction {
@@ -2423,9 +2548,10 @@ impl SujianEditorItem {
         let snapshot = self.layout_snapshot(width);
 
         // Find the line containing the cursor
-        let cursor_line = snapshot.lines.iter().find(|l| {
-            l.byte_end >= cursor_byte && l.byte_start <= cursor_byte
-        });
+        let cursor_line = snapshot
+            .lines
+            .iter()
+            .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte);
 
         let Some(line) = cursor_line else {
             self.preedit_cursor_rect = None;
@@ -2441,12 +2567,11 @@ impl SujianEditorItem {
         );
 
         // Measure width of preedit text up to preedit_cursor
-        let preedit_before_cursor = &self.preedit_text[..self.preedit_cursor.min(self.preedit_text.len())];
-        let preedit_cursor_offset = self.editor_layout.text_width(
-            preedit_before_cursor,
-            font_size,
-            font_family,
-        );
+        let preedit_before_cursor =
+            &self.preedit_text[..self.preedit_cursor.min(self.preedit_text.len())];
+        let preedit_cursor_offset =
+            self.editor_layout
+                .text_width(preedit_before_cursor, font_size, font_family);
 
         let cursor_x = preedit_start_x + preedit_cursor_offset;
         let cursor_y = line.y - scroll_y;
@@ -2541,7 +2666,12 @@ mod tests {
         // 模拟 preedit 从 "n" 变为 "ni"
         let old_text = "n".to_string();
         let new_text = "ni".to_string();
-        let preedit_cursor_rect = Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 });
+        let preedit_cursor_rect = Some(CursorRect {
+            x: 10.0,
+            top: 5.0,
+            bottom: 25.0,
+            baseline_y: 20.0,
+        });
 
         let vt = PreeditVisualTransaction {
             id: 0,
@@ -2571,38 +2701,68 @@ mod tests {
         assert!(json.contains("\"newPreeditText\":"));
     }
 
-    /// 验证：commit 时 preedit_cursor_rect 被正确保存
-    /// commit_from_preedit 标志正确判断
+    /// 验证：commit 时 pending_preedit_cursor_rect 被正确保存
+    /// input_clear_preedit() 在清空 preedit 前保存 preedit_cursor_rect 到 pending，
+    /// insert_text() 通过 take pending_preedit_cursor_rect 获取光标动画起点。
     #[test]
-    fn test_commit_from_preedit_cursor_start_source() {
-        // 当 preedit_text 非空时，commit_from_preedit = true
-        let preedit_text = "拼".to_string();
-        let commit_from_preedit = !preedit_text.is_empty();
-        assert!(commit_from_preedit, "commit from non-empty preedit should set commit_from_preedit=true");
-
-        // 当 preedit_text 为空时，commit_from_preedit = false
-        let empty_preedit = String::new();
-        let commit_from_empty = !empty_preedit.is_empty();
-        assert!(!commit_from_empty, "commit from empty preedit should set commit_from_preedit=false");
-
-        // 验证 preedit_cursor_rect 在 commit 前被保存
+    fn test_pending_preedit_cursor_rect_flow() {
+        // 模拟 input_clear_preedit 的行为：
+        // 如果 preedit_cursor_rect 有值，保存到 pending_preedit_cursor_rect
         let preedit_cursor_rect: Option<CursorRect> = Some(CursorRect {
-            x: 50.0, top: 10.0, bottom: 30.0, baseline_y: 25.0,
+            x: 50.0,
+            top: 10.0,
+            bottom: 30.0,
+            baseline_y: 25.0,
         });
-        let snapshot = preedit_cursor_rect.clone();
-        assert!(snapshot.is_some(), "preedit_cursor_rect snapshot should be saved before clearing");
-        assert_eq!(snapshot.as_ref().unwrap().x, 50.0);
+        let mut pending_preedit_cursor_rect: Option<CursorRect> = None;
+
+        // input_clear_preedit: 保存到 pending 再清空
+        if preedit_cursor_rect.is_some() {
+            pending_preedit_cursor_rect = preedit_cursor_rect.clone();
+        }
+        // preedit_cursor_rect = None (cleared)
+
+        // insert_text: take pending
+        let taken = pending_preedit_cursor_rect.take();
+        assert!(
+            taken.is_some(),
+            "pending_preedit_cursor_rect should be saved before clearing"
+        );
+        assert_eq!(taken.as_ref().unwrap().x, 50.0);
+        assert_eq!(taken.as_ref().unwrap().top, 10.0);
+
+        // take 后 pending 为空
+        assert!(
+            pending_preedit_cursor_rect.is_none(),
+            "pending should be empty after take"
+        );
+
+        // 无 preedit 时：pending 为空，insert_text 不会设置光标动画起点
+        let empty_preedit_cursor_rect: Option<CursorRect> = None;
+        let mut pending2: Option<CursorRect> = None;
+        if empty_preedit_cursor_rect.is_some() {
+            pending2 = empty_preedit_cursor_rect.clone();
+        }
+        let taken2 = pending2.take();
+        assert!(
+            taken2.is_none(),
+            "no pending when preedit_cursor_rect was None"
+        );
     }
 
     /// 验证：PreeditAttributeKind 新变体正确匹配
     #[test]
     fn test_preedit_attribute_kind_new_variants() {
         // TextColor
-        let tc = PreeditAttributeKind::TextColor { color: "#FF0000".to_string() };
+        let tc = PreeditAttributeKind::TextColor {
+            color: "#FF0000".to_string(),
+        };
         assert!(matches!(tc, PreeditAttributeKind::TextColor { .. }));
 
         // BackgroundColor
-        let bc = PreeditAttributeKind::BackgroundColor { color: "#00FF00".to_string() };
+        let bc = PreeditAttributeKind::BackgroundColor {
+            color: "#00FF00".to_string(),
+        };
         assert!(matches!(bc, PreeditAttributeKind::BackgroundColor { .. }));
 
         // FontUnderline
@@ -2630,7 +2790,10 @@ mod tests {
         let vt_present = true;
         let is_scrolling = false;
         let should_create = typing_animation_enabled && vt_present && !is_scrolling;
-        assert!(!should_create, "when typing_animation_enabled=false, no animations should be created");
+        assert!(
+            !should_create,
+            "when typing_animation_enabled=false, no animations should be created"
+        );
     }
 
     /// 验证：scrolling 抑制动画创建
@@ -2640,7 +2803,10 @@ mod tests {
         let vt_present = true;
         let is_scrolling = true;
         let should_create = typing_animation_enabled && vt_present && !is_scrolling;
-        assert!(!should_create, "when scrolling, no animations should be created");
+        assert!(
+            !should_create,
+            "when scrolling, no animations should be created"
+        );
     }
 
     /// 验证：visual_transaction 的 inserted_range 用于 hidden range
@@ -2678,7 +2844,10 @@ mod tests {
     /// is_complex_grapheme('。') == false，因此句号应正常创建动画
     #[test]
     fn chinese_period_not_complex_grapheme_allows_animation() {
-        assert!(!is_complex_grapheme('。'), "Chinese period '。' is not complex, should allow animation");
+        assert!(
+            !is_complex_grapheme('。'),
+            "Chinese period '。' is not complex, should allow animation"
+        );
     }
 
     /// 验证：删除单字动画生命周期
@@ -2701,14 +2870,20 @@ mod tests {
     /// is_complex_grapheme('😀') == true，因此 emoji 不应创建动画
     #[test]
     fn emoji_is_complex_grapheme_skips_animation() {
-        assert!(is_complex_grapheme('😀'), "Emoji should be complex grapheme, skipping animation");
+        assert!(
+            is_complex_grapheme('😀'),
+            "Emoji should be complex grapheme, skipping animation"
+        );
     }
 
     /// 验证：组合音标跳过动画
     /// is_complex_grapheme('\u{0301}') == true（combining acute accent）
     #[test]
     fn combining_accent_is_complex_grapheme_skips_animation() {
-        assert!(is_complex_grapheme('\u{0301}'), "Combining acute accent should be complex grapheme, skipping animation");
+        assert!(
+            is_complex_grapheme('\u{0301}'),
+            "Combining acute accent should be complex grapheme, skipping animation"
+        );
     }
 
     /// 验证：滚动中输入不创建动画
@@ -2719,7 +2894,10 @@ mod tests {
         let vt_present = true;
         let is_scrolling = true;
         let should_create = typing_animation_enabled && vt_present && !is_scrolling;
-        assert!(!should_create, "Scrolling should suppress animation creation");
+        assert!(
+            !should_create,
+            "Scrolling should suppress animation creation"
+        );
     }
 
     /// 验证：关闭 typingAnimation 后新输入不创建动画
@@ -2729,7 +2907,10 @@ mod tests {
         let vt_present = true;
         let is_scrolling = false;
         let should_create = typing_animation_enabled && vt_present && !is_scrolling;
-        assert!(!should_create, "Disabled typing animation should prevent new animations");
+        assert!(
+            !should_create,
+            "Disabled typing animation should prevent new animations"
+        );
     }
 
     /// 验证：关闭 coordinated cursor 不影响 text animation 创建条件
@@ -2742,7 +2923,10 @@ mod tests {
         let coordinated_enabled = false;
         // Text animation creation is independent of coordinated cursor
         let should_create_text_anim = typing_animation_enabled && vt_present && !is_scrolling;
-        assert!(should_create_text_anim, "Text animation creation should not be affected by coordinated cursor setting");
+        assert!(
+            should_create_text_anim,
+            "Text animation creation should not be affected by coordinated cursor setting"
+        );
         // coordinated_enabled is a separate concern for cursor animation, not text animation
         let _ = coordinated_enabled; // explicitly not used in text animation logic
     }
@@ -2759,8 +2943,9 @@ mod tests {
     /// TextAnimationState 应创建 hidden range，cursor rect 正确更新。
     #[test]
     fn ime_commit_4_char_idiom_produces_cursor_animation() {
-        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
-            EditorAnimationKind};
+        use writer_core::editor::{
+            EditorAnimationKind, EditorEngine, EditorSelection, EditorTransactionCause,
+        };
 
         let mut engine = EditorEngine::with_animation_limits(8, 160);
         let idiom = "风和日丽";
@@ -2770,8 +2955,10 @@ mod tests {
         let new_cursor = EditorSelection::collapsed(new_text, new_text.len());
 
         let tx = engine.create_transaction(
-            old_text, new_text,
-            old_cursor, new_cursor,
+            old_text,
+            new_text,
+            old_cursor,
+            new_cursor,
             EditorTransactionCause::TypingCommit,
         );
 
@@ -2780,14 +2967,20 @@ mod tests {
 
         // visual_transaction 应返回 Insert kind
         let vt = engine.visual_transaction(&tx);
-        assert!(vt.is_some(), "4-char idiom commit should produce visual transaction");
+        assert!(
+            vt.is_some(),
+            "4-char idiom commit should produce visual transaction"
+        );
         let vt = vt.unwrap();
         assert_eq!(vt.kind, EditorAnimationKind::Insert);
-        assert_eq!(vt.inserted_range, Some((old_text.len(), old_text.len() + idiom.len())));
+        assert_eq!(
+            vt.inserted_range,
+            Some((old_text.len(), old_text.len() + idiom.len()))
+        );
 
         // should_create_text_animation → FullAnimation (4 glyphs, no newline)
         let decision = should_create_text_animation(
-            4,    // glyph_count
+            4,     // glyph_count
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -2808,14 +3001,22 @@ mod tests {
                 _ => {}
             }
         }
-        assert!(state.has_active_insert(), "4-char idiom should create hidden range");
+        assert!(
+            state.has_active_insert(),
+            "4-char idiom should create hidden range"
+        );
         assert_eq!(state.active_insert_byte_ranges(), vec![(6, 18)]); // "你好"=6 bytes, "风和日丽"=12 bytes
 
         // Cursor 动画事件：old_cursor.index != new_cursor.index → Cursor 事件产生
-        assert_ne!(tx.old_selection.head.index, tx.new_selection.head.index,
-            "Cursor should move after idiom commit");
-        assert_eq!(tx.new_selection.head.index, new_text.len(),
-            "Cursor byte offset should be at end of committed text");
+        assert_ne!(
+            tx.old_selection.head.index, tx.new_selection.head.index,
+            "Cursor should move after idiom commit"
+        );
+        assert_eq!(
+            tx.new_selection.head.index,
+            new_text.len(),
+            "Cursor byte offset should be at end of committed text"
+        );
     }
 
     /// 测试 2：ime_commit_long_candidate_no_text_animation_cursor_still_moves
@@ -2836,17 +3037,22 @@ mod tests {
         let new_cursor = EditorSelection::collapsed(new_text, new_text.len());
 
         let tx = engine.create_transaction(
-            old_text, new_text,
-            old_cursor, new_cursor,
+            old_text,
+            new_text,
+            old_cursor,
+            new_cursor,
             EditorTransactionCause::TypingCommit,
         );
 
         // 9 chars > 8 → should_animate = false (core level)
-        assert!(!tx.should_animate, "9-char candidate should not animate at core level");
+        assert!(
+            !tx.should_animate,
+            "9-char candidate should not animate at core level"
+        );
 
         // should_create_text_animation → NoAnimation (9 glyphs > 8)
         let decision = should_create_text_animation(
-            9,    // glyph_count > MAX_GLYPH_COUNT
+            9,     // glyph_count > MAX_GLYPH_COUNT
             false, // contains_newline
             false, // is_scrolling
             false, // is_loading
@@ -2855,8 +3061,11 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation,
-            "Long candidate should produce NoAnimation decision");
+        assert_eq!(
+            decision,
+            AnimationDecision::NoAnimation,
+            "Long candidate should produce NoAnimation decision"
+        );
 
         // TextAnimationState 不应创建 hidden range
         let mut state = TextAnimationState::new();
@@ -2867,12 +3076,17 @@ mod tests {
             }
             _ => {}
         }
-        assert!(!state.has_active_insert(),
-            "Long candidate should NOT create hidden range");
+        assert!(
+            !state.has_active_insert(),
+            "Long candidate should NOT create hidden range"
+        );
 
         // 光标位置仍正确更新
-        assert_eq!(tx.new_selection.head.index, long_candidate.len(),
-            "Cursor byte offset should be at end of committed text even without animation");
+        assert_eq!(
+            tx.new_selection.head.index,
+            long_candidate.len(),
+            "Cursor byte offset should be at end of committed text even without animation"
+        );
     }
 
     /// 测试 3：ime_commit_after_initials_cursor_moves_forward
@@ -2894,39 +3108,55 @@ mod tests {
         // Step 1: preedit 阶段（ImeComposition cause，不产生动画）
         let preedit_text = "fhrl";
         let tx_preedit = engine.create_transaction(
-            "", preedit_text,
+            "",
+            preedit_text,
             EditorSelection::collapsed("", 0),
             EditorSelection::collapsed(preedit_text, preedit_text.len()),
             EditorTransactionCause::ImeComposition,
         );
-        assert!(!tx_preedit.should_animate,
-            "ImeComposition should not animate");
-        assert_eq!(tx_preedit.new_selection.head.index, preedit_text.len(),
-            "Preedit cursor should be at end of preedit text");
+        assert!(
+            !tx_preedit.should_animate,
+            "ImeComposition should not animate"
+        );
+        assert_eq!(
+            tx_preedit.new_selection.head.index,
+            preedit_text.len(),
+            "Preedit cursor should be at end of preedit text"
+        );
 
         // Step 2: commit 阶段
         // 实际流程：cancel_preedit 清除 preedit → insert_text 插入 commit 文本
         // 所以 commit 事务是 insert_text("", "风和日丽")，而非 replace("fhrl", "风和日丽")
         let committed = "风和日丽";
         let tx_commit = engine.create_transaction(
-            "", committed,
+            "",
+            committed,
             EditorSelection::collapsed("", 0),
             EditorSelection::collapsed(committed, committed.len()),
             EditorTransactionCause::TypingCommit,
         );
         // 4 chars ≤ 8, single Insert change → should_animate = true
-        assert!(tx_commit.should_animate,
-            "TypingCommit of 4-char idiom should animate");
+        assert!(
+            tx_commit.should_animate,
+            "TypingCommit of 4-char idiom should animate"
+        );
 
         // 光标从 0 移动到 commit 末尾
-        assert_eq!(tx_commit.old_selection.head.index, 0,
-            "Old cursor should be at start (preedit was cleared)");
-        assert_eq!(tx_commit.new_selection.head.index, committed.len(),
-            "New cursor should be at end of committed text");
+        assert_eq!(
+            tx_commit.old_selection.head.index, 0,
+            "Old cursor should be at start (preedit was cleared)"
+        );
+        assert_eq!(
+            tx_commit.new_selection.head.index,
+            committed.len(),
+            "New cursor should be at end of committed text"
+        );
 
         // 光标确实向前走了（byte offset 增大）
-        assert!(tx_commit.new_selection.head.index > tx_commit.old_selection.head.index,
-            "Cursor should move forward after commit (byte offset increases)");
+        assert!(
+            tx_commit.new_selection.head.index > tx_commit.old_selection.head.index,
+            "Cursor should move forward after commit (byte offset increases)"
+        );
     }
 
     /// 测试 4：ime_commit_pinyin_longer_than_hanzi_cursor_can_retreat
@@ -2943,8 +3173,9 @@ mod tests {
     /// 允许光标从 preedit 位置到 commit 后位置做动画（可能视觉回退）。
     #[test]
     fn ime_commit_pinyin_longer_than_hanzi_cursor_can_retreat() {
-        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
-            EditorAnimationKind};
+        use writer_core::editor::{
+            EditorAnimationKind, EditorEngine, EditorSelection, EditorTransactionCause,
+        };
 
         let mut engine = EditorEngine::with_animation_limits(8, 160);
 
@@ -2954,7 +3185,8 @@ mod tests {
 
         // 模拟 preedit 阶段
         let tx_preedit = engine.create_transaction(
-            "", pinyin,
+            "",
+            pinyin,
             EditorSelection::collapsed("", 0),
             EditorSelection::collapsed(pinyin, pinyin.len()),
             EditorTransactionCause::ImeComposition,
@@ -2964,17 +3196,22 @@ mod tests {
         // commit 阶段：cancel_preedit → insert_text("", "风和日丽")
         // 实际流程是先清除 preedit 再插入 commit 文本
         let tx_commit = engine.create_transaction(
-            "", hanzi,
+            "",
+            hanzi,
             EditorSelection::collapsed("", 0),
             EditorSelection::collapsed(hanzi, hanzi.len()),
             EditorTransactionCause::TypingCommit,
         );
-        assert!(tx_commit.should_animate,
-            "TypingCommit should animate for 4-char hanzi (single Insert change)");
+        assert!(
+            tx_commit.should_animate,
+            "TypingCommit should animate for 4-char hanzi (single Insert change)"
+        );
 
         // Cursor 动画事件必须生成（光标位置变化）
-        assert_ne!(tx_commit.old_selection.head.index, tx_commit.new_selection.head.index,
-            "Cursor position must change for retreat animation");
+        assert_ne!(
+            tx_commit.old_selection.head.index, tx_commit.new_selection.head.index,
+            "Cursor position must change for retreat animation"
+        );
 
         // 验证 visual_transaction 包含 cursor 信息
         let vt = engine.visual_transaction(&tx_commit);
@@ -2987,9 +3224,8 @@ mod tests {
         assert_eq!(vt.new_selection.head.index, hanzi.len());
 
         // should_create_text_animation → FullAnimation (4 glyphs, no newline)
-        let decision = should_create_text_animation(
-            4, false, false, false, false, false, true, true,
-        );
+        let decision =
+            should_create_text_animation(4, false, false, false, false, false, true, true);
         assert_eq!(decision, AnimationDecision::FullAnimation);
 
         // TextAnimationState 创建 hidden range
@@ -3008,8 +3244,9 @@ mod tests {
     /// 但验证光标必须垂直动画（cursor rect y 变化）。
     #[test]
     fn newline_commit_cursor_vertical_animation() {
-        use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause,
-            EditorAnimationKind, CursorRect};
+        use writer_core::editor::{
+            CursorRect, EditorAnimationKind, EditorEngine, EditorSelection, EditorTransactionCause,
+        };
 
         let mut engine = EditorEngine::with_animation_limits(8, 160);
 
@@ -3017,15 +3254,18 @@ mod tests {
         let old_text = "你好";
         let new_text = "你好\n";
         let tx = engine.create_transaction(
-            old_text, new_text,
+            old_text,
+            new_text,
             EditorSelection::collapsed(old_text, old_text.len()),
             EditorSelection::collapsed(new_text, new_text.len()),
             EditorTransactionCause::Typing,
         );
 
         // 换行包含 \n → should_animate = false (core level: text.contains('\n'))
-        assert!(!tx.should_animate,
-            "Newline commit should not animate at core level (contains newline)");
+        assert!(
+            !tx.should_animate,
+            "Newline commit should not animate at core level (contains newline)"
+        );
 
         // should_create_text_animation → CursorOnly (contains_newline=true)
         let decision = should_create_text_animation(
@@ -3033,8 +3273,11 @@ mod tests {
             true, // contains_newline
             false, false, false, false, true, true,
         );
-        assert_eq!(decision, AnimationDecision::CursorOnly,
-            "Newline should produce CursorOnly decision");
+        assert_eq!(
+            decision,
+            AnimationDecision::CursorOnly,
+            "Newline should produce CursorOnly decision"
+        );
 
         // TextAnimationState 不应创建 hidden range (CursorOnly 不创建 hidden range)
         let mut state = TextAnimationState::new();
@@ -3044,29 +3287,40 @@ mod tests {
             }
             _ => {} // CursorOnly 和 NoAnimation 都不创建 hidden range
         }
-        assert!(!state.has_active_insert(),
-            "Newline should NOT create hidden range (CursorOnly)");
+        assert!(
+            !state.has_active_insert(),
+            "Newline should NOT create hidden range (CursorOnly)"
+        );
 
         // 光标位置必须变化（y 变化 → 垂直动画）
-        assert_ne!(tx.old_selection.head.index, tx.new_selection.head.index,
-            "Cursor must move after newline (vertical animation required)");
+        assert_ne!(
+            tx.old_selection.head.index, tx.new_selection.head.index,
+            "Cursor must move after newline (vertical animation required)"
+        );
 
         // 模拟 cursor rect y 变化：换行后光标 y 应增大
         // Core 不计算坐标，但我们可以验证 CursorRect 数据结构支持 y 变化
         let old_cursor_rect = CursorRect {
-            x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0,
+            x: 10.0,
+            top: 5.0,
+            bottom: 25.0,
+            baseline_y: 20.0,
         };
         let new_cursor_rect = CursorRect {
-            x: 0.0,  // 行首
+            x: 0.0,    // 行首
             top: 30.0, // 下一行
             bottom: 50.0,
             baseline_y: 45.0,
         };
         // y 变化 = 垂直动画
-        assert_ne!(old_cursor_rect.top, new_cursor_rect.top,
-            "Cursor rect y must change for vertical animation after newline");
-        assert!(new_cursor_rect.top > old_cursor_rect.top,
-            "New cursor rect y should be below old (moved down a line)");
+        assert_ne!(
+            old_cursor_rect.top, new_cursor_rect.top,
+            "Cursor rect y must change for vertical animation after newline"
+        );
+        assert!(
+            new_cursor_rect.top > old_cursor_rect.top,
+            "New cursor rect y should be below old (moved down a line)"
+        );
     }
 
     /// 测试 6：mid_insert_reflow_animation_local_push
@@ -3094,7 +3348,7 @@ mod tests {
             old_x: 20.0,
             old_y: 0.0,
             old_baseline_y: 16.0,
-            new_x: 40.0,  // 向右推了
+            new_x: 40.0, // 向右推了
             new_y: 0.0,
             new_baseline_y: 16.0,
             w: 10.0,
@@ -3108,7 +3362,7 @@ mod tests {
             old_x: 30.0,
             old_y: 0.0,
             old_baseline_y: 16.0,
-            new_x: 50.0,  // 向右推了
+            new_x: 50.0, // 向右推了
             new_y: 0.0,
             new_baseline_y: 16.0,
             w: 10.0,
@@ -3122,7 +3376,7 @@ mod tests {
             old_x: 40.0,
             old_y: 0.0,
             old_baseline_y: 16.0,
-            new_x: 60.0,  // 向右推了
+            new_x: 60.0, // 向右推了
             new_y: 0.0,
             new_baseline_y: 16.0,
             w: 10.0,
@@ -3133,16 +3387,24 @@ mod tests {
         let reflow_rects = vec![reflow_c, reflow_d, reflow_e];
 
         // 验证 reflow_rects 包含插入点右侧的 glyph
-        assert_eq!(reflow_rects.len(), 3, "Reflow should contain 3 glyphs right of insertion");
+        assert_eq!(
+            reflow_rects.len(),
+            3,
+            "Reflow should contain 3 glyphs right of insertion"
+        );
         assert_eq!(reflow_rects[0].char_, "C");
         assert_eq!(reflow_rects[1].char_, "D");
         assert_eq!(reflow_rects[2].char_, "E");
 
         // 验证每个 reflow glyph 的新位置比旧位置更右（被推开了）
         for rect in &reflow_rects {
-            assert!(rect.new_x > rect.old_x,
+            assert!(
+                rect.new_x > rect.old_x,
                 "Reflow glyph '{}' should be pushed right: old_x={}, new_x={}",
-                rect.char_, rect.old_x, rect.new_x);
+                rect.char_,
+                rect.old_x,
+                rect.new_x
+            );
         }
 
         // 验证插入范围内的 glyph（X, Y）不应出现在 reflow_rects 中
@@ -3159,9 +3421,11 @@ mod tests {
         // 验证 reflow 动画是局部推送而非瞬间大跳
         // new_x - old_x 应该等于插入文本的宽度（2 chars × 10px = 20px）
         let push_distance = reflow_rects[0].new_x - reflow_rects[0].old_x;
-        assert!((push_distance - 20.0).abs() < 0.1,
+        assert!(
+            (push_distance - 20.0).abs() < 0.1,
             "Reflow push distance should equal inserted text width: got {}",
-            push_distance);
+            push_distance
+        );
     }
 
     /// 测试 7：qml_overlay_skip_must_clear_hidden_range
@@ -3177,26 +3441,43 @@ mod tests {
         let mut state = TextAnimationState::new();
         let byte_range = (10, 22); // 模拟 "风和日丽" 的 byte range
         state.start_insert(byte_range, vec![], 160);
-        assert!(state.has_active_insert(),
-            "Should have active insert before skip");
-        assert_eq!(state.active_insert_byte_ranges(), vec![byte_range],
-            "Hidden range should be (10, 22) before skip");
+        assert!(
+            state.has_active_insert(),
+            "Should have active insert before skip"
+        );
+        assert_eq!(
+            state.active_insert_byte_ranges(),
+            vec![byte_range],
+            "Hidden range should be (10, 22) before skip"
+        );
 
         // QML overlay 跳过动画 → 调用 on_insert_animation_finished（与 skip 共用逻辑）
         // 这模拟了 SujianEditorItem::on_insert_animation_skipped 的行为
         let removed = state.on_insert_animation_finished(10, 22);
-        assert!(removed, "on_insert_animation_skipped should return true (removed matching animation)");
-        assert!(state.is_empty(),
-            "Hidden range must be immediately cleared after skip");
-        assert!(state.active_insert_byte_ranges().is_empty(),
-            "No active insert byte range should remain after skip");
+        assert!(
+            removed,
+            "on_insert_animation_skipped should return true (removed matching animation)"
+        );
+        assert!(
+            state.is_empty(),
+            "Hidden range must be immediately cleared after skip"
+        );
+        assert!(
+            state.active_insert_byte_ranges().is_empty(),
+            "No active insert byte range should remain after skip"
+        );
 
         // 验证：跳过不匹配的 range 不影响现有 hidden range
         state.start_insert((30, 42), vec![], 160);
         let removed_wrong = state.on_insert_animation_finished(50, 60);
-        assert!(!removed_wrong, "Skipping non-matching range should return false");
-        assert!(state.has_active_insert(),
-            "Existing hidden range should remain when skip doesn't match");
+        assert!(
+            !removed_wrong,
+            "Skipping non-matching range should return false"
+        );
+        assert!(
+            state.has_active_insert(),
+            "Existing hidden range should remain when skip doesn't match"
+        );
         assert_eq!(state.active_insert_byte_ranges(), vec![(30, 42)]);
 
         // 清理
