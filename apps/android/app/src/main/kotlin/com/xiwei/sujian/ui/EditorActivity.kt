@@ -1,7 +1,7 @@
 package com.xiwei.sujian.ui
 
 import android.os.Bundle
-import android.util.Log
+import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
@@ -166,7 +166,7 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
 
             currentWritingPolicy?.let { policy ->
                 for (slot in policy.actionSlots) {
-                    Log.d("EditorActivity", "Writing ActionSlot: actionId=${slot.actionId}, " +
+                    DiagnosticsLogger.d("EditorActivity", "Writing ActionSlot: actionId=${slot.actionId}, " +
                         "role=${slot.role}, placement=${slot.placement}, " +
                         "visibleIn=${slot.visibleIn}, requiresConfirmation=${slot.requiresConfirmation}")
                 }
@@ -180,7 +180,7 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
                 applySavePlacement(saveSlot, shellMode)
             }
         } catch (e: Exception) {
-            Log.w("EditorActivity", "Failed to apply Writing ScreenPolicy", e)
+            DiagnosticsLogger.w("EditorActivity", "Failed to apply Writing ScreenPolicy", e)
         }
     }
 
@@ -212,7 +212,7 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
             }
             else -> {
                 // 其他 placement 降级为 toolbar 导航
-                Log.d("EditorActivity", "back placement=${slot.placement}, fallback to TopLeading")
+                DiagnosticsLogger.d("EditorActivity", "back placement=${slot.placement}, fallback to TopLeading")
                 toolbar.setNavigationOnClickListener {
                     onBackPressedDispatcher.onBackPressed()
                 }
@@ -232,7 +232,7 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
 
         val isVisible = slot.visibleIn.contains(shellMode)
         if (!isVisible) {
-            Log.d("EditorActivity", "save not visible in $shellMode, skipping")
+                DiagnosticsLogger.d("EditorActivity", "save not visible in $shellMode, skipping")
             return
         }
 
@@ -240,10 +240,10 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
             ActionPlacement.TopTrailing -> {
                 // TopTrailing：toolbar 右侧
                 // 第一版仅 log，后续可在 toolbar 右侧添加显式保存按钮
-                Log.d("EditorActivity", "save placement=TopTrailing, will add toolbar save button in future iteration")
+                DiagnosticsLogger.d("EditorActivity", "save placement=TopTrailing, will add toolbar save button in future iteration")
             }
             else -> {
-                Log.d("EditorActivity", "save placement=${slot.placement}, no specific UI mapping yet")
+                DiagnosticsLogger.d("EditorActivity", "save placement=${slot.placement}, no specific UI mapping yet")
             }
         }
     }
