@@ -3208,10 +3208,10 @@ mod tests {
             EditorTransactionCause::TypingCommit,
         );
 
-        // 9 chars > 8 → should_animate = false (core level)
+        // 9 chars > 8 → should_animate = true (core level: 不再限制字符数上限，由 choose_animation_mode 决定模式)
         assert!(
-            !tx.should_animate,
-            "9-char candidate should not animate at core level"
+            tx.should_animate,
+            "9-char candidate should animate at core level (RunAnimation)"
         );
 
         // choose_animation_mode → RunAnimation (9 clusters, within 9–40 range)
@@ -3422,10 +3422,10 @@ mod tests {
             EditorTransactionCause::Typing,
         );
 
-        // 换行包含 \n → should_animate = false (core level: text.contains('\n'))
+        // 换行包含 \n → should_animate = true (core level: 不再跳过换行，由 choose_animation_mode 决定模式)
         assert!(
-            !tx.should_animate,
-            "Newline commit should not animate at core level (contains newline)"
+            tx.should_animate,
+            "Newline commit should animate at core level (LineReflowAnimation)"
         );
 
         // choose_animation_mode → LineReflowAnimation (contains_newline=true)
