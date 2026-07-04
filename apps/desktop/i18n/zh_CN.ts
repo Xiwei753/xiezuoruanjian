@@ -834,6 +834,14 @@
         <source>首行缩进宽度</source>
         <translation>首行缩进宽度</translation>
     </message>
+    <message>
+        <source>使用 Android 同步主题色</source>
+        <translation>使用 Android 同步主题色</translation>
+    </message>
+    <message>
+        <source>使用从 Android 设备同步的莫奈调色板</source>
+        <translation>使用从 Android 设备同步的莫奈调色板</translation>
+    </message>
 </context>
 <context>
     <name>StarMapCanvas</name>
