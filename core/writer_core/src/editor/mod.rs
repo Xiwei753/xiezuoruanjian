@@ -29,8 +29,11 @@ pub mod autocorrect;
 pub mod transaction;
 
 pub use transaction::{
-    diff_plain_text, CursorRect, EditorAnimationEvent, EditorAnimationKind, EditorChange,
-    EditorCursor, EditorEngine, EditorSelection, EditorTransaction, EditorTransactionCause,
-    EditorVisualTransaction, GlyphRect, PreeditTextFormat, PreeditVisualTransaction, ReflowGlyphRect,
-    VisualCoordinateMode,
+    choose_animation_mode, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
+    is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
+    split_text_into_runs, text_contains_complex_grapheme, AnimationMode, ClusterRect, ClusterRun,
+    CursorRect, EditorAnimationEvent, EditorAnimationKind, EditorChange, EditorCursor,
+    EditorEngine, EditorSelection, EditorTransaction, EditorTransactionCause,
+    EditorVisualTransaction, GlyphRect, HiddenVisualRange, PreeditTextFormat,
+    PreeditVisualTransaction, Rect, ReflowGlyphRect, VisualCoordinateMode,
 };
