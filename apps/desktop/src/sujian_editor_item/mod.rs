@@ -31,7 +31,7 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
-use text_animation_state::{should_create_text_animation, AnimationDecision, TextAnimationState};
+use text_animation_state::{choose_animation_mode, AnimationMode, TextAnimationState};
 
 pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
@@ -1618,7 +1618,7 @@ impl SujianEditorItem {
         }
 
         // 创建 TextAnimationState 条目，让正文层在动画期间跳过 inserted range
-        // 使用统一的 should_create_text_animation 判定，确保 Rust 和 QML 一致
+        // 使用统一的 choose_animation_mode 判定，确保 Rust 和 QML 一致
         // 仅在动画启用且事务非空时创建
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
@@ -1635,14 +1635,14 @@ impl SujianEditorItem {
                                 // 旧动画被取消（相交），需要触发 static repaint 恢复文字
                                 self.request_static_repaint();
                             }
-                            // 统一动画判定：与 QML 使用相同规则
-                            let glyph_rects = vt.insert_glyph_rects.as_ref();
-                            let glyph_count = glyph_rects.map_or(0, |g| g.len());
+                            // 统一动画模式选择：与 QML 使用相同规则
+                            // 使用 cluster_count（插入文本的字符数）替代 glyph_count
                             let inserted_text = &vt.new_text[range_start..range_end];
+                            let cluster_count = inserted_text.chars().count();
                             let contains_newline = inserted_text.contains('\n');
                             let contains_complex_grapheme = text_contains_complex_grapheme(inserted_text);
-                            let decision = should_create_text_animation(
-                                glyph_count,
+                            let mode = choose_animation_mode(
+                                cluster_count,
                                 contains_newline,
                                 contains_complex_grapheme,
                                 self.current_is_scrolling,
@@ -1652,54 +1652,49 @@ impl SujianEditorItem {
                                 self.current_typing_animation_enabled,
                                 true, // component_ready — Rust 侧始终为 true
                             );
-                            match decision {
-                                AnimationDecision::FullAnimation => {
-                                    // 从 vt.reflow_glyph_rects 收集 reflow byte ranges
-                                    let reflow_ranges: Vec<(usize, usize)> = vt
-                                        .reflow_glyph_rects
-                                        .as_ref()
-                                        .map(|rects| {
-                                            rects
-                                                .iter()
-                                                .map(|r| (r.byte_start, r.byte_end))
-                                                .collect()
-                                        })
-                                        .unwrap_or_default();
-                                    self.text_anim_state.start_insert(
-                                        (range_start, range_end),
-                                        reflow_ranges,
-                                        vt.duration_ms,
-                                    );
-                                    editor_animation_debug_log(&format!(
-                                        "record_transaction: created Insert animation byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
-                                        range_start, range_end,
-                                        vt.reflow_glyph_rects.as_ref().map(|r| r.len()).unwrap_or(0),
-                                        vt.duration_ms
-                                    ));
-                                }
-                                AnimationDecision::CursorOnly => {
-                                    // 换行场景：不创建 hidden range，光标仍可动画
-                                    // 不调用 start_insert，正文层正常绘制
-                                    editor_animation_debug_log(&format!(
-                                        "record_transaction: Insert CursorOnly (newline), byte_range=({},{}), no hidden range",
-                                        range_start, range_end
-                                    ));
-                                }
-                                AnimationDecision::NoAnimation => {
-                                    // 不创建 hidden range，正文层正常绘制
-                                    editor_animation_debug_log(&format!(
-                                        "record_transaction: Insert NoAnimation, byte_range=({},{}), no hidden range",
-                                        range_start, range_end
-                                    ));
-                                }
+                            if mode != AnimationMode::SystemSuppressed {
+                                // 非 SystemSuppressed 模式都创建 hidden range
+                                // 从 vt.reflow_glyph_rects 收集 reflow byte ranges
+                                let reflow_ranges: Vec<(usize, usize)> = vt
+                                    .reflow_glyph_rects
+                                    .as_ref()
+                                    .map(|rects| {
+                                        rects
+                                            .iter()
+                                            .map(|r| (r.byte_start, r.byte_end))
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                self.text_anim_state.start_insert(
+                                    (range_start, range_end),
+                                    reflow_ranges,
+                                    mode,
+                                    vt.duration_ms,
+                                );
+                                editor_animation_debug_log(&format!(
+                                    "record_transaction: created Insert animation mode={:?}, byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
+                                    mode, range_start, range_end,
+                                    vt.reflow_glyph_rects.as_ref().map(|r| r.len()).unwrap_or(0),
+                                    vt.duration_ms
+                                ));
+                            } else {
+                                // SystemSuppressed：不创建 hidden range，正文层正常绘制
+                                editor_animation_debug_log(&format!(
+                                    "record_transaction: Insert SystemSuppressed, byte_range=({},{}), no hidden range",
+                                    range_start, range_end
+                                ));
                             }
                         }
                     }
                     EditorAnimationKind::Delete => {
                         // Delete 动画不需要正文层跳过，但记录以跟踪活跃动画
                         // 使用统一判定
-                        let glyph_rects = vt.deleted_glyph_rects.as_ref();
-                        let glyph_count = glyph_rects.map_or(0, |g| g.len());
+                        let inserted_text = if vt.old_text.len() > vt.new_text.len() {
+                            &vt.old_text
+                        } else {
+                            ""
+                        };
+                        let cluster_count = inserted_text.chars().count();
                         let contains_newline = vt.old_text != vt.new_text
                             && (vt.old_text.contains('\n') || vt.new_text.contains('\n'));
                         // 检测删除的文本中是否包含复杂 grapheme
@@ -1709,8 +1704,8 @@ impl SujianEditorItem {
                             ""
                         };
                         let contains_complex_grapheme = text_contains_complex_grapheme(deleted_text);
-                        let decision = should_create_text_animation(
-                            glyph_count,
+                        let mode = choose_animation_mode(
+                            cluster_count,
                             contains_newline,
                             contains_complex_grapheme,
                             self.current_is_scrolling,
@@ -1720,7 +1715,7 @@ impl SujianEditorItem {
                             self.current_typing_animation_enabled,
                             true, // component_ready
                         );
-                        if matches!(decision, AnimationDecision::FullAnimation) {
+                        if mode != AnimationMode::SystemSuppressed {
                             // 对于 Delete，inserted_range 为 None，需要从变更推导 byte range
                             let changes =
                                 writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
@@ -1750,7 +1745,7 @@ impl SujianEditorItem {
                                     let range_start = *index;
                                     let range_end = range_start + text.len();
                                     self.text_anim_state
-                                        .start_delete((range_start, range_end), vt.duration_ms);
+                                        .start_delete((range_start, range_end), mode, vt.duration_ms);
                                 }
                             }
                         }
@@ -2988,7 +2983,7 @@ mod tests {
         // 模拟从 vt.inserted_range 读取的 hidden range
         let inserted_range = Some((5, 10));
         if let Some((range_start, range_end)) = inserted_range {
-            state.start_insert((range_start, range_end), vec![], 100);
+            state.start_insert((range_start, range_end), vec![], AnimationMode::GlyphAnimation, 100);
         }
         assert_eq!(state.active_insert_byte_ranges(), vec![(5, 10)]);
         assert!(state.has_active_insert());
@@ -3000,7 +2995,7 @@ mod tests {
     fn typing_animation_disabled_clears_hidden_range_immediately() {
         let mut state = TextAnimationState::new();
         // 模拟从 vt.inserted_range 创建的 Insert 动画
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         // 关闭动画 — 立即清除，不依赖 timeout
@@ -3026,7 +3021,7 @@ mod tests {
     #[test]
     fn delete_single_char_animation_lifecycle() {
         let mut state = TextAnimationState::new();
-        state.start_delete((5, 8), 100);
+        state.start_delete((5, 8), AnimationMode::GlyphAnimation, 100);
         // Delete 不产生 hidden range
         assert!(state.active_insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
@@ -3110,7 +3105,7 @@ mod tests {
     ///
     /// 插入 4 字成语（如 "风和日丽"），验证产生 Cursor 类型动画事件。
     /// IME commit 多字使用 TypingCommit cause，4 字 ≤ max_animated_chars(8)，
-    /// should_animate=true，should_create_text_animation=FullAnimation，
+    /// should_animate=true，choose_animation_mode=GlyphAnimation，
     /// TextAnimationState 应创建 hidden range，cursor rect 正确更新。
     #[test]
     fn ime_commit_4_char_idiom_produces_cursor_animation() {
@@ -3149,9 +3144,9 @@ mod tests {
             Some((old_text.len(), old_text.len() + idiom.len()))
         );
 
-        // should_create_text_animation → FullAnimation (4 glyphs, no newline)
-        let decision = should_create_text_animation(
-            4,     // glyph_count
+        // choose_animation_mode → GlyphAnimation (4 clusters, no newline)
+        let mode = choose_animation_mode(
+            4,     // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -3161,16 +3156,13 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::FullAnimation);
+        assert_eq!(mode, AnimationMode::GlyphAnimation);
 
         // TextAnimationState 应创建 hidden range
         let mut state = TextAnimationState::new();
         if let Some((range_start, range_end)) = vt.inserted_range {
-            match decision {
-                AnimationDecision::FullAnimation => {
-                    state.start_insert((range_start, range_end), vec![], vt.duration_ms);
-                }
-                _ => {}
+            if mode != AnimationMode::SystemSuppressed {
+                state.start_insert((range_start, range_end), vec![], mode, vt.duration_ms);
             }
         }
         assert!(
@@ -3191,16 +3183,16 @@ mod tests {
         );
     }
 
-    /// 测试 2：ime_commit_long_candidate_no_text_animation_cursor_still_moves
+    /// 测试 2：ime_commit_long_candidate_run_animation_cursor_still_moves
     ///
-    /// 插入超过 8 字的候选，验证不产生 Insert 文字动画（NoAnimation），
+    /// 插入超过 8 字的候选，验证产生 RunAnimation（9–40 cluster 分组动画），
     /// 但验证光标位置正确更新。
     #[test]
-    fn ime_commit_long_candidate_no_text_animation_cursor_still_moves() {
+    fn ime_commit_long_candidate_run_animation_cursor_still_moves() {
         use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
 
         let mut engine = EditorEngine::with_animation_limits(8, 160);
-        // 9 个汉字，超过 max_animated_chars(8)
+        // 9 个汉字，超过 GlyphAnimation 阈值(8)，但仍在 RunAnimation 范围(9–40)
         let long_candidate = "一二三四五六七八九";
         assert!(long_candidate.chars().count() > 8);
         let old_text = "";
@@ -3222,9 +3214,9 @@ mod tests {
             "9-char candidate should not animate at core level"
         );
 
-        // should_create_text_animation → NoAnimation (9 glyphs > 8)
-        let decision = should_create_text_animation(
-            9,     // glyph_count > MAX_GLYPH_COUNT
+        // choose_animation_mode → RunAnimation (9 clusters, within 9–40 range)
+        let mode = choose_animation_mode(
+            9,     // cluster_count > 8, ≤ 40
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -3235,23 +3227,19 @@ mod tests {
             true,  // component_ready
         );
         assert_eq!(
-            decision,
-            AnimationDecision::NoAnimation,
-            "Long candidate should produce NoAnimation decision"
+            mode,
+            AnimationMode::RunAnimation,
+            "9-cluster candidate should produce RunAnimation"
         );
 
-        // TextAnimationState 不应创建 hidden range
+        // TextAnimationState 应创建 hidden range (RunAnimation != SystemSuppressed)
         let mut state = TextAnimationState::new();
-        match decision {
-            AnimationDecision::FullAnimation => {
-                // 不会进入此分支
-                state.start_insert((0, long_candidate.len()), vec![], 160);
-            }
-            _ => {}
+        if mode != AnimationMode::SystemSuppressed {
+            state.start_insert((0, long_candidate.len()), vec![], mode, 160);
         }
         assert!(
-            !state.has_active_insert(),
-            "Long candidate should NOT create hidden range"
+            state.has_active_insert(),
+            "9-cluster candidate should create hidden range (RunAnimation)"
         );
 
         // 光标位置仍正确更新
@@ -3396,16 +3384,16 @@ mod tests {
         assert_eq!(vt.old_selection.head.index, 0);
         assert_eq!(vt.new_selection.head.index, hanzi.len());
 
-        // should_create_text_animation → FullAnimation (4 glyphs, no newline)
-        let decision =
-            should_create_text_animation(4, false, false, false, false, false, false, true, true);
-        assert_eq!(decision, AnimationDecision::FullAnimation);
+        // choose_animation_mode → GlyphAnimation (4 clusters, no newline)
+        let mode =
+            choose_animation_mode(4, false, false, false, false, false, false, true, true);
+        assert_eq!(mode, AnimationMode::GlyphAnimation);
 
         // TextAnimationState 创建 hidden range
         let mut state = TextAnimationState::new();
         if let Some((rs, re)) = vt.inserted_range {
-            if decision == AnimationDecision::FullAnimation {
-                state.start_insert((rs, re), vec![], vt.duration_ms);
+            if mode != AnimationMode::SystemSuppressed {
+                state.start_insert((rs, re), vec![], mode, vt.duration_ms);
             }
         }
         assert!(state.has_active_insert());
@@ -3413,8 +3401,8 @@ mod tests {
 
     /// 测试 5：newline_commit_cursor_vertical_animation
     ///
-    /// 回车换行，验证不产生 Insert 文字动画（containsNewline → CursorOnly），
-    /// 但验证光标必须垂直动画（cursor rect y 变化）。
+    /// 回车换行，验证产生 LineReflowAnimation（containsNewline → LineReflowAnimation），
+    /// 且验证光标必须垂直动画（cursor rect y 变化）。
     #[test]
     fn newline_commit_cursor_vertical_animation() {
         use writer_core::editor::{
@@ -3440,30 +3428,27 @@ mod tests {
             "Newline commit should not animate at core level (contains newline)"
         );
 
-        // should_create_text_animation → CursorOnly (contains_newline=true)
-        let decision = should_create_text_animation(
-            1,    // glyph_count (the newline char)
+        // choose_animation_mode → LineReflowAnimation (contains_newline=true)
+        let mode = choose_animation_mode(
+            1,    // cluster_count (the newline char)
             true, // contains_newline
             false, // contains_complex_grapheme
             false, false, false, false, true, true,
         );
         assert_eq!(
-            decision,
-            AnimationDecision::CursorOnly,
-            "Newline should produce CursorOnly decision"
+            mode,
+            AnimationMode::LineReflowAnimation,
+            "Newline should produce LineReflowAnimation"
         );
 
-        // TextAnimationState 不应创建 hidden range (CursorOnly 不创建 hidden range)
+        // TextAnimationState 应创建 hidden range (LineReflowAnimation != SystemSuppressed)
         let mut state = TextAnimationState::new();
-        match decision {
-            AnimationDecision::FullAnimation => {
-                state.start_insert((old_text.len(), new_text.len()), vec![], 160);
-            }
-            _ => {} // CursorOnly 和 NoAnimation 都不创建 hidden range
+        if mode != AnimationMode::SystemSuppressed {
+            state.start_insert((old_text.len(), new_text.len()), vec![], mode, 160);
         }
         assert!(
-            !state.has_active_insert(),
-            "Newline should NOT create hidden range (CursorOnly)"
+            state.has_active_insert(),
+            "Newline should create hidden range (LineReflowAnimation)"
         );
 
         // 光标位置必须变化（y 变化 → 垂直动画）
@@ -3614,7 +3599,7 @@ mod tests {
         // 场景：Rust 侧已经创建了 Insert 动画（hidden range）
         let mut state = TextAnimationState::new();
         let byte_range = (10, 22); // 模拟 "风和日丽" 的 byte range
-        state.start_insert(byte_range, vec![], 160);
+        state.start_insert(byte_range, vec![], AnimationMode::GlyphAnimation, 160);
         assert!(
             state.has_active_insert(),
             "Should have active insert before skip"
@@ -3642,7 +3627,7 @@ mod tests {
         );
 
         // 验证：跳过不匹配的 range 不影响现有 hidden range
-        state.start_insert((30, 42), vec![], 160);
+        state.start_insert((30, 42), vec![], AnimationMode::GlyphAnimation, 160);
         let removed_wrong = state.on_insert_animation_finished(50, 60);
         assert!(
             !removed_wrong,

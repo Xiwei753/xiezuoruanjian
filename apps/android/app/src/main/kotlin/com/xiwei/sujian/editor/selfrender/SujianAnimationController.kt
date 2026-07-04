@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.selfrender
 
+import com.xiwei.sujian.model.AnimationModeData
 import com.xiwei.sujian.model.EditorAnimationKindData
 import com.xiwei.sujian.model.EditorVisualTransactionData
 import com.xiwei.sujian.model.SujianCursorRectData
@@ -165,12 +166,13 @@ class SujianAnimationController(
         // 获取插入的 glyph rects（从新文本的新布局中获取）
         val glyphRects = layout.getGlyphRects(text, rangeStartUtf16, rangeEndUtf16)
         
-        // 使用统一动画判定方法
+        // 使用统一动画模式选择方法
         val insertedText = text.substring(rangeStartUtf16, rangeEndUtf16.coerceAtMost(text.length))
         val containsNewline = insertedText.contains("\n") || insertedText.contains("\r")
-        val containsComplexGrapheme = shouldSkipGlyphAnimation(text, rangeStartUtf16, rangeEndUtf16)
-        val decision = shouldCreateTextAnimation(
-            glyphCount = glyphRects.size,
+        val complexGraphemeRanges = detectComplexGraphemeRanges(text, rangeStartUtf16, rangeEndUtf16)
+        val containsComplexGrapheme = complexGraphemeRanges.isNotEmpty()
+        val decision = chooseAnimationMode(
+            clusterCount = glyphRects.size,
             containsNewline = containsNewline,
             containsComplexGrapheme = containsComplexGrapheme,
             isScrolling = renderer.isScrolling(),
@@ -181,7 +183,7 @@ class SujianAnimationController(
             componentReady = true
         )
         
-        if (decision != "fullAnimation") {
+        if (decision == AnimationModeData.SystemSuppressed) {
             DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: decision=$decision, skipping animation")
             return
         }
@@ -217,12 +219,22 @@ class SujianAnimationController(
         // 先映射已有 ranges 以响应本次插入
         val rangeLenUtf16 = rangeEndUtf16 - rangeStartUtf16
         renderer.mapActiveInsertRangesForInsert(rangeStartUtf16, rangeLenUtf16)
-        val insertRangeUtf16 = IntRange(rangeStartUtf16, rangeEndUtf16)
+        val insertRangeUtf16 = HalfOpenRange(rangeStartUtf16, rangeEndUtf16)
         val insertRangeId = renderer.addActiveInsertRange(insertRangeUtf16)
+        
+        // 根据动画模式决定 kind
+        val animKind = when (decision) {
+            AnimationModeData.GlyphAnimation -> "insert"
+            AnimationModeData.ClusterAnimation -> "cluster"
+            AnimationModeData.RunAnimation -> "run"
+            AnimationModeData.LineReflowAnimation -> "insert"  // 换行动画仍用 insert kind，配合 reflow
+            AnimationModeData.SnapshotAnimation -> "snapshot"
+            AnimationModeData.SystemSuppressed -> return  // 已在上方处理
+        }
         
         val insertAnim = SujianOverlayAnim(
             id = (vt.id shl 1),
-            kind = "insert",
+            kind = animKind,
             text = vt.newText.substring(rangeStartUtf16, rangeEndUtf16.coerceAtMost(vt.newText.length)),
             startX = startX,
             startY = startY,
@@ -234,7 +246,8 @@ class SujianAnimationController(
             startTimeMs = System.currentTimeMillis(),
             glyphRects = glyphRects,
             insertRange = insertRangeUtf16,
-            insertRangeId = insertRangeId
+            insertRangeId = insertRangeId,
+            animationMode = decision
         )
         
         if (!renderer.addAnimation(insertAnim)) {
@@ -253,12 +266,12 @@ class SujianAnimationController(
             
             // 收集 reflow ranges 并添加到静态层跳过列表
             // 修复：rr.byteStart/byteEnd 是 UTF-8 byte offset，需转换为 UTF-16 offset
-            val reflowInsertRanges = mutableListOf<IntRange>()
+            val reflowInsertRanges = mutableListOf<HalfOpenRange>()
             val reflowRangeIds = mutableListOf<ULong>()
             for (rr in reflowRects) {
                 val reflowRangeStartUtf16 = buffer.utf8ToUtf16(rr.byteStart)
                 val reflowRangeEndUtf16 = buffer.utf8ToUtf16(rr.byteEnd)
-                val reflowRangeUtf16 = IntRange(reflowRangeStartUtf16, reflowRangeEndUtf16)
+                val reflowRangeUtf16 = HalfOpenRange(reflowRangeStartUtf16, reflowRangeEndUtf16)
                 val rangeId = renderer.addActiveInsertRange(reflowRangeUtf16)
                 reflowInsertRanges.add(reflowRangeUtf16)
                 reflowRangeIds.add(rangeId)
@@ -293,7 +306,8 @@ class SujianAnimationController(
                 insertRangeId = null,
                 reflowRects = reflowRects,
                 reflowInsertRanges = reflowInsertRanges,
-                reflowRangeIds = reflowRangeIds
+                reflowRangeIds = reflowRangeIds,
+                animationMode = decision
             )
             
             if (!renderer.addAnimation(reflowAnim)) {
@@ -431,11 +445,11 @@ class SujianAnimationController(
     }
     
     /**
-     * 统一动画判定方法 — 与 Rust should_create_text_animation 和 QML shouldCreateTextAnimation 使用相同规则
-     * 返回值: "noAnimation" / "cursorOnly" / "fullAnimation"
+     * 统一动画模式选择方法 — 与 Rust choose_animation_mode 和 QML chooseAnimationMode 使用相同规则
+     * 返回分层动画模式
      */
-    fun shouldCreateTextAnimation(
-        glyphCount: Int,
+    fun chooseAnimationMode(
+        clusterCount: Int,
         containsNewline: Boolean,
         containsComplexGrapheme: Boolean,
         isScrolling: Boolean,
@@ -444,16 +458,16 @@ class SujianAnimationController(
         isApplyingSettings: Boolean,
         animEnabled: Boolean,
         componentReady: Boolean
-    ): String {
-        val MAX_GLYPH_COUNT = 8
-        if (!animEnabled) return "noAnimation"
-        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return "noAnimation"
-        if (!componentReady) return "noAnimation"
-        if (glyphCount == 0) return "noAnimation"
-        if (glyphCount > MAX_GLYPH_COUNT) return "noAnimation"
-        if (containsComplexGrapheme) return "noAnimation"
-        if (containsNewline) return "cursorOnly"
-        return "fullAnimation"
+    ): AnimationModeData {
+        if (!animEnabled) return AnimationModeData.SystemSuppressed
+        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return AnimationModeData.SystemSuppressed
+        if (!componentReady) return AnimationModeData.SystemSuppressed
+        if (clusterCount == 0) return AnimationModeData.SystemSuppressed
+        if (containsNewline) return AnimationModeData.LineReflowAnimation
+        if (containsComplexGrapheme) return AnimationModeData.ClusterAnimation
+        if (clusterCount <= 8) return AnimationModeData.GlyphAnimation
+        if (clusterCount <= 40) return AnimationModeData.RunAnimation
+        return AnimationModeData.SnapshotAnimation
     }
     
     /**
@@ -509,39 +523,58 @@ class SujianAnimationController(
     }
     
     /**
-     * 检查是否应跳过复杂 grapheme 的 glyph 动画
-     * （emoji/ZWJ/variation selector/combining mark/regional indicator/surrogate pair）
+     * 检测文本中的复杂 grapheme cluster 范围（UTF-16 offset）。
+     * 返回每个复杂 cluster 的 HalfOpenRange。
      */
-    private fun shouldSkipGlyphAnimation(text: String, startUtf16: Int, endUtf16: Int): Boolean {
-        if (startUtf16 >= endUtf16 || startUtf16 >= text.length) return false
-        for (i in startUtf16 until endUtf16.coerceAtMost(text.length)) {
+    fun detectComplexGraphemeRanges(text: String, startUtf16: Int, endUtf16: Int): List<HalfOpenRange> {
+        val ranges = mutableListOf<HalfOpenRange>()
+        if (startUtf16 >= endUtf16 || startUtf16 >= text.length) return ranges
+        
+        var i = startUtf16
+        while (i < endUtf16.coerceAtMost(text.length)) {
             val codePoint = text.codePointAt(i)
-            // Surrogate pair（emoji 等）
-            if (Character.isHighSurrogate(text[i]) || Character.isLowSurrogate(text[i])) {
-                return true
-            }
-            // ZWJ (U+200D)
-            if (codePoint == 0x200D) {
-                return true
-            }
-            // Variation Selector (U+FE00-U+FE0F, U+E0100-U+E01EF)
-            if ((codePoint in 0xFE00..0xFE0F) || (codePoint in 0xE0100..0xE01EF)) {
-                return true
-            }
-            // Combining mark (Unicode general category M*)
-            val charType = Character.getType(codePoint)
-            if (charType == Character.NON_SPACING_MARK.toInt()
-                || charType == Character.COMBINING_SPACING_MARK.toInt()
-                || charType == Character.ENCLOSING_MARK.toInt()
-            ) {
-                return true
-            }
-            // Regional Indicator (U+1F1E6-U+1F1FF)
-            if (codePoint in 0x1F1E6..0x1F1FF) {
-                return true
+            val charCount = Character.charCount(codePoint)
+            
+            if (isComplexGraphemeCodePoint(codePoint)) {
+                // 收集整个 cluster（包括后续的 combining marks / variation selectors / ZWJ 序列）
+                var clusterEnd = i + charCount
+                while (clusterEnd < endUtf16.coerceAtMost(text.length)) {
+                    val nextCp = text.codePointAt(clusterEnd)
+                    if (isCombiningCodePoint(nextCp) || nextCp == 0x200D) {
+                        clusterEnd += Character.charCount(nextCp)
+                    } else {
+                        break
+                    }
+                }
+                ranges.add(HalfOpenRange(i, clusterEnd))
+                i = clusterEnd
+            } else {
+                i += charCount
             }
         }
+        return ranges
+    }
+    
+    private fun isComplexGraphemeCodePoint(codePoint: Int): Boolean {
+        if (codePoint > 0xFFFF) return true
+        if (codePoint == 0x200D) return true
+        if (codePoint in 0xFE00..0xFE0F) return true
+        if (codePoint in 0xE0100..0xE01EF) return true
+        if (codePoint in 0x1F600..0x1F64F) return true
+        if (codePoint in 0x1F300..0x1F5FF) return true
+        if (codePoint in 0x1F680..0x1F6FF) return true
+        if (codePoint in 0x1F900..0x1F9FF) return true
+        if (codePoint in 0x1F1E6..0x1F1FF) return true
         return false
+    }
+    
+    private fun isCombiningCodePoint(codePoint: Int): Boolean {
+        val charType = Character.getType(codePoint)
+        return charType == Character.NON_SPACING_MARK.toInt()
+            || charType == Character.COMBINING_SPACING_MARK.toInt()
+            || charType == Character.ENCLOSING_MARK.toInt()
+            || codePoint in 0xFE00..0xFE0F
+            || codePoint in 0xE0100..0xE01EF
     }
     
     companion object {

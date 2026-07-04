@@ -24,6 +24,18 @@ data class EditorAnimationEventData(
     val durationMs: Long
 )
 
+/**
+ * 分层动画模式 — 与 Core AnimationMode 对齐。
+ */
+enum class AnimationModeData {
+    GlyphAnimation,
+    ClusterAnimation,
+    RunAnimation,
+    LineReflowAnimation,
+    SnapshotAnimation,
+    SystemSuppressed
+}
+
 // ── Visual Transaction 数据模型 (Phase 2) ──
 
 /**

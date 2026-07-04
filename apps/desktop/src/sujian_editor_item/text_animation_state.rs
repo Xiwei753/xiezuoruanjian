@@ -7,36 +7,39 @@ pub(crate) enum TextAnimationKind {
     Delete,
 }
 
-/// 统一动画判定结果。
-///
-/// Rust 创建 hidden range 前和 QML 创建 ghost 前必须使用同一套规则，
-/// 避免 Rust 已经 hidden range 但 QML 跳过导致文字短暂消失。
+/// 分层动画模式 — 与 Core AnimationMode 对齐。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum AnimationDecision {
-    /// 完全不做动画（不创建 hidden range，不创建 ghost）
-    NoAnimation,
-    /// 只做光标动画（不创建 hidden range，不创建文字 ghost）
-    CursorOnly,
-    /// 完整动画（创建 hidden range + 文字 ghost + 光标动画）
-    FullAnimation,
+pub(crate) enum AnimationMode {
+    /// 逐字形动画：1–8 个 cluster，每个 glyph 独立飞入
+    GlyphAnimation,
+    /// 整簇动画：包含复杂 grapheme（emoji/ZWJ/variation selector/combining mark），整簇作为单个 ghost
+    ClusterAnimation,
+    /// 分组动画：9–40 个 cluster，按 run 分组动画
+    RunAnimation,
+    /// 行级 reflow 动画：包含换行，做行级 reflow
+    LineReflowAnimation,
+    /// 快照动画：>40 个 cluster，极端长文本用 snapshot 动画
+    SnapshotAnimation,
+    /// 系统抑制：动画关闭/滚动/加载/格式化/设置变化等，不创建 hidden range
+    SystemSuppressed,
 }
 
-/// 统一动画判定函数。
+/// 统一动画模式选择函数 — 与 Core choose_animation_mode 使用相同规则。
+///
+/// 规则（按优先级）：
+/// 1. 系统抑制条件（动画关闭/滚动/加载/格式化/设置变化）→ SystemSuppressed
+/// 2. glyph 为空 → SystemSuppressed
+/// 3. 包含换行 → LineReflowAnimation
+/// 4. 包含复杂 grapheme → ClusterAnimation
+/// 5. cluster 数量 1–8 → GlyphAnimation
+/// 6. cluster 数量 9–40 → RunAnimation
+/// 7. cluster 数量 > 40 → SnapshotAnimation
 ///
 /// Rust 侧 `record_transaction` 和 QML 侧 `EditorAnimationOverlay` 必须使用
 /// 相同的判定规则，确保 hidden range 和 ghost 的创建/跳过完全一致。
-///
-/// 规则：
-/// - glyph 为空：不动画
-/// - glyph 超过上限（8）：不动画
-/// - 包含复杂 grapheme（emoji/ZWJ/variation selector/combining mark）：不动画
-/// - 包含换行：文字不动画，但光标仍可动画（CursorOnly）
-/// - scrolling/loading/settings/applyingFormat：不动画
-/// - component not ready：不动画
-/// - 不动画时绝对不能 start_insert hidden range
-/// - 如果已经 start_insert 但 overlay 跳过，必须立即 clear_active_text_animations
-pub(crate) fn should_create_text_animation(
-    glyph_count: usize,
+/// 非 SystemSuppressed 的模式都会创建 hidden range。
+pub(crate) fn choose_animation_mode(
+    cluster_count: usize,
     contains_newline: bool,
     contains_complex_grapheme: bool,
     is_scrolling: bool,
@@ -45,43 +48,41 @@ pub(crate) fn should_create_text_animation(
     is_applying_settings: bool,
     animation_enabled: bool,
     component_ready: bool,
-) -> AnimationDecision {
-    const MAX_GLYPH_COUNT: usize = 8;
-
-    // 全局抑制条件：这些情况下完全不做动画
+) -> AnimationMode {
+    // 全局抑制条件
     if !animation_enabled {
-        return AnimationDecision::NoAnimation;
+        return AnimationMode::SystemSuppressed;
     }
     if is_scrolling || is_loading || is_applying_format || is_applying_settings {
-        return AnimationDecision::NoAnimation;
+        return AnimationMode::SystemSuppressed;
     }
     if !component_ready {
-        return AnimationDecision::NoAnimation;
+        return AnimationMode::SystemSuppressed;
     }
 
-    // Glyph 为空：不动画
-    if glyph_count == 0 {
-        return AnimationDecision::NoAnimation;
+    // 无内容可动画
+    if cluster_count == 0 {
+        return AnimationMode::SystemSuppressed;
     }
 
-    // Glyph 超过上限：不动画
-    if glyph_count > MAX_GLYPH_COUNT {
-        return AnimationDecision::NoAnimation;
-    }
-
-    // 包含复杂 grapheme（emoji/ZWJ/variation selector/combining mark）：不动画
-    // 复杂 grapheme 不能安全拆分为独立 glyph 做动画
-    if contains_complex_grapheme {
-        return AnimationDecision::NoAnimation;
-    }
-
-    // 包含换行：文字不动画，但光标仍可动画
+    // 包含换行 → LineReflowAnimation
     if contains_newline {
-        return AnimationDecision::CursorOnly;
+        return AnimationMode::LineReflowAnimation;
     }
 
-    // 所有条件通过：完整动画
-    AnimationDecision::FullAnimation
+    // 包含复杂 grapheme → ClusterAnimation
+    if contains_complex_grapheme {
+        return AnimationMode::ClusterAnimation;
+    }
+
+    // 按 cluster 数量分层
+    if cluster_count <= 8 {
+        return AnimationMode::GlyphAnimation;
+    }
+    if cluster_count <= 40 {
+        return AnimationMode::RunAnimation;
+    }
+    AnimationMode::SnapshotAnimation
 }
 
 /// 单个活跃动画条目
@@ -93,6 +94,8 @@ pub(crate) struct ActiveTextAnimation {
     /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画。
     /// 动画结束后清除，正文层恢复完整绘制。
     pub reflow_byte_ranges: Vec<(usize, usize)>,
+    /// 动画模式 — 与 Core AnimationMode 对齐
+    pub animation_mode: AnimationMode,
     pub start_time: Instant,
     pub duration_ms: u64,
 }
@@ -122,23 +125,26 @@ impl TextAnimationState {
         &mut self,
         byte_range: (usize, usize),
         reflow_byte_ranges: Vec<(usize, usize)>,
+        animation_mode: AnimationMode,
         duration_ms: u64,
     ) {
         self.animations.push(ActiveTextAnimation {
             kind: TextAnimationKind::Insert,
             byte_range,
             reflow_byte_ranges,
+            animation_mode,
             start_time: Instant::now(),
             duration_ms,
         });
     }
 
     /// 开始一个 Delete 动画
-    pub fn start_delete(&mut self, byte_range: (usize, usize), duration_ms: u64) {
+    pub fn start_delete(&mut self, byte_range: (usize, usize), animation_mode: AnimationMode, duration_ms: u64) {
         self.animations.push(ActiveTextAnimation {
             kind: TextAnimationKind::Delete,
             byte_range,
             reflow_byte_ranges: Vec::new(),
+            animation_mode,
             start_time: Instant::now(),
             duration_ms,
         });
@@ -224,6 +230,18 @@ impl TextAnimationState {
     /// 是否没有任何活跃动画
     pub fn is_empty(&self) -> bool {
         self.animations.is_empty()
+    }
+
+    /// 获取所有活跃动画的动画模式
+    pub fn active_animation_modes(&self) -> Vec<AnimationMode> {
+        self.animations.iter().map(|a| a.animation_mode).collect()
+    }
+
+    /// 是否有活跃的 LineReflow 动画
+    pub fn has_active_line_reflow(&self) -> bool {
+        self.animations
+            .iter()
+            .any(|a| a.animation_mode == AnimationMode::LineReflowAnimation)
     }
 
     /// 当新文本插入到 `pos` 位置、长度为 `len` 时，调整所有活跃动画的 byte ranges。
@@ -357,7 +375,7 @@ mod tests {
     #[test]
     fn test_insert_creates_active_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert!(state.has_active_insert());
         assert!(!state.is_empty());
@@ -366,7 +384,7 @@ mod tests {
     #[test]
     fn test_delete_does_not_create_hidden_range() {
         let mut state = TextAnimationState::new();
-        state.start_delete((5, 15), 100);
+        state.start_delete((5, 15), AnimationMode::GlyphAnimation, 100);
         // Delete 动画不产生 hidden range
         assert!(state.active_insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
@@ -377,8 +395,8 @@ mod tests {
     #[test]
     fn test_clear_removes_all() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_delete((30, 40), 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_delete((30, 40), AnimationMode::GlyphAnimation, 100);
         assert!(!state.is_empty());
         state.clear();
         assert!(state.is_empty());
@@ -389,7 +407,7 @@ mod tests {
     #[test]
     fn test_clear_on_typing_animation_disabled() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         state.clear_on_typing_animation_disabled();
         assert!(state.is_empty());
@@ -399,7 +417,7 @@ mod tests {
     #[test]
     fn test_clear_on_scroll() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         state.clear_on_scroll();
         assert!(state.is_empty());
@@ -409,7 +427,7 @@ mod tests {
     #[test]
     fn test_clear_on_reload() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         state.clear_on_reload();
         assert!(state.is_empty());
@@ -419,7 +437,7 @@ mod tests {
     #[test]
     fn test_clear_on_visual_change() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         state.clear_on_visual_change();
         assert!(state.is_empty());
@@ -429,7 +447,7 @@ mod tests {
     #[test]
     fn test_timeout_clears_animation() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         // duration=100, grace = 2*100 + 200 = 400ms
         // 超过宽限期后 tick 应清除
         let now = Instant::now() + Duration::from_millis(401);
@@ -442,7 +460,7 @@ mod tests {
     #[test]
     fn test_within_grace_period_not_cleared() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         // duration=100, grace = 2*100 + 200 = 400ms
         // 在宽限期内 tick 不应清除
         let now = Instant::now() + Duration::from_millis(300);
@@ -455,7 +473,7 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_removes_matching() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         state.on_insert_animation_finished(10, 20);
         assert!(state.is_empty());
@@ -465,8 +483,8 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_keeps_others() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_delete((30, 40), 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_delete((30, 40), AnimationMode::GlyphAnimation, 100);
         // 完成 Insert (10,20)，Delete (30,40) 应保留
         state.on_insert_animation_finished(10, 20);
         assert!(!state.is_empty());
@@ -477,7 +495,7 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_returns_true_when_removed() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         let removed = state.on_insert_animation_finished(10, 20);
         assert!(removed);
         assert!(state.is_empty());
@@ -486,7 +504,7 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_returns_false_when_no_match() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         let removed = state.on_insert_animation_finished(30, 40);
         assert!(!removed);
         assert!(!state.is_empty());
@@ -496,8 +514,8 @@ mod tests {
     #[test]
     fn test_on_insert_animation_finished_multiple_inserts_repaints_each() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_insert((30, 40), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![], AnimationMode::GlyphAnimation, 100);
         // 完成第一个 Insert — removed=true，但还有另一个 Insert 活跃
         let removed1 = state.on_insert_animation_finished(10, 20);
         assert!(removed1);
@@ -512,8 +530,8 @@ mod tests {
     #[test]
     fn test_active_insert_byte_ranges_returns_all() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_insert((30, 40), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![], AnimationMode::GlyphAnimation, 100);
         // 两个活跃 Insert 动画都应返回
         let ranges = state.active_insert_byte_ranges();
         assert_eq!(ranges.len(), 2);
@@ -532,7 +550,7 @@ mod tests {
     #[test]
     fn test_insert_with_reflow_ranges() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
     }
@@ -540,7 +558,7 @@ mod tests {
     #[test]
     fn test_reflow_ranges_cleared_on_insert_finished() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25)], 100);
+        state.start_insert((10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
         assert!(!state.active_reflow_byte_ranges().is_empty());
         state.on_insert_animation_finished(10, 20);
         assert!(state.active_reflow_byte_ranges().is_empty());
@@ -549,7 +567,7 @@ mod tests {
     #[test]
     fn test_reflow_ranges_cleared_on_clear() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25)], 100);
+        state.start_insert((10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
         state.clear();
         assert!(state.active_reflow_byte_ranges().is_empty());
     }
@@ -557,8 +575,8 @@ mod tests {
     #[test]
     fn test_multiple_inserts_reflow_ranges_merged() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25)], 100);
-        state.start_insert((30, 40), vec![(40, 45)], 100);
+        state.start_insert((10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![(40, 45)], AnimationMode::GlyphAnimation, 100);
         let reflow = state.active_reflow_byte_ranges();
         assert_eq!(reflow.len(), 2);
         assert!(reflow.contains(&(20, 25)));
@@ -571,7 +589,7 @@ mod tests {
     #[test]
     fn test_delete_animation_timeout_clears() {
         let mut state = TextAnimationState::new();
-        state.start_delete((5, 15), 100);
+        state.start_delete((5, 15), AnimationMode::GlyphAnimation, 100);
         assert!(!state.is_empty());
         // duration=100, grace = 2*100 + 200 = 400ms
         let now = Instant::now() + Duration::from_millis(401);
@@ -583,7 +601,7 @@ mod tests {
     #[test]
     fn test_delete_animation_cleared_on_scroll() {
         let mut state = TextAnimationState::new();
-        state.start_delete((5, 15), 100);
+        state.start_delete((5, 15), AnimationMode::GlyphAnimation, 100);
         assert!(!state.is_empty());
         state.clear_on_scroll();
         assert!(state.is_empty(), "Delete animation should be cleared on scroll");
@@ -592,7 +610,7 @@ mod tests {
     #[test]
     fn test_delete_animation_cleared_on_typing_animation_disabled() {
         let mut state = TextAnimationState::new();
-        state.start_delete((5, 15), 100);
+        state.start_delete((5, 15), AnimationMode::GlyphAnimation, 100);
         assert!(!state.is_empty());
         state.clear_on_typing_animation_disabled();
         assert!(state.is_empty(), "Delete animation should be cleared when typing animation disabled");
@@ -601,8 +619,8 @@ mod tests {
     #[test]
     fn test_mixed_insert_delete_clear_all() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_delete((30, 40), 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_delete((30, 40), AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         assert!(!state.is_empty());
         state.clear();
@@ -610,12 +628,12 @@ mod tests {
         assert!(state.active_insert_byte_ranges().is_empty());
     }
 
-    // --- should_create_text_animation unified decision tests ---
+    // --- choose_animation_mode unified decision tests ---
 
     #[test]
-    fn test_should_create_animation_full() {
-        let decision = should_create_text_animation(
-            3,    // glyph_count
+    fn test_choose_animation_mode_glyph() {
+        let mode = choose_animation_mode(
+            3,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -625,13 +643,13 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::FullAnimation);
+        assert_eq!(mode, AnimationMode::GlyphAnimation);
     }
 
     #[test]
-    fn test_should_create_animation_empty_glyphs() {
-        let decision = should_create_text_animation(
-            0,    // glyph_count
+    fn test_choose_animation_mode_empty_clusters() {
+        let mode = choose_animation_mode(
+            0,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -641,13 +659,14 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::SystemSuppressed);
     }
 
     #[test]
-    fn test_should_create_animation_glyph_over_limit() {
-        let decision = should_create_text_animation(
-            9,    // glyph_count > 8
+    fn test_choose_animation_mode_run() {
+        // cluster_count 9–40 → RunAnimation
+        let mode = choose_animation_mode(
+            9,    // cluster_count > 8
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -657,13 +676,30 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::RunAnimation);
     }
 
     #[test]
-    fn test_should_create_animation_contains_newline() {
-        let decision = should_create_text_animation(
-            1,    // glyph_count
+    fn test_choose_animation_mode_snapshot() {
+        // cluster_count > 40 → SnapshotAnimation
+        let mode = choose_animation_mode(
+            41,    // cluster_count > 40
+            false, // contains_newline
+            false, // contains_complex_grapheme
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(mode, AnimationMode::SnapshotAnimation);
+    }
+
+    #[test]
+    fn test_choose_animation_mode_contains_newline() {
+        let mode = choose_animation_mode(
+            1,    // cluster_count
             true, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -673,13 +709,13 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::CursorOnly);
+        assert_eq!(mode, AnimationMode::LineReflowAnimation);
     }
 
     #[test]
-    fn test_should_create_animation_scrolling() {
-        let decision = should_create_text_animation(
-            1,    // glyph_count
+    fn test_choose_animation_mode_scrolling() {
+        let mode = choose_animation_mode(
+            1,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             true, // is_scrolling
@@ -689,13 +725,13 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::SystemSuppressed);
     }
 
     #[test]
-    fn test_should_create_animation_loading() {
-        let decision = should_create_text_animation(
-            1,    // glyph_count
+    fn test_choose_animation_mode_loading() {
+        let mode = choose_animation_mode(
+            1,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -705,13 +741,13 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::SystemSuppressed);
     }
 
     #[test]
-    fn test_should_create_animation_disabled() {
-        let decision = should_create_text_animation(
-            1,    // glyph_count
+    fn test_choose_animation_mode_disabled() {
+        let mode = choose_animation_mode(
+            1,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -721,13 +757,13 @@ mod tests {
             false, // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::SystemSuppressed);
     }
 
     #[test]
-    fn test_should_create_animation_component_not_ready() {
-        let decision = should_create_text_animation(
-            1,    // glyph_count
+    fn test_choose_animation_mode_component_not_ready() {
+        let mode = choose_animation_mode(
+            1,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -737,14 +773,14 @@ mod tests {
             true,  // animation_enabled
             false, // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::SystemSuppressed);
     }
 
     #[test]
-    fn test_should_create_animation_exactly_at_limit() {
-        // glyph_count == 8 should still be FullAnimation
-        let decision = should_create_text_animation(
-            8,    // glyph_count == MAX_GLYPH_COUNT
+    fn test_choose_animation_mode_exactly_at_glyph_limit() {
+        // cluster_count == 8 should still be GlyphAnimation
+        let mode = choose_animation_mode(
+            8,    // cluster_count == 8
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -754,13 +790,30 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::FullAnimation);
+        assert_eq!(mode, AnimationMode::GlyphAnimation);
     }
 
     #[test]
-    fn test_should_create_animation_applying_format() {
-        let decision = should_create_text_animation(
-            1,    // glyph_count
+    fn test_choose_animation_mode_exactly_at_run_limit() {
+        // cluster_count == 40 should still be RunAnimation
+        let mode = choose_animation_mode(
+            40,    // cluster_count == 40
+            false, // contains_newline
+            false, // contains_complex_grapheme
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(mode, AnimationMode::RunAnimation);
+    }
+
+    #[test]
+    fn test_choose_animation_mode_applying_format() {
+        let mode = choose_animation_mode(
+            1,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -770,13 +823,13 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::SystemSuppressed);
     }
 
     #[test]
-    fn test_should_create_animation_applying_settings() {
-        let decision = should_create_text_animation(
-            1,    // glyph_count
+    fn test_choose_animation_mode_applying_settings() {
+        let mode = choose_animation_mode(
+            1,    // cluster_count
             false, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -786,14 +839,14 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
+        assert_eq!(mode, AnimationMode::SystemSuppressed);
     }
 
     #[test]
-    fn test_should_create_animation_newline_overrides_glyph_count() {
-        // Even with valid glyph_count, newline means CursorOnly
-        let decision = should_create_text_animation(
-            5,    // glyph_count
+    fn test_choose_animation_mode_newline_overrides_cluster_count() {
+        // Even with valid cluster_count, newline means LineReflowAnimation
+        let mode = choose_animation_mode(
+            5,    // cluster_count
             true, // contains_newline
             false, // contains_complex_grapheme
             false, // is_scrolling
@@ -803,7 +856,47 @@ mod tests {
             true,  // animation_enabled
             true,  // component_ready
         );
-        assert_eq!(decision, AnimationDecision::CursorOnly);
+        assert_eq!(mode, AnimationMode::LineReflowAnimation);
+    }
+
+    #[test]
+    fn test_choose_animation_mode_complex_grapheme() {
+        let mode = choose_animation_mode(
+            1,     // cluster_count
+            false, // contains_newline
+            true,  // contains_complex_grapheme
+            false, // is_scrolling
+            false, // is_loading
+            false, // is_applying_format
+            false, // is_applying_settings
+            true,  // animation_enabled
+            true,  // component_ready
+        );
+        assert_eq!(mode, AnimationMode::ClusterAnimation);
+    }
+
+    #[test]
+    fn test_choose_animation_mode_complex_grapheme_overrides_normal_cluster() {
+        // 即使 cluster_count 在正常范围内，复杂 grapheme → ClusterAnimation
+        let mode = choose_animation_mode(
+            3,     // cluster_count
+            false, // contains_newline
+            true,  // contains_complex_grapheme
+            false, false, false, false, true, true,
+        );
+        assert_eq!(mode, AnimationMode::ClusterAnimation);
+    }
+
+    #[test]
+    fn test_choose_animation_mode_newline_overrides_complex_grapheme() {
+        // 换行优先级高于复杂 grapheme
+        let mode = choose_animation_mode(
+            3,     // cluster_count
+            true,  // contains_newline
+            true,  // contains_complex_grapheme
+            false, false, false, false, true, true,
+        );
+        assert_eq!(mode, AnimationMode::LineReflowAnimation);
     }
 
     // --- Range mapping tests ---
@@ -811,7 +904,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_before_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
     }
@@ -820,7 +913,7 @@ mod tests {
     fn test_map_ranges_insert_at_range_start() {
         // pos == range.0 算"在 range 之前"，整体后移
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(10, 4);
         assert_eq!(state.active_insert_byte_ranges(), vec![(14, 24)]);
     }
@@ -828,7 +921,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_after_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(20, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
     }
@@ -836,7 +929,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_beyond_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(25, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
     }
@@ -844,7 +937,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_inside_range_cancels() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(15, 3);
         assert!(state.is_empty());
         assert!(state.active_insert_byte_ranges().is_empty());
@@ -853,7 +946,7 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_before_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(7, 17)]);
     }
@@ -862,7 +955,7 @@ mod tests {
     fn test_map_ranges_delete_up_to_range_start() {
         // 删除范围 [5, 10)，range.0 = 10，delete_end = 10 <= range.0，整体前移
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(5, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(5, 15)]);
     }
@@ -870,7 +963,7 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_after_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(20, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
     }
@@ -878,7 +971,7 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_beyond_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(25, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
     }
@@ -887,7 +980,7 @@ mod tests {
     fn test_map_ranges_delete_overlapping_start_cancels() {
         // 删除范围 [8, 13)，和 range [10, 20) 相交
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(8, 5);
         assert!(state.is_empty());
     }
@@ -896,7 +989,7 @@ mod tests {
     fn test_map_ranges_delete_overlapping_end_cancels() {
         // 删除范围 [18, 25)，和 range [10, 20) 相交
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(18, 7);
         assert!(state.is_empty());
     }
@@ -905,7 +998,7 @@ mod tests {
     fn test_map_ranges_delete_inside_range_cancels() {
         // 删除范围 [12, 18)，完全在 range [10, 20) 内部，相交
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(12, 6);
         assert!(state.is_empty());
     }
@@ -914,7 +1007,7 @@ mod tests {
     fn test_map_ranges_delete_superset_of_range_cancels() {
         // 删除范围 [5, 25)，完全包含 range [10, 20)，相交
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(5, 20);
         assert!(state.is_empty());
     }
@@ -924,7 +1017,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_before_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(23, 28), (28, 33)]);
@@ -933,7 +1026,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_after_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(30, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
@@ -943,7 +1036,7 @@ mod tests {
     fn test_map_ranges_insert_inside_reflow_removes_that_reflow() {
         // insert 在 reflow range 内部，移除该 reflow range，但不取消整个动画
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(22, 3);
         // byte_range 不受影响（insert 在 byte_range 之后）
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
@@ -954,7 +1047,7 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_before_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(7, 17)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(17, 22), (22, 27)]);
@@ -963,7 +1056,7 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_after_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(30, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
@@ -973,7 +1066,7 @@ mod tests {
     fn test_map_ranges_delete_overlapping_reflow_removes_that_reflow() {
         // delete 和 reflow range 相交，移除该 reflow range，但不取消整个动画
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(22, 5);
         // byte_range 不受影响（delete 在 byte_range 之后）
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
@@ -986,7 +1079,7 @@ mod tests {
     fn test_map_ranges_delete_partial_reflow_overlap() {
         // delete 只和一个 reflow 相交
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (30, 35)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (30, 35)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(22, 5);
         // byte_range 不受影响
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
@@ -1000,8 +1093,8 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_multiple_animations() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_insert((30, 40), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(5, 3);
         let ranges = state.active_insert_byte_ranges();
         assert_eq!(ranges.len(), 2);
@@ -1012,8 +1105,8 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_cancels_one_of_multiple() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_insert((30, 40), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![], AnimationMode::GlyphAnimation, 100);
         // insert 在第一个 range 内部，取消第一个；第二个后移
         state.map_ranges_for_insert(15, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(33, 43)]);
@@ -1022,8 +1115,8 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_multiple_animations() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_insert((30, 40), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_delete(5, 3);
         let ranges = state.active_insert_byte_ranges();
         assert_eq!(ranges.len(), 2);
@@ -1034,8 +1127,8 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_cancels_one_of_multiple() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
-        state.start_insert((30, 40), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![], AnimationMode::GlyphAnimation, 100);
         // delete 和第一个 range 相交，取消第一个；第二个前移
         state.map_ranges_for_delete(8, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(25, 35)]);
@@ -1044,8 +1137,8 @@ mod tests {
     #[test]
     fn test_map_ranges_multiple_with_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25)], 100);
-        state.start_insert((30, 40), vec![(40, 45)], 100);
+        state.start_insert((10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert((30, 40), vec![(40, 45)], AnimationMode::GlyphAnimation, 100);
         state.map_ranges_for_insert(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23), (33, 43)]);
         let reflow = state.active_reflow_byte_ranges();
@@ -1058,7 +1151,7 @@ mod tests {
     fn test_map_ranges_delete_animation_also_mapped() {
         // Delete 动画的 byte_range 也应该被映射
         let mut state = TextAnimationState::new();
-        state.start_delete((10, 20), 100);
+        state.start_delete((10, 20), AnimationMode::GlyphAnimation, 100);
         // insert 在 delete range 之前
         state.map_ranges_for_insert(5, 3);
         // Delete 动画没有 active_insert_byte_ranges，但状态机不为空
@@ -1069,7 +1162,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_inside_delete_range_cancels() {
         let mut state = TextAnimationState::new();
-        state.start_delete((10, 20), 100);
+        state.start_delete((10, 20), AnimationMode::GlyphAnimation, 100);
         // insert 在 delete range 内部，取消该 delete 动画
         state.map_ranges_for_insert(15, 3);
         assert!(state.is_empty());
@@ -1132,7 +1225,7 @@ mod tests {
     #[test]
     fn test_map_ranges_for_insert_triggers_repaint_on_cancel() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         // insert 在 range 内部，取消动画 → has_active_insert 变为 false（需要 repaint）
         state.map_ranges_for_insert(15, 3);
@@ -1142,7 +1235,7 @@ mod tests {
     #[test]
     fn test_map_ranges_for_delete_triggers_repaint_on_cancel() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         // delete 和 range 相交，取消动画 → has_active_insert 变为 false（需要 repaint）
         state.map_ranges_for_delete(8, 5);
@@ -1152,7 +1245,7 @@ mod tests {
     #[test]
     fn test_map_ranges_for_insert_no_repaint_when_no_cancel() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         // insert 在 range 之前，不取消 → has_active_insert 仍为 true（无需 repaint）
         state.map_ranges_for_insert(5, 3);
@@ -1163,7 +1256,7 @@ mod tests {
     #[test]
     fn test_map_ranges_for_delete_no_repaint_when_no_cancel() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![], 100);
+        state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         // delete 在 range 之后，不取消 → has_active_insert 仍为 true（无需 repaint）
         state.map_ranges_for_delete(25, 5);
@@ -1173,7 +1266,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_before_with_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         // insert 在 byte_range 之前，byte_range 和 reflow_byte_ranges 都后移
         state.map_ranges_for_insert(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
@@ -1183,7 +1276,7 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_intersecting_reflow_cancels_that_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (30, 35)], 100);
+        state.start_insert((10, 20), vec![(20, 25), (30, 35)], AnimationMode::GlyphAnimation, 100);
         // delete [22, 27) 和 reflow (20,25) 相交，取消该 reflow；
         // reflow (30,35) 在 delete 之后，前移 → (25, 30)
         state.map_ranges_for_delete(22, 5);
@@ -1195,7 +1288,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_cancels_animation_with_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25)], 100);
+        state.start_insert((10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
         // insert 在 byte_range 内部，取消整个动画（包括 reflow）
         state.map_ranges_for_insert(15, 3);
         assert!(state.is_empty(), "Insert inside byte_range should cancel entire animation");
@@ -1206,48 +1299,18 @@ mod tests {
     fn test_sequential_inserts_map_correctly() {
         let mut state = TextAnimationState::new();
         // 第一个动画
-        state.start_insert((5, 10), vec![], 100);
+        state.start_insert((5, 10), vec![], AnimationMode::GlyphAnimation, 100);
         // insert 在第一个 range 之后（pos=10 >= range.1=10），range 不变
         state.map_ranges_for_insert(10, 1);
         assert_eq!(state.active_insert_byte_ranges(), vec![(5, 10)]);
 
         // 第二个动画
-        state.start_insert((10, 11), vec![], 100);
+        state.start_insert((10, 11), vec![], AnimationMode::GlyphAnimation, 100);
         // insert 在第一个 range 之后、第二个 range 边界
         state.map_ranges_for_insert(11, 1);
         let ranges = state.active_insert_byte_ranges();
         assert_eq!(ranges.len(), 2);
         assert!(ranges.contains(&(5, 10)), "First animation range should remain (5, 10)");
         assert!(ranges.contains(&(10, 11)), "Second animation range should remain (10, 11)");
-    }
-
-    // --- Complex grapheme tests ---
-
-    #[test]
-    fn test_complex_grapheme_no_animation() {
-        let decision = should_create_text_animation(
-            1,     // glyph_count
-            false, // contains_newline
-            true,  // contains_complex_grapheme
-            false, // is_scrolling
-            false, // is_loading
-            false, // is_applying_format
-            false, // is_applying_settings
-            true,  // animation_enabled
-            true,  // component_ready
-        );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
-    }
-
-    #[test]
-    fn test_complex_grapheme_overrides_normal_glyph() {
-        // 即使 glyph_count 在正常范围内，复杂 grapheme 也不做动画
-        let decision = should_create_text_animation(
-            3,     // glyph_count
-            false, // contains_newline
-            true,  // contains_complex_grapheme
-            false, false, false, false, true, true,
-        );
-        assert_eq!(decision, AnimationDecision::NoAnimation);
     }
 }

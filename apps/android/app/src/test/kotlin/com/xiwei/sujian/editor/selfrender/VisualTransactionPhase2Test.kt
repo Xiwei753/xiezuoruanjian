@@ -355,47 +355,47 @@ class VisualTransactionPhase2Test {
         assertEquals("Programmatic", SujianEditCauseData.Programmatic.toCoreCauseString())
     }
 
-    // ── 7. 复杂 grapheme 跳过 glyph animation ──
+    // ── 7. 复杂 grapheme 检测（detectComplexGraphemeRanges） ──
 
     @Test
-    fun complexGrapheme_emoji_shouldSkipAnimation() {
-        // emoji 包含 surrogate pair，应跳过 glyph animation
+    fun complexGrapheme_emoji_detectedAsComplex() {
+        // emoji 包含 surrogate pair，应被检测为复杂 grapheme
         val text = "a😀b"
         val startUtf16 = 1
         val endUtf16 = 3  // emoji 占 2 UTF-16 code units
 
-        assertTrue(shouldSkipGlyphAnimation(text, startUtf16, endUtf16))
+        assertTrue(detectComplexGraphemeRanges(text, startUtf16, endUtf16).isNotEmpty())
     }
 
     @Test
-    fun complexGrapheme_ascii_shouldNotSkip() {
-        // ASCII 字符不包含 surrogate pair，不应跳过
+    fun complexGrapheme_ascii_notDetected() {
+        // ASCII 字符不包含复杂 grapheme
         val text = "abc"
         val startUtf16 = 0
         val endUtf16 = 3
 
-        assertFalse(shouldSkipGlyphAnimation(text, startUtf16, endUtf16))
+        assertTrue(detectComplexGraphemeRanges(text, startUtf16, endUtf16).isEmpty())
     }
 
     @Test
-    fun complexGrapheme_chinese_shouldNotSkip() {
-        // 中文字符（BMP）不包含 surrogate pair，不应跳过
+    fun complexGrapheme_chinese_notDetected() {
+        // 中文字符（BMP）不包含复杂 grapheme
         val text = "你好"
         val startUtf16 = 0
         val endUtf16 = 2
 
-        assertFalse(shouldSkipGlyphAnimation(text, startUtf16, endUtf16))
+        assertTrue(detectComplexGraphemeRanges(text, startUtf16, endUtf16).isEmpty())
     }
 
     @Test
-    fun complexGrapheme_mixedEmojiAndAscii_emojiRangeSkips() {
+    fun complexGrapheme_mixedEmojiAndAscii_emojiRangeDetected() {
         val text = "a😀b"
         // ASCII range
-        assertFalse(shouldSkipGlyphAnimation(text, 0, 1))
+        assertTrue(detectComplexGraphemeRanges(text, 0, 1).isEmpty())
         // emoji range
-        assertTrue(shouldSkipGlyphAnimation(text, 1, 3))
+        assertTrue(detectComplexGraphemeRanges(text, 1, 3).isNotEmpty())
         // ASCII after emoji
-        assertFalse(shouldSkipGlyphAnimation(text, 3, 4))
+        assertTrue(detectComplexGraphemeRanges(text, 3, 4).isEmpty())
     }
 
     // ── SujianVisualEditContext ──
@@ -523,14 +523,54 @@ class VisualTransactionPhase2Test {
         }
     }
 
-    private fun shouldSkipGlyphAnimation(text: String, startUtf16: Int, endUtf16: Int): Boolean {
-        if (startUtf16 >= endUtf16 || startUtf16 >= text.length) return false
-        for (i in startUtf16 until endUtf16.coerceAtMost(text.length)) {
-            if (Character.isHighSurrogate(text[i]) || Character.isLowSurrogate(text[i])) {
-                return true
+    private fun detectComplexGraphemeRanges(text: String, startUtf16: Int, endUtf16: Int): List<HalfOpenRange> {
+        val ranges = mutableListOf<HalfOpenRange>()
+        if (startUtf16 >= endUtf16 || startUtf16 >= text.length) return ranges
+        
+        var i = startUtf16
+        while (i < endUtf16.coerceAtMost(text.length)) {
+            val codePoint = text.codePointAt(i)
+            val charCount = Character.charCount(codePoint)
+            
+            if (isComplexGraphemeCodePoint(codePoint)) {
+                var clusterEnd = i + charCount
+                while (clusterEnd < endUtf16.coerceAtMost(text.length)) {
+                    val nextCp = text.codePointAt(clusterEnd)
+                    if (isCombiningCodePoint(nextCp) || nextCp == 0x200D) {
+                        clusterEnd += Character.charCount(nextCp)
+                    } else {
+                        break
+                    }
+                }
+                ranges.add(HalfOpenRange(i, clusterEnd))
+                i = clusterEnd
+            } else {
+                i += charCount
             }
         }
+        return ranges
+    }
+    
+    private fun isComplexGraphemeCodePoint(codePoint: Int): Boolean {
+        if (codePoint > 0xFFFF) return true
+        if (codePoint == 0x200D) return true
+        if (codePoint in 0xFE00..0xFE0F) return true
+        if (codePoint in 0xE0100..0xE01EF) return true
+        if (codePoint in 0x1F600..0x1F64F) return true
+        if (codePoint in 0x1F300..0x1F5FF) return true
+        if (codePoint in 0x1F680..0x1F6FF) return true
+        if (codePoint in 0x1F900..0x1F9FF) return true
+        if (codePoint in 0x1F1E6..0x1F1FF) return true
         return false
+    }
+    
+    private fun isCombiningCodePoint(codePoint: Int): Boolean {
+        val charType = Character.getType(codePoint)
+        return charType == Character.NON_SPACING_MARK.toInt()
+            || charType == Character.COMBINING_SPACING_MARK.toInt()
+            || charType == Character.ENCLOSING_MARK.toInt()
+            || codePoint in 0xFE00..0xFE0F
+            || codePoint in 0xE0100..0xE01EF
     }
 
     private fun utf8ToUtf16(text: String, utf8Offset: Int): Int {

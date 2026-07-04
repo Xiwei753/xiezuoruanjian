@@ -222,8 +222,8 @@ class SelfRenderAnimationLogicTest {
         val text = "a😀b"
         assertEquals(4, text.length) // a(1) + 😀(2) + b(1)
         // 插入 emoji 后，UTF-16 range 是 [1, 3)
-        val insertRange = IntRange(1, 3)
-        assertEquals(2, insertRange.last - insertRange.first) // 2 code units
+        val insertRange = HalfOpenRange(1, 3)
+        assertEquals(2, insertRange.end - insertRange.start) // 2 code units
     }
 
     @Test
@@ -231,8 +231,8 @@ class SelfRenderAnimationLogicTest {
         // 你 = U+4F60, 在 UTF-16 中占 1 个 code unit
         val text = "a你b"
         assertEquals(3, text.length) // a(1) + 你(1) + b(1)
-        val insertRange = IntRange(1, 2)
-        assertEquals(1, insertRange.last - insertRange.first)
+        val insertRange = HalfOpenRange(1, 2)
+        assertEquals(1, insertRange.end - insertRange.start)
     }
 
     @Test
@@ -241,10 +241,10 @@ class SelfRenderAnimationLogicTest {
         assertEquals(4, text.length) // 每个 emoji 2 code units
         // 第一个 emoji: [0, 2)
         // 第二个 emoji: [2, 4)
-        val range1 = IntRange(0, 2)
-        val range2 = IntRange(2, 4)
-        assertEquals(2, range1.last - range1.first)
-        assertEquals(2, range2.last - range2.first)
+        val range1 = HalfOpenRange(0, 2)
+        val range2 = HalfOpenRange(2, 4)
+        assertEquals(2, range1.end - range1.start)
+        assertEquals(2, range2.end - range2.start)
     }
 
     // ── excludeRange 不相交行批量收集 ──
@@ -255,14 +255,14 @@ class SelfRenderAnimationLogicTest {
         // 不相交行应被收集为连续区间：[0, 1] 和 [4, 9]
         val firstVisLine = 0
         val lastVisLine = 9
-        val excludeRange = IntRange(25, 35) // 影响行 2, 3
+        val excludeRange = HalfOpenRange(25, 35) // 影响行 2, 3
 
         val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
         var rangeStart = -1
         for (lineIdx in firstVisLine..lastVisLine) {
             val lineStart = lineIdx * 10
             val lineEnd = lineStart + 10
-            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            val overlaps = !(lineEnd <= excludeRange.start || lineStart >= excludeRange.end)
             if (!overlaps) {
                 if (rangeStart < 0) rangeStart = lineIdx
             } else {
@@ -287,14 +287,14 @@ class SelfRenderAnimationLogicTest {
         // 可视行 0-9，exclude [100, 110) 不影响任何可视行
         val firstVisLine = 0
         val lastVisLine = 9
-        val excludeRange = IntRange(100, 110)
+        val excludeRange = HalfOpenRange(100, 110)
 
         val nonOverlapLineRanges = mutableListOf<Pair<Int, Int>>()
         var rangeStart = -1
         for (lineIdx in firstVisLine..lastVisLine) {
             val lineStart = lineIdx * 10
             val lineEnd = lineStart + 10
-            val overlaps = !(lineEnd <= excludeRange.first || lineStart >= excludeRange.last)
+            val overlaps = !(lineEnd <= excludeRange.start || lineStart >= excludeRange.end)
             if (!overlaps) {
                 if (rangeStart < 0) rangeStart = lineIdx
             } else {
@@ -411,7 +411,7 @@ class SelfRenderAnimationLogicTest {
     fun scrolling_clearsAnimations() {
         // 模拟滚动状态管理
         var hasAnimations = true
-        var animatedInsertRange: IntRange? = IntRange(1, 3)
+        var animatedInsertRange: HalfOpenRange? = HalfOpenRange(1, 3)
 
         // 开始滚动
         hasAnimations = false
@@ -447,7 +447,7 @@ class SelfRenderAnimationLogicTest {
 
         // 模拟粘贴操作：即使文本变化很小（单字），Paste 也不动画
         var hasAnimations = false
-        var animatedInsertRange: IntRange? = null
+        var animatedInsertRange: HalfOpenRange? = null
 
         // 模拟粘贴 "a" 到空文本
         // Paste cause → shouldAnimate = false → 不创建动画
@@ -467,7 +467,7 @@ class SelfRenderAnimationLogicTest {
     fun scrollingDuringInsert_clearsAnimation() {
         // 模拟：正在插入文字时有活跃动画，然后用户滚动
         var hasAnimations = true
-        var animatedInsertRange: IntRange? = IntRange(5, 8)
+        var animatedInsertRange: HalfOpenRange? = HalfOpenRange(5, 8)
 
         // 插入操作创建了动画
         assertTrue(hasAnimations)
@@ -491,7 +491,7 @@ class SelfRenderAnimationLogicTest {
     @Test
     fun activeInsertRange_mapForInsert_shiftsRangeCorrectly() {
         // 场景：已有 range [5,8)，在位置 3 插入 2 字符 → range 应变为 [7,10)
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(5, 8)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, HalfOpenRange(5, 8)))
         val pos = 3
         val len = 2
 
@@ -499,21 +499,21 @@ class SelfRenderAnimationLogicTest {
         for (entry in entries) {
             val range = entry.range
             when {
-                pos <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
-                pos >= range.last -> newEntries.add(entry)
+                pos <= range.start -> newEntries.add(entry.copy(range = HalfOpenRange(range.start + len, range.end + len)))
+                pos >= range.end -> newEntries.add(entry)
                 // else: intersect → cancel (not added)
             }
         }
 
         assertEquals(1, newEntries.size)
-        assertEquals(IntRange(7, 10), newEntries[0].range)
+        assertEquals(HalfOpenRange(7, 10), newEntries[0].range)
         assertEquals(1uL, newEntries[0].id) // ID 保留不变
     }
 
     @Test
     fun activeInsertRange_mapForInsert_intersectCancelsRange() {
         // 场景：已有 range [5,8)，在位置 6 插入 → 相交，range 被取消
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(5, 8)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, HalfOpenRange(5, 8)))
         val pos = 6
         val len = 1
 
@@ -522,8 +522,8 @@ class SelfRenderAnimationLogicTest {
         for (entry in entries) {
             val range = entry.range
             when {
-                pos <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
-                pos >= range.last -> newEntries.add(entry)
+                pos <= range.start -> newEntries.add(entry.copy(range = HalfOpenRange(range.start + len, range.end + len)))
+                pos >= range.end -> newEntries.add(entry)
                 else -> { canceledIds.add(entry.id) }
             }
         }
@@ -535,7 +535,7 @@ class SelfRenderAnimationLogicTest {
     @Test
     fun activeInsertRange_mapForDelete_shiftsRangeCorrectly() {
         // 场景：已有 range [8,11)，在位置 3 删除 2 字符 → range 应变为 [6,9)
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(8, 11)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, HalfOpenRange(8, 11)))
         val pos = 3
         val len = 2
 
@@ -543,21 +543,21 @@ class SelfRenderAnimationLogicTest {
         for (entry in entries) {
             val range = entry.range
             when {
-                pos + len <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first - len, range.last - len)))
-                pos >= range.last -> newEntries.add(entry)
+                pos + len <= range.start -> newEntries.add(entry.copy(range = HalfOpenRange(range.start - len, range.end - len)))
+                pos >= range.end -> newEntries.add(entry)
                 // else: intersect → cancel
             }
         }
 
         assertEquals(1, newEntries.size)
-        assertEquals(IntRange(6, 9), newEntries[0].range)
+        assertEquals(HalfOpenRange(6, 9), newEntries[0].range)
         assertEquals(1uL, newEntries[0].id)
     }
 
     @Test
     fun activeInsertRange_mapForDelete_intersectCancelsRange() {
         // 场景：已有 range [5,8)，在位置 6 删除 3 字符 → 相交，range 被取消
-        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, IntRange(5, 8)))
+        val entries = mutableListOf(ActiveInsertRangeEntryForTest(1uL, HalfOpenRange(5, 8)))
         val pos = 6
         val len = 3
 
@@ -566,8 +566,8 @@ class SelfRenderAnimationLogicTest {
         for (entry in entries) {
             val range = entry.range
             when {
-                pos + len <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first - len, range.last - len)))
-                pos >= range.last -> newEntries.add(entry)
+                pos + len <= range.start -> newEntries.add(entry.copy(range = HalfOpenRange(range.start - len, range.end - len)))
+                pos >= range.end -> newEntries.add(entry)
                 else -> { canceledIds.add(entry.id) }
             }
         }
@@ -579,13 +579,13 @@ class SelfRenderAnimationLogicTest {
     @Test
     fun activeInsertRange_tickRemovesById_notByValue() {
         // 关键场景：range 被映射后值已变化，但 ID 不变
-        // tickAnimations 应按 ID 移除，而非按 IntRange 值移除
+        // tickAnimations 应按 ID 移除，而非按 HalfOpenRange 值移除
         // 1. 插入 "A" 在位置 5，range = [5,6), id = 1
         // 2. 插入 "B" 在位置 3，映射后 range 变为 [6,7), id 仍为 1
         // 3. 动画 A 完成，按 id=1 移除 → 正确移除 [6,7)
         val entries = mutableListOf(
-            ActiveInsertRangeEntryForTest(1uL, IntRange(6, 7)),  // 映射后的 range
-            ActiveInsertRangeEntryForTest(2uL, IntRange(3, 4))   // 第二个插入的 range
+            ActiveInsertRangeEntryForTest(1uL, HalfOpenRange(6, 7)),  // 映射后的 range
+            ActiveInsertRangeEntryForTest(2uL, HalfOpenRange(3, 4))   // 第二个插入的 range
         )
 
         // 模拟 tickAnimations：按 ID 移除
@@ -594,16 +594,16 @@ class SelfRenderAnimationLogicTest {
 
         assertEquals(1, entries.size)
         assertEquals(2uL, entries[0].id)
-        assertEquals(IntRange(3, 4), entries[0].range)
+        assertEquals(HalfOpenRange(3, 4), entries[0].range)
     }
 
     @Test
     fun activeInsertRange_multipleConcurrentRanges_independentTracking() {
         // 多个并发 insert 动画各自独立追踪 range
         val entries = mutableListOf(
-            ActiveInsertRangeEntryForTest(1uL, IntRange(5, 6)),
-            ActiveInsertRangeEntryForTest(2uL, IntRange(10, 12)),
-            ActiveInsertRangeEntryForTest(3uL, IntRange(15, 16))
+            ActiveInsertRangeEntryForTest(1uL, HalfOpenRange(5, 6)),
+            ActiveInsertRangeEntryForTest(2uL, HalfOpenRange(10, 12)),
+            ActiveInsertRangeEntryForTest(3uL, HalfOpenRange(15, 16))
         )
 
         // 在位置 7 插入 1 字符 → 只有 range1 不变，range2 和 range3 后移
@@ -613,16 +613,16 @@ class SelfRenderAnimationLogicTest {
         for (entry in entries) {
             val range = entry.range
             when {
-                pos <= range.first -> newEntries.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
-                pos >= range.last -> newEntries.add(entry)
+                pos <= range.start -> newEntries.add(entry.copy(range = HalfOpenRange(range.start + len, range.end + len)))
+                pos >= range.end -> newEntries.add(entry)
                 else -> {} // cancel
             }
         }
 
         assertEquals(3, newEntries.size)
-        assertEquals(IntRange(5, 6), newEntries[0].range)   // 不变
-        assertEquals(IntRange(11, 13), newEntries[1].range) // 后移
-        assertEquals(IntRange(16, 17), newEntries[2].range) // 后移
+        assertEquals(HalfOpenRange(5, 6), newEntries[0].range)   // 不变
+        assertEquals(HalfOpenRange(11, 13), newEntries[1].range) // 后移
+        assertEquals(HalfOpenRange(16, 17), newEntries[2].range) // 后移
     }
 
     // ── 辅助方法 ──
@@ -634,7 +634,7 @@ class SelfRenderAnimationLogicTest {
 
     private data class ActiveInsertRangeEntryForTest(
         val id: ULong,
-        val range: IntRange
+        val range: HalfOpenRange
     )
 
     /**

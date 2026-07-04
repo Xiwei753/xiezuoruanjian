@@ -6,14 +6,16 @@
 // Core transaction → visual_transaction_json signal → QML overlay rendering.
 // The static text texture (Layer 0) and QML cursor remain unchanged.
 //
-// Unified animation decision rules (must match Rust should_create_text_animation):
-// - glyph 为空：不动画
-// - glyph 超过上限（8）：不动画
-// - 包含复杂 grapheme（emoji/ZWJ/variation selector/combining mark）：不动画
-// - 包含换行：文字不动画，但光标仍可动画
-// - scrolling/loading/settings/applyingFormat：不动画
-// - component not ready：不动画
-// - 不动画时绝对不能 start_insert hidden range
+// Unified animation mode rules (must match Rust choose_animation_mode):
+// - cluster 为空：systemSuppressed
+// - 系统抑制条件（动画关闭/滚动/加载/格式化/设置变化）：systemSuppressed
+// - 包含换行：lineReflowAnimation（创建 hidden range + reflow 动画）
+// - 包含复杂 grapheme：clusterAnimation（整簇作为单个 ghost）
+// - cluster 数量 1–8：glyphAnimation
+// - cluster 数量 9–40：runAnimation
+// - cluster 数量 > 40：snapshotAnimation
+// - systemSuppressed 时不创建 hidden range
+// - 非 systemSuppressed 时都创建 hidden range
 // - 如果已经 start_insert 但 overlay 跳过，必须立即通知 Rust 清除 hidden range
 //
 // Animation mechanism:
@@ -61,19 +63,18 @@ Item {
     property var _activeTransactions: []
     property Component _glyphGhostComponent: Qt.createComponent("EditorGlyphGhost.qml")
 
-    /// 统一动画判定函数 — 与 Rust should_create_text_animation 使用相同规则
-    /// 返回值: "noAnimation" / "cursorOnly" / "fullAnimation"
-    function shouldCreateTextAnimation(glyphCount, containsNewline, containsComplexGrapheme, isScrolling, isLoading, isApplyingFormat, isApplyingSettings, animEnabled, componentReady) {
-        var MAX_GLYPH_COUNT = 8
-
-        if (!animEnabled) return "noAnimation"
-        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return "noAnimation"
-        if (!componentReady) return "noAnimation"
-        if (glyphCount === 0) return "noAnimation"
-        if (glyphCount > MAX_GLYPH_COUNT) return "noAnimation"
-        if (containsComplexGrapheme) return "noAnimation"
-        if (containsNewline) return "cursorOnly"
-        return "fullAnimation"
+    /// 统一动画模式选择函数 — 与 Rust choose_animation_mode 使用相同规则
+    /// 返回值: "glyphAnimation" / "clusterAnimation" / "runAnimation" / "lineReflowAnimation" / "snapshotAnimation" / "systemSuppressed"
+    function chooseAnimationMode(clusterCount, containsNewline, containsComplexGrapheme, isScrolling, isLoading, isApplyingFormat, isApplyingSettings, animEnabled, componentReady) {
+        if (!animEnabled) return "systemSuppressed"
+        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return "systemSuppressed"
+        if (!componentReady) return "systemSuppressed"
+        if (clusterCount === 0) return "systemSuppressed"
+        if (containsNewline) return "lineReflowAnimation"
+        if (containsComplexGrapheme) return "clusterAnimation"
+        if (clusterCount <= 8) return "glyphAnimation"
+        if (clusterCount <= 40) return "runAnimation"
+        return "snapshotAnimation"
     }
 
     /// 公共 ghost 创建函数 — 统一参数构建，避免漂移
@@ -260,13 +261,13 @@ Item {
             }
         }
 
-        // ── 统一动画判定 ──
-        // 必须与 Rust should_create_text_animation 使用相同规则
+        // ── 统一动画模式选择 ──
+        // 必须与 Rust choose_animation_mode 使用相同规则
         var component = root._glyphGhostComponent
         var componentReady = component && component.status === Component.Ready
 
-        var decision = root.shouldCreateTextAnimation(
-            glyphRects.length,    // glyphCount
+        var mode = root.chooseAnimationMode(
+            glyphRects.length,    // clusterCount
             containsNewline,      // containsNewline
             containsComplexGrapheme, // containsComplexGrapheme
             false,                // isScrolling (handled via suppressed on QML side)
@@ -277,55 +278,127 @@ Item {
             componentReady        // componentReady
         )
 
-        root._log("insert decision=" + decision + " glyphCount=" + glyphRects.length + " containsNewline=" + containsNewline + " componentReady=" + componentReady)
+        root._log("insert mode=" + mode + " clusterCount=" + glyphRects.length + " containsNewline=" + containsNewline + " containsComplexGrapheme=" + containsComplexGrapheme + " componentReady=" + componentReady)
 
-        if (decision === "noAnimation") {
-            root._log("insert skipped: decision=noAnimation")
+        if (mode === "systemSuppressed") {
+            root._log("insert skipped: mode=systemSuppressed")
             // 通知 Rust 清除可能已创建的 hidden range
             _notifySkippedIfHasRange(vt)
             return
         }
 
-        if (decision === "cursorOnly") {
-            root._log("insert skipped: decision=cursorOnly (newline), cursor still animates")
-            // 换行场景：不创建文字 ghost，但光标仍可动画
-            // 通知 Rust 清除可能已创建的 hidden range
-            _notifySkippedIfHasRange(vt)
-            return
-        }
-
-        // decision === "fullAnimation"
+        // 非 systemSuppressed 模式都创建动画
 
         // ── 阶段1：创建 ghost 对象但不启动 ──
         var createdGhosts = []
 
-        for (var i = 0; i < glyphRects.length; i++) {
-            var gr = glyphRects[i]
-            // 防御性检查：Rust 侧已过滤复杂字符，这里双重保险
-            if (isComplexGrapheme(gr.char)) {
-                root._log("insert skipped: complex grapheme at index=" + i)
-                continue
+        if (mode === "clusterAnimation") {
+            // ClusterAnimation：复杂 grapheme 整簇作为单个 ghost 绘制
+            // 不跳过复杂字符，整组一起绘制
+            for (var i = 0; i < glyphRects.length; i++) {
+                var gr = glyphRects[i]
+                var ghost = createGlyphGhost(
+                    "insert",
+                    startX,
+                    startY,
+                    gr.x,
+                    gr.baselineY || gr.y,
+                    gr.w,
+                    gr.h,
+                    gr.baselineY || 0,
+                    duration,
+                    editorItem.text_color || root.dt.editorText,
+                    gr.char || "",
+                    editorItem.font_family || "",
+                    editorItem.font_pixel_size || 0
+                )
+                if (ghost !== null) {
+                    createdGhosts.push(ghost)
+                } else {
+                    root._log("insert ghost createObject returned null at index=" + i)
+                }
             }
-            var ghost = createGlyphGhost(
-                "insert",
-                startX,
-                startY,
-                gr.x,
-                gr.baselineY || gr.y,
-                gr.w,
-                gr.h,
-                gr.baselineY || 0,
-                duration,
-                editorItem.text_color || root.dt.editorText,
-                isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
-                editorItem.font_family || "",
-                editorItem.font_pixel_size || 0
-            )
+        } else if (mode === "lineReflowAnimation") {
+            // LineReflowAnimation：换行场景，做行级 reflow 动画
+            // 换行字符本身不创建 glyph ghost，但 reflow ghost 仍需创建
+            for (var i = 0; i < glyphRects.length; i++) {
+                var gr = glyphRects[i]
+                // 换行字符不创建 glyph ghost
+                if (gr.char === "\n" || gr.char === "\r") continue
+                // 复杂字符在 reflow 模式下也跳过
+                if (isComplexGrapheme(gr.char)) continue
+                var ghost = createGlyphGhost(
+                    "insert",
+                    startX,
+                    startY,
+                    gr.x,
+                    gr.baselineY || gr.y,
+                    gr.w,
+                    gr.h,
+                    gr.baselineY || 0,
+                    duration,
+                    editorItem.text_color || root.dt.editorText,
+                    gr.char || "",
+                    editorItem.font_family || "",
+                    editorItem.font_pixel_size || 0
+                )
+                if (ghost !== null) {
+                    createdGhosts.push(ghost)
+                }
+            }
+        } else if (mode === "runAnimation" || mode === "snapshotAnimation") {
+            // RunAnimation/SnapshotAnimation：按 glyph 创建，复杂字符跳过
+            for (var i = 0; i < glyphRects.length; i++) {
+                var gr = glyphRects[i]
+                if (isComplexGrapheme(gr.char)) continue
+                var ghost = createGlyphGhost(
+                    "insert",
+                    startX,
+                    startY,
+                    gr.x,
+                    gr.baselineY || gr.y,
+                    gr.w,
+                    gr.h,
+                    gr.baselineY || 0,
+                    duration,
+                    editorItem.text_color || root.dt.editorText,
+                    gr.char || "",
+                    editorItem.font_family || "",
+                    editorItem.font_pixel_size || 0
+                )
+                if (ghost !== null) {
+                    createdGhosts.push(ghost)
+                }
+            }
+        } else {
+            // GlyphAnimation：逐字形动画，复杂字符跳过
+            for (var i = 0; i < glyphRects.length; i++) {
+                var gr = glyphRects[i]
+                if (isComplexGrapheme(gr.char)) {
+                    root._log("insert skipped: complex grapheme at index=" + i)
+                    continue
+                }
+                var ghost = createGlyphGhost(
+                    "insert",
+                    startX,
+                    startY,
+                    gr.x,
+                    gr.baselineY || gr.y,
+                    gr.w,
+                    gr.h,
+                    gr.baselineY || 0,
+                    duration,
+                    editorItem.text_color || root.dt.editorText,
+                    gr.char || "",
+                    editorItem.font_family || "",
+                    editorItem.font_pixel_size || 0
+                )
 
-            if (ghost !== null) {
-                createdGhosts.push(ghost)
-            } else {
-                root._log("insert ghost createObject returned null at index=" + i)
+                if (ghost !== null) {
+                    createdGhosts.push(ghost)
+                } else {
+                    root._log("insert ghost createObject returned null at index=" + i)
+                }
             }
         }
 
@@ -442,7 +515,7 @@ Item {
             return
         }
 
-        // ── 统一动画判定 ──
+        // ── 统一动画模式选择 ──
         var containsNewline = false
         for (var ci = 0; ci < glyphRects.length; ci++) {
             if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
@@ -463,7 +536,7 @@ Item {
         var component = root._glyphGhostComponent
         var componentReady = component && component.status === Component.Ready
 
-        var decision = root.shouldCreateTextAnimation(
+        var mode = root.chooseAnimationMode(
             glyphRects.length,
             containsNewline,
             containsComplexGrapheme,
@@ -475,39 +548,62 @@ Item {
             componentReady
         )
 
-        root._log("delete decision=" + decision + " glyphCount=" + glyphRects.length + " containsNewline=" + containsNewline + " componentReady=" + componentReady)
+        root._log("delete mode=" + mode + " clusterCount=" + glyphRects.length + " containsNewline=" + containsNewline + " componentReady=" + componentReady)
 
-        if (decision !== "fullAnimation") {
-            root._log("delete skipped: decision=" + decision)
+        if (mode === "systemSuppressed") {
+            root._log("delete skipped: mode=systemSuppressed")
             return
         }
 
+        // 非 systemSuppressed 模式都创建删除动画
         root._log("delete creating " + glyphRects.length + " ghosts, cursorRect=(" + endX + "," + endY + ")")
 
-        for (var i = 0; i < glyphRects.length; i++) {
-            var gr = glyphRects[i]
-            // 防御性检查：Rust 侧已过滤复杂字符，这里双重保险
-            if (isComplexGrapheme(gr.char)) {
-                root._log("delete skipped: complex grapheme at index=" + i)
-                continue
+        if (mode === "clusterAnimation") {
+            // ClusterAnimation：复杂 grapheme 整簇作为单个 ghost
+            for (var i = 0; i < glyphRects.length; i++) {
+                var gr = glyphRects[i]
+                var ghost = createGlyphGhost(
+                    "delete",
+                    gr.x,
+                    gr.baselineY || gr.y,
+                    endX,
+                    endY,
+                    gr.w,
+                    gr.h,
+                    gr.baselineY || 0,
+                    duration,
+                    editorItem.text_color || root.dt.editorText,
+                    gr.char || "",
+                    editorItem.font_family || "",
+                    editorItem.font_pixel_size || 0
+                )
+                _trackGhost(ghost, "delete", 0, 0)
             }
-            var ghost = createGlyphGhost(
-                "delete",
-                gr.x,
-                gr.baselineY || gr.y,
-                endX,
-                endY,
-                gr.w,
-                gr.h,
-                gr.baselineY || 0,
-                duration,
-                editorItem.text_color || root.dt.editorText,
-                isComplexGrapheme(gr.char) ? "" : (gr.char || ""),
-                editorItem.font_family || "",
-                editorItem.font_pixel_size || 0
-            )
-
-            _trackGhost(ghost, "delete", 0, 0)
+        } else {
+            // 其他模式：跳过复杂字符
+            for (var i = 0; i < glyphRects.length; i++) {
+                var gr = glyphRects[i]
+                if (isComplexGrapheme(gr.char)) {
+                    root._log("delete skipped: complex grapheme at index=" + i)
+                    continue
+                }
+                var ghost = createGlyphGhost(
+                    "delete",
+                    gr.x,
+                    gr.baselineY || gr.y,
+                    endX,
+                    endY,
+                    gr.w,
+                    gr.h,
+                    gr.baselineY || 0,
+                    duration,
+                    editorItem.text_color || root.dt.editorText,
+                    gr.char || "",
+                    editorItem.font_family || "",
+                    editorItem.font_pixel_size || 0
+                )
+                _trackGhost(ghost, "delete", 0, 0)
+            }
         }
     }
 

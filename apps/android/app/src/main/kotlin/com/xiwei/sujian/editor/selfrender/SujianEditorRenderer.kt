@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.text.Layout
 import android.text.TextPaint
+import com.xiwei.sujian.model.AnimationModeData
 import com.xiwei.sujian.model.SujianReflowGlyphRectData
 
 /**
@@ -13,7 +14,7 @@ import com.xiwei.sujian.model.SujianReflowGlyphRectData
  */
 data class SujianOverlayAnim(
     val id: ULong,
-    val kind: String,          // "insert" | "delete" | "cursor" | "reflow"
+    val kind: String,          // "insert" | "delete" | "cursor" | "reflow" | "cluster" | "run" | "snapshot"
     val text: String,
     val startX: Float,
     val startY: Float,
@@ -24,11 +25,12 @@ data class SujianOverlayAnim(
     val durationMs: Long,
     val startTimeMs: Long,
     val glyphRects: List<SujianGlyphRect>,
-    val insertRange: IntRange? = null,  // insert 动画的跳过范围（保留用于调试）
+    val insertRange: HalfOpenRange? = null,  // insert 动画的跳过范围（保留用于调试）
     val insertRangeId: ULong? = null,   // insert 动画的跳过范围 ID，用于映射后精确移除
     val reflowRects: List<SujianReflowGlyphRectData> = emptyList(),  // reflow 动画的新位置数据
-    val reflowInsertRanges: List<IntRange> = emptyList(),  // reflow 动画的 UTF-16 跳过范围（保留用于调试）
-    val reflowRangeIds: List<ULong> = emptyList()  // reflow 动画的跳过范围 ID，用于映射后精确移除
+    val reflowInsertRanges: List<HalfOpenRange> = emptyList(),  // reflow 动画的 UTF-16 跳过范围（保留用于调试）
+    val reflowRangeIds: List<ULong> = emptyList(),  // reflow 动画的跳过范围 ID，用于映射后精确移除
+    val animationMode: AnimationModeData = AnimationModeData.GlyphAnimation  // 新增
 ) {
     val isFinished: Boolean
         get() = (System.currentTimeMillis() - startTimeMs) >= durationMs
@@ -97,7 +99,7 @@ class SujianEditorRenderer(
     private var isScrolling = false
 
     // ── 动画期间跳过的正文范围（支持多个并发 insert 动画，用 ID 追踪防止映射后残留） ──
-    private data class ActiveInsertRangeEntry(val id: ULong, val range: IntRange)
+    private data class ActiveInsertRangeEntry(val id: ULong, val range: HalfOpenRange)
     private val activeInsertRanges = mutableListOf<ActiveInsertRangeEntry>()
     private var nextInsertRangeId: ULong = 1u
 
@@ -127,11 +129,11 @@ class SujianEditorRenderer(
     }
 
     /**
-     * 添加一个动画期间跳过的正文范围（UTF-16 offset IntRange）
+     * 添加一个动画期间跳过的正文范围（UTF-16 offset HalfOpenRange）
      * 每个 insert 动画独立添加，动画结束后只移除自己的 range
      * @return 该 range 的唯一 ID，用于后续精确移除
      */
-    fun addActiveInsertRange(range: IntRange): ULong {
+    fun addActiveInsertRange(range: HalfOpenRange): ULong {
         val id = nextInsertRangeId++
         activeInsertRanges.add(ActiveInsertRangeEntry(id, range))
         return id
@@ -145,9 +147,9 @@ class SujianEditorRenderer(
     }
 
     /**
-     * 移除指定跳过范围（按 IntRange 值匹配，用于向后兼容）
+     * 移除指定跳过范围（按 HalfOpenRange 值匹配，用于向后兼容）
      */
-    fun removeActiveInsertRange(range: IntRange) {
+    fun removeActiveInsertRange(range: HalfOpenRange) {
         activeInsertRanges.removeAll { it.range == range }
     }
 
@@ -161,7 +163,7 @@ class SujianEditorRenderer(
         if (clearedIds.isNotEmpty()) {
             activeAnimations.removeAll { anim ->
                 when (anim.kind) {
-                    "insert" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
+                    "insert", "cluster", "run", "snapshot" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
                     "reflow" -> anim.reflowRangeIds.any { it in clearedIds }
                     else -> false
                 }
@@ -173,7 +175,7 @@ class SujianEditorRenderer(
      * 映射已有 activeInsertRanges 以响应文本插入（UTF-16 offset）。
      *
      * 遍历所有已有 range：
-     * - pos <= range.first：range 后移 len → IntRange(range.first + len, range.last + len)
+     * - pos <= range.start：range 后移 len → HalfOpenRange(range.start + len, range.end + len)
      * - pos >= range.last：不变
      * - pos 在 range 内部（range.first < pos < range.last）：从列表中移除（相交取消策略）
      *
@@ -185,8 +187,8 @@ class SujianEditorRenderer(
         for (entry in activeInsertRanges) {
             val range = entry.range
             when {
-                pos <= range.first -> newRanges.add(entry.copy(range = IntRange(range.first + len, range.last + len)))
-                pos >= range.last -> newRanges.add(entry)
+                pos <= range.start -> newRanges.add(entry.copy(range = HalfOpenRange(range.start + len, range.end + len)))
+                pos >= range.end -> newRanges.add(entry)
                 else -> { canceledIds.add(entry.id) /* 相交，取消 */ }
             }
         }
@@ -200,7 +202,7 @@ class SujianEditorRenderer(
      * 映射已有 activeInsertRanges 以响应文本删除（UTF-16 offset）。
      *
      * 遍历所有已有 range：
-     * - 删除范围完全在 range 前（pos + len <= range.first）：range 前移 → IntRange(range.first - len, range.last - len)
+     * - 删除范围完全在 range 前（pos + len <= range.start）：range 前移 → HalfOpenRange(range.start - len, range.end - len)
      * - 删除范围完全在 range 后（pos >= range.last）：不变
      * - 删除范围和 range 相交：从列表中移除（相交取消策略）
      *
@@ -212,8 +214,8 @@ class SujianEditorRenderer(
         for (entry in activeInsertRanges) {
             val range = entry.range
             when {
-                pos + len <= range.first -> newRanges.add(entry.copy(range = IntRange(range.first - len, range.last - len)))
-                pos >= range.last -> newRanges.add(entry)
+                pos + len <= range.start -> newRanges.add(entry.copy(range = HalfOpenRange(range.start - len, range.end - len)))
+                pos >= range.end -> newRanges.add(entry)
                 else -> { canceledIds.add(entry.id) /* 相交，取消 */ }
             }
         }
@@ -227,7 +229,7 @@ class SujianEditorRenderer(
      * @deprecated 使用 addActiveInsertRange / clearActiveInsertRanges 代替
      * 保留向后兼容，内部转为列表操作
      */
-    fun setAnimatedInsertRange(range: IntRange?) {
+    fun setAnimatedInsertRange(range: HalfOpenRange?) {
         val clearedIds = activeInsertRanges.map { it.id }.toSet()
         activeInsertRanges.clear()
         if (range != null) {
@@ -238,7 +240,7 @@ class SujianEditorRenderer(
         if (clearedIds.isNotEmpty()) {
             activeAnimations.removeAll { anim ->
                 when (anim.kind) {
-                    "insert" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
+                    "insert", "cluster", "run", "snapshot" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
                     "reflow" -> anim.reflowRangeIds.any { it in clearedIds }
                     else -> false
                 }
@@ -250,8 +252,10 @@ class SujianEditorRenderer(
      * 清理已完成的动画
      */
     fun tickAnimations() {
-        // 先收集已完成的 insert 动画的 range ID，精确移除对应的跳过范围
-        val finishedInsertAnims = activeAnimations.filter { it.kind == "insert" && it.isFinished }
+        // 先收集已完成的 insert/cluster/run/snapshot 动画的 range ID，精确移除对应的跳过范围
+        val finishedInsertAnims = activeAnimations.filter { 
+            (it.kind == "insert" || it.kind == "cluster" || it.kind == "run" || it.kind == "snapshot") && it.isFinished 
+        }
         for (anim in finishedInsertAnims) {
             val rangeId = anim.insertRangeId
             if (rangeId != null) {
@@ -310,7 +314,7 @@ class SujianEditorRenderer(
         // 找到所有拥有被取消 range 的动画
         val animationsToCancel = activeAnimations.filter { anim ->
             when (anim.kind) {
-                "insert" -> anim.insertRangeId != null && anim.insertRangeId in idSet
+                "insert", "cluster", "run", "snapshot" -> anim.insertRangeId != null && anim.insertRangeId in idSet
                 "reflow" -> anim.reflowRangeIds.any { it in idSet }
                 else -> false
             }
@@ -409,7 +413,7 @@ class SujianEditorRenderer(
             val lineStart = layout.getLineStart(lineIdx)
             val lineEnd = layout.getLineEnd(lineIdx)
             val overlaps = excludeRanges.any { er ->
-                !(lineEnd <= er.first || lineStart >= er.last)
+                !(lineEnd <= er.start || lineStart >= er.end)
             }
             if (!overlaps) {
                 if (rangeStart < 0) rangeStart = lineIdx
@@ -443,15 +447,15 @@ class SujianEditorRenderer(
 
             // 收集该行相交的 exclude ranges
             val intersectingRanges = excludeRanges.filter { er ->
-                !(lineEnd <= er.first || lineStart >= er.last)
+                !(lineEnd <= er.start || lineStart >= er.end)
             }
             if (intersectingRanges.isEmpty()) continue // 已在批量绘制中处理
 
             // 计算该行需要排除的 offset 段，合并重叠区间
             val excludeSegments = mutableListOf<Pair<Int, Int>>()
             for (er in intersectingRanges) {
-                val segStart = maxOf(lineStart, er.first)
-                val segEnd = minOf(lineEnd, er.last)
+                val segStart = maxOf(lineStart, er.start)
+                val segEnd = minOf(lineEnd, er.end)
                 if (segStart < segEnd) {
                     excludeSegments.add(Pair(segStart, segEnd))
                 }
@@ -652,6 +656,42 @@ class SujianEditorRenderer(
                             val currentBaselineY = oldGlyph.baselineY + (newRect.newBaselineY.toFloat() - oldGlyph.baselineY) * easedProgress
                             canvas.drawText(oldGlyph.char, currentX, currentBaselineY, animTextPaint)
                         }
+                    }
+                }
+                "cluster" -> {
+                    // Cluster 动画：复杂 grapheme（emoji 等）整组作为一个 ghost
+                    // 与 insert 类似，但整组从起点到目标位置
+                    for (glyphRect in anim.glyphRects) {
+                        val currentX = anim.startX + (glyphRect.x - anim.startX) * easedProgress
+                        val currentBaselineY = anim.startBaselineY + (glyphRect.baselineY - anim.startBaselineY) * easedProgress
+                        val currentAlpha = (255 * easedProgress).toInt()
+                        val currentScale = 0.8f + 0.2f * easedProgress
+
+                        animTextPaint.alpha = currentAlpha
+                        canvas.save()
+                        canvas.scale(currentScale, currentScale, currentX, currentBaselineY)
+                        canvas.drawText(glyphRect.char, currentX, currentBaselineY, animTextPaint)
+                        canvas.restore()
+                    }
+                }
+                "run" -> {
+                    // Run 动画：分组动画（9-40 clusters）
+                    // 整组从起点淡入到目标位置
+                    for (glyphRect in anim.glyphRects) {
+                        val currentX = anim.startX + (glyphRect.x - anim.startX) * easedProgress
+                        val currentBaselineY = anim.startBaselineY + (glyphRect.baselineY - anim.startBaselineY) * easedProgress
+                        val currentAlpha = (255 * easedProgress).toInt()
+
+                        animTextPaint.alpha = currentAlpha
+                        canvas.drawText(glyphRect.char, currentX, currentBaselineY, animTextPaint)
+                    }
+                }
+                "snapshot" -> {
+                    // Snapshot 动画：大量文本（>40 clusters）整体淡入
+                    val currentAlpha = (255 * easedProgress).toInt()
+                    animTextPaint.alpha = currentAlpha
+                    for (glyphRect in anim.glyphRects) {
+                        canvas.drawText(glyphRect.char, glyphRect.x, glyphRect.baselineY, animTextPaint)
                     }
                 }
             }
