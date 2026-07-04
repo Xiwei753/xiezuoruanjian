@@ -195,6 +195,27 @@ fn test_sync_remote_not_counted_as_local_input() {
 }
 
 #[test]
+fn test_daily_stats_aggregation_empty_events() {
+    let temp_dir = tempdir().unwrap();
+    let api = StatsApi::new(temp_dir.path());
+
+    // Aggregate with no events
+    api.flush_and_aggregate();
+
+    let today_str = chrono::Utc::now().format("%Y-%m-%d").to_string();
+    let range = DateRange {
+        start_date: today_str.clone(),
+        end_date: today_str,
+    };
+
+    let summary = api.get_summary(range);
+    assert_eq!(summary.pure_input_chars, 0);
+    assert_eq!(summary.pure_deleted_chars, 0);
+    assert_eq!(summary.effective_chars, 0);
+    assert_eq!(summary.writing_duration_seconds, 0);
+}
+
+#[test]
 fn test_daily_aggregation_idempotent() {
     let temp_dir = tempdir().unwrap();
     let agg = StatsAggregator::new(temp_dir.path());
