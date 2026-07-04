@@ -184,6 +184,7 @@ ApplicationWindow {
             return window.systemThemeIsDark();
         }
         monetColor: settingsBackend !== null ? settingsBackend.setting_monet_color : ""
+        themePaletteJson: settingsBackend !== null ? settingsBackend.setting_theme_palette_json : ""
     }
 
     Connections {

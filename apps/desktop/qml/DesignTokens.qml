@@ -32,9 +32,10 @@ QtObject {
         try { return JSON.parse(themePaletteJson) } catch(e) { return null }
     }
     property bool hasThemePalette: _themePalette !== null && _themePalette.source === "android_dynamic_color"
+    property bool useThemePalette: true
 
     function _paletteColor(lightKey, darkKey) {
-        if (!hasThemePalette) return undefined
+        if (!(hasThemePalette && useThemePalette)) return undefined
         var key = isDark ? darkKey : lightKey
         var val = _themePalette[key]
         if (val && val.length > 0 && val.charAt(0) === '#') {

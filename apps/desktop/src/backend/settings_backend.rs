@@ -30,6 +30,7 @@ pub struct SettingsBackend {
     setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
     setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
     setting_monet_color: qt_property!(QString; READ setting_monet_color WRITE set_setting_monet_color NOTIFY settings_changed),
+    setting_theme_palette_json: qt_property!(QString; READ setting_theme_palette_json WRITE set_setting_theme_palette_json NOTIFY settings_changed),
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
@@ -156,6 +157,13 @@ impl SettingsBackend {
     }
     fn set_setting_monet_color(&mut self, val: QString) {
         self.with_app_mut((), |app| app.set_setting_monet_color(val));
+        self.settings_changed();
+    }
+    fn setting_theme_palette_json(&self) -> QString {
+        self.with_app("".into(), |app| app.setting_theme_palette_json())
+    }
+    fn set_setting_theme_palette_json(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_setting_theme_palette_json(val));
         self.settings_changed();
     }
     fn setting_typing_animation_enabled(&self) -> bool {
@@ -447,6 +455,17 @@ impl AppBackend {
         self.settings_changed();
     }
 
+    // AppBackend::setting_theme_palette_json
+    pub(crate) fn setting_theme_palette_json(&self) -> QString {
+        self.current_setting_theme_palette_json.clone().into()
+    }
+
+    // AppBackend::set_setting_theme_palette_json
+    pub(crate) fn set_setting_theme_palette_json(&mut self, val: QString) {
+        self.current_setting_theme_palette_json = val.to_string();
+        self.settings_changed();
+    }
+
     // AppBackend::setting_typing_animation_enabled
     pub(crate) fn setting_typing_animation_enabled(&self) -> bool {
         self.current_setting_typing_animation_enabled
@@ -552,6 +571,7 @@ impl AppBackend {
         // Default to "system"
         self.current_setting_theme_mode = "system".to_string();
         self.current_setting_monet_color = "".to_string();
+        self.current_setting_theme_palette_json = "".to_string();
         self.settings_changed();
     }
 
@@ -610,8 +630,10 @@ impl AppBackend {
                 }
                 self.current_setting_theme_mode = sync_settings.theme_mode.clone();
                 self.current_setting_monet_color = sync_settings.monet_color.clone();
+                self.current_setting_theme_palette_json = sync_settings.theme_palette_json.clone();
             } else {
                 self.current_setting_monet_color = "".to_string();
+                self.current_setting_theme_palette_json = "".to_string();
                 if let Ok(local) = core.load_local_settings() {
                     self.current_setting_font_size = local.editor_font_size;
                 }
@@ -708,6 +730,7 @@ impl AppBackend {
             syncable.font_size = self.current_setting_font_size as f64;
             syncable.theme_mode = self.current_setting_theme_mode.clone();
             syncable.monet_color = self.current_setting_monet_color.clone();
+            syncable.theme_palette_json = self.current_setting_theme_palette_json.clone();
 
             let syncable_result = core.save_syncable_settings(syncable.clone());
             let syncable_json = match syncable_result {

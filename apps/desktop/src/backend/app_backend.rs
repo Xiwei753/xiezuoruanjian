@@ -272,6 +272,7 @@ pub struct AppBackend {
     current_setting_auto_indent_width: f32,
     current_setting_theme_mode: String,
     current_setting_monet_color: String,
+    current_setting_theme_palette_json: String,
     current_setting_typing_animation_enabled: bool,
     current_setting_smooth_cursor_enabled: bool,
     current_setting_typing_animation_duration_ms: u32,

@@ -105,6 +105,7 @@ Dialog {
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
         diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
         diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
+        useAndroidTheme.checked = root.dt.useThemePalette
         updatingValues = false
         if (coordinatedFixed) {
             root.settingsDirty = true
@@ -216,6 +217,25 @@ Dialog {
                     stepSize: 0.1
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value }
                     onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_line_spacing = value; root.debouncedSave() }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    visible: root.dt.hasThemePalette
+                    title: qsTr("使用 Android 同步主题色")
+                    description: qsTr("使用从 Android 设备同步的莫奈调色板")
+                    clickable: true
+                    onClicked: {
+                        useAndroidTheme.checked = !useAndroidTheme.checked
+                        root.dt.useThemePalette = useAndroidTheme.checked
+                    }
+                    ModernSwitch {
+                        id: useAndroidTheme
+                        dt: root.dt
+                        checked: true
+                        onToggled: function(v) {
+                            root.dt.useThemePalette = v
+                        }
+                    }
                 }
             }
 
