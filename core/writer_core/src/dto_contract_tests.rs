@@ -1132,7 +1132,7 @@ fn theme_palette_dto_snake_case_round_trip_full() {
 
 #[test]
 fn test_settings_auto_indent_contract() {
-    let settings = crate::api::types::settings::Settings {
+    let settings = crate::settings::LocalSettings {
         auto_indent_enabled: true,
         auto_indent_width: 4.0,
         ..Default::default()
@@ -1141,39 +1141,29 @@ fn test_settings_auto_indent_contract() {
     let json = serde_json::to_value(&settings).unwrap();
 
     // Ensure serialization aligns with the DTO contract mapping field names.
-    // By default, serde on settings will use the struct field names if no rename is used.
+    // serde rename_all = "camelCase" on LocalSettings
     let mut expected_keys = vec![
-        "ai_auto_complete_enabled",
-        "ai_base_url",
-        "ai_chat_model",
-        "ai_provider",
-        "ai_write_model",
-        "api_key",
-        "auto_indent_enabled",
-        "auto_indent_width",
-        "auto_save_interval_s",
-        "custom_font_family",
-        "custom_font_size",
-        "daily_word_count_goal",
-        "enable_local_ai_service",
-        "editor_bg_image_enabled",
-        "editor_bg_image_opacity",
-        "editor_bg_image_path",
-        "editor_line_height",
-        "editor_max_width",
-        "editor_paragraph_spacing",
-        "font_size",
-        "font_family",
-        "is_dark_mode",
-        "line_height",
-        "local_ai_port",
-        "max_words_per_chapter",
-        "paragraph_spacing",
-        "sync_enabled",
-        "sync_github_repo",
-        "sync_github_token",
-        "sync_mode",
-        "theme"
+        "aiEnabled",
+        "autoIndentEnabled",
+        "autoIndentWidth",
+        "autoSaveDelayMs",
+        "autoSaveEnabled",
+        "desktopEditorWidth",
+        "desktopSidebarWidth",
+        "diagnosticsEnabled",
+        "diagnosticsVerbose",
+        "editorCoordinatedTextCursorAnimationEnabled",
+        "editorFontSize",
+        "editorLineSpacingMultiplier",
+        "editorSmoothCursorDurationMs",
+        "editorSmoothCursorEnabled",
+        "editorTypingAnimationDurationMs",
+        "editorTypingAnimationEnabled",
+        "locale",
+        "statsDeviceId",
+        "themeMode",
+        "windowHeight",
+        "windowWidth",
     ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
     expected_keys.sort();
     let actual_keys = sorted_keys(&json);
@@ -1182,8 +1172,8 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(actual_keys, expected_keys);
 
     // Test the specific fields we care about
-    assert_eq!(json["auto_indent_enabled"], true);
-    assert_eq!(json["auto_indent_width"], 4.0);
+    assert_eq!(json["autoIndentEnabled"], true);
+    assert_eq!(json["autoIndentWidth"], 4.0);
 
     // Verify it doesn't contain the specific UI fields that are only manually assembled in the presentation layer
     assert!(json.get("enabled").is_none());

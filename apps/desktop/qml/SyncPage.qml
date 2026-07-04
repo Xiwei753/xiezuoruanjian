@@ -57,6 +57,8 @@ Item {
             root.currentSyncStatus = root.backendRef.sync_status || "not_configured";
             root.currentSyncInProgress = root.backendRef.sync_in_progress || false;
             root.currentSyncOperationState = root.backendRef.sync_operation_state || "";
+            autoSyncSwitch.checked = root.backendRef.sync_auto_sync || false;
+            syncIntervalSlider.value = (root.backendRef.sync_interval || 300) / 60;
             root.updateSyncResultText();
             // 同步失败时，如果结果区为空，则显示错误信息
             if (root.isFailureStatus(root.currentSyncStatus) && syncResultArea.text.trim() === "") {
@@ -209,6 +211,77 @@ Item {
                 label: qsTr("访问 Token")
                 placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
                 echoMode: TextInput.Password
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.sp12
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.sp2
+                    AppText {
+                        dt: root.theme
+                        text: qsTr("自动同步")
+                        color: theme.onBackground
+                        font.pixelSize: theme.body
+                        font.family: theme.fontFamily
+                    }
+                    AppText {
+                        dt: root.theme
+                        text: qsTr("启用后按设定间隔自动执行同步")
+                        color: theme.onSurfaceVariant
+                        font.pixelSize: theme.caption
+                        font.family: theme.fontFamily
+                    }
+                }
+
+                Switch {
+                    id: autoSyncSwitch
+                    onToggled: {
+                        if (root.backendRef) {
+                            root.backendRef.sync_auto_sync = autoSyncSwitch.checked
+                        }
+                    }
+                }
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: theme.sp12
+                visible: autoSyncSwitch.checked
+
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: theme.sp2
+                    AppText {
+                        dt: root.theme
+                        text: qsTr("同步间隔")
+                        color: theme.onBackground
+                        font.pixelSize: theme.body
+                        font.family: theme.fontFamily
+                    }
+                    AppText {
+                        dt: root.theme
+                        text: Math.round(syncIntervalSlider.value) + qsTr(" 分钟")
+                        color: theme.onSurfaceVariant
+                        font.pixelSize: theme.caption
+                        font.family: theme.fontFamily
+                    }
+                }
+
+                Slider {
+                    id: syncIntervalSlider
+                    Layout.fillWidth: true
+                    from: 1
+                    to: 60
+                    stepSize: 1
+                    onMoved: {
+                        if (root.backendRef) {
+                            root.backendRef.sync_interval = Math.round(value) * 60
+                        }
+                    }
+                }
             }
         }
 
@@ -378,6 +451,8 @@ Item {
     Component.onCompleted: {
         if (root.backendRef) {
             root.backendRef.load_sync_config()
+            autoSyncSwitch.checked = root.backendRef.sync_auto_sync || false
+            syncIntervalSlider.value = (root.backendRef.sync_interval || 300) / 60
         }
         root.refreshLocalSyncState();
     }

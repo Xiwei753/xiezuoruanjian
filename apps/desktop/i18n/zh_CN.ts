@@ -509,6 +509,22 @@
         <translation>重命名</translation>
     </message>
     <message>
+        <source>自动同步</source>
+        <translation>自动同步</translation>
+    </message>
+    <message>
+        <source>启用后按设定间隔自动执行同步</source>
+        <translation>启用后按设定间隔自动执行同步</translation>
+    </message>
+    <message>
+        <source>同步间隔</source>
+        <translation>同步间隔</translation>
+    </message>
+    <message>
+        <source> 分钟</source>
+        <translation> 分钟</translation>
+    </message>
+    <message>
         <source>重命名作品</source>
         <translation>重命名作品</translation>
     </message>

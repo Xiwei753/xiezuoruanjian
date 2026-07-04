@@ -73,10 +73,12 @@ mod tests {
     fn test_lww_record_time_non_delete() {
         let record = ManifestFileRecord {
             path: "test.md".to_string(),
-            file_hash: "hash".to_string(),
+            content_hash: "hash".to_string(),
             op: "upsert".to_string(),
             updated_at_ms: 1000,
             deleted_at_ms: Some(2000), // Should be ignored
+            device_id: "dev1".to_string(),
+            schema_version: 1,
         };
         assert_eq!(lww_record_time(&record), 1000);
     }
@@ -85,10 +87,12 @@ mod tests {
     fn test_lww_record_time_delete_with_deleted_at_ms() {
         let record = ManifestFileRecord {
             path: "test.md".to_string(),
-            file_hash: "hash".to_string(),
+            content_hash: "hash".to_string(),
             op: "delete".to_string(),
             updated_at_ms: 1000,
             deleted_at_ms: Some(2000),
+            device_id: "dev1".to_string(),
+            schema_version: 1,
         };
         assert_eq!(lww_record_time(&record), 2000);
     }
@@ -97,10 +101,12 @@ mod tests {
     fn test_lww_record_time_delete_without_deleted_at_ms() {
         let record = ManifestFileRecord {
             path: "test.md".to_string(),
-            file_hash: "hash".to_string(),
+            content_hash: "hash".to_string(),
             op: "delete".to_string(),
             updated_at_ms: 1000,
             deleted_at_ms: None,
+            device_id: "dev1".to_string(),
+            schema_version: 1,
         };
         assert_eq!(lww_record_time(&record), 1000); // Fallback to updated_at_ms
     }

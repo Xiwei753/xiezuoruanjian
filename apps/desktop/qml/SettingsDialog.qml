@@ -9,7 +9,7 @@
 //   - 不直接操作文件系统，通过 backendRef.save_local_settings() 持久化
 //   - 使用 DesignTokens 统一样式
 //   - Section 顺序按 Core settings_presentation 契约：
-//     外观 → 编辑器 → 保存 → 同步 → AI → 诊断与日志 → 关于/高级
+//     外观 → 编辑器和动画 → 保存和同步 → AI → 诊断与日志 → 关于
 // =============================================================================
 
 import QtQuick
@@ -405,7 +405,7 @@ Dialog {
                 }
             }
 
-            // ── 5. AI (ai) ──
+            // ── 4. AI (ai) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("AI")
@@ -421,7 +421,7 @@ Dialog {
                 }
             }
 
-            // ── 6. 诊断与日志 (diagnostics) ──
+            // ── 5. 诊断与日志 (diagnostics) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("诊断与日志")
@@ -570,7 +570,7 @@ Dialog {
                 }
             }
 
-            // ── 7. 关于 (about) ──
+            // ── 6. 关于 (about) ──
             SettingsSection {
                 dt: root.dt
                 title: qsTr("关于")
