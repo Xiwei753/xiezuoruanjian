@@ -466,7 +466,7 @@ Item {
                         snapBaselineY,
                         duration,
                         editorItem.text_color || root.dt.editorText,
-                        "",  // snapshot 不需要单个字符文本
+                        "",  // snapshot: no single char text needed
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
                     )
