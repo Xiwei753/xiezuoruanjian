@@ -668,12 +668,15 @@ fn should_animate_changes(
     cause: EditorTransactionCause,
     _max_animated_chars: usize,
 ) -> bool {
-    // 系统状态不进动画
+    // 系统状态和 preedit 不进动画
+    // ImeComposition 是 preedit 阶段，有自己的视觉层，不需要吞吐动画
+    // IME commit 走 TypingCommit cause，已经允许动画
     if matches!(
         cause,
         EditorTransactionCause::Load
             | EditorTransactionCause::Format
             | EditorTransactionCause::Programmatic
+            | EditorTransactionCause::ImeComposition
     ) {
         return false;
     }
@@ -1430,12 +1433,12 @@ mod tests {
             EditorSelection::collapsed("nihao", 5),
             EditorTransactionCause::ImeComposition,
         );
-        // ImeComposition 现在也进入 visual transaction（用户触发的操作不应被入口拦掉）
-        assert!(tx.should_animate, "ImeComposition cause should animate");
+        // ImeComposition 是 preedit 阶段，不需要吞吐动画
+        // IME commit 走 TypingCommit cause，已经允许动画
+        assert!(!tx.should_animate, "ImeComposition should not animate");
         let events = engine.animation_events(&tx);
-        // ImeComposition 产生 Insert + Cursor 事件
-        assert!(events.len() >= 1);
-        assert_eq!(events[0].kind, EditorAnimationKind::Insert);
+        // 只有 Cursor 事件（光标位置变化），没有 Insert/Delete 动画
+        assert!(events.iter().all(|e| e.kind == EditorAnimationKind::Cursor));
     }
 
     #[test]
