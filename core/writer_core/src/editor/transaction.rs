@@ -260,6 +260,12 @@ pub struct GlyphRect {
     /// 文字基线 Y 坐标（coordinate_mode=Baseline 时必须使用此字段而非 y+h）
     #[serde(default)]
     pub baseline_y: f64,
+    /// 该 glyph 在文本中的 UTF-8 byte 起始位置
+    #[serde(default)]
+    pub byte_start: usize,
+    /// 该 glyph 在文本中的 UTF-8 byte 结束位置
+    #[serde(default)]
+    pub byte_end: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -566,14 +572,16 @@ impl EditorEngine {
         let contains_newline = text.contains('\n');
         let contains_complex_grapheme = text_contains_complex_grapheme(text);
 
-        // choose_animation_mode — 默认无系统抑制状态
+        // choose_animation_mode — 根据 cause 传入系统状态
+        let is_loading = transaction.cause == EditorTransactionCause::Load;
+        let is_applying_format = transaction.cause == EditorTransactionCause::Format;
         let animation_mode = choose_animation_mode(
             cluster_count,
             contains_newline,
             contains_complex_grapheme,
             false, // is_scrolling
-            false, // is_loading
-            false, // is_applying_format
+            is_loading,
+            is_applying_format,
             false, // is_applying_settings
             true,  // animation_enabled
         );
@@ -660,9 +668,12 @@ fn should_animate_changes(
     cause: EditorTransactionCause,
     _max_animated_chars: usize,
 ) -> bool {
-    if !matches!(
+    // 系统状态不进动画
+    if matches!(
         cause,
-        EditorTransactionCause::Typing | EditorTransactionCause::Delete | EditorTransactionCause::TypingCommit
+        EditorTransactionCause::Load
+            | EditorTransactionCause::Format
+            | EditorTransactionCause::Programmatic
     ) {
         return false;
     }
@@ -725,15 +736,14 @@ pub fn choose_animation_mode(
 
 /// 计算文本的 grapheme cluster 数量
 pub fn count_grapheme_clusters(text: &str) -> usize {
-    // 简单实现：按 Unicode code point 计数
-    // 真正的 grapheme cluster 需要 unicode-segmentation crate
-    // 但 Core 不应引入新依赖，这里用 chars().count() 近似
-    text.chars().count()
+    use unicode_segmentation::UnicodeSegmentation;
+    text.graphemes(true).count()
 }
 
 /// 检测文本是否包含复杂 grapheme（emoji/ZWJ/组合字符等）
 pub fn text_contains_complex_grapheme(text: &str) -> bool {
-    text.chars().any(|ch| is_complex_grapheme_code_point(ch as u32))
+    use unicode_segmentation::UnicodeSegmentation;
+    text.graphemes(true).any(|g| g.chars().any(|ch| is_complex_grapheme_code_point(ch as u32)))
 }
 
 /// 检测单个 code point 是否属于复杂 grapheme
@@ -886,47 +896,19 @@ pub fn split_text_into_runs(text: &str, base_offset: usize) -> Vec<ClusterRun> {
 /// 将文本按 grapheme cluster 分割，用于 ClusterAnimation。
 /// 每个 cluster 记录 byte range 和是否复杂。
 pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRect> {
+    use unicode_segmentation::UnicodeSegmentation;
     let mut clusters = Vec::new();
-    let mut current_start = base_offset;
-    let mut current_text = String::new();
-    let mut current_is_complex = false;
-
-    for (byte_offset, ch) in text.char_indices() {
-        let absolute_byte = base_offset + byte_offset;
-        let cp = ch as u32;
-        let is_complex = is_complex_grapheme_code_point(cp);
-        let is_combining = is_combining_code_point(cp);
-
-        if is_combining && !current_text.is_empty() {
-            // 组合字符附加到当前 cluster
-            current_text.push(ch);
-            current_is_complex = current_is_complex || is_complex;
-        } else {
-            // 新 cluster 开始
-            if !current_text.is_empty() {
-                clusters.push(ClusterRect {
-                    byte_start: current_start,
-                    byte_end: absolute_byte,
-                    text: current_text.clone(),
-                    is_complex: current_is_complex,
-                });
-            }
-            current_start = absolute_byte;
-            current_text = ch.to_string();
-            current_is_complex = is_complex;
-        }
-    }
-
-    // 处理最后一个 cluster
-    if !current_text.is_empty() {
+    for grapheme in text.graphemes(true) {
+        let byte_start = base_offset + (grapheme.as_ptr() as usize - text.as_ptr() as usize);
+        let byte_end = byte_start + grapheme.len();
+        let is_complex = grapheme.chars().any(|ch| is_complex_grapheme_code_point(ch as u32));
         clusters.push(ClusterRect {
-            byte_start: current_start,
-            byte_end: base_offset + text.len(),
-            text: current_text,
-            is_complex: current_is_complex,
+            byte_start,
+            byte_end,
+            text: grapheme.to_string(),
+            is_complex,
         });
     }
-
     clusters
 }
 
@@ -1069,10 +1051,12 @@ mod tests {
             EditorTransactionCause::Paste,
         );
 
-        assert!(!tx.should_animate);
+        // Paste 现在进入 visual transaction（should_animate=true）
+        assert!(tx.should_animate);
         let events = engine.animation_events(&tx);
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, EditorAnimationKind::Cursor);
+        // Paste 长文本产生 Insert + Cursor 事件
+        assert!(events.len() >= 1);
+        assert_eq!(events[0].kind, EditorAnimationKind::Insert);
     }
 
     #[test]
@@ -1099,6 +1083,8 @@ mod tests {
             h: 24.0,
             char_: "你".to_string(),
             baseline_y: 36.0,
+            byte_start: 0,
+            byte_end: 3,
         };
         let json = serde_json::to_string(&gr).unwrap();
         // 字段名必须是 camelCase，char_ → "char"
@@ -1150,6 +1136,8 @@ mod tests {
                     h: 20.0,
                     char_: "a".to_string(),
                     baseline_y: 16.0,
+                    byte_start: 0,
+                    byte_end: 1,
                 },
                 GlyphRect {
                     x: 10.0,
@@ -1158,6 +1146,8 @@ mod tests {
                     h: 20.0,
                     char_: "b".to_string(),
                     baseline_y: 16.0,
+                    byte_start: 1,
+                    byte_end: 2,
                 },
                 GlyphRect {
                     x: 20.0,
@@ -1166,6 +1156,8 @@ mod tests {
                     h: 20.0,
                     char_: "c".to_string(),
                     baseline_y: 16.0,
+                    byte_start: 2,
+                    byte_end: 3,
                 },
             ],
             old_cursor_rect: None,
@@ -1343,11 +1335,12 @@ mod tests {
             EditorSelection::collapsed("a long pasted text", "a long pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(!tx.should_animate);
+        // Paste 现在进入 visual transaction
+        assert!(tx.should_animate);
         let events = engine.animation_events(&tx);
-        // Only Cursor event, no Insert/Delete
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, EditorAnimationKind::Cursor);
+        // Paste 长文本产生 Insert + Cursor 事件
+        assert!(events.len() >= 1);
+        assert_eq!(events[0].kind, EditorAnimationKind::Insert);
     }
 
     #[test]
@@ -1401,16 +1394,12 @@ mod tests {
             EditorSelection::collapsed("a", 1),
             EditorTransactionCause::Undo,
         );
-        assert!(!tx.should_animate, "Undo cause should not animate");
-        // Undo with cursor movement should only produce Cursor event
+        // Undo 现在进入 visual transaction
+        assert!(tx.should_animate, "Undo cause should animate");
         let events = engine.animation_events(&tx);
-        for event in &events {
-            assert!(
-                event.kind == EditorAnimationKind::Cursor,
-                "Undo should only produce Cursor events, got {:?}",
-                event.kind
-            );
-        }
+        // Undo 产生 Delete + Cursor 事件
+        assert!(events.len() >= 1);
+        assert_eq!(events[0].kind, EditorAnimationKind::Delete);
     }
 
     #[test]
@@ -1423,16 +1412,12 @@ mod tests {
             EditorSelection::collapsed("abc", 3),
             EditorTransactionCause::Redo,
         );
-        assert!(!tx.should_animate, "Redo cause should not animate");
-        // Redo with cursor movement should only produce Cursor event
+        // Redo 现在进入 visual transaction
+        assert!(tx.should_animate, "Redo cause should animate");
         let events = engine.animation_events(&tx);
-        for event in &events {
-            assert!(
-                event.kind == EditorAnimationKind::Cursor,
-                "Redo should only produce Cursor events, got {:?}",
-                event.kind
-            );
-        }
+        // Redo 产生 Insert + Cursor 事件
+        assert!(events.len() >= 1);
+        assert_eq!(events[0].kind, EditorAnimationKind::Insert);
     }
 
     #[test]
@@ -1445,16 +1430,12 @@ mod tests {
             EditorSelection::collapsed("nihao", 5),
             EditorTransactionCause::ImeComposition,
         );
-        assert!(!tx.should_animate, "ImeComposition cause should not animate");
-        // ImeComposition with cursor movement should only produce Cursor event
+        // ImeComposition 现在也进入 visual transaction（用户触发的操作不应被入口拦掉）
+        assert!(tx.should_animate, "ImeComposition cause should animate");
         let events = engine.animation_events(&tx);
-        for event in &events {
-            assert!(
-                event.kind == EditorAnimationKind::Cursor,
-                "ImeComposition should only produce Cursor events, got {:?}",
-                event.kind
-            );
-        }
+        // ImeComposition 产生 Insert + Cursor 事件
+        assert!(events.len() >= 1);
+        assert_eq!(events[0].kind, EditorAnimationKind::Insert);
     }
 
     #[test]
@@ -1506,7 +1487,7 @@ mod tests {
         // Core always returns true for Typing cause — platform is responsible for checking the toggle
         assert!(tx_off.should_animate, "Core should_animate_changes is cause-based, not toggle-based");
 
-        // Non-typing causes should never animate regardless of toggle
+        // Paste 现在也进入 visual transaction（用户触发的操作不应被入口拦掉）
         let tx_paste = engine.create_transaction(
             "a",
             "a pasted text",
@@ -1514,7 +1495,7 @@ mod tests {
             EditorSelection::collapsed("a pasted text", "a pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(!tx_paste.should_animate, "Paste should never animate regardless of toggle");
+        assert!(tx_paste.should_animate, "Paste should animate as a user-triggered operation");
     }
 
     #[test]
@@ -1565,7 +1546,7 @@ mod tests {
     fn undo_redo_no_animation() {
         let mut engine = EditorEngine::with_animation_limits(8, 120);
 
-        // Undo with text change should NOT animate
+        // Undo with text change 现在进入 visual transaction
         let tx_undo = engine.create_transaction(
             "abc",
             "a",
@@ -1573,14 +1554,12 @@ mod tests {
             EditorSelection::collapsed("a", 1),
             EditorTransactionCause::Undo,
         );
-        assert!(!tx_undo.should_animate, "Undo should not animate");
+        assert!(tx_undo.should_animate, "Undo should animate");
         let events_undo = engine.animation_events(&tx_undo);
-        for event in &events_undo {
-            assert_ne!(event.kind, EditorAnimationKind::Insert, "Undo should not produce Insert animation");
-            assert_ne!(event.kind, EditorAnimationKind::Delete, "Undo should not produce Delete animation");
-        }
+        assert!(events_undo.len() >= 1);
+        assert_eq!(events_undo[0].kind, EditorAnimationKind::Delete);
 
-        // Redo with text change should NOT animate
+        // Redo with text change 现在进入 visual transaction
         let tx_redo = engine.create_transaction(
             "a",
             "abc",
@@ -1588,19 +1567,17 @@ mod tests {
             EditorSelection::collapsed("abc", 3),
             EditorTransactionCause::Redo,
         );
-        assert!(!tx_redo.should_animate, "Redo should not animate");
+        assert!(tx_redo.should_animate, "Redo should animate");
         let events_redo = engine.animation_events(&tx_redo);
-        for event in &events_redo {
-            assert_ne!(event.kind, EditorAnimationKind::Insert, "Redo should not produce Insert animation");
-            assert_ne!(event.kind, EditorAnimationKind::Delete, "Redo should not produce Delete animation");
-        }
+        assert!(events_redo.len() >= 1);
+        assert_eq!(events_redo[0].kind, EditorAnimationKind::Insert);
     }
 
     #[test]
     fn paste_no_animation() {
         let mut engine = EditorEngine::with_animation_limits(8, 120);
 
-        // Paste with single-char text should still NOT animate
+        // Paste with single-char text 现在进入 visual transaction
         let tx = engine.create_transaction(
             "a",
             "ab",
@@ -1608,14 +1585,12 @@ mod tests {
             EditorSelection::collapsed("ab", 2),
             EditorTransactionCause::Paste,
         );
-        assert!(!tx.should_animate, "Paste should not animate even for single char");
+        assert!(tx.should_animate, "Paste should animate even for single char");
         let events = engine.animation_events(&tx);
-        for event in &events {
-            assert_ne!(event.kind, EditorAnimationKind::Insert, "Paste should not produce Insert animation");
-            assert_ne!(event.kind, EditorAnimationKind::Delete, "Paste should not produce Delete animation");
-        }
+        assert!(events.len() >= 1);
+        assert_eq!(events[0].kind, EditorAnimationKind::Insert);
 
-        // Paste with multi-char text should NOT animate
+        // Paste with multi-char text 也进入 visual transaction
         let tx2 = engine.create_transaction(
             "a",
             "a long pasted text",
@@ -1623,7 +1598,7 @@ mod tests {
             EditorSelection::collapsed("a long pasted text", "a long pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(!tx2.should_animate, "Paste should not animate for multi-char text");
+        assert!(tx2.should_animate, "Paste should animate for multi-char text");
     }
 
     #[test]
@@ -1690,8 +1665,9 @@ mod tests {
     }
 
     #[test]
-    fn visual_transaction_paste_returns_none() {
-        let mut engine = EditorEngine::new();
+    fn visual_transaction_paste_enters_visual_transaction() {
+        // Paste 长文本进入 visual transaction，mode 是 RunAnimation 或 SnapshotAnimation
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
         let tx = engine.create_transaction(
             "a",
             "a long pasted text",
@@ -1699,7 +1675,85 @@ mod tests {
             EditorSelection::collapsed("a long pasted text", "a long pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(engine.visual_transaction(&tx).is_none());
+        let vt = engine.visual_transaction(&tx);
+        assert!(vt.is_some(), "Paste should enter visual transaction");
+        let vt = vt.unwrap();
+        assert!(
+            vt.animation_mode == AnimationMode::RunAnimation
+                || vt.animation_mode == AnimationMode::SnapshotAnimation,
+            "Paste long text should be RunAnimation or SnapshotAnimation, got {:?}",
+            vt.animation_mode
+        );
+    }
+
+    #[test]
+    fn visual_transaction_paste_short_text_glyph_animation() {
+        // Paste 短文本进入 visual transaction，mode 是 GlyphAnimation
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "a",
+            "abc",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Paste,
+        );
+        let vt = engine.visual_transaction(&tx);
+        assert!(vt.is_some(), "Paste short text should enter visual transaction");
+        let vt = vt.unwrap();
+        assert_eq!(
+            vt.animation_mode,
+            AnimationMode::GlyphAnimation,
+            "Paste short text should be GlyphAnimation"
+        );
+    }
+
+    #[test]
+    fn visual_transaction_paste_newline_line_reflow() {
+        // Paste 包含换行进入 visual transaction，mode 是 LineReflowAnimation
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "a",
+            "a\nb",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("a\nb", "a\nb".len()),
+            EditorTransactionCause::Paste,
+        );
+        let vt = engine.visual_transaction(&tx);
+        assert!(vt.is_some(), "Paste with newline should enter visual transaction");
+        let vt = vt.unwrap();
+        assert_eq!(
+            vt.animation_mode,
+            AnimationMode::LineReflowAnimation,
+            "Paste with newline should be LineReflowAnimation"
+        );
+    }
+
+    #[test]
+    fn visual_transaction_undo_enters_visual_transaction() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "abc",
+            "a",
+            EditorSelection::collapsed("abc", 3),
+            EditorSelection::collapsed("a", 1),
+            EditorTransactionCause::Undo,
+        );
+        let vt = engine.visual_transaction(&tx);
+        assert!(vt.is_some(), "Undo should enter visual transaction");
+    }
+
+    #[test]
+    fn visual_transaction_redo_enters_visual_transaction() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "a",
+            "abc",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Redo,
+        );
+        let vt = engine.visual_transaction(&tx);
+        assert!(vt.is_some(), "Redo should enter visual transaction");
     }
 
     #[test]
@@ -1716,6 +1770,7 @@ mod tests {
         let gr = GlyphRect {
             x: 10.5, y: 20.0, w: 16.0, h: 24.0,
             char_: "你".to_string(), baseline_y: 40.0,
+            byte_start: 0, byte_end: 3,
         };
         let json = serde_json::to_string(&gr).unwrap();
         assert!(json.contains("\"baselineY\":"));
@@ -2001,5 +2056,53 @@ mod tests {
         let vt = engine.visual_transaction(&tx).unwrap();
         assert_eq!(vt.animation_mode, AnimationMode::ClusterAnimation);
         assert_ne!(vt.animation_mode, AnimationMode::SystemSuppressed);
+    }
+
+    #[test]
+    fn count_grapheme_clusters_zwj_emoji() {
+        // ZWJ emoji "👨‍👩‍👧‍👦" 计为 1 个 cluster
+        assert_eq!(count_grapheme_clusters("👨‍👩‍👧‍👦"), 1);
+    }
+
+    #[test]
+    fn count_grapheme_clusters_variation_selector_emoji() {
+        // Variation selector emoji "❤️" 计为 1 个 cluster
+        assert_eq!(count_grapheme_clusters("❤️"), 1);
+    }
+
+    #[test]
+    fn count_grapheme_clusters_combining_mark() {
+        // Combining mark "é" (e + U+0301) 计为 1 个 cluster
+        assert_eq!(count_grapheme_clusters("e\u{0301}"), 1);
+    }
+
+    #[test]
+    fn count_grapheme_clusters_mixed_text() {
+        // 混合文本 "ab😀cd" 计为 5 个 cluster
+        assert_eq!(count_grapheme_clusters("ab😀cd"), 5);
+    }
+
+    #[test]
+    fn split_text_into_clusters_zwj_emoji() {
+        // ZWJ emoji 输出正确的 byte range 和 is_complex=true
+        let emoji = "👨‍👩‍👧‍👦";
+        let clusters = split_text_into_clusters(emoji, 0);
+        assert_eq!(clusters.len(), 1, "ZWJ emoji should be 1 cluster");
+        assert_eq!(clusters[0].byte_start, 0);
+        assert_eq!(clusters[0].byte_end, emoji.len());
+        assert_eq!(clusters[0].text, emoji);
+        assert!(clusters[0].is_complex, "ZWJ emoji should be complex");
+    }
+
+    #[test]
+    fn split_text_into_clusters_variation_selector_emoji() {
+        // Variation selector emoji 输出正确的 byte range 和 is_complex=true
+        let emoji = "❤️"; // ❤ + FE0F
+        let clusters = split_text_into_clusters(emoji, 0);
+        assert_eq!(clusters.len(), 1, "Variation selector emoji should be 1 cluster");
+        assert_eq!(clusters[0].byte_start, 0);
+        assert_eq!(clusters[0].byte_end, emoji.len());
+        assert_eq!(clusters[0].text, emoji);
+        assert!(clusters[0].is_complex, "Variation selector emoji should be complex");
     }
 }

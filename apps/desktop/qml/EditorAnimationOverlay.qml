@@ -293,91 +293,279 @@ Item {
         var createdGhosts = []
 
         if (mode === "clusterAnimation") {
-            // ClusterAnimation：复杂 grapheme 整簇作为单个 ghost 绘制
-            // 不跳过复杂字符，整组一起绘制
-            for (var i = 0; i < glyphRects.length; i++) {
-                var gr = glyphRects[i]
-                var ghost = createGlyphGhost(
-                    "insert",
-                    startX,
-                    startY,
-                    gr.x,
-                    gr.baselineY || gr.y,
-                    gr.w,
-                    gr.h,
-                    gr.baselineY || 0,
-                    duration,
-                    editorItem.text_color || root.dt.editorText,
-                    gr.char || "",
-                    editorItem.font_family || "",
-                    editorItem.font_pixel_size || 0
-                )
-                if (ghost !== null) {
-                    createdGhosts.push(ghost)
-                } else {
-                    root._log("insert ghost createObject returned null at index=" + i)
+            // ClusterAnimation：从 vt.clusterRects 读取 cluster 信息，整簇作为单个 ghost
+            var clusterRects = vt.clusterRects
+            if (clusterRects && Array.isArray(clusterRects)) {
+                for (var ci = 0; ci < clusterRects.length; ci++) {
+                    var cluster = clusterRects[ci]
+                    // 从 insertGlyphRects 中找该 cluster byte range 对应的 glyph rects
+                    var clusterGlyphs = []
+                    for (var gi = 0; gi < glyphRects.length; gi++) {
+                        var gr = glyphRects[gi]
+                        if (gr.byteStart >= cluster.byteStart && gr.byteEnd <= cluster.byteEnd) {
+                            clusterGlyphs.push(gr)
+                        }
+                    }
+                    if (clusterGlyphs.length === 0) continue
+
+                    // 计算 cluster bounding rect
+                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
+                    var clusterBaselineY = 0
+                    for (var k = 0; k < clusterGlyphs.length; k++) {
+                        var cg = clusterGlyphs[k]
+                        if (cg.x < minX) minX = cg.x
+                        if (cg.y < minY) minY = cg.y
+                        if (cg.x + cg.w > maxRight) maxRight = cg.x + cg.w
+                        if (cg.y + cg.h > maxBottom) maxBottom = cg.y + cg.h
+                        clusterBaselineY = cg.baselineY || 0
+                    }
+
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        minX,
+                        clusterBaselineY || minY,
+                        maxRight - minX,
+                        maxBottom - minY,
+                        clusterBaselineY,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        cluster.text || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
+                }
+            } else {
+                // fallback: 逐 glyph（旧逻辑）
+                for (var i = 0; i < glyphRects.length; i++) {
+                    var gr = glyphRects[i]
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        gr.x,
+                        gr.baselineY || gr.y,
+                        gr.w,
+                        gr.h,
+                        gr.baselineY || 0,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        gr.char || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
+                }
+            }
+        } else if (mode === "runAnimation") {
+            // RunAnimation：从 vt.clusterRuns 读取 run 信息，每个 run 一个 ghost
+            var clusterRuns = vt.clusterRuns
+            if (clusterRuns && Array.isArray(clusterRuns)) {
+                for (var ri = 0; ri < clusterRuns.length; ri++) {
+                    var run = clusterRuns[ri]
+                    // 从 insertGlyphRects 中找该 run byte range 对应的 glyph rects
+                    var runGlyphs = []
+                    for (var gi = 0; gi < glyphRects.length; gi++) {
+                        var gr = glyphRects[gi]
+                        if (gr.byteStart >= run.byteStart && gr.byteEnd <= run.byteEnd) {
+                            runGlyphs.push(gr)
+                        }
+                    }
+                    if (runGlyphs.length === 0) continue
+
+                    // 计算 run bounding rect
+                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
+                    var runBaselineY = 0
+                    for (var k = 0; k < runGlyphs.length; k++) {
+                        var rg = runGlyphs[k]
+                        if (rg.x < minX) minX = rg.x
+                        if (rg.y < minY) minY = rg.y
+                        if (rg.x + rg.w > maxRight) maxRight = rg.x + rg.w
+                        if (rg.y + rg.h > maxBottom) maxBottom = rg.y + rg.h
+                        runBaselineY = rg.baselineY || 0
+                    }
+
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        minX,
+                        runBaselineY || minY,
+                        maxRight - minX,
+                        maxBottom - minY,
+                        runBaselineY,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        run.text || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
+                }
+            } else {
+                // fallback: 逐 glyph
+                for (var i = 0; i < glyphRects.length; i++) {
+                    var gr = glyphRects[i]
+                    if (isComplexGrapheme(gr.char)) continue
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        gr.x,
+                        gr.baselineY || gr.y,
+                        gr.w,
+                        gr.h,
+                        gr.baselineY || 0,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        gr.char || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
+                }
+            }
+        } else if (mode === "snapshotAnimation") {
+            // SnapshotAnimation：从 vt.hiddenVisualRanges 读取 snapshot payload
+            var hiddenRanges = vt.hiddenVisualRanges
+            if (hiddenRanges && Array.isArray(hiddenRanges) && hiddenRanges.length > 0) {
+                for (var hi = 0; hi < hiddenRanges.length; hi++) {
+                    var hr = hiddenRanges[hi]
+                    // 从 insertGlyphRects 中找该 range 对应的 glyph rects
+                    var snapGlyphs = []
+                    for (var gi = 0; gi < glyphRects.length; gi++) {
+                        var gr = glyphRects[gi]
+                        if (gr.byteStart >= hr.rangeStart && gr.byteEnd <= hr.rangeEnd) {
+                            snapGlyphs.push(gr)
+                        }
+                    }
+                    if (snapGlyphs.length === 0) continue
+
+                    // 计算 snapshot bounding rect
+                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
+                    var snapBaselineY = 0
+                    for (var k = 0; k < snapGlyphs.length; k++) {
+                        var sg = snapGlyphs[k]
+                        if (sg.x < minX) minX = sg.x
+                        if (sg.y < minY) minY = sg.y
+                        if (sg.x + sg.w > maxRight) maxRight = sg.x + sg.w
+                        if (sg.y + sg.h > maxBottom) maxBottom = sg.y + sg.h
+                        snapBaselineY = sg.baselineY || 0
+                    }
+
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        minX,
+                        snapBaselineY || minY,
+                        maxRight - minX,
+                        maxBottom - minY,
+                        snapBaselineY,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        "",  // snapshot 不需要单个字符文本
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
+                }
+            } else {
+                // fallback: 逐 glyph
+                for (var i = 0; i < glyphRects.length; i++) {
+                    var gr = glyphRects[i]
+                    if (isComplexGrapheme(gr.char)) continue
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        gr.x,
+                        gr.baselineY || gr.y,
+                        gr.w,
+                        gr.h,
+                        gr.baselineY || 0,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        gr.char || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
                 }
             }
         } else if (mode === "lineReflowAnimation") {
             // LineReflowAnimation：换行场景，做行级 reflow 动画
-            // 换行字符本身不创建 glyph ghost，但 reflow ghost 仍需创建
-            for (var i = 0; i < glyphRects.length; i++) {
-                var gr = glyphRects[i]
-                // 换行字符不创建 glyph ghost
-                if (gr.char === "\n" || gr.char === "\r") continue
-                // 复杂字符在 reflow 模式下也跳过
-                if (isComplexGrapheme(gr.char)) continue
-                var ghost = createGlyphGhost(
-                    "insert",
-                    startX,
-                    startY,
-                    gr.x,
-                    gr.baselineY || gr.y,
-                    gr.w,
-                    gr.h,
-                    gr.baselineY || 0,
-                    duration,
-                    editorItem.text_color || root.dt.editorText,
-                    gr.char || "",
-                    editorItem.font_family || "",
-                    editorItem.font_pixel_size || 0
-                )
-                if (ghost !== null) {
-                    createdGhosts.push(ghost)
+            // 从 vt.clusterRects 收集 cluster 信息创建 ghost，复杂字符不跳过
+            var clusterRects = vt.clusterRects
+            if (clusterRects && Array.isArray(clusterRects)) {
+                for (var ci = 0; ci < clusterRects.length; ci++) {
+                    var cluster = clusterRects[ci]
+                    var clusterGlyphs = []
+                    for (var gi = 0; gi < glyphRects.length; gi++) {
+                        var gr = glyphRects[gi]
+                        if (gr.byteStart >= cluster.byteStart && gr.byteEnd <= cluster.byteEnd) {
+                            clusterGlyphs.push(gr)
+                        }
+                    }
+                    if (clusterGlyphs.length === 0) continue
+
+                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
+                    var clusterBaselineY = 0
+                    for (var k = 0; k < clusterGlyphs.length; k++) {
+                        var cg = clusterGlyphs[k]
+                        if (cg.x < minX) minX = cg.x
+                        if (cg.y < minY) minY = cg.y
+                        if (cg.x + cg.w > maxRight) maxRight = cg.x + cg.w
+                        if (cg.y + cg.h > maxBottom) maxBottom = cg.y + cg.h
+                        clusterBaselineY = cg.baselineY || 0
+                    }
+
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        minX,
+                        clusterBaselineY || minY,
+                        maxRight - minX,
+                        maxBottom - minY,
+                        clusterBaselineY,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        cluster.text || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
                 }
-            }
-        } else if (mode === "runAnimation" || mode === "snapshotAnimation") {
-            // RunAnimation/SnapshotAnimation：按 glyph 创建，复杂字符跳过
-            for (var i = 0; i < glyphRects.length; i++) {
-                var gr = glyphRects[i]
-                if (isComplexGrapheme(gr.char)) continue
-                var ghost = createGlyphGhost(
-                    "insert",
-                    startX,
-                    startY,
-                    gr.x,
-                    gr.baselineY || gr.y,
-                    gr.w,
-                    gr.h,
-                    gr.baselineY || 0,
-                    duration,
-                    editorItem.text_color || root.dt.editorText,
-                    gr.char || "",
-                    editorItem.font_family || "",
-                    editorItem.font_pixel_size || 0
-                )
-                if (ghost !== null) {
-                    createdGhosts.push(ghost)
+            } else {
+                // fallback: 逐 glyph，换行字符不创建 glyph ghost，复杂字符不跳过
+                for (var i = 0; i < glyphRects.length; i++) {
+                    var gr = glyphRects[i]
+                    if (gr.char === "\n" || gr.char === "\r") continue
+                    var ghost = createGlyphGhost(
+                        "insert",
+                        startX,
+                        startY,
+                        gr.x,
+                        gr.baselineY || gr.y,
+                        gr.w,
+                        gr.h,
+                        gr.baselineY || 0,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        gr.char || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    if (ghost !== null) createdGhosts.push(ghost)
                 }
             }
         } else {
-            // GlyphAnimation：逐字形动画，复杂字符跳过
+            // GlyphAnimation：逐字形动画
             for (var i = 0; i < glyphRects.length; i++) {
                 var gr = glyphRects[i]
-                if (isComplexGrapheme(gr.char)) {
-                    root._log("insert skipped: complex grapheme at index=" + i)
-                    continue
-                }
                 var ghost = createGlyphGhost(
                     "insert",
                     startX,
@@ -406,16 +594,12 @@ Item {
         // 中间插入时，插入点右侧文字做轻量位移动画（局部挤开）。
         // 静态正文层在动画期间跳过 reflow ranges，由 overlay reflow ghost 显示位移动画。
         // 动画结束后清除 reflow hidden ranges，正文层恢复完整绘制。
+        // 复杂字符也参与 reflow 动画
         var reflowRects = vt.reflowGlyphRects
         if (reflowRects && Array.isArray(reflowRects) && reflowRects.length > 0) {
             root._log("insert creating " + reflowRects.length + " reflow ghosts")
             for (var ri = 0; ri < reflowRects.length; ri++) {
                 var rr = reflowRects[ri]
-                // 防御性检查：复杂字符不参与
-                if (isComplexGrapheme(rr.char)) {
-                    root._log("reflow skipped: complex grapheme at index=" + ri)
-                    continue
-                }
                 // 只有位置真正变化时才创建 reflow ghost
                 var dx = Math.abs(rr.newX - rr.oldX)
                 var dy = Math.abs(rr.newY - rr.oldY)
@@ -559,34 +743,208 @@ Item {
         root._log("delete creating " + glyphRects.length + " ghosts, cursorRect=(" + endX + "," + endY + ")")
 
         if (mode === "clusterAnimation") {
-            // ClusterAnimation：复杂 grapheme 整簇作为单个 ghost
-            for (var i = 0; i < glyphRects.length; i++) {
-                var gr = glyphRects[i]
-                var ghost = createGlyphGhost(
-                    "delete",
-                    gr.x,
-                    gr.baselineY || gr.y,
-                    endX,
-                    endY,
-                    gr.w,
-                    gr.h,
-                    gr.baselineY || 0,
-                    duration,
-                    editorItem.text_color || root.dt.editorText,
-                    gr.char || "",
-                    editorItem.font_family || "",
-                    editorItem.font_pixel_size || 0
-                )
-                _trackGhost(ghost, "delete", 0, 0)
+            // ClusterAnimation：从 vt.clusterRects 读取 cluster 信息，整簇作为单个 ghost
+            var clusterRects = vt.clusterRects
+            if (clusterRects && Array.isArray(clusterRects)) {
+                for (var ci = 0; ci < clusterRects.length; ci++) {
+                    var cluster = clusterRects[ci]
+                    // 从 deletedGlyphRects 中找该 cluster byte range 对应的 glyph rects
+                    var clusterGlyphs = []
+                    for (var gi = 0; gi < glyphRects.length; gi++) {
+                        var gr = glyphRects[gi]
+                        if (gr.byteStart >= cluster.byteStart && gr.byteEnd <= cluster.byteEnd) {
+                            clusterGlyphs.push(gr)
+                        }
+                    }
+                    if (clusterGlyphs.length === 0) continue
+
+                    // 计算 cluster bounding rect
+                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
+                    var clusterBaselineY = 0
+                    for (var k = 0; k < clusterGlyphs.length; k++) {
+                        var cg = clusterGlyphs[k]
+                        if (cg.x < minX) minX = cg.x
+                        if (cg.y < minY) minY = cg.y
+                        if (cg.x + cg.w > maxRight) maxRight = cg.x + cg.w
+                        if (cg.y + cg.h > maxBottom) maxBottom = cg.y + cg.h
+                        clusterBaselineY = cg.baselineY || 0
+                    }
+
+                    var ghost = createGlyphGhost(
+                        "delete",
+                        minX,
+                        clusterBaselineY || minY,
+                        endX,
+                        endY,
+                        maxRight - minX,
+                        maxBottom - minY,
+                        clusterBaselineY,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        cluster.text || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    _trackGhost(ghost, "delete", 0, 0)
+                }
+            } else {
+                // fallback: 逐 glyph
+                for (var i = 0; i < glyphRects.length; i++) {
+                    var gr = glyphRects[i]
+                    var ghost = createGlyphGhost(
+                        "delete",
+                        gr.x,
+                        gr.baselineY || gr.y,
+                        endX,
+                        endY,
+                        gr.w,
+                        gr.h,
+                        gr.baselineY || 0,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        gr.char || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    _trackGhost(ghost, "delete", 0, 0)
+                }
+            }
+        } else if (mode === "runAnimation") {
+            // RunAnimation：从 vt.clusterRuns 读取 run 信息，每个 run 一个 ghost
+            var clusterRuns = vt.clusterRuns
+            if (clusterRuns && Array.isArray(clusterRuns)) {
+                for (var ri = 0; ri < clusterRuns.length; ri++) {
+                    var run = clusterRuns[ri]
+                    var runGlyphs = []
+                    for (var gi = 0; gi < glyphRects.length; gi++) {
+                        var gr = glyphRects[gi]
+                        if (gr.byteStart >= run.byteStart && gr.byteEnd <= run.byteEnd) {
+                            runGlyphs.push(gr)
+                        }
+                    }
+                    if (runGlyphs.length === 0) continue
+
+                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
+                    var runBaselineY = 0
+                    for (var k = 0; k < runGlyphs.length; k++) {
+                        var rg = runGlyphs[k]
+                        if (rg.x < minX) minX = rg.x
+                        if (rg.y < minY) minY = rg.y
+                        if (rg.x + rg.w > maxRight) maxRight = rg.x + rg.w
+                        if (rg.y + rg.h > maxBottom) maxBottom = rg.y + rg.h
+                        runBaselineY = rg.baselineY || 0
+                    }
+
+                    var ghost = createGlyphGhost(
+                        "delete",
+                        minX,
+                        runBaselineY || minY,
+                        endX,
+                        endY,
+                        maxRight - minX,
+                        maxBottom - minY,
+                        runBaselineY,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        run.text || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    _trackGhost(ghost, "delete", 0, 0)
+                }
+            } else {
+                // fallback: 逐 glyph
+                for (var i = 0; i < glyphRects.length; i++) {
+                    var gr = glyphRects[i]
+                    if (isComplexGrapheme(gr.char)) continue
+                    var ghost = createGlyphGhost(
+                        "delete",
+                        gr.x,
+                        gr.baselineY || gr.y,
+                        endX,
+                        endY,
+                        gr.w,
+                        gr.h,
+                        gr.baselineY || 0,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        gr.char || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    _trackGhost(ghost, "delete", 0, 0)
+                }
+            }
+        } else if (mode === "snapshotAnimation") {
+            // SnapshotAnimation：从 vt.hiddenVisualRanges 读取 snapshot payload
+            var hiddenRanges = vt.hiddenVisualRanges
+            if (hiddenRanges && Array.isArray(hiddenRanges) && hiddenRanges.length > 0) {
+                for (var hi = 0; hi < hiddenRanges.length; hi++) {
+                    var hr = hiddenRanges[hi]
+                    var snapGlyphs = []
+                    for (var gi = 0; gi < glyphRects.length; gi++) {
+                        var gr = glyphRects[gi]
+                        if (gr.byteStart >= hr.rangeStart && gr.byteEnd <= hr.rangeEnd) {
+                            snapGlyphs.push(gr)
+                        }
+                    }
+                    if (snapGlyphs.length === 0) continue
+
+                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
+                    var snapBaselineY = 0
+                    for (var k = 0; k < snapGlyphs.length; k++) {
+                        var sg = snapGlyphs[k]
+                        if (sg.x < minX) minX = sg.x
+                        if (sg.y < minY) minY = sg.y
+                        if (sg.x + sg.w > maxRight) maxRight = sg.x + sg.w
+                        if (sg.y + sg.h > maxBottom) maxBottom = sg.y + sg.h
+                        snapBaselineY = sg.baselineY || 0
+                    }
+
+                    var ghost = createGlyphGhost(
+                        "delete",
+                        minX,
+                        snapBaselineY || minY,
+                        endX,
+                        endY,
+                        maxRight - minX,
+                        maxBottom - minY,
+                        snapBaselineY,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    _trackGhost(ghost, "delete", 0, 0)
+                }
+            } else {
+                // fallback: 逐 glyph
+                for (var i = 0; i < glyphRects.length; i++) {
+                    var gr = glyphRects[i]
+                    if (isComplexGrapheme(gr.char)) continue
+                    var ghost = createGlyphGhost(
+                        "delete",
+                        gr.x,
+                        gr.baselineY || gr.y,
+                        endX,
+                        endY,
+                        gr.w,
+                        gr.h,
+                        gr.baselineY || 0,
+                        duration,
+                        editorItem.text_color || root.dt.editorText,
+                        gr.char || "",
+                        editorItem.font_family || "",
+                        editorItem.font_pixel_size || 0
+                    )
+                    _trackGhost(ghost, "delete", 0, 0)
+                }
             }
         } else {
-            // 其他模式：跳过复杂字符
+            // GlyphAnimation / lineReflowAnimation / 其他：逐 glyph，不跳过复杂字符
             for (var i = 0; i < glyphRects.length; i++) {
                 var gr = glyphRects[i]
-                if (isComplexGrapheme(gr.char)) {
-                    root._log("delete skipped: complex grapheme at index=" + i)
-                    continue
-                }
                 var ghost = createGlyphGhost(
                     "delete",
                     gr.x,

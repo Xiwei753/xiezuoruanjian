@@ -153,6 +153,12 @@ pub struct GlyphRectDto {
     /// 文字基线 Y 坐标
     #[serde(default)]
     pub baseline_y: f64,
+    /// 该 glyph 在文本中的 UTF-8 byte 起始位置
+    #[serde(default)]
+    pub byte_start: u64,
+    /// 该 glyph 在文本中的 UTF-8 byte 结束位置
+    #[serde(default)]
+    pub byte_end: u64,
 }
 
 // ── T1.3 EditorVisualTransactionDto ──

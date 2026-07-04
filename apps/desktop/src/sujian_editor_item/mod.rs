@@ -1877,8 +1877,7 @@ impl SujianEditorItem {
                         scroll_y,
                     ));
 
-                    // 局部 reflow 动画：限制 glyph_rects 只包含插入点所在行和下一行（最多 2 行）
-                    // 避免中间插入时给光标后面的全部正文做字符动画，导致换行牵动整个屏幕
+                    // 局部 reflow 动画：只收集屏幕可见受影响行
                     let mut lines_with_insert: Vec<usize> = Vec::new();
                     for (line_idx, line) in insert_snapshot.lines.iter().enumerate() {
                         if line.byte_end <= range_start || line.byte_start >= range_end {
@@ -1887,27 +1886,20 @@ impl SujianEditorItem {
                         if line.para_text.is_empty() {
                             continue;
                         }
+                        // 屏幕外行不参与动画
+                        let line_top = line.y - scroll_y;
+                        let line_bottom = line_top + line.height;
+                        if line_bottom < 0.0 || line_top > viewport_h {
+                            continue;
+                        }
                         lines_with_insert.push(line_idx);
                     }
 
-                    // 限制到插入点所在行 + 下一行（最多 2 行）
-                    // 如果影响超过 2 行、跨段落、滚动中、格式化中，直接 snap
-                    let max_affected_lines = 2;
-                    let should_snap =
-                        lines_with_insert.len() > max_affected_lines || self.current_is_scrolling;
+                    // 记录复杂字符的 byte range，循环结束后用 cluster_rects 补充
+                    let mut complex_byte_ranges: Vec<(usize, usize)> = Vec::new();
 
-                    let allowed_lines: Vec<usize> = if should_snap {
-                        // 只保留前 2 行的 glyph，后续行不做动画
-                        lines_with_insert
-                            .into_iter()
-                            .take(max_affected_lines)
-                            .collect()
-                    } else {
-                        lines_with_insert
-                    };
-
-                    for line_idx in allowed_lines {
-                        let line = &insert_snapshot.lines[line_idx];
+                    for line_idx in &lines_with_insert {
+                        let line = &insert_snapshot.lines[*line_idx];
                         let seg_start = range_start.max(line.byte_start);
                         let seg_end = range_end.min(line.byte_end);
                         if seg_start >= seg_end {
@@ -1931,9 +1923,10 @@ impl SujianEditorItem {
                                 .get(abs_byte..)
                                 .and_then(|s| s.chars().next())
                                 .unwrap_or(' ');
-                            // 复杂字符（emoji / ZWJ / variation selector / combining mark）
-                            // 不参与 glyph ghost 动画，跳过以避免渲染异常和资源浪费
+                            let char_len = ch.len_utf8();
+                            // 复杂字符：跳过逐 glyph 收集，记录 byte range 后续用 cluster_rects 补充
                             if is_complex_grapheme(ch) {
+                                complex_byte_ranges.push((abs_byte, abs_byte + char_len));
                                 continue;
                             }
                             glyph_rects.push(GlyphRect {
@@ -1943,7 +1936,89 @@ impl SujianEditorItem {
                                 h: line.height,
                                 char_: ch.to_string(),
                                 baseline_y: line_baseline_y,
+                                byte_start: abs_byte,
+                                byte_end: abs_byte + char_len,
                             });
+                        }
+                    }
+
+                    // 补充复杂 cluster 的 bounding rect（从 vt.cluster_rects 读取）
+                    if let Some(ref cluster_rects) = vt.cluster_rects {
+                        for cluster in cluster_rects {
+                            if !cluster.is_complex {
+                                continue;
+                            }
+                            // 找到覆盖该 cluster byte range 的行
+                            let cluster_lines: Vec<usize> = insert_snapshot
+                                .lines
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, l)| {
+                                    l.byte_start < cluster.byte_end
+                                        && l.byte_end > cluster.byte_start
+                                        && !l.para_text.is_empty()
+                                })
+                                .map(|(i, _)| i)
+                                .collect();
+                            if cluster_lines.is_empty() {
+                                continue;
+                            }
+
+                            // 收集该 cluster 覆盖的所有 glyph 位置，计算 bounding rect
+                            let mut min_x = f64::MAX;
+                            let mut min_y = f64::MAX;
+                            let mut max_right = f64::MIN;
+                            let mut max_bottom = f64::MIN;
+                            let mut cluster_baseline_y: f64 = 0.0;
+
+                            for &li in &cluster_lines {
+                                let line = &insert_snapshot.lines[li];
+                                let seg_start = cluster.byte_start.max(line.byte_start);
+                                let seg_end = cluster.byte_end.min(line.byte_end);
+                                if seg_start >= seg_end {
+                                    continue;
+                                }
+                                let glyph_data = self.editor_layout.glyph_positions_on_line(
+                                    line,
+                                    seg_start,
+                                    seg_end,
+                                    font_size,
+                                    font_family,
+                                );
+                                let line_baseline_y =
+                                    text_baseline_y(line, font_size, font_family) - scroll_y;
+                                for (abs_byte, x_pos, ch_w) in &glyph_data {
+                                    let glyph_right = line.x + x_pos + ch_w;
+                                    let glyph_bottom = line.y - scroll_y + line.height;
+                                    if line.x + *x_pos < min_x {
+                                        min_x = line.x + *x_pos;
+                                    }
+                                    if line.y - scroll_y < min_y {
+                                        min_y = line.y - scroll_y;
+                                    }
+                                    if glyph_right > max_right {
+                                        max_right = glyph_right;
+                                    }
+                                    if glyph_bottom > max_bottom {
+                                        max_bottom = glyph_bottom;
+                                    }
+                                    cluster_baseline_y = line_baseline_y;
+                                    let _ = abs_byte; // used for positioning
+                                }
+                            }
+
+                            if min_x < f64::MAX && max_right > f64::MIN {
+                                glyph_rects.push(GlyphRect {
+                                    x: min_x,
+                                    y: min_y,
+                                    w: max_right - min_x,
+                                    h: max_bottom - min_y,
+                                    char_: cluster.text.clone(),
+                                    baseline_y: cluster_baseline_y,
+                                    byte_start: cluster.byte_start,
+                                    byte_end: cluster.byte_end,
+                                });
+                            }
                         }
                     }
                 }
@@ -1958,14 +2033,13 @@ impl SujianEditorItem {
                 // 收集逻辑：
                 // 1. 使用 old_text 布局获取插入点右侧 glyph 的旧位置
                 // 2. 使用 new_text 布局获取同一批 glyph 的新位置
-                // 3. 只收集同一行中插入点右侧的 glyph，以及受影响的下一行（最多 2 行）
-                // 4. 复杂字符（emoji/ZWJ/variation selector/combining mark）不参与
+                // 3. 只收集屏幕可见受影响行
+                // 4. 复杂字符也参与 reflow 动画
                 if let Some((range_start, range_end)) = vt.inserted_range {
                     let mut reflow_rects = Vec::new();
                     let old_snapshot = self.layout_snapshot_for_text(old_text, width);
 
-                    // 收集受影响行：插入点所在行和下一行（最多 2 行）
-                    let max_affected_lines = 2;
+                    // 收集受影响行：屏幕可见行
                     let mut affected_line_indices: Vec<usize> = Vec::new();
                     for (line_idx, line) in insert_snapshot.lines.iter().enumerate() {
                         if line.byte_end <= range_start || line.para_text.is_empty() {
@@ -1973,10 +2047,13 @@ impl SujianEditorItem {
                         }
                         // 只收集插入点右侧的行（插入点所在行及之后的行）
                         if line.byte_start >= range_end || line.byte_end > range_start {
+                            // 屏幕外行不参与 reflow 动画
+                            let line_top = line.y - scroll_y;
+                            let line_bottom = line_top + line.height;
+                            if line_bottom < 0.0 || line_top > viewport_h {
+                                continue;
+                            }
                             affected_line_indices.push(line_idx);
-                        }
-                        if affected_line_indices.len() >= max_affected_lines {
-                            break;
                         }
                     }
 
@@ -2016,10 +2093,7 @@ impl SujianEditorItem {
                                 .get(*abs_byte..)
                                 .and_then(|s| s.chars().next())
                                 .unwrap_or(' ');
-                            // 复杂字符不参与 reflow 动画
-                            if is_complex_grapheme(ch) {
-                                continue;
-                            }
+                            // 复杂字符也参与 reflow 动画
 
                             let char_len = ch.len_utf8();
                             let byte_start = *abs_byte;
@@ -2140,11 +2214,20 @@ impl SujianEditorItem {
                             scroll_y,
                         ));
 
+                        // 记录复杂字符的 byte range，循环结束后用 cluster_rects 补充
+                        let mut complex_byte_ranges: Vec<(usize, usize)> = Vec::new();
+
                         for line in &delete_snapshot.lines {
                             if line.byte_end <= range_start || line.byte_start >= range_end {
                                 continue;
                             }
                             if line.para_text.is_empty() {
+                                continue;
+                            }
+                            // 屏幕外行不参与动画
+                            let line_top = line.y - scroll_y;
+                            let line_bottom = line_top + line.height;
+                            if line_bottom < 0.0 || line_top > viewport_h {
                                 continue;
                             }
                             let seg_start = range_start.max(line.byte_start);
@@ -2170,8 +2253,10 @@ impl SujianEditorItem {
                                     .get(abs_byte..)
                                     .and_then(|s| s.chars().next())
                                     .unwrap_or(' ');
-                                // 复杂字符不参与 glyph ghost 动画
+                                let char_len = ch.len_utf8();
+                                // 复杂字符：跳过逐 glyph 收集，记录 byte range 后续用 cluster_rects 补充
                                 if is_complex_grapheme(ch) {
+                                    complex_byte_ranges.push((abs_byte, abs_byte + char_len));
                                     continue;
                                 }
                                 glyph_rects.push(GlyphRect {
@@ -2181,7 +2266,89 @@ impl SujianEditorItem {
                                     h: line.height,
                                     char_: ch.to_string(),
                                     baseline_y: line_baseline_y,
+                                    byte_start: abs_byte,
+                                    byte_end: abs_byte + char_len,
                                 });
+                            }
+                        }
+
+                        // 补充复杂 cluster 的 bounding rect（从 vt.cluster_rects 读取）
+                        if let Some(ref cluster_rects) = vt.cluster_rects {
+                            for cluster in cluster_rects {
+                                if !cluster.is_complex {
+                                    continue;
+                                }
+                                // 找到覆盖该 cluster byte range 的行
+                                let cluster_lines: Vec<usize> = delete_snapshot
+                                    .lines
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, l)| {
+                                        l.byte_start < cluster.byte_end
+                                            && l.byte_end > cluster.byte_start
+                                            && !l.para_text.is_empty()
+                                    })
+                                    .map(|(i, _)| i)
+                                    .collect();
+                                if cluster_lines.is_empty() {
+                                    continue;
+                                }
+
+                                // 收集该 cluster 覆盖的所有 glyph 位置，计算 bounding rect
+                                let mut min_x = f64::MAX;
+                                let mut min_y = f64::MAX;
+                                let mut max_right = f64::MIN;
+                                let mut max_bottom = f64::MIN;
+                                let mut cluster_baseline_y: f64 = 0.0;
+
+                                for &li in &cluster_lines {
+                                    let line = &delete_snapshot.lines[li];
+                                    let seg_start = cluster.byte_start.max(line.byte_start);
+                                    let seg_end = cluster.byte_end.min(line.byte_end);
+                                    if seg_start >= seg_end {
+                                        continue;
+                                    }
+                                    let glyph_data = self.editor_layout.glyph_positions_on_line(
+                                        line,
+                                        seg_start,
+                                        seg_end,
+                                        font_size,
+                                        font_family,
+                                    );
+                                    let line_baseline_y =
+                                        text_baseline_y(line, font_size, font_family) - scroll_y;
+                                    for (abs_byte, x_pos, ch_w) in &glyph_data {
+                                        let glyph_right = line.x + x_pos + ch_w;
+                                        let glyph_bottom = line.y - scroll_y + line.height;
+                                        if line.x + *x_pos < min_x {
+                                            min_x = line.x + *x_pos;
+                                        }
+                                        if line.y - scroll_y < min_y {
+                                            min_y = line.y - scroll_y;
+                                        }
+                                        if glyph_right > max_right {
+                                            max_right = glyph_right;
+                                        }
+                                        if glyph_bottom > max_bottom {
+                                            max_bottom = glyph_bottom;
+                                        }
+                                        cluster_baseline_y = line_baseline_y;
+                                        let _ = abs_byte;
+                                    }
+                                }
+
+                                if min_x < f64::MAX && max_right > f64::MIN {
+                                    glyph_rects.push(GlyphRect {
+                                        x: min_x,
+                                        y: min_y,
+                                        w: max_right - min_x,
+                                        h: max_bottom - min_y,
+                                        char_: cluster.text.clone(),
+                                        baseline_y: cluster_baseline_y,
+                                        byte_start: cluster.byte_start,
+                                        byte_end: cluster.byte_end,
+                                    });
+                                }
                             }
                         }
                     }
@@ -2529,6 +2696,7 @@ impl SujianEditorItem {
         let preedit_glyph_rects = {
             let mut rects = Vec::new();
             let mut cum_x = preedit_start_x;
+            let mut byte_offset = 0usize;
             for ch in new_text.chars() {
                 if is_complex_grapheme(ch) {
                     let ch_str = ch.to_string();
@@ -2536,12 +2704,15 @@ impl SujianEditorItem {
                         .editor_layout
                         .text_width(&ch_str, font_size, font_family);
                     cum_x += ch_w;
+                    byte_offset += ch.len_utf8();
                     continue;
                 }
                 let ch_str = ch.to_string();
                 let ch_w = self
                     .editor_layout
                     .text_width(&ch_str, font_size, font_family);
+                let bs = byte_offset;
+                let be = byte_offset + ch.len_utf8();
                 rects.push(GlyphRect {
                     x: cum_x,
                     y: line_y,
@@ -2549,8 +2720,11 @@ impl SujianEditorItem {
                     h: line_h,
                     char_: ch_str,
                     baseline_y: line_baseline_y,
+                    byte_start: bs,
+                    byte_end: be,
                 });
                 cum_x += ch_w;
+                byte_offset = be;
             }
             rects
         };
@@ -2574,9 +2748,11 @@ impl SujianEditorItem {
         let inserted_preedit_glyph_rects = {
             let mut rects = Vec::new();
             let mut cum_x = preedit_start_x;
+            let mut byte_offset = 0usize;
             // Skip prefix
             for ch in new_chars[..prefix_len].iter() {
                 let ch_str = ch.to_string();
+                byte_offset += ch.len_utf8();
                 cum_x += self
                     .editor_layout
                     .text_width(&ch_str, font_size, font_family);
@@ -2589,12 +2765,15 @@ impl SujianEditorItem {
                         .editor_layout
                         .text_width(&ch_str, font_size, font_family);
                     cum_x += ch_w;
+                    byte_offset += ch.len_utf8();
                     continue;
                 }
                 let ch_str = ch.to_string();
                 let ch_w = self
                     .editor_layout
                     .text_width(&ch_str, font_size, font_family);
+                let bs = byte_offset;
+                let be = byte_offset + ch.len_utf8();
                 rects.push(GlyphRect {
                     x: cum_x,
                     y: line_y,
@@ -2602,8 +2781,11 @@ impl SujianEditorItem {
                     h: line_h,
                     char_: ch_str,
                     baseline_y: line_baseline_y,
+                    byte_start: bs,
+                    byte_end: be,
                 });
                 cum_x += ch_w;
+                byte_offset = be;
             }
             if rects.is_empty() {
                 None
@@ -2616,9 +2798,11 @@ impl SujianEditorItem {
         let deleted_preedit_glyph_rects = {
             let mut rects = Vec::new();
             let mut cum_x = preedit_start_x;
+            let mut byte_offset = 0usize;
             // Skip prefix
             for ch in old_chars[..prefix_len].iter() {
                 let ch_str = ch.to_string();
+                byte_offset += ch.len_utf8();
                 cum_x += self
                     .editor_layout
                     .text_width(&ch_str, font_size, font_family);
@@ -2631,12 +2815,15 @@ impl SujianEditorItem {
                         .editor_layout
                         .text_width(&ch_str, font_size, font_family);
                     cum_x += ch_w;
+                    byte_offset += ch.len_utf8();
                     continue;
                 }
                 let ch_str = ch.to_string();
                 let ch_w = self
                     .editor_layout
                     .text_width(&ch_str, font_size, font_family);
+                let bs = byte_offset;
+                let be = byte_offset + ch.len_utf8();
                 rects.push(GlyphRect {
                     x: cum_x,
                     y: line_y,
@@ -2644,8 +2831,11 @@ impl SujianEditorItem {
                     h: line_h,
                     char_: ch_str,
                     baseline_y: line_baseline_y,
+                    byte_start: bs,
+                    byte_end: be,
                 });
                 cum_x += ch_w;
+                byte_offset = be;
             }
             if rects.is_empty() {
                 None

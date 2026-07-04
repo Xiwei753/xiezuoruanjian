@@ -1143,6 +1143,8 @@ dictionary GlyphRectDto {
     f64 h;
     string char_;
     f64 baseline_y;
+    u64 byte_start;
+    u64 byte_end;
 };
 
 dictionary EditorVisualTransactionDto {

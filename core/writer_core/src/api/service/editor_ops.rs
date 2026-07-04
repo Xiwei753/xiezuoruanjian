@@ -133,9 +133,9 @@ mod tests {
             )
             .unwrap();
 
-        // Only cursor event, no text animation
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].kind, EditorAnimationKindDto::Cursor);
+        // Paste 现在进入 visual transaction，产生 Insert + Cursor 事件
+        assert!(events.len() >= 1);
+        assert_eq!(events[0].kind, EditorAnimationKindDto::Insert);
     }
 
     #[test]
@@ -221,7 +221,11 @@ mod tests {
             )
             .unwrap();
 
-        assert!(vt.is_none());
+        // Paste 现在进入 visual transaction
+        assert!(vt.is_some());
+        let vt = vt.unwrap();
+        assert_eq!(vt.kind, EditorAnimationKindDto::Insert);
+        assert_eq!(vt.cause, EditorTransactionCauseDto::Paste);
     }
 
     #[test]
