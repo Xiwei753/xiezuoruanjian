@@ -69,14 +69,14 @@ ScrollView {
                 contentItem: AppText {
                     dt: root.appTheme
                     text: parent.text
-                    color: root.appTheme.primaryText
+                    color: root.appTheme.textPrimary
                     font.pixelSize: root.appTheme.fontSm
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
                     color: parent.hovered
-                        ? root.appTheme.primaryHover
+                        ? root.appTheme.accentHover
                         : root.appTheme.primary
                     radius: root.appTheme.radiusSm
                 }
@@ -99,7 +99,7 @@ ScrollView {
                     verticalAlignment: Text.AlignVCenter
                 }
                 background: Rectangle {
-                    color: parent.hovered ? root.appTheme.hover : "transparent"
+                    color: parent.hovered ? root.appTheme.hoverOverlay : "transparent"
                     radius: root.appTheme.radiusSm
                 }
             }
@@ -113,7 +113,7 @@ ScrollView {
             delegate: Rectangle {
                 Layout.fillWidth: true
                 implicitHeight: 120
-                color: root.appTheme.surfaceAlt
+                color: root.appTheme.surfaceContainerLow
                 radius: root.appTheme.radiusMd
                 border.color: root.appTheme.border
                 border.width: 1
@@ -190,14 +190,14 @@ ScrollView {
                             contentItem: AppText {
                                 dt: root.appTheme
                                 text: parent.text
-                                color: root.appTheme.primaryText
+                                color: root.appTheme.textPrimary
                                 font.pixelSize: root.appTheme.fontSm
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
                             background: Rectangle {
                                 color: parent.hovered
-                                    ? root.appTheme.primaryHover
+                                    ? root.appTheme.accentHover
                                     : root.appTheme.primary
                                 radius: root.appTheme.radiusSm
                             }
@@ -240,7 +240,7 @@ ScrollView {
                             contentItem: AppText {
                                 dt: root.appTheme
                                 text: parent.text
-                                color: root.appTheme.primaryText
+                                color: root.appTheme.textPrimary
                                 font.pixelSize: root.appTheme.fontSm
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
@@ -248,7 +248,7 @@ ScrollView {
                             background: Rectangle {
                                 color: parent.enabled
                                     ? (parent.hovered
-                                        ? root.appTheme.primaryHover
+                                        ? root.appTheme.accentHover
                                         : root.appTheme.primary)
                                     : root.appTheme.border
                                 radius: root.appTheme.radiusSm
@@ -269,7 +269,7 @@ ScrollView {
         Rectangle {
             Layout.fillWidth: true
             height: 120
-            color: root.appTheme.surfaceAlt
+            color: root.appTheme.surfaceContainerLow
             radius: root.appTheme.radiusSm
             border.color: root.appTheme.border
             border.width: 1
@@ -331,13 +331,13 @@ ScrollView {
                         contentItem: AppText {
                             dt: root.appTheme
                             text: parent.text
-                            color: root.appTheme.primaryText
+                            color: root.appTheme.textPrimary
                             font.pixelSize: root.appTheme.fontSm
                             horizontalAlignment: Text.AlignHCenter
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle {
-                            color: parent.hovered ? root.appTheme.primaryHover : root.appTheme.primary
+                            color: parent.hovered ? root.appTheme.accentHover : root.appTheme.primary
                             radius: root.appTheme.radiusSm
                         }
                     }
@@ -359,7 +359,7 @@ ScrollView {
                             verticalAlignment: Text.AlignVCenter
                         }
                         background: Rectangle {
-                            color: parent.hovered ? root.appTheme.hover : "transparent"
+                            color: parent.hovered ? root.appTheme.hoverOverlay : "transparent"
                             radius: root.appTheme.radiusSm
                         }
                     }
@@ -378,7 +378,7 @@ ScrollView {
                         font.pixelSize: root.appTheme.fontXs
                         color: root.appTheme.textPrimary
                         background: Rectangle {
-                            color: root.appTheme.surfaceAlt
+                            color: root.appTheme.surfaceContainerLow
                             radius: root.appTheme.radiusSm
                             border.color: root.appTheme.border
                             border.width: 1
