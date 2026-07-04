@@ -236,7 +236,19 @@ class SujianImeController(
         
         val builder = CursorAnchorInfo.Builder()
         val text = buffer.text
-        val cursorRect = layout.getCursorRect(text, buffer.selection.head)
+        
+        // composing 期间使用 renderer 的 composing 光标位置，让候选框跟随 composing 光标
+        val cursorRect: SujianCursorRect
+        if (buffer.hasComposing && renderer.hasComposingCursor) {
+            cursorRect = SujianCursorRect(
+                renderer.composingCursorX,
+                renderer.composingCursorTop,
+                renderer.composingCursorBottom,
+                renderer.composingCursorBottom  // baselineY 近似用 bottom
+            )
+        } else {
+            cursorRect = layout.getCursorRect(text, buffer.selection.head)
+        }
         
         // 计算光标可见性 flags
         val flags = computeCursorVisibilityFlags(cursorRect)

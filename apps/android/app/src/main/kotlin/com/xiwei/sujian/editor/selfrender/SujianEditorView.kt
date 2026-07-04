@@ -456,6 +456,8 @@ class SujianEditorView @JvmOverloads constructor(
             selection = buffer.selection,
             composingStart = buffer.composingStart,
             composingEnd = buffer.composingEnd,
+            composingText = buffer.composingText,
+            composingCursor = buffer.composingCursor,
             viewportWidth = width - paddingLeft - paddingRight,
             viewportHeight = height - paddingTop - paddingBottom
         )

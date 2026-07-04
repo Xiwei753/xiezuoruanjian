@@ -115,6 +115,9 @@ class SujianInputConnection(
         imeController.onComposingChanged(text.toString())
         imeController.updateSelection()
 
+        // 触发重绘以显示 composing 文字
+        view.invalidate()
+
         return true
     }
 
@@ -123,6 +126,9 @@ class SujianInputConnection(
 
         buffer.setComposingRegion(start, end)
         imeController.updateSelection()
+
+        // 触发重绘以显示 composing 下划线
+        view.invalidate()
 
         return true
     }
@@ -137,6 +143,9 @@ class SujianInputConnection(
         buffer.finishComposing()
         imeController.onComposingFinished()
         imeController.updateSelection()
+
+        // 触发重绘以清除 composing 文字
+        view.invalidate()
 
         return true
     }

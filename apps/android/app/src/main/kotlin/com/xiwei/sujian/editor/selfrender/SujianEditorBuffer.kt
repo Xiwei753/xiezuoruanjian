@@ -73,6 +73,13 @@ class SujianEditorBuffer {
      */
     var composingCursor: Int = 0
         private set
+    /**
+     * Composing 文本内容。
+     * 由 setComposingText 设置，composing 文字不插入 buffer.text（那是正文数据），
+     * 只在渲染层临时绘制。setComposingRegion 不设置此字段（composing 文字已在正文中）。
+     */
+    var composingText: String = ""
+        private set
     val hasComposing: Boolean get() = composingStart >= 0 && composingEnd >= 0 && composingStart != composingEnd
 
     // ── 配置 ──
@@ -234,7 +241,8 @@ class SujianEditorBuffer {
             return
         }
         // composing text 不进正文 buffer，只记录 composing 状态
-        // 实际的 preedit 显示由 SujianEditorView 的 preedit 层处理
+        // 实际的 preedit 显示由 SujianEditorRenderer 的 preedit 层处理
+        composingText = composing
         composingStart = selection.head
         composingEnd = selection.head + composing.length
         // 记录 composing 内光标位置
@@ -383,6 +391,7 @@ class SujianEditorBuffer {
         composingStart = -1
         composingEnd = -1
         composingCursor = 0
+        composingText = ""
     }
 
 }

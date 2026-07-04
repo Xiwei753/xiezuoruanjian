@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
 import android.text.Layout
+import android.text.StaticLayout
 import android.text.TextPaint
 import com.xiwei.sujian.model.AnimationModeData
 import com.xiwei.sujian.model.SujianReflowGlyphRectData
@@ -116,6 +117,12 @@ class SujianEditorRenderer(
     var cursorTargetBottom: Float = 0f
     var smoothCursorEnabled: Boolean = false
     var isCursorAnimating: Boolean = false  // 由 CursorController 设置
+
+    // ── Composing 光标视觉状态（由 drawComposingTextAndUnderline 计算）──
+    internal var hasComposingCursor: Boolean = false
+    internal var composingCursorX: Float = 0f
+    internal var composingCursorTop: Float = 0f
+    internal var composingCursorBottom: Float = 0f
 
     /**
      * 添加动画 overlay
@@ -344,9 +351,14 @@ class SujianEditorRenderer(
         selection: SujianSelection,
         composingStart: Int,
         composingEnd: Int,
+        composingText: String,
+        composingCursor: Int,
         viewportWidth: Int,
         viewportHeight: Int
     ) {
+        // 重置 composing 光标状态
+        hasComposingCursor = false
+
         canvas.save()
         canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
 
@@ -356,8 +368,12 @@ class SujianEditorRenderer(
         // 2. 静态正文层
         drawStaticText(canvas, layout, text, scrollY, viewportHeight)
 
-        // 3. preedit 层（composing 下划线）
-        if (composingStart >= 0 && composingEnd >= 0 && composingStart < composingEnd) {
+        // 3. preedit 层（composing 文字 + 下划线）
+        if (composingText.isNotEmpty() && composingStart >= 0) {
+            // setComposingText 场景：composing 文字不在 buffer.text 中，需要临时绘制
+            drawComposingTextAndUnderline(canvas, layout, text, composingStart, composingText, composingCursor)
+        } else if (composingStart >= 0 && composingEnd >= 0 && composingStart < composingEnd && composingStart < text.length) {
+            // setComposingRegion 场景：composing 文字已在正文中，只画下划线
             drawComposingUnderline(canvas, layout, text, composingStart, composingEnd)
         }
 
@@ -366,7 +382,18 @@ class SujianEditorRenderer(
 
         // 5. 光标层
         if (cursorVisible && cursorBlinkOn && selection.isCollapsed) {
-            drawCursor(canvas, layout, text, selection.head)
+            if (hasComposingCursor) {
+                // composing 期间：光标跟随 composingCursor 在 composing 文字中的位置
+                canvas.drawRect(
+                    composingCursorX - cursorPaint.strokeWidth / 2f,
+                    composingCursorTop,
+                    composingCursorX + cursorPaint.strokeWidth / 2f,
+                    composingCursorBottom,
+                    cursorPaint
+                )
+            } else {
+                drawCursor(canvas, layout, text, selection.head)
+            }
         }
 
         canvas.restore()
@@ -600,6 +627,105 @@ class SujianEditorRenderer(
             canvas.drawLine(0f, underlineY, layout.width.toFloat(), underlineY, composingUnderlinePaint)
             canvas.restore()
         }
+    }
+
+    /**
+     * 绘制 composing 文字和下划线（setComposingText 场景）
+     *
+     * composing 文字不在 buffer.text 中，需要在光标位置临时绘制。
+     * 使用 StaticLayout 正确处理换行，首行从光标位置开始，后续行从左边距开始。
+     * 同时计算 composing 光标位置，供光标层使用。
+     */
+    private fun drawComposingTextAndUnderline(
+        canvas: Canvas,
+        layout: Layout,
+        text: String,
+        composingStart: Int,
+        composingText: String,
+        composingCursor: Int
+    ) {
+        if (composingText.isEmpty()) return
+
+        // 获取 composing 文字起始位置（光标在主布局中的位置）
+        val safeOffset = composingStart.coerceIn(0, text.length)
+        val startX: Float
+        val startBaselineY: Float
+
+        if (text.isEmpty()) {
+            // 空文本时 composing 从左上角开始
+            startX = 0f
+            startBaselineY = textPaint.textSize
+        } else {
+            val startLine = layout.getLineForOffset(safeOffset)
+            startX = layout.getPrimaryHorizontal(safeOffset)
+            startBaselineY = layout.getLineBaseline(startLine).toFloat()
+        }
+
+        // 为 composing 文字创建临时 StaticLayout
+        // 使用 LeadingMarginSpan 让首行从 startX 位置开始，后续行从左边距开始
+        val layoutWidth = layout.width.coerceAtLeast(1)
+        val composingLayout: StaticLayout
+
+        if (startX > 0f) {
+            // 首行有缩进偏移，使用 LeadingMarginSpan 处理
+            val indentPx = Math.round(startX)
+            val spannedString = android.text.SpannableString(composingText)
+            val marginSpan = android.text.style.LeadingMarginSpan.Standard(indentPx, 0)
+            spannedString.setSpan(marginSpan, 0, composingText.length, android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE)
+
+            composingLayout = StaticLayout.Builder.obtain(
+                spannedString, 0, spannedString.length, textPaint, layoutWidth
+            ).setAlignment(Layout.Alignment.ALIGN_NORMAL)
+             .setLineSpacing(layout.spacingAdd, layout.spacingMultiplier)
+             .setIncludePad(false)
+             .build()
+        } else {
+            composingLayout = StaticLayout.Builder.obtain(
+                composingText, 0, composingText.length, textPaint, layoutWidth
+            ).setAlignment(Layout.Alignment.ALIGN_NORMAL)
+             .setLineSpacing(layout.spacingAdd, layout.spacingMultiplier)
+             .setIncludePad(false)
+             .build()
+        }
+
+        // 绘制 composing 文字和下划线
+        val firstLineBaseline = composingLayout.getLineBaseline(0).toFloat()
+
+        for (i in 0 until composingLayout.lineCount) {
+            val lineStart = composingLayout.getLineStart(i)
+            val lineEnd = composingLayout.getLineEnd(i)
+            if (lineStart >= lineEnd) continue
+
+            val lineText = composingText.substring(lineStart, lineEnd)
+            val drawBaselineY = startBaselineY + (composingLayout.getLineBaseline(i).toFloat() - firstLineBaseline)
+
+            // LeadingMarginSpan 影响布局计算，getLineLeft 返回含 margin 偏移的绘制起点
+            val lineDrawX = composingLayout.getLineLeft(i)
+
+            // 绘制文字
+            canvas.drawText(lineText, lineDrawX, drawBaselineY, textPaint)
+
+            // 绘制下划线
+            val descent = composingLayout.getLineDescent(i).toFloat()
+            val underlineY = drawBaselineY + descent + 2f
+            val textWidth = textPaint.measureText(lineText)
+            if (textWidth > 0f) {
+                canvas.drawLine(lineDrawX, underlineY, lineDrawX + textWidth, underlineY, composingUnderlinePaint)
+            }
+        }
+
+        // 计算 composing 光标位置
+        val cursorOffset = composingCursor.coerceIn(0, composingText.length)
+        val cursorLine = composingLayout.getLineForOffset(cursorOffset)
+        val cursorXInComposing = composingLayout.getPrimaryHorizontal(cursorOffset)
+        val cursorBaselineY = startBaselineY + (composingLayout.getLineBaseline(cursorLine).toFloat() - firstLineBaseline)
+        val cursorAscent = composingLayout.getLineAscent(cursorLine).toFloat()
+        val cursorDescent = composingLayout.getLineDescent(cursorLine).toFloat()
+
+        hasComposingCursor = true
+        composingCursorX = cursorXInComposing
+        composingCursorTop = cursorBaselineY + cursorAscent
+        composingCursorBottom = cursorBaselineY + cursorDescent
     }
 
     private fun drawAnimations(canvas: Canvas) {
