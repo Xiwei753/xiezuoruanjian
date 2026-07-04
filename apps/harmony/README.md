@@ -1,49 +1,39 @@
 # HarmonyOS NEXT 客户端
 
-> **[WIP] 本端当前为工作进展中（Work In Progress）的壳层状态，不具备正式可用功能。**
->
-> - 不认为已完成 Rust Core 全量接入
-> - 不认为已完成多端 UI 对齐
-> - 不作为正式端发布
-> - Mock 模式仅供开发验证，不是正式功能
-
 ## 概述
 
-这是写作软件的 HarmonyOS NEXT 客户端壳层，遵循 Core-first 架构约束，所有业务逻辑委托给 Rust Core。
+这是写作软件的 HarmonyOS NEXT 客户端，遵循 Core-first 架构约束，所有业务逻辑委托给 Rust Core。默认通过 NAPI 调用 Rust Core，不自动降级 mock。
 
 ## 当前状态
 
-**阶段 1：壳层搭建 - 已搭建（WIP）**
+**Native 桥接已实现，默认走 Rust Core。**
 
-- 已完成 DevEco Studio 工程骨架
-- 已完成 ArkTS 页面结构
-- 已完成 Mock Bridge 实现
-- 已完成 接口与实现分离
-- 已完成 系统服务接口定义
-- 已完成 主题适配器
-- 已完成 生命周期管理
-- 已完成 路由和状态流验证
+- ArkTS 通过 `import nativeModule from 'libwriter_core.so'` 调用 NAPI
+- C++ NAPI 层（`napi_init.cpp`）注册了约 50 个 `nativeXxx` 函数
+- C++ 链接 `libwriter_core_ffi.so`（预编译 Rust FFI 库）
+- `CMakeLists.txt` 检查 `prebuilt/${OHOS_ARCH}/libwriter_core_ffi.so`，不存在则 fatal error
+- `writer_core_bridge.h` 声明了所有 C-ABI 函数
+- Rust Core 通过 C-ABI 导出 `writer_core_init`、workspace、project、chapter、settings、sync、stats、starmap 等接口
+- `MockWriterCoreBridge` 仍然存在，但仅用于开发调试，不是默认路径
 
-> 注意：以上仅代表壳层结构已搭建，不代表功能已完成。当前所有页面和桥接均使用 mock 数据，未接入 Rust Core。
+## 架构说明
 
-**阶段 2：接口设计 - 待推进**
+四层桥接架构：
 
-- 已整理 Core Action Map 文档
-- 已整理 Native Bridge 接入计划
-- 已整理 DTO 类型定义
-- 已整理 ResultEnvelope 统一返回格式
-- 等待 Core 接口稳定后方可推进
+```
+Rust Core (libwriter_core_ffi.so)
+  ↓ C-ABI (writer_core_bridge.h)
+C++ NAPI 层 (napi_init.cpp, libwriter_core.so)
+  ↓ NAPI
+ArkTS NativeWriterCoreBridge
+  ↓
+页面 / ViewModel
+```
 
-**阶段 3：真实桥接 - 待开始**
-
-- 待接入 Rust Core
-- 待 C-ABI/NAPI 方案实施
-
----
-
-**WIP 声明**：
-
-Harmony 当前为 WIP shell。不认为已完成 Rust Core 全量接入，不认为已完成多端 UI 对齐，不作为正式端发布。
+1. **Rust FFI 层**：`libwriter_core_ffi.so`，通过 C-ABI 导出 `writer_core_init`、workspace、project、chapter、settings、sync、stats、starmap 等函数
+2. **C Header 层**：`writer_core_bridge.h`，声明所有 C-ABI 函数签名
+3. **NAPI C++ 层**：`napi_init.cpp`，将 C-ABI 函数包装为约 50 个 `nativeXxx` NAPI 函数，注册到 `libwriter_core.so`
+4. **ArkTS 层**：`NativeWriterCoreBridge`，通过 `import nativeModule from 'libwriter_core.so'` 调用 NAPI 函数
 
 ## 目录结构
 
@@ -85,8 +75,8 @@ apps/harmony/
           SettingsPage.ets        设置页面
         bridge/
           IWriterCoreBridge.ets   桥接接口
-          MockWriterCoreBridge.ets Mock 实现
-          NativeWriterCoreBridge.ets Native 实现
+          MockWriterCoreBridge.ets Mock 实现（仅开发调试用）
+          NativeWriterCoreBridge.ets Native 实现（默认）
           WriterCoreBridge.ets    桥接入口
         model/
           CoreDtos.ets            数据传输对象
@@ -110,9 +100,12 @@ apps/harmony/
 
 ```
 IWriterCoreBridge (接口)
-├── MockWriterCoreBridge (Mock 实现)
-└── NativeWriterCoreBridge (Native 空壳，待实现)
+├── MockWriterCoreBridge (仅开发调试用)
+└── NativeWriterCoreBridge (默认，已实现)
 ```
+
+- **NativeWriterCoreBridge**：默认桥接，通过 NAPI 调用 Rust Core。初始化失败时显示错误，不降级 mock。
+- **MockWriterCoreBridge**：仅用于开发调试，不作为默认路径。如需使用需手动切换环境配置。
 
 ### 系统服务（对齐 HarmonyOS NEXT API 12）
 
@@ -124,7 +117,14 @@ IWriterCoreBridge (接口)
 
 ### 应用上下文
 
-AppContext 统一管理所有服务实例，支持 Mock/Native 环境切换。
+AppContext 统一管理所有服务实例，默认 `environment=native`。
+
+## 初始化流程
+
+1. `EntryAbility.setAbilityContext` → 设置应用上下文
+2. `Index.initAndLoad` → 调用 `NativeWriterCoreBridge.initialize(workspacePath)`
+3. 初始化成功 → 加载工作区数据
+4. 初始化失败 → 显示错误信息，不降级 mock
 
 ## 页面说明
 
@@ -175,37 +175,21 @@ IWriterCoreBridge 定义了完整的接口：
 - **Sync**: loadSyncConfig, saveSyncConfig, syncDryRun, syncDiagnostics, performSync
 - **Stats**: getWritingStats, calculateWordCount, processWritingEvent
 
-## 开发计划
-
-### 阶段 2：接口设计
-- 已整理 Core Action Map 文档
-- 已整理 Native Bridge 接入计划
-- 已整理 DTO 类型定义
-- 已整理 ResultEnvelope 统一返回格式
-
-### 阶段 3：真实桥接
-- C-ABI + NAPI 方案评估
-- 编译 Rust Core 为 HarmonyOS 目标
-- 实现 NativeWriterCoreBridge
-- 集成测试
-
 ## 构建与运行
 
 ### 前置条件
 - DevEco Studio 5.0+
 - HarmonyOS NEXT SDK
 - Node.js 16+
+- 预编译 `libwriter_core_ffi.so` 放置于 `entry/src/main/cpp/libs/prebuilt/${OHOS_ARCH}/`
 
 ### 构建步骤
 1. 使用 DevEco Studio 打开 `apps/harmony/` 目录
 2. 等待依赖安装完成
 3. 选择模拟器或真机
 4. 点击运行
-### Mock 模式
 
-当前所有数据都是 Mock 实现，无需配置 Rust Core。
-
-> **重要**：Mock 模式仅供开发验证页面结构和接口形状，不是正式功能。Mock 数据不代表真实业务逻辑，不应用于功能测试或用户体验评估。
+> Mock 模式仅用于开发调试，不是默认路径。如需使用 Mock 模式，需手动将 AppContext 的 environment 切换为 mock。
 
 ## 云端构建（CI/CD）
 
@@ -241,20 +225,19 @@ IWriterCoreBridge 定义了完整的接口：
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("sujian.p7b")) | Set-Content profile.txt
 ```
 
-## 重要声明
+## 当前限制
 
-- 云端构建 artifact 仅用于开发测试，**不代表正式发布包**
-- 签名材料**不得提交到仓库**
-- 第一阶段只构建无签名/调试 HAP
+- 不要求编译 HAP
+- 不要求 DevEco 实测
+- 不要求真机验证
+- 仅要求仓库代码、类型、单元测试、静态检查通过
 
 ## 注意事项
 
-1. 当前阶段使用 mock 数据，不涉及真实文件系统，mock 仅供开发验证
-2. 所有业务逻辑最终由 Rust Core 处理，当前尚未接入
-3. 鸿蒙端只负责 UI 渲染和系统交互
-4. 不自行实现任何业务规则或数据校验
-5. 遵循 Core-first 架构约束
-6. 本端为 WIP 壳层，不作为正式端发布
+1. 鸿蒙端只负责 UI 渲染和系统交互
+2. 不自行实现任何业务规则或数据校验
+3. 遵循 Core-first 架构约束
+4. Mock 模式仅用于开发调试，不是默认路径
 
 ## 参考文档
 
