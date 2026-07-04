@@ -41,7 +41,7 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 - 最新路线见 [自绘编辑器与统一事件层路线](editor_engine_route.md)。
 - 编辑器路线是：Core 统一编辑事务 + 平台原生文本能力 + 必要时自绘渲染层。
 - Core `editor` 模块统一产出 `EditorTransaction`、`EditorAnimationEvent` 等平台无关语义。
-- Android 当前优先接管长按菜单、选区动作、paste/cut/copy/selectAll 行为，不立刻替换完整 EditText。
+- Android SujianEditorView 已进入自绘阶段，分层绘制，接管选区、光标与动画（保留 WriterEditText 作为 fallback）。
 - Desktop 因 Qt/QML TextArea 路线已多次踩坑，继续推进 SujianEditorItem。
 - Desktop 动画允许开启，但只能走 Core transaction + animation_events_json + QML overlay 路线：
   Core EditorTransaction / EditorAnimationEvent → SujianEditorItem.animation_events_json → QML EditorAnimationOverlay / EditorGlyphGhost。

@@ -19,6 +19,7 @@ Supersedes: docs/README.md (previous version)
 | [starmap_semantics.md](starmap_semantics.md) | 星图语义模型与独立引用安全机制 |
 | [starmap_canvas_model.md](starmap_canvas_model.md) | 星图画布模型契约（独立画布、节点、边、超链接定义） |
 | [starmap_implementation_route.md](starmap_implementation_route.md) | 星图实现路线（存储、渲染、交互、迁移） |
+| [ui_tokens.md](ui_tokens.md) | 跨端 UI Token 唯一事实来源 |
 
 ## 使用说明
 
