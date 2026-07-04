@@ -31,8 +31,15 @@ Supersedes: None
 - `editorTypingAnimationDurationMs`（整数，毫秒，范围 30..1000，步长 10）
 - `editorSmoothCursorDurationMs`（整数，毫秒，范围 30..1000，步长 10）
 - `windowWidth`、`windowHeight`（浮点数）
-- `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 false，不进入同步、不含敏感数据）
-- `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 false，不进入同步、不含敏感数据）
+- `autoIndentEnabled`（布尔值，自动首行缩进开关，默认 true）
+- `autoIndentWidth`（浮点数，首行缩进宽度字符数，默认 2.0）
+- `editorCoordinatedTextCursorAnimationEnabled`（布尔值，协同光标动画开关，默认 false）
+- `aiEnabled`（布尔值，AI 功能开关，默认 false）
+- `statsDeviceId`（字符串，统计设备 ID，默认自动生成 UUID）
+- `desktopSidebarWidth`（整数，Desktop 侧边栏宽度像素，默认 260）
+- `desktopEditorWidth`（整数，Desktop 编辑器宽度像素，默认 820）
+- `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
+- `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 
 ### `app-meta/settings/settings.sync.json`
 存储**应该**在所有设备间同步的用户偏好。

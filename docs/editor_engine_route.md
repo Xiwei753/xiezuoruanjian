@@ -39,6 +39,7 @@ Rust Core EditorTransaction
 | `apps/desktop/src/sujian_editor_item/rendering.rs` | 渲染逻辑（QImage → QSGImageNode） |
 | `apps/desktop/src/sujian_editor_item/cursor_controller.rs` | 光标控制 |
 | `apps/desktop/src/sujian_editor_item/buffer.rs` | 渲染缓冲 |
+| `apps/desktop/src/sujian_editor_item/text_animation_state.rs` | 文字动画状态管理 |
 | `apps/desktop/src/editor/layout.rs` | QTextLayout 排版封装 |
 | `apps/desktop/src/editor/renderer.rs` | 渲染器 |
 | `apps/desktop/src/editor/scene_graph.rs` | QSG 节点管理 |
