@@ -38,14 +38,25 @@ cpp! {{
         // If QInputMethodEvent arrives before the deferred callback fires,
         // the pending key is discarded (IME consumed it). Otherwise the key
         // is inserted normally (genuine non-IME input).
+        //
+        // IMPORTANT: This strategy is ONLY for Windows. On Linux/macOS,
+        // Qt/fcitx/ibus deliver InputMethodEvent correctly without the
+        // first-key leak issue. Deferring on Linux breaks symbol input,
+        // preedit, and IME commit because the event ordering differs.
         bool has_pending_key;
         QString pending_key_text;
         int pending_key_key;
         int pending_key_modifiers;
+        bool is_windows;
 
         SujianEventFilter(QObject* parent, void* item)
             : QObject(parent), rust_item(item), ime_composing(false),
-              has_pending_key(false), pending_key_key(0), pending_key_modifiers(0) {}
+              has_pending_key(false), pending_key_key(0), pending_key_modifiers(0),
+              is_windows(false) {
+            // Determine platform once at construction time
+            QString platformName = QGuiApplication::platformName();
+            is_windows = (platformName == QStringLiteral("windows"));
+        }
 
         void flush_pending_key() {
             if (!has_pending_key) return;
@@ -193,12 +204,20 @@ cpp! {{
                 }
 
                 // ── Plain text insertion (non-shortcut, non-IME) ──
-                // Deferred insertion: on Windows, QKeyEvent arrives before
-                // QInputMethodEvent for the same physical key. To prevent the
-                // first pinyin key from leaking as an English letter, we defer
-                // plain-text insertion by one event loop iteration.
-                // If QInputMethodEvent arrives first (IME consumed the key),
-                // the pending key is discarded. Otherwise it's inserted normally.
+                // Platform-branch strategy:
+                //
+                // Windows: QKeyEvent arrives BEFORE QInputMethodEvent for the same
+                // physical key. To prevent the first pinyin key from leaking as an
+                // English letter, we defer plain-text insertion by one event loop
+                // iteration. If QInputMethodEvent arrives first (IME consumed the
+                // key), the pending key is discarded. Otherwise it's inserted normally.
+                //
+                // Linux/macOS: Qt/fcitx/ibus deliver InputMethodEvent correctly
+                // without the first-key leak. Deferring on Linux breaks symbol
+                // input (space, +, -, etc.), preedit display, and IME commit
+                // because the event ordering differs from Windows. On these
+                // platforms, plain text keys are inserted immediately.
+                //
                 // Do NOT use QInputMethod::isVisible() — it's unreliable and blocks
                 // space, +, and other symbols from being inserted.
                 bool ime_active = ime_composing;
@@ -220,20 +239,32 @@ cpp! {{
                     && ke->key() != Qt::Key_PageUp
                     && ke->key() != Qt::Key_PageDown
                     && !has_pending_key) {
-                    // Defer insertion: store key data and schedule flush
-                    pending_key_text = ke->text();
-                    pending_key_key = ke->key();
-                    pending_key_modifiers = static_cast<int>(ke->modifiers());
-                    has_pending_key = true;
-                    // QueuedConnection: callback fires after current event loop
-                    // iteration, by which time QInputMethodEvent has already been
-                    // dispatched (if IME is active). If IME started composing,
-                    // has_pending_key is already false and flush is a no-op.
-                    QMetaObject::invokeMethod(this, [this]() {
-                        flush_pending_key();
-                    }, Qt::QueuedConnection);
-                    event->accept();
-                    return true;
+                    if (is_windows) {
+                        // Windows: defer insertion to prevent IME first-key leak
+                        pending_key_text = ke->text();
+                        pending_key_key = ke->key();
+                        pending_key_modifiers = static_cast<int>(ke->modifiers());
+                        has_pending_key = true;
+                        QMetaObject::invokeMethod(this, [this]() {
+                            flush_pending_key();
+                        }, Qt::QueuedConnection);
+                        event->accept();
+                        return true;
+                    } else {
+                        // Linux/macOS: insert immediately, no deferred insertion
+                        bool accepted = sujian_handle_key_and_text(
+                            rust_item,
+                            static_cast<int>(ke->key()),
+                            static_cast<int>(ke->modifiers()),
+                            reinterpret_cast<const ushort*>(ke->text().utf16()),
+                            static_cast<int>(ke->text().size())
+                        );
+                        if (accepted) {
+                            event->accept();
+                            return true;
+                        }
+                        return false;
+                    }
                 }
                 // Handle navigation, deletion, and shortcut keys (no text).
                 bool accepted = sujian_handle_key_and_text(
@@ -423,9 +454,14 @@ cpp! {{
         if (im) {
             im->update(Qt::ImEnabled);
         }
-        if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
-            qDebug("[sujian] component_complete: ItemAcceptsInputMethod=%d", item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
-        }
+        // Always log IME diagnostics on startup (not just debug mode)
+        qDebug("[sujian] install_event_filter: platform=%s, QT_QPA_PLATFORM=%s, QT_IM_MODULE=%s, "
+               "ItemAcceptsInputMethod=%d, QInputMethod=%p, is_windows=%d",
+               QGuiApplication::platformName().toUtf8().constData(),
+               qEnvironmentVariable("QT_QPA_PLATFORM"),
+               qEnvironmentVariable("QT_IM_MODULE"),
+               item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod),
+               im, filter->is_windows ? 1 : 0);
     }
 
     void sujian_focus_item(QQuickItem* item) {
@@ -437,9 +473,10 @@ cpp! {{
             im->update(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
             im->show();
         }
-        if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
-            qDebug("[sujian] focus_item: hasActiveFocus=%d", item->hasActiveFocus());
-        }
+        // Always log focus diagnostics
+        qDebug("[sujian] focus_item: hasActiveFocus=%d, ItemAcceptsInputMethod=%d",
+               item->hasActiveFocus(),
+               item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod));
     }
 }}
 
@@ -1399,5 +1436,145 @@ mod tests {
         ime_replace_and_commit(&mut host, "修正".to_string(), -2, 2);
         // Should be a single replace_and_insert call (atomic operation)
         assert_eq!(host.replace_and_insert_calls.len(), 1);
+    }
+
+    // ── Linux input regression tests ──
+    // These tests verify the Linux-specific input path where plain text
+    // is inserted immediately (no deferred insertion). On Linux/macOS,
+    // handle_key_and_text is called directly from the KeyPress event
+    // handler without the pending key deferral used on Windows.
+
+    #[test]
+    fn linux_space_inserts_immediately() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0x20, 0, " ".to_string()));
+        assert_eq!(host.inserted, vec![" "]);
+    }
+
+    #[test]
+    fn linux_plus_inserts_immediately() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "+".to_string()));
+        assert_eq!(host.inserted, vec!["+"]);
+    }
+
+    #[test]
+    fn linux_minus_inserts_immediately() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, 0, "-".to_string()));
+        assert_eq!(host.inserted, vec!["-"]);
+    }
+
+    #[test]
+    fn linux_underscore_inserts_immediately() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, SHIFT_MODIFIER, "_".to_string()));
+        assert_eq!(host.inserted, vec!["_"]);
+    }
+
+    #[test]
+    fn linux_slash_inserts_immediately() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, 0, "/".to_string()));
+        assert_eq!(host.inserted, vec!["/"]);
+    }
+
+    #[test]
+    fn linux_chinese_punctuation_inserts_immediately() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, 0, "。".to_string()));
+        assert_eq!(host.inserted, vec!["。"]);
+        let mut host2 = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host2, 0, 0, "，".to_string()));
+        assert_eq!(host2.inserted, vec!["，"]);
+        let mut host3 = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host3, 0, 0, "！".to_string()));
+        assert_eq!(host3.inserted, vec!["！"]);
+    }
+
+    #[test]
+    fn linux_ime_preedit_does_not_write_to_buffer() {
+        let mut host = FakeHost::enabled();
+        ime_preedit(&mut host, "拼音".to_string(), 3);
+        assert_eq!(host.preedit_text, "拼音");
+        assert!(host.inserted.is_empty(), "preedit must NOT insert into buffer");
+    }
+
+    #[test]
+    fn linux_ime_commit_writes_to_buffer() {
+        let mut host = FakeHost::enabled();
+        ime_commit(&mut host, "你好".to_string());
+        assert_eq!(host.inserted, vec!["你好"]);
+        assert_eq!(host.preedit_text, "");
+    }
+
+    #[test]
+    fn linux_ime_preedit_with_attrs_does_not_write_to_buffer() {
+        let mut host = FakeHost::enabled();
+        ime_preedit_with_attrs(
+            &mut host,
+            "拼".to_string(),
+            0,
+            vec![crate::sujian_editor_item::PreeditAttribute {
+                start: 0,
+                length: 3,
+                kind: crate::sujian_editor_item::PreeditAttributeKind::Underline,
+            }],
+        );
+        assert_eq!(host.preedit_text, "拼");
+        assert!(host.inserted.is_empty(), "preedit with attrs must NOT insert into buffer");
+    }
+
+    #[test]
+    fn linux_ime_commit_after_preedit_writes_to_buffer() {
+        let mut host = FakeHost::enabled();
+        ime_preedit(&mut host, "拼".to_string(), 0);
+        assert!(host.inserted.is_empty());
+        ime_commit(&mut host, "你好".to_string());
+        assert_eq!(host.inserted, vec!["你好"]);
+        assert_eq!(host.preedit_text, "");
+    }
+
+    #[test]
+    fn linux_ime_replacement_works() {
+        let mut host = FakeHost::enabled();
+        ime_replace_and_commit(&mut host, "修正".to_string(), -2, 2);
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, -2);
+        assert_eq!(*len, 2);
+        assert_eq!(text, "修正");
+    }
+
+    #[test]
+    fn linux_ime_cancel_clears_preedit() {
+        let mut host = FakeHost::enabled();
+        ime_preedit(&mut host, "拼".to_string(), 0);
+        assert_eq!(host.preedit_text, "拼");
+        ime_cancel(&mut host);
+        assert_eq!(host.preedit_text, "");
+    }
+
+    #[test]
+    fn linux_symbols_not_blocked_by_ctrl_or_alt() {
+        let mut host = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host, 0, 0, "(".to_string()));
+        assert_eq!(host.inserted, vec!["("]);
+        let mut host2 = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host2, 0, 0, ")".to_string()));
+        assert_eq!(host2.inserted, vec![")"]);
+        let mut host3 = FakeHost::enabled();
+        assert!(handle_key_and_text(&mut host3, 0, 0, "[".to_string()));
+        assert_eq!(host3.inserted, vec!["["]);
+    }
+
+    #[test]
+    fn linux_ime_commit_not_blocked_by_animation_state() {
+        // IME commit must work regardless of animation state.
+        // The Rust-side ime_commit function only checks input_enabled,
+        // not animation state. Animation is a visual concern, not a text concern.
+        let mut host = FakeHost::enabled();
+        ime_commit(&mut host, "测试".to_string());
+        assert_eq!(host.inserted, vec!["测试"]);
     }
 }

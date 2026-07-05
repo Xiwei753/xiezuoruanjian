@@ -330,7 +330,7 @@ Item {
                         maxBottom - minY,
                         clusterBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         cluster.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -351,7 +351,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -397,7 +397,7 @@ Item {
                         maxBottom - minY,
                         runBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         run.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -419,7 +419,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -465,7 +465,7 @@ Item {
                         maxBottom - minY,
                         snapBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         "",  // snapshot: no single char text needed
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -487,7 +487,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -532,7 +532,7 @@ Item {
                         maxBottom - minY,
                         clusterBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         cluster.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -554,7 +554,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -576,7 +576,7 @@ Item {
                     gr.h,
                     gr.baselineY || 0,
                     duration,
-                    editorItem.text_color || root.dt.editorText,
+                    editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                     gr.char || "",
                     editorItem.font_family || "",
                     editorItem.font_pixel_size || 0
@@ -616,7 +616,7 @@ Item {
                     rr.h,
                     rr.newBaselineY || 0,
                     duration,
-                    editorItem.text_color || root.dt.editorText,
+                    editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                     rr.char || "",
                     editorItem.font_family || "",
                     editorItem.font_pixel_size || 0
@@ -780,7 +780,7 @@ Item {
                         maxBottom - minY,
                         clusterBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         cluster.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -801,7 +801,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -845,7 +845,7 @@ Item {
                         maxBottom - minY,
                         runBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         run.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -867,7 +867,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -911,7 +911,7 @@ Item {
                         maxBottom - minY,
                         snapBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -933,7 +933,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -955,7 +955,7 @@ Item {
                     gr.h,
                     gr.baselineY || 0,
                     duration,
-                    editorItem.text_color || root.dt.editorText,
+                    editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                     gr.char || "",
                     editorItem.font_family || "",
                     editorItem.font_pixel_size || 0
@@ -1024,7 +1024,7 @@ Item {
                 gr.h,
                 gr.baselineY || 0,
                 duration,
-                editorItem.text_color || root.dt.editorText,
+                editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                 gr.char || "",
                 editorItem.font_family || "",
                 editorItem.font_pixel_size || 0
@@ -1076,7 +1076,7 @@ Item {
                 gr.h,
                 gr.baselineY || 0,
                 duration,
-                editorItem.text_color || root.dt.editorText,
+                editorItem.text_color || (root.dt ? root.dt.editorText : "#E2E2E5"),
                 gr.char || "",
                 editorItem.font_family || "",
                 editorItem.font_pixel_size || 0

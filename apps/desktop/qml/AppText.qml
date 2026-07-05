@@ -3,10 +3,11 @@ import QtQuick.Controls
 
 Text {
     id: control
-    required property var dt
+    property var dt: null
     property string variant: "primary"
 
     color: {
+        if (!dt) return "#E2E2E5"
         switch (control.variant) {
             case "secondary": return dt.textSecondary;
             case "muted": return dt.textMuted;
@@ -24,6 +25,6 @@ Text {
                 return dt.textPrimary;
         }
     }
-    font.pixelSize: dt.fontMd
+    font.pixelSize: dt ? dt.fontMd : 14
     wrapMode: Text.WordWrap
 }

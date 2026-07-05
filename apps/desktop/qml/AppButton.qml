@@ -14,22 +14,22 @@ import QtQuick.Controls
 
 Button {
     id: control
-    required property var dt
+    property var dt: null
 
-    readonly property color _primary: dt.primary
-    readonly property color _onPrimary: dt.onPrimary
-    readonly property color _secondaryContainer: dt.secondaryContainer
-    readonly property color _onSecondaryContainer: dt.onSecondaryContainer
-    readonly property color _surfaceContainerLow: dt.surfaceContainerLow
-    readonly property color _dangerContainer: dt.dangerContainer
-    readonly property color _onDangerContainer: dt.onDangerContainer
-    readonly property color _border: dt.border
-    readonly property color _textDisabled: dt.textDisabled
-    readonly property bool _isDark: dt.isDark
-    readonly property int _inputFieldRadius: dt.inputFieldRadius
-    readonly property int _label: dt.label
-    readonly property string _fontFamily: dt.fontFamily
-    readonly property int _animFast: dt.animFast
+    readonly property color _primary: dt ? dt.primary : "#6750A4"
+    readonly property color _onPrimary: dt ? dt.onPrimary : "#FFFFFF"
+    readonly property color _secondaryContainer: dt ? dt.secondaryContainer : "#E8DEF8"
+    readonly property color _onSecondaryContainer: dt ? dt.onSecondaryContainer : "#1D192B"
+    readonly property color _surfaceContainerLow: dt ? dt.surfaceContainerLow : "#F7F2FA"
+    readonly property color _dangerContainer: dt ? dt.dangerContainer : "#F9DED9"
+    readonly property color _onDangerContainer: dt ? dt.onDangerContainer : "#410E0B"
+    readonly property color _border: dt ? dt.border : "#CAC4D0"
+    readonly property color _textDisabled: dt ? dt.textDisabled : "#1D192B1F"
+    readonly property bool _isDark: dt ? dt.isDark : false
+    readonly property int _inputFieldRadius: dt ? dt.inputFieldRadius : 8
+    readonly property int _label: dt ? dt.label : 14
+    readonly property string _fontFamily: dt ? dt.fontFamily : "sans-serif"
+    readonly property int _animFast: dt ? dt.animFast : 150
 
     property string tooltip: ""
     property bool small: false

@@ -50,14 +50,14 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Install Qt 6.8.3
-        uses: jurplel/install-qt-action@v4
         id: install-qt
+        uses: jurplel/install-qt-action@v4
         with:
           version: '6.8.3'
           host: 'linux'
           target: 'desktop'
           arch: 'linux_gcc_64'
-          modules: 'qtshadertools qtimageformats'
+          modules: 'qtshadertools qtimageformats qtwaylandcompositor'
 
       - name: Install system dependencies (non-Qt)
         run: |
@@ -78,7 +78,11 @@ jobs:
             file \
             wget \
             xauth \
-            xvfb
+            xvfb \
+            libwayland-dev \
+            wayland-protocols \
+            libgl-dev \
+            libegl-dev
           wget -O linuxdeploy-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20240109-1/linuxdeploy-x86_64.AppImage
           wget -O linuxdeploy-plugin-qt-x86_64.AppImage https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/1-alpha-20240109-1/linuxdeploy-plugin-qt-x86_64.AppImage
           chmod +x linuxdeploy-x86_64.AppImage linuxdeploy-plugin-qt-x86_64.AppImage
@@ -145,6 +149,12 @@ jobs:
           fi
           mkdir -p AppDir/usr/plugins/platforminputcontexts
           cp -v "$FCITX_QT_PLUGIN" AppDir/usr/plugins/platforminputcontexts/
+          # Ensure Wayland platform plugins are available for linuxdeploy to pick up
+          # linuxdeploy-plugin-qt should auto-detect these from the Qt installation
+          echo "Qt plugin path: $QT_ROOT_DIR/plugins"
+          ls -la "$QT_ROOT_DIR/plugins/platforms/" || true
+          ls -la "$QT_ROOT_DIR/plugins/wayland/" || true
+          ls -la "$QT_ROOT_DIR/plugins/shellintegration/" || true
           OUTPUT="sujian-desktop-${{ matrix.flavor }}.AppImage" \
             QML_SOURCES_PATHS="$PWD/apps/desktop/qml" \
             EXTRA_QT_PLUGINS="platforminputcontexts/libfcitx5platforminputcontextplugin.so" \
@@ -159,10 +169,19 @@ jobs:
             echo "::error title=AppImage fcitx5 plugin missing::Qt platform input context plugin was not packaged"
             exit 1
           fi
+          # Verify critical platform plugins are packaged
+          echo "=== AppDir platform plugins ==="
+          find AppDir -name "libqxcb.so" -o -name "libqwayland*.so" -o -name "libfcitx5*.so" | head -20
+          if ! find AppDir -name "libqxcb.so" | grep -q .; then
+            echo "::warning title=AppImage missing XCB platform plugin::libqxcb.so not found in AppDir"
+          fi
 
       - name: Smoke test AppImage startup
         run: |
           set +e
+          # Set reasonable IM module fallback: wayland > fcitx > ibus
+          # Do NOT hard-override user's existing QT_IM_MODULE
+          export QT_IM_MODULES="wayland;fcitx;ibus"
           xvfb-run -a timeout 10s ./sujian-desktop-${{ matrix.flavor }}.AppImage > appimage-smoke.log 2>&1
           status=$?
           set -e
@@ -172,6 +191,12 @@ jobs:
             summary="$(grep -E "$failure_patterns" appimage-smoke.log | tr '\n' ' ' | cut -c1-800)"
             echo "::error title=AppImage smoke test failed::$summary"
             exit 1
+          fi
+          # Check IME diagnostics are present in log
+          if grep -q "sujian.*install_event_filter" appimage-smoke.log; then
+            echo "IME diagnostics found in startup log"
+          else
+            echo "::warning title=IME diagnostics missing::install_event_filter log line not found in startup output"
           fi
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
             summary="$(tr '\n' ' ' < appimage-smoke.log | cut -c1-800)"

@@ -48,7 +48,7 @@ Item {
     property int duration: 100
 
     // 颜色（默认值跟随系统主题，实际值由父组件 EditorAnimationOverlay 传入）
-    property color ghostColor: dt.editorText
+    property color ghostColor: dt ? dt.editorText : "#E2E2E5"
 
     // glyph 文字内容
     property string glyphText: ""

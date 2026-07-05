@@ -14,7 +14,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    required property var dt
+    property var dt: null
     property string title: ""
     property string subtitle: ""
     property string actionText: ""
@@ -22,27 +22,27 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        spacing: dt.sp16
+        spacing: dt ? dt.sp16 : 16
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: dt.sp6
+            spacing: dt ? dt.sp6 : 6
 
             AppText {
                 dt: root.dt
                 text: root.title
-                color: dt.onBackground
-                font.pixelSize: dt.fontTitle
-                font.family: dt.fontFamily
+                color: dt ? dt.onBackground : "#E2E2E5"
+                font.pixelSize: dt ? dt.fontTitle : 22
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 font.weight: Font.Bold
             }
 
             AppText {
                 dt: root.dt
                 text: root.subtitle
-                color: dt.textSecondary
-                font.pixelSize: dt.body
-                font.family: dt.fontFamily
+                color: dt ? dt.textSecondary : "#B0B0B0"
+                font.pixelSize: dt ? dt.body : 14
+                font.family: dt ? dt.fontFamily : "sans-serif"
                 visible: text.length > 0
             }
         }

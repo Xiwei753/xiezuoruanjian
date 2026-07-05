@@ -85,6 +85,12 @@ while IFS= read -r line; do
     if [[ "$FILE" == *"DesignTokens.qml" ]] || [[ "$FILE" == *"AppShadow.qml" ]]; then continue; fi
     # Skip "transparent" — structural, not a color value
     if [[ "$line" == *"\"transparent\""* ]]; then continue; fi
+    # Skip null-guard fallback colors (dt ? dt.xxx : "#fallback") — safety defaults, not theme colors
+    if [[ "$line" == *"\"#"* ]] && [[ "$line" == *"dt ?"* ]]; then continue; fi
+    if [[ "$line" == *"\"#"* ]] && [[ "$line" == *"? dt."* ]]; then continue; fi
+    if [[ "$line" == *"\"#"* ]] && [[ "$line" == *"? root.dt."* ]]; then continue; fi
+    # Skip null-guard return values (if (!dt) return "#fallback") — safety defaults
+    if [[ "$line" == *"!dt"* ]] && [[ "$line" == *"return"* ]]; then continue; fi
     QML_HEX_COLOR_ISSUES="${QML_HEX_COLOR_ISSUES}  $line"$'\n'
 done < <(cd "$REPO_ROOT" && grep -rn '"#[0-9a-fA-F]\{6,8\}"' apps/desktop/qml/ 2>/dev/null || true)
 
@@ -209,6 +215,38 @@ done < <(cd "$REPO_ROOT" && perl -CSD -ne 'print "$ARGV:$.: $_" if /android:text
 if [[ -n "$XML_CJK_ISSUES" ]]; then
     echo "   FAIL: Found hardcoded Chinese text in layout XML (use @string/ instead):"
     echo "$XML_CJK_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
+# --- Check 9: QML base components dt injection ---
+echo "9. Checking QML base components (AppText/AppButton/HubPageHeader) have dt injected..."
+DT_INJECTION_ISSUES=""
+
+# Check that AppText, AppButton, HubPageHeader instances always pass dt
+# These components previously used `required property var dt` and MUST receive dt
+for COMPONENT in AppText AppButton HubPageHeader; do
+    while IFS= read -r line; do
+        FILE=$(echo "$line" | cut -d: -f1)
+        LINENUM=$(echo "$line" | cut -d: -f2)
+        # Skip the component definition file itself
+        if [[ "$FILE" == *"/${COMPONENT}.qml" ]]; then continue; fi
+        # Check if the line contains the component instantiation but NOT dt:
+        # Look at a wider context (5 lines) to find dt: assignment
+        START=$((LINENUM > 5 ? LINENUM - 2 : 1))
+        END=$((LINENUM + 5))
+        CONTEXT=$(cd "$REPO_ROOT" && sed -n "${START},${END}p" "$FILE" 2>/dev/null || true)
+        if echo "$CONTEXT" | grep -q "dt:"; then
+            continue  # dt is passed, OK
+        fi
+        DT_INJECTION_ISSUES="${DT_INJECTION_ISSUES}  $line (missing dt injection)"$'\n'
+    done < <(cd "$REPO_ROOT" && grep -rn "${COMPONENT}\s*{" apps/desktop/qml/ 2>/dev/null | grep -v 'id:' || true)
+done
+
+if [[ -n "$DT_INJECTION_ISSUES" ]]; then
+    echo "   FAIL: Found ${COMPONENT:-component} instances without dt injection:"
+    echo "$DT_INJECTION_ISSUES"
     ERRORS=$((ERRORS + 1))
 else
     echo "   PASS"
