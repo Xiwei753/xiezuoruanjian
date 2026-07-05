@@ -4,8 +4,8 @@
 # =============================================================================
 #
 # 检查 Harmony 桥接链路一致性：
-#   ArkTS 调用的 nativeXXX 必须在 napi_init.cpp 注册
-#   napi_init.cpp 调用的 writer_core_xxx 必须在 writer_core_bridge.h 声明
+#   ArkTS 调用的 nativeXXX 必须在 napi_*.cpp 注册
+#   napi_*.cpp 调用的 writer_core_xxx 必须在 writer_core_bridge.h 声明
 #   writer_core_bridge.h 声明的函数必须在 Rust FFI 存在
 #
 # 用法: bash scripts/check_harmony_bridge_consistency.sh
@@ -17,7 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 HARMONY_CPP="$PROJECT_ROOT/apps/harmony/entry/src/main/cpp"
-NAPI_INIT="$HARMONY_CPP/napi_init.cpp"
+NAPI_SOURCES=("$HARMONY_CPP"/napi_*.cpp)
 BRIDGE_H="$HARMONY_CPP/writer_core_bridge.h"
 FFI_DIR="$PROJECT_ROOT/core/writer_core/src/ffi"
 
@@ -32,14 +32,17 @@ warnings=0
 echo "=== Harmony Bridge Consistency Check ==="
 echo ""
 
-# ── Step 1: Extract native function names from napi_init.cpp registration ──
-echo "Step 1: Extracting native function names from napi_init.cpp..."
+# ── Step 1: Extract native function names from napi_*.cpp registration ──
+echo "Step 1: Extracting native function names from napi_*.cpp..."
 napi_registered=()
-while IFS= read -r line; do
-    if [[ "$line" =~ \"(native[A-Za-z]+)\" ]]; then
-        napi_registered+=("${BASH_REMATCH[1]}")
-    fi
-done < "$NAPI_INIT"
+for napi_source in "${NAPI_SOURCES[@]}"; do
+    [[ -f "$napi_source" ]] || continue
+    while IFS= read -r line; do
+        if [[ "$line" =~ \"(native[A-Za-z]+)\" ]]; then
+            napi_registered+=("${BASH_REMATCH[1]}")
+        fi
+    done < "$napi_source"
+done
 
 echo "  Found ${#napi_registered[@]} registered NAPI functions"
 
@@ -70,13 +73,16 @@ echo "  Found ${#rust_exported[@]} exported Rust FFI functions"
 # ── Step 4: Check NAPI → C header consistency ──
 echo "Step 4: Checking NAPI → C header consistency..."
 
-# Extract the actual writer_core_* calls from napi_init.cpp
+# Extract the actual writer_core_* calls from all modular NAPI sources.
 napi_c_calls=()
-while IFS= read -r line; do
-    if [[ "$line" =~ writer_core_([a-z_]+)\( ]]; then
-        napi_c_calls+=("writer_core_${BASH_REMATCH[1]}")
-    fi
-done < "$NAPI_INIT"
+for napi_source in "${NAPI_SOURCES[@]}"; do
+    [[ -f "$napi_source" ]] || continue
+    while IFS= read -r line; do
+        if [[ "$line" =~ writer_core_([a-z_]+)\( ]]; then
+            napi_c_calls+=("writer_core_${BASH_REMATCH[1]}")
+        fi
+    done < "$napi_source"
+done
 
 for c_call in "${napi_c_calls[@]}"; do
     found=false
@@ -88,7 +94,7 @@ for c_call in "${napi_c_calls[@]}"; do
     done
 
     if ! $found; then
-        echo -e "  ${RED}ERROR${NC}: napi_init.cpp calls '${c_call}' but it's NOT declared in writer_core_bridge.h"
+        echo -e "  ${RED}ERROR${NC}: napi_*.cpp calls '${c_call}' but it's NOT declared in writer_core_bridge.h"
         errors=$((errors + 1))
     fi
 done
@@ -146,7 +152,7 @@ if [[ -d "$arkts_ets_dir" ]]; then
                     fi
                 done
                 if ! $found; then
-                    echo -e "  ${RED}ERROR${NC}: ${ets_file##*/} calls '${arkts_call}' but it's NOT registered in napi_init.cpp"
+                    echo -e "  ${RED}ERROR${NC}: ${ets_file##*/} calls '${arkts_call}' but it's NOT registered in napi_*.cpp"
                     errors=$((errors + 1))
                 fi
             fi

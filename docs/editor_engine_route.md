@@ -43,7 +43,7 @@ Rust Core EditorTransaction
 | `apps/desktop/src/editor/layout.rs` | QTextLayout 排版封装 |
 | `apps/desktop/src/editor/renderer.rs` | 渲染器 |
 | `apps/desktop/src/editor/scene_graph.rs` | QSG 节点管理 |
-| `apps/desktop/src/editor/input.rs` | 输入事件处理 |
+| `apps/desktop/src/editor/input/` | 输入事件处理（三层结构入口：`qt_surface.rs` / `platform_ime.rs` / `controller.rs`） |
 | `apps/desktop/qml/WritingWorkspace.qml` | 写作工作区，直接使用 SujianEditorItem |
 | `apps/desktop/qml/EditorAnimationOverlay.qml` | 动画 overlay，唯一动画主路径 |
 
