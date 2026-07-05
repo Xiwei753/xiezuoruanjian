@@ -152,6 +152,8 @@ jobs:
           fi
           mkdir -p AppDir/usr/plugins/platforminputcontexts
           cp -v "$FCITX_QT_PLUGIN" AppDir/usr/plugins/platforminputcontexts/
+          mkdir -p AppDir/usr/plugins/platforms
+          cp -v "$QT_ROOT_DIR"/plugins/platforms/libqwayland*.so AppDir/usr/plugins/platforms/
           # Ensure Wayland platform plugins are available for linuxdeploy to pick up
           # linuxdeploy-plugin-qt should auto-detect these from the Qt installation
           echo "Qt plugin path: $QT_ROOT_DIR/plugins"
