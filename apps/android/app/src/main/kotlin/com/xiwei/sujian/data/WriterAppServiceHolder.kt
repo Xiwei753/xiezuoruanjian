@@ -16,7 +16,7 @@ class WriterAppServiceHolder(workspacePath: String) {
         private const val TAG = "WriterAppServiceHolder"
     }
 
-    inline fun <T> wrapResult(block: () -> T): BridgeResult<T> {
+    fun <T> wrapResult(block: () -> T): BridgeResult<T> {
         return try {
             BridgeResult.Success(block())
         } catch (e: UnsatisfiedLinkError) {
