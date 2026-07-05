@@ -3,15 +3,10 @@ import QtQuick.Controls
 
 Text {
     id: control
-    property var dt: null
+    required property var dt
     property string variant: "primary"
 
-    Component.onCompleted: {
-        if (!dt) console.warn("[DesignTokens] AppText created without dt — caller must pass dt property")
-    }
-
     color: {
-        if (!dt) return "#E2E2E5"
         switch (control.variant) {
             case "secondary": return dt.textSecondary;
             case "muted": return dt.textMuted;
@@ -29,6 +24,6 @@ Text {
                 return dt.textPrimary;
         }
     }
-    font.pixelSize: dt ? dt.fontMd : 14
+    font.pixelSize: dt.fontMd
     wrapMode: Text.WordWrap
 }

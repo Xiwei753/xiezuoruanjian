@@ -14,11 +14,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    property var dt: null
-
-    Component.onCompleted: {
-        if (!dt) console.warn("[DesignTokens] HubPageHeader created without dt — caller must pass dt property")
-    }
+    required property var dt
 
     property string title: ""
     property string subtitle: ""
@@ -27,27 +23,27 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        spacing: dt ? dt.sp16 : 16
+        spacing: dt.sp16
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: dt ? dt.sp6 : 6
+            spacing: dt.sp6
 
             AppText {
                 dt: root.dt
                 text: root.title
-                color: dt ? dt.onBackground : "#E2E2E5"
-                font.pixelSize: dt ? dt.fontTitle : 22
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.onBackground
+                font.pixelSize: dt.fontTitle
+                font.family: dt.fontFamily
                 font.weight: Font.Bold
             }
 
             AppText {
                 dt: root.dt
                 text: root.subtitle
-                color: dt ? dt.textSecondary : "#B0B0B0"
-                font.pixelSize: dt ? dt.body : 14
-                font.family: dt ? dt.fontFamily : "sans-serif"
+                color: dt.textSecondary
+                font.pixelSize: dt.body
+                font.family: dt.fontFamily
                 visible: text.length > 0
             }
         }
