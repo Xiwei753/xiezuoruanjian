@@ -180,7 +180,11 @@ pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
 ///
 /// This is a **stateless** function that does not require `writer_core_init`.
 /// It computes animation events purely from the input parameters.
+///
+/// **Deprecated**: Use `writer_core_editor_visual_transaction` instead.
+/// Android has migrated to visual transaction; this is retained only for Desktop QML compatibility.
 #[no_mangle]
+#[allow(deprecated)]
 pub unsafe extern "C" fn writer_core_editor_animation_events(
     old_text: *const c_char,
     new_text: *const c_char,

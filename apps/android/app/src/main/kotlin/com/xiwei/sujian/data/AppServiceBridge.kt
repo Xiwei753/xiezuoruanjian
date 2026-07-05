@@ -432,28 +432,6 @@ class AppServiceBridge(workspacePath: String) {
 
     // ── Editor Animation ──
     /**
-     * Internal UniFFI adapter for EditorAnimationBridge.
-     *
-     * Keep Android on typed DTO/model flow. Desktop QML may continue to expose animation_events_json,
-     * but Android must not serialize typed DTOs to JSON and hand-parse them back.
-     */
-    internal fun editorAnimationEventDtos(
-        oldText: String,
-        newText: String,
-        oldCursorIndex: UInt,
-        newCursorIndex: UInt,
-        cause: String,
-        maxAnimatedChars: UInt,
-        animationDurationMs: ULong
-    ): BridgeResult<List<uniffi.writer_core.EditorAnimationEventDto>> = wrapResult {
-        val causeDto = causeStringToDto(cause)
-        service.editorAnimationEvents(
-            oldText, newText, oldCursorIndex, newCursorIndex,
-            causeDto, maxAnimatedChars, animationDurationMs
-        )
-    }
-
-    /**
      * Internal UniFFI adapter for EditorAnimationBridge — visual transaction API.
      *
      * Returns an EditorVisualTransactionDto if animation is warranted, or null otherwise.
