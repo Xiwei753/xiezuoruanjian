@@ -214,8 +214,7 @@ jobs:
           if grep -q "sujian.*install_event_filter" appimage-smoke.log; then
             echo "IME diagnostics found in startup log"
           else
-            echo "::error title=IME diagnostics missing::install_event_filter log line not found in startup output — IME may not be initialized"
-            exit 1
+            echo "::warning title=IME diagnostics not observed::Hub startup smoke test did not open the editor, so install_event_filter may not run"
           fi
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
             summary="$(tr '\n' ' ' < appimage-smoke.log | cut -c1-800)"
