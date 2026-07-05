@@ -119,6 +119,9 @@ jobs:
       - name: Check Harmony bridge consistency
         run: bash scripts/check_harmony_bridge_consistency.sh
 
+      - name: Check QML DesignTokens dt injection
+        run: python3 tools/check_qml_dt.py
+
       - name: Test Rust core
         run: cargo test -p writer_core ${{ matrix.features }}
 
@@ -172,8 +175,20 @@ jobs:
           # Verify critical platform plugins are packaged
           echo "=== AppDir platform plugins ==="
           find AppDir -name "libqxcb.so" -o -name "libqwayland*.so" -o -name "libfcitx5*.so" | head -20
+          # ── Fail-fast: critical plugins must exist ──
+          # Missing libqxcb.so: X11/XWayland will not work
           if ! find AppDir -name "libqxcb.so" | grep -q .; then
-            echo "::warning title=AppImage missing XCB platform plugin::libqxcb.so not found in AppDir"
+            echo "::error title=AppImage missing XCB platform plugin::libqxcb.so not found in AppDir — X11/XWayland will not work"
+            exit 1
+          fi
+          # Missing fcitx5 platform input context: fcitx5 IME will not work
+          if ! find AppDir -name "libfcitx5platforminputcontextplugin.so" | grep -q .; then
+            echo "::error title=AppImage missing fcitx5 input context plugin::libfcitx5platforminputcontextplugin.so not found in AppDir — fcitx5 IME will not work"
+            exit 1
+          fi
+          # Missing Wayland plugins: Wayland native will not work (warning, not error — XWayland fallback)
+          if ! find AppDir -name "libqwayland*.so" | grep -q .; then
+            echo "::warning title=AppImage missing Wayland platform plugins::libqwayland*.so not found in AppDir — Wayland native will not work, XWayland fallback only"
           fi
 
       - name: Smoke test AppImage startup
@@ -196,7 +211,8 @@ jobs:
           if grep -q "sujian.*install_event_filter" appimage-smoke.log; then
             echo "IME diagnostics found in startup log"
           else
-            echo "::warning title=IME diagnostics missing::install_event_filter log line not found in startup output"
+            echo "::error title=IME diagnostics missing::install_event_filter log line not found in startup output — IME may not be initialized"
+            exit 1
           fi
           if [ "$status" -ne 0 ] && [ "$status" -ne 124 ]; then
             summary="$(tr '\n' ' ' < appimage-smoke.log | cut -c1-800)"

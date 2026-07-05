@@ -35,6 +35,11 @@ Item {
 
     property var editorItem: null
     property var dt: null
+
+    Component.onCompleted: {
+        if (!dt) console.warn("[DesignTokens] EditorAnimationOverlay created without dt — caller must pass dt property")
+    }
+
     property bool animationEnabled: true
     property bool suppressed: false
 

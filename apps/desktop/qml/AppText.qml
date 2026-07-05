@@ -6,6 +6,10 @@ Text {
     property var dt: null
     property string variant: "primary"
 
+    Component.onCompleted: {
+        if (!dt) console.warn("[DesignTokens] AppText created without dt — caller must pass dt property")
+    }
+
     color: {
         if (!dt) return "#E2E2E5"
         switch (control.variant) {

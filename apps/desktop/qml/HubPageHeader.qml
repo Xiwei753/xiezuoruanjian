@@ -15,6 +15,11 @@ import QtQuick.Layouts
 Item {
     id: root
     property var dt: null
+
+    Component.onCompleted: {
+        if (!dt) console.warn("[DesignTokens] HubPageHeader created without dt — caller must pass dt property")
+    }
+
     property string title: ""
     property string subtitle: ""
     property string actionText: ""

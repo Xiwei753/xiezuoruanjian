@@ -16,6 +16,10 @@ Button {
     id: control
     property var dt: null
 
+    Component.onCompleted: {
+        if (!dt) console.warn("[DesignTokens] AppButton created without dt — caller must pass dt property")
+    }
+
     readonly property color _primary: dt ? dt.primary : "#6750A4"
     readonly property color _onPrimary: dt ? dt.onPrimary : "#FFFFFF"
     readonly property color _secondaryContainer: dt ? dt.secondaryContainer : "#E8DEF8"
