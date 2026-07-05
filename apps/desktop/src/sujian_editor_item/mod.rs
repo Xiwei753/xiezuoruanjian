@@ -72,6 +72,7 @@ cpp! {{
     #include <QtGui/QPainter>
     #include <QtGui/QClipboard>
     #include <QGuiApplication>
+    #include <QMetaMethod>
     #include <QMetaObject>
 }}
 
@@ -955,6 +956,29 @@ impl SujianEditorItem {
 
     fn preedit_visual_transaction_json(&self) -> QString {
         self.last_preedit_visual_transaction_json.clone()
+    }
+
+    #[cfg(test)]
+    fn debug_meta_object_animation_signals(&self) -> QString {
+        let obj = self.get_cpp_object();
+        if obj.is_null() {
+            return "<null>".into();
+        }
+        cpp!(unsafe [obj as "QObject*"] -> QString as "QString" {
+            const QMetaObject* meta = obj->metaObject();
+            QStringList signal_list;
+            for (int i = 0; meta && i < meta->methodCount(); ++i) {
+                QMetaMethod method = meta->method(i);
+                if (method.methodType() != QMetaMethod::Signal) continue;
+                const QByteArray sig = method.methodSignature();
+                if (sig.contains("visual") || sig.contains("transaction") || sig.contains("explicit_clear")) {
+                    signal_list << QString::fromLatin1(sig);
+                }
+            }
+            return QStringLiteral("class=%1 signals=%2")
+                .arg(meta ? QString::fromLatin1(meta->className()) : QStringLiteral("<null>"))
+                .arg(signal_list.join(QStringLiteral(",")));
+        })
     }
 
     fn cursor_rect_x(&self) -> f32 {
@@ -2966,6 +2990,22 @@ impl SujianEditorItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meta_object_dump_contains_animation_signals() {
+        let item_box = QObjectBox::new(SujianEditorItem::default());
+        item_box.pinned().get_or_create_cpp_object();
+        let dump = {
+            let pinned = item_box.pinned();
+            let item = pinned.borrow();
+            item.debug_meta_object_animation_signals().to_string()
+        };
+        eprintln!("[sujian-test] SujianEditorItem metaObject animation signals: {dump}");
+        assert!(dump.contains("visual_transaction_changed"), "missing visual_transaction_changed in {dump}");
+        assert!(dump.contains("preedit_visual_transaction_changed"), "missing preedit_visual_transaction_changed in {dump}");
+        assert!(dump.contains("transaction_created"), "missing transaction_created in {dump}");
+        assert!(dump.contains("explicit_clear_requested"), "missing explicit_clear_requested in {dump}");
+    }
 
     #[test]
     fn test_is_complex_grapheme_emoji() {

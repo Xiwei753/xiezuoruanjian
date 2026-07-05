@@ -155,6 +155,22 @@ else
     QT_VERSION_DETECTED="unknown"
 fi
 
+
+print_desktop_runtime_profile() {
+    local label="$1"
+    local qml_import_path="${QML2_IMPORT_PATH:-${QML_IMPORT_PATH:-<unset>}}"
+    local qt_plugin_path="${QT_PLUGIN_PATH:-<unset>}"
+    local platform_name="${QT_QPA_PLATFORM:-$( [ -n "${WAYLAND_DISPLAY:-}" ] && echo wayland || echo xcb )}"
+    local input_method_module="${QT_IM_MODULE:-${QT_IM_MODULES:-<unset>}}"
+    local bundled_qt="false"
+    local runtime_profile="linux-debug"
+    if [ -n "${APPIMAGE:-}" ]; then
+        bundled_qt="true"
+        runtime_profile="linux-appimage"
+    fi
+    echo "[$label] DesktopRuntimeProfile runtimeProfile=$runtime_profile qtRuntimeVersion=${QT_VERSION_DETECTED:-unknown} qtBuildVersion=${QT_VERSION_DETECTED:-unknown} qmlEntry=qrc:/main.qml qmlImportPath=$qml_import_path qtPluginPath=$qt_plugin_path qrcRevision=${SUJIAN_QRC_REVISION:-package:qml_resources_v1} platformName=$platform_name inputMethodModule=$input_method_module bundledQt=$bundled_qt"
+}
+
 # Determine Qt6 QML/plugin paths
 if [ -d "/run/host/usr/lib64/qt6/qml" ]; then
     prepend_path_var QML2_IMPORT_PATH "/run/host/usr/lib64/qt6/qml"
@@ -232,6 +248,7 @@ echo "QT_INCLUDE_PATH: ${QT_INCLUDE_PATH:-}"
 echo "QT_LIBRARY_PATH: ${QT_LIBRARY_PATH:-}"
 echo "QML2_IMPORT_PATH: ${QML2_IMPORT_PATH:-}"
 echo "QT_PLUGIN_PATH: ${QT_PLUGIN_PATH:-}"
+print_desktop_runtime_profile "start-debug"
 echo "QtQuick.Window qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing ) )"
 echo "QtQuick Controls qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing ) )"
 echo "Log file path: $LOG_FILE"

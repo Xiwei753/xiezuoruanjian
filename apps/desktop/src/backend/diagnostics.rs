@@ -698,7 +698,25 @@ mod tests {
     }
 
     #[test]
+    fn test_export_diagnostics_pack_returns_zip_path_and_export_dir() {
+        let workspace = tempdir().unwrap();
+        let log_dir = tempdir().unwrap();
+        fs::write(log_dir.path().join("sujian-current.log"), "safe log line\n").unwrap();
+
+        let zip_path = export_diagnostics_pack(workspace.path(), log_dir.path()).unwrap();
+        assert!(zip_path.exists(), "zip should exist: {}", zip_path.display());
+        assert_eq!(zip_path.extension().and_then(|e| e.to_str()), Some("zip"));
+        let export_dir = zip_path.parent().expect("zip has parent export dir");
+        assert!(export_dir.ends_with("app-meta/diagnostics"), "unexpected export dir: {}", export_dir.display());
+    }
+
+    #[test]
     fn test_append_log_line() {
+        let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
+        let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
+        DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(true, Ordering::Relaxed);
+
         let dir = tempdir().unwrap();
         let log_dir = dir.path();
 
@@ -708,6 +726,9 @@ mod tests {
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("Test log message"));
+
+        DIAGNOSTICS_ENABLED.store(prev_enabled, Ordering::Relaxed);
+        VERBOSE_ENABLED.store(prev_verbose, Ordering::Relaxed);
     }
 
     #[test]

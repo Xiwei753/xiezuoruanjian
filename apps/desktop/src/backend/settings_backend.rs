@@ -290,19 +290,35 @@ impl SettingsBackend {
             ) {
                 Ok(path) => {
                     let path_str = path.to_string_lossy().to_string();
+                    let export_dir = path
+                        .parent()
+                        .map(|p| p.to_path_buf())
+                        .unwrap_or_else(|| std::path::PathBuf::from(""));
+                    let export_dir_str = export_dir.to_string_lossy().to_string();
                     // Construct file:// URL for QML consumption.
                     // On Windows, convert backslashes to forward slashes for URL.
-                    let url_path = path_str.replace('\\', "/");
-                    let file_url = if url_path.starts_with('/') {
-                        format!("file://{}", url_path)
+                    let dir_url_path = export_dir_str.replace('\\', "/");
+                    let export_dir_url = if dir_url_path.starts_with('/') {
+                        format!("file://{}", dir_url_path)
                     } else {
-                        format!("file:///{}", url_path)
+                        format!("file:///{}", dir_url_path)
+                    };
+                    let open_result = if !export_dir.as_os_str().is_empty() {
+                        crate::platform_utils::open_directory(&export_dir_str)
+                    } else {
+                        Err("导出目录为空".to_string())
                     };
                     let envelope = serde_json::json!({
                         "success": true,
                         "path": path_str,
                         "nativePath": path_str,
-                        "fileUrl": file_url
+                        "zipPath": path_str,
+                        "nativeZipPath": path_str,
+                        "exportDir": export_dir_str,
+                        "nativeExportDir": export_dir_str,
+                        "exportDirUrl": export_dir_url,
+                        "openedExportDir": open_result.is_ok(),
+                        "openExportDirError": open_result.err()
                     });
                     envelope.to_string().into()
                 }

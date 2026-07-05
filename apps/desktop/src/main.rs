@@ -456,50 +456,84 @@ fn log_input_method_diagnostics() {
     }
 }
 
-fn log_desktop_runtime_profile(qt_version: &str, qml_entry: &str) {
-    let runtime_profile = if cfg!(target_os = "linux") {
-        if std::env::var_os("APPIMAGE").is_some() {
-            "linux-appimage-bundled-qt"
-        } else {
-            "linux-debug-host-qt"
-        }
-    } else if cfg!(target_os = "windows") {
-        if std::env::var_os("SUJIAN_PACKAGED").is_some() {
-            "windows-packaged"
-        } else {
-            "windows-debug"
-        }
-    } else if cfg!(target_os = "macos") {
-        "macos-debug"
-    } else {
-        "unknown"
-    };
-    let session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "<unset>".to_string());
-    let input_method_module = std::env::var("QT_IM_MODULE").unwrap_or_else(|_| "<unset>".to_string());
-    let qt_plugin_path = std::env::var("QT_PLUGIN_PATH").unwrap_or_else(|_| "<unset>".to_string());
-    let qml_import_path = std::env::var("QML2_IMPORT_PATH")
-        .or_else(|_| std::env::var("QML_IMPORT_PATH"))
-        .unwrap_or_else(|_| "<unset>".to_string());
-    let using_bundled_qt = runtime_profile.contains("appimage") || runtime_profile.contains("packaged");
+const QRC_RESOURCE_REVISION: &str = concat!(env!("CARGO_PKG_VERSION"), ":qml_resources_v1");
 
-    let summary = format!(
-        "runtimeProfile={} qtRuntimeVersion={} qtBuildVersion={} qmlEntry={} qmlResourceRevision={} qtPluginPath={} qmlImportPath={} platformName={} sessionType={} inputMethodModule={} usingBundledQt={}",
-        runtime_profile,
-        qt_version,
-        qt_build_version(),
-        qml_entry,
-        env!("CARGO_PKG_VERSION"),
-        qt_plugin_path,
-        qml_import_path,
-        std::env::consts::OS,
-        session_type,
-        input_method_module,
-        using_bundled_qt
-    );
+struct DesktopRuntimeProfile {
+    runtime_profile: String,
+    qt_runtime_version: String,
+    qt_build_version: String,
+    qml_entry: String,
+    qml_import_path: String,
+    qt_plugin_path: String,
+    qrc_revision: String,
+    platform_name: String,
+    input_method_module: String,
+    bundled_qt: bool,
+}
+
+impl DesktopRuntimeProfile {
+    fn collect(qt_version: &str, qml_entry: &str) -> Self {
+        let appimage = std::env::var_os("APPIMAGE").is_some();
+        let packaged = std::env::var_os("SUJIAN_PACKAGED").is_some();
+        let bundled_qt = appimage || packaged;
+        let runtime_profile = if cfg!(target_os = "linux") {
+            if appimage { "linux-appimage" } else { "linux-debug" }
+        } else if cfg!(target_os = "windows") {
+            if packaged { "windows-packaged" } else { "windows-debug" }
+        } else if cfg!(target_os = "macos") {
+            if packaged { "macos-packaged" } else { "macos-debug" }
+        } else {
+            "unknown"
+        };
+        let qt_plugin_path = std::env::var("QT_PLUGIN_PATH").unwrap_or_else(|_| "<unset>".to_string());
+        let qml_import_path = std::env::var("QML2_IMPORT_PATH")
+            .or_else(|_| std::env::var("QML_IMPORT_PATH"))
+            .unwrap_or_else(|_| "<unset>".to_string());
+        let platform_name = cpp!(unsafe [] -> QString as "QString" {
+            return QGuiApplication::platformName();
+        })
+        .to_string();
+        let input_method_module = std::env::var("QT_IM_MODULE")
+            .or_else(|_| std::env::var("QT_IM_MODULES"))
+            .unwrap_or_else(|_| "<unset>".to_string());
+
+        Self {
+            runtime_profile: runtime_profile.to_string(),
+            qt_runtime_version: qt_version.to_string(),
+            qt_build_version: qt_build_version(),
+            qml_entry: qml_entry.to_string(),
+            qml_import_path,
+            qt_plugin_path,
+            qrc_revision: QRC_RESOURCE_REVISION.to_string(),
+            platform_name,
+            input_method_module,
+            bundled_qt,
+        }
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "runtimeProfile={} qtRuntimeVersion={} qtBuildVersion={} qmlEntry={} qmlImportPath={} qtPluginPath={} qrcRevision={} platformName={} inputMethodModule={} bundledQt={}",
+            self.runtime_profile,
+            self.qt_runtime_version,
+            self.qt_build_version,
+            self.qml_entry,
+            self.qml_import_path,
+            self.qt_plugin_path,
+            self.qrc_revision,
+            self.platform_name,
+            self.input_method_module,
+            self.bundled_qt
+        )
+    }
+}
+
+fn log_desktop_runtime_profile(qt_version: &str, qml_entry: &str) {
+    let profile = DesktopRuntimeProfile::collect(qt_version, qml_entry);
+    let summary = profile.summary();
     debug_log_static("app", "desktop_runtime_profile", &summary);
     diagnostics::log_to_file("INFO", "app", "desktop_runtime_profile", &summary);
 }
-
 fn install_translator() {
     // Install QTranslator for i18n support.
     // Loads the compiled .qm file from the embedded qrc resource.

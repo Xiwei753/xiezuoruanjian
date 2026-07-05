@@ -20,6 +20,7 @@
 pub mod events;
 pub mod controller;
 pub mod platform_ime;
+pub mod platform;
 pub mod qt_surface;
 
 pub(crate) use events::*;

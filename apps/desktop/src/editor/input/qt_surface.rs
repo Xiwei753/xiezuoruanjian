@@ -24,6 +24,7 @@ cpp! {{
     #include <QDebug>
     #include <QtGui/QInputMethod>
     #include <QGuiApplication>
+    #include <QMetaMethod>
 
     extern "C" bool sujian_handle_key_and_text(void* rust_item, int key, int modifiers, const ushort* text, int text_len);
     extern "C" void sujian_ime_commit(void* rust_item, const ushort* text, int text_len);
@@ -33,77 +34,10 @@ cpp! {{
     extern "C" void sujian_ime_cancel(void* rust_item);
     extern "C" void sujian_request_repaint(void* rust_item);
 
-    // ═══════════════════════════════════════════════════════════════════════
-    // Layer 2: PlatformImeAdapter — 平台分支点
-    //
-    // Windows: pending key deferred insertion 防首字母泄漏
-    // Linux/macOS: 直接插入，不延迟，按 Qt inputMethodEvent 语义
-    // ═══════════════════════════════════════════════════════════════════════
-
-    enum class PlatformKind { Windows, Linux, Mac };
-
-    class PlatformImeAdapter {
-    public:
-        PlatformKind platform;
-        bool ime_composing;
-
-        // ── Windows-only: pending key deferred insertion ──
-        // On Windows, QKeyEvent arrives BEFORE QInputMethodEvent for the same
-        // physical key press. If we insert the key text immediately, the first
-        // pinyin key (e.g. 'n') leaks into the document as an English letter.
-        // Solution: defer plain-text insertion by one event loop iteration.
-        // If QInputMethodEvent arrives before the deferred callback fires,
-        // the pending key is discarded (IME consumed it). Otherwise the key
-        // is inserted normally (genuine non-IME input).
-        //
-        // IMPORTANT: This strategy is ONLY for Windows. On Linux/macOS,
-        // Qt/fcitx/ibus deliver InputMethodEvent correctly without the
-        // first-key leak issue. Deferring on Linux breaks symbol input,
-        // preedit, and IME commit because the event ordering differs.
-        bool has_pending_key;
-        QString pending_key_text;
-        int pending_key_key;
-        int pending_key_modifiers;
-
-        PlatformImeAdapter()
-            : platform(PlatformKind::Linux), ime_composing(false),
-              has_pending_key(false), pending_key_key(0), pending_key_modifiers(0) {}
-
-        void detect_platform() {
-            QString platformName = QGuiApplication::platformName();
-            if (platformName == QStringLiteral("windows")) {
-                platform = PlatformKind::Windows;
-            } else if (platformName == QStringLiteral("cocoa")) {
-                platform = PlatformKind::Mac;
-            } else {
-                platform = PlatformKind::Linux;
-            }
-        }
-
-        bool is_windows() const { return platform == PlatformKind::Windows; }
-        bool is_linux() const { return platform == PlatformKind::Linux; }
-        bool is_mac() const { return platform == PlatformKind::Mac; }
-
-        void discard_pending_key() { has_pending_key = false; }
-
-        void flush_pending_key(void* rust_item) {
-            if (!has_pending_key) return;
-            has_pending_key = false;
-            if (pending_key_text.isEmpty()) return;
-            sujian_handle_key_and_text(
-                rust_item, pending_key_key, pending_key_modifiers,
-                reinterpret_cast<const ushort*>(pending_key_text.utf16()),
-                static_cast<int>(pending_key_text.size())
-            );
-        }
-
-        void defer_key(int key, int modifiers, const QString& text) {
-            pending_key_text = text;
-            pending_key_key = key;
-            pending_key_modifiers = modifiers;
-            has_pending_key = true;
-        }
-    };
+    // PlatformImeAdapter is defined by cfg-selected modules under
+    // editor/input/platform/{linux,windows}/input_surface.rs.  Keep this
+    // file as QtInputSurface only so platform IME policy cannot drift back
+    // into the mixed Qt surface layer.
 
     // ═══════════════════════════════════════════════════════════════════════
     // Layer 1: QtInputSurface (SujianEventFilter)
@@ -220,7 +154,7 @@ cpp! {{
                 && ke->key() != Qt::Key_End
                 && ke->key() != Qt::Key_PageUp
                 && ke->key() != Qt::Key_PageDown
-                && !ime_adapter.has_pending_key;
+                && ime_adapter.can_accept_plain_text_key();
         }
 
         bool try_shortcut(QKeyEvent* ke) {
@@ -265,7 +199,7 @@ cpp! {{
             if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
                 qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld, platform=%s",
                        static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()),
-                       ime_adapter.is_windows() ? "windows" : (ime_adapter.is_mac() ? "mac" : "linux"));
+                       ime_adapter.platform_name());
             }
             if (!commit.isEmpty()) {
                 ime_adapter.discard_pending_key();
@@ -404,8 +338,19 @@ cpp! {{
         if (im) {
             im->update(Qt::ImEnabled);
         }
-        const char* platform_str = filter->ime_adapter.is_windows() ? "windows"
-                                 : filter->ime_adapter.is_mac() ? "mac" : "linux";
+        const char* platform_str = filter->ime_adapter.platform_name();
+        const QMetaObject* meta = item->metaObject();
+        QStringList animation_signals;
+        if (meta) {
+            for (int i = 0; i < meta->methodCount(); ++i) {
+                QMetaMethod method = meta->method(i);
+                if (method.methodType() != QMetaMethod::Signal) continue;
+                const QByteArray sig = method.methodSignature();
+                if (sig.contains("visual") || sig.contains("transaction") || sig.contains("explicit_clear")) {
+                    animation_signals << QString::fromLatin1(sig);
+                }
+            }
+        }
         QByteArray qpa_platform = qEnvironmentVariable("QT_QPA_PLATFORM").toUtf8();
         QByteArray qt_im_module = qEnvironmentVariable("QT_IM_MODULE").toUtf8();
         QByteArray qt_im_modules = qEnvironmentVariable("QT_IM_MODULES").toUtf8();
@@ -421,6 +366,9 @@ cpp! {{
                item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod),
                im,
                item->hasActiveFocus());
+        qDebug("[sujian] SujianEditorItem metaObject animation signals: class=%s signals=%s",
+               meta ? meta->className() : "<null>",
+               animation_signals.join(QStringLiteral(",")).toUtf8().constData());
     }
 
     void sujian_focus_item(QQuickItem* item) {
