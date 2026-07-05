@@ -14,7 +14,9 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    required property var dt
+
+    DesignTokens { id: fallbackDt }
+    property var dt: fallbackDt
 
     property string title: ""
     property string subtitle: ""
