@@ -62,3 +62,6 @@ jobs:
 
       - name: Run i18n check script tests
         run: python3 tools/test_check_i18n.py
+
+      - name: Check HarmonyOS native bridge consistency
+        run: python3 tools/check_harmony_native_bridge.py

@@ -181,7 +181,7 @@ IWriterCoreBridge 定义了完整的接口：
 - DevEco Studio 5.0+
 - HarmonyOS NEXT SDK
 - Node.js 16+
-- 预编译 `libwriter_core_ffi.so` 放置于 `entry/src/main/cpp/libs/prebuilt/${OHOS_ARCH}/`
+- 预编译 `libwriter_core_ffi.so` 放置于 `entry/src/main/prebuilt/${OHOS_ARCH}/`
 
 ### 构建步骤
 1. 使用 DevEco Studio 打开 `apps/harmony/` 目录
