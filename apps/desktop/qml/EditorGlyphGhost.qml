@@ -26,8 +26,10 @@ Item {
     // 动画类型
     property string animKind: "insert"  // "insert", "delete", or "reflow"
 
-    // DesignTokens 引用（由父组件传入或设置）
+    // DesignTokens 引用（由父组件传入或设置），漏传时使用本地 fallback，避免动态 ghost 组件运行时读 null
     property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
 
     // 起始位置（insert: 光标位置; delete: glyph 位置）
     property real startX: 0
@@ -48,7 +50,7 @@ Item {
     property int duration: 100
 
     // 颜色（默认值跟随系统主题，实际值由父组件 EditorAnimationOverlay 传入）
-    property color ghostColor: dt ? dt.editorText : palette.text
+    property color ghostColor: resolvedDt.editorText
 
     // glyph 文字内容
     property string glyphText: ""

@@ -3,27 +3,29 @@ import QtQuick.Controls
 
 Text {
     id: control
-    required property var dt
+    property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
     property string variant: "primary"
 
     color: {
         switch (control.variant) {
-            case "secondary": return dt.textSecondary;
-            case "muted": return dt.textMuted;
-            case "disabled": return dt.textDisabled;
-            case "onPrimary": return dt.onPrimary;
-            case "selected": return dt.selectedText;
-            case "onSurface": return dt.onSurface;
-            case "onSurfaceVariant": return dt.onSurfaceVariant;
-            case "onPrimaryContainer": return dt.onPrimaryContainer;
-            case "onSecondaryContainer": return dt.onSecondaryContainer;
-            case "onError": return dt.onError;
-            case "onDangerContainer": return dt.onDangerContainer;
+            case "secondary": return resolvedDt.textSecondary;
+            case "muted": return resolvedDt.textMuted;
+            case "disabled": return resolvedDt.textDisabled;
+            case "onPrimary": return resolvedDt.onPrimary;
+            case "selected": return resolvedDt.selectedText;
+            case "onSurface": return resolvedDt.onSurface;
+            case "onSurfaceVariant": return resolvedDt.onSurfaceVariant;
+            case "onPrimaryContainer": return resolvedDt.onPrimaryContainer;
+            case "onSecondaryContainer": return resolvedDt.onSecondaryContainer;
+            case "onError": return resolvedDt.onError;
+            case "onDangerContainer": return resolvedDt.onDangerContainer;
             case "primary":
             default:
-                return dt.textPrimary;
+                return resolvedDt.textPrimary;
         }
     }
-    font.pixelSize: dt.fontMd
+    font.pixelSize: resolvedDt.fontMd
     wrapMode: Text.WordWrap
 }

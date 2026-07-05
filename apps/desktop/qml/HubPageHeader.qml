@@ -15,8 +15,9 @@ import QtQuick.Layouts
 Item {
     id: root
 
+    property var dt: null
     DesignTokens { id: fallbackDt }
-    property var dt: fallbackDt
+    readonly property var resolvedDt: dt || fallbackDt
 
     property string title: ""
     property string subtitle: ""
@@ -25,27 +26,27 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        spacing: dt.sp16
+        spacing: root.resolvedDt.sp16
 
         ColumnLayout {
             Layout.fillWidth: true
-            spacing: dt.sp6
+            spacing: root.resolvedDt.sp6
 
             AppText {
-                dt: root.dt
+                dt: root.resolvedDt
                 text: root.title
-                color: dt.onBackground
-                font.pixelSize: dt.fontTitle
-                font.family: dt.fontFamily
+                color: root.resolvedDt.onBackground
+                font.pixelSize: root.resolvedDt.fontTitle
+                font.family: root.resolvedDt.fontFamily
                 font.weight: Font.Bold
             }
 
             AppText {
-                dt: root.dt
+                dt: root.resolvedDt
                 text: root.subtitle
-                color: dt.textSecondary
-                font.pixelSize: dt.body
-                font.family: dt.fontFamily
+                color: root.resolvedDt.textSecondary
+                font.pixelSize: root.resolvedDt.body
+                font.family: root.resolvedDt.fontFamily
                 visible: text.length > 0
             }
         }
@@ -53,7 +54,7 @@ Item {
         AppButton {
             visible: root.actionText.length > 0
             text: root.actionText
-            dt: root.dt
+            dt: root.resolvedDt
             variant: "primary"
             onClicked: root.actionClicked()
         }

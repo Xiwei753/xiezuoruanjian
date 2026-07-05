@@ -14,22 +14,24 @@ import QtQuick.Controls
 
 Button {
     id: control
-    required property var dt
+    property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
 
-    readonly property color _primary: dt.primary
-    readonly property color _onPrimary: dt.onPrimary
-    readonly property color _secondaryContainer: dt.secondaryContainer
-    readonly property color _onSecondaryContainer: dt.onSecondaryContainer
-    readonly property color _surfaceContainerLow: dt.surfaceContainerLow
-    readonly property color _dangerContainer: dt.dangerContainer
-    readonly property color _onDangerContainer: dt.onDangerContainer
-    readonly property color _border: dt.border
-    readonly property color _textDisabled: dt.textDisabled
-    readonly property bool _isDark: dt.isDark
-    readonly property int _inputFieldRadius: dt.inputFieldRadius
-    readonly property int _label: dt.label
-    readonly property string _fontFamily: dt.fontFamily
-    readonly property int _animFast: dt.animFast
+    readonly property color _primary: resolvedDt.primary
+    readonly property color _onPrimary: resolvedDt.onPrimary
+    readonly property color _secondaryContainer: resolvedDt.secondaryContainer
+    readonly property color _onSecondaryContainer: resolvedDt.onSecondaryContainer
+    readonly property color _surfaceContainerLow: resolvedDt.surfaceContainerLow
+    readonly property color _dangerContainer: resolvedDt.dangerContainer
+    readonly property color _onDangerContainer: resolvedDt.onDangerContainer
+    readonly property color _border: resolvedDt.border
+    readonly property color _textDisabled: resolvedDt.textDisabled
+    readonly property bool _isDark: resolvedDt.isDark
+    readonly property int _inputFieldRadius: resolvedDt.inputFieldRadius
+    readonly property int _label: resolvedDt.label
+    readonly property string _fontFamily: resolvedDt.fontFamily
+    readonly property int _animFast: resolvedDt.animFast
 
     property string tooltip: ""
     property bool small: false
@@ -63,7 +65,7 @@ Button {
     TextMetrics { id: tm; text: control.text; font.pixelSize: _label }
 
     contentItem: AppText {
-        dt: control.dt
+        dt: control.resolvedDt
         text: control.text
         color: control.contentColor
         font.pixelSize: _label

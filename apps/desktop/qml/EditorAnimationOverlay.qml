@@ -34,7 +34,9 @@ Item {
     id: root
 
     property var editorItem: null
-    required property var dt
+    property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
 
     property bool animationEnabled: true
     property bool suppressed: false
@@ -97,13 +99,14 @@ Item {
             "ghostColor": ghostColor,
             "glyphText": glyphText,
             "glyphFontFamily": glyphFontFamily,
-            "glyphFontPixelSize": glyphFontPixelSize
+            "glyphFontPixelSize": glyphFontPixelSize,
+            "dt": root.resolvedDt
         })
     }
 
     Connections {
         target: editorItem
-        function onVisualTransactionChanged() {
+        function onVisual_transaction_changed() {
             var jsonStr = editorItem.visual_transaction_json
             if (!jsonStr || jsonStr === "{}") {
                 root._log("skipped: jsonStr empty or {}")
@@ -134,7 +137,7 @@ Item {
             root._handleTransaction(vt)
         }
 
-        function onPreeditVisualTransactionChanged() {
+        function onPreedit_visual_transaction_changed() {
             if (!root.animationEnabled || root.suppressed) return
             var jsonStr = editorItem.preedit_visual_transaction_json
             if (!jsonStr || jsonStr === "{}") return
@@ -331,7 +334,7 @@ Item {
                         maxBottom - minY,
                         clusterBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         cluster.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -352,7 +355,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -398,7 +401,7 @@ Item {
                         maxBottom - minY,
                         runBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         run.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -420,7 +423,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -466,7 +469,7 @@ Item {
                         maxBottom - minY,
                         snapBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         "",  // snapshot: no single char text needed
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -488,7 +491,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -533,7 +536,7 @@ Item {
                         maxBottom - minY,
                         clusterBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         cluster.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -555,7 +558,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -577,7 +580,7 @@ Item {
                     gr.h,
                     gr.baselineY || 0,
                     duration,
-                    editorItem.text_color || root.dt.editorText,
+                    editorItem.text_color || root.resolvedDt.editorText,
                     gr.char || "",
                     editorItem.font_family || "",
                     editorItem.font_pixel_size || 0
@@ -617,7 +620,7 @@ Item {
                     rr.h,
                     rr.newBaselineY || 0,
                     duration,
-                    editorItem.text_color || root.dt.editorText,
+                    editorItem.text_color || root.resolvedDt.editorText,
                     rr.char || "",
                     editorItem.font_family || "",
                     editorItem.font_pixel_size || 0
@@ -781,7 +784,7 @@ Item {
                         maxBottom - minY,
                         clusterBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         cluster.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -802,7 +805,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -846,7 +849,7 @@ Item {
                         maxBottom - minY,
                         runBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         run.text || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -868,7 +871,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -912,7 +915,7 @@ Item {
                         maxBottom - minY,
                         snapBaselineY,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -934,7 +937,7 @@ Item {
                         gr.h,
                         gr.baselineY || 0,
                         duration,
-                        editorItem.text_color || root.dt.editorText,
+                        editorItem.text_color || root.resolvedDt.editorText,
                         gr.char || "",
                         editorItem.font_family || "",
                         editorItem.font_pixel_size || 0
@@ -956,7 +959,7 @@ Item {
                     gr.h,
                     gr.baselineY || 0,
                     duration,
-                    editorItem.text_color || root.dt.editorText,
+                    editorItem.text_color || root.resolvedDt.editorText,
                     gr.char || "",
                     editorItem.font_family || "",
                     editorItem.font_pixel_size || 0
@@ -1025,7 +1028,7 @@ Item {
                 gr.h,
                 gr.baselineY || 0,
                 duration,
-                editorItem.text_color || root.dt.editorText,
+                editorItem.text_color || root.resolvedDt.editorText,
                 gr.char || "",
                 editorItem.font_family || "",
                 editorItem.font_pixel_size || 0
@@ -1077,7 +1080,7 @@ Item {
                 gr.h,
                 gr.baselineY || 0,
                 duration,
-                editorItem.text_color || root.dt.editorText,
+                editorItem.text_color || root.resolvedDt.editorText,
                 gr.char || "",
                 editorItem.font_family || "",
                 editorItem.font_pixel_size || 0

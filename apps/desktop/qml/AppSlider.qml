@@ -16,19 +16,21 @@ import QtQuick.Layouts
 Item {
     id: root
     property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
 
-    readonly property color _primary: dt.primary
-    readonly property color _border: dt.border
-    readonly property color _surfaceVariant: dt.surfaceVariant
-    readonly property color _surface: dt.surface
-    readonly property color _accentHover: dt.accentHover
-    readonly property color _textPrimary: dt.textPrimary
-    readonly property color _textSecondary: dt.textSecondary
-    readonly property int _sp6: dt.sp6
-    readonly property int _sp12: dt.sp12
-    readonly property int _body: dt.body
-    readonly property int _caption: dt.caption
-    readonly property string _fontFamily: dt.fontFamily
+    readonly property color _primary: resolvedDt.primary
+    readonly property color _border: resolvedDt.border
+    readonly property color _surfaceVariant: resolvedDt.surfaceVariant
+    readonly property color _surface: resolvedDt.surface
+    readonly property color _accentHover: resolvedDt.accentHover
+    readonly property color _textPrimary: resolvedDt.textPrimary
+    readonly property color _textSecondary: resolvedDt.textSecondary
+    readonly property int _sp6: resolvedDt.sp6
+    readonly property int _sp12: resolvedDt.sp12
+    readonly property int _body: resolvedDt.body
+    readonly property int _caption: resolvedDt.caption
+    readonly property string _fontFamily: resolvedDt.fontFamily
 
     property string label: ""
     property string valueText: ""
@@ -55,7 +57,7 @@ Item {
             spacing: _sp12
 
             AppText {
-                dt: root.dt
+                dt: root.resolvedDt
                 Layout.fillWidth: true
                 text: root.label
                 color: _textPrimary
@@ -65,7 +67,7 @@ Item {
             }
 
             AppText {
-                dt: root.dt
+                dt: root.resolvedDt
                 text: root.valueText
                 color: _textSecondary
                 font.pixelSize: _caption
@@ -121,7 +123,7 @@ Item {
         }
 
         AppText {
-            dt: root.dt
+            dt: root.resolvedDt
             Layout.fillWidth: true
             text: root.description
             color: _textSecondary

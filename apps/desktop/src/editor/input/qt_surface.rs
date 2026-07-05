@@ -406,14 +406,18 @@ cpp! {{
         }
         const char* platform_str = filter->ime_adapter.is_windows() ? "windows"
                                  : filter->ime_adapter.is_mac() ? "mac" : "linux";
+        QByteArray qpa_platform = qEnvironmentVariable("QT_QPA_PLATFORM").toUtf8();
+        QByteArray qt_im_module = qEnvironmentVariable("QT_IM_MODULE").toUtf8();
+        QByteArray qt_im_modules = qEnvironmentVariable("QT_IM_MODULES").toUtf8();
+        QByteArray qt_plugin_path = qEnvironmentVariable("QT_PLUGIN_PATH").toUtf8();
         qDebug("[sujian] install_event_filter: platform=%s, QT_QPA_PLATFORM=%s, QT_IM_MODULE=%s, "
                "QT_IM_MODULES=%s, QT_PLUGIN_PATH=%s, "
                "ItemAcceptsInputMethod=%d, QInputMethod=%p, hasActiveFocus=%d",
                platform_str,
-               qEnvironmentVariable("QT_QPA_PLATFORM"),
-               qEnvironmentVariable("QT_IM_MODULE"),
-               qEnvironmentVariable("QT_IM_MODULES"),
-               qEnvironmentVariable("QT_PLUGIN_PATH"),
+               qpa_platform.constData(),
+               qt_im_module.constData(),
+               qt_im_modules.constData(),
+               qt_plugin_path.constData(),
                item->flags().testFlag(QQuickItem::ItemAcceptsInputMethod),
                im,
                item->hasActiveFocus());

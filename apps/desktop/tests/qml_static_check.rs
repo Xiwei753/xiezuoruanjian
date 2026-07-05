@@ -1212,3 +1212,44 @@ fn test_agents_md_no_legacy_animation_prohibition() {
         );
     }
 }
+
+#[test]
+fn issue_431_base_components_have_token_fallback_and_overlay_uses_real_signal_names() {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let qml_dir = manifest_dir.join("qml");
+
+    for file_name in [
+        "AppText.qml",
+        "AppButton.qml",
+        "AppSlider.qml",
+        "HubPageHeader.qml",
+        "EditorAnimationOverlay.qml",
+        "EditorGlyphGhost.qml",
+    ] {
+        let content = fs::read_to_string(qml_dir.join(file_name)).unwrap();
+        assert!(
+            content.contains("property var dt: null"),
+            "{file_name} must accept missing dt without required-property startup failures"
+        );
+        assert!(
+            content.contains("DesignTokens { id: fallbackDt }")
+                && content.contains("readonly property var resolvedDt: dt || fallbackDt"),
+            "{file_name} must resolve dt through a local DesignTokens fallback"
+        );
+    }
+
+    let overlay = fs::read_to_string(qml_dir.join("EditorAnimationOverlay.qml")).unwrap();
+    assert!(
+        overlay.contains("function onVisual_transaction_changed()"),
+        "EditorAnimationOverlay must listen to qmetaobject's visual_transaction_changed signal name"
+    );
+    assert!(
+        overlay.contains("function onPreedit_visual_transaction_changed()"),
+        "EditorAnimationOverlay must listen to qmetaobject's preedit_visual_transaction_changed signal name"
+    );
+    assert!(
+        !overlay.contains("function onVisualTransactionChanged()")
+            && !overlay.contains("function onPreeditVisualTransactionChanged()"),
+        "EditorAnimationOverlay must not use non-existent camelCase animation signal handlers"
+    );
+}
