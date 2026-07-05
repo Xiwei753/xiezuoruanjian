@@ -110,6 +110,37 @@ mod tests {
         };
         assert_eq!(lww_record_time(&record), 1000); // Fallback to updated_at_ms
     }
+
+    #[test]
+    fn test_lww_record_time_tie_breaker_with_deleted_at_ms() {
+        // Local is a newer edit based on updated_at_ms
+        let local_rec = ManifestFileRecord {
+            path: "a.txt".to_string(),
+            content_hash: "hash1".to_string(),
+            op: "upsert".to_string(),
+            updated_at_ms: 1500,
+            deleted_at_ms: None,
+            device_id: "dev1".to_string(),
+            schema_version: 1,
+        };
+        // Remote is a delete. updated_at_ms is older, but deleted_at_ms is newer
+        let remote_rec = ManifestFileRecord {
+            path: "a.txt".to_string(),
+            content_hash: "hash1".to_string(),
+            op: "delete".to_string(),
+            updated_at_ms: 1000,
+            deleted_at_ms: Some(2000),
+            device_id: "dev2".to_string(),
+            schema_version: 1,
+        };
+
+        let local_time = lww_record_time(&local_rec);
+        let remote_time = lww_record_time(&remote_rec);
+
+        // Remote time should be 2000 (from deleted_at_ms) and win against local's 1500
+        assert!(remote_time > local_time);
+        assert_eq!(remote_time, 2000);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
