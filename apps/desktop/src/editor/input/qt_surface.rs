@@ -346,6 +346,7 @@ cpp! {{
             if (im) {
                 im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImCursorPosition | Qt::ImSurroundingText | Qt::ImCurrentSelection);
             }
+            ime->accept();
             return true;
         }
 
@@ -386,6 +387,7 @@ cpp! {{
             if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
                 qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
             }
+            qe->accept();
             return true;
         }
     };
