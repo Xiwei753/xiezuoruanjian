@@ -12,7 +12,7 @@ enum class EditorAnimationKindData {
     Cursor
 }
 
-@Deprecated("Legacy: 仅用于旧版 WriterEditText fallback，已废弃。自研写作区走 EditorVisualTransactionData。")
+@Deprecated("Legacy WriterEditText fallback. Use EditorVisualTransactionData instead.")
 data class EditorAnimationEventData(
     val id: ULong,
     val kind: EditorAnimationKindData,
