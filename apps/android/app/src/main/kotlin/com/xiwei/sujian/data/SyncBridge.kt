@@ -1,14 +1,47 @@
 package com.xiwei.sujian.data
 
-import com.xiwei.sujian.model.*
+import com.xiwei.sujian.model.SyncConfig
+import com.xiwei.sujian.model.SyncDiagnosticsResult
+import com.xiwei.sujian.model.SyncPlan
+import com.xiwei.sujian.model.SyncResult
+import com.xiwei.sujian.model.SyncSecrets
+import com.xiwei.sujian.model.SyncState
 
-class SyncBridge(private val appService: AppServiceBridge) {
-    fun loadSyncConfig(): BridgeResult<SyncConfig> = appService.loadSyncConfig()
-    fun saveSyncConfig(config: SyncConfig): BridgeResult<Boolean> = appService.saveSyncConfig(config)
-    fun loadSyncSecrets(): BridgeResult<SyncSecrets> = appService.loadSyncSecrets()
-    fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> = appService.saveSyncSecrets(secrets)
-    fun loadSyncState(): BridgeResult<SyncState> = appService.loadSyncState()
-    fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> = appService.performSyncDiagnostics(config)
-    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> = appService.performSyncDryRun(config)
-    fun performSync(config: SyncConfig, forceSync: Boolean = false): BridgeResult<SyncResult> = appService.performSync(config, forceSync)
+/**
+ * 同步 领域 Bridge。
+ *
+ * 从 AppServiceBridge 拆出，负责同步相关操作。
+ */
+class SyncBridge internal constructor(private val holder: WriterAppServiceHolder) {
+    fun loadSyncConfig(): BridgeResult<SyncConfig> = holder.wrapResult {
+        holder.service.loadSyncConfig().toModel()
+    }
+
+    fun saveSyncConfig(config: SyncConfig): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.saveSyncConfig(config.toDto())
+    }
+
+    fun loadSyncSecrets(): BridgeResult<SyncSecrets> = holder.wrapResult {
+        holder.service.loadSyncSecrets().toModel()
+    }
+
+    fun saveSyncSecrets(secrets: SyncSecrets): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.saveSyncSecrets(secrets.toDto())
+    }
+
+    fun loadSyncState(): BridgeResult<SyncState> = holder.wrapResult {
+        holder.service.loadSyncState().toModel()
+    }
+
+    fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> = holder.wrapResult {
+        holder.service.performSyncDiagnostics(config.toDto()).toModel()
+    }
+
+    fun performSyncDryRun(config: SyncConfig): BridgeResult<SyncPlan> = holder.wrapResult {
+        holder.service.performSyncDryRun(config.toDto()).toModel()
+    }
+
+    fun performSync(config: SyncConfig, forceSync: Boolean = false): BridgeResult<SyncResult> = holder.wrapResult {
+        holder.service.performSync(config.toDto(), forceSync).toModel()
+    }
 }

@@ -40,29 +40,51 @@ def result_line(name: str, passed: bool, detail: str = "") -> str:
 
 def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
     results: List[Tuple[bool, str]] = []
-    fpath = os.path.join(harmony_root, "entry/src/main/ets/bridge/NativeWriterCoreBridge.ets")
-    content = read_file(fpath)
 
-    if content is None:
-        results.append((False, f"文件不存在: {fpath}"))
+    # 1a: 扫描所有 Native*Bridge.ets 文件，检查不能有 MockWriterCoreBridge 的 import 或使用
+    bridge_files = [
+        "NativeWriterCoreBridge.ets",
+        "NativeCoreModule.ets",
+        "NativeWorkspaceBridge.ets",
+        "NativeProjectBridge.ets",
+        "NativeChapterBridge.ets",
+        "NativeSettingsBridge.ets",
+        "NativeSyncBridge.ets",
+        "NativeStatsBridge.ets",
+        "NativeStarMapBridge.ets",
+        "NativeLayoutBridge.ets",
+    ]
+    all_bridge_content = ""
+    for bf in bridge_files:
+        fpath = os.path.join(harmony_root, "entry/src/main/ets/bridge", bf)
+        c = read_file(fpath)
+        if c is not None:
+            all_bridge_content += c + "\n"
+    if not all_bridge_content.strip():
+        results.append((False, "No Native*Bridge.ets files found"))
         return results
 
-    # 1a: 不能有 MockWriterCoreBridge 的 import 或使用
-    has_mock_import = bool(re.search(r"import\s+.*MockWriterCoreBridge", content))
-    has_mock_usage = bool(re.search(r"\bMockWriterCoreBridge\b", content))
+    has_mock_import = bool(re.search(r"import\s+.*MockWriterCoreBridge", all_bridge_content))
+    has_mock_usage = bool(re.search(r"\bMockWriterCoreBridge\b", all_bridge_content))
     mock_ok = not has_mock_import and not has_mock_usage
     detail = ""
     if has_mock_import:
         detail += "发现 MockWriterCoreBridge import; "
     if has_mock_usage:
         detail += "发现 MockWriterCoreBridge 使用; "
-    results.append((mock_ok, f"NativeWriterCoreBridge.ets 不含 MockWriterCoreBridge — {detail.strip(' ;')}"))
+    results.append((mock_ok, f"Native*Bridge.ets 不含 MockWriterCoreBridge — {detail.strip(' ;')}"))
 
     # 1b: initialize() 失败时不能降级到 mock
-    # 查找 initialize 方法体，检查是否有 fallback 到 mock 的逻辑
+    # 只检查 NativeWriterCoreBridge.ets 中的 initialize 方法
+    main_bridge_path = os.path.join(harmony_root, "entry/src/main/ets/bridge/NativeWriterCoreBridge.ets")
+    main_bridge_content = read_file(main_bridge_path)
+    if main_bridge_content is None:
+        results.append((False, f"文件不存在: {main_bridge_path}"))
+        return results
+
     init_match = re.search(
         r"(?:async\s+)?initialize\s*\([^)]*\)\s*(?::\s*[^{]+?)?\{",
-        content,
+        main_bridge_content,
     )
     degrade_ok = True
     degrade_detail = ""
@@ -71,15 +93,15 @@ def check_native_bridge_no_mock(harmony_root: str) -> List[Tuple[bool, str]]:
         start = init_match.end() - 1  # 指向 {
         depth = 0
         end = start
-        for i in range(start, len(content)):
-            if content[i] == "{":
+        for i in range(start, len(main_bridge_content)):
+            if main_bridge_content[i] == "{":
                 depth += 1
-            elif content[i] == "}":
+            elif main_bridge_content[i] == "}":
                 depth -= 1
                 if depth == 0:
                     end = i + 1
                     break
-        init_body = content[start:end]
+        init_body = main_bridge_content[start:end]
 
         # 去除注释行再检查，避免误报
         init_body_no_comments = re.sub(r"//.*$", "", init_body, flags=re.MULTILINE)
@@ -308,11 +330,25 @@ def check_cmake_prebuilt_so(harmony_root: str) -> List[Tuple[bool, str]]:
 def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
     results: List[Tuple[bool, str]] = []
 
-    # 6a: 提取 napi_init.cpp 中注册的函数名
-    napi_path = os.path.join(harmony_root, "entry/src/main/cpp/napi_init.cpp")
-    napi_content = read_file(napi_path)
-    if napi_content is None:
-        results.append((False, f"文件不存在: {napi_path}"))
+    # 6a: 提取所有 napi_*.cpp 中注册的函数名
+    napi_files = [
+        "napi_init.cpp",
+        "napi_workspace.cpp",
+        "napi_project.cpp",
+        "napi_chapter.cpp",
+        "napi_settings.cpp",
+        "napi_sync.cpp",
+        "napi_stats.cpp",
+        "napi_starmap.cpp",
+    ]
+    napi_content = ""
+    for nf in napi_files:
+        fpath = os.path.join(harmony_root, "entry/src/main/cpp", nf)
+        content = read_file(fpath)
+        if content is not None:
+            napi_content += content + "\n"
+    if not napi_content.strip():
+        results.append((False, "No napi_*.cpp files found"))
         return results
 
     # 匹配 napi_define_properties 中的函数名描述符
@@ -327,11 +363,27 @@ def check_napi_vs_arkts(harmony_root: str) -> List[Tuple[bool, str]]:
     for m in re.finditer(r"napi_set_property_name\s*\([^,]+,\s*\"(\w+)\"", napi_content):
         napi_funcs.add(m.group(1))
 
-    # 6b: 提取 NativeWriterCoreBridge.ets 中调用的函数名
-    bridge_path = os.path.join(harmony_root, "entry/src/main/ets/bridge/NativeWriterCoreBridge.ets")
-    bridge_content = read_file(bridge_path)
-    if bridge_content is None:
-        results.append((False, f"文件不存在: {bridge_path}"))
+    # 6b: 提取所有 Native*Bridge.ets 中调用的函数名
+    bridge_files = [
+        "NativeWriterCoreBridge.ets",
+        "NativeCoreModule.ets",
+        "NativeWorkspaceBridge.ets",
+        "NativeProjectBridge.ets",
+        "NativeChapterBridge.ets",
+        "NativeSettingsBridge.ets",
+        "NativeSyncBridge.ets",
+        "NativeStatsBridge.ets",
+        "NativeStarMapBridge.ets",
+        "NativeLayoutBridge.ets",
+    ]
+    bridge_content = ""
+    for bf in bridge_files:
+        fpath = os.path.join(harmony_root, "entry/src/main/ets/bridge", bf)
+        c = read_file(fpath)
+        if c is not None:
+            bridge_content += c + "\n"
+    if not bridge_content.strip():
+        results.append((False, "No Native*Bridge.ets files found"))
         return results
 
     # 匹配 this.getNativeModule().nativeXxx( 或 nativeModule.nativeXxx(

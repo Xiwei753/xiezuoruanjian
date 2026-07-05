@@ -16,13 +16,13 @@ object BridgeProvider {
 
     fun getWorkspaceBridge(context: Context): WorkspaceBridge = WorkspaceBridge(getAppServiceBridge(context))
     fun getWritingBridge(context: Context): WritingBridge = WritingBridge(getAppServiceBridge(context))
-    fun getStatsBridge(context: Context): StatsBridge = StatsBridge(getAppServiceBridge(context))
-    fun getStarmapBridge(context: Context): StarMapBridge = StarMapBridge(getAppServiceBridge(context))
-    fun getSettingsBridge(context: Context): SettingsBridge = SettingsBridge(getAppServiceBridge(context))
-    fun getSyncBridge(context: Context): SyncBridge = SyncBridge(getAppServiceBridge(context))
+    fun getStatsBridge(context: Context): StatsBridge = getAppServiceBridge(context).statsBridge
+    fun getStarmapBridge(context: Context): StarMapBridge = getAppServiceBridge(context).starMapBridge
+    fun getSettingsBridge(context: Context): SettingsBridge = getAppServiceBridge(context).settingsBridge
+    fun getSyncBridge(context: Context): SyncBridge = getAppServiceBridge(context).syncBridge
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getAppServiceBridge(context))
-    fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = LayoutPolicyBridge(getAppServiceBridge(context))
+    fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = getAppServiceBridge(context).layoutPolicyBridge
     fun getScreenPolicyBridge(context: Context): ScreenPolicyBridge = ScreenPolicyBridge(getAppServiceBridge(context))
-    fun getEditorAnimationBridge(context: Context): EditorAnimationBridge = EditorAnimationBridge(getAppServiceBridge(context))
+    fun getEditorAnimationBridge(context: Context): EditorAnimationBridge = getAppServiceBridge(context).editorAnimationBridge
     fun getAiStatus(context: Context): Boolean = getAppServiceBridge(context).aiAvailable()
 }

@@ -20,7 +20,6 @@ import {
   SyncResult,
   SyncDiagnosticsResult,
   RecentEdit,
-  ErrorCode,
   ChangedEntity,
   WindowMetrics,
   LayoutPlan,
@@ -28,67 +27,32 @@ import {
   ScreenRole,
   ShellMode
 } from '../model/CoreDtos'
-
-import nativeModule from 'libwriter_core.so'
-
-interface NativeJsonEnvelope {
-  success: boolean
-  data?: Record<string, Object>
-  errorCode?: string
-  messageKey?: string
-  messageArgs?: Record<string, string>
-  userMessage?: string
-  rawError?: string
-  warnings?: string[]
-  changedPaths?: string[]
-  changedEntities?: ChangedEntity[]
-}
-
-interface ChapterLocationResult {
-  projectId: string
-  volumeId: string
-}
-
-interface VolumeLocationResult {
-  projectId: string
-  volumeId: string
-}
-
-interface WritingEventDto {
-  deviceId: string
-  platform: string
-  projectId: string
-  volumeId: string
-  chapterId: string
-  oldText: string
-  newText: string
-  durationSeconds: number
-  sessionId: string
-}
+import { NativeCoreModule } from './NativeCoreModule'
+import { NativeWorkspaceBridge } from './NativeWorkspaceBridge'
+import { NativeProjectBridge } from './NativeProjectBridge'
+import { NativeChapterBridge } from './NativeChapterBridge'
+import { NativeSettingsBridge } from './NativeSettingsBridge'
+import { NativeSyncBridge } from './NativeSyncBridge'
+import { NativeStatsBridge } from './NativeStatsBridge'
+import { NativeStarMapBridge } from './NativeStarMapBridge'
+import { NativeLayoutBridge } from './NativeLayoutBridge'
 
 export class NativeWriterCoreBridge implements IWriterCoreBridge {
   private static instance: NativeWriterCoreBridge
   private isInitialized: boolean = false
   private workspacePath: string = ''
-  private nativeModuleAvailable: boolean = true
+  private lastInitErrorCode: number = 0
 
-  /**
-   * 防御性获取 native module。
-   * 如果 nativeModule 不可用（加载失败或运行时异常），返回错误 ResultEnvelope。
-   * 调用方应在 try-catch 中使用此方法，或用 checkNativeError() 包装。
-   */
-  private getNativeModule(): Record<string, Function> {
-    if (!this.nativeModuleAvailable) {
-      throw new Error('Native module is not available (previously failed to load)')
-    }
-    // nativeModule 是顶层 import 的模块对象，ArkTS 不支持运行时 require/import
-    // 如果顶层 import 失败，整个模块不会加载，所以这里主要防御运行时调用异常
-    if (nativeModule === null || nativeModule === undefined) {
-      this.nativeModuleAvailable = false
-      throw new Error('Native module is null or undefined')
-    }
-    return nativeModule as Record<string, Function>
-  }
+  // ── 公共模块 & 分域 Bridge ──
+  private core = new NativeCoreModule()
+  private workspaceBridge = new NativeWorkspaceBridge(this.core)
+  private projectBridge = new NativeProjectBridge(this.core)
+  private chapterBridge = new NativeChapterBridge(this.core)
+  private settingsBridge = new NativeSettingsBridge(this.core)
+  private syncBridge = new NativeSyncBridge(this.core)
+  private statsBridge = new NativeStatsBridge(this.core)
+  private starMapBridge = new NativeStarMapBridge(this.core)
+  private layoutBridge = new NativeLayoutBridge(this.core)
 
   static getInstance(): NativeWriterCoreBridge {
     if (!NativeWriterCoreBridge.instance) {
@@ -97,99 +61,16 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
     return NativeWriterCoreBridge.instance
   }
 
-  private parseEnvelope<T>(jsonStr: string): ResultEnvelope<T> {
-    try {
-      const obj: NativeJsonEnvelope = JSON.parse(jsonStr) as NativeJsonEnvelope
-      const result: ResultEnvelope<T> = {
-        success: obj.success,
-        data: obj.data as T | undefined,
-        errorCode: obj.errorCode as string | undefined,
-        messageKey: obj.messageKey,
-        messageArgs: obj.messageArgs,
-        userMessage: obj.userMessage,
-        rawError: obj.rawError,
-        warnings: obj.warnings ?? [] as string[],
-        changedPaths: obj.changedPaths ?? [] as string[],
-        changedEntities: obj.changedEntities ?? [] as ChangedEntity[]
-      }
-      return result
-    } catch (e) {
-      const errResult: ResultEnvelope<T> = {
-        success: false,
-        errorCode: 'PARSE_ERROR',
-        messageKey: 'error.parse_error',
-        messageArgs: { 'detail': `${e}` } as Record<string, string>,
-        rawError: `JSON parse error: ${e}`,
-        warnings: [] as string[],
-        changedPaths: [] as string[],
-        changedEntities: [] as ChangedEntity[]
-      }
-      return errResult
-    }
-  }
-
-  private notImplemented<T>(): ResultEnvelope<T> {
-    const result: ResultEnvelope<T> = {
-      success: false,
-      errorCode: 'NOT_IMPLEMENTED',
-      messageKey: 'error.not_implemented_bridge',
-      rawError: 'Native bridge not implemented yet',
-      warnings: [] as string[],
-      changedPaths: [] as string[],
-      changedEntities: [] as ChangedEntity[]
-    }
-    return result
-  }
-
-  /**
-   * 通过 Core FFI 的 resolveChapterLocation 查找 chapterId 所在的 projectId 和 volumeId。
-   * 不再使用遍历项目树的临时方案。
-   */
-  private async resolveChapterLocation(chapterId: string): Promise<ChapterLocationResult | null> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeResolveChapterLocation(chapterId)
-      const result = this.parseEnvelope<ChapterLocationResult>(jsonStr)
-      if (result.success && result.data) {
-        const loc: ChapterLocationResult = {
-          projectId: result.data.projectId,
-          volumeId: result.data.volumeId
-        }
-        return loc
-      }
-      return null
-    } catch (e) {
-      return null
-    }
-  }
-
-  /**
-   * 通过 Core FFI 的 resolveVolumeLocation 查找 volumeId 所属的 projectId。
-   * 不再使用遍历项目树的临时方案。
-   */
-  private async resolveVolumeProjectId(volumeId: string): Promise<string | null> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeResolveVolumeLocation(volumeId)
-      const result = this.parseEnvelope<VolumeLocationResult>(jsonStr)
-      if (result.success && result.data) {
-        return result.data.projectId
-      }
-      return null
-    } catch (e) {
-      return null
-    }
-  }
-
-  private lastInitErrorCode: number = 0
-
   async initialize(workspacePath: string): Promise<boolean> {
     if (this.isInitialized) {
       return true
     }
     try {
-      const result: number = this.getNativeModule().nativeInit(workspacePath) as number
+      const result: number = this.core.getNativeModule().nativeInit(workspacePath) as number
       if (result === 0) {
         this.isInitialized = true
         this.workspacePath = workspacePath
+        this.statsBridge.setInitialized(true)
         return true
       }
       this.lastInitErrorCode = result
@@ -197,7 +78,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
       return false
     } catch (e) {
       this.lastInitErrorCode = -999
-      this.nativeModuleAvailable = false
+      this.core.markNativeUnavailable()
       console.error(`nativeInit exception: ${e}`)
       return false
     }
@@ -209,7 +90,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async getLastError(): Promise<string> {
     try {
-      const err: string = this.getNativeModule().nativeGetLastError() as string
+      const err: string = this.core.getNativeModule().nativeGetLastError() as string
       return err
     } catch (e) {
       return String(e)
@@ -219,498 +100,213 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   // ── Workspace ──
 
   async listWorkspaces(): Promise<ResultEnvelope<WorkspaceSummary[]>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeListWorkspaces()
-      return this.parseEnvelope<WorkspaceSummary[]>(jsonStr)
-    } catch (e) {
-      return this.notImplemented<WorkspaceSummary[]>()
-    }
+    return this.workspaceBridge.listWorkspaces()
   }
 
   async openWorkspace(path: string): Promise<ResultEnvelope<WorkspaceSummary>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeOpenWorkspace(path)
-      return this.parseEnvelope<WorkspaceSummary>(jsonStr)
-    } catch (e) {
-      return this.notImplemented<WorkspaceSummary>()
-    }
+    return this.workspaceBridge.openWorkspace(path)
   }
 
   async validateWorkspace(path: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeValidateWorkspace()
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.workspaceBridge.validateWorkspace(path)
   }
 
   async getWorkspaceState(): Promise<ResultEnvelope<WorkspaceSummary>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetWorkspaceState()
-      return this.parseEnvelope<WorkspaceSummary>(jsonStr)
-    } catch (e) {
-      return this.notImplemented<WorkspaceSummary>()
-    }
+    return this.workspaceBridge.getWorkspaceState()
   }
 
   // ── Project ──
 
   async listProjects(): Promise<ResultEnvelope<Project[]>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeListProjects()
-      return this.parseEnvelope<Project[]>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.listProjects()
   }
 
   async getProjectTree(projectId: string): Promise<ResultEnvelope<ProjectTree>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetProjectTree(projectId)
-      return this.parseEnvelope<ProjectTree>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.getProjectTree(projectId)
   }
 
   async createProject(name: string): Promise<ResultEnvelope<Project>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeCreateProject(name)
-      return this.parseEnvelope<Project>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.createProject(name)
   }
 
   async renameProject(projectId: string, newName: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeRenameProject(projectId, newName)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.renameProject(projectId, newName)
   }
 
   async deleteProject(projectId: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeDeleteProject(projectId)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.deleteProject(projectId)
   }
 
   async getProjectStats(projectId: string): Promise<ResultEnvelope<WritingStats>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetProjectStats(projectId)
-      return this.parseEnvelope<WritingStats>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.getProjectStats(projectId)
   }
 
   // ── Volume ──
 
   async listVolumes(projectId: string): Promise<ResultEnvelope<Volume[]>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeListVolumes(projectId)
-      return this.parseEnvelope<Volume[]>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.listVolumes(projectId)
   }
 
   async createVolume(projectId: string, name: string): Promise<ResultEnvelope<Volume>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeCreateVolume(projectId, name)
-      return this.parseEnvelope<Volume>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.createVolume(projectId, name)
   }
 
   async renameVolume(projectId: string, volumeId: string, newName: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeRenameVolume(projectId, volumeId, newName)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.renameVolume(projectId, volumeId, newName)
   }
 
   async deleteVolume(projectId: string, volumeId: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeDeleteVolume(projectId, volumeId)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.deleteVolume(projectId, volumeId)
   }
 
   async reorderVolumes(projectId: string, orderedVolumeIds: string[]): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeReorderVolumes(projectId, JSON.stringify(orderedVolumeIds))
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.projectBridge.reorderVolumes(projectId, orderedVolumeIds)
   }
 
   // ── Chapter ──
 
   async listChapters(volumeId: string): Promise<ResultEnvelope<ChapterMeta[]>> {
-    const projectId = await this.resolveVolumeProjectId(volumeId)
-    if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeListChapters(projectId, volumeId)
-      return this.parseEnvelope<ChapterMeta[]>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.listChapters(volumeId)
   }
 
   async loadChapter(chapterId: string): Promise<ResultEnvelope<ChapterContent>> {
-    const loc = await this.resolveChapterLocation(chapterId)
-    if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeOpenChapter(loc.projectId, loc.volumeId, chapterId)
-      return this.parseEnvelope<ChapterContent>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.loadChapter(chapterId)
   }
 
   async saveChapter(chapterId: string, text: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    const loc = await this.resolveChapterLocation(chapterId)
-    if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeSaveChapter(loc.projectId, loc.volumeId, chapterId, text)
-      return this.parseEnvelope<ChapterSaveReceipt>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.saveChapter(chapterId, text)
   }
 
   async clearChapter(chapterId: string): Promise<ResultEnvelope<ChapterSaveReceipt>> {
-    const loc = await this.resolveChapterLocation(chapterId)
-    if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeClearChapter(loc.projectId, loc.volumeId, chapterId)
-      return this.parseEnvelope<ChapterSaveReceipt>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.clearChapter(chapterId)
   }
 
   async createChapter(volumeId: string, name: string): Promise<ResultEnvelope<ChapterMeta>> {
-    const projectId = await this.resolveVolumeProjectId(volumeId)
-    if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeCreateChapter(projectId, volumeId, name)
-      return this.parseEnvelope<ChapterMeta>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.createChapter(volumeId, name)
   }
 
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
-    const loc = await this.resolveChapterLocation(chapterId)
-    if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeRenameChapter(loc.projectId, loc.volumeId, chapterId, newName)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.renameChapter(chapterId, newName)
   }
 
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
-    const loc = await this.resolveChapterLocation(chapterId)
-    if (!loc) {
-      return { success: false, errorCode: 'CHAPTER_NOT_FOUND', messageKey: 'error.chapter_not_found', rawError: `Chapter ${chapterId} not found`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeDeleteChapter(loc.projectId, loc.volumeId, chapterId)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.deleteChapter(chapterId)
   }
 
   async reorderChapters(volumeId: string, orderedChapterIds: string[]): Promise<ResultEnvelope<boolean>> {
-    const projectId = await this.resolveVolumeProjectId(volumeId)
-    if (!projectId) {
-      return { success: false, errorCode: 'VOLUME_NOT_FOUND', messageKey: 'error.volume_not_found', rawError: `Volume ${volumeId} not found in any project`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
-    try {
-      const jsonStr: string = this.getNativeModule().nativeReorderChapters(projectId, volumeId, JSON.stringify(orderedChapterIds))
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.chapterBridge.reorderChapters(volumeId, orderedChapterIds)
   }
 
   // ── StarMap ──
 
   async listStarMaps(): Promise<ResultEnvelope<StarMapMeta[]>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeListStarMaps()
-      return this.parseEnvelope<StarMapMeta[]>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.listStarMaps()
   }
 
   async listStarMapsForProject(projectId: string): Promise<ResultEnvelope<StarMapMeta[]>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeListStarMapsForProject(projectId)
-      return this.parseEnvelope<StarMapMeta[]>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.listStarMapsForProject(projectId)
   }
 
   async getStarMap(starmapId: string): Promise<ResultEnvelope<StarMapMeta>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetStarMap(starmapId)
-      return this.parseEnvelope<StarMapMeta>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.getStarMap(starmapId)
   }
 
   async getStarMapGraph(starmapId: string): Promise<ResultEnvelope<StarMapGraph>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetStarMapGraph(starmapId)
-      return this.parseEnvelope<StarMapGraph>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.getStarMapGraph(starmapId)
   }
 
   async createStarMap(title: string, description: string): Promise<ResultEnvelope<StarMapMeta>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeCreateStarMap(title, description)
-      return this.parseEnvelope<StarMapMeta>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.createStarMap(title, description)
   }
 
   async deleteStarMap(starmapId: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeDeleteStarMap(starmapId)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.deleteStarMap(starmapId)
   }
 
   async renameStarMap(starmapId: string, newTitle: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeRenameStarMap(starmapId, newTitle)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.renameStarMap(starmapId, newTitle)
   }
 
-  // ── StarMap Layout & Motion ──
-
   async saveStarMapLayout(starmapId: string, layout: StarMapLayout): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeSaveStarMapLayout(starmapId, JSON.stringify(layout))
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.saveStarMapLayout(starmapId, layout)
   }
 
   async getStarMapLayout(starmapId: string): Promise<ResultEnvelope<StarMapLayout>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetStarMapLayout(starmapId)
-      return this.parseEnvelope<StarMapLayout>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.getStarMapLayout(starmapId)
   }
 
   async getStarMapMotionPolicy(): Promise<ResultEnvelope<StarMapMotionPolicy>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetStarMapMotionPolicy()
-      return this.parseEnvelope<StarMapMotionPolicy>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.getStarMapMotionPolicy()
   }
 
   async computeStarMapEdgeRenders(graph: StarMapGraph): Promise<ResultEnvelope<StarMapEdgeRender[]>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeComputeStarMapEdgeRenders(JSON.stringify(graph))
-      return this.parseEnvelope<StarMapEdgeRender[]>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.starMapBridge.computeStarMapEdgeRenders(graph)
   }
 
   // ── Settings ──
 
   async getLocalSettings(): Promise<ResultEnvelope<LocalSettings>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeLoadLocalSettings()
-      return this.parseEnvelope<LocalSettings>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.settingsBridge.getLocalSettings()
   }
 
   async saveLocalSettings(settings: LocalSettings): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeSaveLocalSettings(JSON.stringify(settings))
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.settingsBridge.saveLocalSettings(settings)
   }
 
   async getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeLoadSyncableSettings()
-      return this.parseEnvelope<SyncableSettings>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.settingsBridge.getSyncableSettings()
   }
 
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeSaveSyncableSettings(JSON.stringify(settings))
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.settingsBridge.saveSyncableSettings(settings)
   }
-
 
   // ── Sync ──
 
   async loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeLoadSyncConfig()
-      return this.parseEnvelope<SyncConfig>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.syncBridge.loadSyncConfig()
   }
 
   async saveSyncConfig(config: SyncConfig): Promise<ResultEnvelope<boolean>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeSaveSyncConfig(JSON.stringify(config))
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.syncBridge.saveSyncConfig(config)
   }
 
   async syncDryRun(): Promise<ResultEnvelope<SyncResult>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeSyncDryRun()
-      return this.parseEnvelope<SyncResult>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.syncBridge.syncDryRun()
   }
 
-
   async performSync(): Promise<ResultEnvelope<SyncResult>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativePerformSync()
-      return this.parseEnvelope<SyncResult>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.syncBridge.performSync()
   }
 
   async syncDiagnostics(): Promise<ResultEnvelope<SyncDiagnosticsResult>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeSyncDiagnostics()
-      return this.parseEnvelope<SyncDiagnosticsResult>(jsonStr)
-    } catch (err) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.sync_failed', messageArgs: { 'detail': String(err) } as Record<string, string>, rawError: `syncDiagnostics failed: ${err}`, warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.syncBridge.syncDiagnostics()
   }
 
   // ── Stats ──
 
   async getWritingStats(): Promise<ResultEnvelope<WritingStats>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetWritingStats()
-      return this.parseEnvelope<WritingStats>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.statsBridge.getWritingStats()
   }
 
   async calculateWordCount(text: string): Promise<number> {
-    if (!this.isInitialized) {
-      return -1
-    }
-    try {
-      return this.getNativeModule().nativeCalculateWordCount(text)
-    } catch (e) {
-      return -1
-    }
+    return this.statsBridge.calculateWordCount(text)
   }
 
   async processWritingEvent(deviceId: string, platform: string, projectId: string, volumeId: string,
     chapterId: string, oldText: string, newText: string, durationSeconds: number, sessionId: string): Promise<ResultEnvelope<boolean>> {
-    try {
-      const eventObj: WritingEventDto = {
-        deviceId: deviceId,
-        platform: platform,
-        projectId: projectId,
-        volumeId: volumeId,
-        chapterId: chapterId,
-        oldText: oldText,
-        newText: newText,
-        durationSeconds: durationSeconds,
-        sessionId: sessionId
-      }
-      const eventJson = JSON.stringify(eventObj)
-      const jsonStr: string = this.getNativeModule().nativeProcessWritingEvent(eventJson)
-      return this.parseEnvelope<boolean>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.statsBridge.processWritingEvent(deviceId, platform, projectId, volumeId, chapterId, oldText, newText, durationSeconds, sessionId)
   }
 
   async getRecentEdits(): Promise<ResultEnvelope<RecentEdit[]>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeGetRecentEdits()
-      return this.parseEnvelope<RecentEdit[]>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.statsBridge.getRecentEdits()
   }
 
   // ── Native Status ──
 
   async getNativeLoadStatus(): Promise<ResultEnvelope<string>> {
     try {
-      const status: string = this.getNativeModule().nativeGetLoadStatus() as string
+      const status: string = this.core.getNativeModule().nativeGetLoadStatus() as string
       const result: ResultEnvelope<string> = {
         success: true,
         data: status,
@@ -726,8 +322,8 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async isWorkspaceValid(): Promise<ResultEnvelope<boolean>> {
     try {
-      const jsonStr: string = this.getNativeModule().nativeValidateWorkspace() as string
-      return this.parseEnvelope<boolean>(jsonStr)
+      const jsonStr: string = this.core.getNativeModule().nativeValidateWorkspace() as string
+      return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) {
       return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
     }
@@ -735,7 +331,7 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async isAiAvailable(): Promise<ResultEnvelope<boolean>> {
     try {
-      const available: number = this.getNativeModule().nativeIsAiAvailable() as number
+      const available: number = this.core.getNativeModule().nativeIsAiAvailable() as number
       const result: ResultEnvelope<boolean> = {
         success: true,
         data: available === 1,
@@ -752,25 +348,12 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
   // ── Layout Policy ──
 
   async resolveLayout(metrics: WindowMetrics): Promise<ResultEnvelope<LayoutPlan>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeResolveLayout(JSON.stringify(metrics))
-      return this.parseEnvelope<LayoutPlan>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.layoutBridge.resolveLayout(metrics)
   }
 
   // ── Screen Policy ──
 
   async resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>> {
-    try {
-      const jsonStr: string = this.getNativeModule().nativeResolveScreenPolicy(
-        JSON.stringify(screenRole),
-        JSON.stringify(shellMode)
-      )
-      return this.parseEnvelope<ScreenPolicy>(jsonStr)
-    } catch (e) {
-      return { success: false, errorCode: 'NATIVE_ERROR', messageKey: 'error.native_error', messageArgs: { 'detail': String(e) } as Record<string, string>, rawError: String(e), warnings: [] as string[], changedPaths: [] as string[], changedEntities: [] as ChangedEntity[] }
-    }
+    return this.layoutBridge.resolveScreenPolicy(screenRole, shellMode)
   }
 }

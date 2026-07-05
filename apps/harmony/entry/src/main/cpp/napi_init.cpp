@@ -8,11 +8,36 @@
 #define LOG_DOMAIN 0xFF00
 #define LOG_TAG "WriterCoreNapi"
 
+// ── Inline utility helpers (shared across domains) ──
+
 static char* dup_napi_string(napi_env env, napi_value value, char* buf, size_t buf_size) {
     size_t len = 0;
     napi_get_value_string_utf8(env, value, buf, buf_size, &len);
     return buf;
 }
+
+static napi_value ReturnJsonString(napi_env env, char* json) {
+    if (json == nullptr) {
+        napi_value empty;
+        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}", 47, &empty);
+        return empty;
+    }
+    napi_value result;
+    napi_create_string_utf8(env, json, strlen(json), &result);
+    writer_core_free_string(json);
+    return result;
+}
+
+// ── Include domain implementations ──
+// Each included file defines static NAPI handler functions and a get*Descriptors() function.
+
+#include "napi_workspace.cpp"
+#include "napi_project.cpp"
+#include "napi_chapter.cpp"
+#include "napi_settings.cpp"
+#include "napi_sync.cpp"
+#include "napi_stats.cpp"
+#include "napi_starmap.cpp"
 
 // ── Core lifecycle ──
 
@@ -95,21 +120,6 @@ static napi_value NativeCalculateWordCount(napi_env env, napi_callback_info info
     return result;
 }
 
-// ── JSON-returning helpers ──
-// All return a JSON string that the ArkTS side parses into ResultEnvelope<T>.
-
-static napi_value ReturnJsonString(napi_env env, char* json) {
-    if (json == nullptr) {
-        napi_value empty;
-        napi_create_string_utf8(env, "{\"success\":false,\"errorCode\":\"NULL_RESULT\"}", 47, &empty);
-        return empty;
-    }
-    napi_value result;
-    napi_create_string_utf8(env, json, strlen(json), &result);
-    writer_core_free_string(json);
-    return result;
-}
-
 // ── Layout Policy ──
 
 static napi_value NativeResolveLayout(napi_env env, napi_callback_info info) {
@@ -167,671 +177,6 @@ static napi_value NativeResolveScreenPolicy(napi_env env, napi_callback_info inf
     return result;
 }
 
-// ── Workspace ──
-
-static napi_value NativeValidateWorkspace(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_validate_workspace());
-}
-
-static napi_value NativeListWorkspaces(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_list_workspaces());
-}
-
-static napi_value NativeOpenWorkspace(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char path[2048] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], path, sizeof(path), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_open_workspace(path));
-}
-
-static napi_value NativeGetWorkspaceState(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_get_workspace_state());
-}
-
-static napi_value NativeResolveChapterLocation(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char chapter_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], chapter_id, sizeof(chapter_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_resolve_chapter_location(chapter_id));
-}
-
-static napi_value NativeResolveVolumeLocation(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char volume_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], volume_id, sizeof(volume_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_resolve_volume_location(volume_id));
-}
-
-// ── Project ──
-
-static napi_value NativeListProjects(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_list_projects());
-}
-
-static napi_value NativeGetProjectTree(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_get_project_tree(project_id));
-}
-
-static napi_value NativeCreateProject(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char name[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], name, sizeof(name), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_create_project(name));
-}
-
-// ── Volume ──
-
-static napi_value NativeListVolumes(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_list_volumes(project_id));
-}
-
-static napi_value NativeCreateVolume(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char name[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], name, sizeof(name), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_create_volume(project_id, name));
-}
-
-// ── Chapter ──
-
-static napi_value NativeListChapters(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_list_chapters(project_id, volume_id));
-}
-
-static napi_value NativeCreateChapter(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char name[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], name, sizeof(name), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_create_chapter(project_id, volume_id, name));
-}
-
-static napi_value NativeOpenChapter(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    }
-
-    return ReturnJsonString(env, writer_core_open_chapter(project_id, volume_id, chapter_id));
-}
-
-static napi_value NativeSaveChapter(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value args[4];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    }
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    }
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    }
-
-    // Chapter content can be large, use dynamic allocation
-    char* content = nullptr;
-    if (argc >= 4) {
-        size_t content_len = 0;
-        napi_get_value_string_utf8(env, args[3], nullptr, 0, &content_len);
-        content = new char[content_len + 1];
-        napi_get_value_string_utf8(env, args[3], content, content_len + 1, &content_len);
-    } else {
-        content = new char[1];
-        content[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_chapter(project_id, volume_id, chapter_id, content));
-    delete[] content;
-    return result;
-}
-
-// ── Recent edits ──
-
-static napi_value NativeGetRecentEdits(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_get_recent_edits());
-}
-
-// ── Settings ──
-
-static napi_value NativeLoadLocalSettings(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_load_local_settings());
-}
-
-static napi_value NativeSaveLocalSettings(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_local_settings(json));
-    delete[] json;
-    return result;
-}
-
-// ── Project mutations ──
-
-static napi_value NativeRenameProject(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char new_name[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], new_name, sizeof(new_name), nullptr);
-
-    return ReturnJsonString(env, writer_core_rename_project(project_id, new_name));
-}
-
-static napi_value NativeDeleteProject(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_delete_project(project_id));
-}
-
-static napi_value NativeGetProjectStats(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_get_project_stats(project_id));
-}
-
-// ── Volume mutations ──
-
-static napi_value NativeRenameVolume(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char new_name[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    if (argc >= 3) napi_get_value_string_utf8(env, args[2], new_name, sizeof(new_name), nullptr);
-
-    return ReturnJsonString(env, writer_core_rename_volume(project_id, volume_id, new_name));
-}
-
-static napi_value NativeDeleteVolume(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_delete_volume(project_id, volume_id));
-}
-
-static napi_value NativeReorderVolumes(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[1], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_reorder_volumes(project_id, json));
-    delete[] json;
-    return result;
-}
-
-// ── Chapter mutations ──
-
-static napi_value NativeRenameChapter(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value args[4];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    char new_name[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-    if (argc >= 4) napi_get_value_string_utf8(env, args[3], new_name, sizeof(new_name), nullptr);
-
-    return ReturnJsonString(env, writer_core_rename_chapter(project_id, volume_id, chapter_id, new_name));
-}
-
-static napi_value NativeDeleteChapter(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_delete_chapter(project_id, volume_id, chapter_id));
-}
-
-static napi_value NativeReorderChapters(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 3) {
-        napi_get_value_string_utf8(env, args[2], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[2], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_reorder_chapters(project_id, volume_id, json));
-    delete[] json;
-    return result;
-}
-
-static napi_value NativeClearChapter(napi_env env, napi_callback_info info) {
-    size_t argc = 3;
-    napi_value args[3];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    char volume_id[256] = {0};
-    char chapter_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], volume_id, sizeof(volume_id), nullptr);
-    if (argc >= 3) napi_get_value_string_utf8(env, args[2], chapter_id, sizeof(chapter_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_clear_chapter(project_id, volume_id, chapter_id));
-}
-
-// ── StarMap ──
-
-static napi_value NativeListStarMaps(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_list_starmaps());
-}
-
-static napi_value NativeListStarMapsForProject(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char project_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], project_id, sizeof(project_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_list_starmaps_for_project(project_id));
-}
-
-static napi_value NativeGetStarMap(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char starmap_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_get_starmap(starmap_id));
-}
-
-static napi_value NativeGetStarMapGraph(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char starmap_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_get_starmap_graph(starmap_id));
-}
-
-static napi_value NativeCreateStarMap(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char title[256] = {0};
-    char description[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], title, sizeof(title), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], description, sizeof(description), nullptr);
-
-    return ReturnJsonString(env, writer_core_create_starmap(title, description));
-}
-
-static napi_value NativeDeleteStarMap(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char starmap_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_delete_starmap(starmap_id));
-}
-
-static napi_value NativeRenameStarMap(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char starmap_id[256] = {0};
-    char new_title[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
-    if (argc >= 2) napi_get_value_string_utf8(env, args[1], new_title, sizeof(new_title), nullptr);
-
-    return ReturnJsonString(env, writer_core_rename_starmap(starmap_id, new_title));
-}
-
-static napi_value NativeGetStarMapMotionPolicy(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_get_starmap_motion_policy());
-}
-
-static napi_value NativeGetStarMapLayout(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char starmap_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
-
-    return ReturnJsonString(env, writer_core_get_starmap_layout(starmap_id));
-}
-
-static napi_value NativeSaveStarMapLayout(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char starmap_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[1], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_starmap_layout(starmap_id, json));
-    delete[] json;
-    return result;
-}
-
-static napi_value NativeSaveStarMapViewport(napi_env env, napi_callback_info info) {
-    size_t argc = 2;
-    napi_value args[2];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    char starmap_id[256] = {0};
-    if (argc >= 1) napi_get_value_string_utf8(env, args[0], starmap_id, sizeof(starmap_id), nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 2) {
-        napi_get_value_string_utf8(env, args[1], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[1], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_starmap_viewport(starmap_id, json));
-    delete[] json;
-    return result;
-}
-
-static napi_value NativeComputeStarMapEdgeRenders(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_compute_starmap_edge_renders(json));
-    delete[] json;
-    return result;
-}
-
-// ── Syncable Settings ──
-
-static napi_value NativeLoadSyncableSettings(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_load_syncable_settings());
-}
-
-static napi_value NativeSaveSyncableSettings(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_syncable_settings(json));
-    delete[] json;
-    return result;
-}
-
-// ── Sync ──
-
-static napi_value NativeLoadSyncConfig(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_load_sync_config());
-}
-
-static napi_value NativeSaveSyncConfig(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_save_sync_config(json));
-    delete[] json;
-    return result;
-}
-
-static napi_value NativeSyncDryRun(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_sync_dry_run());
-}
-
-static napi_value NativeSyncDiagnostics(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_sync_diagnostics());
-}
-
-static napi_value NativePerformSync(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_perform_sync());
-}
-
-// ── Writing Stats ──
-
-static napi_value NativeGetWritingStats(napi_env env, napi_callback_info info) {
-    return ReturnJsonString(env, writer_core_get_writing_stats());
-}
-
-static napi_value NativeProcessWritingEvent(napi_env env, napi_callback_info info) {
-    size_t argc = 1;
-    napi_value args[1];
-    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
-
-    size_t json_len = 0;
-    char* json = nullptr;
-    if (argc >= 1) {
-        napi_get_value_string_utf8(env, args[0], nullptr, 0, &json_len);
-        json = new char[json_len + 1];
-        napi_get_value_string_utf8(env, args[0], json, json_len + 1, &json_len);
-    } else {
-        json = new char[1];
-        json[0] = '\0';
-    }
-
-    napi_value result = ReturnJsonString(env, writer_core_process_writing_event(json));
-    delete[] json;
-    return result;
-}
-
 // ── Misc ──
 
 static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
@@ -844,78 +189,46 @@ static napi_value NativeIsAiAvailable(napi_env env, napi_callback_info info) {
 // ── Module registration ──
 
 static napi_value Init(napi_env env, napi_value exports) {
-    napi_property_descriptor desc[] = {
-        // Lifecycle
+    // Collect descriptors from all domains
+    size_t ws_count = 0, proj_count = 0, chap_count = 0, set_count = 0;
+    size_t sync_count = 0, stats_count = 0, sm_count = 0;
+
+    napi_property_descriptor* ws_desc = getWorkspaceDescriptors(&ws_count);
+    napi_property_descriptor* proj_desc = getProjectDescriptors(&proj_count);
+    napi_property_descriptor* chap_desc = getChapterDescriptors(&chap_count);
+    napi_property_descriptor* set_desc = getSettingsDescriptors(&set_count);
+    napi_property_descriptor* sync_desc = getSyncDescriptors(&sync_count);
+    napi_property_descriptor* stats_desc = getStatsDescriptors(&stats_count);
+    napi_property_descriptor* sm_desc = getStarMapDescriptors(&sm_count);
+
+    // Core lifecycle + layout + misc descriptors
+    napi_property_descriptor core_desc[] = {
         {"nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLoadStatus", nullptr, NativeGetLoadStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLastError", nullptr, NativeGetLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Layout Policy
         {"nativeResolveLayout", nullptr, NativeResolveLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Screen Policy
         {"nativeResolveScreenPolicy", nullptr, NativeResolveScreenPolicy, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Workspace
-        {"nativeValidateWorkspace", nullptr, NativeValidateWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeListWorkspaces", nullptr, NativeListWorkspaces, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeOpenWorkspace", nullptr, NativeOpenWorkspace, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetWorkspaceState", nullptr, NativeGetWorkspaceState, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeResolveChapterLocation", nullptr, NativeResolveChapterLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeResolveVolumeLocation", nullptr, NativeResolveVolumeLocation, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Project
-        {"nativeListProjects", nullptr, NativeListProjects, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetProjectTree", nullptr, NativeGetProjectTree, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeCreateProject", nullptr, NativeCreateProject, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeRenameProject", nullptr, NativeRenameProject, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeDeleteProject", nullptr, NativeDeleteProject, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetProjectStats", nullptr, NativeGetProjectStats, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Volume
-        {"nativeListVolumes", nullptr, NativeListVolumes, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeCreateVolume", nullptr, NativeCreateVolume, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeRenameVolume", nullptr, NativeRenameVolume, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeDeleteVolume", nullptr, NativeDeleteVolume, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeReorderVolumes", nullptr, NativeReorderVolumes, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Chapter
-        {"nativeListChapters", nullptr, NativeListChapters, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeCreateChapter", nullptr, NativeCreateChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeOpenChapter", nullptr, NativeOpenChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveChapter", nullptr, NativeSaveChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeRenameChapter", nullptr, NativeRenameChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeDeleteChapter", nullptr, NativeDeleteChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeReorderChapters", nullptr, NativeReorderChapters, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeClearChapter", nullptr, NativeClearChapter, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Recent edits
-        {"nativeGetRecentEdits", nullptr, NativeGetRecentEdits, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Settings
-        {"nativeLoadLocalSettings", nullptr, NativeLoadLocalSettings, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveLocalSettings", nullptr, NativeSaveLocalSettings, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeLoadSyncableSettings", nullptr, NativeLoadSyncableSettings, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveSyncableSettings", nullptr, NativeSaveSyncableSettings, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // StarMap
-        {"nativeListStarMaps", nullptr, NativeListStarMaps, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeListStarMapsForProject", nullptr, NativeListStarMapsForProject, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetStarMap", nullptr, NativeGetStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetStarMapGraph", nullptr, NativeGetStarMapGraph, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetStarMapMotionPolicy", nullptr, NativeGetStarMapMotionPolicy, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeGetStarMapLayout", nullptr, NativeGetStarMapLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveStarMapLayout", nullptr, NativeSaveStarMapLayout, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveStarMapViewport", nullptr, NativeSaveStarMapViewport, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeComputeStarMapEdgeRenders", nullptr, NativeComputeStarMapEdgeRenders, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeCreateStarMap", nullptr, NativeCreateStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeDeleteStarMap", nullptr, NativeDeleteStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeRenameStarMap", nullptr, NativeRenameStarMap, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Sync
-        {"nativeLoadSyncConfig", nullptr, NativeLoadSyncConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSaveSyncConfig", nullptr, NativeSaveSyncConfig, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSyncDryRun", nullptr, NativeSyncDryRun, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeSyncDiagnostics", nullptr, NativeSyncDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativePerformSync", nullptr, NativePerformSync, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Stats
-        {"nativeGetWritingStats", nullptr, NativeGetWritingStats, nullptr, nullptr, nullptr, napi_default, nullptr},
-        {"nativeProcessWritingEvent", nullptr, NativeProcessWritingEvent, nullptr, nullptr, nullptr, napi_default, nullptr},
-        // Misc
         {"nativeIsAiAvailable", nullptr, NativeIsAiAvailable, nullptr, nullptr, nullptr, napi_default, nullptr},
     };
-    napi_define_properties(env, exports, sizeof(desc) / sizeof(desc[0]), desc);
+    size_t core_count = sizeof(core_desc) / sizeof(core_desc[0]);
+
+    // Merge all descriptors
+    size_t total = core_count + ws_count + proj_count + chap_count + set_count + sync_count + stats_count + sm_count;
+    napi_property_descriptor* all_desc = new napi_property_descriptor[total];
+    size_t offset = 0;
+
+    memcpy(all_desc + offset, core_desc, core_count * sizeof(napi_property_descriptor)); offset += core_count;
+    memcpy(all_desc + offset, ws_desc, ws_count * sizeof(napi_property_descriptor)); offset += ws_count;
+    memcpy(all_desc + offset, proj_desc, proj_count * sizeof(napi_property_descriptor)); offset += proj_count;
+    memcpy(all_desc + offset, chap_desc, chap_count * sizeof(napi_property_descriptor)); offset += chap_count;
+    memcpy(all_desc + offset, set_desc, set_count * sizeof(napi_property_descriptor)); offset += set_count;
+    memcpy(all_desc + offset, sync_desc, sync_count * sizeof(napi_property_descriptor)); offset += sync_count;
+    memcpy(all_desc + offset, stats_desc, stats_count * sizeof(napi_property_descriptor)); offset += stats_count;
+    memcpy(all_desc + offset, sm_desc, sm_count * sizeof(napi_property_descriptor)); offset += sm_count;
+
+    napi_define_properties(env, exports, total, all_desc);
+    delete[] all_desc;
     return exports;
 }
 

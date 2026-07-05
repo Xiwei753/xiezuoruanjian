@@ -8,10 +8,10 @@ class WriterRepository private constructor(context: Context) {
 
     val workspace = WorkspaceBridge(appService)
     val writing = WritingBridge(appService)
-    val settings = SettingsBridge(appService)
-    val sync = SyncBridge(appService)
-    val stats = StatsBridge(appService)
-    val starMap = StarMapBridge(appService)
+    val settings = appService.settingsBridge
+    val sync = appService.syncBridge
+    val stats = appService.statsBridge
+    val starMap = appService.starMapBridge
 
 
     companion object {

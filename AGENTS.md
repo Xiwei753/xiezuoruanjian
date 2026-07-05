@@ -1,7 +1,7 @@
 # AGENTS.md — AI 开发守则
 
 Status: active
-Last verified: 2026-06-11
+Last verified: 2025-07-05
 Truth source: code / product decision / protocol
 Supersedes: AGENTS.md (previous version)
 
@@ -52,7 +52,8 @@ Supersedes: AGENTS.md (previous version)
 |-----------|------|
 | **唯一技术路线** | `docs/TECHNICAL_ROUTE.md` 是唯一的全局技术路线。 |
 | **自研写作区路线** | Desktop 自研写作区唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。 |
-| **禁止旧路线** | **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` / `QQuickPaintedItem` / QSG 三层 overlay 修自研写作区。这些全是旧路线或 experimental，不得复活。 |
+| **平台路线收口** | Desktop/Android 自研写作区已收口（SujianEditorItem + SujianEditorView），不再维护旧 WriterEditText fallback；Harmony 默认 native bridge，不要求 HAP 编译/真机，只要求静态守卫和代码测试。 |
+| **禁止旧路线** | **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` / `QQuickPaintedItem` / QSG 三层 overlay 修自研写作区。这些是旧 fallback 路径，只允许保留兼容，不允许新增依赖；不得作为可开发路线。 |
 | **正式图谱路线** | `mind_map` 是 legacy（已废弃），正式图谱是 `starmap`。所有新增图谱能力必须走 StarMapCapability。 |
 | **淘汰 envelope_json** | `envelope_json` 是 legacy 兼容，新功能**绝对禁止**使用，必须完全采用 typed DTO。 |
 | **光标修复要求** | 修光标必须先保证 `QTextLine` `xToCursor/cursorToX` roundtrip。 |
@@ -76,7 +77,7 @@ Supersedes: AGENTS.md (previous version)
 
 - Desktop 自研写作区当前唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。
 - 排查入口：`apps/desktop/src/sujian_editor_item/*`、`apps/desktop/src/editor/layout.rs`、`apps/desktop/src/editor/renderer.rs`、`apps/desktop/src/editor/scene_graph.rs`、`apps/desktop/qml/WritingWorkspace.qml`、`apps/desktop/qml/EditorAnimationOverlay.qml`。
-- **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` 修自研写作区。这些是 fallback 路径，不得用于自研编辑器的光标、命中、滚动、动画修复。
+- **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` 修自研写作区。这些是旧 fallback 路径，只允许保留兼容，不允许新增依赖；不得作为可开发路线。
 - 修自研写作区必须看 `apps/desktop/src/sujian_editor_item/` 和 `docs/editor_engine_route.md`。
 
 ### 3.4 openChapter 防死循环

@@ -17,6 +17,8 @@ import uniffi.writer_core.HeightClassDto
 import uniffi.writer_core.NavigationModeDto
 import uniffi.writer_core.OrientationDto
 import uniffi.writer_core.PointerKindDto
+import uniffi.writer_core.ScreenPolicyDto
+import uniffi.writer_core.ScreenRoleDto
 import uniffi.writer_core.ShellModeDto
 import uniffi.writer_core.WidthClassDto
 
@@ -25,12 +27,26 @@ import uniffi.writer_core.WidthClassDto
  *
  * Android 端测量窗口尺寸后传入 WindowMetrics，调用 Core 的 resolve_layout 获取 LayoutPlan。
  * 不允许 Android 端自己判断 isTablet 或自己发明断点。
+ *
+ * 通过 WriterAppServiceHolder 直接调用 Core 服务，不再依赖 AppServiceBridge。
  */
-class LayoutPolicyBridge(private val appServiceBridge: AppServiceBridge) {
+class LayoutPolicyBridge internal constructor(private val holder: WriterAppServiceHolder) {
 
     companion object {
         private const val TAG = "LayoutPolicyBridge"
     }
+
+    // ── DTO 层 API（供 AppServiceBridge 门面委托） ──
+
+    fun resolveLayout(metrics: uniffi.writer_core.WindowMetricsDto): BridgeResult<uniffi.writer_core.LayoutPlanDto> = holder.wrapResult {
+        holder.service.resolveLayout(metrics)
+    }
+
+    fun resolveScreenPolicy(screenRole: ScreenRoleDto, shellMode: ShellModeDto): BridgeResult<ScreenPolicyDto> = holder.wrapResult {
+        holder.service.resolveScreenPolicy(screenRole, shellMode)
+    }
+
+    // ── Model 层 API（供 UI 层使用，保留向后兼容） ──
 
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? {
         return try {
@@ -44,7 +60,7 @@ class LayoutPolicyBridge(private val appServiceBridge: AppServiceBridge) {
                 orientation = metrics.orientation.toDto(),
                 pointer = metrics.pointer.toDto()
             )
-            val result = appServiceBridge.resolveLayout(dto)
+            val result = resolveLayout(dto)
             when (result) {
                 is BridgeResult.Success -> result.data.toModel()
                 else -> null
