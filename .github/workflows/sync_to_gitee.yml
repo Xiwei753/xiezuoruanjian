@@ -11,15 +11,19 @@ permissions:
 
 jobs:
   sync:
-    name: Mirror to Gitee
+    name: Mirror current snapshot to Gitee
     runs-on: ubuntu-24.04
     steps:
-      - name: Checkout repository
+      - name: Checkout current source snapshot
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          # Gitee is only a source snapshot mirror. Do not fetch or push the
+          # GitHub history/tags, otherwise old large objects count against the
+          # Gitee repository quota.
+          fetch-depth: 1
+          fetch-tags: false
 
-      - name: Sync to Gitee
+      - name: Push orphan source snapshot to Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
@@ -28,12 +32,21 @@ jobs:
             echo "GITEE_TOKEN is missing"
             exit 1
           fi
-          HEADER="> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 的镜像备份。**\n>\n> 反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。\n"
+
+          HEADER="> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 当前源码快照的镜像备份。**\n>\n> Gitee 镜像不保留 GitHub 历史、tags 或构建产物；反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。\n"
           { echo -e "$HEADER"; cat README.md; } > README.tmp && mv README.tmp README.md
           echo -e "\n---\n更多赞助方式请见[源仓库](https://github.com/Xiwei753/xiezuoruanjian)" >> README.md
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "添加镜像说明" || true
-          git remote add gitee https://wei-xi753:${GITEE_TOKEN}@gitee.com/wei-xi753/xiezuoruanjian.git || true
-          git push gitee main --force
+
+          # Re-root the checked-out worktree onto a brand-new orphan commit so
+          # Gitee receives only the current tracked source snapshot. This avoids
+          # pushing GitHub's historical objects, tags, or old large files.
+          git checkout --orphan gitee-snapshot
+          git rm -r --cached . >/dev/null 2>&1 || true
+          git add -A
+          git commit -m "同步 GitHub 当前源码快照"
+
+          git remote add gitee "https://wei-xi753:${GITEE_TOKEN}@gitee.com/wei-xi753/xiezuoruanjian.git" || true
+          git push gitee HEAD:main --force
