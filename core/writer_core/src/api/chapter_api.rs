@@ -146,5 +146,4 @@ impl WriterCoreApi {
             .map(|_| true)
             .map_err(Into::into)
     }
-
 }

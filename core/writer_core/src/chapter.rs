@@ -27,8 +27,8 @@
 
 use crate::error::Result;
 use chrono::Utc;
-use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use uuid::Uuid;
@@ -118,8 +118,7 @@ pub fn list_chapters(
         return Ok(Vec::new());
     }
 
-    let entries: Vec<_> = fs::read_dir(chapters_dir)?
-        .collect::<std::io::Result<Vec<_>>>()?;
+    let entries: Vec<_> = fs::read_dir(chapters_dir)?.collect::<std::io::Result<Vec<_>>>()?;
 
     let mut chapters: Vec<Chapter> = entries
         .into_par_iter()
@@ -798,7 +797,8 @@ mod tests {
         assert_eq!(chapter2.title, "第2章");
 
         // 有标题时不应被覆盖
-        let chapter3 = create_chapter(workspace_path, &project.id, &volume.id, "自定义标题").unwrap();
+        let chapter3 =
+            create_chapter(workspace_path, &project.id, &volume.id, "自定义标题").unwrap();
         assert_eq!(chapter3.title, "自定义标题");
 
         // 再创建空标题应生成"第4章"（因为已有3个章节）

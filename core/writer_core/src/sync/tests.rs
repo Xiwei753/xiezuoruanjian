@@ -2781,7 +2781,7 @@ mod tests {
         state_before_3.last_sync_time = None;
         SyncService::save_sync_state(dir.path(), &state_before_3).unwrap();
 
-        let (mock_url3, shutdown3, files_map3, _manifest_str3, server_thread3) =
+        let (mock_url3, shutdown3, _files_map3, _manifest_str3, server_thread3) =
             start_mock_github_api(Some(initial_manifest.clone()), initial_files.clone());
 
         let config3 = SyncConfig {
@@ -3286,7 +3286,10 @@ mod tests {
 
         let result = SyncService::perform_sync_diagnostics(&config, &secrets).unwrap();
         // Git 后端不再假成功
-        assert!(!result.success, "Git backend diagnostics should not report success");
+        assert!(
+            !result.success,
+            "Git backend diagnostics should not report success"
+        );
         assert!(!result.network_ok, "Git backend network_ok should be false");
         assert!(!result.auth_ok, "Git backend auth_ok should be false");
         assert!(!result.repo_ok, "Git backend repo_ok should be false");
@@ -3324,13 +3327,13 @@ mod tests {
         };
 
         // 第一次同步（force_sync=true）应该尝试执行（虽然会因网络失败，但不会被 debounce 跳过）
-        let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, true).unwrap();
+        let _res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, true).unwrap();
         // 因为是测试环境没有真实 GitHub API，预期返回错误状态而非 Success
         // debounce 跳过时返回 Success，所以只要不是 Success 就说明没被 debounce 跳过
 
         // 第二次同步（force_sync=false）在 min_interval 内应该被 debounce 跳过
         // debounce 跳过时返回 status=Success
-        let res2 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
+        let _res2 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
         // 如果被 debounce 跳过，status 应该是 Success
         // 注意：如果第一次同步失败没有更新 last_sync_time，则不会被 debounce
         // 所以这个测试验证的是：如果 last_sync_time 在 min_interval 内，force_sync=false 会被跳过
@@ -3366,13 +3369,21 @@ mod tests {
 
         // force_sync=false 应该被 debounce 跳过（返回 Success）
         let res1 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
-        assert_eq!(res1.status, SyncStatus::Success, "auto sync should be debounced");
+        assert_eq!(
+            res1.status,
+            SyncStatus::Success,
+            "auto sync should be debounced"
+        );
 
         // force_sync=true 应该绕过 debounce（尝试执行，虽然网络会失败）
         let res2 = SyncService::perform_lww_sync(dir.path(), &config, &secrets, true).unwrap();
         // force_sync=true 绕过了 debounce，会尝试网络请求
         // 因为测试环境没有真实 API，预期返回错误状态
-        assert_ne!(res2.status, SyncStatus::Success, "force_sync should bypass debounce and attempt sync");
+        assert_ne!(
+            res2.status,
+            SyncStatus::Success,
+            "force_sync should bypass debounce and attempt sync"
+        );
     }
 
     #[test]
@@ -3402,12 +3413,18 @@ mod tests {
         let mut state = crate::sync::SyncService::load_sync_state(dir.path()).unwrap();
         state.last_sync_time = Some(chrono::Utc::now().timestamp());
         // 添加 pending_take_remote（模拟用户刚解决冲突选择"采用远端"）
-        state.pending_take_remote.insert("test_chapter.md".to_string());
+        state
+            .pending_take_remote
+            .insert("test_chapter.md".to_string());
         crate::sync::SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         // force_sync=false 但有 pending_take_remote，应该绕过 debounce（尝试执行）
         let res = SyncService::perform_lww_sync(dir.path(), &config, &secrets, false).unwrap();
         // 绕过了 debounce，会尝试网络请求，因测试环境没有真实 API，预期返回错误状态
-        assert_ne!(res.status, SyncStatus::Success, "pending_take_remote should bypass debounce");
+        assert_ne!(
+            res.status,
+            SyncStatus::Success,
+            "pending_take_remote should bypass debounce"
+        );
     }
 }

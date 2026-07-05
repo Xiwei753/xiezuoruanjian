@@ -544,7 +544,7 @@ impl EditorEngine {
     }
 
     /// 从 transaction 生成 EditorVisualTransaction。
-    /// 
+    ///
     /// Core 只填充语义字段（id, kind, cause, old/new text, selection, inserted_range, duration, coordinate_mode, animation_mode）。
     /// 平台层负责填充坐标字段（glyph_rects, cursor_rect, cluster_rects, cluster_runs）。
     pub fn visual_transaction(
@@ -712,7 +712,12 @@ pub fn choose_animation_mode(
     animation_enabled: bool,
 ) -> AnimationMode {
     // 1. 系统抑制条件
-    if !animation_enabled || is_scrolling || is_loading || is_applying_format || is_applying_settings {
+    if !animation_enabled
+        || is_scrolling
+        || is_loading
+        || is_applying_format
+        || is_applying_settings
+    {
         return AnimationMode::SystemSuppressed;
     }
     // 2. 无内容可动画
@@ -746,34 +751,63 @@ pub fn count_grapheme_clusters(text: &str) -> usize {
 /// 检测文本是否包含复杂 grapheme（emoji/ZWJ/组合字符等）
 pub fn text_contains_complex_grapheme(text: &str) -> bool {
     use unicode_segmentation::UnicodeSegmentation;
-    text.graphemes(true).any(|g| g.chars().any(|ch| is_complex_grapheme_code_point(ch as u32)))
+    text.graphemes(true).any(|g| {
+        g.chars()
+            .any(|ch| is_complex_grapheme_code_point(ch as u32))
+    })
 }
 
 /// 检测单个 code point 是否属于复杂 grapheme
 pub fn is_complex_grapheme_code_point(cp: u32) -> bool {
     // Surrogate pairs: code point > 0xFFFF (non-BMP, e.g. emoji)
-    if cp > 0xFFFF { return true; }
+    if cp > 0xFFFF {
+        return true;
+    }
     // Zero Width Joiner
-    if cp == 0x200D { return true; }
+    if cp == 0x200D {
+        return true;
+    }
     // Variation selectors (FE00-FE0F, E0100-E01EF)
-    if (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF) { return true; }
+    if (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF) {
+        return true;
+    }
     // Combining Diacritical Marks (0300-036F)
-    if cp >= 0x0300 && cp <= 0x036F { return true; }
+    if cp >= 0x0300 && cp <= 0x036F {
+        return true;
+    }
     // Combining Diacritical Marks Extended (1AB0-1AFF)
-    if cp >= 0x1AB0 && cp <= 0x1AFF { return true; }
+    if cp >= 0x1AB0 && cp <= 0x1AFF {
+        return true;
+    }
     // Combining Diacritical Marks Supplement (1DC0-1DFF)
-    if cp >= 0x1DC0 && cp <= 0x1DFF { return true; }
+    if cp >= 0x1DC0 && cp <= 0x1DFF {
+        return true;
+    }
     // Combining Diacritical Marks for Symbols (20D0-20FF)
-    if cp >= 0x20D0 && cp <= 0x20FF { return true; }
+    if cp >= 0x20D0 && cp <= 0x20FF {
+        return true;
+    }
     // Combining Half Marks (FE20-FE2F)
-    if cp >= 0xFE20 && cp <= 0xFE2F { return true; }
+    if cp >= 0xFE20 && cp <= 0xFE2F {
+        return true;
+    }
     // Emoji code points (common ranges)
-    if cp >= 0x1F600 && cp <= 0x1F64F { return true; }
-    if cp >= 0x1F300 && cp <= 0x1F5FF { return true; }
-    if cp >= 0x1F680 && cp <= 0x1F6FF { return true; }
-    if cp >= 0x1F900 && cp <= 0x1F9FF { return true; }
+    if cp >= 0x1F600 && cp <= 0x1F64F {
+        return true;
+    }
+    if cp >= 0x1F300 && cp <= 0x1F5FF {
+        return true;
+    }
+    if cp >= 0x1F680 && cp <= 0x1F6FF {
+        return true;
+    }
+    if cp >= 0x1F900 && cp <= 0x1F9FF {
+        return true;
+    }
     // Regional Indicator (U+1F1E6-U+1F1FF)
-    if cp >= 0x1F1E6 && cp <= 0x1F1FF { return true; }
+    if cp >= 0x1F1E6 && cp <= 0x1F1FF {
+        return true;
+    }
     false
 }
 
@@ -904,7 +938,9 @@ pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRe
     for grapheme in text.graphemes(true) {
         let byte_start = base_offset + (grapheme.as_ptr() as usize - text.as_ptr() as usize);
         let byte_end = byte_start + grapheme.len();
-        let is_complex = grapheme.chars().any(|ch| is_complex_grapheme_code_point(ch as u32));
+        let is_complex = grapheme
+            .chars()
+            .any(|ch| is_complex_grapheme_code_point(ch as u32));
         clusters.push(ClusterRect {
             byte_start,
             byte_end,
@@ -1240,7 +1276,12 @@ mod tests {
 
     #[test]
     fn cursor_rect_serializes_camel_case() {
-        let cr = CursorRect { x: 10.5, top: 5.0, bottom: 25.0, baseline_y: 20.0 };
+        let cr = CursorRect {
+            x: 10.5,
+            top: 5.0,
+            bottom: 25.0,
+            baseline_y: 20.0,
+        };
         let json = serde_json::to_string(&cr).unwrap();
         assert!(json.contains("\"x\":"));
         assert!(json.contains("\"top\":"));
@@ -1260,8 +1301,18 @@ mod tests {
             new_cursor: EditorCursor { index: 1 },
             duration_ms: 160,
             glyph_rects: Vec::new(),
-            old_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            new_cursor_rect: Some(CursorRect { x: 30.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            old_cursor_rect: Some(CursorRect {
+                x: 10.0,
+                top: 5.0,
+                bottom: 25.0,
+                baseline_y: 20.0,
+            }),
+            new_cursor_rect: Some(CursorRect {
+                x: 30.0,
+                top: 5.0,
+                bottom: 25.0,
+                baseline_y: 20.0,
+            }),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("oldCursorRect"));
@@ -1474,7 +1525,10 @@ mod tests {
             EditorSelection::collapsed("abc", 3),
             EditorTransactionCause::Typing,
         );
-        assert!(tx_on.should_animate, "Typing should animate when animation is on");
+        assert!(
+            tx_on.should_animate,
+            "Typing should animate when animation is on"
+        );
 
         // When typing animation is OFF: should_animate_changes still returns true for Typing cause,
         // but the caller (platform) should check the setting and skip creating animation events.
@@ -1488,7 +1542,10 @@ mod tests {
             EditorTransactionCause::Typing,
         );
         // Core always returns true for Typing cause — platform is responsible for checking the toggle
-        assert!(tx_off.should_animate, "Core should_animate_changes is cause-based, not toggle-based");
+        assert!(
+            tx_off.should_animate,
+            "Core should_animate_changes is cause-based, not toggle-based"
+        );
 
         // Paste 现在也进入 visual transaction（用户触发的操作不应被入口拦掉）
         let tx_paste = engine.create_transaction(
@@ -1498,7 +1555,10 @@ mod tests {
             EditorSelection::collapsed("a pasted text", "a pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(tx_paste.should_animate, "Paste should animate as a user-triggered operation");
+        assert!(
+            tx_paste.should_animate,
+            "Paste should animate as a user-triggered operation"
+        );
     }
 
     #[test]
@@ -1530,7 +1590,10 @@ mod tests {
             EditorTransactionCause::Typing,
         );
         let events2 = engine.animation_events(&tx2);
-        assert_eq!(events2[0].duration_ms, 5, "Core stores whatever duration is set; clamping is the caller's responsibility");
+        assert_eq!(
+            events2[0].duration_ms, 5,
+            "Core stores whatever duration is set; clamping is the caller's responsibility"
+        );
 
         // Very large duration
         engine.set_animation_duration_ms(9999);
@@ -1542,7 +1605,10 @@ mod tests {
             EditorTransactionCause::Typing,
         );
         let events3 = engine.animation_events(&tx3);
-        assert_eq!(events3[0].duration_ms, 9999, "Core stores whatever duration is set; clamping is the caller's responsibility");
+        assert_eq!(
+            events3[0].duration_ms, 9999,
+            "Core stores whatever duration is set; clamping is the caller's responsibility"
+        );
     }
 
     #[test]
@@ -1588,7 +1654,10 @@ mod tests {
             EditorSelection::collapsed("ab", 2),
             EditorTransactionCause::Paste,
         );
-        assert!(tx.should_animate, "Paste should animate even for single char");
+        assert!(
+            tx.should_animate,
+            "Paste should animate even for single char"
+        );
         let events = engine.animation_events(&tx);
         assert!(events.len() >= 1);
         assert_eq!(events[0].kind, EditorAnimationKind::Insert);
@@ -1601,7 +1670,10 @@ mod tests {
             EditorSelection::collapsed("a long pasted text", "a long pasted text".len()),
             EditorTransactionCause::Paste,
         );
-        assert!(tx2.should_animate, "Paste should animate for multi-char text");
+        assert!(
+            tx2.should_animate,
+            "Paste should animate for multi-char text"
+        );
     }
 
     #[test]
@@ -1618,7 +1690,10 @@ mod tests {
         );
         assert!(!tx.should_animate, "Load should not animate");
         let events = engine.animation_events(&tx);
-        assert!(events.is_empty(), "Load should produce zero animation events (not even Cursor)");
+        assert!(
+            events.is_empty(),
+            "Load should produce zero animation events (not even Cursor)"
+        );
 
         // Load with same cursor position (0→0) should also produce no events
         let tx2 = engine.create_transaction(
@@ -1701,7 +1776,10 @@ mod tests {
             EditorTransactionCause::Paste,
         );
         let vt = engine.visual_transaction(&tx);
-        assert!(vt.is_some(), "Paste short text should enter visual transaction");
+        assert!(
+            vt.is_some(),
+            "Paste short text should enter visual transaction"
+        );
         let vt = vt.unwrap();
         assert_eq!(
             vt.animation_mode,
@@ -1722,7 +1800,10 @@ mod tests {
             EditorTransactionCause::Paste,
         );
         let vt = engine.visual_transaction(&tx);
-        assert!(vt.is_some(), "Paste with newline should enter visual transaction");
+        assert!(
+            vt.is_some(),
+            "Paste with newline should enter visual transaction"
+        );
         let vt = vt.unwrap();
         assert_eq!(
             vt.animation_mode,
@@ -1761,7 +1842,12 @@ mod tests {
 
     #[test]
     fn cursor_rect_has_baseline_y() {
-        let cr = CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 };
+        let cr = CursorRect {
+            x: 10.0,
+            top: 5.0,
+            bottom: 25.0,
+            baseline_y: 20.0,
+        };
         let json = serde_json::to_string(&cr).unwrap();
         assert!(json.contains("\"baselineY\":"));
         assert!(json.contains("\"top\":"));
@@ -1771,9 +1857,14 @@ mod tests {
     #[test]
     fn glyph_rect_has_baseline_y() {
         let gr = GlyphRect {
-            x: 10.5, y: 20.0, w: 16.0, h: 24.0,
-            char_: "你".to_string(), baseline_y: 40.0,
-            byte_start: 0, byte_end: 3,
+            x: 10.5,
+            y: 20.0,
+            w: 16.0,
+            h: 24.0,
+            char_: "你".to_string(),
+            baseline_y: 40.0,
+            byte_start: 0,
+            byte_end: 3,
         };
         let json = serde_json::to_string(&gr).unwrap();
         assert!(json.contains("\"baselineY\":"));
@@ -1786,11 +1877,21 @@ mod tests {
             old_preedit_text: "n".to_string(),
             new_preedit_text: "ni".to_string(),
             old_preedit_cursor_rect: None,
-            new_preedit_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            new_preedit_cursor_rect: Some(CursorRect {
+                x: 10.0,
+                top: 5.0,
+                bottom: 25.0,
+                baseline_y: 20.0,
+            }),
             preedit_glyph_rects: None,
             deleted_preedit_glyph_rects: None,
             inserted_preedit_glyph_rects: None,
-            preedit_cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            preedit_cursor_rect: Some(CursorRect {
+                x: 10.0,
+                top: 5.0,
+                bottom: 25.0,
+                baseline_y: 20.0,
+            }),
             duration_ms: 160,
             coordinate_mode: VisualCoordinateMode::Baseline,
         };
@@ -1810,7 +1911,9 @@ mod tests {
 
     #[test]
     fn preedit_text_format_serializes_camel_case() {
-        let fmt = PreeditTextFormat::TextColor { color: "#FF0000".to_string() };
+        let fmt = PreeditTextFormat::TextColor {
+            color: "#FF0000".to_string(),
+        };
         let json = serde_json::to_string(&fmt).unwrap();
         assert!(json.contains("\"textColor\":"));
         assert!(json.contains("\"color\":"));
@@ -1819,7 +1922,9 @@ mod tests {
         let json2 = serde_json::to_string(&fmt2).unwrap();
         assert!(json2.contains("\"underline\""));
 
-        let fmt3 = PreeditTextFormat::BackgroundColor { color: "#00FF00".to_string() };
+        let fmt3 = PreeditTextFormat::BackgroundColor {
+            color: "#00FF00".to_string(),
+        };
         let json3 = serde_json::to_string(&fmt3).unwrap();
         assert!(json3.contains("\"backgroundColor\":"));
 
@@ -2001,8 +2106,18 @@ mod tests {
             kind: AnimationMode::LineReflowAnimation,
             range_start: 0,
             range_end: 5,
-            old_rect: Some(Rect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 }),
-            new_rect: Some(Rect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 }),
+            old_rect: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 20.0,
+            }),
+            new_rect: Some(Rect {
+                x: 0.0,
+                y: 20.0,
+                w: 100.0,
+                h: 20.0,
+            }),
             line_index: 1,
             payload_ref: Some(99),
         };
@@ -2102,10 +2217,17 @@ mod tests {
         // Variation selector emoji 输出正确的 byte range 和 is_complex=true
         let emoji = "❤️"; // ❤ + FE0F
         let clusters = split_text_into_clusters(emoji, 0);
-        assert_eq!(clusters.len(), 1, "Variation selector emoji should be 1 cluster");
+        assert_eq!(
+            clusters.len(),
+            1,
+            "Variation selector emoji should be 1 cluster"
+        );
         assert_eq!(clusters[0].byte_start, 0);
         assert_eq!(clusters[0].byte_end, emoji.len());
         assert_eq!(clusters[0].text, emoji);
-        assert!(clusters[0].is_complex, "Variation selector emoji should be complex");
+        assert!(
+            clusters[0].is_complex,
+            "Variation selector emoji should be complex"
+        );
     }
 }

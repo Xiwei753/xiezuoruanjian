@@ -158,7 +158,11 @@ pub fn save_last_navigation_state(
     starmap_id: Option<&str>,
 ) -> Result<(), String> {
     let mut config = load_app_config();
-    config.last_route = if route.is_empty() { None } else { Some(route.to_string()) };
+    config.last_route = if route.is_empty() {
+        None
+    } else {
+        Some(route.to_string())
+    };
     config.last_project_id = project_id.map(|s| s.to_string());
     config.last_volume_id = volume_id.map(|s| s.to_string());
     config.last_chapter_id = chapter_id.map(|s| s.to_string());
@@ -352,7 +356,11 @@ mod tests {
     #[test]
     fn test_save_app_config_creates_parent_dirs() {
         let tmp_dir = tempfile::tempdir().expect("无法创建临时目录");
-        let config_path = tmp_dir.path().join("nested").join("dir").join("app_config.json");
+        let config_path = tmp_dir
+            .path()
+            .join("nested")
+            .join("dir")
+            .join("app_config.json");
 
         let config = AppConfig {
             last_workspace_path: Some("/test".to_string()),
@@ -538,7 +546,10 @@ mod tests {
             let has_appdata = std::env::var_os("APPDATA").is_some();
             let has_local_appdata = std::env::var_os("LOCALAPPDATA").is_some();
             if has_appdata || has_local_appdata {
-                assert!(dir.is_some(), "Windows 上 APPDATA 或 LOCALAPPDATA 存在时 config_dir() 应返回 Some");
+                assert!(
+                    dir.is_some(),
+                    "Windows 上 APPDATA 或 LOCALAPPDATA 存在时 config_dir() 应返回 Some"
+                );
                 let dir = dir.unwrap();
                 assert_eq!(
                     dir.file_name().unwrap().to_str().unwrap(),

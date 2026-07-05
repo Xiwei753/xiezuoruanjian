@@ -275,7 +275,8 @@ pub(crate) fn perform_lww_sync(
                 } else {
                     log::debug!(
                         "[sync] debounce: last_sync={}s ago, min_interval={}s, skipping",
-                        elapsed, min_interval
+                        elapsed,
+                        min_interval
                     );
                     result.status = SyncStatus::Success;
                     return Ok(result);
@@ -603,8 +604,7 @@ fn execute_lww_sync_attempt(
             pending_paths
                 .par_iter()
                 .map(|path| {
-                    let remote =
-                        github_get_content(client, api_base, token, &config.branch, path)?;
+                    let remote = github_get_content(client, api_base, token, &config.branch, path)?;
                     let Some((content, _sha)) = remote else {
                         return Ok((path.clone(), None));
                     };
@@ -931,14 +931,11 @@ fn execute_lww_sync_attempt(
                         crate::Error::Other(format!("local_io_error: {}: {}", path, e))
                     })?;
                 }
-                let tmp_path =
-                    full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                std::fs::write(&tmp_path, content).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
-                })?;
-                std::fs::rename(tmp_path, &full_path).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
-                })?;
+                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
+                std::fs::write(&tmp_path, content)
+                    .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
+                std::fs::rename(tmp_path, &full_path)
+                    .map_err(|e| crate::Error::Other(format!("local_io_error: {}: {}", path, e)))?;
                 Ok(())
             })
         });

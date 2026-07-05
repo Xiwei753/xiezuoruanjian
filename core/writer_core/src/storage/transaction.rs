@@ -175,7 +175,9 @@ pub fn recover_pending_transactions(workspace_path: &Path) -> Vec<TransactionRec
                     Err(e) => {
                         log::warn!(
                             "[transaction] recovery rename failed: {} -> {}: {}",
-                            tx_entry.staging_filename, tx_entry.target_relative, e
+                            tx_entry.staging_filename,
+                            tx_entry.target_relative,
+                            e
                         );
                         missing_files.push(tx_entry.target_relative.clone());
                     }

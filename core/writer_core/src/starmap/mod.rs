@@ -571,8 +571,7 @@ mod tests {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let child =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None)
-                .unwrap();
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
 
         assert_eq!(
             child.parent_starmap_id.as_deref(),
@@ -602,11 +601,9 @@ mod tests {
         let dir = setup_workspace();
         let parent = create_starmap(dir.path(), "Parent", "", None).unwrap();
         let child1 =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None)
-                .unwrap();
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 1", "", None).unwrap();
         let child2 =
-            create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None)
-                .unwrap();
+            create_child_starmap(dir.path(), &parent.starmap_id, "Child 2", "", None).unwrap();
 
         delete_starmap(dir.path(), &parent.starmap_id).unwrap();
 

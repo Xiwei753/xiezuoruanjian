@@ -213,15 +213,25 @@ mod tests {
         assert!(!registry.items.is_empty());
 
         // Verify i18n key pattern for title_key/description_key and fallback presence
-        let font_size_item = registry.items.iter().find(|i| i.id == "editor.font_size").unwrap();
+        let font_size_item = registry
+            .items
+            .iter()
+            .find(|i| i.id == "editor.font_size")
+            .unwrap();
         assert!(font_size_item.title_key.starts_with("settings.item."));
         assert!(font_size_item.description_key.starts_with("settings.item."));
         assert!(font_size_item.title_fallback.is_some());
         assert!(font_size_item.description_fallback.is_some());
-        assert!(font_size_item.category_key.starts_with("settings.category."));
+        assert!(font_size_item
+            .category_key
+            .starts_with("settings.category."));
         assert!(font_size_item.category_fallback.is_some());
 
-        let token_item = registry.items.iter().find(|i| i.id == "sync.git.token").unwrap();
+        let token_item = registry
+            .items
+            .iter()
+            .find(|i| i.id == "sync.git.token")
+            .unwrap();
         assert!(token_item.title_key.starts_with("settings.item."));
         assert!(token_item.description_key.starts_with("settings.item."));
         assert!(token_item.title_fallback.is_some());

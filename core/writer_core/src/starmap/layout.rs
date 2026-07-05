@@ -232,4 +232,118 @@ mod tests {
         );
         assert_eq!(layout.nodes.len(), 3);
     }
+
+    #[test]
+    fn test_radial_layout_empty() {
+        let ids = vec![];
+        let parent_map = std::collections::HashMap::new();
+        let layout = calculate_radial_layout(
+            &ids,
+            &parent_map,
+            &StarMapLayout {
+                kind: StarMapLayoutKind::AutoRadial,
+                nodes: vec![],
+            },
+        );
+        assert_eq!(layout.nodes.len(), 0);
+    }
+
+    #[test]
+    fn test_radial_layout_multiple_roots() {
+        let ids = vec!["root1".into(), "root2".into(), "child1".into()];
+        let mut parent_map = std::collections::HashMap::new();
+        parent_map.insert("root1".to_string(), None);
+        parent_map.insert("root2".to_string(), None);
+        parent_map.insert("child1".to_string(), Some("root1".to_string()));
+        let layout = calculate_radial_layout(
+            &ids,
+            &parent_map,
+            &StarMapLayout {
+                kind: StarMapLayoutKind::AutoRadial,
+                nodes: vec![],
+            },
+        );
+        assert_eq!(layout.nodes.len(), 3);
+        let root1 = layout.nodes.iter().find(|n| n.node_id == "root1").unwrap();
+        let root2 = layout.nodes.iter().find(|n| n.node_id == "root2").unwrap();
+        let child1 = layout.nodes.iter().find(|n| n.node_id == "child1").unwrap();
+
+        assert_eq!(root1.depth, 1.0);
+        assert_eq!(root2.depth, 1.0);
+        assert_eq!(child1.depth, 2.0);
+    }
+
+    #[test]
+    fn test_radial_layout_deep_tree() {
+        let ids = vec![
+            "root".into(),
+            "child1".into(),
+            "child2".into(),
+            "grandchild1".into(),
+        ];
+        let mut parent_map = std::collections::HashMap::new();
+        parent_map.insert("root".to_string(), None);
+        parent_map.insert("child1".to_string(), Some("root".to_string()));
+        parent_map.insert("child2".to_string(), Some("root".to_string()));
+        parent_map.insert("grandchild1".to_string(), Some("child1".to_string()));
+
+        let layout = calculate_radial_layout(
+            &ids,
+            &parent_map,
+            &StarMapLayout {
+                kind: StarMapLayoutKind::AutoRadial,
+                nodes: vec![],
+            },
+        );
+
+        assert_eq!(layout.nodes.len(), 4);
+        let root = layout.nodes.iter().find(|n| n.node_id == "root").unwrap();
+        let child1 = layout.nodes.iter().find(|n| n.node_id == "child1").unwrap();
+        let child2 = layout.nodes.iter().find(|n| n.node_id == "child2").unwrap();
+        let grandchild1 = layout
+            .nodes
+            .iter()
+            .find(|n| n.node_id == "grandchild1")
+            .unwrap();
+
+        assert_eq!(root.depth, 1.0);
+        assert_eq!(child1.depth, 2.0);
+        assert_eq!(child2.depth, 2.0);
+        assert_eq!(grandchild1.depth, 3.0);
+    }
+
+    #[test]
+    fn test_radial_layout_preserves_existing() {
+        let existing = StarMapLayout {
+            kind: StarMapLayoutKind::AutoRadial,
+            nodes: vec![StarMapLayoutNode {
+                node_id: "root".into(),
+                x: 100.0,
+                y: 100.0,
+                width: 200.0,
+                height: 80.0,
+                radius: 40.0,
+                collapsed: false,
+                z_index: 5,
+                scale: 1.0,
+                depth: 0.0,
+                focus_weight: 0.0,
+                orbit_group: None,
+            }],
+        };
+        let ids = vec!["root".into(), "child".into()];
+        let mut parent_map = std::collections::HashMap::new();
+        parent_map.insert("child".to_string(), Some("root".to_string()));
+
+        let layout = calculate_radial_layout(&ids, &parent_map, &existing);
+
+        let root_node = layout.nodes.iter().find(|n| n.node_id == "root").unwrap();
+        assert_eq!(root_node.depth, 1.0);
+        assert_eq!(root_node.x, 100.0);
+        assert_eq!(root_node.y, 100.0);
+        assert_eq!(root_node.width, 200.0);
+
+        let child_node = layout.nodes.iter().find(|n| n.node_id == "child").unwrap();
+        assert_eq!(child_node.depth, 2.0);
+    }
 }

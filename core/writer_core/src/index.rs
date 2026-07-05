@@ -188,7 +188,9 @@ impl SearchIndex {
                         chapter_id: entry.chapter_id.clone(),
                         chapter_title: entry
                             .chapter_title
-                            .get_or_init(|| load_chapter_title(&entry.chapter_path, &entry.chapter_id))
+                            .get_or_init(|| {
+                                load_chapter_title(&entry.chapter_path, &entry.chapter_id)
+                            })
                             .clone(),
                         line_number: line_idx + 1,
                         line_text: line.clone(),
@@ -267,7 +269,9 @@ impl SearchIndex {
                         chapter_id: entry.chapter_id.clone(),
                         chapter_title: entry
                             .chapter_title
-                            .get_or_init(|| load_chapter_title(&entry.chapter_path, &entry.chapter_id))
+                            .get_or_init(|| {
+                                load_chapter_title(&entry.chapter_path, &entry.chapter_id)
+                            })
                             .clone(),
                         line_number: line_idx + 1,
                         line_text: line.clone(),

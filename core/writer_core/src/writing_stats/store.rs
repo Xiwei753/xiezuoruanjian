@@ -652,7 +652,7 @@ mod tests {
             0,
             0,
             5,
-            "session_1"
+            "session_1",
         )
     }
 
@@ -1100,5 +1100,4 @@ mod tests {
             assert!(buffer.is_empty());
         }
     }
-
 }
