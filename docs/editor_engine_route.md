@@ -18,7 +18,7 @@ Rust Core EditorTransaction
     → QImage static texture (Layer 0)
     → QSGImageNode 上屏
     → QML Rectangle cursor (绑定 Rust cursor_rect_x/y/width/height)
-    → QML EditorAnimationOverlay (消费 animation_events_json 信号，渲染 EditorGlyphGhost)
+    → QML EditorAnimationOverlay (消费 visual_transaction_json 信号，渲染 EditorGlyphGhost)
 ```
 
 ### 各层职责
@@ -29,7 +29,7 @@ Rust Core EditorTransaction
 | 静态正文 | `QImage` → `QSGImageNode` | 正常完整绘制正文纹理；插入动画期间临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染）；动画结束后恢复完整绘制 |
 | 光标 | QML `Rectangle` | 绑定 Rust 暴露的 cursor rect 属性 |
 | 动画 | QML `EditorAnimationOverlay` + `EditorGlyphGhost` | 逐字 ghost 动画（insert 从光标吐出，delete 向光标吞回） |
-| 事务 | Rust Core `EditorTransaction` / `EditorAnimationEvent` | 统一管理插入、删除、选区、格式化、动画事件 |
+| 事务 | Rust Core `EditorTransaction` / `EditorVisualTransaction` | 统一管理插入、删除、选区、格式化、动画事件 |
 
 ### 关键文件
 
@@ -60,9 +60,9 @@ Rust Core EditorTransaction
 
 ## Desktop 动画唯一主路径
 
-1. Rust Core 生成 `EditorTransaction` / `EditorAnimationEvent`，填充 `glyph_rects`
-2. `SujianEditorItem` 通过 `animation_events_json` 属性暴露给 QML
-3. QML `EditorAnimationOverlay` 监听 `animationEventsChanged` 信号，解析 JSON 事件
+1. Rust Core 生成 `EditorTransaction` / `EditorVisualTransaction`，填充 `glyph_rects`
+2. `SujianEditorItem` 通过 `visual_transaction_json` 属性暴露给 QML
+3. QML `EditorAnimationOverlay` 监听 `visual_transaction_changed` 信号，解析 JSON 事件
 4. `EditorGlyphGhost` 组件渲染逐字 ghost 动画
 
 Rust 侧只负责：排版、命中、选区、光标、事务、glyph rects。
