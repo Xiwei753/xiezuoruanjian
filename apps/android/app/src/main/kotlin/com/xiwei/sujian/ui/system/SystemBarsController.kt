@@ -154,11 +154,4 @@ class SystemBarsController(private val activity: Activity) {
         }
     }
 
-    // ── 旧方法兼容（标记 @Deprecated） ──
-
-    @Deprecated("Use addAppBarTarget", ReplaceWith("addAppBarTarget(view)"))
-    fun setAppBarInsetTarget(view: View) = addAppBarTarget(view)
-
-    @Deprecated("Use addBottomPaddingTarget", ReplaceWith("addBottomPaddingTarget(view)"))
-    fun setBottomInsetTarget(view: View) = addBottomPaddingTarget(view)
 }
