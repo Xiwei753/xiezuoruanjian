@@ -579,32 +579,6 @@ impl WriterAppService {
         }
     }
 
-    // ── Editor Animation ──
-
-    #[allow(deprecated)]
-    pub fn editor_animation_events(
-        &self,
-        old_text: String,
-        new_text: String,
-        old_cursor_index: u32,
-        new_cursor_index: u32,
-        cause: crate::api::EditorTransactionCauseDto,
-        max_animated_chars: u32,
-        animation_duration_ms: u64,
-    ) -> Vec<crate::api::EditorAnimationEventDto> {
-        self.api
-            .editor_animation_events(
-                &old_text,
-                &new_text,
-                old_cursor_index,
-                new_cursor_index,
-                cause,
-                max_animated_chars,
-                animation_duration_ms,
-            )
-            .unwrap_or_default()
-    }
-
     pub fn editor_visual_transaction(
         &self,
         old_text: String,
