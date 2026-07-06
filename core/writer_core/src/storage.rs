@@ -60,18 +60,15 @@ pub fn atomic_write_string(path: &Path, content: &str) -> Result<()> {
         return Err(e.into());
     }
 
-    #[allow(unused_variables)]
+    #[cfg(unix)]
     if let Some(parent) = path.parent() {
-        #[cfg(unix)]
-        {
-            let parent_path = if parent.as_os_str().is_empty() {
-                Path::new(".")
-            } else {
-                parent
-            };
-            let dir = File::open(parent_path)?;
-            dir.sync_all()?;
-        }
+        let parent_path = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        let dir = File::open(parent_path)?;
+        dir.sync_all()?;
     }
 
     Ok(())
