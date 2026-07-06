@@ -16,6 +16,16 @@
 use std::io::Write;
 
 fn command_stdout(cmd: &str, args: &[&str]) -> Option<String> {
+    if !matches!(cmd, "gdbus" | "gsettings" | "kreadconfig5" | "kreadconfig6") {
+        return None;
+    }
+
+    for arg in args {
+        if !arg.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':' | '/')) {
+            return None;
+        }
+    }
+
     let output = std::process::Command::new(cmd).args(args).output().ok()?;
     if output.status.success() {
         return Some(String::from_utf8_lossy(&output.stdout).trim().to_string());
