@@ -207,24 +207,6 @@ pub fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
         .count()
 }
 
-#[allow(dead_code)]
-pub fn byte_index_at_char_offset_in_range(
-    text: &str,
-    start: usize,
-    end: usize,
-    char_offset: usize,
-) -> usize {
-    if char_offset == 0 {
-        return start;
-    }
-    for (offset, (byte, _)) in text[start..end].char_indices().enumerate() {
-        if offset == char_offset {
-            return start + byte;
-        }
-    }
-    end
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -271,17 +253,6 @@ mod tests {
         assert_eq!(redone.text, "第一行\n第二行");
         assert_eq!(buffer.text, "第一行\n第二行");
         assert_eq!(buffer.cursor, buffer.text.len());
-    }
-
-    #[test]
-    fn line_char_offset_does_not_jump_to_document_end() {
-        let text = "第一行\n第二行";
-        let line_end = "第一行".len();
-
-        assert_eq!(
-            byte_index_at_char_offset_in_range(text, 0, line_end, 3),
-            line_end
-        );
     }
 
     #[test]
