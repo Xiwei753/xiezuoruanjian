@@ -375,3 +375,61 @@ pub(crate) fn validate_viewport(viewport: &StarMapViewport) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::starmap::types::StarMapViewport;
+
+    #[test]
+    fn test_validate_viewport_valid() {
+        let viewport = StarMapViewport {
+            scale: 1.0,
+            offset_x: 10.0,
+            offset_y: -20.5,
+            width: 1920.0,
+            height: 1080.0,
+        };
+        assert!(validate_viewport(&viewport).is_ok());
+    }
+
+    #[test]
+    fn test_validate_viewport_invalid_scale() {
+        let mut viewport = StarMapViewport::default();
+
+        viewport.scale = 0.0;
+        assert!(validate_viewport(&viewport).is_err());
+
+        viewport.scale = -1.0;
+        assert!(validate_viewport(&viewport).is_err());
+
+        viewport.scale = f32::NAN;
+        assert!(validate_viewport(&viewport).is_err());
+
+        viewport.scale = f32::INFINITY;
+        assert!(validate_viewport(&viewport).is_err());
+    }
+
+    #[test]
+    fn test_validate_viewport_invalid_offset_or_size() {
+        let mut viewport = StarMapViewport {
+            scale: 1.0,
+            ..Default::default()
+        };
+
+        viewport.offset_x = f32::NAN;
+        assert!(validate_viewport(&viewport).is_err());
+
+        viewport.offset_x = 0.0;
+        viewport.offset_y = f32::INFINITY;
+        assert!(validate_viewport(&viewport).is_err());
+
+        viewport.offset_y = 0.0;
+        viewport.width = f32::NEG_INFINITY;
+        assert!(validate_viewport(&viewport).is_err());
+
+        viewport.width = 0.0;
+        viewport.height = f32::NAN;
+        assert!(validate_viewport(&viewport).is_err());
+    }
+}
