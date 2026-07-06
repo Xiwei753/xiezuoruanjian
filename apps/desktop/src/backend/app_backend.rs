@@ -142,7 +142,7 @@ fn debug_level_enabled(module: &str, level: DebugLevel) -> bool {
     level <= get_debug_config().level
 }
 
-#[allow(dead_code)]
+
 pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Info) {
         println!(
@@ -154,7 +154,7 @@ pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     crate::backend::diagnostics::log_to_file("INFO", module, event, message);
 }
 
-#[allow(dead_code)]
+
 pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Warn) {
         eprintln!(
@@ -166,7 +166,7 @@ pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     crate::backend::diagnostics::log_to_file("WARN", module, event, message);
 }
 
-#[allow(dead_code)]
+
 pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Error) {
         eprintln!(
@@ -183,7 +183,7 @@ use sync_bridge::SyncTaskOutcome;
 #[path = "system_utils.rs"]
 mod system_utils;
 
-#[allow(dead_code)]
+
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
 pub struct AppBackend {
