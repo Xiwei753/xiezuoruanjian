@@ -855,6 +855,10 @@ Rectangle {
                             Qt.callLater(sujianEditor.flush_content_height)
                         }
 
+                        Component.onCompleted: {
+                            sujianEditor.verify_animation_signal_meta_object()
+                        }
+
                         onExplicit_clear_requested: editorController.markPotentialExplicitClear()
 
                         onContext_menu_requested: function(cx, cy) {

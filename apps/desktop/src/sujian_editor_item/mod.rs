@@ -14,6 +14,7 @@ pub(crate) mod cursor_controller;
 pub(crate) mod rendering;
 pub(crate) mod text_animation_state;
 
+use crate::backend::diagnostics;
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
     text_baseline_y, CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot,
@@ -71,9 +72,11 @@ cpp! {{
     #include <QtGui/QFont>
     #include <QtGui/QPainter>
     #include <QtGui/QClipboard>
+    #include <QByteArray>
     #include <QGuiApplication>
     #include <QMetaMethod>
     #include <QMetaObject>
+    #include <QStringList>
 }}
 
 /// 编辑器颜色 fallback 常量 — QML 初始化时必须注入主题色覆盖这些值
@@ -251,6 +254,7 @@ pub struct SujianEditorItem {
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
     request_text_input_focus: qt_method!(fn(&mut self)),
     snap_next_cursor_update: qt_method!(fn(&mut self)),
+    verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
     on_insert_animation_finished: qt_method!(fn(&mut self, byte_start: i32, byte_end: i32)),
     on_insert_animation_skipped: qt_method!(fn(&mut self, byte_start: i32, byte_end: i32)),
 
@@ -393,6 +397,7 @@ impl Default for SujianEditorItem {
             select_word_at: Default::default(),
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
+            verify_animation_signal_meta_object: Default::default(),
             on_insert_animation_finished: Default::default(),
             on_insert_animation_skipped: Default::default(),
             buffer: EditorBuffer::default(),
@@ -956,6 +961,45 @@ impl SujianEditorItem {
 
     fn preedit_visual_transaction_json(&self) -> QString {
         self.last_preedit_visual_transaction_json.clone()
+    }
+
+    fn verify_animation_signal_meta_object(&self) -> bool {
+        let obj = self.get_cpp_object();
+        let missing = if obj.is_null() {
+            "<null QObject>".into()
+        } else {
+            cpp!(unsafe [obj as "QObject*"] -> QString as "QString" {
+                const QMetaObject* meta = obj->metaObject();
+                QStringList missing;
+                if (!meta) {
+                    missing << QStringLiteral("<null metaObject>");
+                } else {
+                    const QByteArray visual = QMetaObject::normalizedSignature("visual_transaction_changed()");
+                    const QByteArray preedit = QMetaObject::normalizedSignature("preedit_visual_transaction_changed()");
+                    if (meta->indexOfSignal(visual.constData()) < 0) {
+                        missing << QStringLiteral("visual_transaction_changed");
+                    }
+                    if (meta->indexOfSignal(preedit.constData()) < 0) {
+                        missing << QStringLiteral("preedit_visual_transaction_changed");
+                    }
+                }
+                return missing.join(QStringLiteral(","));
+            })
+        };
+        if missing.is_empty() {
+            editor_animation_debug_log(
+                "[SujianEditorItemMetaObject] required animation signals present",
+            );
+            true
+        } else {
+            let message = format!(
+                "SujianEditorItem metaObject missing required animation signals: {}",
+                missing
+            );
+            eprintln!("[ERROR][SujianEditorItemMetaObject] {}", message);
+            diagnostics::log_to_file("ERROR", "editor", "sujian_editor_metaobject_missing_signal", &message);
+            false
+        }
     }
 
     #[cfg(test)]
@@ -3005,6 +3049,12 @@ mod tests {
         assert!(dump.contains("preedit_visual_transaction_changed"), "missing preedit_visual_transaction_changed in {dump}");
         assert!(dump.contains("transaction_created"), "missing transaction_created in {dump}");
         assert!(dump.contains("explicit_clear_requested"), "missing explicit_clear_requested in {dump}");
+        let verified = {
+            let pinned = item_box.pinned();
+            let item = pinned.borrow();
+            item.verify_animation_signal_meta_object()
+        };
+        assert!(verified, "hard metaObject verification failed for {dump}");
     }
 
     #[test]
