@@ -158,3 +158,5 @@ pub fn load_workspace_summary(
 uniffi::include_scaffolding!("api");
 pub mod app_service;
 pub use app_service::WriterAppService;
+#[cfg(test)]
+pub mod action_ops_tests;
