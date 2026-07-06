@@ -26,14 +26,7 @@ fn command_stdout(cmd: &str, args: &[&str]) -> Option<String> {
 fn read_kde_config_value(cmd: &str, group: &str, key: &str) -> Option<String> {
     command_stdout(
         cmd,
-        &[
-            "--file",
-            "kdeglobals",
-            "--group",
-            group,
-            "--key",
-            key,
-        ],
+        &["--file", "kdeglobals", "--group", group, "--key", key],
     )
 }
 
@@ -146,7 +139,8 @@ fn detect_gsettings_color_scheme() -> Option<String> {
     .to_lowercase();
     if value.contains("prefer-dark") || value.contains("dark") {
         Some("dark".to_string())
-    } else if value.contains("prefer-light") || value.contains("light") || value.contains("default") {
+    } else if value.contains("prefer-light") || value.contains("light") || value.contains("default")
+    {
         Some("light".to_string())
     } else {
         None
@@ -182,6 +176,20 @@ pub(crate) fn detect_system_theme_from_platform() -> String {
 }
 
 pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
+    // Security check: validate clipboard content to prevent injection
+    if text_str.contains('\0') || text_str.contains('\x1B') {
+        return serde_json::json!({
+            "success": false,
+            "errorCode": "INVALID_INPUT",
+            "messageKey": "error.clipboard_unavailable",
+            "messageArgs": {},
+            "rawError": "Clipboard text contains invalid control characters",
+            "warnings": [],
+            "changedPaths": [],
+            "changedEntities": [],
+        });
+    }
+
     let mk_success = |backend: &str| -> serde_json::Value {
         serde_json::json!({
             "success": true,
@@ -279,6 +287,17 @@ mod tests {
             scheme_from_background_foreground("239,240,241", "35,38,39"),
             Some("light")
         );
+    }
+
+    #[test]
+    fn test_clipboard_rejects_invalid_characters() {
+        let res = copy_text_to_clipboard_impl("hello\0world");
+        assert_eq!(res["success"], false);
+        assert_eq!(res["errorCode"], "INVALID_INPUT");
+
+        let res = copy_text_to_clipboard_impl("hello\x1Bworld");
+        assert_eq!(res["success"], false);
+        assert_eq!(res["errorCode"], "INVALID_INPUT");
     }
 
     #[test]
