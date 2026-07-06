@@ -21,7 +21,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{LazyLock, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 日志文件最大大小（1 MiB），超过则轮转
@@ -185,71 +185,100 @@ pub fn install_panic_hook() {
     }));
 }
 
+static RE_SSH_KEY: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----")
+        .ok()
+});
+
+static RE_PEM: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----")
+        .ok()
+});
+
+static RE_BEARER_HEADER: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+")
+        .ok()
+});
+
+static RE_SENSITIVE_KV: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(
+        r#"(?i)\b(token|access_token|refresh_token|authorization|password|passwd|secret|private_key)\s*[:=]\s*(?:"[^"]*"|\S+)"#,
+    )
+    .ok()
+});
+
+static RE_CONTENT_KV: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(
+        r#"(?i)\b(content|text|body|chapter|chapter_content|chapterContent)\s*[:=]\s*(?:"[^"]*"|[^,}\]\n]+)"#,
+    )
+    .ok()
+});
+
+static RE_BEARER_STANDALONE: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*")
+        .ok()
+});
+
+static RE_GHP: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r"ghp_[A-Za-z0-9]{36}")
+        .ok()
+});
+
+static RE_GHO: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r"gho_[A-Za-z0-9]{36}")
+        .ok()
+});
+
+static RE_GITHUB_PAT: LazyLock<Option<regex::Regex>> = LazyLock::new(|| {
+    regex::Regex::new(r"github_pat_[A-Za-z0-9_]{82}")
+        .ok()
+});
+
 /// 脱敏正则规则列表
 /// 与 Android DiagnosticsLogger.REDACT_RULES 对齐
 fn redact(message: &str) -> String {
     let mut result = message.to_string();
 
     // SSH private key blocks
-    let re_ssh_key = regex::Regex::new(
-        r"(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_ssh_key
-        .replace_all(&result, "ssh_private_key=[REDACTED]")
-        .to_string();
+    if let Some(re) = &*RE_SSH_KEY {
+        result = re.replace_all(&result, "ssh_private_key=[REDACTED]").to_string();
+    }
 
     // PEM private key blocks
-    let re_pem = regex::Regex::new(
-        r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_pem
-        .replace_all(&result, "[REDACTED_PEM]")
-        .to_string();
+    if let Some(re) = &*RE_PEM {
+        result = re.replace_all(&result, "[REDACTED_PEM]").to_string();
+    }
 
     // Bearer token in header-style (Authorization: Bearer xxx)
-    let re_bearer_header = regex::Regex::new(r"(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+")
-        .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_bearer_header
-        .replace_all(&result, "Authorization: Bearer [REDACTED]")
-        .to_string();
+    if let Some(re) = &*RE_BEARER_HEADER {
+        result = re.replace_all(&result, "Authorization: Bearer [REDACTED]").to_string();
+    }
 
     // Sensitive key=value pairs (token, password, secret, etc.)
-    let re_sensitive_kv = regex::Regex::new(
-        r#"(?i)\b(token|access_token|refresh_token|authorization|password|passwd|secret|private_key)\s*[:=]\s*(?:"[^"]*"|\S+)"#,
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_sensitive_kv
-        .replace_all(&result, "$1=[REDACTED]")
-        .to_string();
+    if let Some(re) = &*RE_SENSITIVE_KV {
+        result = re.replace_all(&result, "$1=[REDACTED]").to_string();
+    }
 
     // Content/body/chapter key=value pairs (user content)
-    let re_content_kv = regex::Regex::new(
-        r#"(?i)\b(content|text|body|chapter|chapter_content|chapterContent)\s*[:=]\s*(?:"[^"]*"|[^,}\]\n]+)"#,
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_content_kv
-        .replace_all(&result, "$1=[REDACTED]")
-        .to_string();
+    if let Some(re) = &*RE_CONTENT_KV {
+        result = re.replace_all(&result, "$1=[REDACTED]").to_string();
+    }
 
     // Bearer tokens standalone
-    let re_bearer_standalone =
-        regex::Regex::new(r"(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_bearer_standalone
-        .replace_all(&result, "Bearer [REDACTED]")
-        .to_string();
+    if let Some(re) = &*RE_BEARER_STANDALONE {
+        result = re.replace_all(&result, "Bearer [REDACTED]").to_string();
+    }
 
     // GitHub PAT patterns
-    let re_ghp = regex::Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_ghp.replace_all(&result, "[REDACTED]").to_string();
-
-    let re_gho = regex::Regex::new(r"gho_[A-Za-z0-9]{36}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_gho.replace_all(&result, "[REDACTED]").to_string();
-
-    let re_github_pat =
-        regex::Regex::new(r"github_pat_[A-Za-z0-9_]{82}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_github_pat.replace_all(&result, "[REDACTED]").to_string();
+    if let Some(re) = &*RE_GHP {
+        result = re.replace_all(&result, "[REDACTED]").to_string();
+    }
+    if let Some(re) = &*RE_GHO {
+        result = re.replace_all(&result, "[REDACTED]").to_string();
+    }
+    if let Some(re) = &*RE_GITHUB_PAT {
+        result = re.replace_all(&result, "[REDACTED]").to_string();
+    }
 
     result
 }
