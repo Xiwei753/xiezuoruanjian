@@ -49,6 +49,24 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_manifest_serializes_with_deleted_at_ms() {
+        let manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: "abc".to_string(),
+                updated_at_ms: 1000,
+                deleted_at_ms: Some(2000),
+                device_id: "device_a".to_string(),
+                op: "delete".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let json = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(json["files"][0]["deleted_at_ms"], 2000);
+    }
+
+    #[test]
     fn test_sync_manifest_deserializes_with_deleted_at_ms() {
         let raw = r#"{
             "files": [{
@@ -2488,6 +2506,25 @@ mod tests {
         let merged = SyncService::semantic_merge_json(&base, &local, &remote).unwrap();
         assert_eq!(merged.get("a"), Some(&serde_json::json!(10)));
         assert_eq!(merged.get("b"), Some(&serde_json::json!(20)));
+    }
+
+    #[test]
+    #[cfg(feature = "git-https")]
+    fn test_semantic_merge_json_missing_keys_conflict() {
+        let mut base = serde_json::Map::new();
+        base.insert("a".to_string(), serde_json::json!(1));
+
+        let local = serde_json::Map::new();
+        // local deletes "a"
+
+        let mut remote = serde_json::Map::new();
+        remote.insert("a".to_string(), serde_json::json!(2)); // remote modifies "a"
+
+        let conflict_err = SyncService::semantic_merge_json(&base, &local, &remote).unwrap_err();
+        assert_eq!(conflict_err.len(), 1);
+        assert_eq!(conflict_err[0].key, "a");
+        assert_eq!(conflict_err[0].local_value, serde_json::Value::Null);
+        assert_eq!(conflict_err[0].remote_value, serde_json::json!(2));
     }
 
     /// P0-1: Test that resolve_conflict_keep_local properly clears the conflict
