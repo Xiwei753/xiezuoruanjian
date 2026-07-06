@@ -188,6 +188,73 @@ fn validate_edges(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_node(scale: f32, depth: f32, focus_weight: f32) -> StarMapLayoutNode {
+        StarMapLayoutNode {
+            node_id: "test".to_string(),
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+            radius: 50.0,
+            collapsed: false,
+            z_index: 0,
+            scale,
+            depth,
+            focus_weight,
+            orbit_group: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_layout_valid() {
+        let layout = StarMapLayout {
+            kind: StarMapLayoutKind::Freeform,
+            nodes: vec![create_test_node(1.0, 0.0, 0.5)],
+        };
+        assert!(validate_layout(&layout).is_ok());
+    }
+
+    #[test]
+    fn test_validate_layout_invalid_scale() {
+        let layout_zero = StarMapLayout {
+            kind: StarMapLayoutKind::Freeform,
+            nodes: vec![create_test_node(0.0, 0.0, 0.5)],
+        };
+        assert!(validate_layout(&layout_zero).is_err());
+
+        let layout_neg = StarMapLayout {
+            kind: StarMapLayoutKind::Freeform,
+            nodes: vec![create_test_node(-1.0, 0.0, 0.5)],
+        };
+        assert!(validate_layout(&layout_neg).is_err());
+
+        let layout_nan = StarMapLayout {
+            kind: StarMapLayoutKind::Freeform,
+            nodes: vec![create_test_node(f32::NAN, 0.0, 0.5)],
+        };
+        assert!(validate_layout(&layout_nan).is_err());
+    }
+
+    #[test]
+    fn test_validate_layout_invalid_depth_focus() {
+        let layout_nan_depth = StarMapLayout {
+            kind: StarMapLayoutKind::Freeform,
+            nodes: vec![create_test_node(1.0, f32::NAN, 0.5)],
+        };
+        assert!(validate_layout(&layout_nan_depth).is_err());
+
+        let layout_nan_focus = StarMapLayout {
+            kind: StarMapLayoutKind::Freeform,
+            nodes: vec![create_test_node(1.0, 0.0, f32::NAN)],
+        };
+        assert!(validate_layout(&layout_nan_focus).is_err());
+    }
+}
+
 fn validate_embeds(
     workspace: &std::path::Path,
     graph: &StarMapGraph,
