@@ -1030,7 +1030,7 @@ fn execute_lww_sync_attempt(
             state
                 .known_files_updated_at
                 .get(p)
-                .map(|v| (p.clone(), v.clone()))
+                .map(|v| (p.clone(), *v))
         })
         .collect();
 
