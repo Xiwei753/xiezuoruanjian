@@ -158,7 +158,15 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
     device_class: *const c_char,
 ) -> *mut c_char {
     let platform_str = match c_str_to_rust(platform) {
-        Ok(s) => s,
+        Ok(s) => {
+            if s.len() > 64 || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    "Invalid platform format",
+                );
+            }
+            s
+        }
         Err(e) => {
             return err_json(
                 "INVALID_ARGUMENT",
@@ -167,7 +175,15 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
         }
     };
     let device_class_str = match c_str_to_rust(device_class) {
-        Ok(s) => s,
+        Ok(s) => {
+            if s.len() > 64 || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                return err_json(
+                    "INVALID_ARGUMENT",
+                    "Invalid device_class format",
+                );
+            }
+            s
+        }
         Err(e) => {
             return err_json(
                 "INVALID_ARGUMENT",
