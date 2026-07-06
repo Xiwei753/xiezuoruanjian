@@ -191,65 +191,67 @@ fn redact(message: &str) -> String {
     let mut result = message.to_string();
 
     // SSH private key blocks
-    let re_ssh_key = regex::Regex::new(
+    if let Ok(re_ssh_key) = regex::Regex::new(
         r"(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_ssh_key
-        .replace_all(&result, "ssh_private_key=[REDACTED]")
-        .to_string();
+    ) {
+        result = re_ssh_key
+            .replace_all(&result, "ssh_private_key=[REDACTED]")
+            .to_string();
+    }
 
     // PEM private key blocks
-    let re_pem = regex::Regex::new(
+    if let Ok(re_pem) = regex::Regex::new(
         r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_pem
-        .replace_all(&result, "[REDACTED_PEM]")
-        .to_string();
+    ) {
+        result = re_pem
+            .replace_all(&result, "[REDACTED_PEM]")
+            .to_string();
+    }
 
     // Bearer token in header-style (Authorization: Bearer xxx)
-    let re_bearer_header = regex::Regex::new(r"(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+")
-        .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_bearer_header
-        .replace_all(&result, "Authorization: Bearer [REDACTED]")
-        .to_string();
+    if let Ok(re_bearer_header) = regex::Regex::new(r"(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+") {
+        result = re_bearer_header
+            .replace_all(&result, "Authorization: Bearer [REDACTED]")
+            .to_string();
+    }
 
     // Sensitive key=value pairs (token, password, secret, etc.)
-    let re_sensitive_kv = regex::Regex::new(
+    if let Ok(re_sensitive_kv) = regex::Regex::new(
         r#"(?i)\b(token|access_token|refresh_token|authorization|password|passwd|secret|private_key)\s*[:=]\s*(?:"[^"]*"|\S+)"#,
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_sensitive_kv
-        .replace_all(&result, "$1=[REDACTED]")
-        .to_string();
+    ) {
+        result = re_sensitive_kv
+            .replace_all(&result, "$1=[REDACTED]")
+            .to_string();
+    }
 
     // Content/body/chapter key=value pairs (user content)
-    let re_content_kv = regex::Regex::new(
+    if let Ok(re_content_kv) = regex::Regex::new(
         r#"(?i)\b(content|text|body|chapter|chapter_content|chapterContent)\s*[:=]\s*(?:"[^"]*"|[^,}\]\n]+)"#,
-    )
-    .unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_content_kv
-        .replace_all(&result, "$1=[REDACTED]")
-        .to_string();
+    ) {
+        result = re_content_kv
+            .replace_all(&result, "$1=[REDACTED]")
+            .to_string();
+    }
 
     // Bearer tokens standalone
-    let re_bearer_standalone =
-        regex::Regex::new(r"(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_bearer_standalone
-        .replace_all(&result, "Bearer [REDACTED]")
-        .to_string();
+    if let Ok(re_bearer_standalone) = regex::Regex::new(r"(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*") {
+        result = re_bearer_standalone
+            .replace_all(&result, "Bearer [REDACTED]")
+            .to_string();
+    }
 
     // GitHub PAT patterns
-    let re_ghp = regex::Regex::new(r"ghp_[A-Za-z0-9]{36}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_ghp.replace_all(&result, "[REDACTED]").to_string();
+    if let Ok(re_ghp) = regex::Regex::new(r"ghp_[A-Za-z0-9]{36}") {
+        result = re_ghp.replace_all(&result, "[REDACTED]").to_string();
+    }
 
-    let re_gho = regex::Regex::new(r"gho_[A-Za-z0-9]{36}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_gho.replace_all(&result, "[REDACTED]").to_string();
+    if let Ok(re_gho) = regex::Regex::new(r"gho_[A-Za-z0-9]{36}") {
+        result = re_gho.replace_all(&result, "[REDACTED]").to_string();
+    }
 
-    let re_github_pat =
-        regex::Regex::new(r"github_pat_[A-Za-z0-9_]{82}").unwrap_or_else(|_| regex::Regex::new(r"$^").unwrap());
-    result = re_github_pat.replace_all(&result, "[REDACTED]").to_string();
+    if let Ok(re_github_pat) = regex::Regex::new(r"github_pat_[A-Za-z0-9_]{82}") {
+        result = re_github_pat.replace_all(&result, "[REDACTED]").to_string();
+    }
 
     result
 }
