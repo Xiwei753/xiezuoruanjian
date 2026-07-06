@@ -345,10 +345,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       return this.success(data)
     }
 
-    const volKeys: string[] = Array.from(this.mockChapters.keys())
-    for (let i = 0; i < volKeys.length; i++) {
-      const volId: string = volKeys[i]
-      const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
+    for (const chapters of this.mockChapters.values()) {
       const chapter = chapters.find(ch => ch.id === chapterId)
       if (chapter) {
         const sampleContent = `这是《${chapter.title}》的示例内容。\n\n在此处开始写作...\n\n鸿蒙端当前使用 mock 数据，后续将对接真实 Rust Core。`
@@ -424,10 +421,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const volKeys: string[] = Array.from(this.mockChapters.keys())
-    for (let i = 0; i < volKeys.length; i++) {
-      const volId: string = volKeys[i]
-      const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
+    for (const chapters of this.mockChapters.values()) {
       const chapter = chapters.find(ch => ch.id === chapterId)
       if (chapter) {
         chapter.title = newName
@@ -440,10 +434,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const volKeys: string[] = Array.from(this.mockChapters.keys())
-    for (let i = 0; i < volKeys.length; i++) {
-      const volId: string = volKeys[i]
-      const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
+    for (const chapters of this.mockChapters.values()) {
       const index = chapters.findIndex(ch => ch.id === chapterId)
       if (index !== -1) {
         chapters.splice(index, 1)
