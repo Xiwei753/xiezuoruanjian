@@ -352,6 +352,45 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn test_create_project_success() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+        crate::workspace::create_workspace(workspace_path).unwrap();
+
+        let project = create_project(workspace_path, "New Project").unwrap();
+
+        assert_eq!(project.title, "New Project");
+        assert_eq!(project.order, 0);
+
+        let project_dir = workspace_path.join("projects").join(&project.id);
+        assert!(project_dir.exists());
+        assert!(project_dir.join("volumes").exists());
+        assert!(project_dir.join("characters").exists());
+        assert!(project_dir.join("project.json").exists());
+
+        // Check if default volume "第一卷" is created
+        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0].title, "第一卷");
+    }
+
+    #[test]
+    fn test_create_project_order() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+        crate::workspace::create_workspace(workspace_path).unwrap();
+
+        let project1 = create_project(workspace_path, "Project 1").unwrap();
+        assert_eq!(project1.order, 0);
+
+        let project2 = create_project(workspace_path, "Project 2").unwrap();
+        assert_eq!(project2.order, 1);
+
+        let project3 = create_project(workspace_path, "Project 3").unwrap();
+        assert_eq!(project3.order, 2);
+    }
+
     /// 验证聚合查询：有子章节时返回最大的 chapter updated_at。
     #[test]
     fn test_aggregated_volume_updated_at_with_chapters() {
