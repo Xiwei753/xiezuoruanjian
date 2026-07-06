@@ -49,8 +49,8 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 - Core `editor` 模块统一产出 `EditorTransaction`、`EditorAnimationEvent` 等平台无关语义。
 - Android SujianEditorView 已进入自绘阶段，分层绘制，接管选区、光标与动画（保留 WriterEditText 作为 fallback）。
 - Desktop 因 Qt/QML TextArea 路线已多次踩坑，继续推进 SujianEditorItem。
-- Desktop 动画允许开启，但只能走 Core transaction + animation_events_json + QML overlay 路线：
-  Core EditorTransaction / EditorAnimationEvent → SujianEditorItem.animation_events_json → QML EditorAnimationOverlay / EditorGlyphGhost。
+- Desktop 动画允许开启，但只能走 Core transaction + editor_visual_transaction + QML overlay 路线：
+  Core EditorTransaction / EditorAnimationEvent → SujianEditorItem.editor_visual_transaction → QML EditorAnimationOverlay / EditorGlyphGhost。
   Insert 动画期间，静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），动画 overlay 渲染 ghost glyph。
   Delete 动画使用旧 glyph snapshot（删除前的字形位置），overlay 渲染吞回动画。
   overlay 是动画层，不是完整正文 overlay 冒充真吐字。

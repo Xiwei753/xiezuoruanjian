@@ -18,7 +18,7 @@ Rust Core EditorTransaction
     → QImage static texture (Layer 0)
     → QSGImageNode 上屏
     → QML Rectangle cursor (绑定 Rust cursor_rect_x/y/width/height)
-    → QML EditorAnimationOverlay (消费 animation_events_json 信号，渲染 EditorGlyphGhost)
+    → QML EditorAnimationOverlay (消费 editor_visual_transaction 信号，渲染 EditorGlyphGhost)
 ```
 
 ### 各层职责
@@ -61,7 +61,7 @@ Rust Core EditorTransaction
 ## Desktop 动画唯一主路径
 
 1. Rust Core 生成 `EditorTransaction` / `EditorAnimationEvent`，填充 `glyph_rects`
-2. `SujianEditorItem` 通过 `animation_events_json` 属性暴露给 QML
+2. `SujianEditorItem` 通过 `editor_visual_transaction` 属性暴露给 QML
 3. QML `EditorAnimationOverlay` 监听 `animationEventsChanged` 信号，解析 JSON 事件
 4. `EditorGlyphGhost` 组件渲染逐字 ghost 动画
 

@@ -3,7 +3,7 @@ package com.xiwei.sujian.model
 /**
  * Android typed model for editor animation events from Core.
  *
- * Desktop QML may keep consuming animation_events_json for its overlay path; Android must stay on
+ * Desktop QML may keep consuming editor_visual_transaction for its overlay path; Android must stay on
  * typed models and must not route typed DTO -> JSON -> handwritten parser.
  */
 enum class EditorAnimationKindData {
