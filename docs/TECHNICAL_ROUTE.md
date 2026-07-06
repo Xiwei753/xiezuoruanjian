@@ -12,6 +12,12 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 - 如需改变路线，必须先单独提交技术路线文档变更，并说明为什么旧路线不再适用。
 
 ## 当前仓库事实
+- 平台目录路线：
+  - 不拆分 `apps/linux` / `apps/windows`。
+  - `apps/desktop` 收口为 Linux Qt/QML 客户端，优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
+  - Android 继续作为独立原生客户端推进。
+  - HarmonyOS 保持既有骨架和 Rust Core 内核接入。
+  - Windows 后续不继续当前 Qt 桌面补丁路线；等 Linux 输入法和动画稳定后，再另开原生 Windows 客户端路线。
 - Android：
   - Kotlin + XML/View。
   - AppCompat / Material / ConstraintLayout / Lifecycle。
@@ -20,8 +26,8 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
   - 只正式支持 arm64-v8a。
   - 暂不引入 Compose 作为主 UI 技术。
 - Linux：
-  - 当前是 Qt/QML 路线。
-  - 遵循 Qt/KDE 桌面应用路线。
+  - 当前是 `apps/desktop` Qt/QML 路线。
+  - 遵循 Qt/KDE 桌面应用路线，当前优先级是输入法、渲染、动画、AppImage、日志导出和 runtime profile。
   - 不再随意 Qt5 / Qt6 / Qt Quick / 其他 UI 栈来回切。
 - Core：
   - Rust Core 是业务真相来源。

@@ -1,6 +1,6 @@
 # Desktop 应用
 
-本目录包含 desktop 原生客户端，使用 Rust 和 Qt/QML 构建，提供桌面端写作体验。
+本目录包含 Linux desktop 原生客户端，使用 Rust 和 Qt/QML 构建，提供桌面端写作体验。
 
 ## 主要文件
 
@@ -16,6 +16,8 @@
 ## 架构说明
 
 客户端**必须**通过 FFI 使用 `core/writer_core` Rust 核心库，严格禁止在 C++ 或 QML 中直接实现工作区格式、保存逻辑或同步功能。UI 使用 Qt 6 / QML 构建，所有业务逻辑依赖 Rust 核心。
+
+路线收口：`apps/desktop` 当前定位为 Linux Qt/QML 客户端，优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile；不拆分 `apps/linux` / `apps/windows`。Windows 后续不继续当前 Qt 桌面补丁路线，待 Linux 输入法和动画稳定后另开原生 Windows 客户端路线。
 
 ## 依赖关系
 

@@ -22,7 +22,7 @@ A cross-platform writing tool for novel creators, built with a Rust core + nativ
 - StarMap character relationship visualization
 - AI writing assistant
 - Cloud sync (Beta)
-- Cross-platform: Android / Linux / Windows / HarmonyOS WIP
+- Cross-platform: Android / Linux / HarmonyOS WIP; Windows will move to a separate native-client route later
 
 > **Regarding Apple platforms**: There are currently no plans to support macOS / iOS. We'll consider it once we've saved up enough from our day jobs to cover the Apple Developer Program signing fee (¥688/year).
 
@@ -31,14 +31,14 @@ A cross-platform writing tool for novel creators, built with a Rust core + nativ
 ```
 core/writer_core/     Rust core library (sole business logic layer)
 apps/android/         Kotlin Android client
-apps/desktop/         Rust + Qt6/QML Desktop client (Linux / Windows)
+apps/desktop/         Rust + Qt6/QML Linux Desktop client
 apps/harmony/         ArkTS HarmonyOS NEXT client
 bindings/             Cross-platform binding code
 ```
 
 - `core/writer_core`: The **sole** business logic core library written in Rust. Handles all file I/O, project management, sync, formatting, and settings rules. Strictly excludes UI logic.
 - `apps/android`: Native Kotlin Android client. Main business entry point is `AppServiceBridge + UniFFI`. `BridgeProvider` only exposes domain Bridges to Repository/ViewModel/UI for platform adaptation.
-- `apps/desktop`: Native Rust + Qt6/QML desktop client for Linux and Windows. UI calls Rust Core through the QObject backend adapter layer. Implementing workspace, save, or sync rules in QML is not allowed.
+- `apps/desktop`: Native Rust + Qt6/QML Linux desktop client. UI calls Rust Core through the QObject backend adapter layer. Implementing workspace, save, or sync rules in QML is not allowed. Current priorities are Linux IME, rendering, animation, AppImage, log export, and runtime profile stability.
 - `apps/harmony`: Native ArkTS HarmonyOS NEXT client. Calls Rust Core FFI through the NAPI C++ bridge layer. The ArkTS side is decoupled via the `IWriterCoreBridge` interface.
 - `bindings`: Code for connecting the Rust core with native clients.
 
@@ -92,7 +92,7 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 
 ### Windows Client
 
-The Windows client shares the same Rust + Qt6/QML codebase as the Linux client. CI generates a portable zip (`sujian-windows-{flavor}-portable.zip`) and an Inno Setup installer (`SujianWriterSetup-{flavor}.exe`). Windows packaging uses `windeployqt` to bundle Qt dependencies and Inno Setup to build the installer.
+Windows will not continue on the current Qt desktop patch route. After Linux IME and animation are stable, a separate native Windows client route will be opened.
 
 ### HarmonyOS Client
 

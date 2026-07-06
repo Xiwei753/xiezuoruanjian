@@ -24,7 +24,7 @@
 - 星图（StarMap）角色关系可视化
 - AI 写作辅助
 - 云同步（Beta）
-- 跨平台：Android / Linux / Windows / HarmonyOS（WIP）
+- 跨平台：Android / Linux / HarmonyOS（WIP）；Windows 后续另开原生客户端路线
 
 > **关于 Apple 平台**：目前没有适配 macOS / iOS 的打算。等什么时候搬砖凑够了 Apple Developer Program 的签名费用（688 元/年）再考虑适配。
 
@@ -33,14 +33,14 @@
 ```
 core/writer_core/     Rust 核心库（唯一业务逻辑层）
 apps/android/         Kotlin Android 客户端
-apps/desktop/         Rust + Qt6/QML Desktop 客户端（Linux / Windows）
+apps/desktop/         Rust + Qt6/QML Linux Desktop 客户端
 apps/harmony/         ArkTS HarmonyOS NEXT 客户端
 bindings/             跨平台绑定代码
 ```
 
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
 - `apps/android`: 原生 Kotlin Android 客户端。主业务入口为 `AppServiceBridge + UniFFI`，`BridgeProvider` 只暴露领域 Bridge 给 Repository/ViewModel/UI 做平台适配。
-- `apps/desktop`: 原生 Rust + Qt6/QML Desktop 客户端，覆盖 Linux 和 Windows。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则。
+- `apps/desktop`: 原生 Rust + Qt6/QML Linux Desktop 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则；当前优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
 - `apps/harmony`: 原生 ArkTS HarmonyOS NEXT 客户端。通过 NAPI C++ 桥接层调用 Rust Core FFI，ArkTS 侧通过 `IWriterCoreBridge` 接口解耦。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 
@@ -94,15 +94,7 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
 
 ### Windows 客户端
 
-Windows 客户端与 Linux 共用 `apps/desktop` 代码库，同样基于 Rust + Qt6/QML。
-
-```bash
-cargo run -p sujian-desktop
-```
-
-**CI 构建产物**：
-- **Portable ZIP**：CI 会生成 `sujian-windows-{flavor}-portable.zip`，解压即可运行。
-- **安装包**：CI 会生成 `SujianWriterSetup-{flavor}.exe`，使用 `windeployqt` + Inno Setup 打包，安装需要管理员权限，并包含 VC++ 运行库静默安装。
+Windows 后续不继续走当前 Qt 桌面补丁路线；等 Linux 输入法和动画稳定后，再另开原生 Windows 客户端路线。
 
 ### HarmonyOS 客户端（WIP）
 
