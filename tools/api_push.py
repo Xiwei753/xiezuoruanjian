@@ -49,14 +49,13 @@ def main():
         print("Already up to date.")
         return
     if remote_sha != parent_sha:
-        # Walk commits to upload all missing ones
-        commits = git(["rev-list", "--reverse", f"{remote_sha}..{local_sha}"]).splitlines()
-        commits = [c.strip() for c in commits if c.strip()]
-        print(f"Need to push {len(commits)} commit(s)")
-        for sha in commits:
-            push_one_commit(api, headers, sha, git)
-        # Update ref to final commit
-        r = requests.patch(f"{api}/refs/heads/{branch}", headers=headers, json={"sha": local_sha, "force": False}, timeout=15)
+        # Remote branch moved independently (or a previous API push created a
+        # sibling commit). Preserve remote history by creating a new GitHub
+        # commit whose tree exactly matches local HEAD and whose parent is the
+        # current remote HEAD, then fast-forward the branch to that commit.
+        print("Remote HEAD differs from local parent; creating a fast-forward commit with local tree")
+        new_commit = create_commit_with_local_tree(api, headers, local_sha, remote_sha, git)
+        r = requests.patch(f"{api}/refs/heads/{branch}", headers=headers, json={"sha": new_commit, "force": False}, timeout=15)
         r.raise_for_status()
         print("Push successful!")
         return
@@ -110,6 +109,25 @@ def upload_blob(api, headers, blob_sha, git_fn):
     b64 = base64.b64encode(r_bin.stdout).decode()
     r = requests.post(f"{api}/blobs", headers=headers, json={"content": b64, "encoding": "base64"}, timeout=15)
     r.raise_for_status()
+
+
+def create_commit_with_local_tree(api, headers, local_sha, remote_parent_sha, git_fn):
+    """Create a GitHub commit using local HEAD's full tree and remote parent."""
+    tree_sha = git_fn(["rev-parse", f"{local_sha}^{{tree}}"])
+    upload_tree(api, headers, tree_sha, git_fn)
+    msg = git_fn(["log", "-1", "--format=%B", local_sha])
+    author = git_fn(["log", "-1", "--format=%an", local_sha])
+    email = git_fn(["log", "-1", "--format=%ae", local_sha])
+    date = git_fn(["log", "-1", "--format=%aI", local_sha])
+    r = requests.post(f"{api}/commits", headers=headers, json={
+        "message": msg, "tree": tree_sha, "parents": [remote_parent_sha],
+        "author": {"name": author, "email": email, "date": date},
+        "committer": {"name": author, "email": email, "date": date},
+    }, timeout=15)
+    r.raise_for_status()
+    new_commit = r.json()["sha"]
+    print(f"  commit {new_commit[:12]} (tree from local {local_sha[:12]})")
+    return new_commit
 
 
 def push_one_commit(api, headers, commit_sha, git_fn):
