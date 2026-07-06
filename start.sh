@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    Linux) ;;
+    *)
+        echo "Error: apps/desktop startup scripts are scoped to the Linux Qt/QML route." >&2
+        echo "Windows Qt desktop packaging is legacy/manual only; do not use this script as a Windows route." >&2
+        exit 1
+        ;;
+esac
+
 # Check arguments
 if [ $# -gt 0 ]; then
     if [ "$1" = "debug" ]; then

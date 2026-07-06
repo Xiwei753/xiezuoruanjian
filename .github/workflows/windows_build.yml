@@ -1,17 +1,12 @@
-name: Sujian Windows Build
+name: Sujian Windows Build (legacy manual only)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'apps/desktop/**'
-      - 'core/writer_core/**'
-      - 'packaging/windows/**'
-      - '.github/workflows/windows_build.yml'
-      - 'Cargo.lock'
-      - 'Cargo.toml'
+
+# Windows Qt desktop packaging is intentionally kept as a legacy manual job.
+# apps/desktop is now the Linux Qt/QML client route; pushes must not trigger
+# Windows Qt build/test/package by default.  Native Windows client work should
+# use a new route after Linux IME/animation stabilizes.
 
 permissions:
   contents: read

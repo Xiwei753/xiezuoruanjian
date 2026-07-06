@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+case "$(uname -s 2>/dev/null || echo unknown)" in
+    Linux) ;;
+    *)
+        echo "Error: apps/desktop debug runtime profile is scoped to the Linux Qt/QML route." >&2
+        echo "Windows Qt desktop packaging is legacy/manual only; do not use this script as a Windows route." >&2
+        exit 1
+        ;;
+esac
+
 # Style settings
 export QT_QUICK_CONTROLS_STYLE=Basic
 
