@@ -507,4 +507,57 @@ mod tests {
             _ => panic!("Expected InvalidDeleteTarget error for non-existent project"),
         }
     }
+
+    #[test]
+    fn test_list_projects_empty_workspace() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert!(projects.is_empty());
+    }
+
+    #[test]
+    fn test_list_projects_success_and_ordered() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+        crate::workspace::create_workspace(workspace_path).unwrap();
+
+        let p1 = crate::project::create_project(workspace_path, "Project A").unwrap();
+        let p2 = crate::project::create_project(workspace_path, "Project B").unwrap();
+
+        reorder_projects(workspace_path, &[p2.id.clone(), p1.id.clone()]).unwrap();
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert_eq!(projects.len(), 2);
+        assert_eq!(projects[0].id, p2.id);
+        assert_eq!(projects[1].id, p1.id);
+    }
+
+    #[test]
+    fn test_list_projects_ignores_invalid_entries() {
+        let temp_dir = tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+        crate::workspace::create_workspace(workspace_path).unwrap();
+
+        let p1 = crate::project::create_project(workspace_path, "Project A").unwrap();
+
+        // Create invalid entries
+        let projects_dir = workspace_path.join("projects");
+
+        // 1. A file
+        std::fs::write(projects_dir.join("not_a_dir.txt"), "hello").unwrap();
+
+        // 2. A dir without project.json
+        std::fs::create_dir_all(projects_dir.join("empty_dir")).unwrap();
+
+        // 3. A dir with invalid project.json
+        let bad_proj_dir = projects_dir.join("bad_proj_dir");
+        std::fs::create_dir_all(&bad_proj_dir).unwrap();
+        std::fs::write(bad_proj_dir.join("project.json"), "{ invalid json }").unwrap();
+
+        let projects = list_projects(workspace_path).unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].id, p1.id);
+    }
 }
