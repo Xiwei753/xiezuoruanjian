@@ -13,11 +13,11 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 
 ## 当前仓库事实
 - 平台目录路线：
-  - 不拆分 `apps/linux` / `apps/windows`。
-  - `apps/desktop` 收口为 Linux Qt/QML 客户端，优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
+  - `apps/Linux_qt` 只服务 Linux Qt/QML 客户端，优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
+  - `apps/windows` 仅预留原生 Windows 客户端文档，标记“待更改至原生”；不得复用 Linux Qt 兼容补丁路线。
+  - 后续如需 GTK，可新增 Linux GTK 客户端目录，当前不新增实现。
   - Android 继续作为独立原生客户端推进。
   - HarmonyOS 保持既有骨架和 Rust Core 内核接入。
-  - Windows 后续不继续当前 Qt 桌面补丁路线；等 Linux 输入法和动画稳定后，再另开原生 Windows 客户端路线。
 - Android：
   - Kotlin + XML/View。
   - AppCompat / Material / ConstraintLayout / Lifecycle。
@@ -26,7 +26,7 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
   - 只正式支持 arm64-v8a。
   - 暂不引入 Compose 作为主 UI 技术。
 - Linux：
-  - 当前是 `apps/desktop` Qt/QML 路线。
+  - 当前是 `apps/Linux_qt` Qt/QML 路线。
   - 遵循 Qt/KDE 桌面应用路线，当前优先级是输入法、渲染、动画、AppImage、日志导出和 runtime profile。
   - 不再随意 Qt5 / Qt6 / Qt Quick / 其他 UI 栈来回切。
 - Core：
@@ -230,7 +230,7 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 
 | 目录 | 技术路线文档 | 说明 |
 |------|------------|------|
-| `apps/desktop/` | `docs/editor_engine_route.md` | 自研编辑器渲染引擎路线 |
+| `apps/Linux_qt/` | `docs/editor_engine_route.md` | 自研编辑器渲染引擎路线 |
 | `core/writer_core/` (starmap) | `docs/starmap_semantics.md` | 星图语义模型 |
 | `core/writer_core/` (starmap) | `docs/starmap_canvas_model.md` | 星图画布模型契约 |
 | `core/writer_core/` (starmap) | `docs/starmap_implementation_route.md` | 星图实现路线 |

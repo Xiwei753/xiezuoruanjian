@@ -2,7 +2,7 @@
 Type=Application
 Name=素笺写作
 Comment=Rust Core + Qt6/QML writing application
-Exec=sujian-desktop
+Exec=sujian-linux-qt
 Icon=sujian
 Terminal=false
 Categories=Office;TextEditor;

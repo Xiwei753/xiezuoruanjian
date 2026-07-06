@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <title>Sujian App Icon v10 - White Thin Star Slip</title>
+  <desc>Pure white background app icon: a thin oblique ivory writing slip with a subtle star-map watermark.</desc>
+
+  <defs>
+    <linearGradient id="paper" x1="284" y1="160" x2="738" y2="850" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFDF7"/>
+      <stop offset="0.70" stop-color="#F8EEDC"/>
+      <stop offset="1" stop-color="#EBD8B8"/>
+    </linearGradient>
+
+    <linearGradient id="thinEdge" x1="684" y1="656" x2="738" y2="860" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#D0B589"/>
+      <stop offset="1" stop-color="#AF8E5E"/>
+    </linearGradient>
+
+    <filter id="paperShadow" x="154" y="96" width="740" height="840" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="20" stdDeviation="22" flood-color="#21180F" flood-opacity="0.13"/>
+    </filter>
+
+    <clipPath id="paperClip">
+      <path d="M270 252C274 229 292 211 315 208L720 151C748 147 772 170 768 198L693 782C690 807 671 827 646 832L242 904C214 909 189 887 193 858L270 252Z"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1024" height="1024" fill="#FFFFFF"/>
+
+  <!-- Thin side plane. -->
+  <path d="M242 904L646 832C671 827 690 807 693 782L768 198L792 220L717 805C713 834 691 858 662 863L260 936C225 942 195 918 193 883L242 904Z"
+        fill="url(#thinEdge)" opacity="0.42"/>
+
+  <g filter="url(#paperShadow)">
+    <path d="M270 252C274 229 292 211 315 208L720 151C748 147 772 170 768 198L693 782C690 807 671 827 646 832L242 904C214 909 189 887 193 858L270 252Z"
+          fill="url(#paper)"/>
+    <path d="M270 252C274 229 292 211 315 208L720 151C748 147 772 170 768 198L693 782C690 807 671 827 646 832L242 904C214 909 189 887 193 858L270 252Z"
+          stroke="#8B6A3F" stroke-opacity="0.13" stroke-width="7"/>
+  </g>
+
+  <!-- Fainter guide traces. -->
+  <g clip-path="url(#paperClip)">
+    <path d="M309 326L704 270" stroke="#8C6A3D" stroke-opacity="0.030" stroke-width="7" stroke-linecap="round"/>
+    <path d="M293 454L688 397" stroke="#8C6A3D" stroke-opacity="0.027" stroke-width="7" stroke-linecap="round"/>
+    <path d="M276 582L656 527" stroke="#8C6A3D" stroke-opacity="0.024" stroke-width="7" stroke-linecap="round"/>
+  </g>
+
+  <!-- Star-map watermark: even quieter than v9. -->
+  <g clip-path="url(#paperClip)" opacity="0.18">
+    <path d="M444 550L495 499L555 520L610 438"
+          stroke="#5D513F" stroke-opacity="0.20" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="444" cy="550" r="10" fill="#5D513F" fill-opacity="0.20"/>
+    <circle cx="495" cy="499" r="9" fill="#B08A48" fill-opacity="0.18"/>
+    <circle cx="555" cy="520" r="8" fill="#5D513F" fill-opacity="0.16"/>
+    <circle cx="610" cy="438" r="10" fill="#B08A48" fill-opacity="0.18"/>
+  </g>
+
+  <rect x="574" y="724" width="34" height="34" rx="7" fill="#A94335" opacity="0.68"/>
+</svg>

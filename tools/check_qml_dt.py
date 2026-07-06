@@ -43,7 +43,7 @@ def check_qml_file(filepath):
     return errors
 
 def main():
-    qml_dir = Path(__file__).parent.parent / "apps" / "desktop" / "qml"
+    qml_dir = Path(__file__).parent.parent / "apps" / "Linux_qt" / "qml"
     if not qml_dir.exists():
         print(f"QML directory not found: {qml_dir}")
         sys.exit(1)

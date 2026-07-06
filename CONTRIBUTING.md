@@ -43,7 +43,7 @@ cargo test
 ### Linux 客户端（Qt6/QML）
 
 ```bash
-cargo run -p sujian-desktop
+cargo run -p sujian-linux-qt
 ```
 
 ### HarmonyOS 客户端
@@ -142,7 +142,7 @@ Only `arm64-v8a` builds are supported.
 ### Linux Client (Qt6/QML)
 
 ```bash
-cargo run -p sujian-desktop
+cargo run -p sujian-linux-qt
 ```
 
 ### HarmonyOS Client

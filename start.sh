@@ -4,7 +4,7 @@ set -euo pipefail
 case "$(uname -s 2>/dev/null || echo unknown)" in
     Linux) ;;
     *)
-        echo "Error: apps/desktop startup scripts are scoped to the Linux Qt/QML route." >&2
+        echo "Error: apps/Linux_qt startup scripts are scoped to the Linux Qt/QML route." >&2
         echo "Windows Qt desktop packaging is legacy/manual only; do not use this script as a Windows route." >&2
         exit 1
         ;;
@@ -158,8 +158,8 @@ print_desktop_runtime_profile "start"
 echo "[start] QtQuick.Window qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing ) )"
 echo "[start] QtQuick Controls qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing ) )"
 
-echo "[start] Building sujian-desktop package..."
-cargo build -p sujian-desktop
+echo "[start] Building sujian-linux-qt package..."
+cargo build -p sujian-linux-qt
 
 echo "[start] Running 素笺写作..."
-cargo run -p sujian-desktop
+cargo run -p sujian-linux-qt

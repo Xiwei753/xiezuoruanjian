@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """检查 QML 文件中的硬编码 hex 颜色。
 
-扫描 apps/desktop/qml/ 目录下所有 .qml 文件（排除 DesignTokens.qml），
+扫描 apps/Linux_qt/qml/ 目录下所有 .qml 文件（排除 DesignTokens.qml），
 检测硬编码的 hex 颜色值（#[0-9a-fA-F]{3,8}），允许 transparent 关键字。
 
 用法:
@@ -17,7 +17,7 @@ import re
 import sys
 
 QML_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                       "apps", "desktop", "qml")
+                       "apps", "Linux_qt", "qml")
 EXCLUDED_FILES = {"DesignTokens.qml"}
 
 # 匹配 # 后跟 3-8 个十六进制字符（3/4/6/8 位 hex 颜色）

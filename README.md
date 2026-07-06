@@ -3,8 +3,6 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
 [![Linux Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml)
 [![Android Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml)
-[![Windows Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml)
-
 [English Version / 英文版](README_EN.md)
 
 <!-- 截图占位：替换为实际应用截图 -->
@@ -33,14 +31,16 @@
 ```
 core/writer_core/     Rust 核心库（唯一业务逻辑层）
 apps/android/         Kotlin Android 客户端
-apps/desktop/         Rust + Qt6/QML Linux Desktop 客户端
+apps/Linux_qt/         Rust + Qt6/QML Linux Desktop 客户端
+apps/windows/         Windows 原生客户端预留文档（待更改至原生）
 apps/harmony/         ArkTS HarmonyOS NEXT 客户端
 bindings/             跨平台绑定代码
 ```
 
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
 - `apps/android`: 原生 Kotlin Android 客户端。主业务入口为 `AppServiceBridge + UniFFI`，`BridgeProvider` 只暴露领域 Bridge 给 Repository/ViewModel/UI 做平台适配。
-- `apps/desktop`: 原生 Rust + Qt6/QML Linux Desktop 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则；当前优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
+- `apps/Linux_qt`: 原生 Rust + Qt6/QML Linux Desktop 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则；当前优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
+- `apps/windows`: 仅预留 Windows 原生客户端路线文档，标记“待更改至原生”；不复用 Linux Qt/QML 兼容代码。
 - `apps/harmony`: 原生 ArkTS HarmonyOS NEXT 客户端。通过 NAPI C++ 桥接层调用 Rust Core FFI，ArkTS 侧通过 `IWriterCoreBridge` 接口解耦。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 
@@ -80,21 +80,21 @@ cargo test
 
 ### Linux 客户端
 
-Linux 客户端统一使用 Qt6。CI、`apps/desktop/build.rs` 和目录 README 都以 Qt6 为唯一构建链路；不要混入 Qt5 QML/plugin 路径。
+Linux 客户端统一使用 Qt6。CI、`apps/Linux_qt/build.rs` 和目录 README 都以 Qt6 为唯一构建链路；不要混入 Qt5 QML/plugin 路径。
 
 ```bash
-cargo run -p sujian-desktop
+cargo run -p sujian-linux-qt
 ```
 
 如果遇到渲染问题（如 Wayland 下 UI 重影或黑屏错位），尝试使用基础渲染循环并启用调试日志：
 
 ```bash
-QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
+QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-linux-qt
 ```
 
 ### Windows 客户端
 
-Windows 后续不继续走当前 Qt 桌面补丁路线；等 Linux 输入法和动画稳定后，再另开原生 Windows 客户端路线。
+见 `apps/windows/README.md`。当前仅预留路线，待更改至原生。
 
 ### HarmonyOS 客户端（WIP）
 

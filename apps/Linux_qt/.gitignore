@@ -1,0 +1,3 @@
+build/
+# .qm files are compiled from .ts by lrelease during build
+i18n/*.qm

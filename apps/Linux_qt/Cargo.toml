@@ -1,0 +1,31 @@
+[package]
+name = "sujian-linux-qt"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+ai = ["writer_core/ai"]
+
+[dependencies]
+writer_core = { path = "../../core/writer_core", features = ["git-https"] }
+arboard = "3.4.1"
+rfd = "0.14.1"
+qmetaobject = "0.2.10"
+serde_json = "1.0.149"
+serde = { version = "1.0", features = ["derive"] }
+uuid = "1.8"
+chrono = "0.4"
+cpp = "0.5.11"
+zip = "2.2"
+regex = "1"
+
+[build-dependencies]
+cpp_build = "0.5.11"
+pkg-config = "0.3.33"
+qmetaobject = "0.2.10"
+semver = "1"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+regex = "1"

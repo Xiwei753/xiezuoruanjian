@@ -57,7 +57,7 @@ def generate_android() -> None:
 
 
 def generate_linux() -> None:
-    copy_file(FULL_SVG, ROOT / "apps" / "desktop" / "resources" / "icons" / "sujian.svg")
+    copy_file(FULL_SVG, ROOT / "apps" / "Linux_qt" / "resources" / "icons" / "sujian.svg")
     copy_file(FULL_SVG, ROOT / "packaging" / "linux" / "icons" / "hicolor" / "scalable" / "apps" / "sujian.svg")
     resize_png(FULL_1024, ROOT / "packaging" / "linux" / "icons" / "hicolor" / "256x256" / "apps" / "sujian.png", 256)
 
@@ -67,17 +67,6 @@ def generate_packaging() -> None:
     copy_file(FULL_1024, ROOT / "packaging" / "apple" / "app-icon-1024.png")
     copy_file(FULL_512, ROOT / "packaging" / "web" / "icon-512.png")
     resize_png(FULL_1024, ROOT / "packaging" / "web" / "icon-192.png", 192)
-
-    ico_path = ROOT / "packaging" / "windows" / "app.ico"
-    ico_path.parent.mkdir(parents=True, exist_ok=True)
-    with Image.open(FULL_1024) as image:
-        image = image.convert("RGBA")
-        image.save(
-            ico_path,
-            format="ICO",
-            sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (256, 256)],
-        )
-
 
 def main() -> None:
     ensure_sources()

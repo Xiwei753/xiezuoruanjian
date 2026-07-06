@@ -23,8 +23,8 @@ import xml.etree.ElementTree as ET
 # ── 路径配置 ──────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(SCRIPT_DIR)
-QML_DIR = os.path.join(REPO_ROOT, "apps", "desktop", "qml")
-TS_FILE = os.path.join(REPO_ROOT, "apps", "desktop", "i18n", "zh_CN.ts")
+QML_DIR = os.path.join(REPO_ROOT, "apps", "Linux_qt", "qml")
+TS_FILE = os.path.join(REPO_ROOT, "apps", "Linux_qt", "i18n", "zh_CN.ts")
 
 # ── 正则 ─────────────────────────────────────────────────
 # 中文字符范围（CJK Unified Ideographs）

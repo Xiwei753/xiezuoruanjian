@@ -35,17 +35,17 @@ Rust Core EditorTransaction
 
 | 文件 | 职责 |
 |------|------|
-| `apps/desktop/src/sujian_editor_item/mod.rs` | 自研编辑器核心入口，处理渲染和交互 |
-| `apps/desktop/src/sujian_editor_item/rendering.rs` | 渲染逻辑（QImage → QSGImageNode） |
-| `apps/desktop/src/sujian_editor_item/cursor_controller.rs` | 光标控制 |
-| `apps/desktop/src/sujian_editor_item/buffer.rs` | 渲染缓冲 |
-| `apps/desktop/src/sujian_editor_item/text_animation_state.rs` | 文字动画状态管理 |
-| `apps/desktop/src/editor/layout.rs` | QTextLayout 排版封装 |
-| `apps/desktop/src/editor/renderer.rs` | 渲染器 |
-| `apps/desktop/src/editor/scene_graph.rs` | QSG 节点管理 |
-| `apps/desktop/src/editor/input/` | 输入事件处理（三层结构入口：`qt_surface.rs` / `platform_ime.rs` / `controller.rs`） |
-| `apps/desktop/qml/WritingWorkspace.qml` | 写作工作区，直接使用 SujianEditorItem |
-| `apps/desktop/qml/EditorAnimationOverlay.qml` | 动画 overlay，唯一动画主路径 |
+| `apps/Linux_qt/src/sujian_editor_item/mod.rs` | 自研编辑器核心入口，处理渲染和交互 |
+| `apps/Linux_qt/src/sujian_editor_item/rendering.rs` | 渲染逻辑（QImage → QSGImageNode） |
+| `apps/Linux_qt/src/sujian_editor_item/cursor_controller.rs` | 光标控制 |
+| `apps/Linux_qt/src/sujian_editor_item/buffer.rs` | 渲染缓冲 |
+| `apps/Linux_qt/src/sujian_editor_item/text_animation_state.rs` | 文字动画状态管理 |
+| `apps/Linux_qt/src/editor/layout.rs` | QTextLayout 排版封装 |
+| `apps/Linux_qt/src/editor/renderer.rs` | 渲染器 |
+| `apps/Linux_qt/src/editor/scene_graph.rs` | QSG 节点管理 |
+| `apps/Linux_qt/src/editor/input/` | 输入事件处理（三层结构入口：`qt_surface.rs` / `platform_ime.rs` / `controller.rs`） |
+| `apps/Linux_qt/qml/WritingWorkspace.qml` | 写作工作区，直接使用 SujianEditorItem |
+| `apps/Linux_qt/qml/EditorAnimationOverlay.qml` | 动画 overlay，唯一动画主路径 |
 
 ### text_revision 机制
 
@@ -55,7 +55,7 @@ Rust Core EditorTransaction
 
 ### 编译验证
 
-- 修改 `sujian_editor_item` 代码后，必须通过 `cargo check -p sujian-desktop` 验证编译
+- 修改 `sujian_editor_item` 代码后，必须通过 `cargo check -p sujian-linux-qt` 验证编译
 - 不依赖本地 Qt6 环境，不假设 CI 有 Qt6 完整开发包
 
 ## Desktop 动画唯一主路径

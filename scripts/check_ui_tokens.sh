@@ -48,7 +48,7 @@ while IFS= read -r line; do
     # Skip small circular dots in ProjectCard.qml (8x8 dot with radius: 4)
     if [[ "$FILE" == *"ProjectCard.qml" ]] && [[ "$line" == *"radius: 4"* ]]; then continue; fi
     QML_RADIUS_ISSUES="${QML_RADIUS_ISSUES}  $line"$'\n'
-done < <(cd "$REPO_ROOT" && grep -rn 'radius: [0-9]' apps/desktop/qml/ 2>/dev/null || true)
+done < <(cd "$REPO_ROOT" && grep -rn 'radius: [0-9]' apps/Linux_qt/qml/ 2>/dev/null || true)
 
 if [[ -n "$QML_RADIUS_ISSUES" ]]; then
     echo "   FAIL: Found hardcoded radius in QML:"
@@ -66,7 +66,7 @@ while IFS= read -r line; do
     # Skip AppShadow.qml and DesignTokens.qml
     if [[ "$FILE" == *"AppShadow.qml" ]] || [[ "$FILE" == *"DesignTokens.qml" ]]; then continue; fi
     QML_SHADOW_ISSUES="${QML_SHADOW_ISSUES}  $line"$'\n'
-done < <(cd "$REPO_ROOT" && grep -rn 'Qt.rgba(0,0,0,' apps/desktop/qml/ 2>/dev/null || true)
+done < <(cd "$REPO_ROOT" && grep -rn 'Qt.rgba(0,0,0,' apps/Linux_qt/qml/ 2>/dev/null || true)
 
 if [[ -n "$QML_SHADOW_ISSUES" ]]; then
     echo "   FAIL: Found hardcoded shadow color in QML:"
@@ -92,7 +92,7 @@ while IFS= read -r line; do
     # Skip null-guard return values (if (!dt) return "#fallback") — safety defaults
     if [[ "$line" == *"!dt"* ]] && [[ "$line" == *"return"* ]]; then continue; fi
     QML_HEX_COLOR_ISSUES="${QML_HEX_COLOR_ISSUES}  $line"$'\n'
-done < <(cd "$REPO_ROOT" && grep -rn '"#[0-9a-fA-F]\{6,8\}"' apps/desktop/qml/ 2>/dev/null || true)
+done < <(cd "$REPO_ROOT" && grep -rn '"#[0-9a-fA-F]\{6,8\}"' apps/Linux_qt/qml/ 2>/dev/null || true)
 
 if [[ -n "$QML_HEX_COLOR_ISSUES" ]]; then
     echo "   FAIL: Found hardcoded hex colors in QML (use DesignTokens instead):"
@@ -112,7 +112,7 @@ while IFS= read -r line; do
     # Skip "transparent" — structural, not a color value
     if [[ "$line" == *"\"transparent\""* ]]; then continue; fi
     QML_NAMED_COLOR_ISSUES="${QML_NAMED_COLOR_ISSUES}  $line"$'\n'
-done < <(cd "$REPO_ROOT" && grep -rn 'color: "white"\|color: "black"\|color: "red"\|color: "green"\|color: "blue"\|color: "gray"\|color: "grey"' apps/desktop/qml/ 2>/dev/null || true)
+done < <(cd "$REPO_ROOT" && grep -rn 'color: "white"\|color: "black"\|color: "red"\|color: "green"\|color: "blue"\|color: "gray"\|color: "grey"' apps/Linux_qt/qml/ 2>/dev/null || true)
 
 if [[ -n "$QML_NAMED_COLOR_ISSUES" ]]; then
     echo "   FAIL: Found hardcoded named colors in QML (use DesignTokens instead):"
@@ -241,7 +241,7 @@ for COMPONENT in AppText AppButton HubPageHeader; do
             continue  # dt is passed, OK
         fi
         DT_INJECTION_ISSUES="${DT_INJECTION_ISSUES}  $line (missing dt injection)"$'\n'
-    done < <(cd "$REPO_ROOT" && grep -rn "${COMPONENT}\s*{" apps/desktop/qml/ 2>/dev/null | grep -v 'id:' || true)
+    done < <(cd "$REPO_ROOT" && grep -rn "${COMPONENT}\s*{" apps/Linux_qt/qml/ 2>/dev/null | grep -v 'id:' || true)
 done
 
 if [[ -n "$DT_INJECTION_ISSUES" ]]; then

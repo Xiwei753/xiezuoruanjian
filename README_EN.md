@@ -3,8 +3,6 @@
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
 [![Linux Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml)
 [![Android Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml)
-[![Windows Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/windows_build.yml)
-
 <!-- Screenshot placeholder: replace with actual app screenshots -->
 <!--
 ![Sujian Writer - Writing View](docs/screenshots/writing.png)
@@ -31,14 +29,16 @@ A cross-platform writing tool for novel creators, built with a Rust core + nativ
 ```
 core/writer_core/     Rust core library (sole business logic layer)
 apps/android/         Kotlin Android client
-apps/desktop/         Rust + Qt6/QML Linux Desktop client
+apps/Linux_qt/         Rust + Qt6/QML Linux Desktop client
+apps/windows/         Windows native-client placeholder docs (pending native rewrite)
 apps/harmony/         ArkTS HarmonyOS NEXT client
 bindings/             Cross-platform binding code
 ```
 
 - `core/writer_core`: The **sole** business logic core library written in Rust. Handles all file I/O, project management, sync, formatting, and settings rules. Strictly excludes UI logic.
 - `apps/android`: Native Kotlin Android client. Main business entry point is `AppServiceBridge + UniFFI`. `BridgeProvider` only exposes domain Bridges to Repository/ViewModel/UI for platform adaptation.
-- `apps/desktop`: Native Rust + Qt6/QML Linux desktop client. UI calls Rust Core through the QObject backend adapter layer. Implementing workspace, save, or sync rules in QML is not allowed. Current priorities are Linux IME, rendering, animation, AppImage, log export, and runtime profile stability.
+- `apps/Linux_qt`: Native Rust + Qt6/QML Linux desktop client. UI calls Rust Core through the QObject backend adapter layer. Implementing workspace, save, or sync rules in QML is not allowed. Current priorities are Linux IME, rendering, animation, AppImage, log export, and runtime profile stability.
+- `apps/windows`: Placeholder documentation for the native Windows route only; it is marked pending native rewrite and does not reuse Linux Qt/QML compatibility code.
 - `apps/harmony`: Native ArkTS HarmonyOS NEXT client. Calls Rust Core FFI through the NAPI C++ bridge layer. The ArkTS side is decoupled via the `IWriterCoreBridge` interface.
 - `bindings`: Code for connecting the Rust core with native clients.
 
@@ -78,21 +78,21 @@ cargo test
 
 ### Linux Client
 
-The Linux client uses Qt6 exclusively. CI, `apps/desktop/build.rs`, and the directory README all use Qt6 as the sole build pipeline; do not mix in Qt5 QML/plugin paths.
+The Linux client uses Qt6 exclusively. CI, `apps/Linux_qt/build.rs`, and the directory README all use Qt6 as the sole build pipeline; do not mix in Qt5 QML/plugin paths.
 
 ```bash
-cargo run -p sujian-desktop
+cargo run -p sujian-linux-qt
 ```
 
 If you encounter rendering issues (such as double UI or black screen misalignment under Wayland), try running with basic render loop and enabling debug logs:
 
 ```bash
-QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-desktop
+QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-linux-qt
 ```
 
 ### Windows Client
 
-Windows will not continue on the current Qt desktop patch route. After Linux IME and animation are stable, a separate native Windows client route will be opened.
+See `apps/windows/README.md`. The route is reserved and pending a native rewrite.
 
 ### HarmonyOS Client
 

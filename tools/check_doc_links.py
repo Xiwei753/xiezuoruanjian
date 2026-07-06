@@ -8,7 +8,7 @@ import urllib.parse
 LINK_REGEX = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
 
 # 2. Regex to find inline paths starting with known repo directories
-# e.g., apps/desktop, core/writer_core/src/sync/mod.rs, bindings/android
+# e.g., apps/Linux_qt, core/writer_core/src/sync/mod.rs, bindings/android
 PATH_PATTERN = re.compile(
     r'\b(?:apps|core|bindings|docs|tools|scripts|packaging|\.github)/[a-zA-Z0-9_\-\./]+'
 )
@@ -44,7 +44,7 @@ LEGACY_CONTEXT_FILENAMES = {
 }
 
 LEGACY_CONTEXT_PATHS = {
-    'apps/desktop/src/document_handler.rs',
+    'apps/Linux_qt/src/document_handler.rs',
 }
 
 LEGACY_CONTEXT_KEYWORDS = [
@@ -77,7 +77,7 @@ FORBIDDEN_CODE_PATTERNS = {
 
 # 检查脚本自身白名单：这些文件是验证禁止模式的代码，不是使用禁止模式的代码
 FORBIDDEN_CODE_PATTERN_WHITELIST_PATHS = {
-    'apps/desktop/tests/qml_static_check.rs',  # 验证 document_handler 不存在的检查脚本
+    'apps/Linux_qt/tests/qml_static_check.rs',  # 验证 document_handler 不存在的检查脚本
     'tools/check_doc_links.py',  # 本脚本自身
     'tools/test_check_doc_links.py',  # 本脚本的测试
 }
@@ -193,7 +193,7 @@ def check_links():
                             print()
                             broken_count += 1
             
-            # 2. Scan for plain text paths (e.g. apps/desktop) — line-by-line for context
+            # 2. Scan for plain text paths (e.g. apps/Linux_qt) — line-by-line for context
             for line in content_no_code.split('\n'):
                 path_matches = PATH_PATTERN.findall(line)
                 for p_match in path_matches:

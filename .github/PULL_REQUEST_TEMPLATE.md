@@ -21,7 +21,7 @@
 
 - [ ] `core/writer_core` (Rust 核心)
 - [ ] `apps/android` (Android 客户端)
-- [ ] `apps/desktop` (Linux 客户端)
+- [ ] `apps/Linux_qt` (Linux 客户端)
 - [ ] `apps/harmony` (HarmonyOS 客户端)
 - [ ] `bindings` (跨平台绑定)
 - [ ] `docs` (文档)

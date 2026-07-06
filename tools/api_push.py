@@ -68,9 +68,13 @@ def main():
     # Upload blobs for changed files
     entries = []
     for f in changed:
+        ls_tree = git(["ls-tree", local_sha, f])
+        if not ls_tree:
+            entries.append({"mode": "100644", "type": "blob", "path": f, "sha": None})
+            continue
         blob_sha = git(["rev-parse", f"{local_sha}:{f}"])
         upload_blob(api, headers, blob_sha, git)
-        mode = git(["ls-tree", local_sha, f]).split()[0]
+        mode = ls_tree.split()[0]
         entries.append({"mode": mode, "type": "blob", "sha": blob_sha, "path": f})
 
     # Create tree (incremental on parent tree)

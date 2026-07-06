@@ -4,7 +4,7 @@ set -euo pipefail
 case "$(uname -s 2>/dev/null || echo unknown)" in
     Linux) ;;
     *)
-        echo "Error: apps/desktop debug runtime profile is scoped to the Linux Qt/QML route." >&2
+        echo "Error: apps/Linux_qt debug runtime profile is scoped to the Linux Qt/QML route." >&2
         echo "Windows Qt desktop packaging is legacy/manual only; do not use this script as a Windows route." >&2
         exit 1
         ;;
@@ -200,11 +200,11 @@ fi
 
 # Clean up older log files (keep 20 most recent)
 if [ -d logs ]; then
-    ls -t logs/sujian-desktop-debug-*.log 2>/dev/null | tail -n +21 | xargs rm -f || true
+    ls -t logs/sujian-linux-qt-debug-*.log 2>/dev/null | tail -n +21 | xargs rm -f || true
 fi
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="logs/sujian-desktop-debug-${TIMESTAMP}.log"
+LOG_FILE="logs/sujian-linux-qt-debug-${TIMESTAMP}.log"
 touch "$LOG_FILE"
 
 # Mirror all subsequent debug output into one log file, including build failures.
@@ -266,8 +266,8 @@ if [ "${WRITER_DEBUG_QT_VERBOSE:-0}" = "0" ]; then
 fi
 echo "==========================="
 
-echo "[start-debug] Building sujian-desktop package..."
-cargo build -p sujian-desktop
+echo "[start-debug] Building sujian-linux-qt package..."
+cargo build -p sujian-linux-qt
 
 echo "[start-debug] Running 素笺写作 with tracing..."
-cargo run -p sujian-desktop
+cargo run -p sujian-linux-qt

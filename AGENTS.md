@@ -76,9 +76,9 @@ Supersedes: AGENTS.md (previous version)
 ### 3.3 编辑器排版架构
 
 - Desktop 自研写作区当前唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。
-- 排查入口：`apps/desktop/src/sujian_editor_item/*`、`apps/desktop/src/editor/layout.rs`、`apps/desktop/src/editor/renderer.rs`、`apps/desktop/src/editor/scene_graph.rs`、`apps/desktop/qml/WritingWorkspace.qml`、`apps/desktop/qml/EditorAnimationOverlay.qml`。
+- 排查入口：`apps/Linux_qt/src/sujian_editor_item/*`、`apps/Linux_qt/src/editor/layout.rs`、`apps/Linux_qt/src/editor/renderer.rs`、`apps/Linux_qt/src/editor/scene_graph.rs`、`apps/Linux_qt/qml/WritingWorkspace.qml`、`apps/Linux_qt/qml/EditorAnimationOverlay.qml`。
 - **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` 修自研写作区。这些是旧 fallback 路径，只允许保留兼容，不允许新增依赖；不得作为可开发路线。
-- 修自研写作区必须看 `apps/desktop/src/sujian_editor_item/` 和 `docs/editor_engine_route.md`。
+- 修自研写作区必须看 `apps/Linux_qt/src/sujian_editor_item/` 和 `docs/editor_engine_route.md`。
 
 ### 3.4 openChapter 防死循环
 
@@ -128,7 +128,7 @@ Supersedes: AGENTS.md (previous version)
 cd core/writer_core && cargo test
 
 # Linux 客户端
-cd apps/desktop && cargo check && cargo test
+cd apps/Linux_qt && cargo check && cargo test
 
 # Android
 ./tools/build_android.sh
@@ -195,9 +195,9 @@ cd apps/desktop && cargo check && cargo test
 | 文件/目录 | 允许修改 | 禁止修改 |
 |-----------|---------|---------|
 | `core/writer_core/` | Rust 核心逻辑 | — |
-| `apps/desktop/src/main.rs` | AppBackend 绑定 | 不要新增写作排版细节 |
-| `apps/desktop/src/document_handler.rs` | — | 已删除（legacy），不得恢复 |
-| `apps/desktop/qml/*.qml` | UI 组件和状态绑定 | 不要写复杂业务逻辑 |
+| `apps/Linux_qt/src/main.rs` | AppBackend 绑定 | 不要新增写作排版细节 |
+| `apps/Linux_qt/src/document_handler.rs` | — | 已删除（legacy），不得恢复 |
+| `apps/Linux_qt/qml/*.qml` | UI 组件和状态绑定 | 不要写复杂业务逻辑 |
 | `apps/android/` | Android 客户端 | 不要硬编码输入法逻辑 |
 | `.github/` | CI/CD 配置 | — |
 | `docs/*.md` | 文档 | — |

@@ -6,11 +6,11 @@ Covers:
   - docs/foo.md: "请修改 SmoothCursor.qml" → FAIL
   - docs/foo.md: "SmoothCursor.qml 已删除，不得恢复" → PASS
   - docs/foo.md: "document_handler.rs is deprecated" → PASS
-  - docs/foo.md: "apps/desktop/src/document_handler.rs is deleted" → PASS
+  - docs/foo.md: "apps/Linux_qt/src/document_handler.rs is deleted" → PASS
   - docs/foo.md: "EditorPage.qml is legacy, must not restore" → PASS
   - docs/foo.md: "Use EditorPage.qml for editing" → FAIL
   - AGENTS.md: "EditorPage.qml" (no keyword on same line) → PASS (AGENTS.md always passes)
-  - docs/foo.md: "apps/desktop/src/document_handler.rs" (no keyword) → FAIL
+  - docs/foo.md: "apps/Linux_qt/src/document_handler.rs" (no keyword) → FAIL
 """
 import os
 import re
@@ -156,9 +156,9 @@ def test_docs_deprecated_keyword_pass():
 
 
 def test_docs_legacy_path_with_keyword_pass():
-    """docs/foo.md: 'apps/desktop/src/document_handler.rs is deleted' → PASS"""
+    """docs/foo.md: 'apps/Linux_qt/src/document_handler.rs is deleted' → PASS"""
     broken, output = _run_check_in_tmpdir({
-        'docs/foo.md': '# Guide\napps/desktop/src/document_handler.rs is deleted\n',
+        'docs/foo.md': '# Guide\napps/Linux_qt/src/document_handler.rs is deleted\n',
     })
     found = any('document_handler.rs' in line for line in output)
     assert not found, "Legacy path should NOT be reported when deleted keyword present"
@@ -193,9 +193,9 @@ def test_agents_md_always_pass():
 
 
 def test_docs_legacy_path_no_keyword_fail():
-    """docs/foo.md: 'apps/desktop/src/document_handler.rs' (no keyword) → FAIL"""
+    """docs/foo.md: 'apps/Linux_qt/src/document_handler.rs' (no keyword) → FAIL"""
     broken, output = _run_check_in_tmpdir({
-        'docs/foo.md': '# Guide\nSee apps/desktop/src/document_handler.rs for details\n',
+        'docs/foo.md': '# Guide\nSee apps/Linux_qt/src/document_handler.rs for details\n',
     })
     assert broken >= 1, f"Expected >= 1 broken reference, got {broken}"
     found = any('document_handler.rs' in line for line in output)

@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - 'apps/desktop/**'
+      - 'apps/Linux_qt/**'
       - 'core/writer_core/**'
       - '.github/workflows/linux_build.yml'
       - 'Cargo.lock'
@@ -126,26 +126,26 @@ jobs:
         run: cargo test -p writer_core ${{ matrix.features }}
 
       - name: Test Linux contracts
-        run: cargo test -p sujian-desktop ${{ matrix.features }}
+        run: cargo test -p sujian-linux-qt ${{ matrix.features }}
 
       - name: Build Linux desktop
-        run: cargo build -p sujian-desktop --release ${{ matrix.features }}
+        run: cargo build -p sujian-linux-qt --release ${{ matrix.features }}
 
       - name: Package AppImage
         run: |
           rm -rf AppDir
           mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/scalable/apps
-          cp target/release/sujian-desktop AppDir/usr/bin/sujian-desktop
-          cat > AppDir/usr/share/applications/sujian-desktop.desktop <<'EOF'
+          cp target/release/sujian-linux-qt AppDir/usr/bin/sujian-linux-qt
+          cat > AppDir/usr/share/applications/sujian-linux-qt.desktop <<'EOF'
           [Desktop Entry]
           Type=Application
           Name=素笺写作
-          Exec=sujian-desktop
-          Icon=sujian-desktop
+          Exec=sujian-linux-qt
+          Icon=sujian-linux-qt
           Categories=Office;TextEditor;
           Terminal=false
           EOF
-          cp apps/desktop/resources/icons/sujian.svg AppDir/usr/share/icons/hicolor/scalable/apps/sujian-desktop.svg
+          cp apps/Linux_qt/resources/icons/sujian.svg AppDir/usr/share/icons/hicolor/scalable/apps/sujian-linux-qt.svg
           if [ ! -f "$FCITX_QT_PLUGIN" ]; then
             echo "::error title=fcitx5 Qt6 input context missing::Expected built plugin at $FCITX_QT_PLUGIN"
             exit 1
@@ -160,14 +160,14 @@ jobs:
           ls -la "$QT_ROOT_DIR/plugins/platforms/" || true
           ls -la "$QT_ROOT_DIR/plugins/wayland/" || true
           ls -la "$QT_ROOT_DIR/plugins/shellintegration/" || true
-          OUTPUT="sujian-desktop-${{ matrix.flavor }}.AppImage" \
-            QML_SOURCES_PATHS="$PWD/apps/desktop/qml" \
+          OUTPUT="sujian-linux-qt-${{ matrix.flavor }}.AppImage" \
+            QML_SOURCES_PATHS="$PWD/apps/Linux_qt/qml" \
             EXTRA_QT_PLUGINS="platforminputcontexts/libfcitx5platforminputcontextplugin.so" \
             ./linuxdeploy-x86_64.AppImage \
               --appdir AppDir \
-              --executable AppDir/usr/bin/sujian-desktop \
-              --desktop-file AppDir/usr/share/applications/sujian-desktop.desktop \
-              --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/sujian-desktop.svg \
+              --executable AppDir/usr/bin/sujian-linux-qt \
+              --desktop-file AppDir/usr/share/applications/sujian-linux-qt.desktop \
+              --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/sujian-linux-qt.svg \
               --plugin qt \
               --output appimage
           if [ ! -f AppDir/usr/plugins/platforminputcontexts/libfcitx5platforminputcontextplugin.so ]; then
@@ -200,7 +200,7 @@ jobs:
           # Set reasonable IM module fallback: wayland > fcitx > ibus
           # Do NOT hard-override user's existing QT_IM_MODULE
           export QT_IM_MODULES="wayland;fcitx;ibus"
-          xvfb-run -a timeout 10s ./sujian-desktop-${{ matrix.flavor }}.AppImage > appimage-smoke.log 2>&1
+          xvfb-run -a timeout 10s ./sujian-linux-qt-${{ matrix.flavor }}.AppImage > appimage-smoke.log 2>&1
           status=$?
           set -e
           cat appimage-smoke.log
@@ -225,6 +225,6 @@ jobs:
       - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: sujian-desktop-${{ matrix.flavor }}
-          path: sujian-desktop-${{ matrix.flavor }}.AppImage
+          name: sujian-linux-qt-${{ matrix.flavor }}
+          path: sujian-linux-qt-${{ matrix.flavor }}.AppImage
           retention-days: 30

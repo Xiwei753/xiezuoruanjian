@@ -2,7 +2,7 @@
 //!
 //! 验证 FFI 层手动拼接的 JSON 字段名与各端期望的字段名对齐。
 //! Harmony 端参考: apps/harmony/entry/src/main/ets/model/CoreDtos.ets
-//! Desktop 端参考: apps/desktop/src/backend/ (QML via json_utils)
+//! Linux Qt 端参考: apps/Linux_qt/src/backend/ (QML via json_utils)
 //! Android 端参考: core/writer_core/src/api.udl + api/types/
 
 use serde_json::json;
