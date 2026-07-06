@@ -23,6 +23,11 @@ pub fn open_directory(path: &str) -> Result<(), String> {
         return Err("路径为空".to_string());
     }
 
+    let path_obj = std::path::Path::new(path);
+    if !path_obj.is_dir() {
+        return Err(format!("无效的目录路径: {}", path));
+    }
+
     #[cfg(target_os = "linux")]
     {
         for cmd in &["xdg-open", "nautilus", "dolphin"] {
