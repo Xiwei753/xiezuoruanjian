@@ -585,7 +585,19 @@ fn zip_dir_recursive(
             let relative = path
                 .strip_prefix(base_dir)
                 .map_err(|e| format!("计算相对路径失败: {}", e))?;
+
+            // 安全检查：防止 Zip Slip 漏洞
+            if relative.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_))) {
+                return Err(format!("检测到非法的相对路径，可能存在 Zip Slip 风险: {}", relative.display()));
+            }
+
             let entry_name = relative.to_string_lossy().replace('\\', "/");
+
+            // 进一步安全检查字符串层面的 Zip Slip
+            if entry_name.contains("../") || entry_name.starts_with("/") {
+                return Err(format!("检测到非法的压缩包条目名称，可能存在 Zip Slip 风险: {}", entry_name));
+            }
+
             zip.start_file(&entry_name, *options)
                 .map_err(|e| format!("创建 zip 条目失败: {}", e))?;
             let content =
