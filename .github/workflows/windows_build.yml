@@ -2,16 +2,6 @@ name: Sujian Windows Build
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - 'apps/windows/**'
-      - 'bindings/windows/**'
-      - 'core/writer_core/**'
-      - '.github/workflows/windows_build.yml'
-      - 'Cargo.lock'
-      - 'Cargo.toml'
 
 permissions:
   contents: read

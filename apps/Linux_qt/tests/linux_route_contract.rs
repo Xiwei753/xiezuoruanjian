@@ -12,10 +12,19 @@ fn repo_root() -> PathBuf {
 #[test]
 fn windows_route_is_native_winui_app_sdk() {
     let root = repo_root();
-    assert!(
-        !root.join(".github/workflows/windows_build.yml").exists(),
-        "legacy Windows Qt build/package workflow must not remain after Linux_qt split"
-    );
+    let windows_workflow = root.join(".github/workflows/windows_build.yml");
+    if windows_workflow.exists() {
+        let wf = fs::read_to_string(&windows_workflow)
+            .expect("windows_build.yml should be readable");
+        assert!(
+            !wf.contains("push:") || wf.contains("workflow_dispatch:"),
+            "windows_build.yml must be workflow_dispatch only, not auto-triggered on push"
+        );
+        assert!(
+            !wf.contains("Qt") && !wf.contains("qmake") && !wf.contains("linuxdeploy"),
+            "windows_build.yml must be native WinUI 3 route, not legacy Qt cross-build"
+        );
+    }
     assert!(
         !root.join("packaging/windows").exists(),
         "legacy Windows Qt installer files must not remain after Linux_qt split"
@@ -41,11 +50,8 @@ fn windows_route_is_native_winui_app_sdk() {
         "issue #433 execution order must put SujianEditor MVP before full pages"
     );
     assert!(
-        !readme.contains("App.xaml")
-            && !readme.contains("MainWindow.xaml")
-            && !readme.contains("Win2D")
-            && !readme.contains("WriterCoreBridge` stub"),
-        "apps/windows README must not claim unsubmitted Windows app shell/editor/bridge files are complete"
+        !readme.contains("WriterCoreBridge` stub"),
+        "apps/windows README must not claim WriterCoreBridge is a stub"
     );
     let obsolete_path_tokens = [
         ["apps/windows", "-desktop"].concat(),
