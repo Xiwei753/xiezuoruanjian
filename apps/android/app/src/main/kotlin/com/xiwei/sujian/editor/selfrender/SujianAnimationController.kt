@@ -44,6 +44,8 @@ class SujianAnimationController(
     private val cursorController: SujianCursorController
 ) {
     private val TAG = "SujianAnimCtrl"
+
+    enum class TextAnimationStartResult { Started, Skipped }
     
     var animationEnabled: Boolean = false
     var animationDurationMs: Long = 160L
@@ -112,36 +114,27 @@ class SujianAnimationController(
         // 填充 reflow 数据（由 runVisualEdit 计算并传入）
         vt.reflowGlyphRects = context.reflowGlyphRects
         
-        when (vt.kind) {
-            EditorAnimationKindData.Insert -> {
-                handleInsertTransaction(vt)
-                // 协同光标：光标和文字动画共用 vt 的 old/new cursor rect
-                if (coordinatedAnimationEnabled && vt.oldCursorRect != null && vt.newCursorRect != null) {
-                    val newRect = vt.newCursorRect!!
-                    cursorController.updateCursorTarget(
-                        newRect.x.toFloat(),
-                        newRect.top.toFloat(),
-                        newRect.bottom.toFloat(),
-                        true
-                    )
-                }
-            }
-            EditorAnimationKindData.Delete -> {
-                handleDeleteTransaction(vt)
-                // 协同光标：光标和文字动画共用 vt 的 old/new cursor rect
-                if (coordinatedAnimationEnabled && vt.oldCursorRect != null && vt.newCursorRect != null) {
-                    val newRect = vt.newCursorRect!!
-                    cursorController.updateCursorTarget(
-                        newRect.x.toFloat(),
-                        newRect.top.toFloat(),
-                        newRect.bottom.toFloat(),
-                        true
-                    )
-                }
-            }
+        val textAnimationResult = when (vt.kind) {
+            EditorAnimationKindData.Insert -> handleInsertTransaction(vt)
+            EditorAnimationKindData.Delete -> handleDeleteTransaction(vt)
             EditorAnimationKindData.Cursor -> {
                 // Cursor 动画由 CursorController 处理
+                TextAnimationStartResult.Skipped
             }
+        }
+
+        // 协同光标：只有文字动画真实 Started 时，才使用同一个 vt 的 old/new cursor rect
+        // 触发光标协同；文字动画和光标动画仍分别由 Renderer/CursorController 管理。
+        if (textAnimationResult == TextAnimationStartResult.Started &&
+            coordinatedAnimationEnabled && vt.oldCursorRect != null && vt.newCursorRect != null
+        ) {
+            val newRect = vt.newCursorRect!!
+            cursorController.updateCursorTarget(
+                newRect.x.toFloat(),
+                newRect.top.toFloat(),
+                newRect.bottom.toFloat(),
+                true
+            )
         }
     }
     
@@ -151,11 +144,14 @@ class SujianAnimationController(
      * **关键变更**：从 vt.oldCursorRect 获取起点坐标，不再调用 layout.getCursorRect 反推。
      * 使用 vt.insertedRangeStart/End（UTF-8 → UTF-16 转换后）获取 glyph rects。
      */
-    fun handleInsertTransaction(vt: EditorVisualTransactionData) {
-        if (!animationEnabled) return
+    fun handleInsertTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
+        if (!animationEnabled) return TextAnimationStartResult.Skipped
         
         // 滚动中直接不建 hidden range、不建动画，避免 activeInsertRange 残留
-        if (renderer.isScrolling()) return
+        if (renderer.isScrolling()) {
+            renderer.clearAnimations()
+            return TextAnimationStartResult.Skipped
+        }
         
         val text = buffer.text
         
@@ -169,21 +165,19 @@ class SujianAnimationController(
         // Core animationMode is the only semantic source. Android may only
         // downgrade for platform/system suppression; do not recalculate from
         // glyphRects.size or local grapheme inspection.
-        val decision = if (renderer.isScrolling()) {
-            AnimationModeData.SystemSuppressed
-        } else {
-            vt.animationMode
-        }
+        val decision = vt.animationMode
         
-        if (decision == AnimationModeData.SystemSuppressed) {
+        if (decision == AnimationModeData.SystemSuppressed || decision == AnimationModeData.SnapshotAnimation) {
+            // Snapshot renderer 尚未完成：与 Linux_qt 统一降级为跳过，并立即清理 hidden range。
+            renderer.clearAnimations()
             DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: decision=$decision, skipping animation")
-            return
+            return TextAnimationStartResult.Skipped
         }
         
         // 防御：glyphRects 为空时直接 return
         if (glyphRects.isEmpty()) {
             DiagnosticsLogger.d(TAG, "No glyph rects for insert transaction at [$rangeStartUtf16, $rangeEndUtf16), skipping animation")
-            return
+            return TextAnimationStartResult.Skipped
         }
         
         vt.insertGlyphRects = glyphRects.map { gr ->
@@ -220,8 +214,8 @@ class SujianAnimationController(
             AnimationModeData.ClusterAnimation -> "cluster"
             AnimationModeData.RunAnimation -> "run"
             AnimationModeData.LineReflowAnimation -> "insert"  // 换行动画仍用 insert kind，配合 reflow
-            AnimationModeData.SnapshotAnimation -> "snapshot"
-            AnimationModeData.SystemSuppressed -> return  // 已在上方处理
+            AnimationModeData.SnapshotAnimation,
+            AnimationModeData.SystemSuppressed -> return TextAnimationStartResult.Skipped  // 已在上方处理
         }
         
         val insertAnim = SujianOverlayAnim(
@@ -245,7 +239,7 @@ class SujianAnimationController(
         if (!renderer.addAnimation(insertAnim)) {
             // 动画未成功加入（如滚动中），立即清除刚添加的 hidden range
             renderer.removeActiveInsertRangeById(insertRangeId)
-            return
+            return TextAnimationStartResult.Skipped
         }
         
         // ── Reflow 处理（方案 A：reflow ghost 动画） ──
@@ -309,6 +303,7 @@ class SujianAnimationController(
                 }
             }
         }
+        return TextAnimationStartResult.Started
     }
     
     /**
@@ -318,8 +313,19 @@ class SujianAnimationController(
      * 使用 vt.newCursorRect 作为动画终点。
      * 禁止从新 layout 反推已删 glyph 位置。
      */
-    fun handleDeleteTransaction(vt: EditorVisualTransactionData) {
-        if (!animationEnabled) return
+    fun handleDeleteTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
+        if (!animationEnabled) return TextAnimationStartResult.Skipped
+        
+        // Delete 路径与 Insert 一样，以 Core animationMode 为唯一语义来源。
+        // SystemSuppressed / SnapshotAnimation 不建 overlay；Snapshot renderer 尚未完成，
+        // 与 Linux_qt 统一降级为跳过并清理 hidden range。
+        val decision = if (renderer.isScrolling()) AnimationModeData.SystemSuppressed else vt.animationMode
+        if (decision == AnimationModeData.SystemSuppressed || decision == AnimationModeData.SnapshotAnimation) {
+            renderer.clearAnimations()
+            consumeDeleteSnapshot(lastDeleteSnapshotId)
+            DiagnosticsLogger.d(TAG, "Delete transaction ${vt.id}: decision=$decision, skipping animation")
+            return TextAnimationStartResult.Skipped
+        }
         
         // 映射已有 activeInsertRanges 以响应本次删除
         // 删除位置 = 当前光标位置（删除后光标在删除起始处），删除长度 = 被删文本 UTF-16 长度
@@ -343,7 +349,7 @@ class SujianAnimationController(
         val endBaselineY = newCursorRect?.baselineY?.toFloat() ?: layout.getCursorRect(buffer.text, buffer.selection.head).baselineY
         
         if (snapshot != null) {
-            renderer.addAnimation(SujianOverlayAnim(
+            return if (renderer.addAnimation(SujianOverlayAnim(
                 id = (vt.id shl 1),
                 kind = "delete",
                 text = snapshot.deletedText,
@@ -355,14 +361,15 @@ class SujianAnimationController(
                 endBaselineY = endBaselineY,
                 durationMs = vt.durationMs,
                 startTimeMs = System.currentTimeMillis(),
-                glyphRects = snapshot.deletedGlyphRects
-            ))
+                glyphRects = snapshot.deletedGlyphRects,
+                animationMode = decision
+            ))) TextAnimationStartResult.Started else TextAnimationStartResult.Skipped
         } else {
             // 没有匹配的快照时，尝试 FIFO fallback
             val fallbackSnapshot = deleteSnapshots.firstOrNull()
             if (fallbackSnapshot != null) {
                 deleteSnapshots.remove(fallbackSnapshot)
-                renderer.addAnimation(SujianOverlayAnim(
+                return if (renderer.addAnimation(SujianOverlayAnim(
                     id = (vt.id shl 1),
                     kind = "delete",
                     text = fallbackSnapshot.deletedText,
@@ -374,12 +381,13 @@ class SujianAnimationController(
                     endBaselineY = endBaselineY,
                     durationMs = vt.durationMs,
                     startTimeMs = System.currentTimeMillis(),
-                    glyphRects = fallbackSnapshot.deletedGlyphRects
-                ))
+                    glyphRects = fallbackSnapshot.deletedGlyphRects,
+                    animationMode = decision
+                ))) TextAnimationStartResult.Started else TextAnimationStartResult.Skipped
             } else {
                 // 完全没有快照时，使用 Core 事件信息创建简化动画
                 DiagnosticsLogger.d(TAG, "No delete snapshot for transaction ${vt.id}, using fallback")
-                renderer.addAnimation(SujianOverlayAnim(
+                return if (renderer.addAnimation(SujianOverlayAnim(
                     id = (vt.id shl 1),
                     kind = "delete",
                     text = vt.oldText,
@@ -391,8 +399,9 @@ class SujianAnimationController(
                     endBaselineY = endBaselineY,
                     durationMs = vt.durationMs,
                     startTimeMs = System.currentTimeMillis(),
-                    glyphRects = emptyList()
-                ))
+                    glyphRects = emptyList(),
+                    animationMode = decision
+                ))) TextAnimationStartResult.Started else TextAnimationStartResult.Skipped
             }
         }
     }

@@ -233,29 +233,6 @@ class SujianEditorRenderer(
     }
 
     /**
-     * @deprecated 使用 addActiveInsertRange / clearActiveInsertRanges 代替
-     * 保留向后兼容，内部转为列表操作
-     */
-    fun setAnimatedInsertRange(range: HalfOpenRange?) {
-        val clearedIds = activeInsertRanges.map { it.id }.toSet()
-        activeInsertRanges.clear()
-        if (range != null) {
-            val id = nextInsertRangeId++
-            activeInsertRanges.add(ActiveInsertRangeEntry(id, range))
-        }
-        // 取消拥有被清除 range 的动画
-        if (clearedIds.isNotEmpty()) {
-            activeAnimations.removeAll { anim ->
-                when (anim.kind) {
-                    "insert", "cluster", "run", "snapshot" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
-                    "reflow" -> anim.reflowRangeIds.any { it in clearedIds }
-                    else -> false
-                }
-            }
-        }
-    }
-
-    /**
      * 清理已完成的动画
      */
     fun tickAnimations() {

@@ -27,4 +27,21 @@ class AnimationModeTest {
         assertTrue(source.contains("AnimationModeData.SystemSuppressed"))
         assertTrue(source.contains("vt.animationMode"))
     }
+
+    @Test
+    fun snapshotModeIsSkippedUntilRealRendererExists() {
+        val source = controllerSource()
+        assertTrue(source.contains("decision == AnimationModeData.SystemSuppressed || decision == AnimationModeData.SnapshotAnimation"))
+        assertTrue(source.contains("renderer.clearAnimations()"))
+        assertFalse("Android must not create placeholder snapshot overlays", source.contains("AnimationModeData.SnapshotAnimation -> \"snapshot\""))
+    }
+
+    @Test
+    fun coordinatedCursorOnlyStartsAfterTextAnimationStarted() {
+        val source = controllerSource()
+        assertTrue(source.contains("TextAnimationStartResult.Started"))
+        assertTrue(source.contains("textAnimationResult == TextAnimationStartResult.Started"))
+        assertTrue(source.contains("handleInsertTransaction(vt)"))
+        assertTrue(source.contains("handleDeleteTransaction(vt)"))
+    }
 }

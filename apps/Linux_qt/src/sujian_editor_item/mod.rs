@@ -1733,8 +1733,8 @@ impl SujianEditorItem {
             self.fill_visual_transaction_coords(vt, &new.text, &old.text);
         }
 
-        // 创建 TextAnimationState 条目，让正文层在动画期间跳过 inserted range
-        // 使用统一的 choose_animation_mode 判定，确保 Rust 和 QML 一致
+        // 创建 TextAnimationState 条目，让正文层在动画期间跳过 inserted range。
+        // Core animation_mode 是唯一语义来源；Linux_qt 仅做平台/系统降级。
         // 仅在动画启用且事务非空时创建
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
@@ -1754,7 +1754,7 @@ impl SujianEditorItem {
                             // Core animation_mode is the only semantic source. Linux_qt may only
                             // downgrade for platform/system suppression; it must not recalculate
                             // mode from chars/glyphs locally.
-                            let mut mode = Self::animation_mode_from_core(vt.animation_mode);
+                            let mut mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
                             if self.current_is_scrolling
                                 || self.current_is_loading
                                 || self.current_is_applying_format
@@ -1807,7 +1807,7 @@ impl SujianEditorItem {
                     EditorAnimationKind::Delete => {
                         // Delete animation state follows Core animation_mode; Linux_qt only
                         // downgrades for platform/system suppression.
-                        let mut mode = Self::animation_mode_from_core(vt.animation_mode);
+                        let mut mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
                         if self.current_is_scrolling
                             || self.current_is_loading
                             || self.current_is_applying_format
@@ -3067,7 +3067,6 @@ impl SujianEditorItem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sujian_editor_item::text_animation_state::choose_animation_mode;
 
     #[test]
     fn meta_object_dump_contains_animation_signals() {
@@ -3419,7 +3418,7 @@ mod tests {
     ///
     /// 插入 4 字成语（如 "风和日丽"），验证产生 Cursor 类型动画事件。
     /// IME commit 多字使用 TypingCommit cause，4 字 ≤ max_animated_chars(8)，
-    /// should_animate=true，choose_animation_mode=GlyphAnimation，
+    /// should_animate=true，Core animationMode=GlyphAnimation，
     /// TextAnimationState 应创建 hidden range，cursor rect 正确更新。
     #[test]
     fn ime_commit_4_char_idiom_produces_cursor_animation() {
@@ -3458,18 +3457,8 @@ mod tests {
             Some((old_text.len(), old_text.len() + idiom.len()))
         );
 
-        // choose_animation_mode → GlyphAnimation (4 clusters, no newline)
-        let mode = choose_animation_mode(
-            4,     // cluster_count
-            false, // contains_newline
-            false, // contains_complex_grapheme
-            false, // is_scrolling
-            false, // is_loading
-            false, // is_applying_format
-            false, // is_applying_settings
-            true,  // animation_enabled
-            true,  // component_ready
-        );
+        // 平台直接消费 Core animationMode，不在本地按 cluster/newline 重算。
+        let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(mode, AnimationMode::GlyphAnimation);
 
         // TextAnimationState 应创建 hidden range
@@ -3522,24 +3511,15 @@ mod tests {
             EditorTransactionCause::TypingCommit,
         );
 
-        // 9 chars > 8 → should_animate = true (core level: 不再限制字符数上限，由 choose_animation_mode 决定模式)
+        // 9 chars > 8 → should_animate = true；具体模式由 Core animationMode 决定。
         assert!(
             tx.should_animate,
             "9-char candidate should animate at core level (RunAnimation)"
         );
 
-        // choose_animation_mode → RunAnimation (9 clusters, within 9–40 range)
-        let mode = choose_animation_mode(
-            9,     // cluster_count > 8, ≤ 40
-            false, // contains_newline
-            false, // contains_complex_grapheme
-            false, // is_scrolling
-            false, // is_loading
-            false, // is_applying_format
-            false, // is_applying_settings
-            true,  // animation_enabled
-            true,  // component_ready
-        );
+        let vt = engine.visual_transaction(&tx).expect("RunAnimation visual transaction");
+        // 平台直接消费 Core animationMode，不在本地按 cluster 数重算。
+        let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(
             mode,
             AnimationMode::RunAnimation,
@@ -3698,9 +3678,8 @@ mod tests {
         assert_eq!(vt.old_selection.head.index, 0);
         assert_eq!(vt.new_selection.head.index, hanzi.len());
 
-        // choose_animation_mode → GlyphAnimation (4 clusters, no newline)
-        let mode =
-            choose_animation_mode(4, false, false, false, false, false, false, true, true);
+        // 平台直接消费 Core animationMode，不在本地按 cluster/newline 重算。
+        let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(mode, AnimationMode::GlyphAnimation);
 
         // TextAnimationState 创建 hidden range
@@ -3736,19 +3715,15 @@ mod tests {
             EditorTransactionCause::Typing,
         );
 
-        // 换行包含 \n → should_animate = true (core level: 不再跳过换行，由 choose_animation_mode 决定模式)
+        // 换行包含 \n → should_animate = true；具体模式由 Core animationMode 决定。
         assert!(
             tx.should_animate,
             "Newline commit should animate at core level (LineReflowAnimation)"
         );
 
-        // choose_animation_mode → LineReflowAnimation (contains_newline=true)
-        let mode = choose_animation_mode(
-            1,    // cluster_count (the newline char)
-            true, // contains_newline
-            false, // contains_complex_grapheme
-            false, false, false, false, true, true,
-        );
+        let vt = engine.visual_transaction(&tx).expect("LineReflowAnimation visual transaction");
+        // 平台直接消费 Core animationMode，不在本地按 newline/cluster 重算。
+        let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(
             mode,
             AnimationMode::LineReflowAnimation,

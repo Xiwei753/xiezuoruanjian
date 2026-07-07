@@ -243,6 +243,7 @@ class SujianEditorView @JvmOverloads constructor(
                 reflowGlyphRects = reflowGlyphRects
             )
             animationController.handleVisualEdit(context, this)
+            requestAnimationFrameIfNeeded()
 
             return result
         } finally {
@@ -357,6 +358,7 @@ class SujianEditorView @JvmOverloads constructor(
         // 关闭 typingAnimation 时清除 hidden range、动画和删除快照
         if (!enabled && wasEnabled) {
             animationController.clearState()
+            invalidate()
         }
     }
 
@@ -464,9 +466,16 @@ class SujianEditorView @JvmOverloads constructor(
 
         canvas.restore()
 
-        // 如果有活跃动画，继续重绘
+        // 如果有活跃动画，继续按 Choreographer 帧节奏重绘。
+        // 不使用普通 invalidate()，避免高刷设备上活跃动画只被普通 UI invalidation 驱动而抖动/漏帧。
         if (animationController.hasActiveAnimations()) {
-            invalidate()
+            postInvalidateOnAnimation()
+        }
+    }
+
+    private fun requestAnimationFrameIfNeeded() {
+        if (animationController.hasActiveAnimations()) {
+            postInvalidateOnAnimation()
         }
     }
 

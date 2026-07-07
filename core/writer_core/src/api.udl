@@ -952,10 +952,6 @@ interface WriterAppService {
 
     ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role, ShellModeDto shell_mode);
 
-    // ── Editor Animation ──
-
-    sequence<EditorAnimationEventDto> editor_animation_events(string old_text, string new_text, u32 old_cursor_index, u32 new_cursor_index, EditorTransactionCauseDto cause, u32 max_animated_chars, u64 animation_duration_ms);
-
     // ── Editor Visual Transaction ──
 
     EditorVisualTransactionDto? editor_visual_transaction(string old_text, string new_text, u32 old_cursor_index, u32 new_cursor_index, EditorTransactionCauseDto cause, u32 max_animated_chars, u64 animation_duration_ms);
@@ -1119,17 +1115,6 @@ enum EditorTransactionCauseDto {
     "Load",
     "Format",
     "Programmatic",
-};
-
-dictionary EditorAnimationEventDto {
-    u64 id;
-    EditorAnimationKindDto kind;
-    u32 range_start;
-    u32 range_len;
-    string text;
-    u32 old_cursor_index;
-    u32 new_cursor_index;
-    u64 duration_ms;
 };
 
 // ── Editor Visual Transaction DTOs ──

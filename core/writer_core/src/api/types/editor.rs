@@ -81,47 +81,6 @@ impl From<EditorTransactionCauseDto> for crate::editor::EditorTransactionCause {
     }
 }
 
-/// A single animation event produced by the Core EditorEngine.
-///
-/// The platform side uses `range_start`, `range_len`, `text` to locate
-/// the affected text in its own Layout, then computes glyph coordinates
-/// and submits them to its renderer (e.g., Android `EditorRenderLayer`).
-///
-/// **Deprecated**: Use `EditorVisualTransactionDto` instead. This DTO
-/// will be removed in a future version.
-#[deprecated(
-    since = "0.12.0",
-    note = "Use EditorVisualTransactionDto instead. This will be removed in a future version."
-)]
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EditorAnimationEventDto {
-    pub id: u64,
-    pub kind: EditorAnimationKindDto,
-    pub range_start: u32,
-    pub range_len: u32,
-    pub text: String,
-    pub old_cursor_index: u32,
-    pub new_cursor_index: u32,
-    pub duration_ms: u64,
-}
-
-#[allow(deprecated)]
-impl From<crate::editor::EditorAnimationEvent> for EditorAnimationEventDto {
-    fn from(e: crate::editor::EditorAnimationEvent) -> Self {
-        Self {
-            id: e.id,
-            kind: e.kind.into(),
-            range_start: e.range_start as u32,
-            range_len: e.range_len as u32,
-            text: e.text,
-            old_cursor_index: e.old_cursor.index as u32,
-            new_cursor_index: e.new_cursor.index as u32,
-            duration_ms: e.duration_ms,
-        }
-    }
-}
-
 // ── T1.1 VisualCoordinateModeDto ──
 
 /// 视觉坐标模式 DTO。

@@ -51,8 +51,8 @@ Supersedes: AGENTS.md (previous version)
 | 规则与约束 | 说明 |
 |-----------|------|
 | **唯一技术路线** | `docs/TECHNICAL_ROUTE.md` 是唯一的全局技术路线。 |
-| **自研写作区路线** | Desktop 自研写作区唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。 |
-| **平台路线收口** | Desktop/Android 自研写作区已收口（SujianEditorItem + SujianEditorView），不再维护旧 WriterEditText fallback；Harmony 默认 native bridge，不要求 HAP 编译/真机，只要求静态守卫和代码测试。 |
+| **自研写作区路线** | Linux_qt 自研写作区唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。 |
+| **平台路线收口** | Linux_qt/Android 自研写作区已收口（SujianEditorItem + SujianEditorView），不再维护旧 WriterEditText fallback；Harmony 默认 native bridge，不要求 HAP 编译/真机，只要求静态守卫和代码测试。 |
 | **禁止旧路线** | **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` / `QQuickPaintedItem` / QSG 三层 overlay 修自研写作区。这些是旧 fallback 路径，只允许保留兼容，不允许新增依赖；不得作为可开发路线。 |
 | **正式图谱路线** | `mind_map` 是 legacy（已废弃），正式图谱是 `starmap`。所有新增图谱能力必须走 StarMapCapability。 |
 | **淘汰 envelope_json** | `envelope_json` 是 legacy 兼容，新功能**绝对禁止**使用，必须完全采用 typed DTO。 |
@@ -75,7 +75,7 @@ Supersedes: AGENTS.md (previous version)
 
 ### 3.3 编辑器排版架构
 
-- Desktop 自研写作区当前唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。
+- Linux_qt 自研写作区当前唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。
 - 排查入口：`apps/Linux_qt/src/sujian_editor_item/*`、`apps/Linux_qt/src/editor/layout.rs`、`apps/Linux_qt/src/editor/renderer.rs`、`apps/Linux_qt/src/editor/scene_graph.rs`、`apps/Linux_qt/qml/WritingWorkspace.qml`、`apps/Linux_qt/qml/EditorAnimationOverlay.qml`。
 - **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` 修自研写作区。这些是旧 fallback 路径，只允许保留兼容，不允许新增依赖；不得作为可开发路线。
 - 修自研写作区必须看 `apps/Linux_qt/src/sujian_editor_item/` 和 `docs/editor_engine_route.md`。
