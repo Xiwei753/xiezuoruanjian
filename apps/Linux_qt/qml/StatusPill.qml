@@ -14,20 +14,22 @@ import QtQuick.Layouts
 Rectangle {
     id: control
     property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
 
-    readonly property color _primaryContainer: dt.primaryContainer
-    readonly property color _onPrimaryContainer: dt.onPrimaryContainer
-    readonly property color _successContainer: dt.successContainer
-    readonly property color _onSuccessContainer: dt.onSuccessContainer
-    readonly property color _warningContainer: dt.warningContainer
-    readonly property color _onWarningContainer: dt.onWarningContainer
-    readonly property color _dangerContainer: dt.dangerContainer
-    readonly property color _onDangerContainer: dt.onDangerContainer
-    readonly property int _sp6: dt.sp6
-    readonly property int _sp16: dt.sp16
-    readonly property int _radiusPill: dt.radiusPill
-    readonly property int _caption: dt.caption
-    readonly property string _fontFamily: dt.fontFamily
+    readonly property color _primaryContainer: resolvedDt.primaryContainer
+    readonly property color _onPrimaryContainer: resolvedDt.onPrimaryContainer
+    readonly property color _successContainer: resolvedDt.successContainer
+    readonly property color _onSuccessContainer: resolvedDt.onSuccessContainer
+    readonly property color _warningContainer: resolvedDt.warningContainer
+    readonly property color _onWarningContainer: resolvedDt.onWarningContainer
+    readonly property color _dangerContainer: resolvedDt.dangerContainer
+    readonly property color _onDangerContainer: resolvedDt.onDangerContainer
+    readonly property int _sp6: resolvedDt.sp6
+    readonly property int _sp16: resolvedDt.sp16
+    readonly property int _radiusPill: resolvedDt.radiusPill
+    readonly property int _caption: resolvedDt.caption
+    readonly property string _fontFamily: resolvedDt.fontFamily
 
     property string status: "info"
     property string text: ""
@@ -57,15 +59,15 @@ Rectangle {
 
         Rectangle {
             Layout.alignment: Qt.AlignVCenter
-            width: dt.statusDotSize
-            height: dt.statusDotSize
-            radius: dt.statusDotSize / 2
+            width: resolvedDt.statusDotSize
+            height: resolvedDt.statusDotSize
+            radius: resolvedDt.statusDotSize / 2
             color: control.contentColor
             opacity: 0.8
         }
 
         AppText {
-            dt: control.dt
+            dt: control.resolvedDt
             text: control.text
             visible: control.text.length > 0
             color: control.contentColor

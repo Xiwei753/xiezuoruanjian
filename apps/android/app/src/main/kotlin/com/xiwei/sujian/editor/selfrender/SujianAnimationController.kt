@@ -49,7 +49,7 @@ class SujianAnimationController(
     
     var animationEnabled: Boolean = false
     var animationDurationMs: Long = 160L
-    var coordinatedAnimationEnabled: Boolean = true
+    var coordinatedAnimationEnabled: Boolean = false
     
     // ── 删除前快照 ──
     // 每次删除操作独立记录，不允许 pendingDelete 覆盖丢动画

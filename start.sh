@@ -154,6 +154,45 @@ echo "[start] QT_INCLUDE_PATH: ${QT_INCLUDE_PATH:-}"
 echo "[start] QT_LIBRARY_PATH: ${QT_LIBRARY_PATH:-}"
 echo "[start] QML2_IMPORT_PATH: ${QML2_IMPORT_PATH:-}"
 echo "[start] QT_PLUGIN_PATH: ${QT_PLUGIN_PATH:-}"
+
+# Auto-detect input method for Wayland/fcitx5/ibus
+if [ -z "${QT_IM_MODULE:-}" ] && [ -z "${QT_IM_MODULES:-}" ]; then
+    session_type="${XDG_SESSION_TYPE:-}"
+    if [ "$session_type" = "wayland" ]; then
+        if command -v fcitx5 &>/dev/null || pgrep -x fcitx5 &>/dev/null; then
+            export QT_IM_MODULES="wayland;fcitx;ibus"
+            echo "[start] Wayland + fcitx5 detected: QT_IM_MODULES=$QT_IM_MODULES"
+        elif command -v ibus-daemon &>/dev/null || pgrep -x ibus-daemon &>/dev/null; then
+            export QT_IM_MODULES="wayland;ibus"
+            echo "[start] Wayland + ibus detected: QT_IM_MODULES=$QT_IM_MODULES"
+        else
+            echo "[start] Wayland detected but no IM framework found; relying on Qt Wayland text-input protocol"
+        fi
+    elif [ "$session_type" = "x11" ] || [ -n "${DISPLAY:-}" ]; then
+        if command -v fcitx5 &>/dev/null || pgrep -x fcitx5 &>/dev/null; then
+            export QT_IM_MODULE="fcitx"
+            echo "[start] X11 + fcitx5 detected: QT_IM_MODULE=$QT_IM_MODULE"
+        elif command -v ibus-daemon &>/dev/null || pgrep -x ibus-daemon &>/dev/null; then
+            export QT_IM_MODULE="ibus"
+            echo "[start] X11 + ibus detected: QT_IM_MODULE=$QT_IM_MODULE"
+        fi
+    fi
+fi
+
+# Ensure fcitx5 Qt6 plugin path is discoverable
+if [ -n "${QT_IM_MODULE:-}" ] && [ "$QT_IM_MODULE" = "fcitx" ] || [ -n "${QT_IM_MODULES:-}" ] && echo "$QT_IM_MODULES" | grep -q fcitx; then
+    for fcitx_plugin_dir in \
+        "/usr/lib64/qt6/plugins/platforminputcontexts" \
+        "/usr/lib/x86_64-linux-gnu/qt6/plugins/platforminputcontexts" \
+        "/usr/lib/qt6/plugins/platforminputcontexts" \
+        "/app/usr/lib64/qt6/plugins/platforminputcontexts"; do
+        if [ -d "$fcitx_plugin_dir" ]; then
+            prepend_path_var QT_PLUGIN_PATH "$(dirname "$fcitx_plugin_dir")"
+            break
+        fi
+    done
+fi
+
 print_desktop_runtime_profile "start"
 echo "[start] QtQuick.Window qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Window/qmldir ] && echo found || echo missing ) )"
 echo "[start] QtQuick Controls qmldir: $( [ -f /run/host/usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || ( [ -f /usr/lib64/qt6/qml/QtQuick/Controls/qmldir ] && echo found || echo missing ) )"

@@ -14,10 +14,12 @@ import QtQuick.Window
 
 Item {
     id: root
-    implicitHeight: mainCol.implicitHeight + theme.sp32
+    implicitHeight: mainCol.implicitHeight + resolvedDt.sp32
     property int lastSyncResultLen: -1
     property double lastSyncStatusLogTime: 0
     property var theme: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: theme || fallbackDt
     property var backendRef: null
     property var beforeSyncHook: null
     signal settingsChanged()
@@ -146,35 +148,35 @@ Item {
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.margins: theme.sp16
-        spacing: theme.sp16
+        anchors.margins: resolvedDt.sp16
+        spacing: resolvedDt.sp16
 
         RowLayout {
             Layout.fillWidth: true
-            spacing: theme.sp12
+            spacing: resolvedDt.sp12
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: theme.sp4
+                spacing: resolvedDt.sp4
                 AppText {
-                    dt: root.theme
+                    dt: root.resolvedDt
                     text: qsTr("同步设置")
-                    color: theme.onBackground
-                    font.pixelSize: theme.title
-                    font.family: theme.fontFamily
+                    color: resolvedDt.onBackground
+                    font.pixelSize: resolvedDt.title
+                    font.family: resolvedDt.fontFamily
                     font.weight: Font.Bold
                 }
                 AppText {
-                    dt: root.theme
+                    dt: root.resolvedDt
                     text: qsTr("配置远端仓库并查看同步状态")
-                    color: theme.onSurfaceVariant
-                    font.pixelSize: theme.body
-                    font.family: theme.fontFamily
+                    color: resolvedDt.onSurfaceVariant
+                    font.pixelSize: resolvedDt.body
+                    font.family: resolvedDt.fontFamily
                 }
             }
 
             StatusPill {
-                dt: root.theme
+                dt: root.resolvedDt
                 status: root.statusKind()
                 text: root.statusText()
             }
@@ -182,14 +184,14 @@ Item {
 
         AppCard {
             Layout.fillWidth: true
-            dt: root.theme
+            dt: root.resolvedDt
             variant: "surface"
-            spacing: theme.sp16
+            spacing: resolvedDt.sp16
 
             AppTextField {
                 id: urlField
                 Layout.fillWidth: true
-                theme: root.theme
+                theme: root.resolvedDt
                 label: qsTr("远程仓库地址")
                 text: (root.backendRef ? root.backendRef.sync_remote_url : "")
                 placeholderText: "https://github.com/user/repo"
@@ -198,7 +200,7 @@ Item {
             AppTextField {
                 id: branchField
                 Layout.fillWidth: true
-                theme: root.theme
+                theme: root.resolvedDt
                 label: qsTr("分支名")
                 text: (root.backendRef ? root.backendRef.sync_branch : "")
                 placeholderText: "main"
@@ -207,7 +209,7 @@ Item {
             AppTextField {
                 id: tokenField
                 Layout.fillWidth: true
-                theme: root.theme
+                theme: root.resolvedDt
                 label: qsTr("访问 Token")
                 placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
                 echoMode: TextInput.Password
@@ -215,24 +217,24 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: theme.sp12
+                spacing: resolvedDt.sp12
 
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: theme.sp2
+                    spacing: resolvedDt.sp2
                     AppText {
-                        dt: root.theme
+                        dt: root.resolvedDt
                         text: qsTr("自动同步")
-                        color: theme.onBackground
-                        font.pixelSize: theme.body
-                        font.family: theme.fontFamily
+                        color: resolvedDt.onBackground
+                        font.pixelSize: resolvedDt.body
+                        font.family: resolvedDt.fontFamily
                     }
                     AppText {
-                        dt: root.theme
+                        dt: root.resolvedDt
                         text: qsTr("启用后按设定间隔自动执行同步")
-                        color: theme.onSurfaceVariant
-                        font.pixelSize: theme.caption
-                        font.family: theme.fontFamily
+                        color: resolvedDt.onSurfaceVariant
+                        font.pixelSize: resolvedDt.caption
+                        font.family: resolvedDt.fontFamily
                     }
                 }
 
@@ -248,25 +250,25 @@ Item {
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: theme.sp12
+                spacing: resolvedDt.sp12
                 visible: autoSyncSwitch.checked
 
                 ColumnLayout {
                     Layout.fillWidth: true
-                    spacing: theme.sp2
+                    spacing: resolvedDt.sp2
                     AppText {
-                        dt: root.theme
+                        dt: root.resolvedDt
                         text: qsTr("同步间隔")
-                        color: theme.onBackground
-                        font.pixelSize: theme.body
-                        font.family: theme.fontFamily
+                        color: resolvedDt.onBackground
+                        font.pixelSize: resolvedDt.body
+                        font.family: resolvedDt.fontFamily
                     }
                     AppText {
-                        dt: root.theme
+                        dt: root.resolvedDt
                         text: Math.round(syncIntervalSlider.value) + qsTr(" 分钟")
-                        color: theme.onSurfaceVariant
-                        font.pixelSize: theme.caption
-                        font.family: theme.fontFamily
+                        color: resolvedDt.onSurfaceVariant
+                        font.pixelSize: resolvedDt.caption
+                        font.family: resolvedDt.fontFamily
                     }
                 }
 
@@ -287,11 +289,11 @@ Item {
 
         Flow {
             Layout.fillWidth: true
-            spacing: theme.sp8
+            spacing: resolvedDt.sp8
 
             AppButton {
                 text: qsTr("保存配置")
-                dt: root.theme
+                dt: root.resolvedDt
                 variant: "primary"
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") {
@@ -326,9 +328,9 @@ Item {
 
             AppButton {
                 text: qsTr("执行同步")
-                dt: root.theme
+                dt: root.resolvedDt
                 variant: "secondary"
-                enabled: !root.currentSyncInProgress
+                enabled: !root.currentSyncInProgress && root.backendRef && root.backendRef.sync_can_run
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
                     // 先保存当前 UI 配置
@@ -360,9 +362,9 @@ Item {
 
             AppButton {
                 text: qsTr("运行诊断")
-                dt: root.theme
+                dt: root.resolvedDt
                 variant: "secondary"
-                enabled: !root.currentSyncInProgress
+                enabled: !root.currentSyncInProgress && root.backendRef && root.backendRef.has_workspace
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")
@@ -380,7 +382,7 @@ Item {
 
             AppButton {
                 text: qsTr("打开工作区目录")
-                dt: root.theme
+                dt: root.resolvedDt
                 variant: "text"
                 visible: root.backendRef && root.backendRef.has_workspace
                 onClicked: if (root.backendRef) root.backendRef.open_workspace_dir()
@@ -388,7 +390,7 @@ Item {
 
             AppButton {
                 text: qsTr("复制冲突信息")
-                dt: root.theme
+                dt: root.resolvedDt
                 variant: "danger"
                 visible: root.backendRef && root.isConflictStatus(root.currentSyncStatus)
                 onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncResultArea.text)
@@ -396,15 +398,26 @@ Item {
         }
 
         AppText {
+            id: syncBlockReason
+            dt: root.resolvedDt
+            visible: root.backendRef && !root.backendRef.sync_can_run && root.backendRef.sync_block_reason.length > 0
+            text: root.backendRef ? root.backendRef.sync_block_reason : ""
+            color: resolvedDt.onSurfaceVariant
+            font.pixelSize: resolvedDt.caption
+            font.family: resolvedDt.fontFamily
+            Layout.fillWidth: true
+        }
+
+        AppText {
             id: syncConfigFeedback
-            dt: root.theme
+            dt: root.resolvedDt
             property string message: ""
             property bool isError: false
             visible: message.length > 0
             text: syncConfigFeedback.message
-            color: isError ? theme.error : theme.onSurfaceVariant
-            font.pixelSize: theme.caption
-            font.family: theme.fontFamily
+            color: isError ? resolvedDt.error : resolvedDt.onSurfaceVariant
+            font.pixelSize: resolvedDt.caption
+            font.family: resolvedDt.fontFamily
             Layout.fillWidth: true
         }
 
@@ -420,26 +433,26 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             Layout.preferredHeight: 180
-            color: root.isFailureStatus(root.currentSyncStatus) ? theme.dangerContainer : theme.surfaceContainerLow
-            border.color: root.isFailureStatus(root.currentSyncStatus) ? theme.error : theme.border
+            color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.dangerContainer : resolvedDt.surfaceContainerLow
+            border.color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.error : resolvedDt.border
             border.width: root.isFailureStatus(root.currentSyncStatus) ? 2 : 1
-            radius: theme.radiusLg
+            radius: resolvedDt.radiusLg
             clip: true
             visible: (root.currentSyncOperationState !== "" || root.currentSyncStatus === "syncing" || root.isFailureStatus(root.currentSyncStatus))
 
             ScrollView {
                 id: logScroll
                 anchors.fill: parent
-                anchors.margins: theme.sp12
+                anchors.margins: resolvedDt.sp12
                 ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
                 ScrollBar.vertical.policy: ScrollBar.AsNeeded
                 TextArea {
                     id: syncResultArea
                     width: logScroll.availableWidth
                     text: ""
-                    color: root.isFailureStatus(root.currentSyncStatus) ? theme.dangerContainer : theme.onSurfaceVariant
+                    color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.dangerContainer : resolvedDt.onSurfaceVariant
                     font.family: "monospace"
-                    font.pixelSize: theme.caption
+                    font.pixelSize: resolvedDt.caption
                     readOnly: true
                     background: null
                     wrapMode: TextEdit.Wrap

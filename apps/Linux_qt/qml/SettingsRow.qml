@@ -15,28 +15,30 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
     property string title: ""
     property string description: ""
     property bool clickable: false
     signal clicked()
     default property alias controlData: controlHost.data
 
-    color: rowHover.containsMouse && root.clickable ? dt.surfaceContainer : "transparent"
-    radius: dt.radiusMd
+    color: rowHover.containsMouse && root.clickable ? resolvedDt.surfaceContainer : "transparent"
+    radius: resolvedDt.radiusMd
 
-    readonly property int _verticalPadding: dt.sp12
-    readonly property int _controlMinHeight: dt.settingsControlHeight
+    readonly property int _verticalPadding: resolvedDt.sp12
+    readonly property int _controlMinHeight: resolvedDt.settingsControlHeight
     implicitHeight: Math.max(_controlMinHeight, textCol.implicitHeight) + _verticalPadding * 2
-    implicitWidth: row.implicitWidth + dt.sp16
+    implicitWidth: row.implicitWidth + resolvedDt.sp16
 
     RowLayout {
         id: row
         anchors.fill: parent
-        anchors.leftMargin: dt.sp8
-        anchors.rightMargin: dt.sp8
+        anchors.leftMargin: resolvedDt.sp8
+        anchors.rightMargin: resolvedDt.sp8
         anchors.topMargin: root._verticalPadding
         anchors.bottomMargin: root._verticalPadding
-        spacing: dt.sp12
+        spacing: resolvedDt.sp12
 
         ColumnLayout {
             id: textCol
@@ -44,20 +46,20 @@ Rectangle {
             Layout.alignment: Qt.AlignVCenter
             spacing: 2
             AppText {
-                dt: root.dt
+                dt: root.resolvedDt
                 text: root.title
-                color: dt.textPrimary
-                font.pixelSize: dt.body
-                font.family: dt.fontFamily
+                color: resolvedDt.textPrimary
+                font.pixelSize: resolvedDt.body
+                font.family: resolvedDt.fontFamily
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
             }
             AppText {
-                dt: root.dt
+                dt: root.resolvedDt
                 text: root.description
-                color: dt.textSecondary
-                font.pixelSize: dt.caption
-                font.family: dt.fontFamily
+                color: resolvedDt.textSecondary
+                font.pixelSize: resolvedDt.caption
+                font.family: resolvedDt.fontFamily
                 visible: text.length > 0
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -95,7 +97,7 @@ Rectangle {
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         height: 1
-        color: dt.border
+        color: resolvedDt.border
         opacity: 0.65
     }
 

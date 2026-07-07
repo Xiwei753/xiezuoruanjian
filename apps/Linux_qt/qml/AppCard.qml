@@ -15,17 +15,19 @@ import QtQuick.Layouts
 Item {
     id: control
     property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
 
     // Elevation shadow support
     property int elevation: 1
     property var appShadow: null
 
-    readonly property color _surfaceContainer: dt.surfaceContainer
-    readonly property color _card: dt.card
-    readonly property color _border: dt.border
-    readonly property int _cardRadius: dt.cardRadius
-    readonly property int _sp12: dt.sp12
-    readonly property int _sp16: dt.sp16
+    readonly property color _surfaceContainer: resolvedDt.surfaceContainer
+    readonly property color _card: resolvedDt.card
+    readonly property color _border: resolvedDt.border
+    readonly property int _cardRadius: resolvedDt.cardRadius
+    readonly property int _sp12: resolvedDt.sp12
+    readonly property int _sp16: resolvedDt.sp16
 
     property alias spacing: col.spacing
     property string variant: "surface"

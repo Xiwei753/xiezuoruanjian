@@ -29,6 +29,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var currentSettings: LocalSettings
     private lateinit var syncHelper: SyncSettingsHelper
+    private var isReloading: Boolean = false
 
     // ── SystemBarsController: 存为属性，供实验室开关立即生效 ──
     private var systemBarsController: SystemBarsController? = null
@@ -263,6 +264,7 @@ class SettingsActivity : AppCompatActivity() {
             cardAi.visibility = android.view.View.VISIBLE
             switchAiEnabled.isChecked = currentSettings.aiEnabled
             switchAiEnabled.setOnCheckedChangeListener { _, isChecked ->
+                if (isReloading) return@setOnCheckedChangeListener
                 currentSettings = currentSettings.copy(aiEnabled = isChecked)
                 saveAndFinish(false)
             }
@@ -278,13 +280,27 @@ class SettingsActivity : AppCompatActivity() {
         tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
         tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
 
-        switchAutoSave.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
-        switchAutoIndent.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
+        switchAutoSave.setOnCheckedChangeListener { _, isChecked ->
+            if (isReloading) return@setOnCheckedChangeListener
+            currentSettings = currentSettings.copy(autoSaveEnabled = isChecked)
+            saveAndFinish(false)
+        }
+        switchAutoIndent.setOnCheckedChangeListener { _, isChecked ->
+            if (isReloading) return@setOnCheckedChangeListener
+            currentSettings = currentSettings.copy(autoIndentEnabled = isChecked)
+            saveAndFinish(false)
+        }
         switchTypingAnimation.setOnCheckedChangeListener { _, isChecked ->
+            if (isReloading) return@setOnCheckedChangeListener
+            currentSettings = currentSettings.copy(editorTypingAnimationEnabled = isChecked)
             sbTypingAnimationDuration.isEnabled = isChecked
             saveAndFinish(false)
         }
-        switchSmoothCursor.setOnCheckedChangeListener { _, _ -> saveAndFinish(false) }
+        switchSmoothCursor.setOnCheckedChangeListener { _, isChecked ->
+            if (isReloading) return@setOnCheckedChangeListener
+            currentSettings = currentSettings.copy(editorSmoothCursorEnabled = isChecked)
+            saveAndFinish(false)
+        }
 
 
 
@@ -337,6 +353,7 @@ class SettingsActivity : AppCompatActivity() {
         EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
 
         switchDiagnosticsEnabled.setOnCheckedChangeListener { _, isChecked ->
+            if (isReloading) return@setOnCheckedChangeListener
             currentSettings = currentSettings.copy(diagnosticsEnabled = isChecked)
             switchDiagnosticsVerbose.isEnabled = isChecked
             DiagnosticsLogger.setEnabled(isChecked)
@@ -349,6 +366,7 @@ class SettingsActivity : AppCompatActivity() {
             saveAndFinish(false)
         }
         switchDiagnosticsVerbose.setOnCheckedChangeListener { _, isChecked ->
+            if (isReloading) return@setOnCheckedChangeListener
             currentSettings = currentSettings.copy(diagnosticsVerbose = isChecked)
             DiagnosticsLogger.setVerbose(isChecked)
             saveAndFinish(false)
@@ -359,10 +377,9 @@ class SettingsActivity : AppCompatActivity() {
         labsRepo.migrateFromLegacy(currentSettings.experimentalFullscreenMode)
         switchExperimentalFullscreen.isChecked = labsRepo.isEnabled("fullscreen_immersive")
         switchExperimentalFullscreen.setOnCheckedChangeListener { _, isChecked ->
+            if (isReloading) return@setOnCheckedChangeListener
             labsRepo.setEnabled("fullscreen_immersive", isChecked)
-            // 立即生效
             systemBarsController?.applyFullscreen(isChecked)
-            // 同步到 LocalSettings
             currentSettings = currentSettings.copy(experimentalFullscreenMode = isChecked)
             saveAndFinish(false)
         }
@@ -412,48 +429,53 @@ class SettingsActivity : AppCompatActivity() {
     private fun reloadSettings() {
         if (!::settingsRepository.isInitialized) return
 
-        currentSettings = settingsRepository.getLocalSettings()
-        val effectiveFontSize = settingsRepository.getEffectiveFontSize()
+        isReloading = true
+        try {
+            currentSettings = settingsRepository.getLocalSettings()
+            val effectiveFontSize = settingsRepository.getEffectiveFontSize()
 
-        sbFontSize.value = effectiveFontSize
-        sbLineSpacing.value = currentSettings.editorLineSpacingMultiplier
-        switchAutoSave.isChecked = currentSettings.autoSaveEnabled
-        sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
-        switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
-        sbAutoIndentWidth.value = currentSettings.autoIndentWidth
-        switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
-        sbTypingAnimationDuration.isEnabled = currentSettings.editorTypingAnimationEnabled
-        switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
-        sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
-        sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
+            sbFontSize.value = effectiveFontSize
+            sbLineSpacing.value = currentSettings.editorLineSpacingMultiplier
+            switchAutoSave.isChecked = currentSettings.autoSaveEnabled
+            sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
+            switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
+            sbAutoIndentWidth.value = currentSettings.autoIndentWidth
+            switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
+            sbTypingAnimationDuration.isEnabled = currentSettings.editorTypingAnimationEnabled
+            switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
+            sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
+            sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
 
-        tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
-        tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
-        tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
-        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
-        tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
-        tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
+            tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
+            tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
+            tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
+            tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
+            tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
+            tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
 
-        switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
-        switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
-        switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
-        switchExperimentalFullscreen.isChecked = currentSettings.experimentalFullscreenMode
-        DiagnosticsLogger.setEnabled(currentSettings.diagnosticsEnabled)
-        DiagnosticsLogger.setVerbose(currentSettings.diagnosticsVerbose)
-        EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
+            switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
+            switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
+            switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
+            switchExperimentalFullscreen.isChecked = currentSettings.experimentalFullscreenMode
+            DiagnosticsLogger.setEnabled(currentSettings.diagnosticsEnabled)
+            DiagnosticsLogger.setVerbose(currentSettings.diagnosticsVerbose)
+            EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
 
-        val syncable = settingsRepository.getSyncableSettings()
-        if (syncable.themeMode.isNotEmpty()) {
-            currentSettings = currentSettings.copy(themeMode = syncable.themeMode)
+            val syncable = settingsRepository.getSyncableSettings()
+            if (syncable.themeMode.isNotEmpty()) {
+                currentSettings = currentSettings.copy(themeMode = syncable.themeMode)
+            }
+            actvTheme.setText(when (currentSettings.themeMode) {
+                "light" -> getString(R.string.theme_light)
+                "dark" -> getString(R.string.theme_dark)
+                else -> getString(R.string.theme_system)
+            }, false)
+
+            syncHelper.loadSyncState()
+            syncHelper.bindSyncSettings()
+        } finally {
+            isReloading = false
         }
-        actvTheme.setText(when (currentSettings.themeMode) {
-            "light" -> getString(R.string.theme_light)
-            "dark" -> getString(R.string.theme_dark)
-            else -> getString(R.string.theme_system)
-        }, false)
-
-        syncHelper.loadSyncState()
-        syncHelper.bindSyncSettings()
     }
 
     override fun onBackPressed() {
@@ -470,6 +492,7 @@ class SettingsActivity : AppCompatActivity() {
             else -> "system"
         }
 
+        val aiVisible = cardAi.visibility == android.view.View.VISIBLE
         val newSettings = currentSettings.copy(
             editorLineSpacingMultiplier = sbLineSpacing.value,
             autoSaveEnabled = switchAutoSave.isChecked,
@@ -481,7 +504,7 @@ class SettingsActivity : AppCompatActivity() {
             editorSmoothCursorEnabled = switchSmoothCursor.isChecked,
             editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
             editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),
-            aiEnabled = switchAiEnabled.isChecked,
+            aiEnabled = if (aiVisible) switchAiEnabled.isChecked else currentSettings.aiEnabled,
             diagnosticsEnabled = switchDiagnosticsEnabled.isChecked,
             diagnosticsVerbose = switchDiagnosticsVerbose.isChecked,
             experimentalFullscreenMode = switchExperimentalFullscreen.isChecked

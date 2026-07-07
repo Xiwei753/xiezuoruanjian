@@ -414,7 +414,7 @@ impl Default for SujianEditorItem {
             current_cursor_animation_duration_ms: 80,
             current_typing_animation_enabled: true,
             current_typing_animation_duration_ms: 100,
-            current_coordinated_text_cursor_animation_enabled: true,
+            current_coordinated_text_cursor_animation_enabled: false,
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,

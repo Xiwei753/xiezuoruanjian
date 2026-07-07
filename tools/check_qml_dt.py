@@ -16,8 +16,11 @@ from pathlib import Path
 COMPONENTS_REQUIRING_DT = [
     "AppText",
     "AppButton",
+    "AppCard",
     "HubPageHeader",
     "EditorAnimationOverlay",
+    "SettingsRow",
+    "StatusPill",
 ]
 
 def check_qml_file(filepath):
@@ -42,6 +45,26 @@ def check_qml_file(filepath):
     
     return errors
 
+def check_component_fallback(filepath):
+    """检查基础组件自身是否有 resolvedDt fallback。"""
+    errors = []
+    content = filepath.read_text(encoding='utf-8')
+    filename = filepath.name
+    
+    if filename in [c + ".qml" for c in COMPONENTS_REQUIRING_DT]:
+        has_fallback_dt = 'DesignTokens { id: fallbackDt }' in content
+        has_resolved_dt = 'resolvedDt' in content
+        if not has_fallback_dt or not has_resolved_dt:
+            errors.append(f"{filename}: missing DesignTokens fallbackDt or resolvedDt")
+        
+        import re
+        direct_dt_access = re.findall(r'(?<!resolved)(?<!\w)dt\.\w+', content)
+        if direct_dt_access:
+            for match in direct_dt_access:
+                errors.append(f"{filename}: direct dt.xxx access without resolvedDt: '{match}'")
+    
+    return errors
+
 def main():
     qml_dir = Path(__file__).parent.parent / "apps" / "Linux_qt" / "qml"
     if not qml_dir.exists():
@@ -51,11 +74,13 @@ def main():
     total_errors = 0
     for qml_file in sorted(qml_dir.glob("*.qml")):
         errors = check_qml_file(qml_file)
-        if errors:
+        fallback_errors = check_component_fallback(qml_file)
+        all_errors = errors + fallback_errors
+        if all_errors:
             print(f"\n{qml_file.name}:")
-            for error in errors:
+            for error in all_errors:
                 print(f"  {error}")
-            total_errors += len(errors)
+            total_errors += len(all_errors)
     
     if total_errors > 0:
         print(f"\n❌ Found {total_errors} dt property issues")

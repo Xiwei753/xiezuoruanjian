@@ -311,7 +311,11 @@ impl AppBackend {
     // AppBackend::try_restore_last_workspace
     pub(crate) fn try_restore_last_workspace(&mut self) {
         self.debug_log("workspace", "try_restore_last_workspace_start", "");
-        if let Some(path) = writer_core::app_config::get_last_workspace_path() {
+        if let Some(raw_path) = writer_core::app_config::get_last_workspace_path() {
+            let path = std::path::Path::new(&raw_path)
+                .canonicalize()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or(raw_path);
             self.debug_log(
                 "workspace",
                 "try_restore_last_workspace_path_found",
@@ -369,6 +373,11 @@ impl AppBackend {
 
     // AppBackend::internal_open_workspace
     pub(crate) fn internal_open_workspace(&mut self, path: &str, initialize: bool) -> QString {
+        let canonical_path = std::path::Path::new(path)
+            .canonicalize()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| path.to_string());
+        let path = canonical_path.as_str();
         self.debug_log(
             "workspace",
             "internal_open_workspace_start",

@@ -42,6 +42,8 @@ pub struct SyncBackend {
     sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
     sync_in_progress: qt_property!(bool; READ sync_in_progress NOTIFY sync_status_changed),
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
+    sync_can_run: qt_property!(bool; READ sync_can_run NOTIFY sync_status_changed),
+    sync_block_reason: qt_property!(QString; READ sync_block_reason NOTIFY sync_status_changed),
     sync_config_changed: qt_signal!(),
     sync_action_completed: qt_signal!(),
     sync_status_changed: qt_signal!(),
@@ -161,6 +163,12 @@ impl SyncBackend {
     }
     fn has_workspace(&self) -> bool {
         self.with_app(false, |app| app.has_workspace())
+    }
+    fn sync_can_run(&self) -> bool {
+        self.with_app(false, |app| app.sync_can_run())
+    }
+    fn sync_block_reason(&self) -> QString {
+        self.with_app("".into(), |app| app.sync_block_reason())
     }
     fn set_sync_token(&mut self, token: QString) {
         self.with_app_mut((), |app| app.set_sync_token(token));
@@ -322,6 +330,32 @@ impl AppBackend {
     // AppBackend::has_sync_token
     pub(crate) fn has_sync_token(&self) -> bool {
         !self.current_sync_token.is_empty()
+    }
+
+    // AppBackend::sync_can_run
+    pub(crate) fn sync_can_run(&self) -> bool {
+        self.current_has_workspace
+            && !self.current_workspace.is_empty()
+            && !self.current_sync_remote_url.is_empty()
+            && !self.current_sync_token.is_empty()
+            && self.current_sync_enabled
+    }
+
+    // AppBackend::sync_block_reason
+    pub(crate) fn sync_block_reason(&self) -> QString {
+        if !self.current_has_workspace || self.current_workspace.is_empty() {
+            return "请先打开有效工作区".into();
+        }
+        if !self.current_sync_enabled {
+            return "同步未启用".into();
+        }
+        if self.current_sync_remote_url.is_empty() {
+            return "未配置远程仓库地址".into();
+        }
+        if self.current_sync_token.is_empty() {
+            return "未设置访问 Token".into();
+        }
+        "".into()
     }
 
     // AppBackend::set_sync_token
@@ -487,6 +521,9 @@ impl AppBackend {
             );
         } else {
             self.current_sync_branch = "main".to_string();
+            self.current_sync_status = "not_configured".to_string();
+            self.sync_status_changed();
+            self.sync_config_changed();
             self.debug_warn("sync", "load_sync_config_failed", "core_not_initialized");
         }
     }

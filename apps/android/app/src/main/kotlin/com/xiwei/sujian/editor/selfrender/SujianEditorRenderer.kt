@@ -98,6 +98,10 @@ class SujianEditorRenderer(
     private val activeAnimations = mutableListOf<SujianOverlayAnim>()
     private var isScrolling = false
 
+    // ── 动画超时安全机制（防止 hidden range 残留） ──
+    private val animationStartTimes = mutableMapOf<ULong, Long>()
+    private var animationTimeoutMs: Long = 520L
+
     // ── 动画期间跳过的正文范围（支持多个并发 insert 动画，用 ID 追踪防止映射后残留） ──
     private data class ActiveInsertRangeEntry(val id: ULong, val range: HalfOpenRange)
     private val activeInsertRanges = mutableListOf<ActiveInsertRangeEntry>()
@@ -128,9 +132,9 @@ class SujianEditorRenderer(
      */
     fun addAnimation(anim: SujianOverlayAnim): Boolean {
         if (isScrolling) return false
-        // 移除同 id 的旧动画
         activeAnimations.removeAll { it.id == anim.id }
         activeAnimations.add(anim)
+        animationStartTimes[anim.id] = android.os.SystemClock.uptimeMillis()
         return true
     }
 
@@ -228,23 +232,34 @@ class SujianEditorRenderer(
      * 清理已完成的动画
      */
     fun tickAnimations() {
-        val finishedInsertAnims = activeAnimations.filter { 
-            (it.kind == "insert" || it.kind == "cluster" || it.kind == "run") && it.isFinished 
+        val now = android.os.SystemClock.uptimeMillis()
+        val timedOutIds = mutableSetOf<ULong>()
+        for (anim in activeAnimations) {
+            val startTime = animationStartTimes[anim.id]
+            if (startTime != null && (now - startTime) > animationTimeoutMs && !anim.isFinished) {
+                timedOutIds.add(anim.id)
+            }
+        }
+        val finishedInsertAnims = activeAnimations.filter { anim ->
+            ((anim.kind == "insert" || anim.kind == "cluster" || anim.kind == "run") && anim.isFinished) || anim.id in timedOutIds
         }
         for (anim in finishedInsertAnims) {
             val rangeId = anim.insertRangeId
             if (rangeId != null) {
                 activeInsertRanges.removeAll { it.id == rangeId }
             }
+            animationStartTimes.remove(anim.id)
         }
-        // 收集已完成的 reflow 动画的 range ID，精确移除对应的跳过范围
-        val finishedReflowAnims = activeAnimations.filter { it.kind == "reflow" && it.isFinished }
+        val finishedReflowAnims = activeAnimations.filter { anim ->
+            (anim.kind == "reflow" && anim.isFinished) || anim.id in timedOutIds
+        }
         for (anim in finishedReflowAnims) {
             for (rangeId in anim.reflowRangeIds) {
                 activeInsertRanges.removeAll { it.id == rangeId }
             }
+            animationStartTimes.remove(anim.id)
         }
-        activeAnimations.removeAll { it.isFinished }
+        activeAnimations.removeAll { it.isFinished || it.id in timedOutIds }
     }
 
     /**
@@ -260,6 +275,7 @@ class SujianEditorRenderer(
         if (scrolling) {
             activeAnimations.clear()
             activeInsertRanges.clear()
+            animationStartTimes.clear()
         }
     }
 
@@ -269,6 +285,7 @@ class SujianEditorRenderer(
     fun clearAnimations() {
         activeAnimations.clear()
         activeInsertRanges.clear()
+        animationStartTimes.clear()
     }
 
     /**

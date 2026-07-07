@@ -269,23 +269,68 @@ cpp! {{
                 qe->setValue(Qt::ImCursorRectangle, QRectF(cx, cy, cw, ch));
             }
             if (qe->queries() & Qt::ImAnchorRectangle) {
-                double cx = obj->property("cursor_rect_x").toDouble();
-                double cy = obj->property("cursor_rect_y").toDouble();
-                double cw = obj->property("cursor_rect_width").toDouble();
-                double ch = obj->property("cursor_rect_height").toDouble();
-                qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy, cw, ch));
+                QVariant anchorXVar = obj->property("anchor_rect_x");
+                if (anchorXVar.isValid()) {
+                    double ax = anchorXVar.toDouble();
+                    double ay = obj->property("anchor_rect_y").toDouble();
+                    double aw = obj->property("anchor_rect_width").toDouble();
+                    double ah = obj->property("anchor_rect_height").toDouble();
+                    qe->setValue(Qt::ImAnchorRectangle, QRectF(ax, ay, aw, ah));
+                } else {
+                    double cx = obj->property("cursor_rect_x").toDouble();
+                    double cy = obj->property("cursor_rect_y").toDouble();
+                    double cw = obj->property("cursor_rect_width").toDouble();
+                    double ch = obj->property("cursor_rect_height").toDouble();
+                    qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy, cw, ch));
+                }
             }
             if (qe->queries() & Qt::ImSurroundingText) {
-                QString surrounding = obj->property("plain_text").toString();
+                QString fullText = obj->property("plain_text").toString();
+                int cursorPos = obj->property("cursor_position").toInt();
+                int beforeLen = qMin(cursorPos, 100);
+                int afterLen = qMin(fullText.length() - cursorPos, 100);
+                QString surrounding = fullText.mid(cursorPos - beforeLen, beforeLen + afterLen);
                 qe->setValue(Qt::ImSurroundingText, surrounding);
             }
             if (qe->queries() & Qt::ImCursorPosition) {
                 int cursorPos = obj->property("cursor_position").toInt();
-                qe->setValue(Qt::ImCursorPosition, cursorPos);
+                int beforeLen = qMin(cursorPos, 100);
+                qe->setValue(Qt::ImCursorPosition, beforeLen);
             }
             if (qe->queries() & Qt::ImCurrentSelection) {
                 QString selText = obj->property("current_selection_text").toString();
                 qe->setValue(Qt::ImCurrentSelection, selText);
+            }
+            if (qe->queries() & Qt::ImAbsolutePosition) {
+                double cx = obj->property("cursor_rect_x").toDouble();
+                double cy = obj->property("cursor_rect_y").toDouble();
+                QQuickItem* quickItem = qobject_cast<QQuickItem*>(obj);
+                if (quickItem) {
+                    QPointF scenePos = quickItem->mapToScene(QPointF(cx, cy));
+                    qe->setValue(Qt::ImAbsolutePosition, scenePos);
+                }
+            }
+            if (qe->queries() & Qt::ImAnchorPosition) {
+                int cursorPos = obj->property("cursor_position").toInt();
+                QString selText = obj->property("current_selection_text").toString();
+                if (!selText.isEmpty()) {
+                    int anchorPos = cursorPos + selText.length();
+                    qe->setValue(Qt::ImAnchorPosition, anchorPos);
+                } else {
+                    qe->setValue(Qt::ImAnchorPosition, cursorPos);
+                }
+            }
+            if (qe->queries() & Qt::ImTextBeforeCursor) {
+                QString fullText = obj->property("plain_text").toString();
+                int cursorPos = obj->property("cursor_position").toInt();
+                int beforeLen = qMin(cursorPos, 100);
+                qe->setValue(Qt::ImTextBeforeCursor, fullText.mid(cursorPos - beforeLen, beforeLen));
+            }
+            if (qe->queries() & Qt::ImTextAfterCursor) {
+                QString fullText = obj->property("plain_text").toString();
+                int cursorPos = obj->property("cursor_position").toInt();
+                int afterLen = qMin(fullText.length() - cursorPos, 100);
+                qe->setValue(Qt::ImTextAfterCursor, fullText.mid(cursorPos, afterLen));
             }
             if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
                 qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));

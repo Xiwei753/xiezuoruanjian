@@ -44,7 +44,7 @@ data class LocalSettings(
     val statsDeviceId: String? = null,
     val linuxQtSidebarWidth: Double = 240.0,
     val linuxQtEditorWidth: Double = 0.0,
-    val editorCoordinatedTextCursorAnimationEnabled: Boolean = true,
+    val editorCoordinatedTextCursorAnimationEnabled: Boolean = false,
     @SerializedName("diagnostics_enabled") val diagnosticsEnabled: Boolean = true,
     @SerializedName("diagnostics_verbose") val diagnosticsVerbose: Boolean = true,
     @SerializedName("use_self_render_editor_on_android") val useSelfRenderEditorOnAndroid: Boolean = true,
