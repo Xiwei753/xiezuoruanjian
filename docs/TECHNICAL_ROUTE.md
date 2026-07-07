@@ -1,7 +1,7 @@
 # 技术路线与架构约束
 
 Status: active
-Last verified: 2026-07-05
+Last verified: 2026-06-11
 Truth source: code / product decision / protocol
 Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 

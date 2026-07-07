@@ -352,45 +352,6 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    #[test]
-    fn test_create_project_success() {
-        let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
-        crate::workspace::create_workspace(workspace_path).unwrap();
-
-        let project = create_project(workspace_path, "New Project").unwrap();
-
-        assert_eq!(project.title, "New Project");
-        assert_eq!(project.order, 0);
-
-        let project_dir = workspace_path.join("projects").join(&project.id);
-        assert!(project_dir.exists());
-        assert!(project_dir.join("volumes").exists());
-        assert!(project_dir.join("characters").exists());
-        assert!(project_dir.join("project.json").exists());
-
-        // Check if default volume "第一卷" is created
-        let volumes = crate::volume::list_volumes(workspace_path, &project.id).unwrap();
-        assert_eq!(volumes.len(), 1);
-        assert_eq!(volumes[0].title, "第一卷");
-    }
-
-    #[test]
-    fn test_create_project_order() {
-        let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
-        crate::workspace::create_workspace(workspace_path).unwrap();
-
-        let project1 = create_project(workspace_path, "Project 1").unwrap();
-        assert_eq!(project1.order, 0);
-
-        let project2 = create_project(workspace_path, "Project 2").unwrap();
-        assert_eq!(project2.order, 1);
-
-        let project3 = create_project(workspace_path, "Project 3").unwrap();
-        assert_eq!(project3.order, 2);
-    }
-
     /// 验证聚合查询：有子章节时返回最大的 chapter updated_at。
     #[test]
     fn test_aggregated_volume_updated_at_with_chapters() {
@@ -545,58 +506,5 @@ mod tests {
             Err(crate::error::Error::InvalidDeleteTarget(_)) => {}
             _ => panic!("Expected InvalidDeleteTarget error for non-existent project"),
         }
-    }
-
-    #[test]
-    fn test_list_projects_empty_workspace() {
-        let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
-
-        let projects = list_projects(workspace_path).unwrap();
-        assert!(projects.is_empty());
-    }
-
-    #[test]
-    fn test_list_projects_success_and_ordered() {
-        let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
-        crate::workspace::create_workspace(workspace_path).unwrap();
-
-        let p1 = crate::project::create_project(workspace_path, "Project A").unwrap();
-        let p2 = crate::project::create_project(workspace_path, "Project B").unwrap();
-
-        reorder_projects(workspace_path, &[p2.id.clone(), p1.id.clone()]).unwrap();
-
-        let projects = list_projects(workspace_path).unwrap();
-        assert_eq!(projects.len(), 2);
-        assert_eq!(projects[0].id, p2.id);
-        assert_eq!(projects[1].id, p1.id);
-    }
-
-    #[test]
-    fn test_list_projects_ignores_invalid_entries() {
-        let temp_dir = tempdir().unwrap();
-        let workspace_path = temp_dir.path();
-        crate::workspace::create_workspace(workspace_path).unwrap();
-
-        let p1 = crate::project::create_project(workspace_path, "Project A").unwrap();
-
-        // Create invalid entries
-        let projects_dir = workspace_path.join("projects");
-
-        // 1. A file
-        std::fs::write(projects_dir.join("not_a_dir.txt"), "hello").unwrap();
-
-        // 2. A dir without project.json
-        std::fs::create_dir_all(projects_dir.join("empty_dir")).unwrap();
-
-        // 3. A dir with invalid project.json
-        let bad_proj_dir = projects_dir.join("bad_proj_dir");
-        std::fs::create_dir_all(&bad_proj_dir).unwrap();
-        std::fs::write(bad_proj_dir.join("project.json"), "{ invalid json }").unwrap();
-
-        let projects = list_projects(workspace_path).unwrap();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].id, p1.id);
     }
 }

@@ -1,9 +1,11 @@
 package com.xiwei.sujian.data
 
+import com.xiwei.sujian.model.AnimationModeData
 import com.xiwei.sujian.model.EditorAnimationKindData
 import com.xiwei.sujian.model.EditorVisualTransactionData
 import com.xiwei.sujian.model.SujianEditCauseData
 import com.xiwei.sujian.model.VisualCoordinateModeData
+import uniffi.writer_core.AnimationModeDto
 import uniffi.writer_core.EditorAnimationKindDto
 import uniffi.writer_core.EditorVisualTransactionDto
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -75,6 +77,14 @@ private fun EditorVisualTransactionDto.toModel(): EditorVisualTransactionData = 
     newSelectionHead = newSelectionHead.toInt(),
     insertedRangeStart = insertedRangeStart.toInt(),
     insertedRangeEnd = insertedRangeEnd.toInt(),
+    animationMode = when (animationMode) {
+        AnimationModeDto.GLYPH_ANIMATION -> AnimationModeData.GlyphAnimation
+        AnimationModeDto.CLUSTER_ANIMATION -> AnimationModeData.ClusterAnimation
+        AnimationModeDto.RUN_ANIMATION -> AnimationModeData.RunAnimation
+        AnimationModeDto.LINE_REFLOW_ANIMATION -> AnimationModeData.LineReflowAnimation
+        AnimationModeDto.SNAPSHOT_ANIMATION -> AnimationModeData.SnapshotAnimation
+        AnimationModeDto.SYSTEM_SUPPRESSED -> AnimationModeData.SystemSuppressed
+    },
     durationMs = durationMs.toLong(),
     coordinateMode = when (coordinateMode) {
         VisualCoordinateModeDto.BASELINE -> VisualCoordinateModeData.Baseline

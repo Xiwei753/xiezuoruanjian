@@ -24,6 +24,30 @@ impl From<crate::editor::EditorAnimationKind> for EditorAnimationKindDto {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+pub enum AnimationModeDto {
+    #[default]
+    GlyphAnimation,
+    ClusterAnimation,
+    RunAnimation,
+    LineReflowAnimation,
+    SnapshotAnimation,
+    SystemSuppressed,
+}
+
+impl From<crate::editor::AnimationMode> for AnimationModeDto {
+    fn from(mode: crate::editor::AnimationMode) -> Self {
+        match mode {
+            crate::editor::AnimationMode::GlyphAnimation => Self::GlyphAnimation,
+            crate::editor::AnimationMode::ClusterAnimation => Self::ClusterAnimation,
+            crate::editor::AnimationMode::RunAnimation => Self::RunAnimation,
+            crate::editor::AnimationMode::LineReflowAnimation => Self::LineReflowAnimation,
+            crate::editor::AnimationMode::SnapshotAnimation => Self::SnapshotAnimation,
+            crate::editor::AnimationMode::SystemSuppressed => Self::SystemSuppressed,
+        }
+    }
+}
+
 /// Cause of an editor transaction, used by Core to decide `should_animate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub enum EditorTransactionCauseDto {
@@ -196,6 +220,8 @@ pub struct EditorVisualTransactionDto {
     pub inserted_range_start: u32,
     /// 插入范围结束（UTF-8 byte offset），无插入时为 0
     pub inserted_range_end: u32,
+    /// Core 决定的动画模式，是平台端唯一语义来源
+    pub animation_mode: AnimationModeDto,
     /// 动画时长（毫秒）
     pub duration_ms: u64,
     /// 坐标模式
@@ -237,6 +263,7 @@ impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto
             new_selection_head: vt.new_selection.head.index as u32,
             inserted_range_start,
             inserted_range_end,
+            animation_mode: vt.animation_mode.into(),
             duration_ms: vt.duration_ms,
             coordinate_mode: vt.coordinate_mode.into(),
         }

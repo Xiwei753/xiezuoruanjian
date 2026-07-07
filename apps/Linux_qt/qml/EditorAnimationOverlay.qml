@@ -6,16 +6,10 @@
 // Core transaction → visual_transaction_json signal → QML overlay rendering.
 // The static text texture (Layer 0) and QML cursor remain unchanged.
 //
-// Unified animation mode rules (must match Rust choose_animation_mode):
-// - cluster 为空：systemSuppressed
-// - 系统抑制条件（动画关闭/滚动/加载/格式化/设置变化）：systemSuppressed
-// - 包含换行：lineReflowAnimation（创建 hidden range + reflow 动画）
-// - 包含复杂 grapheme：clusterAnimation（整簇作为单个 ghost）
-// - cluster 数量 1–8：glyphAnimation
-// - cluster 数量 9–40：runAnimation
-// - cluster 数量 > 40：snapshotAnimation
-// - systemSuppressed 时不创建 hidden range
-// - 非 systemSuppressed 时都创建 hidden range
+// Core `EditorVisualTransaction.animationMode` is the only semantic source.
+// QML may only downgrade it to systemSuppressed when the overlay is disabled,
+// suppressed, component-not-ready, or when Linux_qt lacks a real renderer for
+// a mode (currently snapshotAnimation).
 // - 如果已经 start_insert 但 overlay 跳过，必须立即通知 Rust 清除 hidden range
 //
 // Animation mechanism:
@@ -48,38 +42,37 @@ Item {
     // ── 真吐字/吞字动画信号 ──
     // Insert 动画完成时通知 Rust 侧清除 hidden range（临时渲染状态），恢复正文完整绘制
     // hidden range 是自研渲染层的内部渲染状态，不是正文数据污染
-    signal insertAnimationFinished(int transactionId, int rangeId, int byteStart, int byteEnd)
+    signal insertAnimationFinished(string transactionId, string rangeId, int byteStart, int byteEnd)
 
     // Insert 动画被跳过时通知 Rust 侧清除 hidden range
     // 当 QML overlay 因 component not ready / glyph 超限 / 换行等原因跳过动画时，
     // Rust 侧可能已经创建了 hidden range，必须立即清除否则文字消失
-    signal insertAnimationSkipped(int transactionId, int rangeId, int byteStart, int byteEnd)
+    signal insertAnimationSkipped(string transactionId, string rangeId, int byteStart, int byteEnd)
 
     function _log(message) {
         if (verboseLogging) console.log("[AnimOverlay] " + message)
     }
 
-    function _safeIntId(value) {
-        if (value === undefined || value === null) return 0
-        var n = Number(value)
-        if (!isFinite(n) || n <= 0 || n > 2147483647) return 0
-        return Math.floor(n)
+    function _safeIdString(value) {
+        if (value === undefined || value === null) return ""
+        var s = String(value)
+        return /^[0-9]+$/.test(s) && s !== "0" ? s : ""
     }
 
     function _transactionId(vt) {
-        return _safeIntId(vt ? vt.id : 0)
+        return _safeIdString(vt ? vt.id : "")
     }
 
     function _rangeId(vt) {
-        if (!vt || !vt.hiddenVisualRanges || !Array.isArray(vt.hiddenVisualRanges) || vt.hiddenVisualRanges.length === 0) return 0
-        return _safeIntId(vt.hiddenVisualRanges[0].id)
+        if (!vt || !vt.hiddenVisualRanges || !Array.isArray(vt.hiddenVisualRanges) || vt.hiddenVisualRanges.length === 0) return ""
+        return _safeIdString(vt.hiddenVisualRanges[0].id)
     }
 
     function _matchesTransaction(tx, transactionId, rangeId, byteStart, byteEnd) {
-        if (rangeId > 0 && tx.rangeId === rangeId) return true
-        if (transactionId > 0 && tx.transactionId === transactionId) return true
+        if (rangeId !== "" && tx.rangeId === rangeId) return true
+        if (transactionId !== "" && tx.transactionId === transactionId) return true
         // byte range 只能作为旧数据兜底：只有双方都没有稳定 id 时才按 byteStart/byteEnd 匹配。
-        if ((tx.rangeId || 0) <= 0 && (tx.transactionId || 0) <= 0 && rangeId <= 0 && transactionId <= 0) {
+        if ((tx.rangeId || "") === "" && (tx.transactionId || "") === "" && rangeId === "" && transactionId === "") {
             return tx.byteStart === byteStart && tx.byteEnd === byteEnd
         }
         return false
@@ -92,18 +85,13 @@ Item {
     property var _activeTransactions: []
     property Component _glyphGhostComponent: Qt.createComponent("EditorGlyphGhost.qml")
 
-    /// 统一动画模式选择函数 — 与 Rust choose_animation_mode 使用相同规则
-    /// 返回值: "glyphAnimation" / "clusterAnimation" / "runAnimation" / "lineReflowAnimation" / "snapshotAnimation" / "systemSuppressed"
-    function chooseAnimationMode(clusterCount, containsNewline, containsComplexGrapheme, isScrolling, isLoading, isApplyingFormat, isApplyingSettings, animEnabled, componentReady) {
-        if (!animEnabled) return "systemSuppressed"
-        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return "systemSuppressed"
-        if (!componentReady) return "systemSuppressed"
-        if (clusterCount === 0) return "systemSuppressed"
-        if (containsNewline) return "lineReflowAnimation"
-        if (containsComplexGrapheme) return "clusterAnimation"
-        if (clusterCount <= 8) return "glyphAnimation"
-        if (clusterCount <= 40) return "runAnimation"
-        return "snapshotAnimation"
+    function _modeFromCore(vt, componentReady) {
+        if (!root.animationEnabled || root.suppressed || !componentReady) return "systemSuppressed"
+        var mode = vt && vt.animationMode ? String(vt.animationMode) : "systemSuppressed"
+        // Snapshot/text-run rendering is not implemented yet; do not create an
+        // empty ghost or rely on hidden range. Let Rust restore normal drawing.
+        if (mode === "snapshotAnimation") return "systemSuppressed"
+        return mode
     }
 
     /// 公共 ghost 创建函数 — 统一参数构建，避免漂移
@@ -275,42 +263,12 @@ Item {
             insertByteEnd = vt.insertedRange[1]
         }
 
-        // 检测是否包含换行
-        var containsNewline = false
-        for (var ci = 0; ci < glyphRects.length; ci++) {
-            if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
-                containsNewline = true
-                break
-            }
-        }
-
-        // 检测是否包含复杂 grapheme
-        var containsComplexGrapheme = false
-        for (var ci = 0; ci < glyphRects.length; ci++) {
-            if (isComplexGrapheme(glyphRects[ci].char)) {
-                containsComplexGrapheme = true
-                break
-            }
-        }
-
-        // ── 统一动画模式选择 ──
-        // 必须与 Rust choose_animation_mode 使用相同规则
+        // ── Core is the only semantic source for animation mode ──
         var component = root._glyphGhostComponent
         var componentReady = component && component.status === Component.Ready
+        var mode = root._modeFromCore(vt, componentReady)
 
-        var mode = root.chooseAnimationMode(
-            glyphRects.length,    // clusterCount
-            containsNewline,      // containsNewline
-            containsComplexGrapheme, // containsComplexGrapheme
-            false,                // isScrolling (handled via suppressed on QML side)
-            root.suppressed,      // isLoading (suppressed covers loading)
-            false,                // isApplyingFormat (suppressed covers this)
-            false,                // isApplyingSettings (suppressed covers this)
-            root.animationEnabled, // animationEnabled
-            componentReady        // componentReady
-        )
-
-        root._log("insert mode=" + mode + " clusterCount=" + glyphRects.length + " containsNewline=" + containsNewline + " containsComplexGrapheme=" + containsComplexGrapheme + " componentReady=" + componentReady)
+        root._log("insert mode=" + mode + " coreMode=" + vt.animationMode + " glyphRects=" + glyphRects.length + " componentReady=" + componentReady)
 
         if (mode === "systemSuppressed") {
             root._log("insert skipped: mode=systemSuppressed")
@@ -739,40 +697,12 @@ Item {
             return
         }
 
-        // ── 统一动画模式选择 ──
-        var containsNewline = false
-        for (var ci = 0; ci < glyphRects.length; ci++) {
-            if (glyphRects[ci].char === "\n" || glyphRects[ci].char === "\r") {
-                containsNewline = true
-                break
-            }
-        }
-
-        // 检测是否包含复杂 grapheme
-        var containsComplexGrapheme = false
-        for (var ci = 0; ci < glyphRects.length; ci++) {
-            if (isComplexGrapheme(glyphRects[ci].char)) {
-                containsComplexGrapheme = true
-                break
-            }
-        }
-
+        // ── Core is the only semantic source for animation mode ──
         var component = root._glyphGhostComponent
         var componentReady = component && component.status === Component.Ready
+        var mode = root._modeFromCore(vt, componentReady)
 
-        var mode = root.chooseAnimationMode(
-            glyphRects.length,
-            containsNewline,
-            containsComplexGrapheme,
-            false,
-            root.suppressed,
-            false,
-            false,
-            root.animationEnabled,
-            componentReady
-        )
-
-        root._log("delete mode=" + mode + " clusterCount=" + glyphRects.length + " containsNewline=" + containsNewline + " componentReady=" + componentReady)
+        root._log("delete mode=" + mode + " coreMode=" + vt.animationMode + " glyphRects=" + glyphRects.length + " componentReady=" + componentReady)
 
         if (mode === "systemSuppressed") {
             root._log("delete skipped: mode=systemSuppressed")
@@ -1143,8 +1073,8 @@ Item {
         for (var ti = 0; ti < root._activeTransactions.length; ti++) {
             var tx = root._activeTransactions[ti]
             if (tx.byteStart !== undefined && tx.byteEnd !== undefined && tx.byteEnd > tx.byteStart) {
-                var txId = tx.transactionId || 0
-                var hiddenRangeId = tx.rangeId || 0
+                var txId = tx.transactionId || ""
+                var hiddenRangeId = tx.rangeId || ""
                 root._log("clearAll: sending insertAnimationSkipped for transactionId=" + txId + " rangeId=" + hiddenRangeId + " byteRange=(" + tx.byteStart + "," + tx.byteEnd + ")")
                 root.insertAnimationSkipped(txId, hiddenRangeId, tx.byteStart, tx.byteEnd)
             }

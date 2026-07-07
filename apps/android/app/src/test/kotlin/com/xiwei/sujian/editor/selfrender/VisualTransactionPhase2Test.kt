@@ -198,13 +198,13 @@ class VisualTransactionPhase2Test {
     // ── 4. shouldAnimateForCause 新增 Undo/Redo ──
 
     @Test
-    fun shouldAnimateForCause_undo_false() {
-        assertFalse(shouldAnimateForCause(SujianEditCauseData.Undo))
+    fun shouldAnimateForCause_undo_true() {
+        assertTrue(shouldAnimateForCause(SujianEditCauseData.Undo))
     }
 
     @Test
-    fun shouldAnimateForCause_redo_false() {
-        assertFalse(shouldAnimateForCause(SujianEditCauseData.Redo))
+    fun shouldAnimateForCause_redo_true() {
+        assertTrue(shouldAnimateForCause(SujianEditCauseData.Redo))
     }
 
     @Test
@@ -223,8 +223,8 @@ class VisualTransactionPhase2Test {
     }
 
     @Test
-    fun shouldAnimateForCause_paste_false() {
-        assertFalse(shouldAnimateForCause(SujianEditCauseData.Paste))
+    fun shouldAnimateForCause_paste_true() {
+        assertTrue(shouldAnimateForCause(SujianEditCauseData.Paste))
     }
 
     @Test
@@ -512,13 +512,13 @@ class VisualTransactionPhase2Test {
         return when (cause) {
             SujianEditCauseData.Typing,
             SujianEditCauseData.Delete,
-            SujianEditCauseData.TypingCommit -> true
+            SujianEditCauseData.TypingCommit,
             SujianEditCauseData.Paste,
+            SujianEditCauseData.Undo,
+            SujianEditCauseData.Redo -> true
             SujianEditCauseData.Load,
             SujianEditCauseData.Format,
             SujianEditCauseData.ImeComposition,
-            SujianEditCauseData.Undo,
-            SujianEditCauseData.Redo,
             SujianEditCauseData.Programmatic -> false
         }
     }

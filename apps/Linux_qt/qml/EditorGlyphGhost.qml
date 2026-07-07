@@ -13,7 +13,7 @@
 //   - scale: 1.0 → 0.45
 //   - position: glyph → 光标
 // reflow: 中间插入时，插入点右侧文字做轻量位移动画（局部挤开）
-//   - opacity: 1.0（始终可见，因为正文层没有跳过这些 glyph）
+//   - opacity: 1.0（正文层会临时跳过对应 reflow ranges，由 ghost 显示位移）
 //   - scale: 1.0（无缩放变化）
 //   - position: 旧位置 → 新位置
 // 动画结束后自动 destroy。
@@ -222,7 +222,7 @@ Item {
 
     // ── Reflow 并行动画组 ──
     // 局部挤开模式：中间插入时，插入点右侧文字做轻量位移动画
-    // opacity: 1.0（始终可见，因为正文层没有跳过这些 glyph）
+    // opacity: 1.0（正文层会临时跳过对应 reflow ranges，由 ghost 显示位移）
     // scale: 1.0（无缩放变化）
     // position: 旧位置 → 新位置
 

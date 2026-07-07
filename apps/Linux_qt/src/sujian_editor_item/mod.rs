@@ -32,12 +32,12 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
-use text_animation_state::{choose_animation_mode, AnimationMode, TextAnimationState};
+use text_animation_state::{AnimationMode, TextAnimationState};
 
 pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
-    CursorRect, EditorAnimationKind, EditorCursor, EditorEngine, EditorSelection,
-    EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
+    AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
+    EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
     ReflowGlyphRect,
 };
 
@@ -169,10 +169,6 @@ fn is_complex_grapheme(ch: char) -> bool {
     false
 }
 
-fn text_contains_complex_grapheme(text: &str) -> bool {
-    text.chars().any(|ch| is_complex_grapheme(ch))
-}
-
 #[allow(dead_code)]
 #[derive(QObject)]
 pub struct SujianEditorItem {
@@ -255,8 +251,8 @@ pub struct SujianEditorItem {
     request_text_input_focus: qt_method!(fn(&mut self)),
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
-    on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32)),
-    on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32)),
+    on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)),
+    on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -475,14 +471,14 @@ impl SujianEditorItem {
 
     fn on_insert_animation_finished_by_id(
         &mut self,
-        transaction_id: i32,
-        range_id: i32,
+        transaction_id: QString,
+        range_id: QString,
         byte_start: i32,
         byte_end: i32,
     ) {
         self.finish_insert_animation(
-            Self::positive_i32_to_u64(transaction_id),
-            Self::positive_i32_to_u64(range_id),
+            Self::positive_id_string_to_u64(&transaction_id.to_string()),
+            Self::positive_id_string_to_u64(&range_id.to_string()),
             byte_start,
             byte_end,
             false,
@@ -491,22 +487,37 @@ impl SujianEditorItem {
 
     fn on_insert_animation_skipped_by_id(
         &mut self,
-        transaction_id: i32,
-        range_id: i32,
+        transaction_id: QString,
+        range_id: QString,
         byte_start: i32,
         byte_end: i32,
     ) {
         self.finish_insert_animation(
-            Self::positive_i32_to_u64(transaction_id),
-            Self::positive_i32_to_u64(range_id),
+            Self::positive_id_string_to_u64(&transaction_id.to_string()),
+            Self::positive_id_string_to_u64(&range_id.to_string()),
             byte_start,
             byte_end,
             true,
         );
     }
 
-    fn positive_i32_to_u64(value: i32) -> Option<u64> {
-        (value > 0).then_some(value as u64)
+    fn positive_id_string_to_u64(value: &str) -> Option<u64> {
+        value.parse::<u64>().ok().filter(|id| *id > 0)
+    }
+
+    fn animation_mode_from_core(mode: CoreAnimationMode) -> AnimationMode {
+        match mode {
+            CoreAnimationMode::GlyphAnimation => AnimationMode::GlyphAnimation,
+            CoreAnimationMode::ClusterAnimation => AnimationMode::ClusterAnimation,
+            CoreAnimationMode::RunAnimation => AnimationMode::RunAnimation,
+            CoreAnimationMode::LineReflowAnimation => AnimationMode::LineReflowAnimation,
+            // Linux_qt does not yet have real snapshot/text-run rendering. Downgrade
+            // the platform render state to SystemSuppressed so no hidden range is
+            // created until snapshot animation is implemented.
+            CoreAnimationMode::SnapshotAnimation | CoreAnimationMode::SystemSuppressed => {
+                AnimationMode::SystemSuppressed
+            }
+        }
     }
 
     fn finish_insert_animation(
@@ -1183,6 +1194,10 @@ impl SujianEditorItem {
     }
 
     fn insert_text(&mut self, text: QString) {
+        self.insert_text_with_cause(text, None);
+    }
+
+    fn insert_text_with_cause(&mut self, text: QString, explicit_cause: Option<EditorTransactionCause>) {
         if !self.current_editor_enabled {
             return;
         }
@@ -1211,11 +1226,13 @@ impl SujianEditorItem {
         self.buffer.push_undo(old.clone());
         self.buffer.replace_selection_or_insert(&inserted);
         self.adjust_affinity_at_wrap_boundary();
-        let cause = if inserted.chars().count() == 1 {
-            EditorTransactionCause::Typing
-        } else {
-            EditorTransactionCause::TypingCommit
-        };
+        let cause = explicit_cause.unwrap_or_else(|| {
+            if inserted.chars().count() == 1 {
+                EditorTransactionCause::Typing
+            } else {
+                EditorTransactionCause::TypingCommit
+            }
+        });
         let new = self.buffer.snapshot();
         let _vt = self.record_transaction(old, new, cause, true);
         // Animation lifecycle is owned by QML EditorAnimationOverlay.
@@ -1606,7 +1623,7 @@ impl SujianEditorItem {
             return;
         }
         let normalized = normalize_plain_text(&s);
-        self.insert_text(normalized.into());
+        self.insert_text_with_cause(normalized.into(), Some(EditorTransactionCause::Paste));
     }
 
     fn insert_preedit(&mut self, text: QString) {
@@ -1734,23 +1751,18 @@ impl SujianEditorItem {
                                 // 旧动画被取消（相交），需要触发 static repaint 恢复文字
                                 self.request_static_repaint();
                             }
-                            // 统一动画模式选择：与 QML 使用相同规则
-                            // 使用 cluster_count（插入文本的字符数）替代 glyph_count
-                            let inserted_text = &vt.new_text[range_start..range_end];
-                            let cluster_count = inserted_text.chars().count();
-                            let contains_newline = inserted_text.contains('\n');
-                            let contains_complex_grapheme = text_contains_complex_grapheme(inserted_text);
-                            let mode = choose_animation_mode(
-                                cluster_count,
-                                contains_newline,
-                                contains_complex_grapheme,
-                                self.current_is_scrolling,
-                                self.current_is_loading,
-                                self.current_is_applying_format,
-                                self.current_is_applying_settings,
-                                self.current_typing_animation_enabled,
-                                true, // component_ready — Rust 侧始终为 true
-                            );
+                            // Core animation_mode is the only semantic source. Linux_qt may only
+                            // downgrade for platform/system suppression; it must not recalculate
+                            // mode from chars/glyphs locally.
+                            let mut mode = Self::animation_mode_from_core(vt.animation_mode);
+                            if self.current_is_scrolling
+                                || self.current_is_loading
+                                || self.current_is_applying_format
+                                || self.current_is_applying_settings
+                                || !self.current_typing_animation_enabled
+                            {
+                                mode = AnimationMode::SystemSuppressed;
+                            }
                             if mode != AnimationMode::SystemSuppressed {
                                 // 非 SystemSuppressed 模式都创建 hidden range
                                 // 从 vt.reflow_glyph_rects 收集 reflow byte ranges
@@ -1793,34 +1805,17 @@ impl SujianEditorItem {
                         }
                     }
                     EditorAnimationKind::Delete => {
-                        // Delete 动画不需要正文层跳过，但记录以跟踪活跃动画
-                        // 使用统一判定
-                        let inserted_text = if vt.old_text.len() > vt.new_text.len() {
-                            &vt.old_text
-                        } else {
-                            ""
-                        };
-                        let cluster_count = inserted_text.chars().count();
-                        let contains_newline = vt.old_text != vt.new_text
-                            && (vt.old_text.contains('\n') || vt.new_text.contains('\n'));
-                        // 检测删除的文本中是否包含复杂 grapheme
-                        let deleted_text = if vt.old_text.len() > vt.new_text.len() {
-                            &vt.old_text
-                        } else {
-                            ""
-                        };
-                        let contains_complex_grapheme = text_contains_complex_grapheme(deleted_text);
-                        let mode = choose_animation_mode(
-                            cluster_count,
-                            contains_newline,
-                            contains_complex_grapheme,
-                            self.current_is_scrolling,
-                            self.current_is_loading,
-                            self.current_is_applying_format,
-                            self.current_is_applying_settings,
-                            self.current_typing_animation_enabled,
-                            true, // component_ready
-                        );
+                        // Delete animation state follows Core animation_mode; Linux_qt only
+                        // downgrades for platform/system suppression.
+                        let mut mode = Self::animation_mode_from_core(vt.animation_mode);
+                        if self.current_is_scrolling
+                            || self.current_is_loading
+                            || self.current_is_applying_format
+                            || self.current_is_applying_settings
+                            || !self.current_typing_animation_enabled
+                        {
+                            mode = AnimationMode::SystemSuppressed;
+                        }
                         if mode != AnimationMode::SystemSuppressed {
                             // 对于 Delete，inserted_range 为 None，需要从变更推导 byte range
                             let changes =
@@ -3072,6 +3067,7 @@ impl SujianEditorItem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sujian_editor_item::text_animation_state::choose_animation_mode;
 
     #[test]
     fn meta_object_dump_contains_animation_signals() {

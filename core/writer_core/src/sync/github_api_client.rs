@@ -64,7 +64,7 @@ pub(crate) fn github_get_content(
     let url = format!("{}/contents/{}?ref={}", api_base, path, branch);
     let resp = client
         .get(&url)
-        .bearer_auth(token)
+        .header("Authorization", format!("Bearer {}", token))
         .header("User-Agent", "WriterApp/1.0")
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -128,7 +128,7 @@ pub(crate) fn github_put_content_once(
     }
     let resp = client
         .put(&url)
-        .bearer_auth(token)
+        .header("Authorization", format!("Bearer {}", token))
         .header("User-Agent", "WriterApp/1.0")
         .header("Accept", "application/vnd.github+json")
         .json(&payload)
@@ -205,7 +205,7 @@ pub(crate) fn github_delete_content_once(
     });
     let resp = client
         .delete(&url)
-        .bearer_auth(token)
+        .header("Authorization", format!("Bearer {}", token))
         .header("User-Agent", "WriterApp/1.0")
         .header("Accept", "application/vnd.github+json")
         .json(&payload)

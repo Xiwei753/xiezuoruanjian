@@ -91,6 +91,8 @@ data class EditorVisualTransactionData(
     val insertedRangeStart: Int,
     /** 插入范围结束（UTF-8 byte offset），无插入时为 0 */
     val insertedRangeEnd: Int,
+    /** Core 决定的动画模式，是 Android 渲染端唯一语义来源 */
+    val animationMode: AnimationModeData = AnimationModeData.GlyphAnimation,
     val durationMs: Long,
     val coordinateMode: VisualCoordinateModeData,
 

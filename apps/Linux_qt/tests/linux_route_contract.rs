@@ -87,11 +87,11 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         .expect("SujianEditorItem source should be readable");
     assert!(
         sujian_item.contains(
-            "on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32))"
+            "on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"
         ) && sujian_item.contains(
-            "on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32))"
+            "on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"
         ),
-        "SujianEditorItem qt_method signatures must keep four i32 parameters for transaction/range aware cleanup"
+        "SujianEditorItem qt_method signatures must carry transaction/range ids as strings to avoid u64 truncation"
     );
     assert!(
         sujian_item.contains("start_insert_with_ids(")

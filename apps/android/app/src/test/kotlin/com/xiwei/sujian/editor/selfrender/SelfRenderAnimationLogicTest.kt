@@ -131,8 +131,8 @@ class SelfRenderAnimationLogicTest {
     }
 
     @Test
-    fun shouldAnimate_paste_false() {
-        assertFalse(shouldAnimateForCause(SujianEditCause.Paste))
+    fun shouldAnimate_paste_true() {
+        assertTrue(shouldAnimateForCause(SujianEditCause.Paste))
     }
 
     @Test
@@ -440,23 +440,22 @@ class SelfRenderAnimationLogicTest {
     // ── Paste 完整场景测试 ──
 
     @Test
-    fun pasteDoesNotAnimate() {
-        // Paste 不动画 — 更完整的场景测试
-        // 验证 Paste cause 不动画
-        assertFalse(shouldAnimateForCause(SujianEditCause.Paste))
+    fun pasteUsesCoreVisualTransactionRoute() {
+        // Paste 是否实际动画由 Core 返回的 visual transaction / animationMode 决定；Android 不再提前拦截。
+        assertTrue(shouldAnimateForCause(SujianEditCause.Paste))
 
-        // 模拟粘贴操作：即使文本变化很小（单字），Paste 也不动画
+        // 模拟粘贴操作：Android 只放行到 Core，不在本地按文本长度决定模式
         var hasAnimations = false
         var animatedInsertRange: HalfOpenRange? = null
 
         // 模拟粘贴 "a" 到空文本
-        // Paste cause → shouldAnimate = false → 不创建动画
-        assertFalse(shouldAnimateForCause(SujianEditCause.Paste))
+        // Paste cause → 允许进入 Core 路线；本测试不模拟 Core 返回结果，因此本地未创建动画。
+        assertTrue(shouldAnimateForCause(SujianEditCause.Paste))
         assertFalse(hasAnimations)
         assertNull(animatedInsertRange)
 
         // 模拟粘贴长文本
-        assertFalse(shouldAnimateForCause(SujianEditCause.Paste))
+        assertTrue(shouldAnimateForCause(SujianEditCause.Paste))
         assertFalse(hasAnimations)
         assertNull(animatedInsertRange)
     }
@@ -667,8 +666,8 @@ class SelfRenderAnimationLogicTest {
         return when (cause) {
             SujianEditCause.Typing,
             SujianEditCause.Delete,
-            SujianEditCause.TypingCommit -> true
-            SujianEditCause.Paste,
+            SujianEditCause.TypingCommit,
+            SujianEditCause.Paste -> true
             SujianEditCause.Load,
             SujianEditCause.Format,
             SujianEditCause.ImeComposition,

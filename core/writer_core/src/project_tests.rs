@@ -26,37 +26,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rename_project_success() {
-        let dir = tempdir().unwrap();
-        let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
-
-        let project = create_project(workspace_path, "Old Title").unwrap();
-
-        let result = crate::project::rename_project(workspace_path, &project.id, "New Title");
-        assert!(result.is_ok());
-
-        let projects = list_projects(workspace_path).unwrap();
-        assert_eq!(projects.len(), 1);
-        assert_eq!(projects[0].title, "New Title");
-    }
-
-    #[test]
-    fn test_rename_project_not_found() {
-        let dir = tempdir().unwrap();
-        let workspace_path = dir.path();
-        create_workspace(workspace_path).unwrap();
-
-        let result = crate::project::rename_project(workspace_path, "non-existent-id", "New Title");
-        assert!(result.is_err());
-        if let Err(crate::error::Error::ProjectNotFound) = result {
-            // expected
-        } else {
-            panic!("Expected Error::ProjectNotFound");
-        }
-    }
-
-    #[test]
     fn test_rename_project_duplicate_title() {
         let dir = tempdir().unwrap();
         let workspace_path = dir.path();

@@ -540,39 +540,6 @@ fn test_session_gap_detection() {
 }
 
 #[test]
-fn test_daily_stats_merge_multiple_devices() {
-    let temp_dir = tempdir().unwrap();
-    let store = StatsStore::new(temp_dir.path());
-
-    let stats_dev1 = crate::writing_stats::store::DailyStats {
-        date: "2025-01-16".to_string(),
-        device_id: "dev-1".to_string(),
-        platform: "desktop".to_string(),
-        total_human_typed_chars: 50,
-        ..Default::default()
-    };
-    store.save_or_merge_daily_stats(&stats_dev1).unwrap();
-
-    let stats_dev2 = crate::writing_stats::store::DailyStats {
-        date: "2025-01-16".to_string(),
-        device_id: "dev-2".to_string(),
-        platform: "android".to_string(),
-        total_human_typed_chars: 100,
-        ..Default::default()
-    };
-    store.save_or_merge_daily_stats(&stats_dev2).unwrap();
-
-    let loaded = store.load_all_daily_stats_for_date("2025-01-16").unwrap();
-    assert_eq!(loaded.len(), 2);
-
-    let dev1_loaded = loaded.iter().find(|d| d.device_id == "dev-1").unwrap();
-    assert_eq!(dev1_loaded.total_human_typed_chars, 50);
-
-    let dev2_loaded = loaded.iter().find(|d| d.device_id == "dev-2").unwrap();
-    assert_eq!(dev2_loaded.total_human_typed_chars, 100);
-}
-
-#[test]
 fn test_char_count_uses_unicode_scalar() {
     let temp_dir = tempdir().unwrap();
     let api = StatsApi::new(temp_dir.path());

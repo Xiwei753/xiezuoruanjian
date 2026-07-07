@@ -27,7 +27,7 @@ import com.xiwei.sujian.diagnostics.DiagnosticsLogger
  *   Core 返回 Delete，layout 算 newCursorRect，动画层把 deletedGlyphRects 吞向 newCursorRect
  * - 连续删除每次独立 animation id，不允许 pendingDelete 覆盖丢动画
  * - 输入类型：普通单字 Typing；中文/日文 IME commit 多字 TypingCommit；
- *   composing ImeComposition 不动画；粘贴 Paste 不动画；加载 Load 不动画；
+ *   Paste/Undo/Redo 交给 Core 决定是否产出 visual transaction；composing ImeComposition、加载 Load、
  *   设置变化 Format/Programmatic 不动画
  * - 滚动中不播放动画
  *
@@ -166,22 +166,14 @@ class SujianAnimationController(
         // 获取插入的 glyph rects（从新文本的新布局中获取）
         val glyphRects = layout.getGlyphRects(text, rangeStartUtf16, rangeEndUtf16)
         
-        // 使用统一动画模式选择方法
-        val insertedText = text.substring(rangeStartUtf16, rangeEndUtf16.coerceAtMost(text.length))
-        val containsNewline = insertedText.contains("\n") || insertedText.contains("\r")
-        val complexGraphemeRanges = detectComplexGraphemeRanges(text, rangeStartUtf16, rangeEndUtf16)
-        val containsComplexGrapheme = complexGraphemeRanges.isNotEmpty()
-        val decision = chooseAnimationMode(
-            clusterCount = glyphRects.size,
-            containsNewline = containsNewline,
-            containsComplexGrapheme = containsComplexGrapheme,
-            isScrolling = renderer.isScrolling(),
-            isLoading = false,
-            isApplyingFormat = false,
-            isApplyingSettings = false,
-            animEnabled = animationEnabled,
-            componentReady = true
-        )
+        // Core animationMode is the only semantic source. Android may only
+        // downgrade for platform/system suppression; do not recalculate from
+        // glyphRects.size or local grapheme inspection.
+        val decision = if (renderer.isScrolling()) {
+            AnimationModeData.SystemSuppressed
+        } else {
+            vt.animationMode
+        }
         
         if (decision == AnimationModeData.SystemSuppressed) {
             DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: decision=$decision, skipping animation")
@@ -445,32 +437,6 @@ class SujianAnimationController(
     }
     
     /**
-     * 统一动画模式选择方法 — 与 Rust choose_animation_mode 和 QML chooseAnimationMode 使用相同规则
-     * 返回分层动画模式
-     */
-    fun chooseAnimationMode(
-        clusterCount: Int,
-        containsNewline: Boolean,
-        containsComplexGrapheme: Boolean,
-        isScrolling: Boolean,
-        isLoading: Boolean,
-        isApplyingFormat: Boolean,
-        isApplyingSettings: Boolean,
-        animEnabled: Boolean,
-        componentReady: Boolean
-    ): AnimationModeData {
-        if (!animEnabled) return AnimationModeData.SystemSuppressed
-        if (isScrolling || isLoading || isApplyingFormat || isApplyingSettings) return AnimationModeData.SystemSuppressed
-        if (!componentReady) return AnimationModeData.SystemSuppressed
-        if (clusterCount == 0) return AnimationModeData.SystemSuppressed
-        if (containsNewline) return AnimationModeData.LineReflowAnimation
-        if (containsComplexGrapheme) return AnimationModeData.ClusterAnimation
-        if (clusterCount <= 8) return AnimationModeData.GlyphAnimation
-        if (clusterCount <= 40) return AnimationModeData.RunAnimation
-        return AnimationModeData.SnapshotAnimation
-    }
-    
-    /**
      * 设置滚动状态
      */
     fun setScrolling(scrolling: Boolean) {
@@ -511,13 +477,13 @@ class SujianAnimationController(
         return when (cause) {
             SujianEditCauseData.Typing,
             SujianEditCauseData.Delete,
-            SujianEditCauseData.TypingCommit -> true
+            SujianEditCauseData.TypingCommit,
             SujianEditCauseData.Paste,
+            SujianEditCauseData.Undo,
+            SujianEditCauseData.Redo -> true
             SujianEditCauseData.Load,
             SujianEditCauseData.Format,
             SujianEditCauseData.ImeComposition,
-            SujianEditCauseData.Undo,
-            SujianEditCauseData.Redo,
             SujianEditCauseData.Programmatic -> false
         }
     }

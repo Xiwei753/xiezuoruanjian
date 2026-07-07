@@ -13,9 +13,11 @@ sealed class BridgeResult<out T> {
         val code: String? get() = envelope.errorCode
     }
     object NotLoaded : BridgeResult<Nothing>() {
+        @Suppress("DEPRECATION")
         val envelope: ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
-            errorCode = "NATIVE_NOT_LOADED"
+            errorCode = "NATIVE_NOT_LOADED",
+            userMessage = null
         )
     }
 }
@@ -31,6 +33,7 @@ data class ResultEnvelope<out T>(
     val errorCode: String? = null,
     val messageKey: String? = null,
     val messageArgs: Map<String, String> = emptyMap(),
+    @Deprecated("Core 不再提供 user_message，使用 messageKey 或 rawError") val userMessage: String? = null, // i18n-exempt
     val rawError: String? = null,
     val warnings: List<String> = emptyList(),
     val changedPaths: List<String> = emptyList(),
@@ -42,11 +45,13 @@ data class ResultEnvelope<out T>(
             data = data
         )
 
-        fun error(errorCode: String, rawError: String): ResultEnvelope<Nothing> = ResultEnvelope(
+        @Deprecated("使用 messageKey/rawError") // i18n-exempt
+        fun error(errorCode: String, @Suppress("DEPRECATION") userMessage: String): ResultEnvelope<Nothing> = ResultEnvelope(
             success = false,
             errorCode = errorCode,
             messageKey = errorCodeToMessageKey(errorCode),
-            rawError = rawError
+            userMessage = null,
+            rawError = userMessage
         )
 
         private fun errorCodeToMessageKey(errorCode: String): String = when (errorCode) {

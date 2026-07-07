@@ -355,7 +355,7 @@ fn execute_lww_sync_attempt(
     let tree_url = format!("{}/git/trees/{}?recursive=1", api_base, config.branch);
     let resp = client
         .get(&tree_url)
-        .bearer_auth(token)
+        .header("Authorization", format!("Bearer {}", token))
         .header("User-Agent", "WriterApp/1.0")
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -389,7 +389,7 @@ fn execute_lww_sync_attempt(
         let ref_url = format!("{}/git/ref/heads/{}", api_base, config.branch);
         let ref_resp = client
             .get(&ref_url)
-            .bearer_auth(token)
+            .header("Authorization", format!("Bearer {}", token))
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
             .send()
@@ -406,7 +406,7 @@ fn execute_lww_sync_attempt(
             // 再尝试访问仓库本身来区分
             let repo_resp = client
                 .get(api_base)
-                .bearer_auth(token)
+                .header("Authorization", format!("Bearer {}", token))
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
                 .send()

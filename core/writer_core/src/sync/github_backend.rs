@@ -77,7 +77,7 @@ impl SyncBackend for GitHubApiBackend {
 
         match client
             .get(&api_url)
-            .bearer_auth(token)
+            .header("Authorization", format!("Bearer {}", token))
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
             .send()
