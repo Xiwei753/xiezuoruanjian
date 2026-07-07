@@ -1,6 +1,6 @@
 # Windows 原生客户端路线（issue #433）
 
-Windows 不再走 Qt 桌面端路线，也不复用 `apps/Linux_qt`。本目录是唯一 Windows 客户端落点，不再新开 `apps/windows-desktop`。
+Windows 不再走 Qt 桌面端路线，也不复用 `apps/Linux_qt`。本目录是唯一 Windows 客户端落点，不另设 Windows 桌面专用新目录。
 
 ## 技术路线
 
@@ -16,16 +16,14 @@ WinUI 3 / Windows App SDK 与 DirectWrite/Direct2D 自定义文本渲染可成�
 
 ## 当前实现状态
 
-### 已完成
-- WinUI 3 应用壳（`App.xaml` / `MainWindow.xaml`）。
-- `SujianEditor` 基础骨架：纯文本行存储、点击定位光标、字符输入、删除、换行、方向键移动、基础滚动。
-- DirectWrite/Direct2D 文本渲染（Win2D `CanvasTextLayout` + `CanvasControl`）。
-- 光标绘制（基于 `CanvasTextLayout.GetCaretPosition`）。
-- IME composition/commit 骨架方法（`StartComposition` / `UpdateComposition` / `CommitComposition` / `CancelComposition`）。
-- `WriterCoreBridge` stub（等待 writer_core Windows ABI 产物）。
+本 README 记录 issue #433 的目标路线和验收口径；在对应工程文件、编辑器实现和桥接代码正式提交前，不把目标能力写成“已完成”。
 
-### 下一步
-- TSF/IME 完整链路：微软拼音 composition/commit、候选窗口锚点。
+### 待实现 / 待提交验收
+- WinUI 3 / Windows App SDK 应用壳。
+- 自研 `SujianEditor` 基础骨架：纯文本行存储、点击定位光标、字符输入、删除、换行、方向键移动、基础滚动。
+- DirectWrite/Direct2D 文本布局与渲染。
+- 光标绘制与 hit test / caret metrics。
+- Windows IME / TSF composition/commit 完整链路，候选窗口锚点跟随 `SujianEditor` 光标矩形。
 - `WriterCoreBridge` 绑定真实 writer_core（通过 C ABI / UniFFI）。
 - 打开 workspace、列项目、列卷、列章节、打开章节、保存章节端到端闭环。
 - 文字动画（Core `EditorVisualTransaction` → SujianEditor overlay）。
@@ -35,7 +33,7 @@ WinUI 3 / Windows App SDK 与 DirectWrite/Direct2D 自定义文本渲染可成�
 
 Windows issue #433 的执行顺序固定为：**先做自研 `SujianEditor` MVP，再补设置页、统计页、同步页等完整页面**。MVP 必须先证明：
 
-1. WinUI 3 应用能启动，`apps/windows` 是唯一 Windows 目录，不新开 `apps/windows-desktop`。
+1. WinUI 3 应用能启动，`apps/windows` 是唯一 Windows 目录，不另设 Windows 桌面专用新目录。
 2. 自研 `SujianEditor` 可以显示纯文本、点击定位光标、输入、删除、换行、方向键移动、基础滚动。
 3. 微软拼音 IME composition/commit 正常，候选窗口锚点跟随 `SujianEditor` 光标矩形。
 4. DirectWrite/Direct2D 渲染在常见 DPI 与字体设置下稳定，hit test 与 caret metrics 可用。

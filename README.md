@@ -40,7 +40,7 @@ bindings/             跨平台绑定代码
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
 - `apps/android`: 原生 Kotlin Android 客户端。主业务入口为 `AppServiceBridge + UniFFI`，`BridgeProvider` 只暴露领域 Bridge 给 Repository/ViewModel/UI 做平台适配。
 - `apps/Linux_qt`: 原生 Rust + Qt6/QML Linux 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则；当前优先稳定 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、渲染、动画、日志导出和 runtime profile，不混入 Windows 兼容逻辑。
-- `apps/windows`: Windows 原生客户端唯一落点。正式路线为 WinUI 3 / Windows App SDK 应用壳 + 自研 `SujianEditor` + DirectWrite/Direct2D + Windows IME + Rust `writer_core`；不新增 `apps/windows-desktop`，不复用 `apps/Linux_qt` Qt/QML，`RichEditBox` / `TextBox` 不得成为正式写作区。
+- `apps/windows`: Windows 原生客户端唯一落点。正式路线为 WinUI 3 / Windows App SDK 应用壳 + 自研 `SujianEditor` + DirectWrite/Direct2D + Windows IME + Rust `writer_core`；不另设 Windows 桌面专用新目录，不复用 `apps/Linux_qt` Qt/QML，`RichEditBox` / `TextBox` 不得成为正式写作区。
 - `apps/harmony`: 原生 ArkTS HarmonyOS NEXT 客户端。通过 NAPI C++ 桥接层调用 Rust Core FFI，ArkTS 侧通过 `IWriterCoreBridge` 接口解耦。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 

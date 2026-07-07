@@ -14,7 +14,7 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 ## 当前仓库事实
 - 平台目录路线：
   - `apps/Linux_qt` 只服务 Linux Qt/QML 客户端，优先稳定 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、渲染、动画、日志导出和 runtime profile，不混 Windows 兼容逻辑。
-  - `apps/windows` 是 Windows 原生客户端唯一落点：WinUI 3 / Windows App SDK 应用壳 + 自研 SujianEditor + DirectWrite/Direct2D + Windows IME + Rust `writer_core`。不得复用 Linux Qt/QML，也不得新开 `apps/windows-desktop`。
+  - `apps/windows` 是 Windows 原生客户端唯一落点：WinUI 3 / Windows App SDK 应用壳 + 自研 SujianEditor + DirectWrite/Direct2D + Windows IME + Rust `writer_core`。不得复用 Linux Qt/QML，也不得另设 Windows 桌面专用新目录。
   - 后续如需 GTK，可新增 Linux GTK 客户端目录，当前不新增实现。
   - Android 继续作为独立原生客户端推进。
   - HarmonyOS 保持既有骨架和 Rust Core 内核接入。

@@ -953,14 +953,15 @@ Rectangle {
                         visible: true
 
                         // 真吐字：Insert 动画完成时通知 Rust 清除 hidden range
-                        onInsertAnimationFinished: function(byteStart, byteEnd) {
-                            sujianEditor.on_insert_animation_finished(byteStart, byteEnd)
+                        // 优先使用 transactionId/rangeId 精确清理；byte range 仅旧数据兜底。
+                        onInsertAnimationFinished: function(transactionId, rangeId, byteStart, byteEnd) {
+                            sujianEditor.on_insert_animation_finished_by_id(transactionId, rangeId, byteStart, byteEnd)
                         }
 
                         // Insert 动画被跳过时通知 Rust 清除 hidden range
                         // 防止 Rust 已创建 hidden range 但 QML 跳过动画导致文字消失
-                        onInsertAnimationSkipped: function(byteStart, byteEnd) {
-                            sujianEditor.on_insert_animation_skipped(byteStart, byteEnd)
+                        onInsertAnimationSkipped: function(transactionId, rangeId, byteStart, byteEnd) {
+                            sujianEditor.on_insert_animation_skipped_by_id(transactionId, rangeId, byteStart, byteEnd)
                         }
                     }
 

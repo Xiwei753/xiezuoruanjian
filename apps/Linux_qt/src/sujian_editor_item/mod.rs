@@ -255,8 +255,8 @@ pub struct SujianEditorItem {
     request_text_input_focus: qt_method!(fn(&mut self)),
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
-    on_insert_animation_finished: qt_method!(fn(&mut self, byte_start: i32, byte_end: i32)),
-    on_insert_animation_skipped: qt_method!(fn(&mut self, byte_start: i32, byte_end: i32)),
+    on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32)),
+    on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -398,8 +398,8 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
-            on_insert_animation_finished: Default::default(),
-            on_insert_animation_skipped: Default::default(),
+            on_insert_animation_finished_by_id: Default::default(),
+            on_insert_animation_skipped_by_id: Default::default(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -473,33 +473,64 @@ impl SujianEditorItem {
         }
     }
 
-    /// QML 动画 overlay 通知 Insert 动画完成，清除对应的隐藏 range。
-    /// 只要真的移除了匹配的 Insert 动画就立刻 request_static_repaint，
-    /// 不必等 has_active_insert 变成 false，避免多 Insert 动画时漏重绘。
-    fn on_insert_animation_finished(&mut self, byte_start: i32, byte_end: i32) {
-        let bs = byte_start as usize;
-        let be = byte_end as usize;
-        let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
-        if removed {
-            editor_animation_debug_log(&format!(
-                "on_insert_animation_finished: byte_range=({},{}), removed, has_active_insert={}",
-                bs, be, self.text_anim_state.has_active_insert()
-            ));
-            self.request_static_repaint();
-        }
+    fn on_insert_animation_finished_by_id(
+        &mut self,
+        transaction_id: i32,
+        range_id: i32,
+        byte_start: i32,
+        byte_end: i32,
+    ) {
+        self.finish_insert_animation(
+            Self::positive_i32_to_u64(transaction_id),
+            Self::positive_i32_to_u64(range_id),
+            byte_start,
+            byte_end,
+            false,
+        );
     }
 
-    /// QML 动画 overlay 通知 Insert 动画被跳过（component not ready / glyph 超限 / 换行等）。
-    /// 此时 Rust 侧可能已经创建了 hidden range，必须立即清除，
-    /// 否则正文层会永久跳过该 range 导致文字消失。
-    fn on_insert_animation_skipped(&mut self, byte_start: i32, byte_end: i32) {
-        let bs = byte_start as usize;
-        let be = byte_end as usize;
-        let removed = self.text_anim_state.on_insert_animation_finished(bs, be);
+    fn on_insert_animation_skipped_by_id(
+        &mut self,
+        transaction_id: i32,
+        range_id: i32,
+        byte_start: i32,
+        byte_end: i32,
+    ) {
+        self.finish_insert_animation(
+            Self::positive_i32_to_u64(transaction_id),
+            Self::positive_i32_to_u64(range_id),
+            byte_start,
+            byte_end,
+            true,
+        );
+    }
+
+    fn positive_i32_to_u64(value: i32) -> Option<u64> {
+        (value > 0).then_some(value as u64)
+    }
+
+    fn finish_insert_animation(
+        &mut self,
+        transaction_id: Option<u64>,
+        range_id: Option<u64>,
+        byte_start: i32,
+        byte_end: i32,
+        skipped: bool,
+    ) {
+        let bs = byte_start.max(0) as usize;
+        let be = byte_end.max(0) as usize;
+        let removed = self
+            .text_anim_state
+            .on_insert_animation_finished_by_id(transaction_id, range_id, bs, be);
         if removed {
             editor_animation_debug_log(&format!(
-                "on_insert_animation_skipped: byte_range=({},{}), cleared hidden range, has_active_insert={}",
-                bs, be, self.text_anim_state.has_active_insert()
+                "on_insert_animation_{}: transaction_id={:?}, range_id={:?}, byte_range=({},{}), cleared hidden range, has_active_insert={}",
+                if skipped { "skipped" } else { "finished" },
+                transaction_id,
+                range_id,
+                bs,
+                be,
+                self.text_anim_state.has_active_insert()
             ));
             self.request_static_repaint();
         }
@@ -1132,7 +1163,7 @@ impl SujianEditorItem {
     }
 
     /// 超时安全机制：检查活跃文本动画是否超时，超时则清除并重绘。
-    /// 正常情况下 QML overlay 动画完成后通过 on_insert_animation_finished 清除，
+    /// 正常情况下 QML overlay 动画完成后通过 on_insert_animation_finished_by_id 清除，
     /// 此方法作为兜底防止 QML 信号丢失导致正文层永久跳过 range。
     fn tick_text_animations(&mut self) {
         let now = Instant::now();
@@ -1733,15 +1764,22 @@ impl SujianEditorItem {
                                             .collect()
                                     })
                                     .unwrap_or_default();
-                                self.text_anim_state.start_insert(
+                                let hidden_range_id = vt.hidden_visual_ranges.first().map(|r| r.id);
+                                self.text_anim_state.start_insert_with_ids(
+                                    Some(vt.id),
+                                    hidden_range_id,
                                     (range_start, range_end),
                                     reflow_ranges,
                                     mode,
                                     vt.duration_ms,
                                 );
                                 editor_animation_debug_log(&format!(
-                                    "record_transaction: created Insert animation mode={:?}, byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
-                                    mode, range_start, range_end,
+                                    "record_transaction: created Insert animation transaction_id={}, range_id={:?}, mode={:?}, byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
+                                    vt.id,
+                                    hidden_range_id,
+                                    mode,
+                                    range_start,
+                                    range_end,
                                     vt.reflow_glyph_rects.as_ref().map(|r| r.len()).unwrap_or(0),
                                     vt.duration_ms
                                 ));
@@ -3870,8 +3908,8 @@ mod tests {
     /// 测试 7：qml_overlay_skip_must_clear_hidden_range
     ///
     /// QML overlay 跳过动画时 Rust hidden range 必须立刻清掉。
-    /// 验证 on_insert_animation_skipped 清除 active_insert_byte_ranges。
-    /// 这模拟了 QML 调用 on_insert_animation_skipped(byte_start, byte_end) 的场景：
+    /// 验证 on_insert_animation_skipped_by_id 清除 active_insert_byte_ranges。
+    /// 这模拟了 QML 调用 on_insert_animation_skipped_by_id 的场景：
     /// Rust 侧可能已经创建了 hidden range，但 QML 决定跳过动画，
     /// 此时必须立即清除 hidden range，否则正文层会永久跳过该 range 导致文字消失。
     #[test]
@@ -3890,12 +3928,12 @@ mod tests {
             "Hidden range should be (10, 22) before skip"
         );
 
-        // QML overlay 跳过动画 → 调用 on_insert_animation_finished（与 skip 共用逻辑）
-        // 这模拟了 SujianEditorItem::on_insert_animation_skipped 的行为
-        let removed = state.on_insert_animation_finished(10, 22);
+        // QML overlay 跳过动画 → 调用 on_insert_animation_finished_by_id（与 skip 共用逻辑）
+        // 这模拟了 SujianEditorItem::on_insert_animation_skipped_by_id 的行为
+        let removed = state.on_insert_animation_finished_by_id(None, None, 10, 22);
         assert!(
             removed,
-            "on_insert_animation_skipped should return true (removed matching animation)"
+            "on_insert_animation_skipped_by_id should return true (removed matching animation)"
         );
         assert!(
             state.is_empty(),
@@ -3908,7 +3946,7 @@ mod tests {
 
         // 验证：跳过不匹配的 range 不影响现有 hidden range
         state.start_insert((30, 42), vec![], AnimationMode::GlyphAnimation, 160);
-        let removed_wrong = state.on_insert_animation_finished(50, 60);
+        let removed_wrong = state.on_insert_animation_finished_by_id(None, None, 50, 60);
         assert!(
             !removed_wrong,
             "Skipping non-matching range should return false"

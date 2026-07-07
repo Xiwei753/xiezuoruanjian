@@ -106,7 +106,7 @@ pub struct AnimatedGlyph {
 // Animation lifecycle: TextAnimationState manages hidden range lifecycle
 // to make the static layer skip the inserted range during Insert animations
 // (preventing ghost doubling). QML EditorAnimationOverlay manages glyph ghost
-// rendering and notifies Rust via on_insert_animation_finished when ALL ghosts
+// rendering and notifies Rust via on_insert_animation_finished_by_id when ALL ghosts
 // of an event are done. tick_text_animations() provides timeout safety.
 
 impl SujianEditorItem {

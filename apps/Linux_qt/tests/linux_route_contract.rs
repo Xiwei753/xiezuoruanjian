@@ -40,6 +40,69 @@ fn windows_route_is_native_winui_app_sdk() {
         readme.contains("先做自研") || readme.contains("先验证自研"),
         "issue #433 execution order must put SujianEditor MVP before full pages"
     );
+    assert!(
+        !readme.contains("App.xaml")
+            && !readme.contains("MainWindow.xaml")
+            && !readme.contains("Win2D")
+            && !readme.contains("WriterCoreBridge` stub"),
+        "apps/windows README must not claim unsubmitted Windows app shell/editor/bridge files are complete"
+    );
+    let obsolete_path_tokens = [
+        ["apps/windows", "-desktop"].concat(),
+        ["apps/linux", "-desktop"].concat(),
+        ["docs/windows", "_native_route.md"].concat(),
+        ["docs/desktop", "_split_contract.md"].concat(),
+    ];
+    for obsolete in obsolete_path_tokens {
+        assert!(
+            !readme.contains(&obsolete),
+            "issue #433 local route wording must not keep obsolete path token: {obsolete}"
+        );
+    }
+}
+
+#[test]
+fn linux_insert_animation_id_route_is_wired_end_to_end() {
+    let root = repo_root();
+    let writing_workspace = fs::read_to_string(root.join("apps/Linux_qt/qml/WritingWorkspace.qml"))
+        .expect("WritingWorkspace.qml should be readable");
+    assert!(
+        writing_workspace.contains(
+            "onInsertAnimationFinished: function(transactionId, rangeId, byteStart, byteEnd)"
+        ) && writing_workspace.contains(
+            "sujianEditor.on_insert_animation_finished_by_id(transactionId, rangeId, byteStart, byteEnd)"
+        ),
+        "WritingWorkspace.qml must forward insertAnimationFinished transactionId/rangeId/byteStart/byteEnd to SujianEditorItem"
+    );
+    assert!(
+        writing_workspace.contains(
+            "onInsertAnimationSkipped: function(transactionId, rangeId, byteStart, byteEnd)"
+        ) && writing_workspace.contains(
+            "sujianEditor.on_insert_animation_skipped_by_id(transactionId, rangeId, byteStart, byteEnd)"
+        ),
+        "WritingWorkspace.qml must forward insertAnimationSkipped transactionId/rangeId/byteStart/byteEnd to SujianEditorItem"
+    );
+
+    let sujian_item = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/mod.rs"))
+        .expect("SujianEditorItem source should be readable");
+    assert!(
+        sujian_item.contains(
+            "on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32))"
+        ) && sujian_item.contains(
+            "on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: i32, range_id: i32, byte_start: i32, byte_end: i32))"
+        ),
+        "SujianEditorItem qt_method signatures must keep four i32 parameters for transaction/range aware cleanup"
+    );
+    assert!(
+        sujian_item.contains("start_insert_with_ids(")
+            && sujian_item.contains("Some(vt.id)")
+            && sujian_item.contains("hidden_range_id"),
+        "record_transaction Insert path must start TextAnimationState with transactionId/rangeId"
+    );
+    assert!(
+        !sujian_item.contains("text_anim_state.start_insert(\n"),
+        "record_transaction Insert path must not regress to start_insert byte-range-only cleanup"
+    );
 }
 
 #[test]
