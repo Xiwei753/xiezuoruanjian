@@ -51,6 +51,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   private mockChapters: Map<string, ChapterMeta[]> = new Map<string, ChapterMeta[]>()
 
+  private mockChapterToVolume: Map<string, string> = new Map<string, string>()
+
   private mockChapterContents: Map<string, string> = new Map<string, string>()
 
   private mockStarMaps: StarMapMeta[] = []
@@ -302,6 +304,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       return this.error('VOLUME_NOT_FOUND', '卷不存在')
     }
     volumes.splice(index, 1)
+    const chapters = this.mockChapters.get(volumeId) || [] as ChapterMeta[]
+    chapters.forEach(ch => this.mockChapterToVolume.delete(ch.id))
     this.mockChapters.delete(volumeId)
     return this.success(true)
   }
@@ -345,9 +349,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       return this.success(data)
     }
 
-    const volKeys: string[] = Array.from(this.mockChapters.keys())
-    for (let i = 0; i < volKeys.length; i++) {
-      const volId: string = volKeys[i]
+    const volId = this.mockChapterToVolume.get(chapterId)
+    if (volId) {
       const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
       const chapter = chapters.find(ch => ch.id === chapterId)
       if (chapter) {
@@ -419,14 +422,14 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     }
     chapters.push(newChapter)
     this.mockChapters.set(volumeId, chapters)
+    this.mockChapterToVolume.set(newChapter.id, volumeId)
     return this.success(newChapter)
   }
 
   async renameChapter(chapterId: string, newName: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const volKeys: string[] = Array.from(this.mockChapters.keys())
-    for (let i = 0; i < volKeys.length; i++) {
-      const volId: string = volKeys[i]
+    const volId = this.mockChapterToVolume.get(chapterId)
+    if (volId) {
       const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
       const chapter = chapters.find(ch => ch.id === chapterId)
       if (chapter) {
@@ -440,14 +443,14 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async deleteChapter(chapterId: string): Promise<ResultEnvelope<boolean>> {
     await this.delay(150)
-    const volKeys: string[] = Array.from(this.mockChapters.keys())
-    for (let i = 0; i < volKeys.length; i++) {
-      const volId: string = volKeys[i]
+    const volId = this.mockChapterToVolume.get(chapterId)
+    if (volId) {
       const chapters: ChapterMeta[] = this.mockChapters.get(volId) || [] as ChapterMeta[]
       const index = chapters.findIndex(ch => ch.id === chapterId)
       if (index !== -1) {
         chapters.splice(index, 1)
         this.mockChapterContents.delete(chapterId)
+        this.mockChapterToVolume.delete(chapterId)
         return this.success(true)
       }
     }
