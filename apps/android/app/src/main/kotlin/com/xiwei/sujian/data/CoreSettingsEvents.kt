@@ -17,6 +17,11 @@ object CoreSettingsEvents {
         editorChanged.set(true)
     }
 
+    fun markEditorChanged() {
+        changed.set(true)
+        editorChanged.set(true)
+    }
+
     fun consumeChanged(): Boolean {
         return changed.getAndSet(false)
     }

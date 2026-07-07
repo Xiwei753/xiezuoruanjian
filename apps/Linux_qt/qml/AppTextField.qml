@@ -1,21 +1,12 @@
-// =============================================================================
-// AppTextField.qml — 通用文本输入框组件
-// =============================================================================
-//
-// 层级：Linux_qt UI 层（QML 基础组件）
-// 职责：统一风格的文本输入框，支持标签和占位符
-// 约束：
-//   - 纯 UI 组件，输入值通过 text property 绑定
-//   - 使用 DesignTokens 统一样式
-// =============================================================================
-
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
 Item {
     id: control
-    property var theme: null
+    property var dt: null
+    DesignTokens { id: fallbackDt }
+    readonly property var resolvedDt: dt || fallbackDt
     property string label: ""
     property string placeholder: ""
     property alias placeholderText: control.placeholder
@@ -24,14 +15,14 @@ Item {
     property alias validator: inputField.validator
     property bool fieldTabFocus: true
 
-    readonly property color normalTextColor: control.theme.onSurface
-    readonly property color placeholderColor: control.theme.textMuted
-    readonly property color backgroundColor: control.theme.surfaceContainerLow
-    readonly property color labelColor: control.theme.onSurfaceVariant
-    readonly property color activeBorderColor: control.theme.primary
-    readonly property color inactiveBorderColor: control.theme.outline
-    readonly property color highlightColor: control.theme.primary
-    readonly property color highlightTextColor: control.theme.onPrimary
+    readonly property color normalTextColor: control.resolvedDt.onSurface
+    readonly property color placeholderColor: control.resolvedDt.textMuted
+    readonly property color backgroundColor: control.resolvedDt.surfaceContainerLow
+    readonly property color labelColor: control.resolvedDt.onSurfaceVariant
+    readonly property color activeBorderColor: control.resolvedDt.primary
+    readonly property color inactiveBorderColor: control.resolvedDt.outline
+    readonly property color highlightColor: control.resolvedDt.primary
+    readonly property color highlightTextColor: control.resolvedDt.onPrimary
 
     signal accepted()
     signal editingFinished()
@@ -41,21 +32,21 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: control.theme.sp4
+        spacing: control.resolvedDt.sp4
 
         Text {
             text: control.label
-            font.pixelSize: control.theme.label
+            font.pixelSize: control.resolvedDt.label
             color: control.labelColor
             font.weight: Font.Medium
-            font.family: control.theme.fontFamily
+            font.family: control.resolvedDt.fontFamily
             visible: control.label.length > 0
         }
 
         TextField {
             id: inputField
             Layout.fillWidth: true
-            implicitHeight: control.theme.settingsControlHeight
+            implicitHeight: control.resolvedDt.settingsControlHeight
             placeholderText: control.placeholder
             color: control.normalTextColor
             placeholderTextColor: control.placeholderColor
@@ -68,14 +59,14 @@ Item {
                 color: control.backgroundColor
                 border.color: inputField.activeFocus ? control.activeBorderColor : control.inactiveBorderColor
                 border.width: inputField.activeFocus ? 2 : 1
-                radius: control.theme.radiusMd
+                radius: control.resolvedDt.radiusMd
             }
-            font.pixelSize: control.theme.body
-            font.family: control.theme.fontFamily
-            leftPadding: control.theme.sp12
-            rightPadding: control.theme.sp12
-            topPadding: control.theme.sp8
-            bottomPadding: control.theme.sp8
+            font.pixelSize: control.resolvedDt.body
+            font.family: control.resolvedDt.fontFamily
+            leftPadding: control.resolvedDt.sp12
+            rightPadding: control.resolvedDt.sp12
+            topPadding: control.resolvedDt.sp8
+            bottomPadding: control.resolvedDt.sp8
         }
     }
 }

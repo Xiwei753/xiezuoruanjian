@@ -17,9 +17,9 @@ Item {
     implicitHeight: mainCol.implicitHeight + resolvedDt.sp32
     property int lastSyncResultLen: -1
     property double lastSyncStatusLogTime: 0
-    property var theme: null
+    property var dt: null
     DesignTokens { id: fallbackDt }
-    readonly property var resolvedDt: theme || fallbackDt
+    readonly property var resolvedDt: dt || fallbackDt
     property var backendRef: null
     property var beforeSyncHook: null
     signal settingsChanged()
@@ -192,7 +192,7 @@ Item {
             AppTextField {
                 id: urlField
                 Layout.fillWidth: true
-                theme: root.resolvedDt
+                dt: root.resolvedDt
                 label: qsTr("远程仓库地址")
                 text: (root.backendRef ? root.backendRef.sync_remote_url : "")
                 placeholderText: "https://github.com/user/repo"
@@ -201,7 +201,7 @@ Item {
             AppTextField {
                 id: branchField
                 Layout.fillWidth: true
-                theme: root.resolvedDt
+                dt: root.resolvedDt
                 label: qsTr("分支名")
                 text: (root.backendRef ? root.backendRef.sync_branch : "")
                 placeholderText: "main"
@@ -210,7 +210,7 @@ Item {
             AppTextField {
                 id: tokenField
                 Layout.fillWidth: true
-                theme: root.resolvedDt
+                dt: root.resolvedDt
                 label: qsTr("访问 Token")
                 placeholderText: (root.backendRef ? root.backendRef.has_sync_token : false) ? qsTr("已设置（输入新 Token 以覆盖）") : qsTr("请输入 GitHub Personal Access Token")
                 echoMode: TextInput.Password
@@ -322,6 +322,7 @@ Item {
                         root.settingsChanged()
                         root.showConfigFeedback(qsTr("配置已保存"), false)
                     } else {
+                        syncResultArea.text = root.backendRef.sync_operation_state || qsTr("保存配置失败")
                         root.showConfigFeedback(qsTr("保存配置失败"), true)
                     }
                 }

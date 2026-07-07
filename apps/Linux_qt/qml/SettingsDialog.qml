@@ -396,7 +396,7 @@ Dialog {
                 }
                 SyncPage {
                     Layout.fillWidth: true
-                    theme: root.dt
+                    dt: root.dt
                     backendRef: root.syncBackendRef
                     beforeSyncHook: function() {
                         if (root.editorBackendRef) root.editorBackendRef.flush_writing_stats();

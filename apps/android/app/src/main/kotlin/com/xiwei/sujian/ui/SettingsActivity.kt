@@ -29,9 +29,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var currentSettings: LocalSettings
     private lateinit var syncHelper: SyncSettingsHelper
-    private var isReloading: Boolean = false
+    private var isRendering: Boolean = false
 
-    // ── SystemBarsController: 存为属性，供实验室开关立即生效 ──
     private var systemBarsController: SystemBarsController? = null
 
     private lateinit var sbFontSize: Slider
@@ -76,7 +75,6 @@ class SettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 在 setContentView 前应用主题，避免深色模式下先显示浅色再闪烁
         ErrorUtil.safeRun(this) {
             settingsRepository = SettingsRepository(this)
             val settings = ErrorUtil.safeRun(this, LocalSettings()) {
@@ -91,7 +89,6 @@ class SettingsActivity : AppCompatActivity() {
 
         setContentView(R.layout.activity_settings)
 
-        // ── SystemBarsController: edge-to-edge + insets ──
         systemBarsController = SystemBarsController(this)
         systemBarsController?.setupEdgeToEdge()
 
@@ -100,14 +97,6 @@ class SettingsActivity : AppCompatActivity() {
                 settingsRepository.getLocalSettings()
             } else {
                 LocalSettings()
-            }
-        }
-
-        val effectiveFontSize = ErrorUtil.safeRun(this, 16f) {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.getEffectiveFontSize()
-            } else {
-                16f
             }
         }
 
@@ -121,7 +110,6 @@ class SettingsActivity : AppCompatActivity() {
             saveAndFinish()
         }
 
-        // ── SystemBarsController: 设置 inset target ──
         val appBarLayout = findViewById<com.google.android.material.appbar.AppBarLayout>(R.id.appBarLayout)
         systemBarsController?.addAppBarTarget(appBarLayout)
 
@@ -166,8 +154,6 @@ class SettingsActivity : AppCompatActivity() {
         btnClearLogs = findViewById(R.id.btnClearLogs)
         btnCopyDeviceInfo = findViewById(R.id.btnCopyDeviceInfo)
 
-
-        // Live value update listeners
         sbFontSize.addOnChangeListener { _, value, _ ->
             tvFontSizeValue.text = "${value.toInt()}sp"
         }
@@ -187,11 +173,10 @@ class SettingsActivity : AppCompatActivity() {
             tvSmoothCursorDurationValue.text = "${value.toInt()}ms"
         }
 
-        // Save on drag stop
         val saveSettingsListener = object : Slider.OnSliderTouchListener {
             override fun onStartTrackingTouch(slider: Slider) {}
             override fun onStopTrackingTouch(slider: Slider) {
-                saveAndFinish(false)
+                updateAndSaveFromSliders()
             }
         }
         sbFontSize.addOnSliderTouchListener(saveSettingsListener)
@@ -201,8 +186,6 @@ class SettingsActivity : AppCompatActivity() {
         sbTypingAnimationDuration.addOnSliderTouchListener(saveSettingsListener)
         sbSmoothCursorDuration.addOnSliderTouchListener(saveSettingsListener)
 
-
-        // Setup Theme AutoCompleteTextView
         val themeOptions = arrayOf(
             getString(R.string.theme_system),
             getString(R.string.theme_light),
@@ -211,101 +194,41 @@ class SettingsActivity : AppCompatActivity() {
         val themeAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, themeOptions)
         actvTheme.setAdapter(themeAdapter)
 
-        // Set current selection
-        actvTheme.setText(when (currentSettings.themeMode) {
-            "light" -> getString(R.string.theme_light)
-            "dark" -> getString(R.string.theme_dark)
-            else -> getString(R.string.theme_system)
-        }, false)
-
         actvTheme.setOnItemClickListener { _, _, position, _ ->
+            if (isRendering) return@setOnItemClickListener
             val themeStr = when (position) {
                 1 -> "light"
                 2 -> "dark"
                 else -> "system"
             }
-            if (currentSettings.themeMode != themeStr) {
-                currentSettings = currentSettings.copy(themeMode = themeStr)
-                ErrorUtil.safeRun(this@SettingsActivity) {
-                    if (::settingsRepository.isInitialized) {
-                        settingsRepository.saveLocalSettings(currentSettings)
-                    }
-                }
-                when (themeStr) {
-                    "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
-                    "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
-                    else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
-                }
+            updateLocalSettings { it.copy(themeMode = themeStr) }
+            when (themeStr) {
+                "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
+                "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+                else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
             }
         }
 
-        // Bind existing settings
-        sbFontSize.value = effectiveFontSize
-        sbLineSpacing.value = currentSettings.editorLineSpacingMultiplier
-        switchAutoSave.isChecked = currentSettings.autoSaveEnabled
-        sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
-
-        switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
-        sbAutoIndentWidth.value = currentSettings.autoIndentWidth
-
-        switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
-        sbTypingAnimationDuration.isEnabled = switchTypingAnimation.isChecked
-        switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
-        sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
-        sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
-
-        // AI settings - hide section if AI not available (compile-time)
-        val aiAvailable = try {
-            if (::settingsRepository.isInitialized) {
-                settingsRepository.aiAvailable()
-            } else false
-        } catch (e: Exception) { false }
-        if (aiAvailable) {
-            cardAi.visibility = android.view.View.VISIBLE
-            switchAiEnabled.isChecked = currentSettings.aiEnabled
-            switchAiEnabled.setOnCheckedChangeListener { _, isChecked ->
-                if (isReloading) return@setOnCheckedChangeListener
-                currentSettings = currentSettings.copy(aiEnabled = isChecked)
-                saveAndFinish(false)
-            }
-        } else {
-            cardAi.visibility = android.view.View.GONE
-        }
-
-        // Initial texts
-        tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
-        tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
-        tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
-        tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
-        tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
-        tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
+        renderSettings(currentSettings, fromOnCreate = true)
 
         switchAutoSave.setOnCheckedChangeListener { _, isChecked ->
-            if (isReloading) return@setOnCheckedChangeListener
-            currentSettings = currentSettings.copy(autoSaveEnabled = isChecked)
-            saveAndFinish(false)
+            if (isRendering) return@setOnCheckedChangeListener
+            updateLocalSettings { it.copy(autoSaveEnabled = isChecked) }
         }
         switchAutoIndent.setOnCheckedChangeListener { _, isChecked ->
-            if (isReloading) return@setOnCheckedChangeListener
-            currentSettings = currentSettings.copy(autoIndentEnabled = isChecked)
-            saveAndFinish(false)
+            if (isRendering) return@setOnCheckedChangeListener
+            updateLocalSettings { it.copy(autoIndentEnabled = isChecked) }
         }
         switchTypingAnimation.setOnCheckedChangeListener { _, isChecked ->
-            if (isReloading) return@setOnCheckedChangeListener
-            currentSettings = currentSettings.copy(editorTypingAnimationEnabled = isChecked)
+            if (isRendering) return@setOnCheckedChangeListener
             sbTypingAnimationDuration.isEnabled = isChecked
-            saveAndFinish(false)
+            updateLocalSettings { it.copy(editorTypingAnimationEnabled = isChecked) }
         }
         switchSmoothCursor.setOnCheckedChangeListener { _, isChecked ->
-            if (isReloading) return@setOnCheckedChangeListener
-            currentSettings = currentSettings.copy(editorSmoothCursorEnabled = isChecked)
+            if (isRendering) return@setOnCheckedChangeListener
             sbSmoothCursorDuration.isEnabled = isChecked
-            saveAndFinish(false)
+            updateLocalSettings { it.copy(editorSmoothCursorEnabled = isChecked) }
         }
-
-
-
-
 
         tvWorkspacePath.text = if (::settingsRepository.isInitialized) {
             settingsRepository.workspaceDir()
@@ -347,42 +270,34 @@ class SettingsActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
-        switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
-        switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
-        switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
-        DiagnosticsLogger.init(this, currentSettings.diagnosticsEnabled, currentSettings.diagnosticsVerbose)
-        EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
-
         switchDiagnosticsEnabled.setOnCheckedChangeListener { _, isChecked ->
-            if (isReloading) return@setOnCheckedChangeListener
-            currentSettings = currentSettings.copy(diagnosticsEnabled = isChecked)
+            if (isRendering) return@setOnCheckedChangeListener
+            var s = currentSettings.copy(diagnosticsEnabled = isChecked)
             switchDiagnosticsVerbose.isEnabled = isChecked
             DiagnosticsLogger.setEnabled(isChecked)
             EditorEventRingBuffer.setEnabled(isChecked)
             if (!isChecked) {
-                currentSettings = currentSettings.copy(diagnosticsVerbose = false)
+                s = s.copy(diagnosticsVerbose = false)
                 switchDiagnosticsVerbose.isChecked = false
                 DiagnosticsLogger.setVerbose(false)
             }
-            saveAndFinish(false)
+            currentSettings = s
+            persistSettings()
         }
         switchDiagnosticsVerbose.setOnCheckedChangeListener { _, isChecked ->
-            if (isReloading) return@setOnCheckedChangeListener
+            if (isRendering) return@setOnCheckedChangeListener
             currentSettings = currentSettings.copy(diagnosticsVerbose = isChecked)
             DiagnosticsLogger.setVerbose(isChecked)
-            saveAndFinish(false)
+            persistSettings()
         }
 
-        // ── 实验室全屏模式开关 ──
         val labsRepo = ExperimentalSettingsRepository(this)
         labsRepo.migrateFromLegacy(currentSettings.experimentalFullscreenMode)
-        switchExperimentalFullscreen.isChecked = labsRepo.isEnabled("fullscreen_immersive")
         switchExperimentalFullscreen.setOnCheckedChangeListener { _, isChecked ->
-            if (isReloading) return@setOnCheckedChangeListener
+            if (isRendering) return@setOnCheckedChangeListener
             labsRepo.setEnabled("fullscreen_immersive", isChecked)
             systemBarsController?.applyFullscreen(isChecked)
-            currentSettings = currentSettings.copy(experimentalFullscreenMode = isChecked)
-            saveAndFinish(false)
+            updateLocalSettings { it.copy(experimentalFullscreenMode = isChecked) }
         }
 
         btnExportDiagnostics.setOnClickListener {
@@ -414,109 +329,104 @@ class SettingsActivity : AppCompatActivity() {
             android.widget.Toast.makeText(this, getString(R.string.diagnostics_device_info_copied), android.widget.Toast.LENGTH_SHORT).show()
         }
 
-        // Bind Sync Settings
         syncHelper.bindSyncSettings()
     }
 
-
-
-    override fun onResume() {
-        super.onResume()
-        if (CoreSettingsEvents.consumeChanged()) {
-            reloadSettings()
-        }
-    }
-
-    private fun reloadSettings() {
-        if (!::settingsRepository.isInitialized) return
-
-        isReloading = true
+    private fun renderSettings(settings: LocalSettings, fromOnCreate: Boolean = false) {
+        isRendering = true
         try {
-            currentSettings = settingsRepository.getLocalSettings()
-            val effectiveFontSize = settingsRepository.getEffectiveFontSize()
-
-            sbFontSize.value = effectiveFontSize
-            sbLineSpacing.value = currentSettings.editorLineSpacingMultiplier
-            switchAutoSave.isChecked = currentSettings.autoSaveEnabled
-            sbAutoSaveDelay.value = (currentSettings.autoSaveDelayMs / 1000).toFloat()
-            switchAutoIndent.isChecked = currentSettings.autoIndentEnabled
-            sbAutoIndentWidth.value = currentSettings.autoIndentWidth
-            switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
-            sbTypingAnimationDuration.isEnabled = currentSettings.editorTypingAnimationEnabled
-            switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
-            sbSmoothCursorDuration.isEnabled = currentSettings.editorSmoothCursorEnabled
-            sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
-            sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
-
-            tvFontSizeValue.text = "${effectiveFontSize.toInt()}sp"
-            tvLineSpacingValue.text = "${String.format("%.1f", currentSettings.editorLineSpacingMultiplier)}x"
-            tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (currentSettings.autoSaveDelayMs / 1000).toInt())
-            tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, currentSettings.autoIndentWidth)
-            tvTypingAnimationDurationValue.text = "${currentSettings.editorTypingAnimationDurationMs}ms"
-            tvSmoothCursorDurationValue.text = "${currentSettings.editorSmoothCursorDurationMs}ms"
-
-            switchDiagnosticsEnabled.isChecked = currentSettings.diagnosticsEnabled
-            switchDiagnosticsVerbose.isChecked = currentSettings.diagnosticsVerbose
-            switchDiagnosticsVerbose.isEnabled = currentSettings.diagnosticsEnabled
-            switchExperimentalFullscreen.isChecked = currentSettings.experimentalFullscreenMode
-            DiagnosticsLogger.setEnabled(currentSettings.diagnosticsEnabled)
-            DiagnosticsLogger.setVerbose(currentSettings.diagnosticsVerbose)
-            EditorEventRingBuffer.setEnabled(currentSettings.diagnosticsEnabled)
-
-            val syncable = settingsRepository.getSyncableSettings()
-            if (syncable.themeMode.isNotEmpty()) {
-                currentSettings = currentSettings.copy(themeMode = syncable.themeMode)
+            val effectiveFontSize = if (::settingsRepository.isInitialized && fromOnCreate) {
+                settingsRepository.getEffectiveFontSize()
+            } else {
+                sbFontSize.value
             }
-            actvTheme.setText(when (currentSettings.themeMode) {
+            if (fromOnCreate) {
+                sbFontSize.value = effectiveFontSize
+            }
+            sbLineSpacing.value = settings.editorLineSpacingMultiplier
+            switchAutoSave.isChecked = settings.autoSaveEnabled
+            sbAutoSaveDelay.value = (settings.autoSaveDelayMs / 1000).toFloat()
+
+            switchAutoIndent.isChecked = settings.autoIndentEnabled
+            sbAutoIndentWidth.value = settings.autoIndentWidth
+
+            switchTypingAnimation.isChecked = settings.editorTypingAnimationEnabled
+            sbTypingAnimationDuration.isEnabled = settings.editorTypingAnimationEnabled
+            switchSmoothCursor.isChecked = settings.editorSmoothCursorEnabled
+            sbSmoothCursorDuration.isEnabled = settings.editorSmoothCursorEnabled
+            sbTypingAnimationDuration.value = settings.editorTypingAnimationDurationMs.toFloat()
+            sbSmoothCursorDuration.value = settings.editorSmoothCursorDurationMs.toFloat()
+
+            val aiAvailable = try {
+                if (::settingsRepository.isInitialized) settingsRepository.aiAvailable() else false
+            } catch (e: Exception) { false }
+            if (aiAvailable) {
+                cardAi.visibility = android.view.View.VISIBLE
+                switchAiEnabled.isChecked = settings.aiEnabled
+                if (fromOnCreate) {
+                    switchAiEnabled.setOnCheckedChangeListener { _, isChecked ->
+                        if (isRendering) return@setOnCheckedChangeListener
+                        updateLocalSettings { it.copy(aiEnabled = isChecked) }
+                    }
+                }
+            } else {
+                cardAi.visibility = android.view.View.GONE
+            }
+
+            tvFontSizeValue.text = "${sbFontSize.value.toInt()}sp"
+            tvLineSpacingValue.text = "${String.format("%.1f", settings.editorLineSpacingMultiplier)}x"
+            tvAutoSaveDelayValue.text = getString(R.string.auto_save_delay_seconds, (settings.autoSaveDelayMs / 1000).toInt())
+            tvAutoIndentWidthValue.text = getString(R.string.auto_indent_width_chars, settings.autoIndentWidth)
+            tvTypingAnimationDurationValue.text = "${settings.editorTypingAnimationDurationMs}ms"
+            tvSmoothCursorDurationValue.text = "${settings.editorSmoothCursorDurationMs}ms"
+
+            switchDiagnosticsEnabled.isChecked = settings.diagnosticsEnabled
+            switchDiagnosticsVerbose.isChecked = settings.diagnosticsVerbose
+            switchDiagnosticsVerbose.isEnabled = settings.diagnosticsEnabled
+            switchExperimentalFullscreen.isChecked = settings.experimentalFullscreenMode
+            DiagnosticsLogger.setEnabled(settings.diagnosticsEnabled)
+            DiagnosticsLogger.setVerbose(settings.diagnosticsVerbose)
+            EditorEventRingBuffer.setEnabled(settings.diagnosticsEnabled)
+
+            actvTheme.setText(when (settings.themeMode) {
                 "light" -> getString(R.string.theme_light)
                 "dark" -> getString(R.string.theme_dark)
                 else -> getString(R.string.theme_system)
             }, false)
 
-            syncHelper.loadSyncState()
-            syncHelper.bindSyncSettings()
+            if (!fromOnCreate) {
+                syncHelper.loadSyncState()
+                syncHelper.bindSyncSettings()
+            }
         } finally {
-            isReloading = false
+            isRendering = false
         }
     }
 
-    override fun onBackPressed() {
-        saveAndFinish(true)
-        super.onBackPressed()
+    private fun updateLocalSettings(transform: (LocalSettings) -> LocalSettings) {
+        currentSettings = transform(currentSettings)
+        persistSettings()
     }
 
-    private fun saveAndFinish(finishActivity: Boolean = true) {
-        val currentThemeText = actvTheme.text.toString()
-        val themeStr = when {
-            currentThemeText == getString(R.string.theme_light) -> "light"
-            currentThemeText == getString(R.string.theme_dark) -> "dark"
-            else -> "system"
-        }
-
-        val aiVisible = cardAi.visibility == android.view.View.VISIBLE
-
-        // Use currentSettings as the source of truth for switch values.
-        // Only read slider values from UI controls (sliders update display text
-        // in onChangeListener but don't write to currentSettings until save).
-        val newSettings = currentSettings.copy(
+    private fun updateAndSaveFromSliders() {
+        currentSettings = currentSettings.copy(
             editorLineSpacingMultiplier = sbLineSpacing.value,
             autoSaveDelayMs = sbAutoSaveDelay.value.toLong() * 1000L,
             autoIndentWidth = sbAutoIndentWidth.value,
-            themeMode = themeStr,
             editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
             editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),
-            aiEnabled = if (aiVisible) currentSettings.aiEnabled else currentSettings.aiEnabled,
         )
+        persistSettings()
+    }
 
+    private fun persistSettings() {
         ErrorUtil.safeRun(this) {
             if (::settingsRepository.isInitialized) {
-                settingsRepository.saveLocalSettings(newSettings)
+                settingsRepository.saveLocalSettings(currentSettings)
+                CoreSettingsEvents.markEditorChanged()
             }
         }
-
-        // After saving, update currentSettings to match what was persisted
-        currentSettings = newSettings
-
+        val themeStr = currentSettings.themeMode
         val currentSyncable = settingsRepository.getSyncableSettings()
         val newSyncable = currentSyncable.copy(
             fontSize = sbFontSize.value.toDouble(),
@@ -527,9 +437,24 @@ class SettingsActivity : AppCompatActivity() {
                 settingsRepository.saveSyncableSettings(newSyncable)
             }
         }
+    }
 
+    override fun onResume() {
+        super.onResume()
+        if (CoreSettingsEvents.consumeChanged()) {
+            currentSettings = settingsRepository.getLocalSettings()
+            renderSettings(currentSettings)
+        }
+    }
 
-        // Save Sync Config
+    override fun onBackPressed() {
+        saveAndFinish()
+        super.onBackPressed()
+    }
+
+    private fun saveAndFinish() {
+        persistSettings()
+
         val newSyncConfig = syncHelper.buildSaveSyncConfig()
         val newSyncSecrets = syncHelper.buildSaveSyncSecrets()
 
@@ -540,15 +465,6 @@ class SettingsActivity : AppCompatActivity() {
             }
         }
 
-        // Apply theme immediately if it changed
-        if (currentSettings.themeMode != themeStr) {
-            when (themeStr) {
-                "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
-                "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
-                else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
-            }
-        }
-
-        if (finishActivity) { finish() }
+        finish()
     }
 }

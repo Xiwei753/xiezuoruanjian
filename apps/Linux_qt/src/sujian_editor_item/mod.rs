@@ -823,7 +823,15 @@ impl SujianEditorItem {
     }
 
     fn set_smooth_cursor_enabled(&mut self, value: bool) {
+        if self.current_smooth_cursor_enabled == value {
+            return;
+        }
         self.current_smooth_cursor_enabled = value;
+        if !value {
+            self.cursor_ctrl.animation = None;
+            self.cursor_ctrl.force_snap_next = true;
+            self.request_static_repaint();
+        }
         self.visual_settings_changed();
     }
 
