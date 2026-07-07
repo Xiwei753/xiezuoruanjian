@@ -3,8 +3,9 @@ package com.xiwei.sujian.model
 /**
  * Android typed model for editor animation events from Core.
  *
- * Desktop QML may keep consuming animation_events_json for its overlay path; Android must stay on
- * typed models and must not route typed DTO -> JSON -> handwritten parser.
+ * Linux QML consumes visual_transaction_json for its overlay path; Android must stay on
+ * typed EditorVisualTransactionData models and must not route typed DTO -> JSON -> handwritten parser.
+ * SujianEditorView is the only Android writing-area path; do not restore WriterEditText/Span fallback.
  */
 enum class EditorAnimationKindData {
     Insert,
@@ -12,7 +13,7 @@ enum class EditorAnimationKindData {
     Cursor
 }
 
-@Deprecated("Legacy WriterEditText fallback. Use EditorVisualTransactionData instead.")
+@Deprecated("Legacy editor animation event. Use EditorVisualTransactionData instead.")
 data class EditorAnimationEventData(
     val id: ULong,
     val kind: EditorAnimationKindData,

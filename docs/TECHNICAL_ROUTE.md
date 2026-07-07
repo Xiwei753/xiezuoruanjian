@@ -13,8 +13,8 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 
 ## 当前仓库事实
 - 平台目录路线：
-  - `apps/Linux_qt` 只服务 Linux Qt/QML 客户端，优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
-  - `apps/windows` 仅预留原生 Windows 客户端文档，标记“待更改至原生”；不得复用 Linux Qt 兼容补丁路线。
+  - `apps/Linux_qt` 只服务 Linux Qt/QML 客户端，优先稳定 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、渲染、动画、日志导出和 runtime profile，不混 Windows 兼容逻辑。
+  - `apps/windows` 是 Windows 原生客户端唯一落点：WinUI 3 / Windows App SDK 应用壳 + 自研 SujianEditor + DirectWrite/Direct2D + Windows IME + Rust `writer_core`。不得复用 Linux Qt/QML，也不得新开 `apps/windows-desktop`。
   - 后续如需 GTK，可新增 Linux GTK 客户端目录，当前不新增实现。
   - Android 继续作为独立原生客户端推进。
   - HarmonyOS 保持既有骨架和 Rust Core 内核接入。
@@ -25,9 +25,15 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
   - `NativeCoreBridge` / `writer_core_jni` 仅作为 legacy JSON/JNI fallback，不是新业务入口。
   - 只正式支持 arm64-v8a。
   - 暂不引入 Compose 作为主 UI 技术。
+- Windows：
+  - 当前路线是 `apps/windows` 原生 WinUI 3 / Windows App SDK 客户端。
+  - 正文写作区必须是自研 `SujianEditor`，文本布局/渲染走 DirectWrite/Direct2D，IME 走 Windows 原生 composition/commit 与候选窗口锚点链路。
+  - issue #433 执行顺序：先验证自研 `SujianEditor` MVP（纯文本显示、点击定位、输入、删除、换行、方向键、基础滚动、微软拼音 composition/commit、候选窗口锚点、通过 `writer_core` 打开/保存章节），再补设置页、统计页、同步页等完整页面。
+  - Windows 客户端只负责 UI、输入法、光标、文本布局、渲染、动画和平台集成；工作区、项目、卷、章节、保存、同步、设置等业务逻辑继续由 `core/writer_core` 提供。
+  - 禁止恢复 Windows Qt 旧实现、旧打包、旧安装器、旧 workflow、旧 runtime profile、DWM/IME/pending-key 兼容入口。
 - Linux：
   - 当前是 `apps/Linux_qt` Qt/QML 路线。
-  - 遵循 Qt/KDE 桌面应用路线，当前优先级是输入法、渲染、动画、AppImage、日志导出和 runtime profile。
+  - 遵循 Qt/KDE Linux 应用路线，当前优先级是 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、输入法、渲染、动画、日志导出和 runtime profile。
   - 不再随意 Qt5 / Qt6 / Qt Quick / 其他 UI 栈来回切。
 - Core：
   - Rust Core 是业务真相来源。
@@ -46,20 +52,26 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 ## 编辑器底层路线
 - 最新路线见 [自绘编辑器与统一事件层路线](editor_engine_route.md)。
 - 编辑器路线是：Core 统一编辑事务 + 平台原生文本能力 + 必要时自绘渲染层。
-- Core `editor` 模块统一产出 `EditorTransaction`、`EditorAnimationEvent` 等平台无关语义。
-- Android SujianEditorView 已进入自绘阶段，分层绘制，接管选区、光标与动画（保留 WriterEditText 作为 fallback）。
-- Desktop 因 Qt/QML TextArea 路线已多次踩坑，继续推进 SujianEditorItem。
-- Desktop 动画允许开启，但只能走 Core transaction + animation_events_json + QML overlay 路线：
-  Core EditorTransaction / EditorAnimationEvent → SujianEditorItem.animation_events_json → QML EditorAnimationOverlay / EditorGlyphGhost。
+- Core `editor` 模块统一产出 `EditorTransaction` 与 `EditorVisualTransaction` 等平台无关语义；新路线统一称 `visual_transaction_json` / typed visual transaction。
+- Android SujianEditorView 是 Android 正文写作区唯一主路径，分层绘制，接管选区、光标与动画；不得回退 EditText/Span 正文方案。
+- Linux `apps/Linux_qt` 正文写作区唯一主路径是 `SujianEditorItem` + `EditorAnimationOverlay`。
+- Linux 动画只能走 Core visual transaction → Rust 自研编辑器 hidden range/static texture → QML overlay ghost → 动画完成后清 hidden range：
+  Core `EditorVisualTransaction` → `SujianEditorItem.visual_transaction_json` → QML `EditorAnimationOverlay` / `EditorGlyphGhost`。
   Insert 动画期间，静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），动画 overlay 渲染 ghost glyph。
   Delete 动画使用旧 glyph snapshot（删除前的字形位置），overlay 渲染吞回动画。
   overlay 是动画层，不是完整正文 overlay 冒充真吐字。
   禁止恢复：TextArea fallback、QTextDocument 字符格式隐藏、正文透明 span/透明颜色污染正文数据、正文完整绘制+overlay冒充真吐字。
   自研渲染层自己的 hidden range 是允许的内部渲染状态，不是正文数据污染。
-  QSG 三层 overlay（paint_animation_overlay / update_animation_overlay）标记为 future/experimental，不是当前验收路径。
+  Insert 与 reflow 动画完成/跳过必须优先按 transactionId / rangeId 清 hidden range，byte range 只能作为旧数据兜底；滚动、加载正文、格式化、字号变化、章节切换、关闭动画时必须立即清空或落最终状态。
 - Android SujianEditorView 已进入自绘阶段，分层绘制：静态正文层 → 选区高亮层 → preedit 层 → 动画层 → 光标层。
   动画期间静态层跳过 animated insert range 避免重影，删除动画使用删除前 snapshot glyph rect。
-  WriterEditText 仍作为兼容 fallback 存在。
+  动画数据走 Core typed `EditorVisualTransactionData`，`SujianEditorView` 是唯一主路径；不得回退 WriterEditText、Span/透明文字、typed DTO → JSON → 手写 parser。活跃动画期间继续 `invalidate`，滚动中不创建动画，关闭动画后真实正文、保存、撤销不受影响；`insertRangeId` / `reflowRangeIds` 精确清 hidden range 必须保留。
+
+## 三端边界
+- Windows：`apps/windows` 原生 WinUI 3 / Windows App SDK + 自研 SujianEditor + DirectWrite/Direct2D。
+- Linux：`apps/Linux_qt` Qt/QML + SujianEditorItem + EditorAnimationOverlay。
+- Android：`apps/android` Kotlin View + 自研 SujianEditorView。
+- 三端共享 `writer_core`、typed DTO、设置 key、同步协议、统计格式和动画事务语义；不共享 UI、输入法、光标、打包、标题栏、平台渲染实现。
 
 ## Android 图谱技术路线
 - 图谱不是普通页面，而是大画布图形系统。**图谱最终是与正文并列的创作知识图谱，不仅限于章节树结构。**
@@ -256,7 +268,7 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 
 ### 平台端渲染策略
 - **Android**：使用 Spanned / StaticLayout 或自研 run layout，将 style_runs 映射为 CharacterStyle / ParagraphStyle span
-- **Desktop**：使用 QTextLayout FormatRange 或自研 run layout，将 style_runs 映射为 QTextCharFormat
+- **Linux_qt**：使用 QTextLayout FormatRange 或自研 run layout，将 style_runs 映射为 QTextCharFormat
 - **Harmony**：使用 TextStyle / TextDecoration 或自研 run layout
 - **共同约束**：渲染层只消费 RichTextModel 的结构化数据，不反向生成 HTML 或富文本序列化
 

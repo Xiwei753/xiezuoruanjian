@@ -22,7 +22,7 @@
 - 星图（StarMap）角色关系可视化
 - AI 写作辅助
 - 云同步（Beta）
-- 跨平台：Android / Linux / HarmonyOS（WIP）；Windows 后续另开原生客户端路线
+- 跨平台：Android / Linux / Windows / HarmonyOS（WIP）；Windows 固定走原生客户端路线
 
 > **关于 Apple 平台**：目前没有适配 macOS / iOS 的打算。等什么时候搬砖凑够了 Apple Developer Program 的签名费用（688 元/年）再考虑适配。
 
@@ -31,16 +31,16 @@
 ```
 core/writer_core/     Rust 核心库（唯一业务逻辑层）
 apps/android/         Kotlin Android 客户端
-apps/Linux_qt/         Rust + Qt6/QML Linux Desktop 客户端
-apps/windows/         Windows 原生客户端预留文档（待更改至原生）
+apps/Linux_qt/         Rust + Qt6/QML Linux 客户端
+apps/windows/         WinUI 3 / Windows App SDK 原生客户端
 apps/harmony/         ArkTS HarmonyOS NEXT 客户端
 bindings/             跨平台绑定代码
 ```
 
 - `core/writer_core`: 使用 Rust 编写的**唯一**业务底层核心库。处理所有文件 I/O、项目管理、同步、格式化和设置规则。严格排除 UI 逻辑。
 - `apps/android`: 原生 Kotlin Android 客户端。主业务入口为 `AppServiceBridge + UniFFI`，`BridgeProvider` 只暴露领域 Bridge 给 Repository/ViewModel/UI 做平台适配。
-- `apps/Linux_qt`: 原生 Rust + Qt6/QML Linux Desktop 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则；当前优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。
-- `apps/windows`: 仅预留 Windows 原生客户端路线文档，标记“待更改至原生”；不复用 Linux Qt/QML 兼容代码。
+- `apps/Linux_qt`: 原生 Rust + Qt6/QML Linux 客户端。UI 通过 QObject 后端适配层调用 Rust Core，不允许在 QML 中实现工作区、保存或同步规则；当前优先稳定 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、渲染、动画、日志导出和 runtime profile，不混入 Windows 兼容逻辑。
+- `apps/windows`: Windows 原生客户端唯一落点。正式路线为 WinUI 3 / Windows App SDK 应用壳 + 自研 `SujianEditor` + DirectWrite/Direct2D + Windows IME + Rust `writer_core`；不新增 `apps/windows-desktop`，不复用 `apps/Linux_qt` Qt/QML，`RichEditBox` / `TextBox` 不得成为正式写作区。
 - `apps/harmony`: 原生 ArkTS HarmonyOS NEXT 客户端。通过 NAPI C++ 桥接层调用 Rust Core FFI，ArkTS 侧通过 `IWriterCoreBridge` 接口解耦。
 - `bindings`: 用于连接 Rust 核心和原生客户端的代码。
 
@@ -94,7 +94,7 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-linux-qt
 
 ### Windows 客户端
 
-见 `apps/windows/README.md`。当前仅预留路线，待更改至原生。
+见 `apps/windows/README.md`。Windows 固定落在 `apps/windows`：先验证自研写作区 MVP（纯文本显示、点击定位、输入、删除、换行、方向键、滚动、微软拼音 composition/commit、候选窗口锚点、通过 `writer_core` 打开/保存章节），再补完整页面。
 
 ### HarmonyOS 客户端（WIP）
 

@@ -88,16 +88,32 @@ pub(crate) fn choose_animation_mode(
 /// 单个活跃动画条目
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveTextAnimation {
+    /// Core EditorVisualTransaction.id. Used as the primary lifecycle key so
+    /// consecutive inserts at the same byte range cannot clear the wrong
+    /// hidden range after later edits remap byte offsets.
+    pub transaction_id: Option<u64>,
+    /// Core HiddenVisualRange.id. Used as the most precise key for clearing a
+    /// concrete hidden range. Byte range is only a legacy fallback.
+    pub range_id: Option<u64>,
     pub kind: TextAnimationKind,
     pub byte_range: (usize, usize),
     /// Reflow hidden ranges：受插入影响的 glyph 在新文本中的 byte ranges。
     /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画。
     /// 动画结束后清除，正文层恢复完整绘制。
-    pub reflow_byte_ranges: Vec<(usize, usize)>,
+    pub reflow_hidden_ranges: Vec<ActiveReflowHiddenRange>,
     /// 动画模式 — 与 Core AnimationMode 对齐
     pub animation_mode: AnimationMode,
     pub start_time: Instant,
     pub duration_ms: u64,
+}
+
+/// 单个 reflow hidden range。range_id 是 Linux 侧稳定生命周期 ID，
+/// 用于在连续输入和 range 映射后仍能把某个 reflow skip range 绑定到
+/// 原 insert transaction；byte_range 只用于静态层实际跳过绘制。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ActiveReflowHiddenRange {
+    pub range_id: u64,
+    pub byte_range: (usize, usize),
 }
 
 /// 文本动画状态机 — 独立于 Qt/SujianEditorItem 的动画生命周期管理。
@@ -128,22 +144,69 @@ impl TextAnimationState {
         animation_mode: AnimationMode,
         duration_ms: u64,
     ) {
+        self.start_insert_with_ids(None, None, byte_range, reflow_byte_ranges, animation_mode, duration_ms);
+    }
+
+    /// 开始一个 Insert 动画，并记录 Core 事务 ID / hidden range ID。
+    /// 完成/跳过时优先按 ID 清理；byte range 只作为旧 QML 信号兜底。
+    pub fn start_insert_with_ids(
+        &mut self,
+        transaction_id: Option<u64>,
+        range_id: Option<u64>,
+        byte_range: (usize, usize),
+        reflow_byte_ranges: Vec<(usize, usize)>,
+        animation_mode: AnimationMode,
+        duration_ms: u64,
+    ) {
+        let reflow_hidden_ranges = reflow_byte_ranges
+            .into_iter()
+            .enumerate()
+            .map(|(idx, byte_range)| ActiveReflowHiddenRange {
+                range_id: Self::derive_reflow_range_id(transaction_id, range_id, idx),
+                byte_range,
+            })
+            .collect();
+
         self.animations.push(ActiveTextAnimation {
+            transaction_id,
+            range_id,
             kind: TextAnimationKind::Insert,
             byte_range,
-            reflow_byte_ranges,
+            reflow_hidden_ranges,
             animation_mode,
             start_time: Instant::now(),
             duration_ms,
         });
     }
 
+    /// 为 reflow hidden range 派生稳定 ID。
+    ///
+    /// Core 目前只给 inserted hidden range 下发 `HiddenVisualRange.id`；Linux 侧
+    /// 对 reflow skip ranges 使用同一个 transaction/range 命名空间派生本地稳定 ID。
+    /// 这些 ID 不依赖 byteStart/byteEnd，因此连续输入导致 byte range 映射后不会
+    /// 把完成/跳过回调误清到其它动画。
+    fn derive_reflow_range_id(
+        transaction_id: Option<u64>,
+        insert_range_id: Option<u64>,
+        idx: usize,
+    ) -> u64 {
+        let base = insert_range_id.or(transaction_id).unwrap_or(0);
+        if base == 0 {
+            // legacy 路径没有 Core id 时仍给出进程内稳定非零 ID；byte range 仍是兜底。
+            0x7fff_0000_u64 + idx as u64 + 1
+        } else {
+            base.saturating_mul(1_000_000).saturating_add(idx as u64 + 1)
+        }
+    }
+
     /// 开始一个 Delete 动画
     pub fn start_delete(&mut self, byte_range: (usize, usize), animation_mode: AnimationMode, duration_ms: u64) {
         self.animations.push(ActiveTextAnimation {
+            transaction_id: None,
+            range_id: None,
             kind: TextAnimationKind::Delete,
             byte_range,
-            reflow_byte_ranges: Vec::new(),
+            reflow_hidden_ranges: Vec::new(),
             animation_mode,
             start_time: Instant::now(),
             duration_ms,
@@ -176,12 +239,38 @@ impl TextAnimationState {
         self.clear();
     }
 
-    /// QML 动画 overlay 通知 Insert 动画完成，清除对应的隐藏 range。
-    /// 返回 true 表示确实移除了匹配的 Insert 动画（需要触发重绘）。
-    pub fn on_insert_animation_finished(&mut self, byte_start: usize, byte_end: usize) -> bool {
+    /// QML 动画 overlay 通知 Insert 动画完成/跳过，优先按 transaction/range id 精确清理。
+    ///
+    /// 匹配逻辑：
+    /// - 如果调用方提供了 range_id，只移除 range_id 匹配的动画
+    /// - 如果调用方提供了 transaction_id（且 range_id 未匹配），只移除 transaction_id 匹配的动画
+    /// - byte range 仅作为旧数据兜底：当动画自身没有 transaction_id 和 range_id 时，才按 byte range 匹配
+    pub fn on_insert_animation_finished_by_id(
+        &mut self,
+        transaction_id: Option<u64>,
+        range_id: Option<u64>,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> bool {
         let before = self.animations.len();
         self.animations.retain(|anim| {
-            !(anim.kind == TextAnimationKind::Insert && anim.byte_range == (byte_start, byte_end))
+            if anim.kind != TextAnimationKind::Insert {
+                return true;
+            }
+            if let Some(range_id) = range_id {
+                if anim.range_id == Some(range_id) {
+                    return false;
+                }
+            }
+            if let Some(transaction_id) = transaction_id {
+                if anim.transaction_id == Some(transaction_id) {
+                    return false;
+                }
+            }
+            if anim.transaction_id.is_none() && anim.range_id.is_none() {
+                return !(anim.byte_range == (byte_start, byte_end));
+            }
+            true
         });
         self.animations.len() < before
     }
@@ -216,7 +305,17 @@ impl TextAnimationState {
         self.animations
             .iter()
             .filter(|a| a.kind == TextAnimationKind::Insert)
-            .flat_map(|a| a.reflow_byte_ranges.iter().copied())
+            .flat_map(|a| a.reflow_hidden_ranges.iter().map(|r| r.byte_range))
+            .collect()
+    }
+
+    /// 获取所有活跃 reflow hidden ranges 的稳定 ID 与 byte range。
+    /// 渲染跳过仍使用 byte range；生命周期和测试优先使用 range_id。
+    pub fn active_reflow_hidden_ranges(&self) -> Vec<ActiveReflowHiddenRange> {
+        self.animations
+            .iter()
+            .filter(|a| a.kind == TextAnimationKind::Insert)
+            .flat_map(|a| a.reflow_hidden_ranges.iter().cloned())
             .collect()
     }
 
@@ -276,12 +375,17 @@ impl TextAnimationState {
             keep
         });
 
-        // 对存活的动画，映射 reflow_byte_ranges
+        // 对存活的动画，映射 reflow hidden ranges；保留稳定 range_id，只更新 byte_range
         for anim in &mut self.animations {
-            anim.reflow_byte_ranges = anim
-                .reflow_byte_ranges
+            anim.reflow_hidden_ranges = anim
+                .reflow_hidden_ranges
                 .iter()
-                .filter_map(|&r| map_range_for_insert(r, pos, len))
+                .filter_map(|r| {
+                    map_range_for_insert(r.byte_range, pos, len).map(|byte_range| ActiveReflowHiddenRange {
+                        range_id: r.range_id,
+                        byte_range,
+                    })
+                })
                 .collect();
         }
     }
@@ -319,12 +423,17 @@ impl TextAnimationState {
             keep
         });
 
-        // 对存活的动画，映射 reflow_byte_ranges
+        // 对存活的动画，映射 reflow hidden ranges；保留稳定 range_id，只更新 byte_range
         for anim in &mut self.animations {
-            anim.reflow_byte_ranges = anim
-                .reflow_byte_ranges
+            anim.reflow_hidden_ranges = anim
+                .reflow_hidden_ranges
                 .iter()
-                .filter_map(|&r| map_range_for_delete(r, pos, len))
+                .filter_map(|r| {
+                    map_range_for_delete(r.byte_range, pos, len).map(|byte_range| ActiveReflowHiddenRange {
+                        range_id: r.range_id,
+                        byte_range,
+                    })
+                })
                 .collect();
         }
     }
@@ -475,7 +584,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
-        state.on_insert_animation_finished(10, 20);
+        state.on_insert_animation_finished_by_id(None, None, 10, 20);
         assert!(state.is_empty());
         assert!(state.active_insert_byte_ranges().is_empty());
     }
@@ -486,7 +595,7 @@ mod tests {
         state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.start_delete((30, 40), AnimationMode::GlyphAnimation, 100);
         // 完成 Insert (10,20)，Delete (30,40) 应保留
-        state.on_insert_animation_finished(10, 20);
+        state.on_insert_animation_finished_by_id(None, None, 10, 20);
         assert!(!state.is_empty());
         assert!(state.active_insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
@@ -496,7 +605,7 @@ mod tests {
     fn test_on_insert_animation_finished_returns_true_when_removed() {
         let mut state = TextAnimationState::new();
         state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
-        let removed = state.on_insert_animation_finished(10, 20);
+        let removed = state.on_insert_animation_finished_by_id(None, None, 10, 20);
         assert!(removed);
         assert!(state.is_empty());
     }
@@ -505,7 +614,7 @@ mod tests {
     fn test_on_insert_animation_finished_returns_false_when_no_match() {
         let mut state = TextAnimationState::new();
         state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
-        let removed = state.on_insert_animation_finished(30, 40);
+        let removed = state.on_insert_animation_finished_by_id(None, None, 30, 40);
         assert!(!removed);
         assert!(!state.is_empty());
         assert!(state.has_active_insert());
@@ -517,11 +626,11 @@ mod tests {
         state.start_insert((10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         state.start_insert((30, 40), vec![], AnimationMode::GlyphAnimation, 100);
         // 完成第一个 Insert — removed=true，但还有另一个 Insert 活跃
-        let removed1 = state.on_insert_animation_finished(10, 20);
+        let removed1 = state.on_insert_animation_finished_by_id(None, None, 10, 20);
         assert!(removed1);
         assert!(state.has_active_insert());
         // 完成第二个 Insert — removed=true，现在没有活跃 Insert 了
-        let removed2 = state.on_insert_animation_finished(30, 40);
+        let removed2 = state.on_insert_animation_finished_by_id(None, None, 30, 40);
         assert!(removed2);
         assert!(!state.has_active_insert());
         assert!(state.is_empty());
@@ -538,7 +647,7 @@ mod tests {
         assert!(ranges.contains(&(10, 20)));
         assert!(ranges.contains(&(30, 40)));
         // 完成第一个后，只剩一个
-        state.on_insert_animation_finished(10, 20);
+        state.on_insert_animation_finished_by_id(None, None, 10, 20);
         let ranges2 = state.active_insert_byte_ranges();
         assert_eq!(ranges2, vec![(30, 40)]);
     }
@@ -553,6 +662,52 @@ mod tests {
         state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
+        let hidden = state.active_reflow_hidden_ranges();
+        assert_eq!(hidden.len(), 2);
+        assert!(hidden[0].range_id > 0);
+        assert_ne!(hidden[0].range_id, hidden[1].range_id);
+    }
+
+    #[test]
+    fn test_reflow_range_ids_survive_mapping_and_finish_uses_insert_id() {
+        let mut state = TextAnimationState::new();
+        state.start_insert_with_ids(
+            Some(11),
+            Some(22),
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
+        let ids_before: Vec<u64> = state
+            .active_reflow_hidden_ranges()
+            .iter()
+            .map(|r| r.range_id)
+            .collect();
+        state.map_ranges_for_insert(0, 3);
+        let mapped = state.active_reflow_hidden_ranges();
+        assert_eq!(mapped.iter().map(|r| r.range_id).collect::<Vec<_>>(), ids_before);
+        assert_eq!(mapped.iter().map(|r| r.byte_range).collect::<Vec<_>>(), vec![(23, 28), (28, 33)]);
+        assert!(!state.on_insert_animation_finished_by_id(None, None, 13, 23));
+        assert!(state.on_insert_animation_finished_by_id(Some(11), Some(22), 13, 23));
+        assert!(state.active_reflow_hidden_ranges().is_empty());
+    }
+
+    #[test]
+    fn test_byte_fallback_cannot_clear_id_owned_insert_animation() {
+        let mut state = TextAnimationState::new();
+        state.start_insert_with_ids(
+            Some(101),
+            Some(202),
+            (10, 20),
+            vec![(20, 25)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
+        assert!(!state.on_insert_animation_finished_by_id(None, None, 10, 20));
+        assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
+        assert!(state.on_insert_animation_finished_by_id(Some(101), Some(202), 10, 20));
+        assert!(state.is_empty());
     }
 
     #[test]
@@ -560,7 +715,7 @@ mod tests {
         let mut state = TextAnimationState::new();
         state.start_insert((10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
         assert!(!state.active_reflow_byte_ranges().is_empty());
-        state.on_insert_animation_finished(10, 20);
+        state.on_insert_animation_finished_by_id(None, None, 10, 20);
         assert!(state.active_reflow_byte_ranges().is_empty());
     }
 
@@ -582,7 +737,7 @@ mod tests {
         assert!(reflow.contains(&(20, 25)));
         assert!(reflow.contains(&(40, 45)));
         // 完成第一个 insert 后，只剩第二个的 reflow
-        state.on_insert_animation_finished(10, 20);
+        state.on_insert_animation_finished_by_id(None, None, 10, 20);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(40, 45)]);
     }
 
@@ -1221,6 +1376,36 @@ mod tests {
     }
 
     // --- record_transaction repaint-signal tests ---
+
+    #[test]
+    fn test_insert_finished_prefers_range_id_over_byte_range() {
+        let mut state = TextAnimationState::new();
+        state.start_insert_with_ids(Some(10), Some(100), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert_with_ids(Some(11), Some(101), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+
+        let removed = state.on_insert_animation_finished_by_id(Some(11), Some(101), 5, 6);
+
+        assert!(removed);
+        assert_eq!(state.active_insert_byte_ranges(), vec![(5, 6)]);
+        let remaining = state
+            .animations
+            .iter()
+            .find(|a| a.kind == TextAnimationKind::Insert)
+            .unwrap();
+        assert_eq!(remaining.transaction_id, Some(10));
+        assert_eq!(remaining.range_id, Some(100));
+    }
+
+    #[test]
+    fn test_insert_finished_falls_back_to_byte_range_for_legacy_signal() {
+        let mut state = TextAnimationState::new();
+        state.start_insert_with_ids(None, None, (10, 12), vec![], AnimationMode::GlyphAnimation, 100);
+
+        let removed = state.on_insert_animation_finished_by_id(None, None, 10, 12);
+
+        assert!(removed);
+        assert!(state.active_insert_byte_ranges().is_empty());
+    }
 
     #[test]
     fn test_map_ranges_for_insert_triggers_repaint_on_cancel() {

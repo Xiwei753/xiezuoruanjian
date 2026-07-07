@@ -48,15 +48,41 @@ Item {
     // ── 真吐字/吞字动画信号 ──
     // Insert 动画完成时通知 Rust 侧清除 hidden range（临时渲染状态），恢复正文完整绘制
     // hidden range 是自研渲染层的内部渲染状态，不是正文数据污染
-    signal insertAnimationFinished(int byteStart, int byteEnd)
+    signal insertAnimationFinished(int transactionId, int rangeId, int byteStart, int byteEnd)
 
     // Insert 动画被跳过时通知 Rust 侧清除 hidden range
     // 当 QML overlay 因 component not ready / glyph 超限 / 换行等原因跳过动画时，
     // Rust 侧可能已经创建了 hidden range，必须立即清除否则文字消失
-    signal insertAnimationSkipped(int byteStart, int byteEnd)
+    signal insertAnimationSkipped(int transactionId, int rangeId, int byteStart, int byteEnd)
 
     function _log(message) {
         if (verboseLogging) console.log("[AnimOverlay] " + message)
+    }
+
+    function _safeIntId(value) {
+        if (value === undefined || value === null) return 0
+        var n = Number(value)
+        if (!isFinite(n) || n <= 0 || n > 2147483647) return 0
+        return Math.floor(n)
+    }
+
+    function _transactionId(vt) {
+        return _safeIntId(vt ? vt.id : 0)
+    }
+
+    function _rangeId(vt) {
+        if (!vt || !vt.hiddenVisualRanges || !Array.isArray(vt.hiddenVisualRanges) || vt.hiddenVisualRanges.length === 0) return 0
+        return _safeIntId(vt.hiddenVisualRanges[0].id)
+    }
+
+    function _matchesTransaction(tx, transactionId, rangeId, byteStart, byteEnd) {
+        if (rangeId > 0 && tx.rangeId === rangeId) return true
+        if (transactionId > 0 && tx.transactionId === transactionId) return true
+        // byte range 只能作为旧数据兜底：只有双方都没有稳定 id 时才按 byteStart/byteEnd 匹配。
+        if ((tx.rangeId || 0) <= 0 && (tx.transactionId || 0) <= 0 && rangeId <= 0 && transactionId <= 0) {
+            return tx.byteStart === byteStart && tx.byteEnd === byteEnd
+        }
+        return false
     }
 
     visible: editorItem !== null
@@ -194,7 +220,7 @@ Item {
         // Cursor kind: 不需要动画
     }
 
-    function _trackGhost(ghost, animKind, byteStart, byteEnd) {
+    function _trackGhost(ghost, animKind, transactionId, rangeId, byteStart, byteEnd) {
         if (!ghost) return
         root._activeAnimations.push(ghost)
         ghost.animationFinished.connect(function() {
@@ -202,15 +228,15 @@ Item {
             if (idx >= 0) root._activeAnimations.splice(idx, 1)
 
             if (animKind === "insert") {
-                // 找到对应的事务（按 byteStart/byteEnd 匹配）
+                // 找到对应的事务（优先 rangeId / transactionId；byte range 仅旧数据兜底）
                 for (var ti = 0; ti < root._activeTransactions.length; ti++) {
                     var tx = root._activeTransactions[ti]
-                    if (tx.byteStart === byteStart && tx.byteEnd === byteEnd) {
+                    if (root._matchesTransaction(tx, transactionId, rangeId, byteStart, byteEnd)) {
                         tx.pendingCount--
                         root._log("insert ghost finished, pendingCount=" + tx.pendingCount + " for byteRange=(" + byteStart + "," + byteEnd + ")")
                         if (tx.pendingCount <= 0) {
-                            root._log("insert transaction finished, notifying Rust: byteStart=" + byteStart + " byteEnd=" + byteEnd)
-                            root.insertAnimationFinished(byteStart, byteEnd)
+                            root._log("insert transaction finished, notifying Rust: transactionId=" + transactionId + " rangeId=" + rangeId + " byteStart=" + byteStart + " byteEnd=" + byteEnd)
+                            root.insertAnimationFinished(transactionId, rangeId, byteStart, byteEnd)
                             root._activeTransactions.splice(ti, 1)
                         }
                         break
@@ -240,6 +266,8 @@ Item {
 
         // byte range for insert animation — used to notify Rust when animation finishes
         // 从 vt.insertedRange 读取 hidden range
+        var transactionId = root._transactionId(vt)
+        var rangeId = root._rangeId(vt)
         var insertByteStart = 0
         var insertByteEnd = 0
         if (vt.insertedRange && Array.isArray(vt.insertedRange) && vt.insertedRange.length === 2) {
@@ -642,28 +670,34 @@ Item {
         }
 
         // ── 阶段2：先注册 transaction，再统一连接 finished 并 start ──
-        root._activeTransactions.push({ pendingCount: createdGhosts.length, byteStart: insertByteStart, byteEnd: insertByteEnd })
-        root._log("insert pendingCount=" + createdGhosts.length + " byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
+        root._activeTransactions.push({
+            pendingCount: createdGhosts.length,
+            transactionId: transactionId,
+            rangeId: rangeId,
+            byteStart: insertByteStart,
+            byteEnd: insertByteEnd
+        })
+        root._log("insert pendingCount=" + createdGhosts.length + " transactionId=" + transactionId + " rangeId=" + rangeId + " byteRange=(" + insertByteStart + "," + insertByteEnd + ")")
 
         for (var gi = 0; gi < createdGhosts.length; gi++) {
             var g = createdGhosts[gi]
             root._activeAnimations.push(g)
             // 使用 IIFE 捕获当前 ghost 引用和参数
-            ;(function(ghost, animKind, byteStart, byteEnd) {
+            ;(function(ghost, animKind, txId, hiddenRangeId, byteStart, byteEnd) {
                 ghost.animationFinished.connect(function() {
                     var idx = root._activeAnimations.indexOf(ghost)
                     if (idx >= 0) root._activeAnimations.splice(idx, 1)
 
                     if (animKind === "insert" || animKind === "reflow") {
-                        // 找到对应的事务（按 byteStart/byteEnd 匹配）
+                        // 找到对应的事务（优先 rangeId / transactionId；byte range 仅旧数据兜底）
                         for (var ti = 0; ti < root._activeTransactions.length; ti++) {
                             var tx = root._activeTransactions[ti]
-                            if (tx.byteStart === byteStart && tx.byteEnd === byteEnd) {
+                            if (root._matchesTransaction(tx, txId, hiddenRangeId, byteStart, byteEnd)) {
                                 tx.pendingCount--
                                 root._log("insert ghost finished, pendingCount=" + tx.pendingCount + " for byteRange=(" + byteStart + "," + byteEnd + ")")
                                 if (tx.pendingCount <= 0) {
-                                    root._log("insert transaction finished, notifying Rust: byteStart=" + byteStart + " byteEnd=" + byteEnd)
-                                    root.insertAnimationFinished(byteStart, byteEnd)
+                                    root._log("insert transaction finished, notifying Rust: transactionId=" + txId + " rangeId=" + hiddenRangeId + " byteStart=" + byteStart + " byteEnd=" + byteEnd)
+                                    root.insertAnimationFinished(txId, hiddenRangeId, byteStart, byteEnd)
                                     root._activeTransactions.splice(ti, 1)
                                 }
                                 break
@@ -673,7 +707,7 @@ Item {
                     ghost.destroy()
                 })
                 ghost.startAnimation()
-            })(g, g.animKind, insertByteStart, insertByteEnd)
+            })(g, g.animKind, transactionId, rangeId, insertByteStart, insertByteEnd)
         }
     }
 
@@ -684,8 +718,10 @@ Item {
         if (vt.insertedRange && Array.isArray(vt.insertedRange) && vt.insertedRange.length === 2) {
             var byteStart = vt.insertedRange[0]
             var byteEnd = vt.insertedRange[1]
-            root._log("insert skipped, notifying Rust to clear hidden range: byteStart=" + byteStart + " byteEnd=" + byteEnd)
-            root.insertAnimationSkipped(byteStart, byteEnd)
+            var transactionId = root._transactionId(vt)
+            var rangeId = root._rangeId(vt)
+            root._log("insert skipped, notifying Rust to clear hidden range: transactionId=" + transactionId + " rangeId=" + rangeId + " byteStart=" + byteStart + " byteEnd=" + byteEnd)
+            root.insertAnimationSkipped(transactionId, rangeId, byteStart, byteEnd)
         }
     }
 
@@ -1101,13 +1137,16 @@ Item {
     }
 
     function clearAll() {
-        // 遍历所有活跃事务，对每个 insert byte range 发 insertAnimationSkipped
+        // 遍历所有活跃事务，对每个 insert hidden range 发 insertAnimationSkipped
+        // 优先传 transactionId / rangeId，byte range 只作为旧数据兜底。
         // 通知 Rust 清除 hidden range，避免文字短暂消失
         for (var ti = 0; ti < root._activeTransactions.length; ti++) {
             var tx = root._activeTransactions[ti]
             if (tx.byteStart !== undefined && tx.byteEnd !== undefined && tx.byteEnd > tx.byteStart) {
-                root._log("clearAll: sending insertAnimationSkipped for byteRange=(" + tx.byteStart + "," + tx.byteEnd + ")")
-                root.insertAnimationSkipped(tx.byteStart, tx.byteEnd)
+                var txId = tx.transactionId || 0
+                var hiddenRangeId = tx.rangeId || 0
+                root._log("clearAll: sending insertAnimationSkipped for transactionId=" + txId + " rangeId=" + hiddenRangeId + " byteRange=(" + tx.byteStart + "," + tx.byteEnd + ")")
+                root.insertAnimationSkipped(txId, hiddenRangeId, tx.byteStart, tx.byteEnd)
             }
         }
         // 销毁所有活跃动画

@@ -10,7 +10,7 @@ fn repo_root() -> PathBuf {
 }
 
 #[test]
-fn windows_route_is_native_placeholder_only() {
+fn windows_route_is_native_winui_app_sdk() {
     let root = repo_root();
     assert!(
         !root.join(".github/workflows/windows_build.yml").exists(),
@@ -20,11 +20,25 @@ fn windows_route_is_native_placeholder_only() {
         !root.join("packaging/windows").exists(),
         "legacy Windows Qt installer files must not remain after Linux_qt split"
     );
-    let placeholder = fs::read_to_string(root.join("apps/windows/README.md"))
-        .expect("apps/windows README should reserve the native Windows route");
+    let readme = fs::read_to_string(root.join("apps/windows/README.md"))
+        .expect("apps/windows README should describe the native Windows route");
+    for required in [
+        "WinUI 3",
+        "Windows App SDK",
+        "SujianEditor",
+        "DirectWrite",
+        "Direct2D",
+        "Windows IME",
+        "writer_core",
+    ] {
+        assert!(
+            readme.contains(required),
+            "apps/windows README must mention required native route token: {required}"
+        );
+    }
     assert!(
-        placeholder.contains("待更改至原生"),
-        "apps/windows must be marked as pending native rewrite"
+        readme.contains("先做自研") || readme.contains("先验证自研"),
+        "issue #433 execution order must put SujianEditor MVP before full pages"
     );
 }
 

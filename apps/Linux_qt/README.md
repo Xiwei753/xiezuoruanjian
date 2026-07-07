@@ -1,6 +1,6 @@
-# Desktop 应用
+# Linux Qt 应用
 
-本目录包含 Linux desktop 原生客户端，使用 Rust 和 Qt/QML 构建，提供桌面端写作体验。
+本目录包含 Linux 原生客户端，使用 Rust 和 Qt6/QML 构建，提供 Linux 写作体验。
 
 ## 主要文件
 
@@ -17,7 +17,7 @@
 
 客户端**必须**通过 FFI 使用 `core/writer_core` Rust 核心库，严格禁止在 C++ 或 QML 中直接实现工作区格式、保存逻辑或同步功能。UI 使用 Qt 6 / QML 构建，所有业务逻辑依赖 Rust 核心。
 
-路线收口：`apps/Linux_qt` 当前定位为 Linux Qt/QML 客户端，优先稳定 Linux 输入法、渲染、动画、AppImage、日志导出和 runtime profile。Windows 路线仅在 `apps/windows` 预留文档，待更改至原生；如未来需要 GTK，可新增 Linux GTK 客户端目录。
+路线收口：`apps/Linux_qt` 只服务 Linux Qt/QML 客户端，重点是 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、渲染、动画、日志导出和 runtime profile；不混入 Windows 兼容逻辑。Windows 已走 `apps/windows` 原生 WinUI 3 / Windows App SDK + DirectWrite/Direct2D 路线（issue #433），不复用 Linux Qt/QML。如未来需要 GTK，可新增 Linux GTK 客户端目录。
 
 ## 依赖关系
 
@@ -65,4 +65,4 @@ ldd target/debug/sujian-linux-qt | grep -Ei 'Qt5|Qt6|qml|quick'
 
 自研写作区使用 Rust 自绘渲染，完全替代了传统的 QML `TextArea`，提供更可控的编辑体验。当前 `SujianEditorItem` 为唯一受支持的编辑器实现。
 
-吐字动画已可通过 Core transaction 与 animation_events_json 驱动，由 QML EditorAnimationOverlay 负责叠加渲染。
+吐字动画已通过 Core `EditorVisualTransaction` 与 `visual_transaction_json` 驱动，由 QML `EditorAnimationOverlay` 负责叠加渲染。insert 与 reflow hidden range 是自研渲染层的临时状态，完成/跳过时优先按稳定 transactionId / rangeId 清理，byte range 只作为旧数据兜底。

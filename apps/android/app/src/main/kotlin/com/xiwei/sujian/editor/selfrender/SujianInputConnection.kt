@@ -91,7 +91,7 @@ class SujianInputConnection(
                 imeController.updateSelection()
             }
         } else {
-            // fallback：旧版 WriterEditText 不修改
+            // 非 SujianEditorView 宿主只执行 buffer 更新，避免恢复 WriterEditText/Span 写作区路线。
             val result = buffer.replaceSelectionOrInsert(textStr, cause.toLegacyCause())
             imeController.onEditResult(result)
             imeController.updateSelection()
