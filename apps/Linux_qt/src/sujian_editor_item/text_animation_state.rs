@@ -31,8 +31,8 @@ pub(crate) struct ActiveTextAnimation {
     /// consecutive inserts at the same byte range cannot clear the wrong
     /// hidden range after later edits remap byte offsets.
     pub transaction_id: Option<u64>,
-    /// Core HiddenVisualRange.id. Used as the most precise key for clearing a
-    /// concrete hidden range. Byte range is only a legacy fallback.
+    /// Core HiddenVisualRange.id. Used as the primary key for clearing a
+    /// concrete hidden range. Byte range is only used for static layer draw exclusion.
     pub range_id: Option<u64>,
     pub kind: TextAnimationKind,
     pub byte_range: (usize, usize),
@@ -87,7 +87,7 @@ impl TextAnimationState {
     }
 
     /// 开始一个 Insert 动画，并记录 Core 事务 ID / hidden range ID。
-    /// 完成/跳过时优先按 ID 清理；byte range 只作为旧 QML 信号兜底。
+    /// 完成/跳过时按 ID 清理；byte range 只用于静态层绘制排除。
     pub fn start_insert_with_ids(
         &mut self,
         transaction_id: Option<u64>,

@@ -29,7 +29,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
 
-use super::desktop_layout_plan_dto::DesktopLayoutPlanDto;
+use super::linux_qt_layout_plan_dto::LinuxQtLayoutPlanDto;
 use super::json_utils::{
     bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
     serde_to_qjson_object,
@@ -262,8 +262,8 @@ pub struct AppBackend {
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
     pub current_ai_enabled: bool,
-    pub current_setting_desktop_sidebar_width: f64,
-    pub current_setting_desktop_editor_width: f64,
+    pub current_setting_linux_qt_sidebar_width: f64,
+    pub current_setting_linux_qt_editor_width: f64,
     current_setting_font_size: f32,
     current_setting_line_spacing: f32,
     current_setting_auto_save_enabled: bool,
@@ -482,7 +482,7 @@ impl AppBackend {
         };
 
         let plan = resolve_layout(&metrics);
-        let dto = DesktopLayoutPlanDto::from_layout_plan(&plan);
+        let dto = LinuxQtLayoutPlanDto::from_layout_plan(&plan);
         let json = serde_json::to_string(&dto).unwrap_or_else(|_| "{}".to_string());
         qjson_object_from_json(&json)
     }

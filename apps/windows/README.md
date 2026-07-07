@@ -26,7 +26,7 @@ WinUI 3 / Windows App SDK 与 DirectWrite/Direct2D 自定义文本渲染可成�
 - Windows IME / TSF composition/commit 完整链路，候选窗口锚点跟随 `SujianEditor` 光标矩形。
 - `WriterCoreBridge` 绑定真实 writer_core（通过 C ABI / UniFFI）。
 - 打开 workspace、列项目、列卷、列章节、打开章节、保存章节端到端闭环。
-- 文字动画（Core `EditorVisualTransaction` → SujianEditor overlay）。
+- 文字动画（Core `EditorVisualTransaction` → SujianEditor overlay）：暂不实现动画，不参与当前动画主路径。Windows `SujianEditor` 不消费 `editor_visual_transaction` 契约，不创建 hidden range，不创建 overlay 动画。待自研写作区 MVP 稳定后再评估是否接入同一动画契约。
 - 滚动优化（虚拟行、viewport 裁剪）。
 
 ## 第一阶段最小闭环

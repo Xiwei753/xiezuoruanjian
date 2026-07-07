@@ -168,7 +168,6 @@ class SujianAnimationController(
         val decision = vt.animationMode
         
         if (decision == AnimationModeData.SystemSuppressed || decision == AnimationModeData.SnapshotAnimation) {
-            // Snapshot renderer 尚未完成：与 Linux_qt 统一降级为跳过，并立即清理 hidden range。
             renderer.clearAnimations()
             DiagnosticsLogger.d(TAG, "Insert transaction ${vt.id}: decision=$decision, skipping animation")
             return TextAnimationStartResult.Skipped
@@ -187,7 +186,6 @@ class SujianAnimationController(
         // 从 vt.oldCursorRect 获取起点坐标（关键变更：不再从 layout 反推）
         val oldCursorRect = vt.oldCursorRect
         val startX = oldCursorRect?.x?.toFloat() ?: run {
-            // fallback：如果 oldCursorRect 未填充，使用 layout 计算
             val cr = layout.getCursorRect(text, rangeStartUtf16)
             cr.x
         }
@@ -231,9 +229,7 @@ class SujianAnimationController(
             durationMs = vt.durationMs,
             startTimeMs = System.currentTimeMillis(),
             glyphRects = glyphRects,
-            insertRange = insertRangeUtf16,
             insertRangeId = insertRangeId,
-            animationMode = decision
         )
         
         if (!renderer.addAnimation(insertAnim)) {
@@ -259,7 +255,6 @@ class SujianAnimationController(
                 val reflowRangeEndUtf16 = buffer.utf8ToUtf16(rr.byteEnd)
                 val reflowRangeUtf16 = HalfOpenRange(reflowRangeStartUtf16, reflowRangeEndUtf16)
                 val rangeId = renderer.addActiveInsertRange(reflowRangeUtf16)
-                reflowInsertRanges.add(reflowRangeUtf16)
                 reflowRangeIds.add(rangeId)
             }
             
@@ -276,7 +271,7 @@ class SujianAnimationController(
             }
             
             val reflowAnim = SujianOverlayAnim(
-                id = (vt.id shl 1) or 1u,  // 复合 id：奇数区分 reflow，不占用 Core 事务 id 空间
+                id = (vt.id shl 1) or 1u,
                 kind = "reflow",
                 text = "",
                 startX = 0f,
@@ -288,12 +283,8 @@ class SujianAnimationController(
                 durationMs = vt.durationMs,
                 startTimeMs = System.currentTimeMillis(),
                 glyphRects = reflowGlyphRects,
-                insertRange = null,
-                insertRangeId = null,
                 reflowRects = reflowRects,
-                reflowInsertRanges = reflowInsertRanges,
                 reflowRangeIds = reflowRangeIds,
-                animationMode = decision
             )
             
             if (!renderer.addAnimation(reflowAnim)) {
@@ -362,10 +353,8 @@ class SujianAnimationController(
                 durationMs = vt.durationMs,
                 startTimeMs = System.currentTimeMillis(),
                 glyphRects = snapshot.deletedGlyphRects,
-                animationMode = decision
             ))) TextAnimationStartResult.Started else TextAnimationStartResult.Skipped
         } else {
-            // 没有匹配的快照时，尝试 FIFO fallback
             val fallbackSnapshot = deleteSnapshots.firstOrNull()
             if (fallbackSnapshot != null) {
                 deleteSnapshots.remove(fallbackSnapshot)
@@ -382,11 +371,9 @@ class SujianAnimationController(
                     durationMs = vt.durationMs,
                     startTimeMs = System.currentTimeMillis(),
                     glyphRects = fallbackSnapshot.deletedGlyphRects,
-                    animationMode = decision
                 ))) TextAnimationStartResult.Started else TextAnimationStartResult.Skipped
             } else {
-                // 完全没有快照时，使用 Core 事件信息创建简化动画
-                DiagnosticsLogger.d(TAG, "No delete snapshot for transaction ${vt.id}, using fallback")
+                DiagnosticsLogger.d(TAG, "No delete snapshot for transaction ${vt.id}")
                 return if (renderer.addAnimation(SujianOverlayAnim(
                     id = (vt.id shl 1),
                     kind = "delete",
@@ -400,7 +387,6 @@ class SujianAnimationController(
                     durationMs = vt.durationMs,
                     startTimeMs = System.currentTimeMillis(),
                     glyphRects = emptyList(),
-                    animationMode = decision
                 ))) TextAnimationStartResult.Started else TextAnimationStartResult.Skipped
             }
         }

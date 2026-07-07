@@ -57,8 +57,8 @@ struct WorkspacePage {
     editorTypingAnimationDurationMs: 0,
     editorSmoothCursorDurationMs: 0,
     aiEnabled: false,
-    desktopSidebarWidth: 0,
-    desktopEditorWidth: 0
+    linuxQtSidebarWidth: 0,
+    linuxQtEditorWidth: 0
   }
   @State lastSavedContent: string = ''
   @State hasUnsavedChanges: boolean = false

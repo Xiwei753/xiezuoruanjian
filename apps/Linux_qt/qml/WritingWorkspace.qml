@@ -210,7 +210,7 @@ Rectangle {
         // Left sidebar: volume/chapter tree
         Rectangle {
             id: sidebarRect
-            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_desktop_sidebar_width > 0 ? root.backendRef.setting_desktop_sidebar_width : 240
+            SplitView.preferredWidth: root.backendRef && root.backendRef.setting_linux_qt_sidebar_width > 0 ? root.backendRef.setting_linux_qt_sidebar_width : 240
             SplitView.minimumWidth: 180
             SplitView.maximumWidth: 420
             color: dt.sidebar
@@ -222,8 +222,8 @@ Rectangle {
                 interval: 300
                 repeat: false
                 onTriggered: {
-                    if (root.backendRef && sidebarRect.width > 0 && Math.abs(root.backendRef.setting_desktop_sidebar_width - sidebarRect.width) >= 1.0) {
-                        root.backendRef.setting_desktop_sidebar_width = sidebarRect.width;
+                    if (root.backendRef && sidebarRect.width > 0 && Math.abs(root.backendRef.setting_linux_qt_sidebar_width - sidebarRect.width) >= 1.0) {
+                        root.backendRef.setting_linux_qt_sidebar_width = sidebarRect.width;
                         if (settingsBackend) settingsBackend.debounced_save_local_settings();
                     }
                 }
@@ -653,8 +653,8 @@ Rectangle {
                             var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
                                     ? root.layoutPlan.contentMaxWidthVp
                                     : 820
-                            var userW = settingsBackend && settingsBackend.setting_desktop_editor_width > 0
-                                    ? settingsBackend.setting_desktop_editor_width
+                            var userW = settingsBackend && settingsBackend.setting_linux_qt_editor_width > 0
+                                    ? settingsBackend.setting_linux_qt_editor_width
                                     : 0
                             var targetW = userW > 0 ? userW : planW
                             return Math.max(480, Math.min(parent.width, targetW))
@@ -699,7 +699,7 @@ Rectangle {
                             if (pressed && settingsBackend) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
-                                settingsBackend.setting_desktop_editor_width = newWidth;
+                                settingsBackend.setting_linux_qt_editor_width = newWidth;
                                 settingsBackend.debounced_save_local_settings();
                             }
                         }
@@ -737,7 +737,7 @@ Rectangle {
                             if (pressed && settingsBackend) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
-                                settingsBackend.setting_desktop_editor_width = newWidth;
+                                settingsBackend.setting_linux_qt_editor_width = newWidth;
                                 settingsBackend.debounced_save_local_settings();
                             }
                         }

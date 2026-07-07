@@ -99,8 +99,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
     statsDeviceId: undefined,
-    desktopSidebarWidth: 280,
-    desktopEditorWidth: 820
+    linuxQtSidebarWidth: 280,
+    linuxQtEditorWidth: 820
   } as LocalSettings
 
   private mockSyncConfig: SyncConfig = {
@@ -590,8 +590,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       editorSmoothCursorDurationMs: this.mockSettings.editorSmoothCursorDurationMs,
       aiEnabled: this.mockSettings.aiEnabled,
       statsDeviceId: this.mockSettings.statsDeviceId,
-      desktopSidebarWidth: this.mockSettings.desktopSidebarWidth,
-      desktopEditorWidth: this.mockSettings.desktopEditorWidth
+      linuxQtSidebarWidth: this.mockSettings.linuxQtSidebarWidth,
+      linuxQtEditorWidth: this.mockSettings.linuxQtEditorWidth
     }
     return this.success(copy)
   }
@@ -615,8 +615,8 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
       editorSmoothCursorDurationMs: settings.editorSmoothCursorDurationMs,
       aiEnabled: settings.aiEnabled,
       statsDeviceId: settings.statsDeviceId,
-      desktopSidebarWidth: settings.desktopSidebarWidth,
-      desktopEditorWidth: settings.desktopEditorWidth
+      linuxQtSidebarWidth: settings.linuxQtSidebarWidth,
+      linuxQtEditorWidth: settings.linuxQtEditorWidth
     }
     return this.success(true)
   }

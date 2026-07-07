@@ -15,23 +15,20 @@ import com.xiwei.sujian.model.SujianReflowGlyphRectData
  */
 data class SujianOverlayAnim(
     val id: ULong,
-    val kind: String,          // "insert" | "delete" | "cursor" | "reflow" | "cluster" | "run"
+    val kind: String,
     val text: String,
     val startX: Float,
     val startY: Float,
-    val startBaselineY: Float,  // 新增：起始基线 Y
+    val startBaselineY: Float,
     val endX: Float,
     val endY: Float,
-    val endBaselineY: Float,    // 新增：目标基线 Y
+    val endBaselineY: Float,
     val durationMs: Long,
     val startTimeMs: Long,
     val glyphRects: List<SujianGlyphRect>,
-    val insertRange: HalfOpenRange? = null,  // insert 动画的跳过范围（保留用于调试）
-    val insertRangeId: ULong? = null,   // insert 动画的跳过范围 ID，用于映射后精确移除
-    val reflowRects: List<SujianReflowGlyphRectData> = emptyList(),  // reflow 动画的新位置数据
-    val reflowInsertRanges: List<HalfOpenRange> = emptyList(),  // reflow 动画的 UTF-16 跳过范围（保留用于调试）
-    val reflowRangeIds: List<ULong> = emptyList(),  // reflow 动画的跳过范围 ID，用于映射后精确移除
-    val animationMode: AnimationModeData = AnimationModeData.GlyphAnimation  // 新增
+    val insertRangeId: ULong? = null,
+    val reflowRects: List<SujianReflowGlyphRectData> = emptyList(),
+    val reflowRangeIds: List<ULong> = emptyList(),
 ) {
     val isFinished: Boolean
         get() = (System.currentTimeMillis() - startTimeMs) >= durationMs
@@ -49,16 +46,18 @@ data class SujianOverlayAnim(
  * 分层绘制：静态正文层 → 选区高亮层 → preedit 层 → 动画层 → 光标层
  *
  * ## 动画路线
- * - 真吞吐：静态层跳过 inserted range + overlay 层绘制
+ * - 真吞吐：静态层跳过 animated range + overlay 层绘制
  * - 禁止：ghost overlay（正文完整绘制后叠 ghost 必然重影）
  * - 禁止：透明 span 污染 Editable
  *
  * ## 渲染规则
  * - 静态正文使用 StaticLayout 绘制
- * - 动画期间，静态层跳过 animated insert range 避免重影
- * - 删除动画使用删除前 snapshot glyph rect
+ * - 动画期间，静态层跳过 animated range 避免重影
+ * - 删除动画使用删除前 glyph rect 快照
  * - 光标、选区、preedit、动画独立图层绘制
  * - 滚动中暂停/清理文字动画
+ * - SnapshotAnimation 尚未实现，统一降级为跳过，不创建 overlay，不创建 hidden range
+ * - hidden range 生命周期只通过稳定 ID 管理，byte range 只用于静态层绘制排除
  */
 class SujianEditorRenderer(
     private val textPaint: TextPaint,
@@ -151,13 +150,6 @@ class SujianEditorRenderer(
      */
     fun removeActiveInsertRangeById(id: ULong) {
         activeInsertRanges.removeAll { it.id == id }
-    }
-
-    /**
-     * 移除指定跳过范围（按 HalfOpenRange 值匹配，用于向后兼容）
-     */
-    fun removeActiveInsertRange(range: HalfOpenRange) {
-        activeInsertRanges.removeAll { it.range == range }
     }
 
     /**

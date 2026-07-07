@@ -78,23 +78,27 @@ pub struct LocalSettings {
     #[serde(default)]
     pub stats_device_id: Option<String>,
     #[serde(
-        default = "default_desktop_sidebar_width",
+        default = "default_linux_qt_sidebar_width",
+        alias = "desktop_sidebar_width",
         alias = "linux_sidebar_width"
     )]
-    pub desktop_sidebar_width: f64,
-    #[serde(default = "default_desktop_editor_width")]
-    pub desktop_editor_width: f64,
+    pub linux_qt_sidebar_width: f64,
+    #[serde(
+        default = "default_linux_qt_editor_width",
+        alias = "desktop_editor_width"
+    )]
+    pub linux_qt_editor_width: f64,
     #[serde(default = "default_diagnostics_enabled")]
     pub diagnostics_enabled: bool,
     #[serde(default = "default_diagnostics_verbose")]
     pub diagnostics_verbose: bool,
 }
 
-fn default_desktop_sidebar_width() -> f64 {
+fn default_linux_qt_sidebar_width() -> f64 {
     240.0
 }
 
-fn default_desktop_editor_width() -> f64 {
+fn default_linux_qt_editor_width() -> f64 {
     0.0
 }
 
@@ -191,8 +195,8 @@ impl Default for LocalSettings {
             editor_coordinated_text_cursor_animation_enabled: default_editor_coordinated_text_cursor_animation_enabled(),
             ai_enabled: false,
             stats_device_id: None,
-            desktop_sidebar_width: default_desktop_sidebar_width(),
-            desktop_editor_width: default_desktop_editor_width(),
+            linux_qt_sidebar_width: default_linux_qt_sidebar_width(),
+            linux_qt_editor_width: default_linux_qt_editor_width(),
             diagnostics_enabled: default_diagnostics_enabled(),
             diagnostics_verbose: default_diagnostics_verbose(),
         }

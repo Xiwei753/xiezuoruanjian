@@ -109,8 +109,8 @@ export interface LocalSettings {
   editorSmoothCursorDurationMs: number
   aiEnabled: boolean
   statsDeviceId?: string
-  desktopSidebarWidth: number
-  desktopEditorWidth: number
+  linuxQtSidebarWidth: number
+  linuxQtEditorWidth: number
 }
 
 export interface SyncableSettings {

@@ -413,7 +413,7 @@ class SujianInputConnection(
 
 /**
  * SujianEditCauseData → SujianEditCause 转换
- * 用于将新的 Phase 2 cause 枚举映射到 buffer 层的 legacy cause
+ * Phase 2 cause 枚举到 buffer 层 cause 的映射
  */
 private fun SujianEditCauseData.toLegacyCause(): SujianEditCause = when (this) {
     SujianEditCauseData.Typing -> SujianEditCause.Typing

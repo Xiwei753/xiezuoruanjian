@@ -105,8 +105,8 @@ dictionary LocalSettingsDto {
     u64 editor_smooth_cursor_duration_ms;
     boolean ai_enabled;
     string? stats_device_id;
-    f64 desktop_sidebar_width;
-    f64 desktop_editor_width;
+    f64 linux_qt_sidebar_width;
+    f64 linux_qt_editor_width;
     boolean editor_coordinated_text_cursor_animation_enabled;
     boolean diagnostics_enabled;
     boolean diagnostics_verbose;

@@ -39,8 +39,8 @@ struct SettingsPage {
     editorTypingAnimationDurationMs: 100,
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
-    desktopSidebarWidth: 280,
-    desktopEditorWidth: 820
+    linuxQtSidebarWidth: 280,
+    linuxQtEditorWidth: 820
   }
   @State syncConfig: SyncConfig | null = null
   @State isLoading: boolean = true

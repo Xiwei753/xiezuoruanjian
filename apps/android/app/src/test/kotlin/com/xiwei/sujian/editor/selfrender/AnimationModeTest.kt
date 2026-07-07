@@ -12,6 +12,13 @@ class AnimationModeTest {
         return file.readText()
     }
 
+    private fun rendererSource(): String {
+        val path = "src/main/kotlin/com/xiwei/sujian/editor/selfrender/SujianEditorRenderer.kt"
+        val file = File(path)
+        assertTrue("SujianEditorRenderer source should exist at $path", file.exists())
+        return file.readText()
+    }
+
     @Test
     fun productionControllerDoesNotRecomputeAnimationModeLocally() {
         val source = controllerSource()
@@ -43,5 +50,33 @@ class AnimationModeTest {
         assertTrue(source.contains("textAnimationResult == TextAnimationStartResult.Started"))
         assertTrue(source.contains("handleInsertTransaction(vt)"))
         assertTrue(source.contains("handleDeleteTransaction(vt)"))
+    }
+
+    @Test
+    fun rendererDoesNotContainSnapshotKindBranch() {
+        val source = rendererSource()
+        assertFalse("Renderer must not contain snapshot kind branch", source.contains("\"snapshot\""))
+    }
+
+    @Test
+    fun overlayAnimDoesNotContainInsertRangeField() {
+        val source = rendererSource()
+        assertFalse("SujianOverlayAnim must not contain insertRange field", source.contains("val insertRange:"))
+        assertFalse("SujianOverlayAnim must not contain reflowInsertRanges field", source.contains("val reflowInsertRanges:"))
+        assertFalse("SujianOverlayAnim must not contain animationMode field", source.contains("val animationMode:"))
+    }
+
+    @Test
+    fun noRemoveActiveInsertRangeByValue() {
+        val source = rendererSource()
+        assertFalse("Must not have removeActiveInsertRange(range: HalfOpenRange)", source.contains("fun removeActiveInsertRange(range:"))
+        assertTrue("Must have removeActiveInsertRangeById", source.contains("fun removeActiveInsertRangeById"))
+    }
+
+    @Test
+    fun insertDeleteOnlyConsumeVtAnimationMode() {
+        val source = controllerSource()
+        assertTrue("Insert must consume vt.animationMode", source.contains("val decision = vt.animationMode"))
+        assertFalse("Insert must not recompute mode locally", source.contains("fun chooseAnimationMode("))
     }
 }

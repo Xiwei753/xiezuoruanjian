@@ -1034,10 +1034,10 @@ fn test_resolve_layout_output_uses_camel_case() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let app_backend = fs::read_to_string(manifest_dir.join("src/backend/app_backend.rs")).unwrap();
 
-    // app_backend.rs 必须使用 DesktopLayoutPlanDto（而非跨平台 LayoutPlanDto）
+    // app_backend.rs 必须使用 LinuxQtLayoutPlanDto（而非跨平台 LayoutPlanDto）
     assert!(
-        app_backend.contains("DesktopLayoutPlanDto"),
-        "app_backend.rs resolve_layout must use DesktopLayoutPlanDto, not writer_core::api::types::LayoutPlanDto"
+        app_backend.contains("LinuxQtLayoutPlanDto"),
+        "app_backend.rs resolve_layout must use LinuxQtLayoutPlanDto, not writer_core::api::types::LayoutPlanDto"
     );
     // 不应直接使用跨平台 LayoutPlanDto 做序列化
     assert!(

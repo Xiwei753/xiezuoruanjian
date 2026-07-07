@@ -679,10 +679,10 @@ Rectangle {
                         from: 480
                         to: 3840
                         stepSize: 10
-                        value: settingsBackend && settingsBackend.setting_desktop_editor_width > 0 ? settingsBackend.setting_desktop_editor_width : 820
+                        value: settingsBackend && settingsBackend.setting_linux_qt_editor_width > 0 ? settingsBackend.setting_linux_qt_editor_width : 820
                         onMoved: {
                             if (settingsBackend) {
-                                settingsBackend.setting_desktop_editor_width = value;
+                                settingsBackend.setting_linux_qt_editor_width = value;
                                 settingsBackend.debounced_save_local_settings();
                             }
                         }

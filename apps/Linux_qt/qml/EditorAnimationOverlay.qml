@@ -418,73 +418,9 @@ Item {
                 }
             }
         } else if (mode === "snapshotAnimation") {
-            // SnapshotAnimation：从 vt.hiddenVisualRanges 读取 snapshot payload
-            var hiddenRanges = vt.hiddenVisualRanges
-            if (hiddenRanges && Array.isArray(hiddenRanges) && hiddenRanges.length > 0) {
-                for (var hi = 0; hi < hiddenRanges.length; hi++) {
-                    var hr = hiddenRanges[hi]
-                    // 从 insertGlyphRects 中找该 range 对应的 glyph rects
-                    var snapGlyphs = []
-                    for (var gi = 0; gi < glyphRects.length; gi++) {
-                        var gr = glyphRects[gi]
-                        if (gr.byteStart >= hr.rangeStart && gr.byteEnd <= hr.rangeEnd) {
-                            snapGlyphs.push(gr)
-                        }
-                    }
-                    if (snapGlyphs.length === 0) continue
-
-                    // 计算 snapshot bounding rect
-                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
-                    var snapBaselineY = 0
-                    for (var k = 0; k < snapGlyphs.length; k++) {
-                        var sg = snapGlyphs[k]
-                        if (sg.x < minX) minX = sg.x
-                        if (sg.y < minY) minY = sg.y
-                        if (sg.x + sg.w > maxRight) maxRight = sg.x + sg.w
-                        if (sg.y + sg.h > maxBottom) maxBottom = sg.y + sg.h
-                        snapBaselineY = sg.baselineY || 0
-                    }
-
-                    var ghost = createGlyphGhost(
-                        "insert",
-                        startX,
-                        startY,
-                        minX,
-                        snapBaselineY || minY,
-                        maxRight - minX,
-                        maxBottom - minY,
-                        snapBaselineY,
-                        duration,
-                        editorItem.text_color || root.resolvedDt.editorText,
-                        "",  // snapshot: no single char text needed
-                        editorItem.font_family || "",
-                        editorItem.font_pixel_size || 0
-                    )
-                    if (ghost !== null) createdGhosts.push(ghost)
-                }
-            } else {
-                // fallback: 逐 glyph
-                for (var i = 0; i < glyphRects.length; i++) {
-                    var gr = glyphRects[i]
-                    if (isComplexGrapheme(gr.char)) continue
-                    var ghost = createGlyphGhost(
-                        "insert",
-                        startX,
-                        startY,
-                        gr.x,
-                        gr.baselineY || gr.y,
-                        gr.w,
-                        gr.h,
-                        gr.baselineY || 0,
-                        duration,
-                        editorItem.text_color || root.resolvedDt.editorText,
-                        gr.char || "",
-                        editorItem.font_family || "",
-                        editorItem.font_pixel_size || 0
-                    )
-                    if (ghost !== null) createdGhosts.push(ghost)
-                }
-            }
+            // Dead code: Rust converts SnapshotAnimation → SystemSuppressed before reaching QML.
+            // SnapshotAnimation is not yet implemented; both Android and Linux_qt downgrade to skip.
+            // No overlay, no hidden range created.
         } else if (mode === "lineReflowAnimation") {
             // LineReflowAnimation：换行场景，做行级 reflow 动画
             // 从 vt.clusterRects 收集 cluster 信息创建 ghost，复杂字符不跳过
@@ -846,71 +782,9 @@ Item {
                 }
             }
         } else if (mode === "snapshotAnimation") {
-            // SnapshotAnimation：从 vt.hiddenVisualRanges 读取 snapshot payload
-            var hiddenRanges = vt.hiddenVisualRanges
-            if (hiddenRanges && Array.isArray(hiddenRanges) && hiddenRanges.length > 0) {
-                for (var hi = 0; hi < hiddenRanges.length; hi++) {
-                    var hr = hiddenRanges[hi]
-                    var snapGlyphs = []
-                    for (var gi = 0; gi < glyphRects.length; gi++) {
-                        var gr = glyphRects[gi]
-                        if (gr.byteStart >= hr.rangeStart && gr.byteEnd <= hr.rangeEnd) {
-                            snapGlyphs.push(gr)
-                        }
-                    }
-                    if (snapGlyphs.length === 0) continue
-
-                    var minX = Infinity, minY = Infinity, maxRight = -Infinity, maxBottom = -Infinity
-                    var snapBaselineY = 0
-                    for (var k = 0; k < snapGlyphs.length; k++) {
-                        var sg = snapGlyphs[k]
-                        if (sg.x < minX) minX = sg.x
-                        if (sg.y < minY) minY = sg.y
-                        if (sg.x + sg.w > maxRight) maxRight = sg.x + sg.w
-                        if (sg.y + sg.h > maxBottom) maxBottom = sg.y + sg.h
-                        snapBaselineY = sg.baselineY || 0
-                    }
-
-                    var ghost = createGlyphGhost(
-                        "delete",
-                        minX,
-                        snapBaselineY || minY,
-                        endX,
-                        endY,
-                        maxRight - minX,
-                        maxBottom - minY,
-                        snapBaselineY,
-                        duration,
-                        editorItem.text_color || root.resolvedDt.editorText,
-                        "",
-                        editorItem.font_family || "",
-                        editorItem.font_pixel_size || 0
-                    )
-                    _trackGhost(ghost, "delete", 0, 0)
-                }
-            } else {
-                // fallback: 逐 glyph
-                for (var i = 0; i < glyphRects.length; i++) {
-                    var gr = glyphRects[i]
-                    if (isComplexGrapheme(gr.char)) continue
-                    var ghost = createGlyphGhost(
-                        "delete",
-                        gr.x,
-                        gr.baselineY || gr.y,
-                        endX,
-                        endY,
-                        gr.w,
-                        gr.h,
-                        gr.baselineY || 0,
-                        duration,
-                        editorItem.text_color || root.resolvedDt.editorText,
-                        gr.char || "",
-                        editorItem.font_family || "",
-                        editorItem.font_pixel_size || 0
-                    )
-                    _trackGhost(ghost, "delete", 0, 0)
-                }
-            }
+            // Dead code: Rust converts SnapshotAnimation → SystemSuppressed before reaching QML.
+            // SnapshotAnimation is not yet implemented; both Android and Linux_qt downgrade to skip.
+            // No overlay, no hidden range created.
         } else {
             // GlyphAnimation / lineReflowAnimation / 其他：逐 glyph，不跳过复杂字符
             for (var i = 0; i < glyphRects.length; i++) {
