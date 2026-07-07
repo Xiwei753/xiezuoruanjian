@@ -299,6 +299,7 @@ class SettingsActivity : AppCompatActivity() {
         switchSmoothCursor.setOnCheckedChangeListener { _, isChecked ->
             if (isReloading) return@setOnCheckedChangeListener
             currentSettings = currentSettings.copy(editorSmoothCursorEnabled = isChecked)
+            sbSmoothCursorDuration.isEnabled = isChecked
             saveAndFinish(false)
         }
 
@@ -443,6 +444,7 @@ class SettingsActivity : AppCompatActivity() {
             switchTypingAnimation.isChecked = currentSettings.editorTypingAnimationEnabled
             sbTypingAnimationDuration.isEnabled = currentSettings.editorTypingAnimationEnabled
             switchSmoothCursor.isChecked = currentSettings.editorSmoothCursorEnabled
+            sbSmoothCursorDuration.isEnabled = currentSettings.editorSmoothCursorEnabled
             sbTypingAnimationDuration.value = currentSettings.editorTypingAnimationDurationMs.toFloat()
             sbSmoothCursorDuration.value = currentSettings.editorSmoothCursorDurationMs.toFloat()
 
@@ -484,7 +486,6 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun saveAndFinish(finishActivity: Boolean = true) {
-        // Derive theme from actvTheme text
         val currentThemeText = actvTheme.text.toString()
         val themeStr = when {
             currentThemeText == getString(R.string.theme_light) -> "light"
@@ -493,21 +494,18 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         val aiVisible = cardAi.visibility == android.view.View.VISIBLE
+
+        // Use currentSettings as the source of truth for switch values.
+        // Only read slider values from UI controls (sliders update display text
+        // in onChangeListener but don't write to currentSettings until save).
         val newSettings = currentSettings.copy(
             editorLineSpacingMultiplier = sbLineSpacing.value,
-            autoSaveEnabled = switchAutoSave.isChecked,
             autoSaveDelayMs = sbAutoSaveDelay.value.toLong() * 1000L,
-            autoIndentEnabled = switchAutoIndent.isChecked,
             autoIndentWidth = sbAutoIndentWidth.value,
             themeMode = themeStr,
-            editorTypingAnimationEnabled = switchTypingAnimation.isChecked,
-            editorSmoothCursorEnabled = switchSmoothCursor.isChecked,
             editorTypingAnimationDurationMs = sbTypingAnimationDuration.value.toInt(),
             editorSmoothCursorDurationMs = sbSmoothCursorDuration.value.toInt(),
-            aiEnabled = if (aiVisible) switchAiEnabled.isChecked else currentSettings.aiEnabled,
-            diagnosticsEnabled = switchDiagnosticsEnabled.isChecked,
-            diagnosticsVerbose = switchDiagnosticsVerbose.isChecked,
-            experimentalFullscreenMode = switchExperimentalFullscreen.isChecked
+            aiEnabled = if (aiVisible) currentSettings.aiEnabled else currentSettings.aiEnabled,
         )
 
         ErrorUtil.safeRun(this) {
@@ -515,6 +513,9 @@ class SettingsActivity : AppCompatActivity() {
                 settingsRepository.saveLocalSettings(newSettings)
             }
         }
+
+        // After saving, update currentSettings to match what was persisted
+        currentSettings = newSettings
 
         val currentSyncable = settingsRepository.getSyncableSettings()
         val newSyncable = currentSyncable.copy(

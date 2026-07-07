@@ -104,3 +104,28 @@ Android SujianEditorView 已进入自绘阶段，且是 Android 正文写作区�
 动画期间静态层跳过 animated insert range 避免重影，删除动画使用删除前 snapshot glyph rect；活跃动画期间继续 `invalidate`，`insertRangeId` / `reflowRangeIds` 精确清 hidden range 必须保留。
 不得回退 WriterEditText、Span/透明文字或 JSON parser 路线。
 详见 `docs/TECHNICAL_ROUTE.md`。
+
+## 动画契约边界（两端一致）
+
+### 已实现（Linux_qt + Android）
+
+| 动画类型 | hidden range | overlay | 超时安全 | 滚动/加载/设置打断 |
+|---------|-------------|---------|---------|------------------|
+| Insert (Glyph/Cluster/Run) | ✅ 创建+清理 | ✅ ghost | ✅ 2×duration+200ms | ✅ 立即清理 |
+| Insert (LineReflow) | ✅ reflow ranges | ✅ reflow ghost | ✅ 2×duration+200ms | ✅ 立即清理 |
+| Delete | 无 hidden range | ✅ snapshot ghost | N/A（无 hidden range） | ✅ 清除动画状态 |
+| SnapshotAnimation | ❌ 降级为 SystemSuppressed（不创建 hidden range，不创建 overlay） | 同左 | N/A | N/A |
+| Preedit | ✅ 清除活跃动画 | N/A | N/A | ✅ |
+
+### 超时安全策略（两端统一）
+
+- Linux_qt: `TextAnimationState::tick` — 2×duration + 200ms 宽限期
+- Android: `SujianEditorRenderer.tickAnimations` — 动态计算 2×duration + 200ms（下限 520ms，上限 3000ms）
+- 两端策略一致：基于动画 duration 动态计算，不是固定值
+
+### 当前边界（不虚报）
+
+1. **SnapshotAnimation 未实现**：两端统一降级为 SystemSuppressed（跳过，不创建 hidden range，不创建 overlay）。>40 cluster 的长文本插入直接显示，无动画。
+2. **Delete 动画无 hidden range 回收问题**：Delete 不产生 hidden range，只有 overlay snapshot ghost。如果 QML overlay 的 delete 动画卡住，不影响正文显示（正文已删除，overlay 只是视觉残留）。
+3. **Delete 动画无独立超时**：Delete 动画没有 hidden range 需要回收，其 overlay ghost 的 `isFinished` 基于 `durationMs` 判断，超时后自动从 `activeAnimations` 移除。
+4. **滚动/加载/格式化/设置变化/关闭动画**：所有路径立即清除 hidden range 和动画状态，不依赖 timeout。

@@ -237,7 +237,7 @@ impl AppBackend {
     // AppBackend::refresh_sync_status_from_config
     pub(crate) fn refresh_sync_status_from_config(&mut self) {
         if !self.current_has_workspace {
-            self.current_sync_status = "not_configured".to_string();
+            self.current_sync_status = "no_workspace".to_string();
             self.sync_status_changed();
             return;
         }
@@ -521,7 +521,7 @@ impl AppBackend {
             );
         } else {
             self.current_sync_branch = "main".to_string();
-            self.current_sync_status = "not_configured".to_string();
+            self.current_sync_status = "no_workspace".to_string();
             self.sync_status_changed();
             self.sync_config_changed();
             self.debug_warn("sync", "load_sync_config_failed", "core_not_initialized");

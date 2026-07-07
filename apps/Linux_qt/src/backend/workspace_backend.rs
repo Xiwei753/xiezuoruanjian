@@ -312,10 +312,7 @@ impl AppBackend {
     pub(crate) fn try_restore_last_workspace(&mut self) {
         self.debug_log("workspace", "try_restore_last_workspace_start", "");
         if let Some(raw_path) = writer_core::app_config::get_last_workspace_path() {
-            let path = std::path::Path::new(&raw_path)
-                .canonicalize()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or(raw_path);
+            let path = normalize_workspace_path(&raw_path);
             self.debug_log(
                 "workspace",
                 "try_restore_last_workspace_path_found",
@@ -363,7 +360,7 @@ impl AppBackend {
         }
         // No valid workspace to restore
         self.current_has_workspace = false;
-        self.current_sync_status = "not_configured".to_string();
+        self.current_sync_status = "no_workspace".to_string();
         self.sync_status_changed();
         self.workspace_state_changed();
         // Load app-level theme mode even without workspace
@@ -373,10 +370,7 @@ impl AppBackend {
 
     // AppBackend::internal_open_workspace
     pub(crate) fn internal_open_workspace(&mut self, path: &str, initialize: bool) -> QString {
-        let canonical_path = std::path::Path::new(path)
-            .canonicalize()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|_| path.to_string());
+        let canonical_path = normalize_workspace_path(path);
         let path = canonical_path.as_str();
         self.debug_log(
             "workspace",
@@ -491,8 +485,7 @@ impl AppBackend {
         // Clear tree
         self.cached_tree = QJsonArray::default();
         // Reset sync status
-        self.current_sync_status = "not_configured".to_string();
-        // Reset save status
+        self.current_sync_status = "no_workspace".to_string();
         self.current_save_status = "未打开工作区".to_string();
         self.save_status_changed();
         // Clear editor
@@ -532,4 +525,27 @@ impl AppBackend {
             }
         }
     }
+}
+
+/// Normalize a workspace path: canonicalize if possible, otherwise try to
+/// fix missing leading `/` (e.g. `home/xiwei/...` → `/home/xiwei/...`).
+/// If the path is clearly invalid after repair attempts, return it as-is
+/// (validate_workspace will reject it).
+fn normalize_workspace_path(raw: &str) -> String {
+    let path = std::path::Path::new(raw);
+    if let Ok(canon) = path.canonicalize() {
+        return canon.to_string_lossy().to_string();
+    }
+    // canonicalize failed — try to fix missing leading /
+    if !raw.starts_with('/') && raw.contains('/') {
+        let fixed = format!("/{}", raw);
+        if std::path::Path::new(&fixed).canonicalize().is_ok() {
+            return fixed;
+        }
+        // Even if canonicalize still fails on the fixed path, return the
+        // fixed version — validate_workspace will reject it if truly invalid.
+        return fixed;
+    }
+    // Path already starts with / or has no / — return as-is
+    raw.to_string()
 }

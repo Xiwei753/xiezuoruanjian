@@ -42,6 +42,10 @@ pub struct CursorController {
     // IME
     pub ime_cursor_rect_h: f64,
 
+    // Anchor visual position (for ImAnchorRectangle / ImAnchorPosition)
+    pub anchor_visual_x: Option<f64>,
+    pub anchor_visual_y: Option<f64>,
+
     // Animation
     pub animation: Option<CursorAnimationState>,
 
@@ -63,6 +67,8 @@ impl CursorController {
             current_visual_line_id: None,
             last_scroll_y: 0.0,
             ime_cursor_rect_h: 0.0,
+            anchor_visual_x: None,
+            anchor_visual_y: None,
 
             animation: None,
             force_snap_next: false,

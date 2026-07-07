@@ -109,6 +109,7 @@ Item {
         if (root.isFailureStatus(s)) return qsTr("同步失败")
         // 同步状态枚举显示：未配置、已配置未测试
         if (s === "not_configured") return qsTr("未配置")
+        if (s === "no_workspace") return qsTr("未打开工作区")
         if (s === "configured_not_tested") return qsTr("已配置")
         if (root.backendRef && root.backendRef.sync_enabled) return qsTr("同步")
         return qsTr("配置同步")

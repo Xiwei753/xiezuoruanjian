@@ -270,9 +270,10 @@ cpp! {{
             }
             if (qe->queries() & Qt::ImAnchorRectangle) {
                 QVariant anchorXVar = obj->property("anchor_rect_x");
-                if (anchorXVar.isValid()) {
+                QVariant anchorYVar = obj->property("anchor_rect_y");
+                if (anchorXVar.isValid() && anchorYVar.isValid()) {
                     double ax = anchorXVar.toDouble();
-                    double ay = obj->property("anchor_rect_y").toDouble();
+                    double ay = anchorYVar.toDouble();
                     double aw = obj->property("anchor_rect_width").toDouble();
                     double ah = obj->property("anchor_rect_height").toDouble();
                     qe->setValue(Qt::ImAnchorRectangle, QRectF(ax, ay, aw, ah));
@@ -311,13 +312,17 @@ cpp! {{
                 }
             }
             if (qe->queries() & Qt::ImAnchorPosition) {
+                QVariant anchorPosVar = obj->property("anchor_position");
                 int cursorPos = obj->property("cursor_position").toInt();
-                QString selText = obj->property("current_selection_text").toString();
-                if (!selText.isEmpty()) {
-                    int anchorPos = cursorPos + selText.length();
-                    qe->setValue(Qt::ImAnchorPosition, anchorPos);
+                int beforeLen = qMin(cursorPos, 100);
+                if (anchorPosVar.isValid()) {
+                    int anchorPos = anchorPosVar.toInt();
+                    // ImAnchorPosition: offset of anchor within surrounding text
+                    // surrounding text starts at (cursorPos - beforeLen)
+                    int anchorOffset = anchorPos - (cursorPos - beforeLen);
+                    qe->setValue(Qt::ImAnchorPosition, anchorOffset);
                 } else {
-                    qe->setValue(Qt::ImAnchorPosition, cursorPos);
+                    qe->setValue(Qt::ImAnchorPosition, beforeLen);
                 }
             }
             if (qe->queries() & Qt::ImTextBeforeCursor) {

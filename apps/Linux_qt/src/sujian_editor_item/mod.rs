@@ -208,6 +208,11 @@ pub struct SujianEditorItem {
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
     cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
+    anchor_rect_x: qt_property!(f32; READ anchor_rect_x NOTIFY selection_changed),
+    anchor_rect_y: qt_property!(f32; READ anchor_rect_y NOTIFY selection_changed),
+    anchor_rect_width: qt_property!(f32; READ anchor_rect_width NOTIFY selection_changed),
+    anchor_rect_height: qt_property!(f32; READ anchor_rect_height NOTIFY selection_changed),
+    anchor_position: qt_property!(u32; READ anchor_position NOTIFY selection_changed),
     current_selection_text: qt_property!(QString; READ current_selection_text NOTIFY selection_changed),
 
     plain_text_changed: qt_signal!(),
@@ -366,6 +371,11 @@ impl Default for SujianEditorItem {
             cursor_rect_width: Default::default(),
             cursor_rect_height: Default::default(),
             cursor_visible: Default::default(),
+            anchor_rect_x: Default::default(),
+            anchor_rect_y: Default::default(),
+            anchor_rect_width: Default::default(),
+            anchor_rect_height: Default::default(),
+            anchor_position: Default::default(),
             current_selection_text: Default::default(),
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
@@ -1101,6 +1111,32 @@ impl SujianEditorItem {
 
     fn cursor_rect_height(&self) -> f32 {
         self.cursor_ctrl.ime_cursor_rect_h as f32
+    }
+
+    fn anchor_rect_x(&self) -> f32 {
+        if !self.buffer.has_selection() {
+            return self.cursor_rect_x();
+        }
+        self.cursor_ctrl.anchor_visual_x.unwrap_or(self.cursor_ctrl.target_x) as f32
+    }
+
+    fn anchor_rect_y(&self) -> f32 {
+        if !self.buffer.has_selection() {
+            return self.cursor_rect_y();
+        }
+        self.cursor_ctrl.anchor_visual_y.unwrap_or(self.cursor_ctrl.target_y) as f32
+    }
+
+    fn anchor_rect_width(&self) -> f32 {
+        2.0
+    }
+
+    fn anchor_rect_height(&self) -> f32 {
+        self.cursor_ctrl.ime_cursor_rect_h as f32
+    }
+
+    fn anchor_position(&self) -> u32 {
+        byte_to_char_index(&self.buffer.text, self.buffer.selection_anchor) as u32
     }
 
     fn cursor_visible(&self) -> bool {

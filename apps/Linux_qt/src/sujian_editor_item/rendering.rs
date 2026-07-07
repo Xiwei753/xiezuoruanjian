@@ -862,6 +862,20 @@ impl SujianEditorItem {
             self.request_frame_update();
         }
 
+        // Update anchor visual position for ImAnchorRectangle
+        if self.buffer.has_selection() {
+            let anchor_layout = self.editor_layout_cursor_rect(
+                self.buffer.selection_anchor,
+                CaretAffinity::Downstream,
+                scroll_y,
+            );
+            self.cursor_ctrl.anchor_visual_x = Some(anchor_layout.x);
+            self.cursor_ctrl.anchor_visual_y = Some(anchor_layout.y);
+        } else {
+            self.cursor_ctrl.anchor_visual_x = None;
+            self.cursor_ctrl.anchor_visual_y = None;
+        }
+
         result
     }
 }

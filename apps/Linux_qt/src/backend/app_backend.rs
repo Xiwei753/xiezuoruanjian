@@ -657,7 +657,10 @@ mod tests {
         };
         backend.handle_sync_outcome(outcome);
 
-        assert_eq!(backend.current_sync_status, "success");
+        // After sync success with pending path, internal_open_workspace is called.
+        // If the path is invalid, load_sync_config sets status to "no_workspace"
+        // (not "success") because core is not initialized.
+        assert_eq!(backend.current_sync_status, "no_workspace");
         assert_eq!(backend.current_pending_github_init_path, "");
     }
 

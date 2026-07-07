@@ -102,6 +102,10 @@ class SujianEditorRenderer(
     private val animationStartTimes = mutableMapOf<ULong, Long>()
     private var animationTimeoutMs: Long = 520L
 
+    fun setAnimationTimeoutFromDuration(durationMs: Long) {
+        animationTimeoutMs = (durationMs * 2 + 200L).coerceIn(520L, 3000L)
+    }
+
     // ── 动画期间跳过的正文范围（支持多个并发 insert 动画，用 ID 追踪防止映射后残留） ──
     private data class ActiveInsertRangeEntry(val id: ULong, val range: HalfOpenRange)
     private val activeInsertRanges = mutableListOf<ActiveInsertRangeEntry>()
@@ -135,6 +139,7 @@ class SujianEditorRenderer(
         activeAnimations.removeAll { it.id == anim.id }
         activeAnimations.add(anim)
         animationStartTimes[anim.id] = android.os.SystemClock.uptimeMillis()
+        setAnimationTimeoutFromDuration(anim.durationMs)
         return true
     }
 
