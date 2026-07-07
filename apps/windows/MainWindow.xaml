@@ -1,0 +1,24 @@
+<Window
+    x:Class="Sujian.Windows.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:editor="using:Sujian.Windows.Editor">
+    <Grid RowDefinitions="Auto,*" ColumnDefinitions="280,*">
+        <CommandBar Grid.Row="0" Grid.ColumnSpan="2" DefaultLabelPosition="Right">
+            <AppBarButton Label="打开工作区" Click="OpenWorkspace_Click" />
+            <AppBarButton Label="保存章节" Click="SaveChapter_Click" />
+        </CommandBar>
+
+        <NavigationView Grid.Row="1" Grid.Column="0" IsSettingsVisible="False" PaneDisplayMode="Left">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="项目" />
+                <NavigationViewItem Content="卷" />
+                <NavigationViewItem Content="章节" />
+            </NavigationView.MenuItems>
+        </NavigationView>
+
+        <Border Grid.Row="1" Grid.Column="1" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+            <editor:SujianEditor x:Name="Editor" />
+        </Border>
+    </Grid>
+</Window>

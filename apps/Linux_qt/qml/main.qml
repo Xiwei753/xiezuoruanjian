@@ -2,7 +2,7 @@
 // main.qml — 应用入口窗口
 // =============================================================================
 //
-// 层级：Desktop UI 层（QML 页面）
+// 层级：Linux_qt UI 层（QML 页面）
 // 职责：应用主窗口、全局路由管理、初始化 AppBackend、全局错误处理
 // 约束：
 //   - 不包含任何业务逻辑，所有操作委托给 AppBackend (Rust QObject)
@@ -108,7 +108,7 @@ ApplicationWindow {
         if (appBackend === null) return;
         var w = window.width;
         var h = window.height;
-        // Desktop 默认密度为 1.0（逻辑像素 = vp）
+        // Linux_qt 默认密度为 1.0（逻辑像素 = vp）
         var plan = appBackend.resolve_layout(w, h, 0, 0, false, "Unknown",
             w > h ? "Landscape" : "Portrait", "Mouse");
         if (plan) {

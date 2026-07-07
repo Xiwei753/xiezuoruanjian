@@ -489,7 +489,7 @@ proposal patch 可以包含：
 
 ### Phase 5：前端接入
 
-- Desktop 和 Android 都只渲染 snapshot。
+- Linux_qt 和 Android 都只渲染 snapshot。
 - 前端事件回传 Core transaction。
 - 不在 UI 层维护长期业务状态。
 

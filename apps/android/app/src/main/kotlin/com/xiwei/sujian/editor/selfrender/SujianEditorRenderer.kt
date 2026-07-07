@@ -15,7 +15,7 @@ import com.xiwei.sujian.model.SujianReflowGlyphRectData
  */
 data class SujianOverlayAnim(
     val id: ULong,
-    val kind: String,          // "insert" | "delete" | "cursor" | "reflow" | "cluster" | "run" | "snapshot"
+    val kind: String,          // "insert" | "delete" | "cursor" | "reflow" | "cluster" | "run"
     val text: String,
     val startX: Float,
     val startY: Float,
@@ -170,7 +170,7 @@ class SujianEditorRenderer(
         if (clearedIds.isNotEmpty()) {
             activeAnimations.removeAll { anim ->
                 when (anim.kind) {
-                    "insert", "cluster", "run", "snapshot" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
+                    "insert", "cluster", "run" -> anim.insertRangeId != null && anim.insertRangeId in clearedIds
                     "reflow" -> anim.reflowRangeIds.any { it in clearedIds }
                     else -> false
                 }
@@ -236,9 +236,8 @@ class SujianEditorRenderer(
      * 清理已完成的动画
      */
     fun tickAnimations() {
-        // 先收集已完成的 insert/cluster/run/snapshot 动画的 range ID，精确移除对应的跳过范围
         val finishedInsertAnims = activeAnimations.filter { 
-            (it.kind == "insert" || it.kind == "cluster" || it.kind == "run" || it.kind == "snapshot") && it.isFinished 
+            (it.kind == "insert" || it.kind == "cluster" || it.kind == "run") && it.isFinished 
         }
         for (anim in finishedInsertAnims) {
             val rangeId = anim.insertRangeId
@@ -298,7 +297,7 @@ class SujianEditorRenderer(
         // 找到所有拥有被取消 range 的动画
         val animationsToCancel = activeAnimations.filter { anim ->
             when (anim.kind) {
-                "insert", "cluster", "run", "snapshot" -> anim.insertRangeId != null && anim.insertRangeId in idSet
+                "insert", "cluster", "run" -> anim.insertRangeId != null && anim.insertRangeId in idSet
                 "reflow" -> anim.reflowRangeIds.any { it in idSet }
                 else -> false
             }
@@ -789,14 +788,7 @@ class SujianEditorRenderer(
                         canvas.drawText(glyphRect.char, currentX, currentBaselineY, animTextPaint)
                     }
                 }
-                "snapshot" -> {
-                    // Snapshot 动画：大量文本（>40 clusters）整体淡入
-                    val currentAlpha = (255 * easedProgress).toInt()
-                    animTextPaint.alpha = currentAlpha
-                    for (glyphRect in anim.glyphRects) {
-                        canvas.drawText(glyphRect.char, glyphRect.x, glyphRect.baselineY, animTextPaint)
-                    }
-                }
+
             }
         }
     }

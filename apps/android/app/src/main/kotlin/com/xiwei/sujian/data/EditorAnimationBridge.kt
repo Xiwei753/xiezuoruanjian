@@ -15,7 +15,7 @@ import uniffi.writer_core.VisualCoordinateModeDto
  * EditorAnimationBridge — Android editor animation domain bridge.
  *
  * Android consumes typed models from Core through UniFFI.  Do not serialize these DTOs to JSON and
- * parse them back on Android; the JSON property is retained only for the Desktop QML route.
+ * parse them back on Android; the JSON property is retained only for the Linux_qt QML route.
  */
 class EditorAnimationBridge internal constructor(private val appService: AppServiceBridge) {
 

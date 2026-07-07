@@ -2,7 +2,7 @@
 // DesignTokens.qml — 设计令牌
 // =============================================================================
 //
-// 层级：Desktop UI 层（QML 基础组件）
+// 层级：Linux_qt UI 层（QML 基础组件）
 // 职责：全局颜色、间距、字号、圆角、动画时长定义
 // 约束：
 //   - 所有 UI 组件必须引用此文件的令牌，禁止硬编码颜色/间距
@@ -88,7 +88,7 @@ QtObject {
     // --- Inverse primary ---
     property color inversePrimary: isDark ? Qt.rgba(0.000, 0.392, 0.592, 1) : Qt.rgba(0.573, 0.800, 1.000, 1)
 
-    // --- Desktop surfaces ---
+    // --- Linux_qt surfaces ---
     property color surfaceContainerLowest: _paletteColor("light_surface_container_lowest", "dark_surface_container_lowest") ?? (isDark ? Qt.rgba(0.059, 0.067, 0.075, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
     property color surfaceContainerLow: _paletteColor("light_surface_container_low", "dark_surface_container_low") ?? (isDark ? Qt.rgba(0.122, 0.133, 0.145, 1) : Qt.rgba(0.965, 0.973, 0.984, 1))
     property color surfaceContainer: _paletteColor("light_surface_container", "dark_surface_container") ?? (isDark ? Qt.rgba(0.137, 0.153, 0.165, 1) : Qt.rgba(0.941, 0.953, 0.969, 1))

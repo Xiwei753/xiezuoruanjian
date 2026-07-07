@@ -1,6 +1,6 @@
 # UI Tokens — 跨端设计令牌契约
 
-> **权威定义**：本文档是三端（Android / Desktop Qt / Harmony）UI token 的唯一事实来源。
+> **权威定义**：本文档是三端（Android / Linux_qt / Harmony）UI token 的唯一事实来源。
 > 修改 token 值时必须同步更新三端实现，禁止单端擅自变更。
 
 ---
@@ -56,7 +56,7 @@
 | 端 | 文件 | 格式 |
 |----|------|------|
 | Android | `res/values/shape_appearance.xml` + `res/values/colors.xml` + `res/values/themes.xml` + `res/values/styles.xml` | XML |
-| Desktop Qt | `qml/DesignTokens.qml` + `qml/AppShadow.qml` | QML |
+| Linux_qt | `qml/DesignTokens.qml` + `qml/AppShadow.qml` | QML |
 | Harmony | `ets/system/DesignTokens.ets` + `ets/system/HarmonyThemeAdapter.ets` + `ets/system/ThemePalette.ets` | ArkTS |
 
 ---
@@ -85,7 +85,7 @@
 - 非 Android 端不读取壁纸色，不伪装莫奈。
 - 只有同步仓库存在 `theme_palette.source = "android_dynamic_color"` 时，设置里才显示"使用 Android 同步主题色"开关。
 - 没有数据就不显示开关。
-- Desktop 默认走 `SystemPalette` + 素笺纸面。
+- Linux_qt 默认走 `SystemPalette` + 素笺纸面。
 - Harmony 默认走 HDS / 沉浸光感。
 - **正文纸面只用 neutral/surface，不直接吃高饱和 primary。**
 
@@ -93,7 +93,7 @@
 
 跨端复用的是**颜色 token**，不是系统效果 cosplay：
 - Android 的 Dynamic Color 效果（ripple、shape morph）不移植到其他端。
-- Desktop 不实现壁纸取色。
+- Linux_qt 不实现壁纸取色。
 - Harmony 不实现壁纸取色。
 - 其他端只消费同步来的语义色值（primary, surface, outline 等）。
 
@@ -128,9 +128,9 @@ Android 负责产出 Dynamic Color，其他端只消费同步 palette，不伪�
 
 ---
 
-## 6.1 Desktop 专属装饰性 Token
+## 6.1 Linux_qt 专属装饰性 Token
 
-以下 token 仅在 Desktop 端使用，属于装饰性颜色（非语义色），但仍需通过 DesignTokens 管理：
+以下 token 仅在 Linux_qt 端使用，属于装饰性颜色（非语义色），但仍需通过 DesignTokens 管理：
 
 | Token 名 | 类型 | 说明 |
 |----------|------|------|
@@ -203,6 +203,6 @@ Core 磁盘读取
 
 - **只有 Android 端产出** `theme_palette`，其他端只消费。
 - 非 Android 端不读取壁纸色，不伪装莫奈。
-- Desktop 默认走 `SystemPalette` + 素笺纸面。
+- Linux_qt 默认走 `SystemPalette` + 素笺纸面。
 - Harmony 默认走 HDS / 沉浸光感。
 - 只有同步仓库存在 `theme_palette.source = "android_dynamic_color"` 时，设置里才显示"使用 Android 同步主题色"开关。

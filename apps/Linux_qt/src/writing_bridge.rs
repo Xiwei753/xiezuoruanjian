@@ -18,7 +18,7 @@
 // - 被 apps/Linux_qt/src/backend/editor_backend.rs 引用，作为主写作编辑器的后端状态控制器与统计源。
 // =============================================================================
 
-//! # 写作桥接函数（Desktop UI 层 - Backend Adapter）
+//! # 写作桥接函数（Linux_qt UI 层 - Backend Adapter）
 //!
 //! 将 WriterCoreApi 的写作 API 包装为兼容 DTO，供 AppBackend 转为 QML 对象。
 
@@ -120,7 +120,7 @@ pub fn report_writing_event(
         deleted_chars as i32,
         pasted_chars as i32,
         ai_inserted_chars as i32,
-        0, // duration_seconds: not tracked on desktop, default to 0
+        0, // duration_seconds: not tracked on Linux_qt, default to 0
         session_id,
     )
 }

@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_shortcuts_match_existing_keys() {
+    fn linux_qt_shortcuts_match_existing_keys() {
         assert!(is_copy_shortcut(KEY_C, CTRL_MODIFIER));
         assert!(is_copy_shortcut(KEY_INSERT, CTRL_MODIFIER));
         assert!(is_paste_shortcut(KEY_V, CTRL_MODIFIER));

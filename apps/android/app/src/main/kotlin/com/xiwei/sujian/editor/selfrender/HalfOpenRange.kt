@@ -7,7 +7,7 @@ package com.xiwei.sujian.editor.selfrender
  * - IntRange(1, 3) 表示 [1, 2, 3]（3 个元素），不是 [1, 3)（2 个元素）
  * - 对于 UTF-16 offset range，我们需要半开区间 [start, end)
  *
- * 所有动画范围（activeInsertRange、reflowRange、clusterRange、snapshotRange）
+ * 所有动画范围（activeInsertRange、reflowRange、clusterRange）
  * 必须使用 HalfOpenRange，禁止用 IntRange。
  */
 data class HalfOpenRange(val start: Int, val end: Int) : Comparable<HalfOpenRange> {

@@ -459,7 +459,7 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
                     || content.contains("id: typingLayer")
                     || content.contains("cursorBirthAnimationsModel")
                 {
-                    eprintln!("{}: Desktop typing animation and cursor smoothing must not depend on keypress hooks", file_name);
+                    eprintln!("{}: Linux_qt typing animation and cursor smoothing must not depend on keypress hooks", file_name);
                     has_errors = true;
                 }
                 if content.contains("#606470") {
@@ -607,7 +607,7 @@ fn test_editor_render_format_is_unified() {
 
     assert!(
         main_rs.contains("mod sujian_editor_item;") && main_rs.contains("SujianEditorItem"),
-        "Desktop startup must register the Rust self-rendered SujianEditorItem QML type"
+        "Linux_qt startup must register the Rust self-rendered SujianEditorItem QML type"
     );
 
     assert!(
@@ -857,7 +857,7 @@ fn test_sujian_editor_item_no_request_repaint() {
 }
 
 #[test]
-fn test_desktop_no_envelope_json_calls() {
+fn test_linux_qt_no_envelope_json_calls() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let src_dir = manifest_dir.join("src");
 
@@ -908,7 +908,7 @@ fn test_desktop_no_envelope_json_calls() {
 
     assert!(
         violations.is_empty(),
-        "Desktop must not call envelope_json — use typed DTO API + ResultEnvelope instead:\n{}",
+        "Linux_qt must not call envelope_json — use typed DTO API + ResultEnvelope instead:\n{}",
         violations.join("\n")
     );
 }
@@ -1111,7 +1111,7 @@ fn test_editor_route_doc_no_legacy_full_render_claim() {
 
 /// 验证 DesignTokens.qml 中 _paletteColor 只读取 snake_case key，
 /// 不读取 camelCase key（如 lightPrimary、darkPrimary、lightSurfaceContainerHigh）。
-/// 三端统一：Android 产出 snake_case theme_palette，Harmony/Desktop 按 snake_case 消费。
+/// 三端统一：Android 产出 snake_case theme_palette，Harmony/Linux_qt 按 snake_case 消费。
 #[test]
 fn test_design_tokens_palette_keys_are_snake_case() {
     let qml_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("qml");

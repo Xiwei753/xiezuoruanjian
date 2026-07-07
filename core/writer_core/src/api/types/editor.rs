@@ -2,7 +2,7 @@
 //!
 //! These DTOs mirror the Core `editor::transaction` types but are
 //! stable API boundary types used by UniFFI and C-ABI FFI layers.
-//! Platform clients (Android, Desktop, HarmonyOS) consume these
+//! Platform clients (Android, Linux_qt, HarmonyOS) consume these
 //! to decide whether and how to animate text changes.
 
 /// Kind of animation event emitted by the editor engine.
@@ -150,7 +150,7 @@ pub struct GlyphRectDto {
 ///
 /// Core 层只裁判事件语义和范围（UTF-8 byte offset），
 /// 平台层只负责 layout 坐标转换和绘制。
-/// Desktop SujianEditorItem 和 Android SujianEditorView 都吃同一份契约。
+/// Linux_qt SujianEditorItem 和 Android SujianEditorView 都吃同一份契约。
 ///
 /// 坐标字段（old_cursor_rect, new_cursor_rect, deleted_glyph_rects, insert_glyph_rects）
 /// 不在 FFI DTO 中——由平台层自行填充。

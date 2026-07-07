@@ -98,6 +98,6 @@ Supersedes: None
 | 层级 | 机制 | 间隔 |
 |------|------|------|
 | Core | `perform_lww_sync` 入口检查 `last_sync_time` | `max(sync_interval_seconds, 60)` |
-| Desktop Rust | `can_start_auto_sync(reason, 60)` | 同 reason 60 秒 |
-| Desktop QML | `workspaceOpenAutoSyncTimer` / `foregroundAutoSyncTimer` | 1.5s / 1.2s 延迟 |
+| Linux_qt Rust | `can_start_auto_sync(reason, 60)` | 同 reason 60 秒 |
+| Linux_qt QML | `workspaceOpenAutoSyncTimer` / `foregroundAutoSyncTimer` | 1.5s / 1.2s 延迟 |
 | Android | `AutoSyncWorker` elapsed check + WorkManager 周期 | `syncIntervalSeconds`（默认 300s） |

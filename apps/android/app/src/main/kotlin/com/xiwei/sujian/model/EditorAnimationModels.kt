@@ -143,7 +143,7 @@ data class SujianGlyphRectData(
 data class SujianReflowGlyphRectData(
     /** 该 glyph 对应的字符 */
     val char: String,
-    /** 该 glyph 在新文本中的 UTF-8 byte offset 起始位置（与 Core/Desktop 对齐，handleInsertTransaction 中需 utf8ToUtf16 转换） */
+    /** 该 glyph 在新文本中的 UTF-8 byte offset 起始位置（与 Core/Linux_qt 对齐，handleInsertTransaction 中需 utf8ToUtf16 转换） */
     val byteStart: Int,
     /** 该 glyph 在新文本中的 UTF-8 byte offset 结束位置 */
     val byteEnd: Int,

@@ -1,4 +1,4 @@
-//! Desktop 客户端专用的 LayoutPlan DTO
+//! Linux_qt 客户端专用的 LayoutPlan DTO
 //!
 //! 与跨平台 LayoutPlanDto 不同，DesktopLayoutPlanDto 只包含 QML 实际使用的字段，
 //! 并确保输出为 camelCase，QML 无需 snake_case fallback。
@@ -6,7 +6,7 @@
 use serde::Serialize;
 use writer_core::layout_policy::{LayoutPlan, ShellMode};
 
-/// Desktop 客户端专用的布局方案 DTO
+/// Linux_qt 客户端专用的布局方案 DTO
 ///
 /// 字段名使用 Rust snake_case 命名，通过 `#[serde(rename_all = "camelCase")]`
 /// 序列化为 camelCase 输出给 QML。
@@ -56,7 +56,7 @@ mod tests {
     use writer_core::layout_policy::{resolve_layout, WindowMetrics};
 
     #[test]
-    fn test_desktop_layout_plan_dto_camel_case_output() {
+    fn test_linux_qt_layout_plan_dto_camel_case_output() {
         let metrics = WindowMetrics::default();
         let plan = resolve_layout(&metrics);
         let dto = DesktopLayoutPlanDto::from_layout_plan(&plan);
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn test_desktop_layout_plan_dto_shell_mode_values() {
+    fn test_linux_qt_layout_plan_dto_shell_mode_values() {
         // Compact width -> SinglePane
         let mut metrics = WindowMetrics::default();
         metrics.width_vp = 360.0;

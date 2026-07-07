@@ -1,5 +1,5 @@
 // =============================================================================
-// diagnostics.rs — Desktop 诊断日志管理
+// diagnostics.rs — Linux_qt 诊断日志管理
 // =============================================================================
 //
 // 引用了什么：
@@ -9,7 +9,7 @@
 // - serde_json：JSON 序列化
 //
 // 干什么的：
-// - 管理 Desktop 端诊断日志的写入、轮转、清空、导出
+// - 管理 Linux_qt 端诊断日志的写入、轮转、清空、导出
 // - 收集设备信息（OS、架构、Qt 版本等）
 // - 导出诊断包（zip 格式，包含日志、设备信息、设置快照）
 // - 脱敏规则：与 Android DiagnosticsLogger.REDACT_RULES 对齐
@@ -244,7 +244,7 @@ fn redact(message: &str) -> String {
     result
 }
 
-/// 获取 Desktop 端日志目录路径
+/// 获取 Linux_qt 端日志目录路径
 ///
 /// - Linux: ~/.local/share/sujian/logs/
 /// - Fallback: <workspace>/app-meta/logs/

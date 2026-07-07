@@ -2,7 +2,7 @@
 // ScreenPolicyAdapter.qml — 从 Core 获取页面动作位置语义
 // =============================================================================
 //
-// 层级：Desktop UI 层（QML helper 组件）
+// 层级：Linux_qt UI 层（QML helper 组件）
 // 职责：调用 AppBackend.resolve_screen_policy 获取 ActionSlot 列表，
 //       暴露便捷查询方法给 QML 页面使用
 // 约束：

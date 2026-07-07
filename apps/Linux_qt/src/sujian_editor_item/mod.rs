@@ -1,4 +1,4 @@
-//! Desktop 自研写作区 — 唯一主路径
+//! Linux_qt 自研写作区 — 唯一主路径
 //!
 //! 路线：SujianEditorItem(QQuickItem) + QTextLayout/QTextLine + QImage static texture
 //!       + QSGImageNode + QML Rectangle cursor + QML EditorAnimationOverlay
@@ -6,7 +6,7 @@
 //! 禁止旧路线：DocumentHandler / TextArea / QTextDocument / QQuickPaintedItem / QSG 三层 overlay
 
 // =============================================================================
-// sujian_editor_item - Desktop self-rendered editor item
+// sujian_editor_item - Linux_qt self-rendered editor item
 // =============================================================================
 
 pub(crate) mod buffer;

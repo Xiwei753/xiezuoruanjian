@@ -6,7 +6,7 @@
 //! ## 调用链路
 //!
 //! ```text
-//! Android/Harmony/Desktop 测窗口 → 调 Core resolve_layout → 得到 ShellMode
+//! Android/Harmony/Linux_qt 测窗口 → 调 Core resolve_layout → 得到 ShellMode
 //!   → 调 Core resolve_screen_policy(screen_role, shell_mode) → 得到 ActionSlot 列表
 //!   → 各端 StyleAdapter 按 ActionSlot 渲染本平台控件
 //! ```

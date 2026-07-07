@@ -1,4 +1,4 @@
-//! # 构建脚本（Desktop UI 层 - Build）
+//! # 构建脚本（Linux_qt UI 层 - Build）
 //!
 //! Cargo 构建脚本，负责：
 //! 1. 声明 QML 文件依赖（rerun-if-changed）

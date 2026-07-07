@@ -2,7 +2,7 @@
 // SettingsDialog.qml — 设置对话框
 // =============================================================================
 //
-// 层级：Desktop UI 层（QML UI 组件）
+// 层级：Linux_qt UI 层（QML UI 组件）
 // 职责：编辑器设置展示与保存（字号、行距、自动保存、主题、AI 开关）
 // 约束：
 //   - 通过 settingsBackend 兼容入口读写设置属性
@@ -602,7 +602,7 @@ Dialog {
                 SettingsRow {
                     dt: root.dt
                     title: qsTr("版本信息")
-                    description: qsTr("Desktop Qt 客户端")
+                    description: qsTr("Linux_qt 客户端")
                 }
                 SettingsRow {
                     dt: root.dt

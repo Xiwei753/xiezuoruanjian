@@ -287,10 +287,10 @@ pub(crate) struct EditorAnimationEvent {
     /// 平台端填充后通过 FFI 传给 QML overlay。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub glyph_rects: Vec<GlyphRect>,
-    /// 变更前光标的视口矩形位置（由 Desktop 端填充，Core 层默认为 None）
+    /// 变更前光标的视口矩形位置（由 Linux_qt 端填充，Core 层默认为 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_cursor_rect: Option<CursorRect>,
-    /// 变更后光标的视口矩形位置（由 Desktop 端填充，Core 层默认为 None）
+    /// 变更后光标的视口矩形位置（由 Linux_qt 端填充，Core 层默认为 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_cursor_rect: Option<CursorRect>,
 }
@@ -308,7 +308,7 @@ pub enum VisualCoordinateMode {
 ///
 /// Core 层只裁判事件语义和范围（UTF-8 byte offset），
 /// 平台层只负责 layout 坐标转换和绘制。
-/// Desktop SujianEditorItem 和 Android SujianEditorView 都吃同一份契约。
+/// Linux_qt SujianEditorItem 和 Android SujianEditorView 都吃同一份契约。
 ///
 /// coordinate_mode 固定为 Baseline：所有 y 坐标使用 baselineY，
 /// 不使用 top+height 拼接 baseline。
@@ -1174,9 +1174,9 @@ mod tests {
 
     #[test]
     fn complex_grapheme_chars_are_filtered_from_glyph_rects() {
-        // This test verifies that the Desktop Rust side filters complex grapheme
+        // This test verifies that the Linux_qt Rust side filters complex grapheme
         // chars when filling glyph_rects. Since the filtering happens in the
-        // Desktop-specific fill_glyph_rects_for_events (not in core), we test
+        // Linux_qt-specific fill_glyph_rects_for_events (not in core), we test
         // the is_complex_grapheme helper function logic here at the core level
         // by verifying that the core transaction correctly identifies emoji text.
         let mut engine = EditorEngine::with_animation_limits(8, 120);
