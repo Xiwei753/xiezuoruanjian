@@ -8,9 +8,12 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
 using Windows.System;
 using Windows.UI;
+using Windows.UI.Text.Core;
 
 namespace Sujian.Windows.Editor;
 
@@ -25,12 +28,22 @@ public sealed class SujianEditor : UserControl
     private float _firstLineIndentEm = 2f;
     private CanvasTextFormat? _textFormat;
     private CanvasControl? _canvas;
-    private bool _isComposing;
-    private string _compositionText = string.Empty;
     private bool _cursorVisible = true;
     private DispatcherTimer? _cursorBlinkTimer;
     private int _undoIndex;
     private readonly List<string> _undoStack = new();
+
+    private int _selectionStartLine;
+    private int _selectionStartColumn;
+    private int _selectionEndLine;
+    private int _selectionEndColumn;
+    private bool _hasSelection;
+    private bool _isDragging;
+
+    private CoreTextEditContext? _editContext;
+    private bool _isComposing;
+    private string _compositionText = string.Empty;
+    private bool _suppressNotifyTextChanged;
 
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
         nameof(Text),
@@ -68,12 +81,16 @@ public sealed class SujianEditor : UserControl
         set => SetValue(FirstLineIndentEmProperty, value);
     }
 
+    public event EventHandler? TextChangedByUser;
+
     public SujianEditor()
     {
         IsTabStop = true;
         UseSystemFocusVisuals = true;
         Background = new SolidColorBrush(Colors.Transparent);
         PointerPressed += OnPointerPressed;
+        PointerMoved += OnPointerMoved;
+        PointerReleased += OnPointerReleased;
         KeyDown += OnKeyDown;
         CharacterReceived += OnCharacterReceived;
         PointerWheelChanged += OnPointerWheelChanged;
@@ -87,6 +104,201 @@ public sealed class SujianEditor : UserControl
 
         _cursorBlinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
         _cursorBlinkTimer.Tick += (_, _) => { _cursorVisible = !_cursorVisible; _canvas?.Invalidate(); };
+
+        Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
+    }
+
+    private void OnLoaded(object sender, RoutedEventArgs e)
+    {
+        InitializeCoreTextEditContext();
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        _editContext?.Dispose();
+        _editContext = null;
+    }
+
+    private void InitializeCoreTextEditContext()
+    {
+        try
+        {
+            var manager = CoreTextServicesManager.GetForCurrentView();
+            _editContext = manager.CreateEditContext();
+            _editContext.InputScope = CoreTextInputScope.Text;
+            _editContext.TextRequested += OnTextRequested;
+            _editContext.TextUpdating += OnTextUpdating;
+            _editContext.SelectionRequested += OnSelectionRequested;
+            _editContext.SelectionUpdating += OnSelectionUpdating;
+            _editContext.CompositionStarted += OnCompositionStarted;
+            _editContext.CompositionCompleted += OnCompositionCompleted;
+            _editContext.FocusRemoved += OnFocusRemoved;
+            _editContext.FormatUpdating += OnFormatUpdating;
+        }
+        catch { }
+    }
+
+    private void OnTextRequested(CoreTextEditContext sender, CoreTextTextRequestedEventArgs args)
+    {
+        args.Request.Text = GetFullText();
+    }
+
+    private void OnTextUpdating(CoreTextEditContext sender, CoreTextTextUpdatingEventArgs args)
+    {
+        var oldText = GetFullText();
+        var newText = args.Text;
+
+        if (oldText == newText)
+        {
+            args.Result = CoreTextTextUpdatingResult.Succeeded;
+            return;
+        }
+
+        _suppressNotifyTextChanged = true;
+        try
+        {
+            PushUndo();
+            LoadPlainText(newText);
+
+            var startOffset = Math.Min(args.Range.StartCaretPosition, args.Range.EndCaretPosition);
+            var endOffset = Math.Max(args.Range.StartCaretPosition, args.Range.EndCaretPosition);
+            var newEndOffset = args.NewSelection.EndCaretPosition;
+
+            OffsetToLineColumn(newEndOffset, out _cursorLine, out _cursorColumn);
+            ClearSelection();
+            PublishText();
+            TextChangedByUser?.Invoke(this, EventArgs.Empty);
+            args.Result = CoreTextTextUpdatingResult.Succeeded;
+        }
+        catch
+        {
+            args.Result = CoreTextTextUpdatingResult.Failed;
+        }
+        finally
+        {
+            _suppressNotifyTextChanged = false;
+        }
+    }
+
+    private void OnSelectionRequested(CoreTextEditContext sender, CoreTextSelectionRequestedEventArgs args)
+    {
+        var start = LineColumnToOffset(_cursorLine, _cursorColumn);
+        args.Request.Selection = new CoreTextRange(start, start);
+    }
+
+    private void OnSelectionUpdating(CoreTextEditContext sender, CoreTextSelectionUpdatingEventArgs args)
+    {
+        var selStart = Math.Min(args.Selection.StartCaretPosition, args.Selection.EndCaretPosition);
+        var selEnd = Math.Max(args.Selection.StartCaretPosition, args.Selection.EndCaretPosition);
+
+        if (selStart == selEnd)
+        {
+            OffsetToLineColumn(selEnd, out _cursorLine, out _cursorColumn);
+            ClearSelection();
+        }
+        else
+        {
+            OffsetToLineColumn(selStart, out _selectionStartLine, out _selectionStartColumn);
+            OffsetToLineColumn(selEnd, out _selectionEndLine, out _selectionEndColumn);
+            _cursorLine = _selectionEndLine;
+            _cursorColumn = _selectionEndColumn;
+            _hasSelection = true;
+        }
+        _canvas?.Invalidate();
+        args.Result = CoreTextSelectionUpdatingResult.Succeeded;
+    }
+
+    private void OnCompositionStarted(CoreTextEditContext sender, CoreTextCompositionStartedEventArgs args)
+    {
+        _isComposing = true;
+        _compositionText = string.Empty;
+    }
+
+    private void OnCompositionCompleted(CoreTextEditContext sender, CoreTextCompositionCompletedEventArgs args)
+    {
+        _isComposing = false;
+        _compositionText = string.Empty;
+        _canvas?.Invalidate();
+    }
+
+    private void OnFocusRemoved(CoreTextEditContext sender, object args)
+    {
+        LoseFocus();
+    }
+
+    private void OnFormatUpdating(CoreTextEditContext sender, CoreTextFormatUpdatingEventArgs args)
+    {
+        args.Result = CoreTextFormatUpdatingResult.Succeeded;
+    }
+
+    private void NotifyTextChanged(CoreTextEditRangeChange rangeChange, int modifiedRangeStart, int modifiedRangeEnd, int newModifiedEnd)
+    {
+        if (_suppressNotifyTextChanged || _editContext == null) return;
+        try
+        {
+            _editContext.NotifyTextChanged(rangeChange, modifiedRangeStart, modifiedRangeEnd,
+                new CoreTextRange(newModifiedEnd, newModifiedEnd));
+        }
+        catch { }
+    }
+
+    private void NotifySelectionChanged()
+    {
+        if (_editContext == null) return;
+        try
+        {
+            var offset = LineColumnToOffset(_cursorLine, _cursorColumn);
+            _editContext.NotifySelectionChanged(new CoreTextRange(offset, offset));
+        }
+        catch { }
+    }
+
+    private void NotifyFocusEnter()
+    {
+        if (_editContext == null) return;
+        try { _editContext.NotifyFocusEnter(); } catch { }
+    }
+
+    private void NotifyFocusLeave()
+    {
+        if (_editContext == null) return;
+        try { _editContext.NotifyFocusLeave(); } catch { }
+    }
+
+    private string GetFullText()
+    {
+        return string.Join("\n", _lines);
+    }
+
+    private int LineColumnToOffset(int line, int column)
+    {
+        int offset = 0;
+        for (int i = 0; i < line && i < _lines.Count; i++)
+        {
+            offset += _lines[i].Length + 1;
+        }
+        offset += Math.Min(column, _lines.Count > line ? _lines[line].Length : 0);
+        return offset;
+    }
+
+    private void OffsetToLineColumn(int offset, out int line, out int column)
+    {
+        line = 0;
+        column = 0;
+        int remaining = offset;
+        for (int i = 0; i < _lines.Count; i++)
+        {
+            if (remaining <= _lines[i].Length)
+            {
+                line = i;
+                column = remaining;
+                return;
+            }
+            remaining -= _lines[i].Length + 1;
+        }
+        line = Math.Max(0, _lines.Count - 1);
+        column = _lines.Count > 0 ? _lines[_lines.Count - 1].Length : 0;
     }
 
     private void OnGotFocus(object sender, RoutedEventArgs e)
@@ -94,6 +306,7 @@ public sealed class SujianEditor : UserControl
         _cursorVisible = true;
         _cursorBlinkTimer?.Start();
         _canvas?.Invalidate();
+        NotifyFocusEnter();
     }
 
     private void OnLostFocus(object sender, RoutedEventArgs e)
@@ -101,6 +314,7 @@ public sealed class SujianEditor : UserControl
         _cursorBlinkTimer?.Stop();
         _cursorVisible = false;
         _canvas?.Invalidate();
+        NotifyFocusLeave();
     }
 
     private void OnCreateResources(CanvasControl sender, object args)
@@ -164,6 +378,7 @@ public sealed class SujianEditor : UserControl
     private void CommitText(string text)
     {
         PushUndo();
+        if (_hasSelection) DeleteSelection();
         foreach (var ch in text)
         {
             if (ch == '\r') continue;
@@ -171,6 +386,7 @@ public sealed class SujianEditor : UserControl
             else InsertChar(ch);
         }
         PublishText();
+        TextChangedByUser?.Invoke(this, EventArgs.Empty);
     }
 
     private void InsertChar(char ch)
@@ -194,6 +410,13 @@ public sealed class SujianEditor : UserControl
     private void DeleteBackward()
     {
         PushUndo();
+        if (_hasSelection)
+        {
+            DeleteSelection();
+            PublishText();
+            TextChangedByUser?.Invoke(this, EventArgs.Empty);
+            return;
+        }
         if (_cursorColumn > 0)
         {
             var line = _lines[_cursorLine];
@@ -208,12 +431,21 @@ public sealed class SujianEditor : UserControl
             _cursorLine--;
             _cursorColumn = previousLength;
         }
+        ClearSelection();
         PublishText();
+        TextChangedByUser?.Invoke(this, EventArgs.Empty);
     }
 
     private void DeleteForward()
     {
         PushUndo();
+        if (_hasSelection)
+        {
+            DeleteSelection();
+            PublishText();
+            TextChangedByUser?.Invoke(this, EventArgs.Empty);
+            return;
+        }
         var line = _lines[_cursorLine];
         if (_cursorColumn < line.Length)
         {
@@ -224,7 +456,9 @@ public sealed class SujianEditor : UserControl
             _lines[_cursorLine] += _lines[_cursorLine + 1];
             _lines.RemoveAt(_cursorLine + 1);
         }
+        ClearSelection();
         PublishText();
+        TextChangedByUser?.Invoke(this, EventArgs.Empty);
     }
 
     private void Undo()
@@ -232,6 +466,7 @@ public sealed class SujianEditor : UserControl
         if (_undoIndex <= 0) return;
         _undoIndex--;
         LoadPlainText(_undoStack[_undoIndex]);
+        ClearSelection();
         PublishText();
     }
 
@@ -240,6 +475,7 @@ public sealed class SujianEditor : UserControl
         if (_undoIndex >= _undoStack.Count) return;
         _undoIndex++;
         LoadPlainText(_undoStack[_undoIndex - 1]);
+        ClearSelection();
         PublishText();
     }
 
@@ -255,10 +491,213 @@ public sealed class SujianEditor : UserControl
         return _firstLineIndentEm * _fontSize;
     }
 
+    private void ClearSelection()
+    {
+        _hasSelection = false;
+        _selectionStartLine = _cursorLine;
+        _selectionStartColumn = _cursorColumn;
+        _selectionEndLine = _cursorLine;
+        _selectionEndColumn = _cursorColumn;
+    }
+
+    private void SetSelectionFromDrag()
+    {
+        _selectionEndLine = _cursorLine;
+        _selectionEndColumn = _cursorColumn;
+        _hasSelection = !(_selectionStartLine == _selectionEndLine &&
+                          _selectionStartColumn == _selectionEndColumn);
+    }
+
+    private void ExtendSelectionToCursor()
+    {
+        if (!_hasSelection)
+        {
+            _selectionStartLine = _cursorLine;
+            _selectionStartColumn = _cursorColumn;
+        }
+        _selectionEndLine = _cursorLine;
+        _selectionEndColumn = _cursorColumn;
+        _hasSelection = !(_selectionStartLine == _selectionEndLine &&
+                          _selectionStartColumn == _selectionEndColumn);
+    }
+
+    private void DeleteSelection()
+    {
+        if (!_hasSelection) return;
+
+        int startLine, startCol, endLine, endCol;
+        GetSelectionBounds(out startLine, out startCol, out endLine, out endCol);
+
+        if (startLine == endLine)
+        {
+            var line = _lines[startLine];
+            _lines[startLine] = line.Remove(startCol, endCol - startCol);
+        }
+        else
+        {
+            _lines[startLine] = _lines[startLine][..startCol] + _lines[endLine][endCol..];
+            var removeCount = endLine - startLine;
+            for (int i = 0; i < removeCount; i++)
+                _lines.RemoveAt(startLine + 1);
+        }
+
+        _cursorLine = startLine;
+        _cursorColumn = startCol;
+        ClearSelection();
+    }
+
+    private void GetSelectionBounds(out int startLine, out int startCol, out int endLine, out int endCol)
+    {
+        if (_selectionStartLine < _selectionEndLine ||
+            (_selectionStartLine == _selectionEndLine && _selectionStartColumn <= _selectionEndColumn))
+        {
+            startLine = _selectionStartLine;
+            startCol = _selectionStartColumn;
+            endLine = _selectionEndLine;
+            endCol = _selectionEndColumn;
+        }
+        else
+        {
+            startLine = _selectionEndLine;
+            startCol = _selectionEndColumn;
+            endLine = _selectionStartLine;
+            endCol = _selectionStartColumn;
+        }
+    }
+
+    private string GetSelectedText()
+    {
+        if (!_hasSelection) return string.Empty;
+
+        GetSelectionBounds(out int startLine, out int startCol, out int endLine, out int endCol);
+
+        if (startLine == endLine)
+        {
+            return _lines[startLine][startCol..endCol];
+        }
+
+        var parts = new List<string> { _lines[startLine][startCol..] };
+        for (int i = startLine + 1; i < endLine; i++)
+            parts.Add(_lines[i]);
+        parts.Add(_lines[endLine][..endCol]);
+        return string.Join("\n", parts);
+    }
+
+    private void SelectAll()
+    {
+        _selectionStartLine = 0;
+        _selectionStartColumn = 0;
+        _selectionEndLine = _lines.Count - 1;
+        _selectionEndColumn = _lines[_lines.Count - 1].Length;
+        _cursorLine = _selectionEndLine;
+        _cursorColumn = _selectionEndColumn;
+        _hasSelection = true;
+        _canvas?.Invalidate();
+    }
+
+    private async void CopyToClipboard()
+    {
+        var text = GetSelectedText();
+        if (string.IsNullOrEmpty(text)) return;
+        try
+        {
+            var dp = new DataPackage();
+            dp.SetText(text);
+            Clipboard.SetContent(dp);
+        }
+        catch { }
+    }
+
+    private void CutToClipboard()
+    {
+        if (!_hasSelection) return;
+        CopyToClipboard();
+        PushUndo();
+        DeleteSelection();
+        PublishText();
+        TextChangedByUser?.Invoke(this, EventArgs.Empty);
+    }
+
+    private async void PasteFromClipboard()
+    {
+        try
+        {
+            var content = Clipboard.GetContent();
+            if (content.Contains(StandardDataFormats.Text))
+            {
+                var text = await content.GetTextAsync();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    CommitText(text.Replace("\r\n", "\n").Replace('\r', '\n'));
+                }
+            }
+        }
+        catch { }
+    }
+
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
         Focus(FocusState.Pointer);
         var point = e.GetCurrentPoint(this);
+        var indent = GetFirstLineIndent();
+        var y = point.Position.Y + _scrollY;
+        var newLine = Math.Clamp((int)(y / _lineHeight), 0, _lines.Count - 1);
+        var line = _lines[newLine];
+        int newColumn;
+        if (line.Length > 0 && _textFormat != null)
+        {
+            var x = (float)point.Position.X - indent;
+            newColumn = Math.Clamp(XToCharIndex(line, Math.Max(0, x)), 0, line.Length);
+        }
+        else
+        {
+            newColumn = 0;
+        }
+
+        if (point.Properties.IsLeftButtonPressed)
+        {
+            var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
+            bool isShift = shift.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+            if (isShift)
+            {
+                if (!_hasSelection)
+                {
+                    _selectionStartLine = _cursorLine;
+                    _selectionStartColumn = _cursorColumn;
+                }
+                _cursorLine = newLine;
+                _cursorColumn = newColumn;
+                _selectionEndLine = newLine;
+                _selectionEndColumn = newColumn;
+                _hasSelection = !(_selectionStartLine == _selectionEndLine &&
+                                  _selectionStartColumn == _selectionEndColumn);
+            }
+            else
+            {
+                _cursorLine = newLine;
+                _cursorColumn = newColumn;
+                ClearSelection();
+                _isDragging = true;
+            }
+        }
+
+        _cursorVisible = true;
+        _canvas?.Invalidate();
+        e.Handled = true;
+        NotifySelectionChanged();
+    }
+
+    private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (!_isDragging) return;
+        var point = e.GetCurrentPoint(this);
+        if (!point.Properties.IsLeftButtonPressed)
+        {
+            _isDragging = false;
+            return;
+        }
+
         var indent = GetFirstLineIndent();
         var y = point.Position.Y + _scrollY;
         _cursorLine = Math.Clamp((int)(y / _lineHeight), 0, _lines.Count - 1);
@@ -272,9 +711,21 @@ public sealed class SujianEditor : UserControl
         {
             _cursorColumn = 0;
         }
+
+        _selectionEndLine = _cursorLine;
+        _selectionEndColumn = _cursorColumn;
+        _hasSelection = !(_selectionStartLine == _selectionEndLine &&
+                          _selectionStartColumn == _selectionEndColumn);
+
         _cursorVisible = true;
         _canvas?.Invalidate();
         e.Handled = true;
+        NotifySelectionChanged();
+    }
+
+    private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        _isDragging = false;
     }
 
     private int XToCharIndex(string line, float x)
@@ -304,14 +755,16 @@ public sealed class SujianEditor : UserControl
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
         var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
+        var shift = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift);
         bool isCtrl = ctrl.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+        bool isShift = shift.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
         if (isCtrl)
         {
             switch (e.Key)
             {
                 case VirtualKey.Z:
-                    Undo();
+                    if (isShift) Redo(); else Undo();
                     e.Handled = true;
                     return;
                 case VirtualKey.Y:
@@ -319,6 +772,19 @@ public sealed class SujianEditor : UserControl
                     e.Handled = true;
                     return;
                 case VirtualKey.A:
+                    SelectAll();
+                    e.Handled = true;
+                    return;
+                case VirtualKey.C:
+                    CopyToClipboard();
+                    e.Handled = true;
+                    return;
+                case VirtualKey.X:
+                    CutToClipboard();
+                    e.Handled = true;
+                    return;
+                case VirtualKey.V:
+                    PasteFromClipboard();
                     e.Handled = true;
                     return;
             }
@@ -339,50 +805,140 @@ public sealed class SujianEditor : UserControl
                 e.Handled = true;
                 break;
             case VirtualKey.Left:
-                if (_cursorColumn > 0) _cursorColumn--; else if (_cursorLine > 0) { _cursorLine--; _cursorColumn = _lines[_cursorLine].Length; }
+                MoveCursorLeft(isShift);
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
             case VirtualKey.Right:
-                if (_cursorColumn < _lines[_cursorLine].Length) _cursorColumn++; else if (_cursorLine + 1 < _lines.Count) { _cursorLine++; _cursorColumn = 0; }
+                MoveCursorRight(isShift);
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
             case VirtualKey.Up:
-                if (_cursorLine > 0) _cursorLine--;
-                _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+                MoveCursorUp(isShift);
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
             case VirtualKey.Down:
-                if (_cursorLine + 1 < _lines.Count) _cursorLine++;
-                _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+                MoveCursorDown(isShift);
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
             case VirtualKey.Home:
+                if (isShift) ExtendSelectionToCursor();
+                else ClearSelection();
                 _cursorColumn = 0;
+                if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
             case VirtualKey.End:
+                if (isShift) ExtendSelectionToCursor();
+                else ClearSelection();
                 _cursorColumn = _lines[_cursorLine].Length;
+                if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
             case VirtualKey.PageUp:
+                if (isShift) ExtendSelectionToCursor();
+                else ClearSelection();
                 _cursorLine = Math.Max(0, _cursorLine - (int)(ActualHeight / _lineHeight));
                 _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+                if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
             case VirtualKey.PageDown:
+                if (isShift) ExtendSelectionToCursor();
+                else ClearSelection();
                 _cursorLine = Math.Min(_lines.Count - 1, _cursorLine + (int)(ActualHeight / _lineHeight));
                 _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+                if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
                 _canvas?.Invalidate();
+                NotifySelectionChanged();
                 e.Handled = true;
                 break;
         }
+    }
+
+    private void UpdateHasSelection()
+    {
+        _hasSelection = !(_selectionStartLine == _selectionEndLine &&
+                          _selectionStartColumn == _selectionEndColumn);
+    }
+
+    private void MoveCursorLeft(bool isShift)
+    {
+        if (isShift) ExtendSelectionToCursor();
+        else if (_hasSelection)
+        {
+            GetSelectionBounds(out _cursorLine, out _cursorColumn, out _, out _);
+            ClearSelection();
+            return;
+        }
+        else ClearSelection();
+
+        if (_cursorColumn > 0) _cursorColumn--;
+        else if (_cursorLine > 0) { _cursorLine--; _cursorColumn = _lines[_cursorLine].Length; }
+
+        if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
+    }
+
+    private void MoveCursorRight(bool isShift)
+    {
+        if (isShift) ExtendSelectionToCursor();
+        else if (_hasSelection)
+        {
+            GetSelectionBounds(out _, out _, out _cursorLine, out _cursorColumn);
+            ClearSelection();
+            return;
+        }
+        else ClearSelection();
+
+        if (_cursorColumn < _lines[_cursorLine].Length) _cursorColumn++;
+        else if (_cursorLine + 1 < _lines.Count) { _cursorLine++; _cursorColumn = 0; }
+
+        if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
+    }
+
+    private void MoveCursorUp(bool isShift)
+    {
+        if (isShift) ExtendSelectionToCursor();
+        else if (_hasSelection)
+        {
+            GetSelectionBounds(out _cursorLine, out _cursorColumn, out _, out _);
+            ClearSelection();
+        }
+        else ClearSelection();
+
+        if (_cursorLine > 0) _cursorLine--;
+        _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+
+        if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
+    }
+
+    private void MoveCursorDown(bool isShift)
+    {
+        if (isShift) ExtendSelectionToCursor();
+        else if (_hasSelection)
+        {
+            GetSelectionBounds(out _, out _, out _cursorLine, out _cursorColumn);
+            ClearSelection();
+        }
+        else ClearSelection();
+
+        if (_cursorLine + 1 < _lines.Count) _cursorLine++;
+        _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+
+        if (isShift) { _selectionEndLine = _cursorLine; _selectionEndColumn = _cursorColumn; UpdateHasSelection(); }
     }
 
     private void OnPointerWheelChanged(object sender, PointerRoutedEventArgs e)
@@ -405,6 +961,9 @@ public sealed class SujianEditor : UserControl
         ds.Transform = System.Numerics.Matrix3x2.CreateTranslation(0, (float)(-_scrollY));
 
         var textColor = ((SolidColorBrush?)Foreground)?.Color ?? Colors.White;
+        var selectionColor = Color.FromArgb(76, 0, 120, 215);
+
+        DrawSelection(ds, indent, contentWidth, selectionColor);
 
         for (int i = 0; i < _lines.Count; i++)
         {
@@ -446,6 +1005,59 @@ public sealed class SujianEditor : UserControl
         DrawCursor(ds, indent);
     }
 
+    private void DrawSelection(CanvasDrawingSession ds, float indent, float contentWidth, Color selectionColor)
+    {
+        if (!_hasSelection) return;
+
+        GetSelectionBounds(out int startLine, out int startCol, out int endLine, out int endCol);
+
+        for (int i = startLine; i <= endLine; i++)
+        {
+            if (i >= _lines.Count) break;
+            var lineY = i * _lineHeight;
+            if (lineY + _lineHeight < _scrollY) continue;
+            if (lineY > _scrollY + ActualHeight) break;
+
+            int lineStartCol = (i == startLine) ? startCol : 0;
+            int lineEndCol = (i == endLine) ? endCol : _lines[i].Length;
+
+            float rectX = indent;
+            float rectWidth = contentWidth;
+
+            if (_textFormat != null && _canvas?.Device != null && _lines[i].Length > 0)
+            {
+                try
+                {
+                    using var layout = new CanvasTextLayout(
+                        _canvas.Device, _lines[i], _textFormat, Math.Max(1, contentWidth), _lineHeight);
+
+                    float startX = indent;
+                    float endX = indent + contentWidth;
+
+                    if (lineStartCol > 0)
+                    {
+                        var startMetrics = layout.GetCaretPosition(lineStartCol, false);
+                        startX = indent + startMetrics.X;
+                    }
+                    if (lineEndCol <= _lines[i].Length)
+                    {
+                        var endMetrics = layout.GetCaretPosition(lineEndCol, false);
+                        endX = indent + endMetrics.X;
+                    }
+
+                    rectX = startX;
+                    rectWidth = endX - startX;
+                }
+                catch { }
+            }
+
+            if (rectWidth > 0)
+            {
+                ds.FillRectangle(rectX, lineY, rectWidth, _lineHeight, selectionColor);
+            }
+        }
+    }
+
     private void DrawCursor(CanvasDrawingSession ds, float indent)
     {
         if (!_cursorVisible) return;
@@ -476,6 +1088,21 @@ public sealed class SujianEditor : UserControl
         float indent = GetFirstLineIndent();
         float cursorX = indent;
         float cursorY = _cursorLine * _lineHeight - (float)_scrollY;
+
+        var line = _lines[_cursorLine];
+        if (line.Length > 0 && _cursorColumn > 0 && _canvas?.Device != null && _textFormat != null)
+        {
+            try
+            {
+                var contentWidth = (float)ActualWidth - indent;
+                using var layout = new CanvasTextLayout(
+                    _canvas.Device, line, _textFormat, Math.Max(1, contentWidth), _lineHeight);
+                var metrics = layout.GetCaretPosition(_cursorColumn, false);
+                cursorX = indent + metrics.X;
+            }
+            catch { }
+        }
+
         return new Rect(cursorX, cursorY, 2, _lineHeight * 0.8);
     }
 
@@ -515,4 +1142,6 @@ public sealed class SujianEditor : UserControl
     public int GetCursorLine() => _cursorLine;
     public int GetCursorColumn() => _cursorColumn;
     public int GetLineCount() => _lines.Count;
+    public bool HasSelection => _hasSelection;
+    public string SelectedText => GetSelectedText();
 }

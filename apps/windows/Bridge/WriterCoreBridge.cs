@@ -7,6 +7,10 @@ public sealed record WorkspaceSummary(IReadOnlyList<ProjectSummary> Projects);
 public sealed record ProjectSummary(string Id, string Name);
 public sealed record VolumeSummary(string Id, string Name);
 public sealed record ChapterSummary(string Id, string Title);
+public sealed record SyncConfigDto(string RemoteUrl, string AccessToken, bool AutoSync, int IntervalMinutes);
+public sealed record WritingStatsDto(int TotalWords, int TodayWords, int SessionWords, int StreakDays, string SessionStartTime);
+public sealed record StarmapSummaryDto(string Id, string Name, int NodeCount, int EdgeCount);
+public sealed record ProjectStatsDto(int TotalWords, int TotalChapters, string LastEditedAt);
 
 internal sealed class EnvelopeResult
 {
@@ -55,6 +59,46 @@ public sealed class WriterCoreBridge
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     private static extern IntPtr writer_core_get_last_error();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_create_project(IntPtr name);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_create_volume(IntPtr projectId, IntPtr name);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_create_chapter(IntPtr projectId, IntPtr volumeId, IntPtr title);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_get_project_stats(IntPtr projectId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_load_sync_config();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_save_sync_config(IntPtr configJson);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_perform_sync();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_sync_dry_run();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_get_writing_stats();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_list_starmaps_for_project(IntPtr projectId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_get_starmap(IntPtr starmapId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_create_starmap(IntPtr projectId, IntPtr name);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_editor_visual_transaction(
+        IntPtr oldText, IntPtr newText, IntPtr oldSelection, IntPtr newSelection);
 
     private static IntPtr ToUtf8(string? s)
     {
@@ -255,6 +299,98 @@ public sealed class WriterCoreBridge
         }
     }
 
+    public Task<ProjectSummary> CreateProjectAsync(string name)
+    {
+        var namePtr = ToUtf8(name);
+        try
+        {
+            var resultPtr = writer_core_create_project(namePtr);
+            var json = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(json);
+            ThrowIfFailed(env);
+
+        var id = env.Data?.GetProperty("id").GetString() ?? "";
+        var title = env.Data?.GetProperty("title").GetString() ?? name;
+        return Task.FromResult(new ProjectSummary(id, title));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(namePtr);
+        }
+    }
+
+    public Task<VolumeSummary> CreateVolumeAsync(string projectId, string name)
+    {
+        var pidPtr = ToUtf8(projectId);
+        var namePtr = ToUtf8(name);
+        try
+        {
+            var resultPtr = writer_core_create_volume(pidPtr, namePtr);
+            var json = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(json);
+            ThrowIfFailed(env);
+
+            var id = env.Data?.GetProperty("id").GetString() ?? "";
+            var title = env.Data?.GetProperty("title").GetString() ?? name;
+            return Task.FromResult(new VolumeSummary(id, title));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pidPtr);
+            Marshal.FreeHGlobal(namePtr);
+        }
+    }
+
+    public Task<ChapterSummary> CreateChapterAsync(string projectId, string volumeId, string title)
+    {
+        var pidPtr = ToUtf8(projectId);
+        var vidPtr = ToUtf8(volumeId);
+        var titlePtr = ToUtf8(title);
+        try
+        {
+            var resultPtr = writer_core_create_chapter(pidPtr, vidPtr, titlePtr);
+            var json = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(json);
+            ThrowIfFailed(env);
+
+            var id = env.Data?.GetProperty("id").GetString() ?? "";
+            var chTitle = env.Data?.GetProperty("title").GetString() ?? title;
+            return Task.FromResult(new ChapterSummary(id, chTitle));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pidPtr);
+            Marshal.FreeHGlobal(vidPtr);
+            Marshal.FreeHGlobal(titlePtr);
+        }
+    }
+
+    public Task<ProjectStatsDto> GetProjectStatsAsync(string projectId)
+    {
+        var pidPtr = ToUtf8(projectId);
+        try
+        {
+            var resultPtr = writer_core_get_project_stats(pidPtr);
+            var json = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(json);
+            ThrowIfFailed(env);
+
+            int totalWords = 0, totalChapters = 0;
+            string lastEditedAt = "";
+            if (env.Data?.ValueKind == JsonValueKind.Object)
+            {
+                if (env.Data.Value.TryGetProperty("totalWords", out var tw)) totalWords = tw.GetInt32();
+                if (env.Data.Value.TryGetProperty("totalChapters", out var tc)) totalChapters = tc.GetInt32();
+                if (env.Data.Value.TryGetProperty("lastEditedAt", out var lea)) lastEditedAt = lea.GetString() ?? "";
+            }
+            return Task.FromResult(new ProjectStatsDto(totalWords, totalChapters, lastEditedAt));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pidPtr);
+        }
+    }
+
     public Task<LocalSettings> LoadSettingsAsync()
     {
         var resultPtr = writer_core_load_local_settings();
@@ -309,6 +445,178 @@ public sealed class WriterCoreBridge
         finally
         {
             Marshal.FreeHGlobal(textPtr);
+        }
+    }
+
+    public Task<SyncConfigDto> LoadSyncConfigAsync()
+    {
+        var resultPtr = writer_core_load_sync_config();
+        var json = PtrToStringAndFree(resultPtr);
+        var env = ParseEnvelope(json);
+        ThrowIfFailed(env);
+
+        var cfg = new SyncConfigDto("", "", false, 5);
+        if (env.Data?.ValueKind == JsonValueKind.Object)
+        {
+            var remoteUrl = env.Data.Value.TryGetProperty("remoteUrl", out var ru) ? ru.GetString() ?? "" : "";
+            var accessToken = env.Data.Value.TryGetProperty("accessToken", out var at) ? at.GetString() ?? "" : "";
+            var autoSync = env.Data.Value.TryGetProperty("autoSync", out var asv) && asv.GetBoolean();
+            var interval = env.Data.Value.TryGetProperty("intervalMinutes", out var im) ? im.GetInt32() : 5;
+            cfg = new SyncConfigDto(remoteUrl, accessToken, autoSync, interval);
+        }
+        return Task.FromResult(cfg);
+    }
+
+    public Task SaveSyncConfigAsync(SyncConfigDto config)
+    {
+        var json = JsonSerializer.Serialize(new
+        {
+            remoteUrl = config.RemoteUrl,
+            accessToken = config.AccessToken,
+            autoSync = config.AutoSync,
+            intervalMinutes = config.IntervalMinutes
+        });
+        var jsonPtr = ToUtf8(json);
+        try
+        {
+            var resultPtr = writer_core_save_sync_config(jsonPtr);
+            var resultJson = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(resultJson);
+            ThrowIfFailed(env);
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(jsonPtr);
+        }
+    }
+
+    public Task<string> PerformSyncAsync()
+    {
+        var resultPtr = writer_core_perform_sync();
+        var json = PtrToStringAndFree(resultPtr);
+        var env = ParseEnvelope(json);
+        ThrowIfFailed(env);
+        return Task.FromResult(json ?? "");
+    }
+
+    public Task<string> SyncDryRunAsync()
+    {
+        var resultPtr = writer_core_sync_dry_run();
+        var json = PtrToStringAndFree(resultPtr);
+        var env = ParseEnvelope(json);
+        ThrowIfFailed(env);
+        return Task.FromResult(json ?? "");
+    }
+
+    public Task<WritingStatsDto> GetWritingStatsAsync()
+    {
+        var resultPtr = writer_core_get_writing_stats();
+        var json = PtrToStringAndFree(resultPtr);
+        var env = ParseEnvelope(json);
+        ThrowIfFailed(env);
+
+        var stats = new WritingStatsDto(0, 0, 0, 0, "");
+        if (env.Data?.ValueKind == JsonValueKind.Object)
+        {
+            int totalWords = 0, todayWords = 0, sessionWords = 0, streakDays = 0;
+            string sessionStart = "";
+            if (env.Data.Value.TryGetProperty("totalWords", out var tw)) totalWords = tw.GetInt32();
+            if (env.Data.Value.TryGetProperty("todayWords", out var tdw)) todayWords = tdw.GetInt32();
+            if (env.Data.Value.TryGetProperty("sessionWords", out var sw)) sessionWords = sw.GetInt32();
+            if (env.Data.Value.TryGetProperty("streakDays", out var sd)) streakDays = sd.GetInt32();
+            if (env.Data.Value.TryGetProperty("sessionStartTime", out var ss)) sessionStart = ss.GetString() ?? "";
+            stats = new WritingStatsDto(totalWords, todayWords, sessionWords, streakDays, sessionStart);
+        }
+        return Task.FromResult(stats);
+    }
+
+    public Task<IReadOnlyList<StarmapSummaryDto>> ListStarmapsAsync(string projectId)
+    {
+        var pidPtr = ToUtf8(projectId);
+        try
+        {
+            var resultPtr = writer_core_list_starmaps_for_project(pidPtr);
+            var json = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(json);
+            ThrowIfFailed(env);
+
+            var list = new List<StarmapSummaryDto>();
+            if (env.Data?.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var sm in env.Data.Value.EnumerateArray())
+                {
+                    var id = sm.GetProperty("id").GetString() ?? "";
+                    var name = sm.GetProperty("name").GetString() ?? "";
+                    var nodeCount = sm.TryGetProperty("nodeCount", out var nc) ? nc.GetInt32() : 0;
+                    var edgeCount = sm.TryGetProperty("edgeCount", out var ec) ? ec.GetInt32() : 0;
+                    list.Add(new StarmapSummaryDto(id, name, nodeCount, edgeCount));
+                }
+            }
+            return Task.FromResult<IReadOnlyList<StarmapSummaryDto>>(list);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pidPtr);
+        }
+    }
+
+    public Task<string> GetStarmapAsync(string starmapId)
+    {
+        var sidPtr = ToUtf8(starmapId);
+        try
+        {
+            var resultPtr = writer_core_get_starmap(sidPtr);
+            var json = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(json);
+            ThrowIfFailed(env);
+            return Task.FromResult(json ?? "");
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(sidPtr);
+        }
+    }
+
+    public Task<StarmapSummaryDto> CreateStarmapAsync(string projectId, string name)
+    {
+        var pidPtr = ToUtf8(projectId);
+        var namePtr = ToUtf8(name);
+        try
+        {
+            var resultPtr = writer_core_create_starmap(pidPtr, namePtr);
+            var json = PtrToStringAndFree(resultPtr);
+            var env = ParseEnvelope(json);
+            ThrowIfFailed(env);
+
+            var id = env.Data?.GetProperty("id").GetString() ?? "";
+            var smName = env.Data?.GetProperty("name").GetString() ?? name;
+            return Task.FromResult(new StarmapSummaryDto(id, smName, 0, 0));
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(pidPtr);
+            Marshal.FreeHGlobal(namePtr);
+        }
+    }
+
+    public string? GetEditorVisualTransaction(string oldText, string newText, string oldSelection, string newSelection)
+    {
+        var oldTextPtr = ToUtf8(oldText);
+        var newTextPtr = ToUtf8(newText);
+        var oldSelPtr = ToUtf8(oldSelection);
+        var newSelPtr = ToUtf8(newSelection);
+        try
+        {
+            var resultPtr = writer_core_editor_visual_transaction(oldTextPtr, newTextPtr, oldSelPtr, newSelPtr);
+            return PtrToStringAndFree(resultPtr);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(oldTextPtr);
+            Marshal.FreeHGlobal(newTextPtr);
+            Marshal.FreeHGlobal(oldSelPtr);
+            Marshal.FreeHGlobal(newSelPtr);
         }
     }
 }

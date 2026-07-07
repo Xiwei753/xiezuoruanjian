@@ -17,6 +17,7 @@ public sealed partial class MainWindow : Window
     private readonly List<ProjectSummary> _projects = new();
     private readonly List<VolumeSummary> _volumes = new();
     private readonly List<ChapterSummary> _chapters = new();
+    private Editor.SujianEditorHost? _currentEditor;
 
     public MainWindow()
     {
@@ -94,10 +95,11 @@ public sealed partial class MainWindow : Window
         };
         dialog.XamlRoot = Content.XamlRoot;
         var result = await dialog.ShowAsync();
-        if (result == ContentDialogResult.Primary && dialog.Content is TextBox tb)
+        if (result == ContentDialogResult.Primary && dialog.Content is TextBox tb && !string.IsNullOrWhiteSpace(tb.Text))
         {
             try
             {
+                await _core.CreateProjectAsync(tb.Text.Trim());
                 var workspace = await _core.OpenWorkspaceAsync(null);
                 _projects.Clear();
                 _projects.AddRange(workspace.Projects);
@@ -127,10 +129,11 @@ public sealed partial class MainWindow : Window
         };
         dialog.XamlRoot = Content.XamlRoot;
         var result = await dialog.ShowAsync();
-        if (result == ContentDialogResult.Primary && dialog.Content is TextBox tb)
+        if (result == ContentDialogResult.Primary && dialog.Content is TextBox tb && !string.IsNullOrWhiteSpace(tb.Text))
         {
             try
             {
+                await _core.CreateChapterAsync(_currentProjectId, _currentVolumeId, tb.Text.Trim());
                 var chapters = await _core.ListChaptersAsync(_currentProjectId, _currentVolumeId);
                 _chapters.Clear();
                 _chapters.AddRange(chapters);
@@ -152,19 +155,46 @@ public sealed partial class MainWindow : Window
     {
         if (args.SelectedItem is NavigationViewItem item && item.Tag is string tag)
         {
-            if (tag == "projects" && _currentProjectId != null)
+            switch (tag)
             {
-                OpenChapterInEditor();
+                case "projects":
+                    if (_currentProjectId != null) OpenChapterInEditor();
+                    break;
+                case "stats":
+                    ContentFrame.Navigate(typeof(StatsPage));
+                    break;
+                case "starmap":
+                    var starmapPage = new StarmapPage();
+                    if (_currentProjectId != null) starmapPage.SetProject(_currentProjectId);
+                    ContentFrame.Content = starmapPage;
+                    break;
+                case "sync":
+                    ContentFrame.Navigate(typeof(SyncPage));
+                    break;
             }
+        }
+        else if (args.IsSettingsSelected)
+        {
+            ContentFrame.Navigate(typeof(SettingsPage));
         }
     }
 
     private void RefreshNav()
     {
         NavView.MenuItems.Clear();
+        NavView.MenuItems.Add(new NavigationViewItem { Content = "项目", Tag = "projects", Icon = new SymbolIcon(Symbol.Library) });
+        NavView.MenuItems.Add(new NavigationViewItem { Content = "写作统计", Tag = "stats", Icon = new SymbolIcon(Symbol.Repair) });
+        NavView.MenuItems.Add(new NavigationViewItem { Content = "星图", Tag = "starmap", Icon = new SymbolIcon(Symbol.Map) });
+        NavView.MenuItems.Add(new NavigationViewItem { Content = "同步", Tag = "sync", Icon = new SymbolIcon(Symbol.Sync) });
+
         foreach (var p in _projects)
         {
-            NavView.MenuItems.Add(new NavigationViewItem { Content = p.Name, Tag = p.Id });
+            var projectItem = new NavigationViewItem { Content = p.Name, Tag = $"project:{p.Id}" };
+            foreach (var v in _volumes.Where(v => true))
+            {
+                projectItem.MenuItems.Add(new NavigationViewItem { Content = v.Name, Tag = $"volume:{v.Id}" });
+            }
+            NavView.MenuItems.Add(projectItem);
         }
     }
 
@@ -175,8 +205,10 @@ public sealed partial class MainWindow : Window
         try
         {
             var content = await _core.OpenChapterAsync(_currentProjectId, _currentVolumeId, _currentChapterId);
-            var editor = new Editor.SujianEditor { Text = content };
-            ContentFrame.Content = editor;
+            _currentEditor = new Editor.SujianEditorHost { Text = content };
+            _currentEditor.SetChapterContext(_currentProjectId, _currentVolumeId, _currentChapterId, _core);
+            _currentEditor.EnableAutoSave();
+            ContentFrame.Content = _currentEditor;
         }
         catch (WriterCoreException ex)
         {
@@ -184,9 +216,13 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private Editor.SujianEditorHost? GetActiveEditorHost()
+    {
+        return _currentEditor;
+    }
+
     private Editor.SujianEditor? GetActiveEditor()
     {
-        if (ContentFrame.Content is Editor.SujianEditor editor) return editor;
         return null;
     }
 

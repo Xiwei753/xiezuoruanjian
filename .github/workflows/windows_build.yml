@@ -1,0 +1,89 @@
+name: Sujian Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/windows/**'
+      - 'bindings/windows/**'
+      - 'core/writer_core/**'
+      - '.github/workflows/windows_build.yml'
+      - 'Cargo.lock'
+      - 'Cargo.toml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build:
+    name: Windows Build & Test
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Test Rust core
+        run: cargo test -p writer_core
+
+      - name: Build writer_core.dll (C ABI)
+        run: cargo build -p writer_core --release --features harmony-ffi
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.platform }}-pc-windows-msvc
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Copy writer_core.dll to Windows app bin
+        shell: pwsh
+        run: |
+          $dll = "target/release/writer_core.dll"
+          if (Test-Path $dll) {
+            New-Item -ItemType Directory -Force -Path "apps/windows/bin"
+            Copy-Item $dll "apps/windows/bin/writer_core.dll"
+          } else {
+            $targetDll = "target/${{ matrix.platform }}-pc-windows-msvc/release/writer_core.dll"
+            if (Test-Path $targetDll) {
+              New-Item -ItemType Directory -Force -Path "apps/windows/bin"
+              Copy-Item $targetDll "apps/windows/bin/writer_core.dll"
+            } else {
+              Write-Host "::warning::writer_core.dll not found, C# build may fail"
+            }
+          }
+
+      - name: Restore NuGet packages
+        working-directory: apps/windows
+        run: dotnet restore
+
+      - name: Build Windows app
+        working-directory: apps/windows
+        run: dotnet build -c Debug -p:Platform=${{ matrix.platform }}
+        continue-on-error: true
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sujian-windows-${{ matrix.platform }}
+          path: apps/windows/bin/
+          retention-days: 7

@@ -15,12 +15,15 @@
         </CommandBar>
 
         <NavigationView Grid.Row="1" Grid.Column="0"
-            IsSettingsVisible="False"
+            IsSettingsVisible="True"
             PaneDisplayMode="Left"
             SelectionChanged="Nav_SelectionChanged"
             x:Name="NavView">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="项目" Tag="projects" />
+                <NavigationViewItem Content="项目" Tag="projects" Icon="Library" />
+                <NavigationViewItem Content="写作统计" Tag="stats" Icon="Repair" />
+                <NavigationViewItem Content="星图" Tag="starmap" Icon="Map" />
+                <NavigationViewItem Content="同步" Tag="sync" Icon="Sync" />
             </NavigationView.MenuItems>
         </NavigationView>
 

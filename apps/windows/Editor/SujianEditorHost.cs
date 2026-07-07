@@ -10,6 +10,11 @@ public sealed class SujianEditorHost : UserControl
     private readonly SujianEditor _editor;
     private readonly ScrollViewer _scrollViewer;
     private InputPane? _inputPane;
+    private DispatcherTimer? _autoSaveTimer;
+    private string? _currentProjectId;
+    private string? _currentVolumeId;
+    private string? _currentChapterId;
+    private Bridge.WriterCoreBridge? _core;
 
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
         nameof(Text), typeof(string), typeof(SujianEditorHost),
@@ -52,10 +57,11 @@ public sealed class SujianEditorHost : UserControl
         };
         Content = _scrollViewer;
 
-        _editor.TextChanged += (s, e) =>
+        _editor.TextChangedByUser += (s, e) =>
         {
             if (Text != _editor.Text)
                 SetValue(TextProperty, _editor.Text);
+            TextChangedByUser?.Invoke(this, EventArgs.Empty);
         };
 
         RegisterPropertyChangedCallback(TextProperty, (s, dp) =>
@@ -77,6 +83,41 @@ public sealed class SujianEditorHost : UserControl
         Loaded += OnLoaded;
     }
 
+    public event EventHandler? TextChangedByUser;
+
+    public void SetChapterContext(string projectId, string volumeId, string chapterId, Bridge.WriterCoreBridge core)
+    {
+        _currentProjectId = projectId;
+        _currentVolumeId = volumeId;
+        _currentChapterId = chapterId;
+        _core = core;
+    }
+
+    public void EnableAutoSave(int intervalSeconds = 30)
+    {
+        DisableAutoSave();
+        _autoSaveTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(intervalSeconds) };
+        _autoSaveTimer.Tick += OnAutoSaveTick;
+        _autoSaveTimer.Start();
+    }
+
+    public void DisableAutoSave()
+    {
+        _autoSaveTimer?.Stop();
+        _autoSaveTimer = null;
+    }
+
+    private async void OnAutoSaveTick(object? sender, object e)
+    {
+        if (_core == null || _currentProjectId == null || _currentVolumeId == null || _currentChapterId == null)
+            return;
+        try
+        {
+            await _core.SaveChapterAsync(_currentProjectId, _currentVolumeId, _currentChapterId, _editor.Text);
+        }
+        catch { }
+    }
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         try
@@ -90,8 +131,12 @@ public sealed class SujianEditorHost : UserControl
     private void OnInputPaneShowing(InputPane sender, InputPaneVisibilityEventArgs args)
     {
         var cursorRect = _editor.GetCursorRect();
-        System.Diagnostics.Debug.WriteLine(
-            $"[SujianEditorHost] InputPane showing. Cursor rect: X={cursorRect.X}, Y={cursorRect.Y}");
+        var editorBottom = _editor.ActualHeight;
+        if (cursorRect.Y + cursorRect.Height > editorBottom - sender.OccludedRect.Height)
+        {
+            var delta = cursorRect.Y + cursorRect.Height - (editorBottom - sender.OccludedRect.Height);
+            _scrollViewer.ChangeView(null, _scrollViewer.VerticalOffset + delta, null);
+        }
     }
 
     public Rect GetCursorRectForIME()

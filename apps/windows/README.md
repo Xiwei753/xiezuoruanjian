@@ -7,7 +7,7 @@ Windows 不再走 Qt 桌面端路线，也不复用 `apps/Linux_qt`。本目录�
 - 应用壳：WinUI 3 / Windows App SDK，适合承载普通应用壳和导航页面。
 - 正文写作区：自研 `SujianEditor`，不能把 `RichEditBox` / `TextBox` 作为正式编辑器路线。
 - 文本布局与渲染：DirectWrite + Direct2D 是 Windows 自研文本布局和渲染主路径；DirectWrite 负责 text layout / glyph / hit test / caret metrics，Direct2D 负责绘制。
-- 输入法：Windows IME / TSF composition + commit 链路，候选窗口锚点由 `SujianEditor` 光标矩形提供。
+- 输入法：Windows IME / TSF composition + commit 链路，通过 `CoreTextEditContext` 自动集成，候选窗口锚点由 `SujianEditor` 光标矩形提供。
 - 业务核心：`core/writer_core` 是唯一业务核心。Windows 只做 UI、输入法、文本布局、渲染、动画和平台集成。
 - 桥接层：`bindings/windows/` 提供 Rust cdylib → P/Invoke → C# `WriterCoreBridge` 完整链路。
 
@@ -20,10 +20,17 @@ apps/windows/
 ├── Bridge/
 │   └── WriterCoreBridge.cs        — P/Invoke 桥接层（writer_core.dll C ABI）
 ├── Editor/
-│   ├── SujianEditor.cs            — 自研写作区核心控件
-│   └── SujianEditorHost.cs        — 写作区宿主（IME/InputPane 协调）
+│   ├── SujianEditor.cs            — 自研写作区核心控件（TSF + 选区 + 剪贴板）
+│   ├── SujianEditorHost.cs        — 写作区宿主（IME/InputPane/自动保存）
+│   └── Animation/
+│       ├── EditorVisualTransaction.cs — 视觉事务 DTO
+│       ├── SujianAnimationController.cs — 动画控制器
+│       └── SujianAnimationOverlay.cs   — 动画叠加层
 ├── Pages/
-│   └── SettingsPage.xaml / .cs    — 设置页（字号、行高、缩进、主题）
+│   ├── SettingsPage.xaml / .cs    — 设置页（字号、行高、缩进、主题）
+│   ├── SyncPage.xaml / .cs        — 同步页（远程仓库、自动同步）
+│   ├── StatsPage.xaml / .cs       — 写作统计页
+│   └── StarmapPage.xaml / .cs     — 星图页
 ├── SujianWindows.csproj           — 项目文件（WinUI 3 + Win2D）
 └── app.manifest                   — 应用清单
 
@@ -49,19 +56,25 @@ bindings/windows/
 - [x] 打开 workspace、列项目、列卷、列章节、打开章节、保存章节端到端闭环
 - [x] 设置页（字号、行高、首行缩进、自动保存、主题）
 - [x] 深色模式支持（WinUI 3 主题切换）
-- [x] `SujianEditorHost` 宿主控件（IME InputPane 协调）
-- [x] IME composition/commit 基础 API（StartComposition/UpdateComposition/CommitComposition/CancelComposition）
+- [x] `SujianEditorHost` 宿主控件（IME InputPane 协调、自动保存）
+- [x] TSF 自动集成（`CoreTextEditContext`：composition/commit/候选窗口锚点自动跟随）
+- [x] 鼠标拖选 + Shift+方向键选择 + Ctrl+A 全选
+- [x] 选区可视化渲染（半透明蓝色高亮）
+- [x] 复制 (Ctrl+C) / 剪切 (Ctrl+X) / 粘贴 (Ctrl+V)
+- [x] 创建项目/卷/章节（通过 WriterCoreBridge P/Invoke）
+- [x] 正文动画骨架（`SujianAnimationController` + `SujianAnimationOverlay` + `EditorVisualTransaction` DTO）
+- [x] 同步页（远程 URL、访问令牌、自动同步、试运行、立即同步）
+- [x] 写作统计页（总字数、今日字数、本次字数、连续天数）
+- [x] 星图页（列表、新建、刷新）
+- [x] Windows CI 工作流（`.github/workflows/windows_build.yml`）
 
 ### 待实现 / 待提交验收
 
-- [ ] Windows IME / TSF 完整自动集成（当前需手动调用 composition API）
-- [ ] 候选窗口锚点跟随 `SujianEditor` 光标矩形
-- [ ] 鼠标拖选、Shift+方向键选择
-- [ ] 复制、剪切、粘贴
-- [ ] 文字动画（Core `EditorVisualTransaction` → SujianEditor overlay）
+- [ ] 动画与编辑器集成（当前骨架就位，需接入 Core `editor_visual_transaction` 实际数据流）
+- [ ] 星图可视化画布（Canvas 交互式节点/边渲染）
 - [ ] 滚动优化（虚拟行、viewport 裁剪）
-- [ ] 同步页、统计页、星图页
-- [ ] Windows CI / 打包
+- [ ] Windows 打包（MSIX / exe 安装器）
+- [ ] 真机验证：中文 IME composition/commit、候选窗口位置、DPI 缩放
 
 ## 第一阶段最小闭环
 
