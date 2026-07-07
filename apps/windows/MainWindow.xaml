@@ -7,18 +7,25 @@
         <CommandBar Grid.Row="0" Grid.ColumnSpan="2" DefaultLabelPosition="Right">
             <AppBarButton Label="打开工作区" Click="OpenWorkspace_Click" />
             <AppBarButton Label="保存章节" Click="SaveChapter_Click" />
+            <AppBarButton Label="新建项目" Click="CreateProject_Click" />
+            <AppBarButton Label="新建章节" Click="CreateChapter_Click" />
+            <CommandBar.SecondaryCommands>
+                <AppBarButton Label="设置" Click="Settings_Click" />
+            </CommandBar.SecondaryCommands>
         </CommandBar>
 
-        <NavigationView Grid.Row="1" Grid.Column="0" IsSettingsVisible="False" PaneDisplayMode="Left">
+        <NavigationView Grid.Row="1" Grid.Column="0"
+            IsSettingsVisible="False"
+            PaneDisplayMode="Left"
+            SelectionChanged="Nav_SelectionChanged"
+            x:Name="NavView">
             <NavigationView.MenuItems>
-                <NavigationViewItem Content="项目" />
-                <NavigationViewItem Content="卷" />
-                <NavigationViewItem Content="章节" />
+                <NavigationViewItem Content="项目" Tag="projects" />
             </NavigationView.MenuItems>
         </NavigationView>
 
-        <Border Grid.Row="1" Grid.Column="1" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-            <editor:SujianEditor x:Name="Editor" />
-        </Border>
+        <Grid Grid.Row="1" Grid.Column="1" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+            <Frame x:Name="ContentFrame" />
+        </Grid>
     </Grid>
 </Window>

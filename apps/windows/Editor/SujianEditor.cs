@@ -2,6 +2,7 @@ using Microsoft.Graphics.Canvas;
 using Microsoft.Graphics.Canvas.Text;
 using Microsoft.Graphics.Canvas.UI.Xaml;
 using Microsoft.UI;
+using Microsoft.UI.Text;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
@@ -21,10 +22,15 @@ public sealed class SujianEditor : UserControl
     private double _scrollY;
     private float _lineHeight = 24f;
     private float _fontSize = 16f;
+    private float _firstLineIndentEm = 2f;
     private CanvasTextFormat? _textFormat;
     private CanvasControl? _canvas;
     private bool _isComposing;
     private string _compositionText = string.Empty;
+    private bool _cursorVisible = true;
+    private DispatcherTimer? _cursorBlinkTimer;
+    private int _undoIndex;
+    private readonly List<string> _undoStack = new();
 
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
         nameof(Text),
@@ -32,10 +38,34 @@ public sealed class SujianEditor : UserControl
         typeof(SujianEditor),
         new PropertyMetadata(string.Empty, OnTextChanged));
 
+    public static readonly DependencyProperty FontSizeSettingProperty = DependencyProperty.Register(
+        nameof(FontSizeSetting),
+        typeof(float),
+        typeof(SujianEditor),
+        new PropertyMetadata(16f, OnFontSizeSettingChanged));
+
+    public static readonly DependencyProperty FirstLineIndentEmProperty = DependencyProperty.Register(
+        nameof(FirstLineIndentEm),
+        typeof(float),
+        typeof(SujianEditor),
+        new PropertyMetadata(2f, OnIndentChanged));
+
     public string Text
     {
         get => (string)GetValue(TextProperty);
         set => SetValue(TextProperty, value ?? string.Empty);
+    }
+
+    public float FontSizeSetting
+    {
+        get => (float)GetValue(FontSizeSettingProperty);
+        set => SetValue(FontSizeSettingProperty, value);
+    }
+
+    public float FirstLineIndentEm
+    {
+        get => (float)GetValue(FirstLineIndentEmProperty);
+        set => SetValue(FirstLineIndentEmProperty, value);
     }
 
     public SujianEditor()
@@ -47,11 +77,30 @@ public sealed class SujianEditor : UserControl
         KeyDown += OnKeyDown;
         CharacterReceived += OnCharacterReceived;
         PointerWheelChanged += OnPointerWheelChanged;
+        GotFocus += OnGotFocus;
+        LostFocus += OnLostFocus;
 
         _canvas = new CanvasControl();
         _canvas.CreateResources += OnCreateResources;
         _canvas.Draw += OnDraw;
         Content = _canvas;
+
+        _cursorBlinkTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(530) };
+        _cursorBlinkTimer.Tick += (_, _) => { _cursorVisible = !_cursorVisible; _canvas?.Invalidate(); };
+    }
+
+    private void OnGotFocus(object sender, RoutedEventArgs e)
+    {
+        _cursorVisible = true;
+        _cursorBlinkTimer?.Start();
+        _canvas?.Invalidate();
+    }
+
+    private void OnLostFocus(object sender, RoutedEventArgs e)
+    {
+        _cursorBlinkTimer?.Stop();
+        _cursorVisible = false;
+        _canvas?.Invalidate();
     }
 
     private void OnCreateResources(CanvasControl sender, object args)
@@ -70,6 +119,21 @@ public sealed class SujianEditor : UserControl
         };
     }
 
+    private static void OnFontSizeSettingChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var editor = (SujianEditor)d;
+        editor._fontSize = (float)e.NewValue;
+        editor.EnsureTextFormat();
+        editor._canvas?.Invalidate();
+    }
+
+    private static void OnIndentChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var editor = (SujianEditor)d;
+        editor._firstLineIndentEm = (float)e.NewValue;
+        editor._canvas?.Invalidate();
+    }
+
     private static void OnTextChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
     {
         var editor = (SujianEditor)d;
@@ -86,8 +150,20 @@ public sealed class SujianEditor : UserControl
         _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
     }
 
+    private void PushUndo()
+    {
+        var current = string.Join('\n', _lines);
+        if (_undoStack.Count > 0 && _undoStack[_undoStack.Count - 1] == current) return;
+        if (_undoIndex < _undoStack.Count)
+            _undoStack.RemoveRange(_undoIndex, _undoStack.Count - _undoIndex);
+        _undoStack.Add(current);
+        if (_undoStack.Count > 200) _undoStack.RemoveAt(0);
+        _undoIndex = _undoStack.Count;
+    }
+
     private void CommitText(string text)
     {
+        PushUndo();
         foreach (var ch in text)
         {
             if (ch == '\r') continue;
@@ -117,6 +193,7 @@ public sealed class SujianEditor : UserControl
 
     private void DeleteBackward()
     {
+        PushUndo();
         if (_cursorColumn > 0)
         {
             var line = _lines[_cursorLine];
@@ -136,6 +213,7 @@ public sealed class SujianEditor : UserControl
 
     private void DeleteForward()
     {
+        PushUndo();
         var line = _lines[_cursorLine];
         if (_cursorColumn < line.Length)
         {
@@ -149,6 +227,22 @@ public sealed class SujianEditor : UserControl
         PublishText();
     }
 
+    private void Undo()
+    {
+        if (_undoIndex <= 0) return;
+        _undoIndex--;
+        LoadPlainText(_undoStack[_undoIndex]);
+        PublishText();
+    }
+
+    private void Redo()
+    {
+        if (_undoIndex >= _undoStack.Count) return;
+        _undoIndex++;
+        LoadPlainText(_undoStack[_undoIndex - 1]);
+        PublishText();
+    }
+
     private void PublishText()
     {
         var next = string.Join('\n', _lines);
@@ -156,22 +250,29 @@ public sealed class SujianEditor : UserControl
         _canvas?.Invalidate();
     }
 
+    private float GetFirstLineIndent()
+    {
+        return _firstLineIndentEm * _fontSize;
+    }
+
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
         Focus(FocusState.Pointer);
         var point = e.GetCurrentPoint(this);
+        var indent = GetFirstLineIndent();
         var y = point.Position.Y + _scrollY;
         _cursorLine = Math.Clamp((int)(y / _lineHeight), 0, _lines.Count - 1);
         var line = _lines[_cursorLine];
         if (line.Length > 0 && _textFormat != null)
         {
-            var x = (float)point.Position.X;
-            _cursorColumn = Math.Clamp(XToCharIndex(line, x), 0, line.Length);
+            var x = (float)point.Position.X - indent;
+            _cursorColumn = Math.Clamp(XToCharIndex(line, Math.Max(0, x)), 0, line.Length);
         }
         else
         {
             _cursorColumn = 0;
         }
+        _cursorVisible = true;
         _canvas?.Invalidate();
         e.Handled = true;
     }
@@ -182,7 +283,7 @@ public sealed class SujianEditor : UserControl
         try
         {
             using var layout = new CanvasTextLayout(
-                _canvas.Device, line, _textFormat, (float)ActualWidth, _lineHeight);
+                _canvas.Device, line, _textFormat, (float)ActualWidth - GetFirstLineIndent(), _lineHeight);
             var hitTest = layout.HitTest(x, 0);
             return Math.Clamp(hitTest.CharacterIndex, 0, line.Length);
         }
@@ -202,6 +303,27 @@ public sealed class SujianEditor : UserControl
 
     private void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
+        var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Control);
+        bool isCtrl = ctrl.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
+
+        if (isCtrl)
+        {
+            switch (e.Key)
+            {
+                case VirtualKey.Z:
+                    Undo();
+                    e.Handled = true;
+                    return;
+                case VirtualKey.Y:
+                    Redo();
+                    e.Handled = true;
+                    return;
+                case VirtualKey.A:
+                    e.Handled = true;
+                    return;
+            }
+        }
+
         switch (e.Key)
         {
             case VirtualKey.Back:
@@ -238,6 +360,28 @@ public sealed class SujianEditor : UserControl
                 _canvas?.Invalidate();
                 e.Handled = true;
                 break;
+            case VirtualKey.Home:
+                _cursorColumn = 0;
+                _canvas?.Invalidate();
+                e.Handled = true;
+                break;
+            case VirtualKey.End:
+                _cursorColumn = _lines[_cursorLine].Length;
+                _canvas?.Invalidate();
+                e.Handled = true;
+                break;
+            case VirtualKey.PageUp:
+                _cursorLine = Math.Max(0, _cursorLine - (int)(ActualHeight / _lineHeight));
+                _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+                _canvas?.Invalidate();
+                e.Handled = true;
+                break;
+            case VirtualKey.PageDown:
+                _cursorLine = Math.Min(_lines.Count - 1, _cursorLine + (int)(ActualHeight / _lineHeight));
+                _cursorColumn = Math.Clamp(_cursorColumn, 0, _lines[_cursorLine].Length);
+                _canvas?.Invalidate();
+                e.Handled = true;
+                break;
         }
     }
 
@@ -255,62 +399,82 @@ public sealed class SujianEditor : UserControl
         var width = (float)sender.ActualWidth;
         if (width <= 0 || _textFormat == null) return;
 
-        var fullText = string.Join("\n", _lines);
-
-        CanvasTextLayout? layout = null;
-        try
-        {
-            layout = new CanvasTextLayout(sender.Device, fullText, _textFormat, width, float.MaxValue);
-            _lineHeight = layout.LineSpacing > 0 ? layout.LineSpacing : 24f;
-        }
-        catch
-        {
-            DrawCursorOnly(ds, width);
-            return;
-        }
+        var indent = GetFirstLineIndent();
+        var contentWidth = width - indent;
 
         ds.Transform = System.Numerics.Matrix3x2.CreateTranslation(0, (float)(-_scrollY));
 
         var textColor = ((SolidColorBrush?)Foreground)?.Color ?? Colors.White;
-        ds.DrawTextLayout(layout, 0, 0, textColor);
 
-        DrawCursorFromLayout(ds, layout);
+        for (int i = 0; i < _lines.Count; i++)
+        {
+            var lineY = i * _lineHeight;
+            if (lineY + _lineHeight < _scrollY) continue;
+            if (lineY > _scrollY + ActualHeight) break;
+
+            var lineText = _lines[i];
+            var lineIndent = indent;
+
+            if (!string.IsNullOrEmpty(lineText) && contentWidth > 0)
+            {
+                try
+                {
+                    using var layout = new CanvasTextLayout(
+                        sender.Device, lineText, _textFormat, contentWidth, _lineHeight);
+                    _lineHeight = layout.LineSpacing > 0 ? layout.LineSpacing : 24f;
+                    ds.DrawTextLayout(layout, lineIndent, lineY, textColor);
+                }
+                catch
+                {
+                    ds.DrawText(lineText, lineIndent, lineY, textColor);
+                }
+            }
+        }
+
+        if (_isComposing && !string.IsNullOrEmpty(_compositionText))
+        {
+            try
+            {
+                var compY = _cursorLine * _lineHeight;
+                using var compLayout = new CanvasTextLayout(
+                    sender.Device, _compositionText, _textFormat, contentWidth, _lineHeight);
+                ds.DrawTextLayout(compLayout, indent, compY, Colors.DodgerBlue);
+            }
+            catch { }
+        }
+
+        DrawCursor(ds, indent);
     }
 
-    private void DrawCursorFromLayout(CanvasDrawingSession ds, CanvasTextLayout layout)
+    private void DrawCursor(CanvasDrawingSession ds, float indent)
     {
-        var cursorColor = Colors.DodgerBlue;
-        var lineStartOffset = 0;
-        for (int i = 0; i < _cursorLine; i++)
-        {
-            lineStartOffset += _lines[i].Length + 1;
-        }
-        var charOffset = lineStartOffset + _cursorColumn;
+        if (!_cursorVisible) return;
 
-        float cursorX = 0;
+        var cursorColor = Colors.DodgerBlue;
+        float cursorX = indent;
         float cursorY = _cursorLine * _lineHeight;
 
-        try
+        var line = _lines[_cursorLine];
+        if (line.Length > 0 && _cursorColumn > 0 && _canvas?.Device != null && _textFormat != null)
         {
-            var metrics = layout.GetCaretPosition(charOffset, false);
-            cursorX = metrics.X;
+            try
+            {
+                var contentWidth = (float)ActualWidth - indent;
+                using var layout = new CanvasTextLayout(
+                    _canvas.Device, line, _textFormat, Math.Max(1, contentWidth), _lineHeight);
+                var metrics = layout.GetCaretPosition(_cursorColumn, false);
+                cursorX = indent + metrics.X;
+            }
+            catch { }
         }
-        catch { }
 
-        ds.FillRectangle(cursorX, cursorY, 2f, _lineHeight * 0.8f, cursorColor);
-    }
-
-    private void DrawCursorOnly(CanvasDrawingSession ds, float width)
-    {
-        var cursorColor = Colors.DodgerBlue;
-        float cursorX = 0;
-        float cursorY = _cursorLine * _lineHeight - (float)_scrollY;
         ds.FillRectangle(cursorX, cursorY, 2f, _lineHeight * 0.8f, cursorColor);
     }
 
     public Rect GetCursorRect()
     {
-        float cursorX = 0;
+        float indent = GetFirstLineIndent();
+        float cursorX = indent;
         float cursorY = _cursorLine * _lineHeight - (float)_scrollY;
         return new Rect(cursorX, cursorY, 2, _lineHeight * 0.8);
     }
@@ -324,6 +488,7 @@ public sealed class SujianEditor : UserControl
     public void UpdateComposition(string text)
     {
         _compositionText = text;
+        _canvas?.Invalidate();
     }
 
     public void CommitComposition(string text)
@@ -334,11 +499,20 @@ public sealed class SujianEditor : UserControl
         {
             CommitText(text);
         }
+        else
+        {
+            _canvas?.Invalidate();
+        }
     }
 
     public void CancelComposition()
     {
         _isComposing = false;
         _compositionText = string.Empty;
+        _canvas?.Invalidate();
     }
+
+    public int GetCursorLine() => _cursorLine;
+    public int GetCursorColumn() => _cursorColumn;
+    public int GetLineCount() => _lines.Count;
 }

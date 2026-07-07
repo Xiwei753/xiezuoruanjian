@@ -9,25 +9,59 @@ Windows 不再走 Qt 桌面端路线，也不复用 `apps/Linux_qt`。本目录�
 - 文本布局与渲染：DirectWrite + Direct2D 是 Windows 自研文本布局和渲染主路径；DirectWrite 负责 text layout / glyph / hit test / caret metrics，Direct2D 负责绘制。
 - 输入法：Windows IME / TSF composition + commit 链路，候选窗口锚点由 `SujianEditor` 光标矩形提供。
 - 业务核心：`core/writer_core` 是唯一业务核心。Windows 只做 UI、输入法、文本布局、渲染、动画和平台集成。
+- 桥接层：`bindings/windows/` 提供 Rust cdylib → P/Invoke → C# `WriterCoreBridge` 完整链路。
 
-## 风险前置
+## 目录结构
 
-WinUI 3 / Windows App SDK 与 DirectWrite/Direct2D 自定义文本渲染可成立，但社区经验表明细节多且常需 workaround。Windows 端不得先堆完整页面；必须先证明自研写作区 MVP 稳定，尤其是中文 IME、composition、commit、候选窗口锚点、光标矩形、DPI 和字体渲染。
+```
+apps/windows/
+├── App.xaml / App.xaml.cs          — 应用入口，深色模式支持
+├── MainWindow.xaml / .cs           — 主窗口，导航、项目/章节列表
+├── Bridge/
+│   └── WriterCoreBridge.cs        — P/Invoke 桥接层（writer_core.dll C ABI）
+├── Editor/
+│   ├── SujianEditor.cs            — 自研写作区核心控件
+│   └── SujianEditorHost.cs        — 写作区宿主（IME/InputPane 协调）
+├── Pages/
+│   └── SettingsPage.xaml / .cs    — 设置页（字号、行高、缩进、主题）
+├── SujianWindows.csproj           — 项目文件（WinUI 3 + Win2D）
+└── app.manifest                   — 应用清单
+
+bindings/windows/
+├── WriterCoreBridge.cs            — P/Invoke 契约参考（与 apps/windows/Bridge/ 同步）
+├── build.ps1                      — 编译 writer_core.dll 并复制到 bin/
+└── README.md                      — 桥接层文档
+```
 
 ## 当前实现状态
 
-本 README 记录 issue #433 的目标路线和验收口径；在对应工程文件、编辑器实现和桥接代码正式提交前，不把目标能力写成“已完成”。
+### 已实现
+
+- [x] WinUI 3 / Windows App SDK 应用壳
+- [x] 自研 `SujianEditor` 基础骨架：纯文本行存储、点击定位光标、字符输入、删除、换行、方向键移动、基础滚动
+- [x] Win2D (CanvasControl) 文本布局与渲染（基于 DirectWrite/Direct2D）
+- [x] 光标绘制与 hit test / caret metrics
+- [x] 首行缩进（视觉效果，不写入正文空格）
+- [x] 光标闪烁
+- [x] 撤销/重做基础栈
+- [x] Home/End/PageUp/PageDown 键
+- [x] `WriterCoreBridge` P/Invoke 桥接层（调用 writer_core.dll C ABI）
+- [x] 打开 workspace、列项目、列卷、列章节、打开章节、保存章节端到端闭环
+- [x] 设置页（字号、行高、首行缩进、自动保存、主题）
+- [x] 深色模式支持（WinUI 3 主题切换）
+- [x] `SujianEditorHost` 宿主控件（IME InputPane 协调）
+- [x] IME composition/commit 基础 API（StartComposition/UpdateComposition/CommitComposition/CancelComposition）
 
 ### 待实现 / 待提交验收
-- WinUI 3 / Windows App SDK 应用壳。
-- 自研 `SujianEditor` 基础骨架：纯文本行存储、点击定位光标、字符输入、删除、换行、方向键移动、基础滚动。
-- DirectWrite/Direct2D 文本布局与渲染。
-- 光标绘制与 hit test / caret metrics。
-- Windows IME / TSF composition/commit 完整链路，候选窗口锚点跟随 `SujianEditor` 光标矩形。
-- `WriterCoreBridge` 绑定真实 writer_core（通过 C ABI / UniFFI）。
-- 打开 workspace、列项目、列卷、列章节、打开章节、保存章节端到端闭环。
-- 文字动画（Core `EditorVisualTransaction` → SujianEditor overlay）：暂不实现动画，不参与当前动画主路径。Windows `SujianEditor` 不消费 `editor_visual_transaction` 契约，不创建 hidden range，不创建 overlay 动画。待自研写作区 MVP 稳定后再评估是否接入同一动画契约。
-- 滚动优化（虚拟行、viewport 裁剪）。
+
+- [ ] Windows IME / TSF 完整自动集成（当前需手动调用 composition API）
+- [ ] 候选窗口锚点跟随 `SujianEditor` 光标矩形
+- [ ] 鼠标拖选、Shift+方向键选择
+- [ ] 复制、剪切、粘贴
+- [ ] 文字动画（Core `EditorVisualTransaction` → SujianEditor overlay）
+- [ ] 滚动优化（虚拟行、viewport 裁剪）
+- [ ] 同步页、统计页、星图页
+- [ ] Windows CI / 打包
 
 ## 第一阶段最小闭环
 

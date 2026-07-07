@@ -16,4 +16,12 @@ public partial class App : Application
         _window = new MainWindow();
         _window.Activate();
     }
+
+    public static void SetTheme(ElementTheme theme)
+    {
+        if (Current._window?.Content is FrameworkElement root)
+        {
+            root.RequestedTheme = theme;
+        }
+    }
 }

@@ -15,4 +15,8 @@
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250205002" />
     <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.3.1" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="bin\writer_core.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('bin\writer_core.dll')" />
+  </ItemGroup>
 </Project>
