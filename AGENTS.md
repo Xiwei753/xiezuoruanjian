@@ -1,7 +1,7 @@
 # AGENTS.md — AI 开发守则
 
 Status: active
-Last verified: 2025-07-05
+Last verified: 2026-07-05
 Truth source: code / product decision / protocol
 Supersedes: AGENTS.md (previous version)
 
