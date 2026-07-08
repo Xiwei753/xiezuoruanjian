@@ -34,27 +34,32 @@ jobs:
           rm -f *.db *.sqlite *.sqlite3 *.jks *.keystore *.p12 *.pem *.p7b *.cer
 
       - name: Validate Gitee credentials
+        id: validate_gitee
         env:
           GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
           GITEE_REPO: ${{ secrets.GITEE_REPO }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          set -euo pipefail
           if [ -z "${GITEE_USERNAME:-}" ]; then
-            echo "::error::GITEE_USERNAME secret is missing. Please configure it in repository settings."
-            exit 1
+            echo "::warning::GITEE_USERNAME secret is missing. Skipping Gitee sync."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           if [ -z "${GITEE_REPO:-}" ]; then
-            echo "::error::GITEE_REPO secret is missing. Please configure it in repository settings (e.g. wei-xi753/xiezuoruanjian)."
-            exit 1
+            echo "::warning::GITEE_REPO secret is missing. Skipping Gitee sync."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           if [ -z "${GITEE_TOKEN:-}" ]; then
-            echo "::error::GITEE_TOKEN secret is missing. Please configure it in repository settings."
-            exit 1
+            echo "::warning::GITEE_TOKEN secret is missing. Skipping Gitee sync."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
           echo "Gitee credentials validated: username=${GITEE_USERNAME}, repo=${GITEE_REPO}"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
 
       - name: Build orphan snapshot and push to Gitee
+        if: steps.validate_gitee.outputs.skip != 'true'
         env:
           GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
           GITEE_REPO: ${{ secrets.GITEE_REPO }}

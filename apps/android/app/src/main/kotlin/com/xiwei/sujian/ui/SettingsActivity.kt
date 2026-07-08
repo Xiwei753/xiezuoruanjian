@@ -430,7 +430,7 @@ class SettingsActivity : AppCompatActivity() {
         val currentSyncable = settingsRepository.getSyncableSettings()
         val newSyncable = currentSyncable.copy(
             fontSize = sbFontSize.value.toDouble(),
-            themeMode = themeStr
+            themeMode = themeStr ?: "system"
         )
         ErrorUtil.safeRun(this) {
             if (::settingsRepository.isInitialized) {
