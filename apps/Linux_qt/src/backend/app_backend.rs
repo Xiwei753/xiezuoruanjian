@@ -142,7 +142,6 @@ fn debug_level_enabled(module: &str, level: DebugLevel) -> bool {
     level <= get_debug_config().level
 }
 
-#[allow(dead_code)]
 pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Info) {
         println!(
@@ -154,7 +153,6 @@ pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     crate::backend::diagnostics::log_to_file("INFO", module, event, message);
 }
 
-#[allow(dead_code)]
 pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Warn) {
         eprintln!(
@@ -166,7 +164,6 @@ pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     crate::backend::diagnostics::log_to_file("WARN", module, event, message);
 }
 
-#[allow(dead_code)]
 pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Error) {
         eprintln!(
@@ -183,7 +180,6 @@ use sync_bridge::SyncTaskOutcome;
 #[path = "system_utils.rs"]
 mod system_utils;
 
-#[allow(dead_code)]
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
 pub struct AppBackend {
@@ -212,6 +208,7 @@ pub struct AppBackend {
     system_color_scheme_changed: qt_signal!(),
 
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
+    #[allow(dead_code)]
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),
@@ -240,7 +237,6 @@ pub struct AppBackend {
     stats_device_id: String,
     stats_session_id: String,
     stats_last_event_ms: i64,
-    stats_previous_text: String,
 
     current_sync_enabled: bool,
     current_sync_backend_type: String,

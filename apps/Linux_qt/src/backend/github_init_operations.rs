@@ -330,7 +330,7 @@ impl AppBackend {
                             ),
                         );
 
-                        let m = format!(
+                        let _m = format!(
                             "sync.result.conflict_summary: {}",
                             file_str
                         );

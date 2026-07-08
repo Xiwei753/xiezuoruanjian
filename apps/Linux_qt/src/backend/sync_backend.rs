@@ -21,7 +21,7 @@ mod sync_operations;
 use super::*;
 use crate::backend::SafeAppPtr;
 use crate::sync_bridge::{
-    determine_diagnostics_status, format_diagnostics_message, mask_sync_error, sync_error_category,
+    determine_diagnostics_status, mask_sync_error, sync_error_category,
     SyncTaskOutcome,
 };
 use writer_core::api::WriterCoreApi;
