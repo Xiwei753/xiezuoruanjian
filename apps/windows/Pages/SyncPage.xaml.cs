@@ -14,6 +14,25 @@ public sealed partial class SyncPage : Page
         LoadConfig();
     }
 
+    private static string SyncErrorToUserMessage(string errorCode, string? rawMessage)
+    {
+        return errorCode switch
+        {
+            "token_missing" => "未设置 Token",
+            "token_invalid" => "GitHub Token 无效或已过期。请检查 token 是否正确。",
+            "token_permission_denied" => "GitHub Token 权限不足。请给该 token 勾选目标仓库，并授予 Contents: Read and write。",
+            "repo_not_found_or_no_permission" => "仓库不存在或 Token 无权限",
+            "auth_failed" => "认证失败",
+            "network_failed" => "网络连接失败",
+            "branch_missing" => "远程分支不存在",
+            "non_fast_forward" => "远端有更新，请先拉取",
+            "unrelated_histories" => "本地与远端历史不相关",
+            "conflict" => "同步冲突，请手动处理冲突文件后重试",
+            "not_configured" => "同步未配置",
+            _ => "同步失败，请检查网络和配置"
+        };
+    }
+
     private async void LoadConfig()
     {
         try
@@ -26,7 +45,7 @@ public sealed partial class SyncPage : Page
         }
         catch (WriterCoreException ex)
         {
-            StatusText.Text = $"加载同步配置失败: {ex.Code}";
+            StatusText.Text = $"加载同步配置失败: {SyncErrorToUserMessage(ex.Code, ex.Message)}";
         }
     }
 
@@ -41,11 +60,11 @@ public sealed partial class SyncPage : Page
                 (int)SyncIntervalBox.Value
             );
             await _core.SaveSyncConfigAsync(config);
-            StatusText.Text = "同步配置已保存";
+            StatusText.Text = "配置已保存";
         }
         catch (WriterCoreException ex)
         {
-            StatusText.Text = $"保存失败: {ex.Code}";
+            StatusText.Text = $"保存配置失败: {SyncErrorToUserMessage(ex.Code, ex.Message)}";
         }
     }
 
@@ -57,11 +76,11 @@ public sealed partial class SyncPage : Page
             var result = await _core.SyncDryRunAsync();
             ResultBox.Visibility = Visibility.Visible;
             ResultBox.Text = result;
-            StatusText.Text = "试运行完成";
+            StatusText.Text = "预演完成";
         }
         catch (WriterCoreException ex)
         {
-            StatusText.Text = $"试运行失败: {ex.Code}";
+            StatusText.Text = $"试运行失败: {SyncErrorToUserMessage(ex.Code, ex.Message)}";
         }
     }
 
@@ -77,7 +96,7 @@ public sealed partial class SyncPage : Page
         }
         catch (WriterCoreException ex)
         {
-            StatusText.Text = $"同步失败: {ex.Code}";
+            StatusText.Text = SyncErrorToUserMessage(ex.Code, ex.Message);
         }
     }
 }

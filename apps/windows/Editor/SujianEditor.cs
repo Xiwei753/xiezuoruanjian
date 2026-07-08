@@ -43,6 +43,7 @@ public sealed class SujianEditor : UserControl
     private CoreTextEditContext? _editContext;
     private bool _isComposing;
     private string _compositionText = string.Empty;
+    private int _compositionCursor;
     private bool _suppressNotifyTextChanged;
 
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
@@ -213,12 +214,15 @@ public sealed class SujianEditor : UserControl
     {
         _isComposing = true;
         _compositionText = string.Empty;
+        _compositionCursor = 0;
     }
 
     private void OnCompositionCompleted(CoreTextEditContext sender, CoreTextCompositionCompletedEventArgs args)
     {
         _isComposing = false;
         _compositionText = string.Empty;
+        _compositionCursor = 0;
+        NotifySelectionChanged();
         _canvas?.Invalidate();
     }
 
@@ -1080,6 +1084,23 @@ public sealed class SujianEditor : UserControl
             catch { }
         }
 
+        if (_isComposing && !string.IsNullOrEmpty(_compositionText) && _canvas?.Device != null && _textFormat != null)
+        {
+            try
+            {
+                var contentWidth = (float)ActualWidth - indent;
+                var compCursor = Math.Clamp(_compositionCursor, 0, _compositionText.Length);
+                if (compCursor > 0)
+                {
+                    using var compLayout = new CanvasTextLayout(
+                        _canvas.Device, _compositionText, _textFormat, Math.Max(1, contentWidth), _lineHeight);
+                    var compMetrics = compLayout.GetCaretPosition(compCursor, false);
+                    cursorX += (float)compMetrics.X;
+                }
+            }
+            catch { }
+        }
+
         ds.FillRectangle(cursorX, cursorY, 2f, _lineHeight * 0.8f, cursorColor);
     }
 
@@ -1103,6 +1124,23 @@ public sealed class SujianEditor : UserControl
             catch { }
         }
 
+        if (_isComposing && !string.IsNullOrEmpty(_compositionText) && _canvas?.Device != null && _textFormat != null)
+        {
+            try
+            {
+                var contentWidth = (float)ActualWidth - indent;
+                var compCursor = Math.Clamp(_compositionCursor, 0, _compositionText.Length);
+                if (compCursor > 0)
+                {
+                    using var compLayout = new CanvasTextLayout(
+                        _canvas.Device, _compositionText, _textFormat, Math.Max(1, contentWidth), _lineHeight);
+                    var compMetrics = compLayout.GetCaretPosition(compCursor, false);
+                    cursorX += (float)compMetrics.X;
+                }
+            }
+            catch { }
+        }
+
         return new Rect(cursorX, cursorY, 2, _lineHeight * 0.8);
     }
 
@@ -1110,11 +1148,22 @@ public sealed class SujianEditor : UserControl
     {
         _isComposing = true;
         _compositionText = string.Empty;
+        _compositionCursor = 0;
     }
 
     public void UpdateComposition(string text)
     {
         _compositionText = text;
+        _compositionCursor = text.Length;
+        NotifySelectionChanged();
+        _canvas?.Invalidate();
+    }
+
+    public void UpdateComposition(string text, int cursor)
+    {
+        _compositionText = text;
+        _compositionCursor = Math.Clamp(cursor, 0, text.Length);
+        NotifySelectionChanged();
         _canvas?.Invalidate();
     }
 
@@ -1122,12 +1171,14 @@ public sealed class SujianEditor : UserControl
     {
         _isComposing = false;
         _compositionText = string.Empty;
+        _compositionCursor = 0;
         if (!string.IsNullOrEmpty(text))
         {
             CommitText(text);
         }
         else
         {
+            NotifySelectionChanged();
             _canvas?.Invalidate();
         }
     }
@@ -1136,6 +1187,8 @@ public sealed class SujianEditor : UserControl
     {
         _isComposing = false;
         _compositionText = string.Empty;
+        _compositionCursor = 0;
+        NotifySelectionChanged();
         _canvas?.Invalidate();
     }
 

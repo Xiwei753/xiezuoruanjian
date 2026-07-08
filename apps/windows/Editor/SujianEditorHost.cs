@@ -149,6 +149,7 @@ public sealed class SujianEditorHost : UserControl
 
     public void StartComposition() => _editor.StartComposition();
     public void UpdateComposition(string text) => _editor.UpdateComposition(text);
+    public void UpdateComposition(string text, int cursor) => _editor.UpdateComposition(text, cursor);
     public void CommitComposition(string text) => _editor.CommitComposition(text);
     public void CancelComposition() => _editor.CancelComposition();
 }
