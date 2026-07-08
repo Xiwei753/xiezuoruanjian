@@ -115,6 +115,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/DashboardSection.qml" as "DashboardSection.qml",
     "qml/ActionRegistryPage.qml" as "ActionRegistryPage.qml",
     "qml/SyncPage.qml" as "SyncPage.qml",
+    "qml/SyncMessageKeys.qml" as "SyncMessageKeys.qml",
     "qml/EmptyWorkspace.qml" as "EmptyWorkspace.qml",
     // Components
     "qml/AppButton.qml" as "AppButton.qml",

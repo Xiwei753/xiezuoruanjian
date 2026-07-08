@@ -221,11 +221,22 @@ impl AppBackend {
                 let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {
+                        let err_str = e.to_string();
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "dry_run".to_string(),
+                            status_code: "error".to_string(),
+                            phase_key: None,
+                            summary_key: Some("error.load_sync_config_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&err_str)),
+                        };
                         return SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "dry_run".to_string(),
                             sync_status: "error".to_string(),
-                            action_result: format!("error.load_sync_config_failed: {}", e),
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         };
                     }
                 };
@@ -499,11 +510,22 @@ impl AppBackend {
                 let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {
+                        let err_str = e.to_string();
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "sync".to_string(),
+                            status_code: "error".to_string(),
+                            phase_key: None,
+                            summary_key: Some("error.load_sync_config_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&err_str)),
+                        };
                         return SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "sync".to_string(),
                             sync_status: "error".to_string(),
-                            action_result: format!("error.load_sync_config_failed: {}", e),
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         };
                     }
                 };

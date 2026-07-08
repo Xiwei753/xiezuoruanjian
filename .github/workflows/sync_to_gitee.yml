@@ -33,15 +33,34 @@ jobs:
           rm -rf writer_app_workspace/ workspace/ backups/ trash/ sqlite_cache/ logs/ tmp/
           rm -f *.db *.sqlite *.sqlite3 *.jks *.keystore *.p12 *.pem *.p7b *.cer
 
-      - name: Build orphan snapshot and push to Gitee
+      - name: Validate Gitee credentials
         env:
+          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
           set -euo pipefail
-          if [ -z "${GITEE_TOKEN:-}" ]; then
-            echo "GITEE_TOKEN is missing"
+          if [ -z "${GITEE_USERNAME:-}" ]; then
+            echo "::error::GITEE_USERNAME secret is missing. Please configure it in repository settings."
             exit 1
           fi
+          if [ -z "${GITEE_REPO:-}" ]; then
+            echo "::error::GITEE_REPO secret is missing. Please configure it in repository settings (e.g. wei-xi753/xiezuoruanjian)."
+            exit 1
+          fi
+          if [ -z "${GITEE_TOKEN:-}" ]; then
+            echo "::error::GITEE_TOKEN secret is missing. Please configure it in repository settings."
+            exit 1
+          fi
+          echo "Gitee credentials validated: username=${GITEE_USERNAME}, repo=${GITEE_REPO}"
+
+      - name: Build orphan snapshot and push to Gitee
+        env:
+          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
+          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -euo pipefail
 
           HEADER="> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 当前源码快照的镜像备份。**\n>\n> Gitee 镜像不保留 GitHub 历史、tags 或构建产物；反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。\n"
           { echo -e "$HEADER"; cat README.md; } > README.tmp && mv README.tmp README.md
@@ -64,5 +83,20 @@ jobs:
 
           git commit -m "同步 GitHub 当前源码快照"
 
-          git remote add gitee "https://wei-xi753:${GITEE_TOKEN}@gitee.com/wei-xi753/xiezuoruanjian.git" || true
+          ENCODED_TOKEN=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${GITEE_TOKEN}', safe=''))")
+          GITEE_REMOTE="https://${GITEE_USERNAME}:${ENCODED_TOKEN}@gitee.com/${GITEE_REPO}.git"
+
+          echo "Verifying Gitee remote access..."
+          if ! git ls-remote "${GITEE_REMOTE}" HEAD >/dev/null 2>&1; then
+            echo "::error::Failed to access Gitee repository. Possible causes:"
+            echo "  1. GITEE_TOKEN lacks 'projects' read permission"
+            echo "  2. GITEE_REPO path is incorrect (current: ${GITEE_REPO})"
+            echo "  3. GITEE_USERNAME does not match the token owner (current: ${GITEE_USERNAME})"
+            echo "  4. The repository does not exist on Gitee"
+            echo "  5. Token contains special characters that were not properly URL-encoded"
+            exit 1
+          fi
+          echo "Gitee remote access verified."
+
+          git remote add gitee "${GITEE_REMOTE}" || true
           git push gitee HEAD:main --force
