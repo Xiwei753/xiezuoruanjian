@@ -24,6 +24,7 @@ use writer_core::sync::{SyncConfig, SyncSecrets};
 /// 同步任务结果封装。
 pub struct SyncTaskOutcome {
     pub operation_id: String,
+    #[allow(dead_code)]
     pub operation_kind: String,
     pub sync_status: String,
     pub action_result: String,

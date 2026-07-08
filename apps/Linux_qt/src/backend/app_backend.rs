@@ -20,7 +20,7 @@
 
 use cpp::cpp;
 use qmetaobject::prelude::*;
-use qmetaobject::{QJsonArray, QJsonObject, QJsonValue, QString};
+use qmetaobject::{QJsonArray, QJsonObject, QString};
 use rfd::FileDialog;
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -604,6 +604,7 @@ mod tests {
 
     #[test]
     fn test_create_project_failure() -> Result<(), Box<dyn std::error::Error>> {
+        use qmetaobject::QJsonValue;
         let mut backend = AppBackend::default();
         backend.current_workspace = "/invalid/path/that/does/not/exist".to_string();
         backend.current_has_workspace = true;

@@ -34,7 +34,6 @@ use std::cell::Cell;
 use std::time::Instant;
 use text_animation_state::{AnimationMode, TextAnimationState};
 
-pub use rendering::AnimatedGlyph;
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
     EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
@@ -88,15 +87,6 @@ mod editor_color_fallback {
     pub const CURSOR_COLOR: &str = "#006497";
 }
 
-pub fn editor_animation_debug_enabled() -> bool {
-    cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_ANIMATION_DEBUG").is_some()
-}
-
-pub fn sujian_editor_debug_enabled() -> bool {
-    cfg!(debug_assertions) || std::env::var_os("SUJIAN_EDITOR_DEBUG").is_some()
-}
-
-/// 编辑器调试日志：仅当 SUJIAN_EDITOR_DEBUG 或 WRITER_DEBUG 环境变量存在时输出
 pub(crate) fn editor_debug_log(msg: &str) {
     if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() || std::env::var("WRITER_DEBUG").is_ok() {
         eprintln!("{}", msg);
@@ -2507,17 +2497,6 @@ impl SujianEditorItem {
         }
     }
 
-    fn recalculate_content_height_quiet(&mut self) {
-        let next = self.compute_content_height();
-        if (self.current_content_height - next).abs() > 0.5 {
-            self.current_content_height = next;
-            self.content_height_dirty.set(true);
-        }
-    }
-
-    /// Recalculate content height and immediately emit `content_height_changed`
-    /// if the height changed. This ensures QML ScrollView always gets the
-    /// latest contentHeight without relying on a deferred flush.
     fn recalculate_content_height_and_emit(&mut self) {
         let next = self.compute_content_height();
         if (self.current_content_height - next).abs() > 0.5 {
@@ -4064,7 +4043,7 @@ impl QQuickItem for SujianEditorItem {
             self.render_dirty = true;
         }
 
-        let mut final_root = root_raw;
+        let final_root;
 
         // 第一步：确保 Layer 0 有基础 texture
         if !root_raw.is_null() && !item_ptr.is_null() {

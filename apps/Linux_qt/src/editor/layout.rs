@@ -451,8 +451,6 @@ pub struct LayoutSnapshot {
     pub content_height: f32,
 }
 
-pub type LayoutCache = LayoutSnapshot;
-
 #[derive(Default)]
 pub struct EditorLayout {
     cache: Option<LayoutSnapshot>,
@@ -551,15 +549,6 @@ impl EditorLayout {
         caret_rect(snapshot, cursor_byte, affinity, scroll_y, viewport_h)
     }
 
-    pub fn cursor_geometry(
-        &self,
-        snapshot: &LayoutSnapshot,
-        cursor: usize,
-        affinity: CaretAffinity,
-    ) -> (f64, f64, usize) {
-        cursor_geometry(snapshot, cursor, affinity)
-    }
-
     pub fn cursor_line_and_x(
         &self,
         snapshot: &LayoutSnapshot,
@@ -606,19 +595,6 @@ impl EditorLayout {
 
     pub fn text_width(&self, text: &str, font_size: f64, font_family: &str) -> f64 {
         qtextlayout_cursor_to_x(text, text, font_size, font_family)
-    }
-
-    pub fn cursor_height(&self, font_size: f64, font_family: &str) -> f64 {
-        cursor_height_for_line(font_size, font_family)
-    }
-
-    pub fn cursor_rect_for_line(
-        &self,
-        line: &VisualLine,
-        font_size: f64,
-        font_family: &str,
-    ) -> (f64, f64) {
-        cursor_rect_for_line(line, font_size, font_family)
     }
 
     pub fn text_baseline_y(&self, line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
@@ -1069,31 +1045,6 @@ pub fn cursor_line_and_x(
     })
 }
 
-pub fn cursor_geometry(
-    snapshot: &LayoutSnapshot,
-    cursor: usize,
-    affinity: CaretAffinity,
-) -> (f64, f64, usize) {
-    for (idx, line) in snapshot.lines.iter().enumerate() {
-        if line_contains_cursor_with_affinity(&snapshot.lines, idx, cursor, affinity) {
-            let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, snapshot);
-            let cursor_y =
-                cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family).0;
-            return (cursor_x, cursor_y, line.id);
-        }
-    }
-    snapshot
-        .lines
-        .last()
-        .map(|line| {
-            let cursor_x = calculate_cursor_x_for_line(line, cursor, affinity, snapshot);
-            let cursor_y =
-                cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family).0;
-            (cursor_x, cursor_y, line.id)
-        })
-        .unwrap_or((0.0, 0.0, 0))
-}
-
 pub fn calculate_cursor_x_for_line(
     line: &VisualLine,
     cursor: usize,
@@ -1422,12 +1373,6 @@ pub fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
     font_size as f64 * 0.2
 }
 
-pub fn cursor_height_for_line(font_size: f64, font_family: &str) -> f64 {
-    let ascent = get_font_ascent(font_family, font_size as f32);
-    let descent = get_font_descent(font_family, font_size as f32);
-    ascent + descent
-}
-
 pub fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str) -> (f64, f64) {
     let ascent = if line.qt_ascent > 0.0 {
         line.qt_ascent
@@ -1449,10 +1394,6 @@ pub fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str
         top_y = line.y + line.height - h;
     }
     (top_y, h)
-}
-
-pub fn cursor_top_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
-    cursor_rect_for_line(line, font_size, font_family).0
 }
 
 pub fn text_baseline_y(line: &VisualLine, font_size: f64, font_family: &str) -> f64 {

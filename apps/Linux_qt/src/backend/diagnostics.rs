@@ -44,17 +44,6 @@ static DIAGNOSTICS_ENABLED: AtomicBool = AtomicBool::new(true);
 /// 默认 true（alpha 阶段），稳定版应改为 false
 static VERBOSE_ENABLED: AtomicBool = AtomicBool::new(true);
 
-/// 初始化全局日志目录（使用 workspace 路径）
-///
-/// 在 workspace 打开时调用，设置日志目录为平台标准路径
-pub fn init_global_log_dir(workspace_path: &Path) {
-    let log_dir = get_log_dir(workspace_path);
-    if let Err(e) = ensure_log_dir(&log_dir) {
-        eprintln!("[Diagnostics] init_global_log_dir 创建目录失败: {}", e);
-    }
-    let _ = GLOBAL_LOG_DIR.set(log_dir);
-}
-
 /// 确保在没有 workspace 的情况下也能获取日志目录
 ///
 /// 在 main() 最最开始调用，使用平台默认路径
@@ -324,30 +313,6 @@ fn prune_old_logs(log_dir: &Path) {
     }
 }
 
-/// 追加一行日志到当前日志文件
-///
-/// crash/error/warn 级别永远写入，info/debug/trace 级别同时受 diagnostics_enabled 和 diagnostics_verbose 控制
-/// 已废弃 enabled 参数，改用 log_to_file() 进行结构化日志写入
-pub fn append_log_line(log_dir: &Path, line: &str, verbose: bool) {
-    let upper = line.to_uppercase();
-    let is_error_or_warn = upper.contains("ERROR") || upper.contains("CRASH") || upper.contains("WARN");
-
-    if !is_error_or_warn {
-        // INFO/DEBUG/TRACE 需要同时满足 diagnostics_enabled 和 verbose
-        if !is_diagnostics_enabled() || (!verbose && !is_verbose_enabled()) {
-            return;
-        }
-    }
-    let _ = ensure_log_dir(log_dir);
-    let _ = rotate_if_needed(log_dir);
-
-    let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
-    if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&current_file) {
-        let redacted = redact(line);
-        let _ = writeln!(file, "{}", redacted);
-    }
-}
-
 /// 清空日志目录中的所有日志文件
 pub fn clear_logs(log_dir: &Path) -> Result<(), String> {
     if !log_dir.exists() {
@@ -568,6 +533,25 @@ mod tests {
     use super::*;
     use std::sync::Mutex;
     use tempfile::tempdir;
+
+    fn append_log_line(log_dir: &Path, line: &str, verbose: bool) {
+        let upper = line.to_uppercase();
+        let is_error_or_warn = upper.contains("ERROR") || upper.contains("CRASH") || upper.contains("WARN");
+
+        if !is_error_or_warn {
+            if !is_diagnostics_enabled() || (!verbose && !is_verbose_enabled()) {
+                return;
+            }
+        }
+        let _ = ensure_log_dir(log_dir);
+        let _ = rotate_if_needed(log_dir);
+
+        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&current_file) {
+            let redacted = redact(line);
+            let _ = writeln!(file, "{}", redacted);
+        }
+    }
 
     /// 全局状态测试的互斥锁，确保修改 DIAGNOSTICS_ENABLED / VERBOSE_ENABLED 的测试串行执行，
     /// 避免并行测试竞争导致 flaky failure。

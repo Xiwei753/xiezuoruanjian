@@ -21,13 +21,14 @@ pub mod platform_ime;
 pub mod platform;
 pub mod qt_surface;
 
-pub(crate) use events::*;
-pub(crate) use controller::{EditorInputController, EditorInputHost, handle_key, handle_key_and_text, insert_preedit_text, commit_preedit_text, cancel_preedit, ime_commit, ime_replace_and_commit, ime_preedit, ime_preedit_with_attrs, ime_cancel};
+pub(crate) use controller::{EditorInputHost, handle_key, insert_preedit_text, commit_preedit_text, cancel_preedit};
 pub(crate) use qt_surface::{install_event_filter, focus_item};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::events::*;
+    use super::controller::*;
     use crate::sujian_editor_item::PreeditAttribute;
 
     #[derive(Default)]

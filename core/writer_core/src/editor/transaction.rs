@@ -274,6 +274,7 @@ pub struct GlyphRect {
     since = "0.12.0",
     note = "Use EditorVisualTransaction instead. This will be removed in a future version."
 )]
+#[allow(dead_code)]
 pub(crate) struct EditorAnimationEvent {
     pub id: u64,
     pub kind: EditorAnimationKind,
@@ -488,7 +489,7 @@ impl EditorEngine {
         since = "0.12.0",
         note = "Use visual_transaction() instead. This will be removed in a future version."
     )]
-    #[allow(deprecated)]
+    #[allow(deprecated, dead_code)]
     pub(crate) fn animation_events(
         &mut self,
         transaction: &EditorTransaction,

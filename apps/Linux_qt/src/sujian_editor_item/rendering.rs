@@ -93,22 +93,6 @@ impl CursorAnimationState {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct AnimatedGlyph {
-    pub byte_start: usize,
-    pub byte_end: usize,
-    pub text: String,
-    pub rect: (f64, f64, f64, f64),
-    pub baseline_y: f64,
-    pub line_index: usize,
-}
-
-// Animation lifecycle: TextAnimationState manages hidden range lifecycle
-// to make the static layer skip the inserted range during Insert animations
-// (preventing ghost doubling). QML EditorAnimationOverlay manages glyph ghost
-// rendering and notifies Rust via on_insert_animation_finished_by_id when ALL ghosts
-// of an event are done. tick_text_animations() provides timeout safety.
-
 impl SujianEditorItem {
     // has_active_animation() removed: Rust no longer manages animation display
     // lifecycle.  QML EditorAnimationOverlay owns animation state.
@@ -488,6 +472,7 @@ impl SujianEditorItem {
                                 }
                                 super::PreeditAttributeKind::FontUnderline => {
                                     // Draw font underline (thicker)
+                                    #[allow(unused_mut)]
                                     let mut pen = QPen::from_color(renderer::color_from_qstring(
                                         self.current_text_color.clone(),
                                     ));

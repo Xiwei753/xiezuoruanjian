@@ -17,8 +17,8 @@
 
 
 use writer_core::api::types::{
-    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto, StarMapEmbedDto, StarMapEmbedPatchDto,
-    StarMapLayoutDto, StarMapLinkDto, StarMapLinkPatchDto, StarMapNodeContentDto, StarMapNodeDto,
+    StarMapEdgeDto, StarMapEdgeKindDto, StarMapEdgePatchDto,
+    StarMapLayoutDto, StarMapNodeContentDto, StarMapNodeDto,
     StarMapNodeKindDto, StarMapNodePatchDto,
 };
 use writer_core::api::{WriterCoreApi, WriterError};
@@ -222,60 +222,6 @@ pub fn get_main_starmap(api: &WriterCoreApi, project_id: &str) -> String {
 
 pub fn unbind_starmap(api: &WriterCoreApi, starmap_id: &str) -> String {
     envelope(api.unbind_starmap_from_project(starmap_id))
-}
-
-pub fn add_starmap_embed(api: &WriterCoreApi, starmap_id: &str, embed_json: &str) -> String {
-    let embed: StarMapEmbedDto = match serde_json::from_str(embed_json) {
-        Ok(e) => e,
-        Err(e) => return envelope_err_str(&format!("Invalid embed JSON: {}", e)),
-    };
-    envelope(api.add_starmap_embed(starmap_id, embed))
-}
-
-pub fn update_starmap_embed(
-    api: &WriterCoreApi,
-    starmap_id: &str,
-    instance_id: &str,
-    patch_json: &str,
-) -> String {
-    let patch: StarMapEmbedPatchDto = match serde_json::from_str(patch_json) {
-        Ok(p) => p,
-        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
-    };
-    envelope(api.update_starmap_embed(starmap_id, instance_id, patch))
-}
-
-pub fn delete_starmap_embed(api: &WriterCoreApi, starmap_id: &str, instance_id: &str) -> String {
-    envelope(api.delete_starmap_embed(starmap_id, instance_id))
-}
-
-pub fn add_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_json: &str) -> String {
-    let link: StarMapLinkDto = match serde_json::from_str(link_json) {
-        Ok(l) => l,
-        Err(e) => return envelope_err_str(&format!("Invalid link JSON: {}", e)),
-    };
-    envelope(api.add_starmap_link(starmap_id, link))
-}
-
-pub fn update_starmap_link(
-    api: &WriterCoreApi,
-    starmap_id: &str,
-    link_id: &str,
-    patch_json: &str,
-) -> String {
-    let patch: StarMapLinkPatchDto = match serde_json::from_str(patch_json) {
-        Ok(p) => p,
-        Err(e) => return envelope_err_str(&format!("Invalid patch JSON: {}", e)),
-    };
-    envelope(api.update_starmap_link(starmap_id, link_id, patch))
-}
-
-pub fn delete_starmap_link(api: &WriterCoreApi, starmap_id: &str, link_id: &str) -> String {
-    envelope(api.delete_starmap_link(starmap_id, link_id))
-}
-
-pub fn find_starmap_references(api: &WriterCoreApi, target_starmap_id: &str) -> String {
-    envelope(api.find_starmap_references(target_starmap_id))
 }
 
 pub fn compute_edge_renders_json(edges_json: &str, nodes_json: &str) -> String {

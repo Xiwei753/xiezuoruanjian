@@ -9,6 +9,7 @@ pub(crate) enum TextAnimationKind {
 
 /// 分层动画模式 — 与 Core AnimationMode 对齐。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum AnimationMode {
     /// 逐字形动画：1–8 个 cluster，每个 glyph 独立飞入
     GlyphAnimation,
@@ -27,20 +28,12 @@ pub(crate) enum AnimationMode {
 /// 单个活跃动画条目
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveTextAnimation {
-    /// Core EditorVisualTransaction.id. Used as the primary lifecycle key so
-    /// consecutive inserts at the same byte range cannot clear the wrong
-    /// hidden range after later edits remap byte offsets.
     pub transaction_id: Option<u64>,
-    /// Core HiddenVisualRange.id. Used as the primary key for clearing a
-    /// concrete hidden range. Byte range is only used for static layer draw exclusion.
     pub range_id: Option<u64>,
     pub kind: TextAnimationKind,
     pub byte_range: (usize, usize),
-    /// Reflow hidden ranges：受插入影响的 glyph 在新文本中的 byte ranges。
-    /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画。
-    /// 动画结束后清除，正文层恢复完整绘制。
     pub reflow_hidden_ranges: Vec<ActiveReflowHiddenRange>,
-    /// 动画模式 — 与 Core AnimationMode 对齐
+    #[allow(dead_code)]
     pub animation_mode: AnimationMode,
     pub start_time: Instant,
     pub duration_ms: u64,
@@ -62,10 +55,12 @@ pub(crate) struct ActiveReflowHiddenRange {
 ///
 /// Insert 动画期间，正文层跳过 inserted range 不绘制，由 QML overlay 显示 glyph。
 /// Delete 动画不需要正文层跳过，但记录以跟踪活跃动画。
+#[allow(dead_code)]
 pub(crate) struct TextAnimationState {
     animations: Vec<ActiveTextAnimation>,
 }
 
+#[allow(dead_code)]
 impl TextAnimationState {
     pub fn new() -> Self {
         Self {
@@ -76,6 +71,7 @@ impl TextAnimationState {
     /// 开始一个 Insert 动画
     /// `reflow_byte_ranges`：受插入影响的 glyph 在新文本中的 byte ranges，
     /// 静态正文层在动画期间跳过这些 ranges，由 overlay reflow ghost 显示位移动画。
+    #[allow(dead_code)]
     pub fn start_insert(
         &mut self,
         byte_range: (usize, usize),
@@ -159,16 +155,17 @@ impl TextAnimationState {
     }
 
     /// 滚动时立即清理（等价于 clear，语义明确）
+    #[allow(dead_code)]
     pub fn clear_on_scroll(&mut self) {
         self.clear();
     }
 
-    /// 重新加载时立即清理
+    #[allow(dead_code)]
     pub fn clear_on_reload(&mut self) {
         self.clear();
     }
 
-    /// 视觉变更（字号/行距/缩进）时立即清理
+    #[allow(dead_code)]
     pub fn clear_on_visual_change(&mut self) {
         self.clear();
     }

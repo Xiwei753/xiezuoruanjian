@@ -2,7 +2,6 @@ use crate::sync::conflict::build_conflict_summary;
 use crate::sync::conflict::collect_index_conflicts;
 use crate::sync::service::SyncService;
 use crate::sync::types::SyncConflictSummary;
-use crate::sync::SyncConfig;
 use std::path::Path;
 
 pub enum GitAuth {

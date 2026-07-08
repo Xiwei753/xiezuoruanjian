@@ -183,7 +183,6 @@ ApplicationWindow {
             if (appState.settings && appState.settings.themeMode === "light") return false;
             return window.systemThemeIsDark();
         }
-        monetColor: settingsBackend !== null ? settingsBackend.setting_monet_color : ""
         themePaletteJson: settingsBackend !== null ? settingsBackend.setting_theme_palette_json : ""
     }
 

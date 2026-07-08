@@ -245,21 +245,6 @@ impl AppBackend {
         })
     }
 
-    fn mutation_success_json(
-        &mut self,
-        data: serde_json::Value,
-        changed_entities: Vec<&str>,
-    ) -> QString {
-        serde_json::json!({
-            "success": true,
-            "data": data,
-            "state": self.current_app_state_value(),
-            "changedEntities": changed_entities
-        })
-        .to_string()
-        .into()
-    }
-
     fn mutation_error_json(&mut self, message_key: String, raw_error: String) -> QString {
         // message_key 供 QML 侧做 qsTr 翻译
         // 不再输出 userMessage

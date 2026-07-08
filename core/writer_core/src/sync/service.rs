@@ -134,7 +134,7 @@ impl SyncService {
 
 #[cfg(feature = "git-https")]
 enum PullOutcome {
-    Continue { pull_branch_missing: bool },
+    Continue,
     Return(SyncResult),
 }
 
@@ -246,9 +246,7 @@ fn handle_pull_error(
                 Some("remote_branch_missing".to_string()),
             ));
         }
-        PullOutcome::Continue {
-            pull_branch_missing: true,
-        }
+        PullOutcome::Continue
     } else if e.to_string().contains("SyncConflict_Detected") {
         handle_merge_conflict(workspace_path, result, first_sync_mode)
     } else {
@@ -611,7 +609,7 @@ impl SyncService {
             .err();
         if let Some(e) = pull_failed {
             match handle_pull_error(e, workspace_path, &result, result.first_sync_mode.clone()) {
-                PullOutcome::Continue { .. } => {}
+                PullOutcome::Continue => {}
                 PullOutcome::Return(res) => return Ok(res),
             }
         }

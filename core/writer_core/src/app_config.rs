@@ -199,48 +199,42 @@ pub struct NavigationState {
     pub starmap_id: Option<String>,
 }
 
-// ============================================================================
-// 测试辅助函数：在指定目录下保存/加载配置，避免污染真实配置目录
-// ============================================================================
-
-/// 将配置保存到指定路径（测试用）
-fn save_app_config_to(config: &AppConfig, path: &std::path::Path) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
-    let tmp_path = path.with_extension("tmp");
-
-    let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
-    file.write_all(content.as_bytes())
-        .map_err(|e| e.to_string())?;
-    file.flush().map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-    drop(file);
-
-    if path.exists() {
-        fs::remove_file(path).map_err(|e| e.to_string())?;
-    }
-
-    fs::rename(&tmp_path, path).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// 从指定路径加载配置（测试用）
-fn load_app_config_from(path: &std::path::Path) -> AppConfig {
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(path) {
-            if let Ok(config) = serde_json::from_str(&content) {
-                return config;
-            }
-        }
-    }
-    AppConfig::default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn save_app_config_to(config: &AppConfig, path: &std::path::Path) -> Result<(), String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let content = serde_json::to_string_pretty(config).map_err(|e| e.to_string())?;
+        let tmp_path = path.with_extension("tmp");
+
+        let mut file = fs::File::create(&tmp_path).map_err(|e| e.to_string())?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| e.to_string())?;
+        file.flush().map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        drop(file);
+
+        if path.exists() {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+        }
+
+        fs::rename(&tmp_path, path).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn load_app_config_from(path: &std::path::Path) -> AppConfig {
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(path) {
+                if let Ok(config) = serde_json::from_str(&content) {
+                    return config;
+                }
+            }
+        }
+        AppConfig::default()
+    }
 
     // ------------------------------------------------------------------------
     // config_dir 平台测试

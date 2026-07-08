@@ -24,7 +24,6 @@
 
 use serde::Serialize;
 use writer_core::api::error::WriterError;
-use writer_core::api::types::ChapterSaveReceiptDto;
 use writer_core::api::WriterCoreApi;
 
 #[derive(Serialize)]
@@ -60,39 +59,6 @@ pub fn open_chapter(
     } else {
         Err(writer_core::api::error::WriterError::ChapterNotFound)
     }
-}
-
-pub fn save_chapter(
-    api: &WriterCoreApi,
-    project_id: &str,
-    volume_id: &str,
-    chapter_id: &str,
-    text_str: &str,
-    allow_empty_overwrite: bool,
-) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
-    let chapters = api.list_chapters(project_id, volume_id)?;
-    if chapters.iter().any(|ch| ch.id == chapter_id) {
-        let receipt = api.save_chapter_content_with_options(
-            project_id,
-            volume_id,
-            chapter_id,
-            text_str,
-            allow_empty_overwrite,
-        )?;
-        Ok(receipt)
-    } else {
-        Err(writer_core::api::error::WriterError::ChapterNotFound)
-    }
-}
-
-pub fn clear_chapter_content(
-    api: &WriterCoreApi,
-    project_id: &str,
-    volume_id: &str,
-    chapter_id: &str,
-) -> Result<ChapterSaveReceiptDto, writer_core::api::error::WriterError> {
-    let receipt = api.clear_chapter_content(project_id, volume_id, chapter_id)?;
-    Ok(receipt)
 }
 
 pub fn report_writing_event(

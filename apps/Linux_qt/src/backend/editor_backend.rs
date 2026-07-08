@@ -25,7 +25,7 @@ mod chapter_operations;
 #[path = "writing_stats.rs"]
 mod writing_stats;
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[derive(QObject, Default)]
 pub struct EditorBackend {
     base: qt_base_class!(trait QObject),

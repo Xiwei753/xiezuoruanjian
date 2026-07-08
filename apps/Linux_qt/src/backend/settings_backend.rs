@@ -18,7 +18,7 @@
 use super::*;
 use crate::backend::SafeAppPtr;
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[derive(QObject, Default)]
 pub struct SettingsBackend {
     base: qt_base_class!(trait QObject),
@@ -745,7 +745,8 @@ impl AppBackend {
             });
             syncable.font_size = self.current_setting_font_size as f64;
             syncable.theme_mode = self.current_setting_theme_mode.clone();
-            syncable.monet_color = self.current_setting_monet_color.clone();
+            #[allow(deprecated)]
+            { syncable.monet_color = String::new(); }
             syncable.theme_palette_json = self.current_setting_theme_palette_json.clone();
 
             let syncable_result = core.save_syncable_settings(syncable.clone());

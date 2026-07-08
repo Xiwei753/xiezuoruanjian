@@ -266,12 +266,7 @@ fn select_qt6_build_info() -> Qt6BuildInfo {
 }
 
 fn configure_cpp_standard(config: &mut cpp_build::Config) {
-    // cpp_build 0.5.x otherwise injects -std=c++11, which is too old for Qt6 headers.
     config.flag(CPP_STANDARD_FLAG);
-    if std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default() == "msvc" {
-        config.flag("/Zc:__cplusplus");
-        config.flag("/permissive-");
-    }
 }
 
 /// Find the Qt6 lrelease tool for compiling .ts → .qm translation files.

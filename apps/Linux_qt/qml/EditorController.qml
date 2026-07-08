@@ -142,7 +142,7 @@ QtObject {
         }
     }
 
-    // Safe plain text extraction via QTextDocument::toPlainText() in Rust.
+    // Safe plain text extraction via SujianEditorItem in Rust.
     // Never returns HTML regardless of textFormat setting.
     function getEditorPlainText() {
         return readEditorPlainText().text;

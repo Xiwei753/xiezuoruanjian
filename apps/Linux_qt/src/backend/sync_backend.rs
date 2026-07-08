@@ -26,7 +26,7 @@ use crate::sync_bridge::{
 };
 use writer_core::api::WriterCoreApi;
 
-#[allow(non_snake_case)]
+#[allow(non_snake_case, dead_code)]
 #[derive(QObject, Default)]
 pub struct SyncBackend {
     base: qt_base_class!(trait QObject),

@@ -408,7 +408,7 @@ impl AppBackend {
                     Ok(result) => {
                         let (status, msg) = match result.status.as_str() {
                             "success" => {
-                                let mut m = format!(
+                                let m = format!(
                                     "同步成功\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
                                     result.uploaded_files.len(),
                                     result.downloaded_files.len(),
@@ -420,7 +420,7 @@ impl AppBackend {
                                 ("success".to_string(), m)
                             }
                             "latest_wins_applied" => {
-                                let mut m = format!(
+                                let m = format!(
                                     "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
                                     result.uploaded_files.len(),
                                     result.downloaded_files.len(),
@@ -432,7 +432,7 @@ impl AppBackend {
                                 ("success".to_string(), m)
                             }
                             "no_changes" => {
-                                let mut m = format!(
+                                let m = format!(
                                     "同步完成：本地和远端均已是最新状态，无须更新。\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
                                     result.uploaded_files.len(),
                                     result.downloaded_files.len(),

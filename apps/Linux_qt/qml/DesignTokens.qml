@@ -20,10 +20,6 @@ QtObject {
     onIsDarkChanged: {
     }
 
-    // Deprecated: use themePaletteJson instead. Retained for backward-compatible reading.
-    property string monetColor: ""
-    property color _monetColorObj: monetColor
-
     // --- Theme palette (synced from Android Dynamic Color) ---
     // Non-Android clients only consume this; they never produce it.
     property string themePaletteJson: ""
@@ -50,8 +46,7 @@ QtObject {
     }
 
     // --- Semantic color roles (素笺品牌语义色) ---
-    property bool hasMonetColor: monetColor.length === 7 && monetColor.startsWith("#")
-    property color primary: _paletteColor("light_primary", "dark_primary") ?? (hasMonetColor ? _monetColorObj : (isDark ? Qt.rgba(0.573, 0.800, 1.000, 1) : Qt.rgba(0.000, 0.392, 0.592, 1)))
+    property color primary: _paletteColor("light_primary", "dark_primary") ?? (isDark ? Qt.rgba(0.573, 0.800, 1.000, 1) : Qt.rgba(0.000, 0.392, 0.592, 1))
     property color onPrimary: _paletteColor("light_on_primary", "dark_on_primary") ?? (isDark ? Qt.rgba(0.000, 0.200, 0.318, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
     property color primaryContainer: _paletteColor("light_primary_container", "dark_primary_container") ?? (isDark ? Qt.rgba(0.000, 0.294, 0.451, 1) : Qt.rgba(0.800, 0.898, 1.000, 1))
     property color onPrimaryContainer: _paletteColor("light_on_primary_container", "dark_on_primary_container") ?? (isDark ? Qt.rgba(0.800, 0.898, 1.000, 1) : Qt.rgba(0.000, 0.118, 0.192, 1))

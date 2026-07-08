@@ -6,10 +6,11 @@
 use super::events::*;
 use crate::sujian_editor_item::PreeditAttribute;
 
+#[allow(dead_code)]
 pub(crate) struct EditorInputController;
 
 impl EditorInputController {
-    /// 分发归一化输入事件到 EditorInputHost
+    #[allow(dead_code)]
     pub(crate) fn dispatch<H: EditorInputHost + ?Sized>(host: &mut H, event: EditorInputEvent) {
         match event {
             EditorInputEvent::PlainText { text } => {
@@ -43,6 +44,7 @@ impl EditorInputController {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) trait EditorInputHost {
     fn input_enabled(&self) -> bool;
     fn input_emit_explicit_clear_requested(&mut self);
