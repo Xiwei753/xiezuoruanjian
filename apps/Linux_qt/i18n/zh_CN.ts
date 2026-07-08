@@ -870,6 +870,10 @@
         <source>使用从 Android 设备同步的莫奈调色板</source>
         <translation>使用从 Android 设备同步的莫奈调色板</translation>
     </message>
+    <message>
+        <source>Linux_qt 客户端</source>
+        <translation>Linux_qt 客户端</translation>
+    </message>
 </context>
 <context>
     <name>StarMapCanvas</name>
@@ -1466,6 +1470,38 @@
     <message>
         <source>配置已保存</source>
         <translation>配置已保存</translation>
+    </message>
+    <message>
+        <source>上传: </source>
+        <translation>上传: </translation>
+    </message>
+    <message>
+        <source>下载: </source>
+        <translation>下载: </translation>
+    </message>
+    <message>
+        <source>本地删除: </source>
+        <translation>本地删除: </translation>
+    </message>
+    <message>
+        <source>远端删除: </source>
+        <translation>远端删除: </translation>
+    </message>
+    <message>
+        <source>覆盖: </source>
+        <translation>覆盖: </translation>
+    </message>
+    <message>
+        <source>冲突: </source>
+        <translation>冲突: </translation>
+    </message>
+    <message>
+        <source>冲突文件:</source>
+        <translation>冲突文件:</translation>
+    </message>
+    <message>
+        <source>详细错误:</source>
+        <translation>详细错误:</translation>
     </message>
 </context>
 <context>
