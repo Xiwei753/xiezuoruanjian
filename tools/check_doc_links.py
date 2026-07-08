@@ -34,6 +34,7 @@ WHITELIST_FILENAMES = {
 
 WHITELIST_PATHS = {
     'apps/android/NativeCoreBridge',
+    'apps/desktop',
     'bindings/android',
 }
 

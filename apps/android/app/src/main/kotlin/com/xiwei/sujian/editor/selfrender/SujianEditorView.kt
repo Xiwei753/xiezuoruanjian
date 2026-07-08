@@ -432,13 +432,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun replaceRange(start: Int, end: Int, newText: String) {
-        val cause = SujianEditCauseData(
-            cause = "Programmatic",
-            utf8ByteOffset = buffer.utf16ToUtf8(start),
-            oldUtf8Len = buffer.utf16ToUtf8(end) - buffer.utf16ToUtf8(start),
-            newUtf8Len = SujianEditorBuffer.utf16ToUtf8(newText, newText.length)
-        )
-        runVisualEdit(cause) {
+        runVisualEdit(SujianEditCauseData.Programmatic) {
             buffer.replaceRange(start, end, newText)
         }
     }
@@ -448,13 +442,7 @@ class SujianEditorView @JvmOverloads constructor(
         var count = 0
         var idx = content.lastIndexOf(searchStr)
         while (idx >= 0) {
-            val cause = SujianEditCauseData(
-                cause = "Programmatic",
-                utf8ByteOffset = buffer.utf16ToUtf8(idx),
-                oldUtf8Len = SujianEditorBuffer.utf16ToUtf8(searchStr, searchStr.length),
-                newUtf8Len = SujianEditorBuffer.utf16ToUtf8(replaceStr, replaceStr.length)
-            )
-            runVisualEdit(cause) {
+            runVisualEdit(SujianEditCauseData.Programmatic) {
                 buffer.replaceRange(idx, idx + searchStr.length, replaceStr)
             }
             count++

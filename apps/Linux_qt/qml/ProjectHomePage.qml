@@ -127,7 +127,7 @@ Rectangle {
             AppTextField {
                 id: renameField
                 Layout.fillWidth: true
-                theme: dt
+                dt: dt
                 text: renameProjectDialog.currentTitle
                 placeholderText: qsTr("作品名称")
                 onAccepted: renameConfirmButton.clicked()
