@@ -1,0 +1,503 @@
+use super::*;
+
+impl SujianEditorItem {
+    pub(crate) fn flush_content_height(&mut self) {
+        if self.content_height_dirty.get() {
+            self.content_height_dirty.set(false);
+            self.content_height_changed();
+        }
+    }
+
+    pub(crate) fn tick_cursor_animation(&mut self) {
+        if self.cursor_ctrl.animation.is_none() {
+            return;
+        }
+        let still_animating = self.cursor_ctrl.tick_animation();
+        self.cursor_rect_changed();
+        if still_animating {
+            self.request_frame_update();
+        }
+    }
+
+    pub(crate) fn tick_text_animations(&mut self) {
+        let now = Instant::now();
+        if self.text_anim_state.tick(now) {
+            editor_animation_debug_log("tick_text_animations: cleared timed-out animations");
+            self.request_static_repaint();
+        }
+    }
+
+    pub(crate) fn clear_undo_stack(&mut self) {
+        self.buffer.undo_stack.clear();
+        self.buffer.redo_stack.clear();
+    }
+
+    pub(crate) fn insert_text(&mut self, text: QString) {
+        self.insert_text_with_cause(text, None);
+    }
+
+    pub(crate) fn insert_text_with_cause(&mut self, text: QString, explicit_cause: Option<EditorTransactionCause>) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        let inserted = normalize_plain_text(&text.to_string());
+        if inserted.is_empty() {
+            return;
+        }
+
+        let pending_pcr = self.pending_preedit_cursor_rect.take();
+
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
+
+        let old = self.buffer.snapshot();
+        self.buffer.push_undo(old.clone());
+        self.buffer.replace_selection_or_insert(&inserted);
+        self.adjust_affinity_at_wrap_boundary();
+        let cause = explicit_cause.unwrap_or_else(|| {
+            if inserted.chars().count() == 1 {
+                EditorTransactionCause::Typing
+            } else {
+                EditorTransactionCause::TypingCommit
+            }
+        });
+        let new = self.buffer.snapshot();
+        let _vt = self.record_transaction(old, new, cause, true);
+
+        if let Some(pcr) = pending_pcr {
+            self.cursor_ctrl.visual_x = pcr.x;
+            self.cursor_ctrl.visual_y = pcr.top;
+            self.cursor_ctrl.force_snap_next = false;
+            editor_animation_debug_log(&format!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top));
+        } else {
+            editor_animation_debug_log("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
+        }
+
+        self.emit_content_changed();
+    }
+
+    pub(crate) fn ime_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        let inserted = normalize_plain_text(&text);
+        if inserted.is_empty() {
+            return;
+        }
+
+        let pending_pcr = self.pending_preedit_cursor_rect.take();
+
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
+
+        let cursor_byte = self.buffer.cursor;
+        let text_str = &self.buffer.text;
+
+        fn utf16_offset_to_utf8_byte(text: &str, base: usize, utf16_offset: i32) -> usize {
+            if utf16_offset == 0 {
+                return base;
+            }
+            let start = base;
+            if utf16_offset > 0 {
+                let mut utf16_count = 0i32;
+                let mut byte_pos = start;
+                for ch in text[start..].chars() {
+                    if utf16_count >= utf16_offset {
+                        break;
+                    }
+                    utf16_count += ch.len_utf16() as i32;
+                    byte_pos += ch.len_utf8();
+                }
+                byte_pos
+            } else {
+                let abs_offset = (-utf16_offset) as usize;
+                let mut utf16_count = 0usize;
+                let mut byte_pos = start;
+                let before_cursor: Vec<char> = text[..start].chars().collect();
+                for &ch in before_cursor.iter().rev() {
+                    if utf16_count >= abs_offset {
+                        break;
+                    }
+                    utf16_count += ch.len_utf16();
+                    byte_pos -= ch.len_utf8();
+                }
+                byte_pos
+            }
+        }
+
+        let replace_start_byte = utf16_offset_to_utf8_byte(text_str, cursor_byte, replace_start);
+        let replace_start_byte = replace_start_byte.min(text_str.len());
+
+        let replace_end_byte = if replace_length > 0 {
+            let mut utf16_count = 0i32;
+            let mut byte_pos = replace_start_byte;
+            for ch in text_str[replace_start_byte..].chars() {
+                if utf16_count >= replace_length {
+                    break;
+                }
+                utf16_count += ch.len_utf16() as i32;
+                byte_pos += ch.len_utf8();
+            }
+            byte_pos
+        } else {
+            replace_start_byte
+        };
+        let replace_end_byte = replace_end_byte.min(text_str.len());
+
+        let (del_start, del_end) = if replace_start_byte <= replace_end_byte {
+            (replace_start_byte, replace_end_byte)
+        } else {
+            (replace_end_byte, replace_start_byte)
+        };
+
+        let old = self.buffer.snapshot();
+        self.buffer.push_undo(old.clone());
+
+        self.buffer.text.replace_range(del_start..del_end, &inserted);
+        self.buffer.cursor = del_start + inserted.len();
+        self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, self.buffer.cursor);
+        self.buffer.selection_anchor = self.buffer.cursor;
+
+        self.adjust_affinity_at_wrap_boundary();
+        let cause = if inserted.chars().count() == 1 {
+            EditorTransactionCause::Typing
+        } else {
+            EditorTransactionCause::TypingCommit
+        };
+        let new = self.buffer.snapshot();
+        let _vt = self.record_transaction(old, new, cause, true);
+
+        if let Some(pcr) = pending_pcr {
+            self.cursor_ctrl.visual_x = pcr.x;
+            self.cursor_ctrl.visual_y = pcr.top;
+            self.cursor_ctrl.force_snap_next = false;
+        }
+
+        self.emit_content_changed();
+    }
+
+    pub(crate) fn delete_backward(&mut self) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        let old = self.buffer.snapshot();
+
+        if !self.buffer.delete_backward() {
+            return;
+        }
+        self.buffer.push_undo(old.clone());
+        self.adjust_affinity_at_wrap_boundary();
+        let new = self.buffer.snapshot();
+
+        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        self.emit_content_changed();
+    }
+
+    pub(crate) fn delete_forward(&mut self) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        let old = self.buffer.snapshot();
+
+        if !self.buffer.delete_forward() {
+            return;
+        }
+        self.buffer.push_undo(old.clone());
+        self.adjust_affinity_at_wrap_boundary();
+        let new = self.buffer.snapshot();
+
+        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        self.emit_content_changed();
+    }
+
+    pub(crate) fn delete_selection(&mut self) {
+        if !self.current_editor_enabled || !self.buffer.has_selection() {
+            return;
+        }
+        let old = self.buffer.snapshot();
+
+        if !self.buffer.delete_selection() {
+            return;
+        }
+        self.buffer.push_undo(old.clone());
+        self.adjust_affinity_at_wrap_boundary();
+        let new = self.buffer.snapshot();
+
+        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        self.emit_content_changed();
+    }
+
+    pub(crate) fn select_all(&mut self) {
+        self.buffer.select_all();
+        self.bump_visual_revision();
+        self.adjust_affinity_at_wrap_boundary();
+        self.cursor_position_changed();
+        self.selection_changed();
+        self.request_static_repaint();
+    }
+
+    pub(crate) fn selected_text(&self) -> QString {
+        self.buffer.selected_text().into()
+    }
+
+    pub(crate) fn undo(&mut self) {
+        let Some((old, new)) = self.buffer.undo() else {
+            return;
+        };
+        self.adjust_affinity_at_wrap_boundary();
+        self.record_transaction(old, new, EditorTransactionCause::Undo, true);
+        self.emit_content_changed();
+    }
+
+    pub(crate) fn redo(&mut self) {
+        let Some((old, new)) = self.buffer.redo() else {
+            return;
+        };
+        self.adjust_affinity_at_wrap_boundary();
+        self.record_transaction(old, new, EditorTransactionCause::Redo, true);
+        self.emit_content_changed();
+    }
+
+    pub(crate) fn handle_key(&mut self, key: i32, modifiers: i32) -> bool {
+        input::handle_key(self, key, modifiers)
+    }
+
+    pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.force_snap_next = true;
+        editor_debug_log(&format!(
+            "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
+            x, y, self.current_scroll_y, index, affinity, extend
+        ));
+        self.buffer.move_cursor(index, extend);
+        self.bump_visual_revision();
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
+        self.pending_preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
+        self.cursor_position_changed();
+        self.selection_changed();
+        self.cursor_ctrl.dirty = true;
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    pub(crate) fn drag_select_at(&mut self, x: f32, y: f32) {
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.force_snap_next = true;
+        self.buffer.move_cursor(index, true);
+        self.bump_visual_revision();
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    pub(crate) fn long_press_at(&mut self, x: f32, y: f32) {
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.force_snap_next = true;
+        if !self.buffer.has_selection() {
+            self.select_word_at_impl(index);
+        }
+        self.bump_visual_revision();
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+        self.context_menu_requested(x, y);
+    }
+
+    pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {
+        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        self.cursor_ctrl.affinity = affinity;
+        self.cursor_ctrl.force_snap_next = true;
+        self.select_word_at_impl(index);
+        self.bump_visual_revision();
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    pub(crate) fn select_word_at_impl(&mut self, index: usize) {
+        let text = &self.buffer.text;
+        if text.is_empty() || index > text.len() {
+            return;
+        }
+        let char_index = byte_to_char_index(text, index);
+        let chars: Vec<char> = text.chars().collect();
+        if chars.is_empty() {
+            return;
+        }
+        let ci = char_index.min(chars.len().saturating_sub(1));
+
+        fn is_word_boundary(c: char) -> bool {
+            c.is_whitespace()
+                || c == '\n'
+                || c == ','
+                || c == '?'
+                || c == '!'
+                || c == '！'
+                || c == ';'
+                || c == ':'
+                || c == '"'
+                || c == '"'
+                || c == '\u{2018}'
+                || c == '\u{2019}'
+                || c == '？'
+                || c == '-'
+                || c == '.'
+                || c == '('
+                || c == ')'
+                || c == '（'
+                || c == '）'
+        }
+
+        let mut start = ci;
+        while start > 0 && !is_word_boundary(chars[start - 1]) {
+            start -= 1;
+        }
+        let mut end = ci + 1;
+        while end < chars.len() && !is_word_boundary(chars[end]) {
+            end += 1;
+        }
+
+        let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
+        let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
+
+        self.buffer.selection_anchor = byte_start;
+        self.buffer.cursor = byte_end;
+    }
+
+    pub(crate) fn clipboard_copy(&self) -> bool {
+        if !self.buffer.has_selection() {
+            return false;
+        }
+        let text = self.buffer.selected_text();
+        if text.is_empty() {
+            return false;
+        }
+        let qtext: QString = text.into();
+        cpp!(unsafe [qtext as "QString"] {
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            if (clipboard) clipboard->setText(qtext, QClipboard::Clipboard);
+        });
+        true
+    }
+
+    pub(crate) fn clipboard_paste(&mut self) {
+        if !self.current_editor_enabled {
+            return;
+        }
+        let pasted: QString = cpp!(unsafe [] -> QString as "QString" {
+            QClipboard *clipboard = QGuiApplication::clipboard();
+            return clipboard ? clipboard->text(QClipboard::Clipboard) : QString();
+        });
+        let s = pasted.to_string();
+        if s.is_empty() {
+            return;
+        }
+        let normalized = normalize_plain_text(&s);
+        self.insert_text_with_cause(normalized.into(), Some(EditorTransactionCause::Paste));
+    }
+
+    pub(crate) fn insert_preedit(&mut self, text: QString) {
+        self.clear_active_text_animations();
+        input::insert_preedit_text(self, text.to_string());
+    }
+
+    pub(crate) fn commit_preedit(&mut self, text: QString) {
+        input::commit_preedit_text(self, text.to_string());
+    }
+
+    pub(crate) fn cancel_preedit(&mut self) {
+        self.clear_active_text_animations();
+        input::cancel_preedit(self);
+    }
+
+    pub(crate) fn move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
+        let next = if forward {
+            next_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
+        } else {
+            prev_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
+        };
+        self.cursor_ctrl.affinity = if forward {
+            CaretAffinity::Downstream
+        } else {
+            CaretAffinity::Upstream
+        };
+        self.buffer.move_cursor(next, extend);
+        self.bump_visual_revision();
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    pub(crate) fn move_cursor_vertical(&mut self, down: bool, extend: bool) {
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
+        let Some((line_idx, x)) = self.cursor_line_and_x(&lines) else {
+            return;
+        };
+        let target_idx = if down {
+            (line_idx + 1).min(lines.len().saturating_sub(1))
+        } else {
+            line_idx.saturating_sub(1)
+        };
+        if target_idx == line_idx {
+            return;
+        }
+        let index = self.index_at_line_x(&lines[target_idx], x);
+        self.cursor_ctrl.affinity = self
+            .editor_layout
+            .affinity_for_index_on_line(&lines[target_idx], index);
+        self.buffer.move_cursor(index, extend);
+        self.bump_visual_revision();
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
+    pub(crate) fn move_to_line_edge(&mut self, end: bool, extend: bool) {
+        let width = self.bounding_width();
+        let lines = self.ensure_layout_cached(width).clone();
+        let Some((line_idx, _)) = self.cursor_line_and_x(&lines) else {
+            return;
+        };
+        let line = &lines[line_idx];
+        let (index, affinity) = if end {
+            (line.byte_end, CaretAffinity::Upstream)
+        } else {
+            (line.byte_start, CaretAffinity::Downstream)
+        };
+        self.cursor_ctrl.affinity = affinity;
+        self.buffer.move_cursor(index, extend);
+        self.bump_visual_revision();
+        self.cursor_position_changed();
+        self.selection_changed();
+        let _ = self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+}
