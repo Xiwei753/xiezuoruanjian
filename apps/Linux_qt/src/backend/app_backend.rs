@@ -142,7 +142,6 @@ fn debug_level_enabled(module: &str, level: DebugLevel) -> bool {
     level <= get_debug_config().level
 }
 
-#[allow(dead_code)]
 pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Info) {
         println!(
@@ -154,7 +153,6 @@ pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     crate::backend::diagnostics::log_to_file("INFO", module, event, message);
 }
 
-#[allow(dead_code)]
 pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Warn) {
         eprintln!(
@@ -166,7 +164,6 @@ pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     crate::backend::diagnostics::log_to_file("WARN", module, event, message);
 }
 
-#[allow(dead_code)]
 pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Error) {
         eprintln!(
@@ -183,7 +180,6 @@ use sync_bridge::SyncTaskOutcome;
 #[path = "system_utils.rs"]
 mod system_utils;
 
-#[allow(dead_code)]
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
 pub struct AppBackend {
@@ -240,7 +236,6 @@ pub struct AppBackend {
     stats_device_id: String,
     stats_session_id: String,
     stats_last_event_ms: i64,
-    stats_previous_text: String,
 
     current_sync_enabled: bool,
     current_sync_backend_type: String,
@@ -261,7 +256,6 @@ pub struct AppBackend {
 
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
-    pub current_ai_enabled: bool,
     pub current_setting_linux_qt_sidebar_width: f64,
     pub current_setting_linux_qt_editor_width: f64,
     current_setting_font_size: f32,
