@@ -70,11 +70,15 @@ Item {
                         text += "\n\n" + qsTr("冲突文件:") + "\n  - " + obj.summary_args.conflict_files
                     }
 
-                    if (obj.raw_error) {
-                        text += "\n\n" + qsTr("详细错误:") + "\n" + obj.raw_error
-                    }
-
                     syncResultArea.text = text;
+
+                    if (obj.raw_error) {
+                        syncRawErrorArea.text = obj.raw_error
+                        syncRawErrorRow.visible = true
+                    } else {
+                        syncRawErrorArea.text = ""
+                        syncRawErrorRow.visible = false
+                    }
                 } else {
                     syncResultArea.text = root.currentSyncOperationState;
                 }
@@ -496,6 +500,41 @@ Item {
                     background: null
                     wrapMode: TextEdit.Wrap
                 }
+            }
+        }
+
+        RowLayout {
+            id: syncRawErrorRow
+            Layout.fillWidth: true
+            visible: false
+            spacing: resolvedDt.sp8
+
+            AppText {
+                dt: root.resolvedDt
+                text: qsTr("诊断信息:")
+                color: resolvedDt.onSurfaceVariant
+                font.pixelSize: resolvedDt.caption
+                font.family: resolvedDt.fontFamily
+            }
+
+            AppButton {
+                text: qsTr("复制")
+                dt: root.resolvedDt
+                variant: "text"
+                onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncRawErrorArea.text)
+            }
+
+            TextEdit {
+                id: syncRawErrorArea
+                Layout.fillWidth: true
+                text: ""
+                color: resolvedDt.onSurfaceVariant
+                font.family: "monospace"
+                font.pixelSize: resolvedDt.caption
+                readOnly: true
+                wrapMode: TextEdit.Wrap
+                selectByMouse: true
+                visible: text.length > 0
             }
         }
     }

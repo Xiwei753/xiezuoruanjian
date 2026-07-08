@@ -551,6 +551,15 @@ impl AppBackend {
                             "partial_conflict" => Some("sync.result.partial_conflict_summary".to_string()),
                             "dirty_repo_blocked" => Some("sync.result.dirty_repo_blocked".to_string()),
                             "branch_missing_recovered" => Some("sync.result.branch_recovered_summary".to_string()),
+                            "token_missing" => Some("sync.result.token_missing".to_string()),
+                            "token_invalid" => Some("sync.result.token_invalid".to_string()),
+                            "token_permission_denied" => Some("sync.result.token_permission_denied".to_string()),
+                            "repo_not_found_or_no_permission" => Some("sync.result.repo_not_found_or_no_permission".to_string()),
+                            "branch_missing" | "remote_branch_missing" => Some("sync.result.branch_missing".to_string()),
+                            "network_failed" | "dns_failed" | "tls_failed" | "github_network_failed" => Some("sync.result.network_failed".to_string()),
+                            "auth_failed" => Some("sync.result.auth_failed".to_string()),
+                            "non_fast_forward" => Some("sync.result.non_fast_forward".to_string()),
+                            "unrelated_histories" => Some("sync.result.unrelated_histories".to_string()),
                             _ => Some("sync.result.generic_error".to_string()),
                         };
 
@@ -598,12 +607,26 @@ impl AppBackend {
                         let err_str = e.to_string();
                         let cat = sync_error_category(&err_str);
 
+                        let summary_key = match cat.as_str() {
+                            "token_missing" => "sync.result.token_missing",
+                            "token_invalid" => "sync.result.token_invalid",
+                            "token_permission_denied" => "sync.result.token_permission_denied",
+                            "repo_not_found_or_no_permission" => "sync.result.repo_not_found_or_no_permission",
+                            "branch_missing" => "sync.result.branch_missing",
+                            "network_failed" => "sync.result.network_failed",
+                            "auth_failed" => "sync.result.auth_failed",
+                            "non_fast_forward" => "sync.result.non_fast_forward",
+                            "unrelated_histories" => "sync.result.unrelated_histories",
+                            "conflict" => "sync.result.conflict_summary",
+                            _ => "sync.result.generic_error",
+                        };
+
                         let state = writer_core::api::SyncOperationStateDto {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "sync".to_string(),
                             status_code: cat.clone(),
                             phase_key: None,
-                            summary_key: Some("sync.result.generic_error".to_string()),
+                            summary_key: Some(summary_key.to_string()),
                             summary_args: std::collections::HashMap::new(),
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&err_str)),

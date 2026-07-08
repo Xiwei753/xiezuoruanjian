@@ -154,12 +154,28 @@ jobs:
           cp -v "$FCITX_QT_PLUGIN" AppDir/usr/plugins/platforminputcontexts/
           mkdir -p AppDir/usr/plugins/platforms
           cp -v "$QT_ROOT_DIR"/plugins/platforms/libqwayland*.so AppDir/usr/plugins/platforms/
-          # Ensure Wayland platform plugins are available for linuxdeploy to pick up
+          # Ensure Wayland plugins are available for linuxdeploy to pick up
           # linuxdeploy-plugin-qt should auto-detect these from the Qt installation
           echo "Qt plugin path: $QT_ROOT_DIR/plugins"
           ls -la "$QT_ROOT_DIR/plugins/platforms/" || true
           ls -la "$QT_ROOT_DIR/plugins/wayland/" || true
           ls -la "$QT_ROOT_DIR/plugins/shellintegration/" || true
+          # ── Custom AppRun wrapper: ensure IM modules and Qt plugin paths ──
+          # linuxdeploy generates a default AppRun; we replace it with a wrapper
+          # that sets QT_IM_MODULES and QT_PLUGIN_PATH before exec'ing the real binary.
+          cat > AppDir/AppRun <<'APPRUN_EOF'
+          #!/bin/bash
+          APPDIR="$(dirname "$(readlink -f "$0")")"
+          # Point Qt to bundled plugins (platforms, platforminputcontexts, etc.)
+          export QT_PLUGIN_PATH="${APPDIR}/usr/plugins:${APPDIR}/usr/lib/plugins:${QT_PLUGIN_PATH:-}"
+          # Fallback input method modules: wayland > fcitx > ibus
+          # Do NOT hard-override QT_IM_MODULE if the user already set it
+          if [ -z "${QT_IM_MODULE}" ]; then
+            export QT_IM_MODULES="${QT_IM_MODULES:-wayland;fcitx;ibus}"
+          fi
+          exec "${APPDIR}/usr/bin/sujian-linux-qt" "$@"
+          APPRUN_EOF
+          chmod +x AppDir/AppRun
           OUTPUT="sujian-linux-qt-${{ matrix.flavor }}.AppImage" \
             QML_SOURCES_PATHS="$PWD/apps/Linux_qt/qml" \
             EXTRA_QT_PLUGINS="platforminputcontexts/libfcitx5platforminputcontextplugin.so" \

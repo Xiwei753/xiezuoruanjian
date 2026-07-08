@@ -1855,6 +1855,42 @@
         <translation>已配置但未测试</translation>
     </message>
     <message>
+        <source>sync.result.token_missing</source>
+        <translation>未设置 Token</translation>
+    </message>
+    <message>
+        <source>sync.result.token_invalid</source>
+        <translation>GitHub Token 无效或已过期</translation>
+    </message>
+    <message>
+        <source>sync.result.token_permission_denied</source>
+        <translation>Token 权限不足，请授予 Contents 读写权限</translation>
+    </message>
+    <message>
+        <source>sync.result.repo_not_found_or_no_permission</source>
+        <translation>仓库不存在或 Token 无权限</translation>
+    </message>
+    <message>
+        <source>sync.result.branch_missing</source>
+        <translation>远程分支不存在</translation>
+    </message>
+    <message>
+        <source>sync.result.network_failed</source>
+        <translation>网络连接失败</translation>
+    </message>
+    <message>
+        <source>sync.result.auth_failed</source>
+        <translation>认证失败</translation>
+    </message>
+    <message>
+        <source>sync.result.non_fast_forward</source>
+        <translation>远端有更新，请先拉取</translation>
+    </message>
+    <message>
+        <source>sync.result.unrelated_histories</source>
+        <translation>本地与远端历史不相关</translation>
+    </message>
+    <message>
         <source>sync.status.already_running</source>
         <translation>同步正在进行中，请勿重复操作</translation>
     </message>
@@ -1961,6 +1997,14 @@
     <message>
         <source>chapter.deleted_remotely_refreshed</source>
         <translation>章节已在远端被删除，已刷新列表</translation>
+    </message>
+    <message>
+        <source>诊断信息:</source>
+        <translation>诊断信息:</translation>
+    </message>
+    <message>
+        <source>复制</source>
+        <translation>复制</translation>
     </message>
 </context>
 </TS>

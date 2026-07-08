@@ -88,6 +88,7 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes.clear();
         self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
+        self.request_static_repaint();
     }
 
     fn input_set_preedit_with_attrs(
@@ -102,6 +103,7 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes = attributes;
         self.update_preedit_visual_state();
         self.update_ime_cursor_for_preedit();
+        self.request_static_repaint();
     }
 
     fn input_set_suppress_next_ime_commit(&mut self, value: bool) {

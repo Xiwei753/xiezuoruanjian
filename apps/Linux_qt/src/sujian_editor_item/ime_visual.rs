@@ -15,6 +15,8 @@ impl SujianEditorItem {
         let new_text = self.preedit_text.clone();
 
         if old_text == new_text {
+            self.preedit_visual_transaction_changed();
+            self.request_static_repaint();
             return;
         }
 
