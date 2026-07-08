@@ -344,17 +344,20 @@ impl AppBackend {
     // AppBackend::sync_block_reason
     pub(crate) fn sync_block_reason(&self) -> QString {
         if !self.current_has_workspace || self.current_workspace.is_empty() {
-            return "请先打开有效工作区".into();
+            return "sync.block.no_workspace".into();
         }
-        if !self.current_sync_enabled {
-            return "同步未启用".into();
+
+        if let Some(api) = self.core_api() {
+            if let Ok(cap) = api.get_sync_capability() {
+                if !cap.can_run {
+                    return cap
+                        .block_message_key
+                        .unwrap_or_else(|| "sync.block.unknown".to_string())
+                        .into();
+                }
+            }
         }
-        if self.current_sync_remote_url.is_empty() {
-            return "未配置远程仓库地址".into();
-        }
-        if self.current_sync_token.is_empty() {
-            return "未设置访问 Token".into();
-        }
+
         "".into()
     }
 
@@ -366,44 +369,50 @@ impl AppBackend {
 
     // AppBackend::sync_action_result
     pub(crate) fn sync_operation_state(&self) -> QString {
-        #[derive(serde::Serialize)]
-        struct SyncOperationState {
-            operation_id: String,
-            operation_kind: String,
-            status: String,
-            summary: String,
-            details: String,
-        }
-
-        let state = SyncOperationState {
-            operation_id: self.current_sync_operation_id.clone(),
-            operation_kind: self.current_sync_operation_kind.clone(),
-            status: self.current_sync_status.clone(),
-            summary: self.current_sync_operation_state.clone(),
-            details: String::new(),
-        };
-
-        serde_json::to_string(&state).unwrap_or_default().into()
+        self.current_sync_operation_state.clone().into()
     }
 
     // AppBackend::perform_sync_diagnostics
     pub(crate) fn perform_sync_diagnostics(&mut self) -> QString {
         self.debug_log("sync", "perform_sync_diagnostics_start", "");
         let workspace_path = self.current_workspace.clone();
-        if workspace_path.is_empty() {
-            self.current_sync_operation_state = "请先打开工作区".to_string();
-            self.sync_action_completed();
-            self.debug_error("sync", "perform_sync_diagnostics_failed", "workspace_empty");
-            return "".into();
-        }
 
         let op_id = uuid::Uuid::new_v4().to_string();
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "diagnose".to_string();
 
+        if workspace_path.is_empty() {
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "diagnose".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.no_workspace".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: Some("workspace_empty".to_string()),
+            };
+            self.current_sync_operation_state =
+                serde_json::to_string(&state).unwrap_or_default().into();
+            self.sync_action_completed();
+            self.debug_error("sync", "perform_sync_diagnostics_failed", "workspace_empty");
+            return op_id.into();
+        }
+
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
-        self.current_sync_operation_state = "正在诊断...".to_string();
+
+        let state = writer_core::api::SyncOperationStateDto {
+            operation_id: op_id.clone(),
+            operation_kind: "diagnose".to_string(),
+            status_code: "syncing".to_string(),
+            phase_key: Some("sync.phase.diagnose".to_string()),
+            summary_key: None,
+            summary_args: std::collections::HashMap::new(),
+            counts: writer_core::api::SyncOperationCountsDto::default(),
+            raw_error: None,
+        };
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default().into();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -434,24 +443,48 @@ impl AppBackend {
                 match api.perform_sync_diagnostics(config) {
                     Ok(result) => {
                         let status = determine_diagnostics_status(&result);
-                        let msg = format_diagnostics_message(&result);
+
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
+                            status_code: status.to_string(),
+                            phase_key: None,
+                            summary_key: if result.success {
+                                Some("sync.result.diagnose_success".to_string())
+                            } else {
+                                Some("sync.result.diagnose_failed".to_string())
+                            },
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: result.raw_error.clone(),
+                        };
 
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "diagnose".to_string(),
                             sync_status: status.to_string(),
-                            action_result: msg,
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
                     }
-                    Err(e) => SyncTaskOutcome {
-                        operation_id: op_id_capture.clone(),
-                        operation_kind: "diagnose".to_string(),
-                        sync_status: sync_error_category(&e.to_string()),
-                        action_result: format!(
-                            "诊断过程发生错误:\n{}",
-                            mask_sync_error(&e.to_string())
-                        ),
-                    },
+                    Err(e) => {
+                        let status = sync_error_category(&e.to_string());
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
+                            status_code: status.to_string(),
+                            phase_key: None,
+                            summary_key: Some("sync.result.diagnose_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&e.to_string())),
+                        };
+                        SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
+                            sync_status: status,
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        }
+                    }
                 }
             }));
 
@@ -463,13 +496,27 @@ impl AppBackend {
                     } else if let Some(s) = err.downcast_ref::<String>() {
                         s.clone()
                     } else {
-                        "未知 Panic".to_string()
+                        "panic.unknown".to_string()
                     };
+
+                    let state = writer_core::api::SyncOperationStateDto {
+                        operation_id: op_id_capture.clone(),
+                        operation_kind: "diagnose".to_string(),
+                        status_code: "fatal_error".to_string(),
+                        phase_key: None,
+                        summary_key: Some("error.sync_diagnose_panic".to_string()),
+                        summary_args: [("panic_msg".to_string(), panic_msg)]
+                            .into_iter()
+                            .collect(),
+                        counts: writer_core::api::SyncOperationCountsDto::default(),
+                        raw_error: None,
+                    };
+
                     callback(SyncTaskOutcome {
                         operation_id: op_id_capture,
                         operation_kind: "diagnose".to_string(),
                         sync_status: "fatal_error".to_string(),
-                        action_result: format!("同步诊断发生致命错误 (Panic):\n{}", panic_msg),
+                        action_result: serde_json::to_string(&state).unwrap_or_default(),
                     });
                 }
             }
@@ -638,11 +685,14 @@ impl AppBackend {
                 }
             }
         } else {
-            error_msg = Some("Core 未初始化".to_string());
+            error_msg = Some("error.core_not_initialized".to_string());
         }
 
         if let Some(msg) = error_msg {
             self.set_error(&msg);
+            // 这里 msg 已经是包含了 key 的错误描述，虽然还不完全是结构化 DTO，
+            // 但因为 save_sync_config 是同步 Q_METHOD 返回 bool，
+            // 且通常触发 UI 弹窗，所以暂时保持这种传递方式，但移除纯中文。
             self.current_sync_operation_state = msg.clone();
             self.sync_action_completed();
             self.debug_error("sync", "save_sync_config_failed", &msg);
@@ -650,7 +700,17 @@ impl AppBackend {
         }
 
         self.refresh_sync_status_from_config();
-        self.current_sync_operation_state = "配置保存成功".to_string();
+        let state = writer_core::api::SyncOperationStateDto {
+            operation_id: String::new(),
+            operation_kind: "save_config".to_string(),
+            status_code: "success".to_string(),
+            phase_key: None,
+            summary_key: Some("sync.result.save_config_success".to_string()),
+            summary_args: std::collections::HashMap::new(),
+            counts: writer_core::api::SyncOperationCountsDto::default(),
+            raw_error: None,
+        };
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
         self.sync_action_completed();
         let token_present = !self.current_sync_token.is_empty();
         let masked_url = mask_sync_error(&self.current_sync_remote_url);

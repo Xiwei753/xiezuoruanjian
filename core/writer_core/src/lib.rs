@@ -87,6 +87,8 @@ pub mod trash_tests;
 #[cfg(test)]
 pub mod volume_tests;
 #[cfg(test)]
+pub mod sync_api_tests;
+#[cfg(test)]
 pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;

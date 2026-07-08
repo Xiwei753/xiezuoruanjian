@@ -82,6 +82,36 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn get_sync_capability(&self) -> ApiResult<SyncCapabilityDto> {
+        let config = self.load_sync_config()?;
+        let secrets = self.load_sync_secrets()?;
+
+        let mut block_reason_code = None;
+        let mut block_message_key = None;
+        let message_args = std::collections::HashMap::new();
+        let mut can_run = true;
+
+        if !config.enabled {
+            can_run = false;
+            block_reason_code = Some("DISABLED".to_string());
+            block_message_key = Some("sync.block.disabled".to_string());
+        } else if config.remote_url.is_empty() {
+            can_run = false;
+            block_reason_code = Some("REMOTE_URL_MISSING".to_string());
+            block_message_key = Some("sync.block.remote_url_missing".to_string());
+        } else if secrets.token.is_none() || secrets.token.as_ref().unwrap().is_empty() {
+            can_run = false;
+            block_reason_code = Some("TOKEN_MISSING".to_string());
+            block_message_key = Some("sync.block.token_missing".to_string());
+        }
+
+        Ok(SyncCapabilityDto {
+            can_run,
+            block_reason_code,
+            block_message_key,
+            message_args,
+        })
+    }
 }
 
 #[cfg(test)]

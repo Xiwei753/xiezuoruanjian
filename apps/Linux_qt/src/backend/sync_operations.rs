@@ -92,11 +92,12 @@ impl AppBackend {
         self.workspace_state_changed();
 
         if chapter_deleted {
-            self.current_save_status = "当前章节已在其他设备删除，已刷新列表。".to_string();
+            self.current_save_status = "chapter.deleted_remotely_refreshed".to_string();
             self.save_status_changed();
-            self.current_sync_operation_state
-                .push_str("\n\n当前章节已在其他设备删除，已刷新列表。");
-            self.sync_action_completed();
+            // 在这种混合状态下，如果 current_sync_operation_state 已经是 JSON，
+            // 简单的 push_str 会破坏格式。
+            // 正常情况下，handle_sync_outcome 会设置 current_sync_operation_state，
+            // 这里我们只需要通过 save_status 告知 UI 即可。
         }
 
         self.debug_log("sync", "sync_refresh_applied", "tree_reloaded=true");
@@ -125,27 +126,64 @@ impl AppBackend {
 
     pub(crate) fn perform_sync_dry_run(&mut self) -> QString {
         let workspace_path = self.current_workspace.clone();
+
+        let op_id = uuid::Uuid::new_v4().to_string();
+        self.current_sync_operation_id = op_id.clone();
+        self.current_sync_operation_kind = "dry_run".to_string();
+
         if workspace_path.is_empty() {
-            self.current_sync_operation_state = "请先打开工作区".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "dry_run".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.no_workspace".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state =
+                serde_json::to_string(&state).unwrap_or_default().into();
             self.sync_action_completed();
-            return "".into();
+            return op_id.into();
         }
 
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
-            self.current_sync_operation_state = "同步检查失败: 未配置远程仓库 URL".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "dry_run".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.remote_url_missing".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state =
+                serde_json::to_string(&state).unwrap_or_default().into();
             self.sync_status_changed();
             self.sync_action_completed();
-            return "".into();
+            return op_id.into();
         }
 
         if self.current_sync_token.is_empty() {
             self.current_sync_status = "error".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "dry_run".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.token_missing".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
             self.current_sync_operation_state =
-                "同步检查失败: 未配置 GitHub 访问令牌 (Token)".to_string();
+                serde_json::to_string(&state).unwrap_or_default().into();
             self.sync_status_changed();
             self.sync_action_completed();
-            return "".into();
+            return op_id.into();
         }
 
         if self.current_sync_branch.is_empty() {
@@ -153,13 +191,20 @@ impl AppBackend {
             self.sync_config_changed();
         }
 
-        let op_id = uuid::Uuid::new_v4().to_string();
-        self.current_sync_operation_id = op_id.clone();
-        self.current_sync_operation_kind = "dry_run".to_string();
-
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
-        self.current_sync_operation_state = "正在检查同步计划...".to_string();
+
+        let state = writer_core::api::SyncOperationStateDto {
+            operation_id: op_id.clone(),
+            operation_kind: "dry_run".to_string(),
+            status_code: "syncing".to_string(),
+            phase_key: Some("sync.phase.dry_run".to_string()),
+            summary_key: None,
+            summary_args: std::collections::HashMap::new(),
+            counts: writer_core::api::SyncOperationCountsDto::default(),
+            raw_error: None,
+        };
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default().into();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -180,7 +225,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "dry_run".to_string(),
                             sync_status: "error".to_string(),
-                            action_result: format!("无法加载同步配置: {}", e),
+                            action_result: format!("error.load_sync_config_failed: {}", e),
                         };
                     }
                 };
@@ -189,52 +234,54 @@ impl AppBackend {
 
                 match api.perform_sync_dry_run(config) {
                     Ok(plan) => {
-                        let mut msg = String::new();
-                        msg.push_str("同步计划检查完成\n");
-                        msg.push_str(&format!(
-                            "需要上传的文件数: {}\n",
-                            plan.files_to_upload.len()
-                        ));
-                        msg.push_str(&format!(
-                            "需要下载的文件数: {}\n",
-                            plan.files_to_download.len()
-                        ));
-                        msg.push_str(&format!(
-                            "本地待删除的文件数: {}\n",
-                            plan.files_to_delete_local.len()
-                        ));
-                        msg.push_str(&format!(
-                            "远程待删除的文件数: {}\n",
-                            plan.files_to_delete_remote.len()
-                        ));
+                        let counts = writer_core::api::SyncOperationCountsDto {
+                            uploaded: plan.files_to_upload.len() as u32,
+                            downloaded: plan.files_to_download.len() as u32,
+                            local_deleted: plan.files_to_delete_local.len() as u32,
+                            remote_deleted: plan.files_to_delete_remote.len() as u32,
+                            ignored: plan.ignored_files.len() as u32,
+                            conflicts: plan.conflicts.len() as u32,
+                            overwritten: 0,
+                        };
 
-                        if !plan.files_to_upload.is_empty() {
-                            msg.push_str("\n将要上传的文件:\n");
-                            for f in plan.files_to_upload.iter().take(10) {
-                                msg.push_str(&format!("  - {}\n", f));
-                            }
-                            if plan.files_to_upload.len() > 10 {
-                                msg.push_str("  ... 更多文件省略\n");
-                            }
-                        }
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "dry_run".to_string(),
+                            status_code: "dry_run_success".to_string(),
+                            phase_key: None,
+                            summary_key: Some("sync.result.dry_run_summary".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts,
+                            raw_error: None,
+                        };
+
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "dry_run".to_string(),
                             sync_status: "dry_run_success".to_string(),
-                            action_result: msg,
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
                     }
                     Err(e) => {
                         let err_str = e.to_string();
                         let cat = sync_error_category_from_code(None, &err_str);
+
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "dry_run".to_string(),
+                            status_code: cat.clone(),
+                            phase_key: None,
+                            summary_key: Some("sync.result.dry_run_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&err_str)),
+                        };
+
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "dry_run".to_string(),
                             sync_status: cat,
-                            action_result: format!(
-                                "检查同步计划失败: {}",
-                                mask_sync_error(&err_str)
-                            ),
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
                     }
                 }
@@ -248,13 +295,25 @@ impl AppBackend {
                     } else if let Some(s) = err.downcast_ref::<String>() {
                         s.clone()
                     } else {
-                        "未知 Panic".to_string()
+                        "panic.unknown".to_string()
+                    };
+                    let state = writer_core::api::SyncOperationStateDto {
+                        operation_id: op_id_capture.clone(),
+                        operation_kind: "dry_run".to_string(),
+                        status_code: "fatal_error".to_string(),
+                        phase_key: None,
+                        summary_key: Some("error.sync_dry_run_panic".to_string()),
+                        summary_args: [("panic_msg".to_string(), panic_msg)]
+                            .into_iter()
+                            .collect(),
+                        counts: writer_core::api::SyncOperationCountsDto::default(),
+                        raw_error: None,
                     };
                     callback(SyncTaskOutcome {
                         operation_id: op_id_capture,
                         operation_kind: "dry_run".to_string(),
                         sync_status: "fatal_error".to_string(),
-                        action_result: format!("检查同步计划发生致命错误 (Panic):\n{}", panic_msg),
+                        action_result: serde_json::to_string(&state).unwrap_or_default(),
                     });
                 }
             }
@@ -305,10 +364,22 @@ impl AppBackend {
     }
 
     pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) -> QString {
+        let op_id = uuid::Uuid::new_v4().to_string();
         if self.current_sync_in_progress {
             self.debug_log("sync", "perform_sync_skipped", "sync already running");
             if trigger == "manual" {
-                self.current_sync_operation_state = "同步正在进行中，请稍候。".to_string();
+                let state = writer_core::api::SyncOperationStateDto {
+                    operation_id: op_id.clone(),
+                    operation_kind: "sync".to_string(),
+                    status_code: "syncing".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.status.already_running".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                };
+                self.current_sync_operation_state =
+                    serde_json::to_string(&state).unwrap_or_default().into();
                 self.sync_action_completed();
             }
             return self.current_sync_operation_id.clone().into();
@@ -325,30 +396,61 @@ impl AppBackend {
         );
         let workspace_path = self.current_workspace.clone();
         if workspace_path.is_empty() {
-            self.current_sync_operation_state = "请先打开工作区".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "sync".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.no_workspace".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state =
+                serde_json::to_string(&state).unwrap_or_default().into();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "workspace_empty");
-            return "".into();
+            return op_id.into();
         }
 
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "sync".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.remote_url_missing".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
             self.current_sync_operation_state =
-                "同步失败: 未配置远程仓库 URL，请先填写并保存配置。".to_string();
+                serde_json::to_string(&state).unwrap_or_default().into();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
-            return "".into();
+            return op_id.into();
         }
 
         if self.current_sync_token.is_empty() {
             self.current_sync_status = "error".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "sync".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.token_missing".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
             self.current_sync_operation_state =
-                "同步失败: 未配置 GitHub 访问令牌 (Token)，请先填写并保存配置。".to_string();
+                serde_json::to_string(&state).unwrap_or_default().into();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "token_empty");
-            return "".into();
+            return op_id.into();
         }
 
         if self.current_sync_branch.is_empty() {
@@ -356,16 +458,27 @@ impl AppBackend {
             self.sync_config_changed();
         }
 
-        let op_id = uuid::Uuid::new_v4().to_string();
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "sync".to_string();
 
         self.flush_writing_stats();
-        self.current_sync_operation_state = if silent_success {
-            "后台同步中...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件".to_string()
-        } else {
-            "正在同步...\n正在拉取远端清单\n正在比较本地和远端\n正在下载远端较新文件\n正在上传本地较新文件".to_string()
+
+        let state = writer_core::api::SyncOperationStateDto {
+            operation_id: op_id.clone(),
+            operation_kind: "sync".to_string(),
+            status_code: "syncing".to_string(),
+            phase_key: Some(if silent_success {
+                "sync.phase.background_syncing".to_string()
+            } else {
+                "sync.phase.syncing".to_string()
+            }),
+            summary_key: None,
+            summary_args: std::collections::HashMap::new(),
+            counts: writer_core::api::SyncOperationCountsDto::default(),
+            raw_error: None,
         };
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default().into();
+
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;
         self.sync_status_changed();
@@ -390,7 +503,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "sync".to_string(),
                             sync_status: "error".to_string(),
-                            action_result: format!("无法读取同步配置: {}", e),
+                            action_result: format!("error.load_sync_config_failed: {}", e),
                         };
                     }
                 };
@@ -406,154 +519,78 @@ impl AppBackend {
 
                 match api.perform_sync(config, trigger == "manual") {
                     Ok(result) => {
-                        let (status, msg) = match result.status.as_str() {
-                            "success" => {
-                                let m = format!(
-                                    "同步成功\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
-                                    result.uploaded_files.len(),
-                                    result.downloaded_files.len(),
-                                    result.local_deletes.len(),
-                                    result.remote_deletes.len(),
-                                    result.overwritten_files.len(),
-                                    result.ignored_files.len()
-                                );
-                                ("success".to_string(), m)
-                            }
-                            "latest_wins_applied" => {
-                                let m = format!(
-                                    "同步完成 (已自动按最新时间选择版本)\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
-                                    result.uploaded_files.len(),
-                                    result.downloaded_files.len(),
-                                    result.local_deletes.len(),
-                                    result.remote_deletes.len(),
-                                    result.overwritten_files.len(),
-                                    result.ignored_files.len()
-                                );
-                                ("success".to_string(), m)
-                            }
-                            "no_changes" => {
-                                let m = format!(
-                                    "同步完成：本地和远端均已是最新状态，无须更新。\n\n上传: {} 个文件\n下载: {} 个文件\n本地删除: {} 个文件\n远端删除: {} 个文件\n覆盖: {} 个文件\n跳过: {} 个文件",
-                                    result.uploaded_files.len(),
-                                    result.downloaded_files.len(),
-                                    result.local_deletes.len(),
-                                    result.remote_deletes.len(),
-                                    result.overwritten_files.len(),
-                                    result.ignored_files.len()
-                                );
-                                ("success".to_string(), m)
-                            }
-                            "configured_not_tested" => {
-                                ("configured_not_tested".to_string(), "同步配置已加载，尚未测试或执行同步。".to_string())
-                            }
-                            "conflict" => {
-                                let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
-                                files.sort();
-                                files.dedup();
+                        let status_code = result.status.clone();
+                        let summary_key = match status_code.as_str() {
+                            "success" => Some("sync.result.success_summary".to_string()),
+                            "latest_wins_applied" => Some("sync.result.latest_wins_summary".to_string()),
+                            "no_changes" => Some("sync.result.no_changes_summary".to_string()),
+                            "configured_not_tested" => Some("sync.result.configured_not_tested".to_string()),
+                            "conflict" => Some("sync.result.conflict_summary".to_string()),
+                            "partial_conflict" => Some("sync.result.partial_conflict_summary".to_string()),
+                            "dirty_repo_blocked" => Some("sync.result.dirty_repo_blocked".to_string()),
+                            "branch_missing_recovered" => Some("sync.result.branch_recovered_summary".to_string()),
+                            _ => Some("sync.result.generic_error".to_string()),
+                        };
 
-                                let file_str = format_conflict_files(&files);
+                        let counts = writer_core::api::SyncOperationCountsDto {
+                            uploaded: result.uploaded_files.len() as u32,
+                            downloaded: result.downloaded_files.len() as u32,
+                            local_deleted: result.local_deletes.len() as u32,
+                            remote_deleted: result.remote_deletes.len() as u32,
+                            overwritten: result.overwritten_files.len() as u32,
+                            ignored: result.ignored_files.len() as u32,
+                            conflicts: result.conflicts.len() as u32,
+                        };
 
-                                let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
-                                debug_log_static("sync", "conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
+                        let mut summary_args = std::collections::HashMap::new();
+                        if !result.conflicts.is_empty() {
+                            let mut files = result
+                                .conflicts
+                                .iter()
+                                .map(|c| c.local_path.clone())
+                                .collect::<Vec<_>>();
+                            files.sort();
+                            files.dedup();
+                            summary_args.insert("conflict_files".to_string(), format_conflict_files(&files));
+                        }
 
-                                let m = format!(
-                                    "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
-                                    file_str
-                                );
-                                ("conflict".to_string(), m)
-                            }
-                            "partial_conflict" => {
-                                let mut files = result.conflicts.iter().map(|c| c.local_path.clone()).collect::<Vec<_>>();
-                                files.sort();
-                                files.dedup();
-
-                                let file_str = format_conflict_files(&files);
-
-                                let masked_err = result.error.as_deref().map(mask_sync_error).unwrap_or_else(|| "None".to_string());
-                                debug_log_static("sync", "partial_conflict_detected", &format!("conflicted file count={}, masked error={}", files.len(), masked_err));
-
-                                let m = format!(
-                                    "部分同步成功，存在正文冲突\n\n已同步:\n  上传: {} 个文件\n  下载: {} 个文件\n  本地删除: {} 个文件\n  远端删除: {} 个文件\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 手动处理冲突文件后重新同步",
-                                    result.uploaded_files.len(),
-                                    result.downloaded_files.len(),
-                                    result.local_deletes.len(),
-                                    result.remote_deletes.len(),
-                                    file_str
-                                );
-                                ("partial_conflict".to_string(), m)
-                            }
-                            "recoverable_error" => {
-                                let e = result.error.as_deref().unwrap_or("未知错误");
-                                ("recoverable_error".to_string(), format!("可恢复的同步错误:\n{}\n请检查后重试。", mask_sync_error(e)))
-                            }
-                            "fatal_error" => {
-                                let e = result.error.as_deref().unwrap_or("未知错误");
-                                ("fatal_error".to_string(), format!("严重同步错误:\n{}\n建议备份数据并重新配置。", mask_sync_error(e)))
-                            }
-                            "dirty_repo_blocked" => {
-                                ("dirty_repo_blocked".to_string(), "同步被阻止: 本地工作区存在未跟踪或未提交的修改，且这些修改不是同步安全文件。".to_string())
-                            }
-                            "branch_missing_recovered" => {
-                                ("branch_missing_recovered".to_string(), "同步成功 (分支已恢复)\n已自动恢复并关联本地与远端分支。".to_string())
-                            }
-                            "error" => {
-                                let e = result.error.as_deref().unwrap_or("未知错误");
-                                let cat = sync_error_category_from_code(result.error_category.as_deref(), e);
-                                let m = if cat == "conflict" {
-                                    debug_log_static("sync", "conflict_detected", &format!("conflicted file count=unknown, masked error={}", mask_sync_error(e)));
-                                    format!(
-                                        "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
-                                        mask_sync_error(e)
-                                    )
-                                } else {
-                                    format!("同步失败:\n{}", mask_sync_error(e))
-                                };
-                                (cat, m)
-                            }
-                            "idle" => {
-                                ("configured_not_tested".to_string(), "同步未执行".to_string())
-                            }
-                            other => {
-                                ("error".to_string(), format!("同步状态: {}", other))
-                            }
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "sync".to_string(),
+                            status_code: status_code.clone(),
+                            phase_key: None,
+                            summary_key,
+                            summary_args,
+                            counts,
+                            raw_error: result.error.as_ref().map(|e| mask_sync_error(e)),
                         };
 
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "sync".to_string(),
-                            sync_status: status.to_string(),
-                            action_result: msg,
+                            sync_status: status_code,
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
                     }
                     Err(e) => {
                         let err_str = e.to_string();
-                        let err_code = e.code();
-                        let cat = match err_code {
-                            "SYNC_CONFLICT" => "conflict".to_string(),
-                            "SYNC_FAILED" => sync_error_category_from_code(None, &err_str),
-                            _ => sync_error_category(&err_str),
-                        };
-                        let action_result = if cat == "conflict" {
-                            debug_log_static(
-                                "sync",
-                                "conflict_detected",
-                                &format!(
-                                    "conflicted file count=unknown, masked error={}",
-                                    mask_sync_error(&err_str)
-                                ),
-                            );
-                            format!(
-                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
-                                mask_sync_error(&err_str)
-                            )
-                        } else {
-                            format!("同步操作失败:\n{}", mask_sync_error(&err_str))
+                        let cat = sync_error_category(&err_str);
+
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "sync".to_string(),
+                            status_code: cat.clone(),
+                            phase_key: None,
+                            summary_key: Some("sync.result.generic_error".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&err_str)),
                         };
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "sync".to_string(),
                             sync_status: cat,
-                            action_result,
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
                     }
                 }
@@ -567,13 +604,25 @@ impl AppBackend {
                     } else if let Some(s) = err.downcast_ref::<String>() {
                         s.clone()
                     } else {
-                        "未知 Panic".to_string()
+                        "panic.unknown".to_string()
+                    };
+                    let state = writer_core::api::SyncOperationStateDto {
+                        operation_id: op_id_capture.clone(),
+                        operation_kind: "sync".to_string(),
+                        status_code: "fatal_error".to_string(),
+                        phase_key: None,
+                        summary_key: Some("error.sync_panic".to_string()),
+                        summary_args: [("panic_msg".to_string(), panic_msg)]
+                            .into_iter()
+                            .collect(),
+                        counts: writer_core::api::SyncOperationCountsDto::default(),
+                        raw_error: None,
                     };
                     callback(SyncTaskOutcome {
                         operation_id: op_id_capture,
                         operation_kind: "sync".to_string(),
                         sync_status: "fatal_error".to_string(),
-                        action_result: format!("同步执行发生致命错误 (Panic):\n{}", panic_msg),
+                        action_result: serde_json::to_string(&state).unwrap_or_default(),
                     });
                 }
             }
@@ -585,11 +634,11 @@ impl AppBackend {
 
 fn format_conflict_files(files: &[String]) -> String {
     if files.is_empty() {
-        "未能列出具体冲突文件".to_string()
+        "sync.result.no_conflict_files".to_string()
     } else {
         let display_files = if files.len() > 100 {
             let mut subset = files[0..100].to_vec();
-            subset.push(format!("...等共 {} 个文件", files.len()));
+            subset.push(format!("sync.result.more_files_count: {}", files.len()));
             subset
         } else {
             files.to_vec()

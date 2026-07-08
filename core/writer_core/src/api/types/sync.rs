@@ -181,6 +181,37 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SyncCapabilityDto {
+    pub can_run: bool,
+    pub block_reason_code: Option<String>,
+    pub block_message_key: Option<String>,
+    pub message_args: std::collections::HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub struct SyncOperationCountsDto {
+    pub uploaded: u32,
+    pub downloaded: u32,
+    pub local_deleted: u32,
+    pub remote_deleted: u32,
+    pub overwritten: u32,
+    pub ignored: u32,
+    pub conflicts: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SyncOperationStateDto {
+    pub operation_id: String,
+    pub operation_kind: String,
+    pub status_code: String,
+    pub phase_key: Option<String>,
+    pub summary_key: Option<String>,
+    pub summary_args: std::collections::HashMap<String, String>,
+    pub counts: SyncOperationCountsDto,
+    pub raw_error: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SyncPlanDto {
     pub files_to_upload: Vec<String>,
     pub files_to_download: Vec<String>,
