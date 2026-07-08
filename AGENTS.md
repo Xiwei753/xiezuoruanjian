@@ -211,20 +211,30 @@ cd apps/Linux_qt && cargo check && cargo test
 
 ---
 
-## 11. Windows 本地开发注意事项
+## 11. 沟通与输出简洁
 
-### 11.1 文件删除必须用 deleteFile 工具
+- **开始任务时可以简短确认目标、列出计划，然后立即执行**；不要写长篇开场白。
+- **过程中不要把阅读代码、搜索、推理过程写成长篇说明**；除非用户要求，不要复述仓库结构、技术路线、文件逐项长表。
+- **最终回复只保留必要结果**：做了什么、验证结果、提交/推送/CI 状态、阻塞项（如有）。
+- **禁止生成"长技术文档式最终报告"**；失败原因只写关键根因和修复方向，不展开大段背景。
+- **安全信息不得输出**：token、密钥、用户稿件内容等一律禁止出现在回复中。
+
+---
+
+## 12. Windows 本地开发注意事项
+
+### 12.1 文件删除必须用 deleteFile 工具
 
 - **删除文件时必须调用 `deleteFile` 工具**，绝对不要在终端里使用 `del`、`rm`、`Remove-Item` 等命令。
 - 原因：`deleteFile` 走已授权的静默通道，不会触发终端高危拦截弹窗；而终端 `del`/`rm` 会弹出确认弹窗，阻塞自动化流程。
 
-### 11.2 PowerShell 语法
+### 12.2 PowerShell 语法
 
 - Windows 环境下 Shell 为 PowerShell 5.1，`&&` 不是有效语句分隔符。
 - 顺序执行用 `;`，条件执行用 `if ($?) { cmd2 }`。
 - 不要使用 `cd <dir> && <command>` 模式，改用 Bash 工具的 `workdir` 参数。
 
-### 11.3 GitHub 操作必须走 GitHub API
+### 12.3 GitHub 操作必须走 GitHub API
 
 - **查询 GitHub Actions 构建状态、日志、PR、Issue 等信息时，必须使用 `webfetch` 调用 `https://api.github.com/...` REST API**。
 - **推送/更新 GitHub 仓库时也必须走 GitHub API + token**：本机的 SSH 和 HTTPS Git 默认端口都被转发/拦截，`git push` 可能卡住或不可靠；不要把 `git push` 当默认推送路径。
@@ -265,7 +275,7 @@ python tools/api_push.py "<token>" Xiwei753/xiezuoruanjian main
    - **如果 PAT 没有 `actions:read` 权限，无法通过 API 下载日志**，此时需要用户手动从 GitHub 网页复制日志内容。
    - 替代方案：在 CI workflow 中将关键输出写入 `$GITHUB_STEP_SUMMARY`，这样可以通过 check-run annotations 或 job 步骤结果间接获取。
 
-### 11.4 本地依赖
+### 12.4 本地依赖
 
 - Rust 工具链：`cargo`、`rustc` 已在 PATH 中。
 - Qt6：本地开发环境需自行安装，Linux 二进制不应链接 Qt5。
@@ -273,7 +283,7 @@ python tools/api_push.py "<token>" Xiwei753/xiezuoruanjian main
 
 ---
 
-## 12. DeepSeek Thinking Mode + Tool Calls 注意事项
+## 13. DeepSeek Thinking Mode + Tool Calls 注意事项
 
 由于 DeepSeek API 在使用 Thinking Mode（深度思考模式）时，对工具调用（Tool Calls）有特殊要求，本项目在底层做做出特定的兼容处理：
 
