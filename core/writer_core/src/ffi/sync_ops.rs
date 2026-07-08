@@ -158,7 +158,16 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
     device_class: *const c_char,
 ) -> *mut c_char {
     let platform_str = match c_str_to_rust(platform) {
-        Ok(s) => s,
+        Ok(s) => {
+            if s.len() > 64
+                || !s
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return err_json("INVALID_ARGUMENT", "Invalid platform format");
+            }
+            s
+        }
         Err(e) => {
             return err_json(
                 "INVALID_ARGUMENT",
@@ -167,7 +176,16 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
         }
     };
     let device_class_str = match c_str_to_rust(device_class) {
-        Ok(s) => s,
+        Ok(s) => {
+            if s.len() > 64
+                || !s
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            {
+                return err_json("INVALID_ARGUMENT", "Invalid device_class format");
+            }
+            s
+        }
         Err(e) => {
             return err_json(
                 "INVALID_ARGUMENT",
@@ -187,5 +205,42 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("DEVICE_INFO_ERROR", &e),
+    }
+}
+
+fn validate_platform_identifier(s: &str) -> bool {
+    s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_platform_identifier_valid() {
+        assert!(validate_platform_identifier("android"));
+        assert!(validate_platform_identifier("linux_qt"));
+        assert!(validate_platform_identifier("windows-x86"));
+        assert!(validate_platform_identifier("a"));
+    }
+
+    #[test]
+    fn test_validate_platform_identifier_invalid_chars() {
+        assert!(!validate_platform_identifier("android!"));
+        assert!(!validate_platform_identifier("linux qt"));
+        assert!(!validate_platform_identifier("win.dows"));
+    }
+
+    #[test]
+    fn test_validate_platform_identifier_too_long() {
+        let long = "a".repeat(65);
+        assert!(!validate_platform_identifier(&long));
+        let ok = "a".repeat(64);
+        assert!(validate_platform_identifier(&ok));
+    }
+
+    #[test]
+    fn test_validate_platform_identifier_empty() {
+        assert!(validate_platform_identifier(""));
     }
 }

@@ -90,6 +90,8 @@ pub mod volume_tests;
 pub mod workspace_tests;
 #[cfg(test)]
 pub mod writing_stats_tests;
+#[cfg(test)]
+pub mod action_ops_tests;
 
 use std::path::Path;
 

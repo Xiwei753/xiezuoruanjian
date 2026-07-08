@@ -343,6 +343,75 @@ fn starmap_edge_dto_fields_match_harmony() {
 }
 
 #[test]
+fn writing_stats_summary_dto_fields_match_harmony() {
+    let ffi_dto = json!({
+        "range": {
+            "startDate": "2024-01-01",
+            "endDate": "2024-01-07"
+        },
+        "totalHumanTypedChars": 1000,
+        "totalPastedChars": 500,
+        "totalDeletedChars": 200,
+        "totalAiInsertedChars": 100,
+        "totalNetDeltaChars": 1400,
+        "totalActiveSeconds": 3600,
+        "totalSessions": 5,
+        "daysCount": 7
+    });
+
+    let expected_keys = vec![
+        "daysCount",
+        "range",
+        "totalActiveSeconds",
+        "totalAiInsertedChars",
+        "totalDeletedChars",
+        "totalHumanTypedChars",
+        "totalNetDeltaChars",
+        "totalPastedChars",
+        "totalSessions",
+    ];
+    let actual_keys = sorted_keys(&ffi_dto);
+    assert_eq!(
+        actual_keys, expected_keys,
+        "WritingStatsSummaryDto field names must match Harmony CoreDtos.ets"
+    );
+}
+
+#[test]
+fn device_stats_record_dto_fields_match_harmony() {
+    let ffi_device_stats_record = json!({
+        "deviceId": "dev1",
+        "platform": "windows",
+        "deviceClass": "Desktop",
+        "humanTypedChars": 100,
+        "pastedChars": 50,
+        "deletedChars": 20,
+        "aiInsertedChars": 10,
+        "netDeltaChars": 140,
+        "activeSeconds": 600,
+        "sessionsCount": 2
+    });
+
+    let expected_keys = vec![
+        "activeSeconds",
+        "aiInsertedChars",
+        "deletedChars",
+        "deviceClass",
+        "deviceId",
+        "humanTypedChars",
+        "netDeltaChars",
+        "pastedChars",
+        "platform",
+        "sessionsCount",
+    ];
+    let actual_keys = sorted_keys(&ffi_device_stats_record);
+    assert_eq!(
+        actual_keys, expected_keys,
+        "DeviceStatsRecordDto field names must match Harmony CoreDtos.ets"
+    );
+}
+
+#[test]
 fn test_stats_summary_dto_contract() {
     let summary = crate::api::types::WritingStatsSummaryDto {
         range: crate::api::types::DateRangeDto {
@@ -1170,6 +1239,28 @@ fn theme_palette_dto_snake_case_round_trip_full() {
     assert_eq!(restored.dark_surface_container, "#1E2125");
     assert_eq!(restored.dark_surface_container_high, "#282B30");
     assert_eq!(restored.dark_surface_container_highest, "#33363A");
+}
+
+#[test]
+fn test_settings_auto_indent_logic() {
+    let mut settings = crate::settings::LocalSettings::default();
+    settings.auto_indent_enabled = true;
+    settings.auto_indent_width = 4.0;
+    settings.validate();
+    assert_eq!(settings.auto_indent_enabled, true);
+    assert_eq!(settings.auto_indent_width, 4.0);
+
+    settings.auto_indent_width = 0.0;
+    settings.validate();
+    assert_eq!(settings.auto_indent_width, 0.0);
+
+    settings.auto_indent_width = 100.0;
+    settings.validate();
+    assert_eq!(settings.auto_indent_width, crate::settings::ranges::INDENT_WIDTH_MAX);
+
+    settings.auto_indent_width = -1.0;
+    settings.validate();
+    assert_eq!(settings.auto_indent_width, crate::settings::ranges::INDENT_WIDTH_MIN);
 }
 
 #[test]
