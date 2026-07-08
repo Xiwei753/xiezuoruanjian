@@ -343,6 +343,48 @@ fn starmap_edge_dto_fields_match_harmony() {
 }
 
 #[test]
+fn test_stats_summary_dto_contract() {
+    let summary = crate::api::types::WritingStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-02".to_string(),
+        },
+        total_human_typed_chars: 100,
+        total_pasted_chars: 50,
+        total_deleted_chars: 10,
+        total_ai_inserted_chars: 5,
+        total_net_delta_chars: 145,
+        total_active_seconds: 3600,
+        total_sessions: 2,
+        days_count: 2,
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec![
+        "daysCount",
+        "range",
+        "totalActiveSeconds",
+        "totalAiInsertedChars",
+        "totalDeletedChars",
+        "totalHumanTypedChars",
+        "totalNetDeltaChars",
+        "totalPastedChars",
+        "totalSessions",
+    ]
+    .into_iter()
+    .map(|s| s.to_string())
+    .collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys);
+
+    let range = &json["range"];
+    assert!(range.get("startDate").is_some());
+    assert!(range.get("endDate").is_some());
+}
+
+#[test]
 fn writing_stats_dto_fields_match_harmony() {
     let ffi_writing_stats = json!({
         "totalChars": 5000,
