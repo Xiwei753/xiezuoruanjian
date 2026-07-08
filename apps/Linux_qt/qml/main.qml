@@ -697,7 +697,7 @@ ApplicationWindow {
             AppTextField {
                 id: inputField
                 Layout.fillWidth: true
-                theme: designTokens
+                dt: designTokens
                 placeholderText: {
                     if (inputDialog.actionType === "volume") return qsTr("例如：第一卷");
                     if (inputDialog.actionType === "chapter") return qsTr("例如：第一章");
