@@ -429,11 +429,22 @@ impl AppBackend {
                 let mut config = match api.load_sync_config() {
                     Ok(c) => c,
                     Err(e) => {
+                        let err_str = e.to_string();
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
+                            status_code: "error".to_string(),
+                            phase_key: None,
+                            summary_key: Some("error.load_sync_config_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&err_str)),
+                        };
                         return SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "diagnose".to_string(),
                             sync_status: "error".to_string(),
-                            action_result: format!("无法加载同步配置: {}", e),
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
                         };
                     }
                 };
@@ -578,7 +589,7 @@ impl AppBackend {
     // AppBackend::save_sync_config
     pub(crate) fn save_sync_config(&mut self) -> bool {
         self.debug_log("sync", "save_sync_config_start", "");
-        let mut error_msg: Option<String> = None;
+        let mut error_state: Option<writer_core::api::SyncOperationStateDto> = None;
         if let Some(api) = self.core_api() {
             let mut c = api
                 .load_sync_config()
@@ -655,7 +666,16 @@ impl AppBackend {
                 } else {
                     "error.other".to_string()
                 };
-                error_msg = Some(format!("{} ({})", resolved_key, error_code));
+                error_state = Some(writer_core::api::SyncOperationStateDto {
+                    operation_id: String::new(),
+                    operation_kind: "save_config".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("error.save_sync_config_failed".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: Some(format!("{} ({})", resolved_key, error_code)),
+                });
             } else {
                 let secrets_result = api.save_sync_secrets(s);
                 let secrets_json = match secrets_result {
@@ -681,19 +701,35 @@ impl AppBackend {
                     } else {
                         "error.other".to_string()
                     };
-                    error_msg = Some(format!("{} ({})", resolved_key, error_code));
+                    error_state = Some(writer_core::api::SyncOperationStateDto {
+                        operation_id: String::new(),
+                        operation_kind: "save_config".to_string(),
+                        status_code: "error".to_string(),
+                        phase_key: None,
+                        summary_key: Some("error.save_sync_secrets_failed".to_string()),
+                        summary_args: std::collections::HashMap::new(),
+                        counts: writer_core::api::SyncOperationCountsDto::default(),
+                        raw_error: Some(format!("{} ({})", resolved_key, error_code)),
+                    });
                 }
             }
         } else {
-            error_msg = Some("error.core_not_initialized".to_string());
+            error_state = Some(writer_core::api::SyncOperationStateDto {
+                operation_id: String::new(),
+                operation_kind: "save_config".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("error.core_not_initialized".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            });
         }
 
-        if let Some(msg) = error_msg {
+        if let Some(state) = error_state {
+            let msg = format!("{}: {}", state.summary_key.as_deref().unwrap_or("error.other"), state.raw_error.as_deref().unwrap_or(""));
             self.set_error(&msg);
-            // 这里 msg 已经是包含了 key 的错误描述，虽然还不完全是结构化 DTO，
-            // 但因为 save_sync_config 是同步 Q_METHOD 返回 bool，
-            // 且通常触发 UI 弹窗，所以暂时保持这种传递方式，但移除纯中文。
-            self.current_sync_operation_state = msg.clone();
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             self.debug_error("sync", "save_sync_config_failed", &msg);
             return false;
