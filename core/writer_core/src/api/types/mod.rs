@@ -1,6 +1,7 @@
 mod action;
 mod editor;
 mod platform;
+mod platform_interaction;
 mod project;
 pub mod screen_policy;
 mod settings;
@@ -13,6 +14,7 @@ mod workspace;
 pub use action::*;
 pub use editor::*;
 pub use platform::*;
+pub use platform_interaction::*;
 pub use project::*;
 pub use screen_policy::*;
 pub use settings::*;

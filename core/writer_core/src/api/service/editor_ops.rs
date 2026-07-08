@@ -3,10 +3,14 @@
 //! Delegates to `crate::editor::EditorEngine` for text-change semantic analysis
 //! and `should_animate` decisions. Platform clients consume the resulting
 //! `EditorVisualTransactionDto` to drive their own renderers.
+//!
+//! Also provides platform capability queries so settings pages and UI can
+//! enable/disable features based on what the platform supports.
 
 use crate::api::service::{ApiResult, WriterCoreApi};
 use crate::api::types::*;
 use crate::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
+use crate::platform_interaction::{PlatformCapabilities, PlatformKind};
 
 impl WriterCoreApi {
     /// Compute a visual transaction for a text change.
@@ -47,6 +51,32 @@ impl WriterCoreApi {
         let vt = engine.visual_transaction(&transaction);
 
         Ok(vt.map(Into::into))
+    }
+
+    /// Get platform capabilities for a given platform kind.
+    ///
+    /// Settings pages and UI buttons use this to enable/disable features.
+    /// For example, Harmony has no animation support, so animation settings
+    /// should be disabled on Harmony.
+    pub fn get_platform_capabilities(
+        &self,
+        platform: PlatformKindDto,
+    ) -> ApiResult<PlatformCapabilitiesDto> {
+        let kind: PlatformKind = platform.into();
+        let caps = kind.default_capabilities();
+        Ok(caps.into())
+    }
+}
+
+impl From<PlatformKindDto> for PlatformKind {
+    fn from(dto: PlatformKindDto) -> Self {
+        match dto {
+            PlatformKindDto::LinuxQt => Self::LinuxQt,
+            PlatformKindDto::Android => Self::Android,
+            PlatformKindDto::Windows => Self::Windows,
+            PlatformKindDto::Harmony => Self::Harmony,
+            PlatformKindDto::Unknown => Self::Unknown,
+        }
     }
 }
 

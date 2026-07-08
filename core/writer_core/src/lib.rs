@@ -50,6 +50,7 @@ pub mod editor;
 pub mod error;
 pub mod history;
 pub mod index;
+pub mod platform_interaction;
 
 #[cfg(feature = "harmony-ffi")]
 pub mod ffi;
