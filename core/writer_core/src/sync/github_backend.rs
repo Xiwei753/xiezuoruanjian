@@ -148,11 +148,6 @@ impl SyncBackend for GitHubApiBackend {
                     || err_msg.contains("tls")
                 {
                     result.error_category = "tls_failed".to_string();
-                } else if err_msg.contains("connection refused")
-                    || err_msg.contains("timeout")
-                    || err_msg.contains("network unreachable")
-                {
-                    result.error_category = "github_network_failed".to_string();
                 } else {
                     result.error_category = "github_network_failed".to_string();
                 }

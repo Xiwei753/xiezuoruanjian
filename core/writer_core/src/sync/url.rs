@@ -69,8 +69,6 @@ pub fn detect_transport(remote_url: &str) -> SyncTransport {
     let lower = remote_url.to_lowercase();
     if lower.starts_with("git@") || lower.starts_with("ssh://") {
         SyncTransport::SshDeployKey
-    } else if lower.starts_with("https://") || lower.starts_with("http://") {
-        SyncTransport::HttpsToken
     } else {
         SyncTransport::HttpsToken
     }
