@@ -76,3 +76,99 @@ impl AutoCorrectEngine {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scan_text_basic() {
+        let dict = vec![
+            ("teh".to_string(), "the".to_string()),
+            ("donot".to_string(), "do not".to_string()),
+        ];
+        let engine = AutoCorrectEngine::new(&dict).unwrap();
+        let text = "teh quick brown fox donot jump.";
+        let corrections = engine.scan_text(text);
+
+        assert_eq!(corrections.len(), 2);
+
+        assert_eq!(corrections[0].original_text, "teh");
+        assert_eq!(corrections[0].suggestion, "the");
+        assert_eq!(corrections[0].start_index, 0);
+        assert_eq!(corrections[0].end_index, 3);
+
+        assert_eq!(corrections[1].original_text, "donot");
+        assert_eq!(corrections[1].suggestion, "do not");
+        assert_eq!(corrections[1].start_index, 20);
+        assert_eq!(corrections[1].end_index, 25);
+    }
+
+    #[test]
+    fn test_scan_text_no_matches() {
+        let dict = vec![
+            ("teh".to_string(), "the".to_string()),
+        ];
+        let engine = AutoCorrectEngine::new(&dict).unwrap();
+        let text = "the quick brown fox";
+        let corrections = engine.scan_text(text);
+        assert_eq!(corrections.len(), 0);
+    }
+
+    #[test]
+    fn test_scan_text_empty_input() {
+        let dict = vec![
+            ("teh".to_string(), "the".to_string()),
+        ];
+        let engine = AutoCorrectEngine::new(&dict).unwrap();
+        let text = "";
+        let corrections = engine.scan_text(text);
+        assert_eq!(corrections.len(), 0);
+    }
+
+    #[test]
+    fn test_scan_text_multiple_occurrences() {
+        let dict = vec![
+            ("teh".to_string(), "the".to_string()),
+        ];
+        let engine = AutoCorrectEngine::new(&dict).unwrap();
+        let text = "teh teh teh";
+        let corrections = engine.scan_text(text);
+        assert_eq!(corrections.len(), 3);
+        assert_eq!(corrections[0].start_index, 0);
+        assert_eq!(corrections[1].start_index, 4);
+        assert_eq!(corrections[2].start_index, 8);
+    }
+
+    #[test]
+    fn test_scan_text_unicode() {
+        let dict = vec![
+            ("錯字".to_string(), "错字".to_string()),
+        ];
+        let engine = AutoCorrectEngine::new(&dict).unwrap();
+        let text = "这是一个錯字";
+        let corrections = engine.scan_text(text);
+
+        assert_eq!(corrections.len(), 1);
+        assert_eq!(corrections[0].original_text, "錯字");
+        assert_eq!(corrections[0].suggestion, "错字");
+        // start_index and end_index are in bytes
+        assert_eq!(&text[corrections[0].start_index..corrections[0].end_index], "錯字");
+    }
+
+    #[test]
+    fn test_scan_text_case_sensitivity() {
+        let dict = vec![
+            ("Teh".to_string(), "The".to_string()),
+        ];
+        let engine = AutoCorrectEngine::new(&dict).unwrap();
+
+        let text1 = "Teh";
+        let corrections1 = engine.scan_text(text1);
+        assert_eq!(corrections1.len(), 1);
+
+        let text2 = "teh";
+        let corrections2 = engine.scan_text(text2);
+        assert_eq!(corrections2.len(), 0);
+    }
+}

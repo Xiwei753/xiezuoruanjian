@@ -68,6 +68,25 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_manifest_serializes_with_deleted_at_ms() {
+        let manifest = SyncManifest {
+            files: vec![crate::sync::types::ManifestFileRecord {
+                path: "projects/p1/project.json".to_string(),
+                content_hash: "abc".to_string(),
+                updated_at_ms: 1000,
+                deleted_at_ms: Some(2000),
+                device_id: "device_a".to_string(),
+                op: "delete".to_string(),
+                schema_version: 1,
+            }],
+        };
+
+        let json = serde_json::to_string(&manifest).unwrap();
+        assert!(json.contains(r#""deleted_at_ms":2000"#));
+        assert!(json.contains(r#""op":"delete""#));
+    }
+
+    #[test]
     fn test_sync_manifest_deserializes_without_deleted_at_ms() {
         let raw = r#"{
             "files": [{
