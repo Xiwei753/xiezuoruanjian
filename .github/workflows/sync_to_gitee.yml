@@ -62,16 +62,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          HEADER="> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 当前源码快照的镜像备份。**\n>\n> Gitee 镜像不保留 GitHub 历史、tags 或构建产物；反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。\n"
-          { echo -e "$HEADER"; cat README.md; } > README.tmp && mv README.tmp README.md
-          echo -e "\n---\n更多赞助方式请见[源仓库](https://github.com/Xiwei753/xiezuoruanjian)" >> README.md
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git checkout --orphan gitee-snapshot
           git rm -r --cached . >/dev/null 2>&1 || true
           git add -A
+
+          HEADER="> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 当前源码快照的镜像备份。**\n>\n> Gitee 镜像不保留 GitHub 历史、tags 或构建产物；反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。\n"
+          FOOTER="\n---\n更多赞助方式请见[源仓库](https://github.com/Xiwei753/xiezuoruanjian)"
+
+          { echo -e "$HEADER"; cat README.md; } > README.tmp && mv README.tmp README.md
+          echo -e "$FOOTER" >> README.md
 
           SNAPSHOT_SIZE=$(git ls-files -z | xargs -0 du -ch 2>/dev/null | tail -1 | cut -f1)
           echo "Snapshot size: ${SNAPSHOT_SIZE}"
@@ -81,6 +83,7 @@ jobs:
             exit 1
           fi
 
+          git add -A
           git commit -m "同步 GitHub 当前源码快照"
 
           ENCODED_TOKEN=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${GITEE_TOKEN}', safe=''))")

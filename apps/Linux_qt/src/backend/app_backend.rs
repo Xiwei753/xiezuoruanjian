@@ -710,7 +710,7 @@ mod tests {
         assert_eq!(backend.current_sync_status, "error");
         assert!(backend
             .current_sync_operation_state
-            .contains("未配置远程仓库 URL"));
+            .contains("sync.block.remote_url_missing"));
     }
 }
 

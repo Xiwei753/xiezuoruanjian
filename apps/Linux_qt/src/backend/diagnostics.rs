@@ -656,6 +656,7 @@ mod tests {
 
     #[test]
     fn test_append_log_line() {
+        let _lock = GLOBAL_STATE_LOCK.lock().unwrap();
         let prev_enabled = DIAGNOSTICS_ENABLED.load(Ordering::Relaxed);
         let prev_verbose = VERBOSE_ENABLED.load(Ordering::Relaxed);
         DIAGNOSTICS_ENABLED.store(true, Ordering::Relaxed);
