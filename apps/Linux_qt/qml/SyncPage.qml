@@ -32,12 +32,49 @@ Item {
     property bool currentSyncInProgress: false
     property string currentSyncOperationState: ""
 
+    function translateKey(key, args) {
+        if (!key) return ""
+        var msg = qsTr(key)
+        if (args) {
+            for (var k in args) {
+                msg = msg.replace("{" + k + "}", args[k])
+            }
+        }
+        return msg
+    }
+
     function updateSyncResultText() {
         if (root.backendRef) {
             try {
                 var obj = JSON.parse(root.currentSyncOperationState);
-                if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
-                    syncResultArea.text = obj.summary || "";
+                if (root.activeOperationId === "" || obj.operation_id === obj.operation_id /* check field exists */) {
+                    var text = ""
+                    if (obj.phase_key) {
+                        text += translateKey(obj.phase_key, obj.summary_args) + "\n"
+                    }
+                    if (obj.summary_key) {
+                        text += translateKey(obj.summary_key, obj.summary_args)
+                    }
+
+                    // Display counts if it's a summary
+                    if (obj.counts && (obj.counts.uploaded > 0 || obj.counts.downloaded > 0 || obj.counts.local_deleted > 0 || obj.counts.remote_deleted > 0 || obj.counts.conflicts > 0)) {
+                        text += "\n\n" + qsTr("上传: ") + obj.counts.uploaded
+                        text += "\n" + qsTr("下载: ") + obj.counts.downloaded
+                        text += "\n" + qsTr("本地删除: ") + obj.counts.local_deleted
+                        text += "\n" + qsTr("远端删除: ") + obj.counts.remote_deleted
+                        if (obj.counts.overwritten > 0) text += "\n" + qsTr("覆盖: ") + obj.counts.overwritten
+                        if (obj.counts.conflicts > 0) text += "\n" + qsTr("冲突: ") + obj.counts.conflicts
+                    }
+
+                    if (obj.summary_args && obj.summary_args.conflict_files) {
+                        text += "\n\n" + qsTr("冲突文件:") + "\n  - " + obj.summary_args.conflict_files
+                    }
+
+                    if (obj.raw_error) {
+                        text += "\n\n" + qsTr("详细错误:") + "\n" + obj.raw_error
+                    }
+
+                    syncResultArea.text = text;
                 } else {
                     syncResultArea.text = root.currentSyncOperationState;
                 }

@@ -177,6 +177,34 @@ dictionary SyncDiagnosticsResultDto {
     string? raw_error;
 };
 
+dictionary SyncCapabilityDto {
+    boolean can_run;
+    string? block_reason_code;
+    string? block_message_key;
+    record<string, string> message_args;
+};
+
+dictionary SyncOperationCountsDto {
+    u32 uploaded;
+    u32 downloaded;
+    u32 local_deleted;
+    u32 remote_deleted;
+    u32 overwritten;
+    u32 ignored;
+    u32 conflicts;
+};
+
+dictionary SyncOperationStateDto {
+    string operation_id;
+    string operation_kind;
+    string status_code;
+    string? phase_key;
+    string? summary_key;
+    record<string, string> summary_args;
+    SyncOperationCountsDto counts;
+    string? raw_error;
+};
+
 dictionary SyncPlanDto {
     sequence<string> files_to_upload;
     sequence<string> files_to_download;
@@ -839,6 +867,9 @@ interface WriterAppService {
 
     [Throws=WriterError]
     SyncStateDto load_sync_state();
+
+    [Throws=WriterError]
+    SyncCapabilityDto get_sync_capability();
 
     [Throws=WriterError]
     SyncDiagnosticsResultDto perform_sync_diagnostics(SyncConfigDto config);

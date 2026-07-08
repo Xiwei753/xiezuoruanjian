@@ -460,45 +460,13 @@ pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> String
 }
 
 pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
-    let mut msg = format!("诊断结果: {}", if result.success { "成功" } else { "失败" });
-
-    msg.push_str(&format!("\n后端类型: {}", result.backend_type));
-
-    if !result.remote_url_sanitized.is_empty() {
-        msg.push_str(&format!("\nRemote URL: {}", result.remote_url_sanitized));
+    // Note: This function is being deprecated in favor of structured DTOs.
+    // We return a simple key-based string for now.
+    if result.success {
+        "sync.result.diagnose_success".to_string()
+    } else {
+        format!("sync.result.diagnose_failed: {}", result.error_category)
     }
-    msg.push_str(&format!("\nTransport: {}", result.transport));
-
-    msg.push_str(&format!(
-        "\n网络连接: {}",
-        if result.network_ok {
-            "正常"
-        } else {
-            "异常"
-        }
-    ));
-    msg.push_str(&format!(
-        "\n身份认证: {}",
-        if result.auth_ok { "正常" } else { "异常" }
-    ));
-    msg.push_str(&format!(
-        "\n仓库访问: {}",
-        if result.repo_ok { "正常" } else { "异常" }
-    ));
-    msg.push_str(&format!(
-        "\n分支存在: {}",
-        if result.branch_ok { "正常" } else { "异常" }
-    ));
-
-    if !result.error_category.is_empty() && result.error_category != "none" {
-        msg.push_str(&format!("\n错误分类: {}", result.error_category));
-    }
-
-    if let Some(err) = &result.raw_error {
-        msg.push_str(&format!("\n\n错误详情:\n{}", mask_sync_error(err)));
-    }
-
-    msg
 }
 
 pub fn save_sync_configs(
@@ -521,12 +489,12 @@ pub fn save_sync_configs(
     }
     .to_json_string();
     let config_envelope: serde_json::Value =
-        serde_json::from_str(&config_json).map_err(|e| format!("解析配置保存结果失败: {}", e))?;
+        serde_json::from_str(&config_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
     if config_envelope["success"] != true {
         let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
         let raw_error = config_envelope["rawError"]
             .as_str()
-            .unwrap_or("保存同步配置失败");
+            .unwrap_or("error.save_sync_config_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 
@@ -544,12 +512,12 @@ pub fn save_sync_configs(
     }
     .to_json_string();
     let secrets_envelope: serde_json::Value =
-        serde_json::from_str(&secrets_json).map_err(|e| format!("解析凭证保存结果失败: {}", e))?;
+        serde_json::from_str(&secrets_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
     if secrets_envelope["success"] != true {
         let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
         let raw_error = secrets_envelope["rawError"]
             .as_str()
-            .unwrap_or("保存同步凭证失败");
+            .unwrap_or("error.save_sync_secrets_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 

@@ -261,6 +261,10 @@ impl WriterAppService {
         self.api.load_sync_state()
     }
 
+    pub fn get_sync_capability(&self) -> Result<crate::api::SyncCapabilityDto, WriterError> {
+        self.api.get_sync_capability()
+    }
+
     pub fn perform_sync_diagnostics(
         &self,
         config: SyncConfigDto,
