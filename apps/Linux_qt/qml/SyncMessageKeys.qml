@@ -56,15 +56,6 @@ QtObject {
     property string _result_git_repo_not_workspace: qsTr("sync.result.git_repo_not_workspace")
     property string _result_directory_not_empty_not_workspace: qsTr("sync.result.directory_not_empty_not_workspace")
     property string _result_configured_not_tested: qsTr("sync.result.configured_not_tested")
-    property string _result_token_missing: qsTr("sync.result.token_missing")
-    property string _result_token_invalid: qsTr("sync.result.token_invalid")
-    property string _result_token_permission_denied: qsTr("sync.result.token_permission_denied")
-    property string _result_repo_not_found_or_no_permission: qsTr("sync.result.repo_not_found_or_no_permission")
-    property string _result_branch_missing: qsTr("sync.result.branch_missing")
-    property string _result_network_failed: qsTr("sync.result.network_failed")
-    property string _result_auth_failed: qsTr("sync.result.auth_failed")
-    property string _result_non_fast_forward: qsTr("sync.result.non_fast_forward")
-    property string _result_unrelated_histories: qsTr("sync.result.unrelated_histories")
 
     // sync.status.*
     property string _status_already_running: qsTr("sync.status.already_running")
