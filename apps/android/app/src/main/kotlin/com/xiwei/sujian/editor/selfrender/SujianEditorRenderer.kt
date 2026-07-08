@@ -81,6 +81,14 @@ class SujianEditorRenderer(
         strokeWidth = 1.5f
     }
 
+    internal val searchHighlightPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0
+        style = Paint.Style.FILL
+    }
+
+    var searchHighlights: List<Pair<Int, Int>> = emptyList()
+        private set
+
     private val animTextPaint = TextPaint(textPaint)
 
     /**
@@ -92,6 +100,15 @@ class SujianEditorRenderer(
         composingUnderlinePaint.color = composingColor
         selectionPaint.color = selectionColor
         animTextPaint.color = textColor
+        searchHighlightPaint.color = selectionColor
+    }
+
+    fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
+        searchHighlights = highlights
+    }
+
+    fun clearSearchHighlights() {
+        searchHighlights = emptyList()
     }
 
     // ── 动画状态 ──
@@ -352,13 +369,16 @@ class SujianEditorRenderer(
         canvas.save()
         canvas.translate(-scrollX.toFloat(), -scrollY.toFloat())
 
-        // 1. 选区高亮层
+        // 1. 搜索高亮层
+        drawSearchHighlights(canvas, layout, text)
+
+        // 2. 选区高亮层
         drawSelection(canvas, layout, text, selection)
 
-        // 2. 静态正文层
+        // 3. 静态正文层
         drawStaticText(canvas, layout, text, scrollY, viewportHeight)
 
-        // 3. preedit 层（composing 文字 + 下划线）
+        // 4. preedit 层（composing 文字 + 下划线）
         if (composingText.isNotEmpty() && composingStart >= 0) {
             // setComposingText 场景：composing 文字不在 buffer.text 中，需要临时绘制
             drawComposingTextAndUnderline(canvas, layout, text, composingStart, composingText, composingCursor)
@@ -367,10 +387,10 @@ class SujianEditorRenderer(
             drawComposingUnderline(canvas, layout, text, composingStart, composingEnd)
         }
 
-        // 4. 动画层
+        // 5. 动画层
         drawAnimations(canvas)
 
-        // 5. 光标层
+        // 6. 光标层
         if (cursorVisible && cursorBlinkOn && selection.isCollapsed) {
             if (hasComposingCursor) {
                 // composing 期间：光标跟随 composingCursor 在 composing 文字中的位置
@@ -531,6 +551,21 @@ class SujianEditorRenderer(
         canvas.clipPath(path)
         layout.draw(canvas)
         canvas.restore()
+    }
+
+    private fun drawSearchHighlights(canvas: Canvas, layout: Layout, text: String) {
+        if (searchHighlights.isEmpty() || text.isEmpty()) return
+        for ((start, end) in searchHighlights) {
+            val clampedStart = start.coerceIn(0, text.length)
+            val clampedEnd = end.coerceIn(0, text.length)
+            if (clampedStart >= clampedEnd) continue
+
+            val path = Path()
+            layout.getSelectionPath(clampedStart, clampedEnd, path)
+            if (path.isEmpty) continue
+
+            canvas.drawPath(path, searchHighlightPaint)
+        }
     }
 
     private fun drawSelection(canvas: Canvas, layout: Layout, text: String, selection: SujianSelection) {

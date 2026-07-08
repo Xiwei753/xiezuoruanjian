@@ -514,13 +514,20 @@ class EditorFragment : Fragment() {
             }
         }
 
-        // TODO: 替换功能待自研写作区 SujianEditorView 支持文本替换 API 后实现
         btnReplace.setOnClickListener {
-            // 替换当前匹配项 — 暂未实现
+            if (searchResults.isEmpty() || currentSearchIndex < 0) return@setOnClickListener
+            val (start, end) = searchResults[currentSearchIndex]
+            val replaceStr = etReplace.text.toString()
+            sujianEditorView.replaceRange(start, end, replaceStr)
+            performSearch()
         }
 
         btnReplaceAll.setOnClickListener {
-            // 全部替换 — 暂未实现
+            if (searchResults.isEmpty()) return@setOnClickListener
+            val searchStr = etSearch.text.toString()
+            val replaceStr = etReplace.text.toString()
+            sujianEditorView.replaceAll(searchStr, replaceStr)
+            performSearch()
         }
     }
 
@@ -545,17 +552,20 @@ class EditorFragment : Fragment() {
 
         if (searchResults.isNotEmpty()) {
             currentSearchIndex = 0
+            sujianEditorView.setSearchHighlights(searchResults)
             focusSearchResult()
         }
     }
 
     private fun focusSearchResult() {
-        // TODO: 自研写作区搜索高亮和光标定位待 SujianEditorView 支持后实现
-        // 目前仅记录当前搜索索引
+        if (searchResults.isEmpty() || currentSearchIndex < 0) return
+        val (start, end) = searchResults[currentSearchIndex]
+        sujianEditorView.setSelectionRange(start, end)
+        sujianEditorView.scrollToSelection()
     }
 
     private fun clearHighlights() {
-        // TODO: 自研写作区搜索高亮清除待 SujianEditorView 支持后实现
+        sujianEditorView.clearSearchHighlights()
         searchResults.clear()
         currentSearchIndex = -1
     }

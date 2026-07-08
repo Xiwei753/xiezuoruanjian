@@ -109,6 +109,9 @@ pub enum AnimationMode {
     /// 换行/中间插入导致换行，按 old layout → new layout 行级 reflow
     LineReflowAnimation,
     /// 极端长文本或复杂布局，用局部 snapshot 做整体位移/淡入淡出
+    /// UNAVAILABLE: No snapshot renderer exists on any platform.
+    /// choose_animation_mode() must never return this variant.
+    /// Retained for forward compatibility only.
     SnapshotAnimation,
     /// 系统抑制：滚动/加载/字号变化/章节切换/动画关闭
     /// 用户输入/删除/换行/IME commit/中间插入不能返回此值
@@ -701,7 +704,7 @@ fn should_animate_changes(
 /// 4. 包含复杂 grapheme → ClusterAnimation（整组动画，不跳过）
 /// 5. cluster 数量 1–8 → GlyphAnimation（逐 cluster 动画）
 /// 6. cluster 数量 9–40 → RunAnimation（按 word/run/chunk 分组动画）
-/// 7. cluster 数量 > 40 → SnapshotAnimation（局部 snapshot 动画）
+    /// 7. cluster 数量 > 40 → RunAnimation（SnapshotAnimation unavailable，无 snapshot renderer）
 pub fn choose_animation_mode(
     cluster_count: usize,
     contains_newline: bool,
@@ -729,12 +732,13 @@ pub fn choose_animation_mode(
         return AnimationMode::ClusterAnimation;
     }
     // 5–7. 按 cluster 数量分级
+    // NOTE: SnapshotAnimation is unavailable (no snapshot renderer exists on any platform).
+    // >40 cluster edits use RunAnimation instead. SnapshotAnimation enum variant is retained
+    // for forward compatibility but must never be returned by this function.
     if cluster_count <= 8 {
         AnimationMode::GlyphAnimation
-    } else if cluster_count <= 40 {
-        AnimationMode::RunAnimation
     } else {
-        AnimationMode::SnapshotAnimation
+        AnimationMode::RunAnimation
     }
 }
 
@@ -1670,7 +1674,7 @@ mod tests {
 
     #[test]
     fn visual_transaction_paste_enters_visual_transaction() {
-        // Paste 长文本进入 visual transaction，mode 是 RunAnimation 或 SnapshotAnimation
+        // Paste 长文本进入 visual transaction，mode 是 RunAnimation (SnapshotAnimation unavailable)
         let mut engine = EditorEngine::with_animation_limits(8, 120);
         let tx = engine.create_transaction(
             "a",
@@ -1683,9 +1687,8 @@ mod tests {
         assert!(vt.is_some(), "Paste should enter visual transaction");
         let vt = vt.unwrap();
         assert!(
-            vt.animation_mode == AnimationMode::RunAnimation
-                || vt.animation_mode == AnimationMode::SnapshotAnimation,
-            "Paste long text should be RunAnimation or SnapshotAnimation, got {:?}",
+            vt.animation_mode == AnimationMode::RunAnimation,
+            "Paste long text should be RunAnimation, got {:?}",
             vt.animation_mode
         );
     }
@@ -1879,13 +1882,13 @@ mod tests {
     }
 
     #[test]
-    fn choose_animation_mode_extreme_many_clusters_returns_snapshot() {
-        // >40 个 cluster → SnapshotAnimation
+    fn choose_animation_mode_extreme_many_clusters_returns_run() {
+        // >40 个 cluster → RunAnimation (SnapshotAnimation is unavailable)
         let mode = choose_animation_mode(41, false, false, false, false, false, false, true);
-        assert_eq!(mode, AnimationMode::SnapshotAnimation);
+        assert_eq!(mode, AnimationMode::RunAnimation);
 
         let mode100 = choose_animation_mode(100, false, false, false, false, false, false, true);
-        assert_eq!(mode100, AnimationMode::SnapshotAnimation);
+        assert_eq!(mode100, AnimationMode::RunAnimation);
     }
 
     #[test]

@@ -114,7 +114,7 @@ Android SujianEditorView 已进入自绘阶段，且是 Android 正文写作区�
 | Insert (Glyph/Cluster/Run) | ✅ 创建+清理 | ✅ ghost | ✅ 2×duration+200ms | ✅ 立即清理 |
 | Insert (LineReflow) | ✅ reflow ranges | ✅ reflow ghost | ✅ 2×duration+200ms | ✅ 立即清理 |
 | Delete | 无 hidden range | ✅ snapshot ghost | N/A（无 hidden range） | ✅ 清除动画状态 |
-| SnapshotAnimation | ❌ 降级为 SystemSuppressed（不创建 hidden range，不创建 overlay） | 同左 | N/A | N/A |
+| SnapshotAnimation | ❌ Core 不再下发此模式（choose_animation_mode 返回 RunAnimation），枚举保留用于前向兼容 | 同左 | N/A | N/A |
 | Preedit | ✅ 清除活跃动画 | N/A | N/A | ✅ |
 
 ### 超时安全策略（两端统一）
@@ -125,7 +125,7 @@ Android SujianEditorView 已进入自绘阶段，且是 Android 正文写作区�
 
 ### 当前边界（不虚报）
 
-1. **SnapshotAnimation 未实现**：两端统一降级为 SystemSuppressed（跳过，不创建 hidden range，不创建 overlay）。>40 cluster 的长文本插入直接显示，无动画。
+1. **SnapshotAnimation 不可用**：Core 的 `choose_animation_mode()` 不再返回此模式（>40 cluster 改用 RunAnimation）。枚举变体保留用于前向兼容，但各端不应再收到此模式。两端已有的降级逻辑（Linux_qt → SystemSuppressed，Android → skip）作为防御性兜底保留。
 2. **Delete 动画无 hidden range 回收问题**：Delete 不产生 hidden range，只有 overlay snapshot ghost。如果 QML overlay 的 delete 动画卡住，不影响正文显示（正文已删除，overlay 只是视觉残留）。
 3. **Delete 动画无独立超时**：Delete 动画没有 hidden range 需要回收，其 overlay ghost 的 `isFinished` 基于 `durationMs` 判断，超时后自动从 `activeAnimations` 移除。
 4. **滚动/加载/格式化/设置变化/关闭动画**：所有路径立即清除 hidden range 和动画状态，不依赖 timeout。

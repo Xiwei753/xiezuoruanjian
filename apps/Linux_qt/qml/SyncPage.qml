@@ -47,7 +47,7 @@ Item {
         if (root.backendRef) {
             try {
                 var obj = JSON.parse(root.currentSyncOperationState);
-                if (root.activeOperationId === "" || obj.operation_id === obj.operation_id /* check field exists */) {
+                if (root.activeOperationId === "" || obj.operation_id === root.activeOperationId) {
                     var text = ""
                     if (obj.phase_key) {
                         text += translateKey(obj.phase_key, obj.summary_args) + "\n"

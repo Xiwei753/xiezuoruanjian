@@ -18,16 +18,36 @@ impl AppBackend {
         let path_str = path.to_string();
         let path_obj = std::path::Path::new(&path_str);
         if !path_obj.exists() || !path_obj.is_dir() {
-            self.set_error("所选目录不存在或不是目录");
-            self.current_sync_operation_state = "所选目录不存在或不是目录".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: String::new(),
+                operation_kind: "github_init".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.invalid_directory".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.set_error("sync.block.invalid_directory");
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             return;
         }
 
         let remote_url_str = remote_url.to_string();
         if remote_url_str.is_empty() {
-            self.set_error("远程仓库地址不能为空");
-            self.current_sync_operation_state = "远程仓库地址不能为空".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: String::new(),
+                operation_kind: "github_init".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.remote_url_missing".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.set_error("sync.block.remote_url_missing");
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             return;
         }
@@ -45,7 +65,17 @@ impl AppBackend {
 
         self.current_sync_status = "syncing".to_string();
         self.sync_status_changed();
-        self.current_sync_operation_state = "正在初始化...".to_string();
+        let state = writer_core::api::SyncOperationStateDto {
+            operation_id: op_id.clone(),
+            operation_kind: "github_init".to_string(),
+            status_code: "syncing".to_string(),
+            phase_key: Some("sync.phase.github_init".to_string()),
+            summary_key: None,
+            summary_args: std::collections::HashMap::new(),
+            counts: writer_core::api::SyncOperationCountsDto::default(),
+            raw_error: None,
+        };
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -137,9 +167,18 @@ impl AppBackend {
                             if let Err(e) = api.create_workspace_if_needed() {
                                 return SyncTaskOutcome {
                                     operation_id: operation_id.to_string(),
-                                    operation_kind: "sync".to_string(),
+                                    operation_kind: "github_init".to_string(),
                                     sync_status: "error".to_string(),
-                                    action_result: format!("克隆成功但工作区初始化失败: {}", e),
+                                    action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
+                                        operation_id: operation_id.to_string(),
+                                        operation_kind: "github_init".to_string(),
+                                        status_code: "error".to_string(),
+                                        phase_key: None,
+                                        summary_key: Some("sync.result.clone_success_init_failed".to_string()),
+                                        summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))].into_iter().collect(),
+                                        counts: writer_core::api::SyncOperationCountsDto::default(),
+                                        raw_error: Some(mask_sync_error(&e.to_string())),
+                                    }).unwrap_or_default(),
                                 };
                             }
                             let push_backend = writer_core::sync::create_sync_backend(
@@ -168,24 +207,24 @@ impl AppBackend {
                                         if let Some(se) = save_outcome {
                                             return SyncTaskOutcome {
                                                 operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                                                action_result: format!("工作区已创建，但推送到远端失败: {}，且同步配置保存失败: {}. 请检查权限/磁盘。", mask_sync_error(&err), se),
+                                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&err)), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
                                             };
                                         }
                                         return SyncTaskOutcome {
                                             operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category_from_code(category.as_deref(), &err),
-                                            action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&err)),
+                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(category.as_deref(), &err), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&err))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
                                         };
                                     }
                                     Err(e) => {
                                         if let Some(se) = save_outcome {
                                             return SyncTaskOutcome {
                                                 operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                                                action_result: format!("工作区已创建，但推送到远端失败: {}，且同步配置保存失败: {}. 请检查权限/磁盘。", mask_sync_error(&e.to_string()), se),
+                                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&e.to_string())), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                                             };
                                         }
                                         return SyncTaskOutcome {
                                             operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&e.to_string()),
-                                            action_result: format!("本地工作区已初始化但推送到远端失败: {}. 可在配置同步后手动同步。", mask_sync_error(&e.to_string())),
+                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category(&e.to_string()), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                                         };
                                     }
                                 }
@@ -194,11 +233,11 @@ impl AppBackend {
                         match save_sync_configs(path, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "success".to_string(),
-                                action_result: "克隆并初始化工作区成功".to_string(),
+                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "success".to_string(), phase_key: None, summary_key: Some("sync.result.clone_init_success".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: None }).unwrap_or_default(),
                             },
                             Err(e) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                                action_result: format!("工作区已创建/同步可能完成，但同步配置保存失败: {}. 请检查权限/磁盘，不要继续同步。", e),
+                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.save_config_failed".to_string()), summary_args: [("error".to_string(), e)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: None }).unwrap_or_default(),
                             },
                         }
                     } else {
@@ -210,7 +249,7 @@ impl AppBackend {
                                 result.error_category.as_deref(),
                                 &err,
                             ),
-                            action_result: format!("克隆失败: {}", mask_sync_error(&err)),
+                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(result.error_category.as_deref(), &err), phase_key: None, summary_key: Some("sync.result.clone_failed".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
                         }
                     }
                 }
@@ -218,7 +257,7 @@ impl AppBackend {
                     operation_id: operation_id.to_string(),
                     operation_kind: "sync".to_string(),
                     sync_status: sync_error_category(&e.to_string()),
-                    action_result: format!("克隆失败: {}", mask_sync_error(&e.to_string())),
+                    action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category(&e.to_string()), phase_key: None, summary_key: Some("sync.result.clone_failed".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                 },
             }
         } else if has_workspace() {
@@ -231,16 +270,22 @@ impl AppBackend {
                                 operation_id: operation_id.to_string(),
                                 operation_kind: "sync".to_string(),
                                 sync_status: "success".to_string(),
-                                action_result: "远程仓库已配置并同步成功".to_string(),
+                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "success".to_string(), phase_key: None, summary_key: Some("sync.result.remote_configured_sync_success".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: None }).unwrap_or_default(),
                             },
                             Err(e) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(),
-                                operation_kind: "sync".to_string(),
+                                operation_kind: "github_init".to_string(),
                                 sync_status: "error".to_string(),
-                                action_result: format!(
-                                    "同步成功但配置保存失败: {}. 请检查权限/磁盘，不要继续同步。",
-                                    e
-                                ),
+                                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
+                                    operation_id: operation_id.to_string(),
+                                    operation_kind: "github_init".to_string(),
+                                    status_code: "error".to_string(),
+                                    phase_key: None,
+                                    summary_key: Some("sync.result.save_config_failed".to_string()),
+                                    summary_args: [("error".to_string(), e)].into_iter().collect(),
+                                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                                    raw_error: None,
+                                }).unwrap_or_default(),
                             },
                         }
                     } else if result.status == writer_core::sync::SyncStatus::Conflict {
@@ -258,11 +303,11 @@ impl AppBackend {
                         files.dedup();
 
                         let file_str = if files.is_empty() {
-                            "未能列出具体冲突文件".to_string()
+                            "sync.result.no_conflict_files".to_string()
                         } else {
                             let display_files = if files.len() > 100 {
                                 let mut subset = files[0..100].to_vec();
-                                subset.push(format!("...等共 {} 个文件", files.len()));
+                                subset.push(format!("sync.result.more_files_count: {}", files.len()));
                                 subset
                             } else {
                                 files.clone()
@@ -286,20 +331,29 @@ impl AppBackend {
                         );
 
                         let m = format!(
-                            "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - {}\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步",
+                            "sync.result.conflict_summary: {}",
                             file_str
                         );
                         SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
-                            operation_kind: "sync".to_string(),
+                            operation_kind: "github_init".to_string(),
                             sync_status: "conflict".to_string(),
-                            action_result: m,
+                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
+                                operation_id: operation_id.to_string(),
+                                operation_kind: "github_init".to_string(),
+                                status_code: "conflict".to_string(),
+                                phase_key: None,
+                                summary_key: Some("sync.result.conflict_summary".to_string()),
+                                summary_args: [("conflict_files".to_string(), file_str)].into_iter().collect(),
+                                counts: writer_core::api::SyncOperationCountsDto { conflicts: files.len() as u32, ..Default::default() },
+                                raw_error: result.error.as_ref().map(|e| mask_sync_error(e)),
+                            }).unwrap_or_default(),
                         }
                     } else {
                         let err = result.error.unwrap_or_default();
                         let cat =
                             sync_error_category_from_code(result.error_category.as_deref(), &err);
-                        let action_result = if cat == "conflict" {
+                        let summary_key = if cat == "conflict" {
                             debug_log_static(
                                 "sync",
                                 "conflict_detected",
@@ -308,25 +362,31 @@ impl AppBackend {
                                     mask_sync_error(&err)
                                 ),
                             );
-                            format!(
-                                "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
-                                mask_sync_error(&err)
-                            )
+                            "sync.result.conflict_summary".to_string()
                         } else {
-                            format!("同步失败: {}", mask_sync_error(&err))
+                            "sync.result.generic_error".to_string()
                         };
                         SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
-                            operation_kind: "sync".to_string(),
-                            sync_status: cat,
-                            action_result,
+                            operation_kind: "github_init".to_string(),
+                            sync_status: cat.clone(),
+                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
+                                operation_id: operation_id.to_string(),
+                                operation_kind: "github_init".to_string(),
+                                status_code: cat,
+                                phase_key: None,
+                                summary_key: Some(summary_key),
+                                summary_args: std::collections::HashMap::new(),
+                                counts: writer_core::api::SyncOperationCountsDto::default(),
+                                raw_error: Some(mask_sync_error(&err)),
+                            }).unwrap_or_default(),
                         }
                     }
                 }
                 Err(e) => {
                     let err_str = e.to_string();
                     let cat = sync_error_category(&err_str);
-                    let action_result = if cat == "conflict" {
+                    let summary_key = if cat == "conflict" {
                         debug_log_static(
                             "sync",
                             "conflict_detected",
@@ -335,33 +395,56 @@ impl AppBackend {
                                 mask_sync_error(&err_str)
                             ),
                         );
-                        format!(
-                            "同步冲突，已停止，未覆盖任何文件\n\n原因:\n本地和远端都修改了同一批同步文件，Git 无法安全自动合并。\n\n冲突文件:\n  - 未能列出具体冲突文件\n\n下一步建议:\n1. 先备份当前工作区\n2. 运行诊断确认网络认证正常\n3. 手动处理冲突后重新同步\n\n(原始错误: {})",
-                            mask_sync_error(&err_str)
-                        )
+                        "sync.result.conflict_summary".to_string()
                     } else {
-                        format!("同步失败: {}", mask_sync_error(&err_str))
+                        "sync.result.generic_error".to_string()
                     };
                     SyncTaskOutcome {
                         operation_id: operation_id.to_string(),
-                        operation_kind: "sync".to_string(),
-                        sync_status: cat,
-                        action_result,
+                        operation_kind: "github_init".to_string(),
+                        sync_status: cat.clone(),
+                        action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
+                            operation_id: operation_id.to_string(),
+                            operation_kind: "github_init".to_string(),
+                            status_code: cat,
+                            phase_key: None,
+                            summary_key: Some(summary_key),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&err_str)),
+                        }).unwrap_or_default(),
                     }
                 }
             }
         } else if is_git_repo() {
             SyncTaskOutcome {
-                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
-                action_result: "目录包含 Git 仓库但不是素笺写作工作区。请先新建本地工作区（新建作品后保存），再配置同步。".to_string(),
+                operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), sync_status: "error".to_string(),
+                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
+                    operation_id: operation_id.to_string(),
+                    operation_kind: "github_init".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.result.git_repo_not_workspace".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                }).unwrap_or_default(),
             }
         } else {
             SyncTaskOutcome {
                 operation_id: operation_id.to_string(),
-                operation_kind: "sync".to_string(),
+                operation_kind: "github_init".to_string(),
                 sync_status: "error".to_string(),
-                action_result: "目录非空且不是素笺写作工作区。请选择空目录，或先新建本地工作区。"
-                    .to_string(),
+                action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
+                    operation_id: operation_id.to_string(),
+                    operation_kind: "github_init".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.result.directory_not_empty_not_workspace".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                }).unwrap_or_default(),
             }
         }
     }

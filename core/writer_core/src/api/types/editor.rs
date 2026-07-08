@@ -31,6 +31,8 @@ pub enum AnimationModeDto {
     ClusterAnimation,
     RunAnimation,
     LineReflowAnimation,
+    /// UNAVAILABLE: No snapshot renderer exists. Core never returns this.
+    /// Retained for forward compatibility only.
     SnapshotAnimation,
     SystemSuppressed,
 }

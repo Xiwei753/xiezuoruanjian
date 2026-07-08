@@ -274,6 +274,21 @@ class SujianEditorBuffer {
         )
     }
 
+    fun replaceRange(start: Int, end: Int, newText: String, cause: SujianEditCause = SujianEditCause.Programmatic): SujianEditResult {
+        val clampedStart = start.coerceIn(0, text.length)
+        val clampedEnd = end.coerceIn(0, text.length)
+        if (clampedStart > clampedEnd) return SujianEditResult(text, selection, cause)
+
+        text = text.substring(0, clampedStart) + newText + text.substring(clampedEnd)
+        val newCursorPos = clampedStart + newText.length
+        selection = SujianSelection.collapsed(newCursorPos)
+        clearComposing()
+
+        val result = SujianEditResult(text, selection, cause)
+        onTextChanged?.invoke(result)
+        return result
+    }
+
     /**
      * 获取光标前的文本
      */

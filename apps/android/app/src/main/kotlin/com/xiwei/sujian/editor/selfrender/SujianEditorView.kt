@@ -406,6 +406,65 @@ class SujianEditorView @JvmOverloads constructor(
      */
     fun getSelectionEnd(): Int = buffer.selection.end
 
+    fun setSelectionRange(start: Int, end: Int) {
+        buffer.setSelection(start, end)
+        val cursorRect = layoutEngine.getCursorRect(buffer.text, buffer.selection.head)
+        cursorController.requestForceSnap()
+        cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
+        cursorController.onSelectionChanged()
+        imeController.updateSelection()
+        invalidate()
+    }
+
+    fun scrollToSelection() {
+        touchController.ensureCursorVisible()
+        invalidate()
+    }
+
+    fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
+        renderer.setSearchHighlights(highlights)
+        invalidate()
+    }
+
+    fun clearSearchHighlights() {
+        renderer.clearSearchHighlights()
+        invalidate()
+    }
+
+    fun replaceRange(start: Int, end: Int, newText: String) {
+        val cause = SujianEditCauseData(
+            cause = "Programmatic",
+            utf8ByteOffset = buffer.utf16ToUtf8(start),
+            oldUtf8Len = buffer.utf16ToUtf8(end) - buffer.utf16ToUtf8(start),
+            newUtf8Len = SujianEditorBuffer.utf16ToUtf8(newText, newText.length)
+        )
+        runVisualEdit(cause) {
+            buffer.replaceRange(start, end, newText)
+        }
+    }
+
+    fun replaceAll(searchStr: String, replaceStr: String): Int {
+        val content = buffer.text
+        var count = 0
+        var idx = content.lastIndexOf(searchStr)
+        while (idx >= 0) {
+            val cause = SujianEditCauseData(
+                cause = "Programmatic",
+                utf8ByteOffset = buffer.utf16ToUtf8(idx),
+                oldUtf8Len = SujianEditorBuffer.utf16ToUtf8(searchStr, searchStr.length),
+                newUtf8Len = SujianEditorBuffer.utf16ToUtf8(replaceStr, replaceStr.length)
+            )
+            runVisualEdit(cause) {
+                buffer.replaceRange(idx, idx + searchStr.length, replaceStr)
+            }
+            count++
+            val newContent = buffer.text
+            if (newContent === content) break
+            idx = newContent.lastIndexOf(searchStr, (idx - 1).coerceAtLeast(0))
+        }
+        return count
+    }
+
     // ── View 生命周期 ──
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
