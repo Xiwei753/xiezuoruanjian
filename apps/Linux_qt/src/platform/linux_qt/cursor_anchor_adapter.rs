@@ -35,23 +35,14 @@ impl CursorAnchorAdapter for LinuxQtCursorAnchorAdapter {
         _request: &CursorAnchorRequest,
         _reason: CursorAnchorUpdateReason,
     ) {
-        if self.item_ptr.is_null() {
-            return;
-        }
-        // 实际的 QInputMethod::update 调用通过 C++ FFI 执行
-        // cpp! 宏调用在 SujianEditorItem 的 Rust 代码中完成
-        // 此处只提供接口边界，具体实现委托给 SujianEditorItem
+        // 未真实接入 QInputMethod::update，暂不执行
     }
 
     fn request_candidate_window_update(&self, _cursor_rect: &NormalizedCursorRect) {
-        if self.item_ptr.is_null() {
-            return;
-        }
-        // 委托给 QInputMethod::update(Qt::ImCursorRectangle)
+        // 未真实接入 QInputMethod::update(Qt::ImCursorRectangle)，暂不执行
     }
 
     fn is_input_method_visible(&self) -> bool {
-        // QInputMethod::isVisible() 不可靠，不使用
         false
     }
 }

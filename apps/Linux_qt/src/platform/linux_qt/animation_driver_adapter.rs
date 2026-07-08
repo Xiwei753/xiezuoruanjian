@@ -34,8 +34,7 @@ impl Default for LinuxQtAnimationDriver {
 
 impl AnimationDriver for LinuxQtAnimationDriver {
     fn drive_animation(&mut self, _request: AnimationDriveRequest) {
-        // 实际的动画驱动委托给 SujianEditorItem 的 transaction 系统
-        // 此处只提供接口边界
+        // 未真实接入 SujianEditorItem transaction 系统，暂不执行
     }
 
     fn should_suppress_animation(&self) -> bool {
@@ -57,10 +56,10 @@ impl AnimationDriver for LinuxQtAnimationDriver {
     }
 
     fn cancel_all_animations(&mut self) {
-        // 委托给 TextAnimationState::cancel_all()
+        // 未真实接入 TextAnimationState，暂不执行
     }
 
     fn finish_all_animations(&mut self) {
-        // 委托给 TextAnimationState::finish_all()
+        // 未真实接入 TextAnimationState，暂不执行
     }
 }

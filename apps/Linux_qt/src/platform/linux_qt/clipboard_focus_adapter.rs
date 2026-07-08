@@ -31,27 +31,16 @@ impl Default for LinuxQtClipboardFocusAdapter {
 
 impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
     fn execute_clipboard(&mut self, request: ClipboardRequest) -> ClipboardResult {
-        // 实际的 QClipboard 操作通过 FFI 回调到 C++ 侧执行
         match request {
-            ClipboardRequest::Copy { text: _ } => ClipboardResult::Copied,
-            ClipboardRequest::Paste => ClipboardResult::Pasted {
-                text: String::new(),
-            },
-            ClipboardRequest::Cut { text: _ } => ClipboardResult::Cut,
+            ClipboardRequest::Copy { text: _ } => ClipboardResult::Unavailable,
+            ClipboardRequest::Paste => ClipboardResult::Unavailable,
+            ClipboardRequest::Cut { text: _ } => ClipboardResult::Unavailable,
             ClipboardRequest::HasText => ClipboardResult::HasText { has_text: false },
         }
     }
 
-    fn execute_focus(&mut self, request: FocusRequest) {
-        match request {
-            FocusRequest::RequestFocus => {
-                self.focus_state.has_focus = true;
-            }
-            FocusRequest::ReleaseFocus => {
-                self.focus_state.has_focus = false;
-            }
-            FocusRequest::RequestSoftInput | FocusRequest::HideSoftInput => {}
-        }
+    fn execute_focus(&mut self, _request: FocusRequest) {
+        // 未真实接入 QQuickItem::forceActiveFocus，暂不执行
     }
 
     fn focus_state(&self) -> FocusState {
@@ -59,10 +48,10 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
     }
 
     fn show_context_menu(&mut self, _request: ContextMenuRequest) {
-        // QMenu 显示通过 FFI 回调
+        // 未真实接入 QMenu，暂不执行
     }
 
     fn hide_context_menu(&mut self) {
-        // QMenu 隐藏通过 FFI 回调
+        // 未真实接入 QMenu，暂不执行
     }
 }

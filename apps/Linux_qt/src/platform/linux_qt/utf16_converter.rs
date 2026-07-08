@@ -19,16 +19,17 @@ pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
 
 /// UTF-8 byte offset → UTF-16 offset
 pub fn utf8_to_utf16_offset(text: &str, utf8_offset: usize) -> usize {
+    let mut remaining = utf8_offset;
     let mut utf16_count = 0;
     for ch in text.chars() {
-        if ch.len_utf8() == 0 || utf8_offset == 0 {
+        if remaining == 0 {
             break;
         }
         let ch_len = ch.len_utf8();
-        if ch_len > utf8_offset {
+        if ch_len > remaining {
             break;
         }
-        utf8_offset -= ch_len;
+        remaining -= ch_len;
         utf16_count += ch.len_utf16() as usize;
     }
     utf16_count
@@ -66,7 +67,25 @@ mod tests {
         assert_eq!(text.len_utf16(), 2);
         assert_eq!(utf16_to_utf8_offset(text, 0), 0);
         assert_eq!(utf16_to_utf8_offset(text, 1), 0);
+        assert_eq!(utf16_to_utf8_offset(text, 2), 4);
         assert_eq!(utf8_to_utf16_offset(text, 0), 0);
+        assert_eq!(utf8_to_utf16_offset(text, 4), 2);
+    }
+
+    #[test]
+    fn utf8_mid_character_clamps_to_boundary() {
+        let text = "a😀b";
+        assert_eq!(utf8_to_utf16_offset(text, 2), 1);
+        assert_eq!(utf8_to_utf16_offset(text, 3), 1);
+        assert_eq!(utf8_to_utf16_offset(text, 4), 1);
+        assert_eq!(utf8_to_utf16_offset(text, 5), 3);
+    }
+
+    #[test]
+    fn utf16_mid_surrogate_clamps_to_boundary() {
+        let text = "😀";
+        assert_eq!(utf16_to_utf8_offset(text, 1), 0);
+        assert_eq!(utf16_to_utf8_offset(text, 2), 4);
     }
 
     #[test]

@@ -122,12 +122,10 @@ pub trait TextInputAdapter {
 /// 这是个标记 trait，各平台在自己的适配层中定义具体的原始事件类型，
 /// 然后实现 TextInputAdapter::normalize_input_event 来转换。
 /// Core 不定义平台特定事件，避免引入平台依赖。
-pub trait PlatformRawInputEvent: Any {
+pub trait PlatformRawInputEvent: std::any::Any {
     /// 提供 Any 接口用于 downcast
-    fn as_any(&self) -> &dyn Any;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
-
-use std::any::Any;
 
 #[cfg(test)]
 mod tests {

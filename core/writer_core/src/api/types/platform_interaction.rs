@@ -62,9 +62,9 @@ mod tests {
     fn dto_from_linux_qt_capabilities() {
         let caps = crate::platform_interaction::PlatformCapabilities::linux_qt();
         let dto: PlatformCapabilitiesDto = caps.into();
-        assert!(dto.supports_ime_preedit);
-        assert!(dto.supports_replacement_commit);
-        assert!(dto.supports_text_animation);
+        assert!(!dto.supports_ime_preedit);
+        assert!(!dto.supports_replacement_commit);
+        assert!(!dto.supports_text_animation);
     }
 
     #[test]
