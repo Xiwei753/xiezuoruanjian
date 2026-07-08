@@ -460,16 +460,6 @@ pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> String
     }
 }
 
-pub fn format_diagnostics_message(result: &SyncDiagnosticsResultDto) -> String {
-    // Note: This function is being deprecated in favor of structured DTOs.
-    // We return a simple key-based string for now.
-    if result.success {
-        "sync.result.diagnose_success".to_string()
-    } else {
-        format!("sync.result.diagnose_failed: {}", result.error_category)
-    }
-}
-
 pub fn save_sync_configs(
     path: &str,
     config: &SyncConfig,
