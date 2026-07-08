@@ -17,13 +17,13 @@ pub fn calculate_grid_layout(node_ids: &[String], existing: &StarMapLayout) -> S
         .map(|n| (n.node_id.as_str(), n))
         .collect();
 
-    let mut nodes = Vec::new();
+    let mut nodes = Vec::with_capacity(node_ids.len());
     let mut x: f32 = 100.0;
     let mut y: f32 = 100.0;
 
     for id in node_ids {
-        if let Some(en) = existing_map.get(id.as_str()) {
-            nodes.push((*en).clone());
+        if let Some(&en) = existing_map.get(id.as_str()) {
+            nodes.push(en.clone());
         } else {
             nodes.push(StarMapLayoutNode {
                 node_id: id.clone(),
@@ -71,78 +71,79 @@ pub fn calculate_radial_layout(
         };
     }
 
-    let children_map: std::collections::HashMap<String, Vec<String>> = {
-        let mut m: std::collections::HashMap<String, Vec<String>> =
-            std::collections::HashMap::new();
-        for id in node_ids {
-            let parent = parent_map.get(id).and_then(|p| p.as_deref()).unwrap_or("");
-            m.entry(parent.to_string()).or_default().push(id.clone());
-        }
-        m
-    };
+    let mut children_map: std::collections::HashMap<&str, Vec<&str>> =
+        std::collections::HashMap::new();
+    for id in node_ids {
+        let parent = parent_map.get(id).and_then(|p| p.as_deref()).unwrap_or("");
+        children_map.entry(parent).or_default().push(id.as_str());
+    }
 
-    let roots: Vec<String> = node_ids
+    let node_ids_set: std::collections::HashSet<&str> = node_ids.iter().map(|s| s.as_str()).collect();
+
+    let roots: Vec<&str> = node_ids
         .iter()
         .filter(|id| {
             parent_map
                 .get(*id)
                 .and_then(|p| p.as_deref())
-                .map(|p| p.is_empty() || !node_ids.iter().any(|nid| nid == p))
+                .map(|p| p.is_empty() || !node_ids_set.contains(p))
                 .unwrap_or(true)
         })
-        .cloned()
+        .map(|s| s.as_str())
         .collect();
 
-    let mut positions: std::collections::HashMap<String, (f32, f32)> =
-        std::collections::HashMap::new();
-    let mut depths: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let mut positions: std::collections::HashMap<&str, (f32, f32)> =
+        std::collections::HashMap::with_capacity(node_ids.len());
+    let mut depths: std::collections::HashMap<&str, f32> = std::collections::HashMap::with_capacity(node_ids.len());
 
     for (i, root_id) in roots.iter().enumerate() {
         let angle = (i as f32) * 2.0 * std::f32::consts::PI / (roots.len().max(1) as f32);
         let x = RADIAL_CENTER_X + RADIAL_RING_SPACING * angle.cos();
         let y = RADIAL_CENTER_Y + RADIAL_RING_SPACING * angle.sin();
-        positions.insert(root_id.clone(), (x, y));
-        depths.insert(root_id.clone(), 1.0);
+        positions.insert(root_id, (x, y));
+        depths.insert(root_id, 1.0);
     }
 
-    let mut queue: std::collections::VecDeque<(String, f32, f32, f32)> =
+    let mut queue: std::collections::VecDeque<(&str, f32, f32, f32)> =
         std::collections::VecDeque::new();
     for root_id in &roots {
         if let Some((x, y)) = positions.get(root_id) {
-            queue.push_back((root_id.clone(), *x, *y, 1.0));
+            queue.push_back((root_id, *x, *y, 1.0));
         }
     }
 
     while let Some((parent_id, px, py, depth)) = queue.pop_front() {
-        let children = children_map.get(&parent_id).cloned().unwrap_or_default();
-        if children.is_empty() {
-            continue;
-        }
-        let ring_radius = RADIAL_RING_SPACING / (depth + 1.0).max(1.5);
-        for (i, child_id) in children.iter().enumerate() {
-            if positions.contains_key(child_id) {
+        if let Some(children) = children_map.get(parent_id) {
+            if children.is_empty() {
                 continue;
             }
-            let base_angle =
-                (i as f32) * 2.0 * std::f32::consts::PI / (children.len().max(1) as f32);
-            let angle = base_angle + depth * 0.3;
-            let x = px + ring_radius * angle.cos();
-            let y = py + ring_radius * angle.sin();
-            positions.insert(child_id.clone(), (x, y));
-            depths.insert(child_id.clone(), depth + 1.0);
-            queue.push_back((child_id.clone(), x, y, depth + 1.0));
+            let ring_radius = RADIAL_RING_SPACING / (depth + 1.0).max(1.5);
+            for (i, child_id) in children.iter().enumerate() {
+                if positions.contains_key(child_id) {
+                    continue;
+                }
+                let base_angle =
+                    (i as f32) * 2.0 * std::f32::consts::PI / (children.len().max(1) as f32);
+                let angle = base_angle + depth * 0.3;
+                let x = px + ring_radius * angle.cos();
+                let y = py + ring_radius * angle.sin();
+                positions.insert(child_id, (x, y));
+                depths.insert(child_id, depth + 1.0);
+                queue.push_back((child_id, x, y, depth + 1.0));
+            }
         }
     }
 
-    let mut nodes = Vec::new();
+    let mut nodes = Vec::with_capacity(node_ids.len());
     for id in node_ids {
+        let id_str = id.as_str();
         let (x, y) = positions
-            .get(id)
+            .get(id_str)
             .copied()
             .unwrap_or((RADIAL_CENTER_X, RADIAL_CENTER_Y));
-        let depth = depths.get(id).copied().unwrap_or(0.0);
-        if let Some(en) = existing_map.get(id.as_str()) {
-            let mut node = (*en).clone();
+        let depth = depths.get(id_str).copied().unwrap_or(0.0);
+        if let Some(&en) = existing_map.get(id_str) {
+            let mut node = en.clone();
             node.depth = depth;
             nodes.push(node);
         } else {
