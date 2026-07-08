@@ -2,9 +2,9 @@
 mod tests {
     use super::*;
     use crate::sujian_editor_item::is_complex_grapheme;
-    use crate::sujian_editor_item::SujianEditorItem;
-    use crate::sujian_editor_item::PreeditAttributeKind;
     use crate::sujian_editor_item::text_animation_state::{AnimationMode, TextAnimationState};
+    use crate::sujian_editor_item::PreeditAttributeKind;
+    use crate::sujian_editor_item::SujianEditorItem;
     use qmetaobject::prelude::*;
     use writer_core::editor::CursorRect;
 
@@ -18,10 +18,22 @@ mod tests {
             item.debug_meta_object_animation_signals().to_string()
         };
         eprintln!("[sujian-test] SujianEditorItem metaObject animation signals: {dump}");
-        assert!(dump.contains("visual_transaction_changed"), "missing visual_transaction_changed in {dump}");
-        assert!(dump.contains("preedit_visual_transaction_changed"), "missing preedit_visual_transaction_changed in {dump}");
-        assert!(dump.contains("transaction_created"), "missing transaction_created in {dump}");
-        assert!(dump.contains("explicit_clear_requested"), "missing explicit_clear_requested in {dump}");
+        assert!(
+            dump.contains("visual_transaction_changed"),
+            "missing visual_transaction_changed in {dump}"
+        );
+        assert!(
+            dump.contains("preedit_visual_transaction_changed"),
+            "missing preedit_visual_transaction_changed in {dump}"
+        );
+        assert!(
+            dump.contains("transaction_created"),
+            "missing transaction_created in {dump}"
+        );
+        assert!(
+            dump.contains("explicit_clear_requested"),
+            "missing explicit_clear_requested in {dump}"
+        );
         let verified = {
             let pinned = item_box.pinned();
             let item = pinned.borrow();
@@ -202,7 +214,12 @@ mod tests {
         let mut state = TextAnimationState::new();
         let inserted_range = Some((5, 10));
         if let Some((range_start, range_end)) = inserted_range {
-            state.start_insert((range_start, range_end), vec![], AnimationMode::GlyphAnimation, 100);
+            state.start_insert(
+                (range_start, range_end),
+                vec![],
+                AnimationMode::GlyphAnimation,
+                100,
+            );
         }
         assert_eq!(state.active_insert_byte_ranges(), vec![(5, 10)]);
         assert!(state.has_active_insert());
@@ -378,7 +395,9 @@ mod tests {
             "9-char candidate should animate at core level (RunAnimation)"
         );
 
-        let vt = engine.visual_transaction(&tx).expect("RunAnimation visual transaction");
+        let vt = engine
+            .visual_transaction(&tx)
+            .expect("RunAnimation visual transaction");
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(
             mode,
@@ -534,7 +553,9 @@ mod tests {
             "Newline commit should animate at core level (LineReflowAnimation)"
         );
 
-        let vt = engine.visual_transaction(&tx).expect("LineReflowAnimation visual transaction");
+        let vt = engine
+            .visual_transaction(&tx)
+            .expect("LineReflowAnimation visual transaction");
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(
             mode,

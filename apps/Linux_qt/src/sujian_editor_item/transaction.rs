@@ -39,7 +39,8 @@ impl SujianEditorItem {
                             if had_active_before && !self.text_anim_state.has_active_insert() {
                                 self.request_static_repaint();
                             }
-                            let mut mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
+                            let mut mode =
+                                SujianEditorItem::animation_mode_from_core(vt.animation_mode);
                             if self.current_is_scrolling
                                 || self.current_is_loading
                                 || self.current_is_applying_format
@@ -53,10 +54,7 @@ impl SujianEditorItem {
                                     .reflow_glyph_rects
                                     .as_ref()
                                     .map(|rects| {
-                                        rects
-                                            .iter()
-                                            .map(|r| (r.byte_start, r.byte_end))
-                                            .collect()
+                                        rects.iter().map(|r| (r.byte_start, r.byte_end)).collect()
                                     })
                                     .unwrap_or_default();
                                 let hidden_range_id = vt.hidden_visual_ranges.first().map(|r| r.id);
@@ -87,7 +85,8 @@ impl SujianEditorItem {
                         }
                     }
                     EditorAnimationKind::Delete => {
-                        let mut mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
+                        let mut mode =
+                            SujianEditorItem::animation_mode_from_core(vt.animation_mode);
                         if self.current_is_scrolling
                             || self.current_is_loading
                             || self.current_is_applying_format
@@ -122,8 +121,11 @@ impl SujianEditorItem {
                                 {
                                     let range_start = *index;
                                     let range_end = range_start + text.len();
-                                    self.text_anim_state
-                                        .start_delete((range_start, range_end), mode, vt.duration_ms);
+                                    self.text_anim_state.start_delete(
+                                        (range_start, range_end),
+                                        mode,
+                                        vt.duration_ms,
+                                    );
                                 }
                             }
                         }
@@ -683,8 +685,7 @@ impl SujianEditorItem {
 
                 vt.deleted_glyph_rects = Some(glyph_rects);
             }
-            EditorAnimationKind::Cursor => {
-            }
+            EditorAnimationKind::Cursor => {}
         }
     }
 }

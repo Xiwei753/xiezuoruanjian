@@ -63,7 +63,16 @@ pub struct WorkspaceBackend {
     ),
     get_workspace_diagnostics: qt_method!(fn(&self) -> QString),
     open_workspace_dir: qt_method!(fn(&mut self)),
-    save_last_navigation_state: qt_method!(fn(&mut self, route: QString, project_id: QString, volume_id: QString, chapter_id: QString, starmap_id: QString)),
+    save_last_navigation_state: qt_method!(
+        fn(
+            &mut self,
+            route: QString,
+            project_id: QString,
+            volume_id: QString,
+            chapter_id: QString,
+            starmap_id: QString,
+        )
+    ),
     get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
     clear_last_navigation_state: qt_method!(fn(&mut self)),
     app: SafeAppPtr,

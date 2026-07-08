@@ -412,7 +412,8 @@ impl AppBackend {
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };
-        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default().into();
+        self.current_sync_operation_state =
+            serde_json::to_string(&state).unwrap_or_default().into();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -505,9 +506,7 @@ impl AppBackend {
                         status_code: "fatal_error".to_string(),
                         phase_key: None,
                         summary_key: Some("error.sync_diagnose_panic".to_string()),
-                        summary_args: [("panic_msg".to_string(), panic_msg)]
-                            .into_iter()
-                            .collect(),
+                        summary_args: [("panic_msg".to_string(), panic_msg)].into_iter().collect(),
                         counts: writer_core::api::SyncOperationCountsDto::default(),
                         raw_error: None,
                     };

@@ -6,9 +6,9 @@
 //! （cpp! 宏将所有 cpp! 块合并到同一编译单元，类定义不能重复）。
 //! 此文件只包含 Rust 侧的 FFI 回调函数。
 
-use crate::sujian_editor_item::SujianEditorItem;
 use super::controller::*;
 use super::events::decode_utf16_ptr;
+use crate::sujian_editor_item::SujianEditorItem;
 use std::ffi::c_void;
 
 unsafe fn item_from_ptr<'a>(rust_item: *mut c_void) -> Option<&'a mut SujianEditorItem> {
@@ -109,10 +109,12 @@ extern "C" fn sujian_ime_preedit_attrs(
     let text = decode_utf16_ptr(text, text_len);
 
     let mut attributes = Vec::new();
-    if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0 {
+    if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0
+    {
         let types_slice = unsafe { std::slice::from_raw_parts(attr_types, attr_count as usize) };
         let starts_slice = unsafe { std::slice::from_raw_parts(attr_starts, attr_count as usize) };
-        let lengths_slice = unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
+        let lengths_slice =
+            unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
         let formats_slice = if !attr_formats.is_null() {
             unsafe { std::slice::from_raw_parts(attr_formats, attr_count as usize) }
         } else {

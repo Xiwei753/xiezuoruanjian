@@ -36,7 +36,11 @@ impl SujianEditorItem {
         self.insert_text_with_cause(text, None);
     }
 
-    pub(crate) fn insert_text_with_cause(&mut self, text: QString, explicit_cause: Option<EditorTransactionCause>) {
+    pub(crate) fn insert_text_with_cause(
+        &mut self,
+        text: QString,
+        explicit_cause: Option<EditorTransactionCause>,
+    ) {
         if !self.current_editor_enabled {
             return;
         }
@@ -75,13 +79,20 @@ impl SujianEditorItem {
             self.cursor_ctrl.force_snap_next = false;
             editor_animation_debug_log(&format!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top));
         } else {
-            editor_animation_debug_log("[commit] pending_preedit_cursor_rect absent cursor_start_source=normal");
+            editor_animation_debug_log(
+                "[commit] pending_preedit_cursor_rect absent cursor_start_source=normal",
+            );
         }
 
         self.emit_content_changed();
     }
 
-    pub(crate) fn ime_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
+    pub(crate) fn ime_replace_and_insert(
+        &mut self,
+        replace_start: i32,
+        replace_length: i32,
+        text: String,
+    ) {
         if !self.current_editor_enabled {
             return;
         }
@@ -163,9 +174,14 @@ impl SujianEditorItem {
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
 
-        self.buffer.text.replace_range(del_start..del_end, &inserted);
+        self.buffer
+            .text
+            .replace_range(del_start..del_end, &inserted);
         self.buffer.cursor = del_start + inserted.len();
-        self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, self.buffer.cursor);
+        self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(
+            &self.buffer.text,
+            self.buffer.cursor,
+        );
         self.buffer.selection_anchor = self.buffer.cursor;
 
         self.adjust_affinity_at_wrap_boundary();

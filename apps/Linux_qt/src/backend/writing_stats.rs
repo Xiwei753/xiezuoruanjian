@@ -152,7 +152,11 @@ impl AppBackend {
             match core.get_writing_stats_by_project_json(&sd, &ed) {
                 Ok(val) => val.into(),
                 Err(e) => {
-                    self.debug_error("stats", "get_writing_stats_by_project_failed", &e.to_string());
+                    self.debug_error(
+                        "stats",
+                        "get_writing_stats_by_project_failed",
+                        &e.to_string(),
+                    );
                     format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
                 }
             }
@@ -189,7 +193,11 @@ impl AppBackend {
             match core.get_writing_stats_by_chapter_json(&sd, &ed) {
                 Ok(val) => val.into(),
                 Err(e) => {
-                    self.debug_error("stats", "get_writing_stats_by_chapter_failed", &e.to_string());
+                    self.debug_error(
+                        "stats",
+                        "get_writing_stats_by_chapter_failed",
+                        &e.to_string(),
+                    );
                     format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
                 }
             }
@@ -226,7 +234,11 @@ impl AppBackend {
             match core.get_writing_stats_by_device_json(&sd, &ed) {
                 Ok(val) => val.into(),
                 Err(e) => {
-                    self.debug_error("stats", "get_writing_stats_by_device_failed", &e.to_string());
+                    self.debug_error(
+                        "stats",
+                        "get_writing_stats_by_device_failed",
+                        &e.to_string(),
+                    );
                     format!("{{\"error\":\"{}\"}}", e.to_string().replace('"', "\\\"")).into()
                 }
             }

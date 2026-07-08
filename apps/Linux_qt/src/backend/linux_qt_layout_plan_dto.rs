@@ -63,24 +63,72 @@ mod tests {
         let json = serde_json::to_string(&dto).unwrap();
 
         // 必须包含 camelCase 字段名
-        assert!(json.contains("\"shellMode\""), "JSON must contain camelCase 'shellMode'");
-        assert!(json.contains("\"contentMaxWidthVp\""), "JSON must contain camelCase 'contentMaxWidthVp'");
-        assert!(json.contains("\"pagePaddingVp\""), "JSON must contain camelCase 'pagePaddingVp'");
-        assert!(json.contains("\"showSidePanel\""), "JSON must contain camelCase 'showSidePanel'");
-        assert!(json.contains("\"showBottomBar\""), "JSON must contain camelCase 'showBottomBar'");
-        assert!(json.contains("\"sidePanelWidthVp\""), "JSON must contain camelCase 'sidePanelWidthVp'");
-        assert!(json.contains("\"primaryPaneWeight\""), "JSON must contain camelCase 'primaryPaneWeight'");
-        assert!(json.contains("\"detailPanelMaxWidthVp\""), "JSON must contain camelCase 'detailPanelMaxWidthVp'");
+        assert!(
+            json.contains("\"shellMode\""),
+            "JSON must contain camelCase 'shellMode'"
+        );
+        assert!(
+            json.contains("\"contentMaxWidthVp\""),
+            "JSON must contain camelCase 'contentMaxWidthVp'"
+        );
+        assert!(
+            json.contains("\"pagePaddingVp\""),
+            "JSON must contain camelCase 'pagePaddingVp'"
+        );
+        assert!(
+            json.contains("\"showSidePanel\""),
+            "JSON must contain camelCase 'showSidePanel'"
+        );
+        assert!(
+            json.contains("\"showBottomBar\""),
+            "JSON must contain camelCase 'showBottomBar'"
+        );
+        assert!(
+            json.contains("\"sidePanelWidthVp\""),
+            "JSON must contain camelCase 'sidePanelWidthVp'"
+        );
+        assert!(
+            json.contains("\"primaryPaneWeight\""),
+            "JSON must contain camelCase 'primaryPaneWeight'"
+        );
+        assert!(
+            json.contains("\"detailPanelMaxWidthVp\""),
+            "JSON must contain camelCase 'detailPanelMaxWidthVp'"
+        );
 
         // 绝不能包含 snake_case 字段名
-        assert!(!json.contains("\"shell_mode\""), "JSON must NOT contain snake_case 'shell_mode'");
-        assert!(!json.contains("\"content_max_width_vp\""), "JSON must NOT contain snake_case 'content_max_width_vp'");
-        assert!(!json.contains("\"page_padding_vp\""), "JSON must NOT contain snake_case 'page_padding_vp'");
-        assert!(!json.contains("\"show_side_panel\""), "JSON must NOT contain snake_case 'show_side_panel'");
-        assert!(!json.contains("\"show_bottom_bar\""), "JSON must NOT contain snake_case 'show_bottom_bar'");
-        assert!(!json.contains("\"side_panel_width_vp\""), "JSON must NOT contain snake_case 'side_panel_width_vp'");
-        assert!(!json.contains("\"primary_pane_weight\""), "JSON must NOT contain snake_case 'primary_pane_weight'");
-        assert!(!json.contains("\"detail_panel_max_width_vp\""), "JSON must NOT contain snake_case 'detail_panel_max_width_vp'");
+        assert!(
+            !json.contains("\"shell_mode\""),
+            "JSON must NOT contain snake_case 'shell_mode'"
+        );
+        assert!(
+            !json.contains("\"content_max_width_vp\""),
+            "JSON must NOT contain snake_case 'content_max_width_vp'"
+        );
+        assert!(
+            !json.contains("\"page_padding_vp\""),
+            "JSON must NOT contain snake_case 'page_padding_vp'"
+        );
+        assert!(
+            !json.contains("\"show_side_panel\""),
+            "JSON must NOT contain snake_case 'show_side_panel'"
+        );
+        assert!(
+            !json.contains("\"show_bottom_bar\""),
+            "JSON must NOT contain snake_case 'show_bottom_bar'"
+        );
+        assert!(
+            !json.contains("\"side_panel_width_vp\""),
+            "JSON must NOT contain snake_case 'side_panel_width_vp'"
+        );
+        assert!(
+            !json.contains("\"primary_pane_weight\""),
+            "JSON must NOT contain snake_case 'primary_pane_weight'"
+        );
+        assert!(
+            !json.contains("\"detail_panel_max_width_vp\""),
+            "JSON must NOT contain snake_case 'detail_panel_max_width_vp'"
+        );
     }
 
     #[test]

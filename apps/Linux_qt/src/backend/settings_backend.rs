@@ -195,10 +195,14 @@ impl SettingsBackend {
         self.settings_changed();
     }
     fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_coordinated_text_cursor_animation_enabled())
+        self.with_app(true, |app| {
+            app.setting_coordinated_text_cursor_animation_enabled()
+        })
     }
     fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_coordinated_text_cursor_animation_enabled(val));
+        self.with_app_mut((), |app| {
+            app.set_setting_coordinated_text_cursor_animation_enabled(val)
+        });
         self.settings_changed();
     }
     fn ai_available(&self) -> bool {
@@ -281,64 +285,67 @@ impl SettingsBackend {
     }
 
     fn export_diagnostics_pack(&self) -> QString {
-        self.with_app("{\"success\":false,\"error\":\"no workspace\"}".into(), |app| {
-            let workspace_path = std::path::PathBuf::from(&app.current_workspace);
-            let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
-            match crate::backend::diagnostics::export_diagnostics_pack(
-                &workspace_path,
-                &log_dir,
-            ) {
-                Ok(path) => {
-                    let path_str = path.to_string_lossy().to_string();
-                    let export_dir = path
-                        .parent()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| std::path::PathBuf::from(""));
-                    let export_dir_str = export_dir.to_string_lossy().to_string();
-                    // Construct file:// URL for QML consumption.
-                    // Normalize path separators for QML file:// URL consumption.
-                    let dir_url_path = export_dir_str.replace('\\', "/");
-                    let export_dir_url = if dir_url_path.starts_with('/') {
-                        format!("file://{}", dir_url_path)
-                    } else {
-                        format!("file:///{}", dir_url_path)
-                    };
-                    let open_result = if !export_dir.as_os_str().is_empty() {
-                        crate::platform_utils::open_directory(&export_dir_str)
-                    } else {
-                        Err("导出目录为空".to_string())
-                    };
-                    let envelope = serde_json::json!({
-                        "success": true,
-                        "path": path_str,
-                        "nativePath": path_str,
-                        "zipPath": path_str,
-                        "nativeZipPath": path_str,
-                        "exportDir": export_dir_str,
-                        "nativeExportDir": export_dir_str,
-                        "exportDirUrl": export_dir_url,
-                        "openedExportDir": open_result.is_ok(),
-                        "openExportDirError": open_result.err()
-                    });
-                    envelope.to_string().into()
+        self.with_app(
+            "{\"success\":false,\"error\":\"no workspace\"}".into(),
+            |app| {
+                let workspace_path = std::path::PathBuf::from(&app.current_workspace);
+                let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
+                match crate::backend::diagnostics::export_diagnostics_pack(
+                    &workspace_path,
+                    &log_dir,
+                ) {
+                    Ok(path) => {
+                        let path_str = path.to_string_lossy().to_string();
+                        let export_dir = path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| std::path::PathBuf::from(""));
+                        let export_dir_str = export_dir.to_string_lossy().to_string();
+                        // Construct file:// URL for QML consumption.
+                        // Normalize path separators for QML file:// URL consumption.
+                        let dir_url_path = export_dir_str.replace('\\', "/");
+                        let export_dir_url = if dir_url_path.starts_with('/') {
+                            format!("file://{}", dir_url_path)
+                        } else {
+                            format!("file:///{}", dir_url_path)
+                        };
+                        let open_result = if !export_dir.as_os_str().is_empty() {
+                            crate::platform_utils::open_directory(&export_dir_str)
+                        } else {
+                            Err("导出目录为空".to_string())
+                        };
+                        let envelope = serde_json::json!({
+                            "success": true,
+                            "path": path_str,
+                            "nativePath": path_str,
+                            "zipPath": path_str,
+                            "nativeZipPath": path_str,
+                            "exportDir": export_dir_str,
+                            "nativeExportDir": export_dir_str,
+                            "exportDirUrl": export_dir_url,
+                            "openedExportDir": open_result.is_ok(),
+                            "openExportDirError": open_result.err()
+                        });
+                        envelope.to_string().into()
+                    }
+                    Err(e) => {
+                        eprintln!("[SettingsBackend] export_diagnostics_pack failed: {}", e);
+                        let envelope = serde_json::json!({
+                            "success": false,
+                            "error": e
+                        });
+                        envelope.to_string().into()
+                    }
                 }
-                Err(e) => {
-                    eprintln!("[SettingsBackend] export_diagnostics_pack failed: {}", e);
-                    let envelope = serde_json::json!({
-                        "success": false,
-                        "error": e
-                    });
-                    envelope.to_string().into()
-                }
-            }
-        })
+            },
+        )
     }
 
     fn clear_logs(&self) -> QString {
         self.with_app("".into(), |app| {
-            let log_dir = crate::backend::diagnostics::get_log_dir(
-                &std::path::PathBuf::from(&app.current_workspace),
-            );
+            let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
+                &app.current_workspace,
+            ));
             match crate::backend::diagnostics::clear_logs(&log_dir) {
                 Ok(()) => "ok".into(),
                 Err(e) => {
@@ -355,9 +362,9 @@ impl SettingsBackend {
 
     fn open_log_directory(&self) -> QString {
         self.with_app("".into(), |app| {
-            let log_dir = crate::backend::diagnostics::get_log_dir(
-                &std::path::PathBuf::from(&app.current_workspace),
-            );
+            let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
+                &app.current_workspace,
+            ));
             match crate::backend::diagnostics::open_log_directory(&log_dir) {
                 Ok(()) => "ok".into(),
                 Err(e) => {
@@ -746,7 +753,9 @@ impl AppBackend {
             syncable.font_size = self.current_setting_font_size as f64;
             syncable.theme_mode = self.current_setting_theme_mode.clone();
             #[allow(deprecated)]
-            { syncable.monet_color = String::new(); }
+            {
+                syncable.monet_color = String::new();
+            }
             syncable.theme_palette_json = self.current_setting_theme_palette_json.clone();
 
             let syncable_result = core.save_syncable_settings(syncable.clone());

@@ -18,10 +18,10 @@ pub(crate) mod layout_ops;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod rendering;
-pub(crate) mod text_animation_state;
-pub(crate) mod transaction;
 #[cfg(test)]
 mod tests;
+pub(crate) mod text_animation_state;
+pub(crate) mod transaction;
 
 use crate::backend::diagnostics;
 use crate::editor::input::{self, EditorInputHost};
@@ -45,8 +45,8 @@ use text_animation_state::{AnimationMode, TextAnimationState};
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
-    EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
-    ReflowGlyphRect,
+    EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect,
+    PreeditVisualTransaction, ReflowGlyphRect,
 };
 
 #[derive(Clone, Debug)]
@@ -90,9 +90,10 @@ pub(crate) fn editor_debug_log(msg: &str) {
 }
 
 pub(crate) fn editor_animation_debug_log(msg: &str) {
-    if std::env::var("SUJIAN_EDITOR_ANIMATION_DEBUG").is_ok() 
-        || std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() 
-        || std::env::var("WRITER_DEBUG").is_ok() {
+    if std::env::var("SUJIAN_EDITOR_ANIMATION_DEBUG").is_ok()
+        || std::env::var("SUJIAN_EDITOR_DEBUG").is_ok()
+        || std::env::var("WRITER_DEBUG").is_ok()
+    {
         eprintln!("{}", msg);
     }
 }
@@ -225,8 +226,12 @@ pub struct SujianEditorItem {
     request_text_input_focus: qt_method!(fn(&mut self)),
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
-    on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)),
-    on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)),
+    on_insert_animation_finished_by_id: qt_method!(
+        fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)
+    ),
+    on_insert_animation_skipped_by_id: qt_method!(
+        fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)
+    ),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -494,9 +499,12 @@ impl SujianEditorItem {
     ) {
         let bs = byte_start.max(0) as usize;
         let be = byte_end.max(0) as usize;
-        let removed = self
-            .text_anim_state
-            .on_insert_animation_finished_by_id(transaction_id, range_id, bs, be);
+        let removed = self.text_anim_state.on_insert_animation_finished_by_id(
+            transaction_id,
+            range_id,
+            bs,
+            be,
+        );
         if removed {
             editor_animation_debug_log(&format!(
                 "on_insert_animation_{}: transaction_id={:?}, range_id={:?}, byte_range=({},{}), cleared hidden range, has_active_insert={}",

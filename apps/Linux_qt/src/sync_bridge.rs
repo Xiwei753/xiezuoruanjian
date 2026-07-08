@@ -145,10 +145,7 @@ mod tests {
     #[test]
     fn test_sync_error_category_fallback_parsing() {
         // token_missing
-        assert_eq!(
-            sync_error_category("token is missing"),
-            "token_missing"
-        );
+        assert_eq!(sync_error_category("token is missing"), "token_missing");
         assert_eq!(sync_error_category("TOKEN is EMPTY"), "token_missing");
         assert_eq!(
             sync_error_category("token not provided here"),
@@ -356,7 +353,9 @@ mod tests {
             "token_permission_denied"
         );
         assert_eq!(
-            sync_error_category("error: Resource not accessible by personal access token for some repo"),
+            sync_error_category(
+                "error: Resource not accessible by personal access token for some repo"
+            ),
             "token_permission_denied"
         );
     }
@@ -416,10 +415,16 @@ mod tests {
         assert_eq!(determine_diagnostics_status(&result), "token_invalid");
 
         result.error_category = "token_permission_denied".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "token_permission_denied");
+        assert_eq!(
+            determine_diagnostics_status(&result),
+            "token_permission_denied"
+        );
 
         result.error_category = "repo_not_found_or_no_permission".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "repo_not_found_or_no_permission");
+        assert_eq!(
+            determine_diagnostics_status(&result),
+            "repo_not_found_or_no_permission"
+        );
     }
 
     #[test]
@@ -489,8 +494,8 @@ pub fn save_sync_configs(
         Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
     }
     .to_json_string();
-    let config_envelope: serde_json::Value =
-        serde_json::from_str(&config_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
+    let config_envelope: serde_json::Value = serde_json::from_str(&config_json)
+        .map_err(|e| format!("error.parse_json_failed: {}", e))?;
     if config_envelope["success"] != true {
         let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
         let raw_error = config_envelope["rawError"]
@@ -512,8 +517,8 @@ pub fn save_sync_configs(
         Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
     }
     .to_json_string();
-    let secrets_envelope: serde_json::Value =
-        serde_json::from_str(&secrets_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
+    let secrets_envelope: serde_json::Value = serde_json::from_str(&secrets_json)
+        .map_err(|e| format!("error.parse_json_failed: {}", e))?;
     if secrets_envelope["success"] != true {
         let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
         let raw_error = secrets_envelope["rawError"]

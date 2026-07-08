@@ -79,7 +79,14 @@ impl TextAnimationState {
         animation_mode: AnimationMode,
         duration_ms: u64,
     ) {
-        self.start_insert_with_ids(None, None, byte_range, reflow_byte_ranges, animation_mode, duration_ms);
+        self.start_insert_with_ids(
+            None,
+            None,
+            byte_range,
+            reflow_byte_ranges,
+            animation_mode,
+            duration_ms,
+        );
     }
 
     /// 开始一个 Insert 动画，并记录 Core 事务 ID / hidden range ID。
@@ -130,12 +137,18 @@ impl TextAnimationState {
             // legacy 路径没有 Core id 时仍给出进程内稳定非零 ID；byte range 仍是兜底。
             0x7fff_0000_u64 + idx as u64 + 1
         } else {
-            base.saturating_mul(1_000_000).saturating_add(idx as u64 + 1)
+            base.saturating_mul(1_000_000)
+                .saturating_add(idx as u64 + 1)
         }
     }
 
     /// 开始一个 Delete 动画
-    pub fn start_delete(&mut self, byte_range: (usize, usize), animation_mode: AnimationMode, duration_ms: u64) {
+    pub fn start_delete(
+        &mut self,
+        byte_range: (usize, usize),
+        animation_mode: AnimationMode,
+        duration_ms: u64,
+    ) {
         self.animations.push(ActiveTextAnimation {
             transaction_id: None,
             range_id: None,
@@ -317,9 +330,11 @@ impl TextAnimationState {
                 .reflow_hidden_ranges
                 .iter()
                 .filter_map(|r| {
-                    map_range_for_insert(r.byte_range, pos, len).map(|byte_range| ActiveReflowHiddenRange {
-                        range_id: r.range_id,
-                        byte_range,
+                    map_range_for_insert(r.byte_range, pos, len).map(|byte_range| {
+                        ActiveReflowHiddenRange {
+                            range_id: r.range_id,
+                            byte_range,
+                        }
                     })
                 })
                 .collect();
@@ -365,9 +380,11 @@ impl TextAnimationState {
                 .reflow_hidden_ranges
                 .iter()
                 .filter_map(|r| {
-                    map_range_for_delete(r.byte_range, pos, len).map(|byte_range| ActiveReflowHiddenRange {
-                        range_id: r.range_id,
-                        byte_range,
+                    map_range_for_delete(r.byte_range, pos, len).map(|byte_range| {
+                        ActiveReflowHiddenRange {
+                            range_id: r.range_id,
+                            byte_range,
+                        }
                     })
                 })
                 .collect();
@@ -595,7 +612,12 @@ mod tests {
     #[test]
     fn test_insert_with_reflow_ranges() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
         let hidden = state.active_reflow_hidden_ranges();
@@ -622,8 +644,14 @@ mod tests {
             .collect();
         state.map_ranges_for_insert(0, 3);
         let mapped = state.active_reflow_hidden_ranges();
-        assert_eq!(mapped.iter().map(|r| r.range_id).collect::<Vec<_>>(), ids_before);
-        assert_eq!(mapped.iter().map(|r| r.byte_range).collect::<Vec<_>>(), vec![(23, 28), (28, 33)]);
+        assert_eq!(
+            mapped.iter().map(|r| r.range_id).collect::<Vec<_>>(),
+            ids_before
+        );
+        assert_eq!(
+            mapped.iter().map(|r| r.byte_range).collect::<Vec<_>>(),
+            vec![(23, 28), (28, 33)]
+        );
         assert!(!state.on_insert_animation_finished_by_id(None, None, 13, 23));
         assert!(state.on_insert_animation_finished_by_id(Some(11), Some(22), 13, 23));
         assert!(state.active_reflow_hidden_ranges().is_empty());
@@ -695,7 +723,10 @@ mod tests {
         state.start_delete((5, 15), AnimationMode::GlyphAnimation, 100);
         assert!(!state.is_empty());
         state.clear_on_scroll();
-        assert!(state.is_empty(), "Delete animation should be cleared on scroll");
+        assert!(
+            state.is_empty(),
+            "Delete animation should be cleared on scroll"
+        );
     }
 
     #[test]
@@ -704,7 +735,10 @@ mod tests {
         state.start_delete((5, 15), AnimationMode::GlyphAnimation, 100);
         assert!(!state.is_empty());
         state.clear_on_typing_animation_disabled();
-        assert!(state.is_empty(), "Delete animation should be cleared when typing animation disabled");
+        assert!(
+            state.is_empty(),
+            "Delete animation should be cleared when typing animation disabled"
+        );
     }
 
     #[test]
@@ -715,7 +749,10 @@ mod tests {
         assert!(state.has_active_insert());
         assert!(!state.is_empty());
         state.clear();
-        assert!(state.is_empty(), "clear() should remove both Insert and Delete animations");
+        assert!(
+            state.is_empty(),
+            "clear() should remove both Insert and Delete animations"
+        );
         assert!(state.active_insert_byte_ranges().is_empty());
     }
 
@@ -837,7 +874,12 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_before_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         state.map_ranges_for_insert(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(23, 28), (28, 33)]);
@@ -846,7 +888,12 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_after_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         state.map_ranges_for_insert(30, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
@@ -856,7 +903,12 @@ mod tests {
     fn test_map_ranges_insert_inside_reflow_removes_that_reflow() {
         // insert 在 reflow range 内部，移除该 reflow range，但不取消整个动画
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         state.map_ranges_for_insert(22, 3);
         // byte_range 不受影响（insert 在 byte_range 之后）
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
@@ -867,7 +919,12 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_before_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         state.map_ranges_for_delete(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(7, 17)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(17, 22), (22, 27)]);
@@ -876,7 +933,12 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_after_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         state.map_ranges_for_delete(30, 5);
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(state.active_reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
@@ -886,7 +948,12 @@ mod tests {
     fn test_map_ranges_delete_overlapping_reflow_removes_that_reflow() {
         // delete 和 reflow range 相交，移除该 reflow range，但不取消整个动画
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         state.map_ranges_for_delete(22, 5);
         // byte_range 不受影响（delete 在 byte_range 之后）
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
@@ -899,7 +966,12 @@ mod tests {
     fn test_map_ranges_delete_partial_reflow_overlap() {
         // delete 只和一个 reflow 相交
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (30, 35)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (30, 35)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         state.map_ranges_for_delete(22, 5);
         // byte_range 不受影响
         assert_eq!(state.active_insert_byte_ranges(), vec![(10, 20)]);
@@ -1045,8 +1117,22 @@ mod tests {
     #[test]
     fn test_insert_finished_prefers_range_id_over_byte_range() {
         let mut state = TextAnimationState::new();
-        state.start_insert_with_ids(Some(10), Some(100), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        state.start_insert_with_ids(Some(11), Some(101), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert_with_ids(
+            Some(10),
+            Some(100),
+            (5, 6),
+            vec![],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
+        state.start_insert_with_ids(
+            Some(11),
+            Some(101),
+            (5, 6),
+            vec![],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
 
         let removed = state.on_insert_animation_finished_by_id(Some(11), Some(101), 5, 6);
 
@@ -1064,7 +1150,14 @@ mod tests {
     #[test]
     fn test_insert_finished_falls_back_to_byte_range_for_legacy_signal() {
         let mut state = TextAnimationState::new();
-        state.start_insert_with_ids(None, None, (10, 12), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert_with_ids(
+            None,
+            None,
+            (10, 12),
+            vec![],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
 
         let removed = state.on_insert_animation_finished_by_id(None, None, 10, 12);
 
@@ -1079,7 +1172,10 @@ mod tests {
         assert!(state.has_active_insert());
         // insert 在 range 内部，取消动画 → has_active_insert 变为 false（需要 repaint）
         state.map_ranges_for_insert(15, 3);
-        assert!(!state.has_active_insert(), "Insert inside range should cancel animation, triggering repaint");
+        assert!(
+            !state.has_active_insert(),
+            "Insert inside range should cancel animation, triggering repaint"
+        );
     }
 
     #[test]
@@ -1089,7 +1185,10 @@ mod tests {
         assert!(state.has_active_insert());
         // delete 和 range 相交，取消动画 → has_active_insert 变为 false（需要 repaint）
         state.map_ranges_for_delete(8, 5);
-        assert!(!state.has_active_insert(), "Delete intersecting range should cancel animation, triggering repaint");
+        assert!(
+            !state.has_active_insert(),
+            "Delete intersecting range should cancel animation, triggering repaint"
+        );
     }
 
     #[test]
@@ -1099,7 +1198,10 @@ mod tests {
         assert!(state.has_active_insert());
         // insert 在 range 之前，不取消 → has_active_insert 仍为 true（无需 repaint）
         state.map_ranges_for_insert(5, 3);
-        assert!(state.has_active_insert(), "Insert before range should not cancel animation");
+        assert!(
+            state.has_active_insert(),
+            "Insert before range should not cancel animation"
+        );
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
     }
 
@@ -1110,13 +1212,21 @@ mod tests {
         assert!(state.has_active_insert());
         // delete 在 range 之后，不取消 → has_active_insert 仍为 true（无需 repaint）
         state.map_ranges_for_delete(25, 5);
-        assert!(state.has_active_insert(), "Delete after range should not cancel animation");
+        assert!(
+            state.has_active_insert(),
+            "Delete after range should not cancel animation"
+        );
     }
 
     #[test]
     fn test_map_ranges_insert_before_with_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (25, 30)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         // insert 在 byte_range 之前，byte_range 和 reflow_byte_ranges 都后移
         state.map_ranges_for_insert(5, 3);
         assert_eq!(state.active_insert_byte_ranges(), vec![(13, 23)]);
@@ -1126,7 +1236,12 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_intersecting_reflow_cancels_that_reflow() {
         let mut state = TextAnimationState::new();
-        state.start_insert((10, 20), vec![(20, 25), (30, 35)], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(
+            (10, 20),
+            vec![(20, 25), (30, 35)],
+            AnimationMode::GlyphAnimation,
+            100,
+        );
         // delete [22, 27) 和 reflow (20,25) 相交，取消该 reflow；
         // reflow (30,35) 在 delete 之后，前移 → (25, 30)
         state.map_ranges_for_delete(22, 5);
@@ -1141,8 +1256,14 @@ mod tests {
         state.start_insert((10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
         // insert 在 byte_range 内部，取消整个动画（包括 reflow）
         state.map_ranges_for_insert(15, 3);
-        assert!(state.is_empty(), "Insert inside byte_range should cancel entire animation");
-        assert!(state.active_reflow_byte_ranges().is_empty(), "Reflow ranges should be cleared when animation is cancelled");
+        assert!(
+            state.is_empty(),
+            "Insert inside byte_range should cancel entire animation"
+        );
+        assert!(
+            state.active_reflow_byte_ranges().is_empty(),
+            "Reflow ranges should be cleared when animation is cancelled"
+        );
     }
 
     #[test]
@@ -1160,7 +1281,13 @@ mod tests {
         state.map_ranges_for_insert(11, 1);
         let ranges = state.active_insert_byte_ranges();
         assert_eq!(ranges.len(), 2);
-        assert!(ranges.contains(&(5, 10)), "First animation range should remain (5, 10)");
-        assert!(ranges.contains(&(10, 11)), "Second animation range should remain (10, 11)");
+        assert!(
+            ranges.contains(&(5, 10)),
+            "First animation range should remain (5, 10)"
+        );
+        assert!(
+            ranges.contains(&(10, 11)),
+            "Second animation range should remain (10, 11)"
+        );
     }
 }

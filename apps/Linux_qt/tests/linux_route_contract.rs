@@ -14,8 +14,8 @@ fn windows_route_is_native_winui_app_sdk() {
     let root = repo_root();
     let windows_workflow = root.join(".github/workflows/windows_build.yml");
     if windows_workflow.exists() {
-        let wf = fs::read_to_string(&windows_workflow)
-            .expect("windows_build.yml should be readable");
+        let wf =
+            fs::read_to_string(&windows_workflow).expect("windows_build.yml should be readable");
         assert!(
             !wf.contains("push:") || wf.contains("workflow_dispatch:"),
             "windows_build.yml must be workflow_dispatch only, not auto-triggered on push"

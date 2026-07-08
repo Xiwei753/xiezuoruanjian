@@ -3,13 +3,13 @@ use crate::editor::renderer;
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{
-    QImage, QBrush, QColor, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem, QRectF,
-    QString,
+    QBrush, QColor, QImage, QLineF, QPainter, QPainterRenderHint, QPen, QPointF, QQuickItem,
+    QRectF, QString,
 };
 use std::time::Instant;
 
-use super::SujianEditorItem;
 use super::cursor_controller::CursorUpdateResult;
+use super::SujianEditorItem;
 
 pub struct ScrollBuffer {
     pub image: QImage,
@@ -103,7 +103,12 @@ impl SujianEditorItem {
 
     /// 渲染静态正文到 painter。不包含任何动画内容。
     /// buffer_scroll_y 和 buffer_h 定义缓冲区可见范围。
-    pub(crate) fn paint_onto(&mut self, painter: &mut QPainter, buffer_scroll_y: f64, buffer_h: f64) {
+    pub(crate) fn paint_onto(
+        &mut self,
+        painter: &mut QPainter,
+        buffer_scroll_y: f64,
+        buffer_h: f64,
+    ) {
         let paint_start = Instant::now();
         let width = self.bounding_width();
         let snapshot = self.layout_snapshot(width);
@@ -147,7 +152,10 @@ impl SujianEditorItem {
 
         // ── Layer 1: Selection background ──
         for line in &lines[vis_start..vis_end] {
-            if self.buffer.has_selection() && selection.1 > line.byte_start && selection.0 < line.byte_end {
+            if self.buffer.has_selection()
+                && selection.1 > line.byte_start
+                && selection.0 < line.byte_end
+            {
                 let sel_start = selection.0.max(line.byte_start);
                 let sel_end = selection.1.min(line.byte_end);
                 let x_start = self.editor_layout.cursor_x_for_line(
@@ -217,9 +225,7 @@ impl SujianEditorItem {
             let intersecting_ranges: Vec<(usize, usize)> = merged_skip_ranges
                 .iter()
                 .filter(|(rs, re)| *re > line.byte_start && *rs < line.byte_end)
-                .map(|&(rs, re)| {
-                    (rs.max(line.byte_start), re.min(line.byte_end))
-                })
+                .map(|&(rs, re)| (rs.max(line.byte_start), re.min(line.byte_end)))
                 .collect();
 
             if intersecting_ranges.is_empty() {
@@ -428,11 +434,15 @@ impl SujianEditorItem {
 
                     // Draw underline and format attributes based on preedit_attributes
                     // If no attributes, draw a default underline for the full preedit
-                    let has_text_format_attr = self.preedit_attributes.iter()
-                        .any(|a| matches!(a.kind, super::PreeditAttributeKind::Underline
-                            | super::PreeditAttributeKind::FontUnderline
-                            | super::PreeditAttributeKind::TextColor { .. }
-                            | super::PreeditAttributeKind::BackgroundColor { .. }));
+                    let has_text_format_attr = self.preedit_attributes.iter().any(|a| {
+                        matches!(
+                            a.kind,
+                            super::PreeditAttributeKind::Underline
+                                | super::PreeditAttributeKind::FontUnderline
+                                | super::PreeditAttributeKind::TextColor { .. }
+                                | super::PreeditAttributeKind::BackgroundColor { .. }
+                        )
+                    });
 
                     if has_text_format_attr {
                         // Draw format attributes for each TextFormat attribute
@@ -448,21 +458,24 @@ impl SujianEditorItem {
                                 &font_family,
                             );
                             let attr_text = &self.preedit_text[attr_start..attr_end];
-                            let attr_w = self.editor_layout.text_width(
-                                attr_text,
-                                font_size,
-                                &font_family,
-                            );
+                            let attr_w =
+                                self.editor_layout
+                                    .text_width(attr_text, font_size, &font_family);
 
                             match &attr.kind {
                                 super::PreeditAttributeKind::Underline => {
                                     // Draw underline
-                                    painter.set_pen(QPen::from_color(renderer::color_from_qstring(
-                                        self.current_text_color.clone(),
-                                    )));
+                                    painter.set_pen(QPen::from_color(
+                                        renderer::color_from_qstring(
+                                            self.current_text_color.clone(),
+                                        ),
+                                    ));
                                     let underline_y = baseline + 2.0;
                                     let line_f = QLineF {
-                                        pt1: QPointF { x: x + before_w, y: underline_y },
+                                        pt1: QPointF {
+                                            x: x + before_w,
+                                            y: underline_y,
+                                        },
                                         pt2: QPointF {
                                             x: x + before_w + attr_w,
                                             y: underline_y,
@@ -482,7 +495,10 @@ impl SujianEditorItem {
                                     painter.set_pen(pen);
                                     let underline_y = baseline + 2.0;
                                     let line_f = QLineF {
-                                        pt1: QPointF { x: x + before_w, y: underline_y },
+                                        pt1: QPointF {
+                                            x: x + before_w,
+                                            y: underline_y,
+                                        },
                                         pt2: QPointF {
                                             x: x + before_w + attr_w,
                                             y: underline_y,
@@ -566,7 +582,9 @@ impl SujianEditorItem {
                     let preedit_cursor_pos = self.preedit_cursor;
                     if preedit_cursor_pos > 0 && preedit_cursor_pos <= self.preedit_text.len() {
                         // Check if there's an explicit Cursor attribute
-                        let has_cursor_attr = self.preedit_attributes.iter()
+                        let has_cursor_attr = self
+                            .preedit_attributes
+                            .iter()
                             .any(|a| a.kind == super::PreeditAttributeKind::Cursor);
 
                         if has_cursor_attr {
@@ -596,7 +614,9 @@ impl SujianEditorItem {
 
         let now_cleanup = Instant::now();
         let elapsed = paint_start.elapsed();
-        if elapsed.as_millis() > 4 && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup) {
+        if elapsed.as_millis() > 4
+            && renderer::should_log_slow_paint(self.last_slow_paint_log, now_cleanup)
+        {
             self.last_slow_paint_log = Some(now_cleanup);
             crate::sujian_editor_item::editor_debug_log(&format!(
                 "sujian_paint_onto: elapsed_ms={}, vis_lines=[{}..{}]={}, scrolling={}, buffer_h={:.1}",
@@ -769,11 +789,8 @@ impl SujianEditorItem {
     /// It directly emits signals and calls inputMethod()->update().
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
         let scroll_y = self.current_scroll_y as f64;
-        let layout_res = self.editor_layout_cursor_rect(
-            self.buffer.cursor,
-            self.cursor_ctrl.affinity,
-            scroll_y,
-        );
+        let layout_res =
+            self.editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y);
 
         let cursor_x = layout_res.x;
         let cursor_y = layout_res.y;
@@ -822,9 +839,18 @@ impl SujianEditorItem {
                 if let Some(line) = snapshot.lines.iter().find(|l| l.id == visual_line_id) {
                     let font_size = snapshot.font_size as f64;
                     let font_family = &snapshot.font_family;
-                    let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { crate::editor::layout::get_font_ascent(font_family, snapshot.font_size) };
-                    let descent = if line.qt_descent > 0.0 { line.qt_descent } else { crate::editor::layout::get_font_descent(font_family, snapshot.font_size) };
-                    let baseline = crate::editor::layout::text_baseline_y(line, font_size, font_family);
+                    let ascent = if line.qt_ascent > 0.0 {
+                        line.qt_ascent
+                    } else {
+                        crate::editor::layout::get_font_ascent(font_family, snapshot.font_size)
+                    };
+                    let descent = if line.qt_descent > 0.0 {
+                        line.qt_descent
+                    } else {
+                        crate::editor::layout::get_font_descent(font_family, snapshot.font_size)
+                    };
+                    let baseline =
+                        crate::editor::layout::text_baseline_y(line, font_size, font_family);
                     let cursor_top_doc = cursor_y + scroll_y;
                     let cursor_top_to_baseline = baseline - cursor_top_doc;
                     let cursor_bottom_to_baseline = cursor_top_doc + cursor_h - baseline;
@@ -926,7 +952,10 @@ mod tests {
 
         let scroll_buffer = ScrollBuffer {
             image: QImage::new(
-                qmetaobject::QSize { width: 10, height: 3500 },
+                qmetaobject::QSize {
+                    width: 10,
+                    height: 3500,
+                },
                 qmetaobject::ImageFormat::ARGB32_Premultiplied,
             ),
             buffer_scroll_y: 0.0,

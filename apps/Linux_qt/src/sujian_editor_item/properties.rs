@@ -172,9 +172,9 @@ impl SujianEditorItem {
             return;
         }
         editor_debug_log(&format!(
-                "[editor] text_color changed old={} new={}",
-                self.current_text_color, v
-            ));
+            "[editor] text_color changed old={} new={}",
+            self.current_text_color, v
+        ));
         self.current_text_color = value;
         self.visual_changed();
     }
@@ -193,9 +193,9 @@ impl SujianEditorItem {
             return;
         }
         editor_debug_log(&format!(
-                "[editor] selection_color changed old={} new={}",
-                self.current_selection_color, v
-            ));
+            "[editor] selection_color changed old={} new={}",
+            self.current_selection_color, v
+        ));
         self.current_selection_color = value;
         self.visual_changed();
     }
@@ -214,9 +214,9 @@ impl SujianEditorItem {
             return;
         }
         editor_debug_log(&format!(
-                "[editor] selected_text_color changed old={} new={}",
-                self.current_selected_text_color, v
-            ));
+            "[editor] selected_text_color changed old={} new={}",
+            self.current_selected_text_color, v
+        ));
         self.current_selected_text_color = value;
         self.visual_changed();
     }
@@ -235,9 +235,9 @@ impl SujianEditorItem {
             return;
         }
         editor_debug_log(&format!(
-                "[editor] cursor_color changed old={} new={}",
-                self.current_cursor_color, v
-            ));
+            "[editor] cursor_color changed old={} new={}",
+            self.current_cursor_color, v
+        ));
         self.current_cursor_color = value;
         self.visual_changed();
     }
@@ -297,7 +297,10 @@ impl SujianEditorItem {
         }
         self.current_typing_animation_duration_ms = clamped;
         self.engine.set_animation_duration_ms(clamped as u64);
-        editor_animation_debug_log(&format!("typing_animation_duration_ms_changed: {}", clamped));
+        editor_animation_debug_log(&format!(
+            "typing_animation_duration_ms_changed: {}",
+            clamped
+        ));
         self.visual_settings_changed();
     }
 
@@ -479,7 +482,12 @@ impl SujianEditorItem {
                 missing
             );
             eprintln!("[ERROR][SujianEditorItemMetaObject] {}", message);
-            diagnostics::log_to_file("ERROR", "editor", "sujian_editor_metaobject_missing_signal", &message);
+            diagnostics::log_to_file(
+                "ERROR",
+                "editor",
+                "sujian_editor_metaobject_missing_signal",
+                &message,
+            );
             false
         }
     }
@@ -545,14 +553,18 @@ impl SujianEditorItem {
         if !self.buffer.has_selection() {
             return self.cursor_rect_x();
         }
-        self.cursor_ctrl.anchor_visual_x.unwrap_or(self.cursor_ctrl.target_x) as f32
+        self.cursor_ctrl
+            .anchor_visual_x
+            .unwrap_or(self.cursor_ctrl.target_x) as f32
     }
 
     pub(crate) fn anchor_rect_y(&self) -> f32 {
         if !self.buffer.has_selection() {
             return self.cursor_rect_y();
         }
-        self.cursor_ctrl.anchor_visual_y.unwrap_or(self.cursor_ctrl.target_y) as f32
+        self.cursor_ctrl
+            .anchor_visual_y
+            .unwrap_or(self.cursor_ctrl.target_y) as f32
     }
 
     pub(crate) fn anchor_rect_width(&self) -> f32 {

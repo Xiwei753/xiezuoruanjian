@@ -17,9 +17,9 @@
 // =============================================================================
 
 pub mod app_backend;
-pub mod linux_qt_layout_plan_dto;
 pub mod diagnostics;
 pub mod json_utils;
+pub mod linux_qt_layout_plan_dto;
 pub(crate) mod message_key_mapper;
 
 use qmetaobject::prelude::*;
