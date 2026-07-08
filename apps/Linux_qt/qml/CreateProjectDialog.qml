@@ -60,7 +60,7 @@ Dialog {
         AppTextField {
             id: titleField
             Layout.fillWidth: true
-            theme: root.theme
+            dt: root.theme
             placeholderText: qsTr("作品名称")
             onAccepted: {
                 if (text.trim() !== "") {
