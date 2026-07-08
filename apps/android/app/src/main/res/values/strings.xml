@@ -162,6 +162,9 @@
     <string name="sync_repo_not_found">同步仓库不存在或无访问权限</string>
     <string name="sync_branch_missing">同步远程分支不存在</string>
     <string name="sync_network_failed">同步网络连接失败，请检查网络设置</string>
+    <string name="sync_non_fast_forward">远端有更新，请先拉取</string>
+    <string name="sync_unrelated_histories">本地与远端历史不相关</string>
+    <string name="sync_dirty_repo_blocked">本地有未提交变更，同步被阻止</string>
     <string name="error_other">操作失败</string>
 
     <!-- ErrorUtil -->

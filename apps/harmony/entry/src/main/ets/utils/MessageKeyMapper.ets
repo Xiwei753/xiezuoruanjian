@@ -42,6 +42,42 @@ export class MessageKeyMapper {
         return context.resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
       case 'error.sync_failed':
         return context.resourceManager.getStringSync($r('app.string.error_sync_failed_message').id)
+      case 'error.token_missing':
+        return context.resourceManager.getStringSync($r('app.string.sync_token_missing').id)
+      case 'error.token_invalid':
+      case 'error.token_permission_denied':
+      case 'error.auth_error':
+      case 'error.auth_failed':
+      case 'error.github_unauthorized':
+      case 'error.github_forbidden':
+        return context.resourceManager.getStringSync($r('app.string.sync_auth_failed').id)
+      case 'error.repo_not_found_or_no_permission':
+        return context.resourceManager.getStringSync($r('app.string.sync_repo_not_found').id)
+      case 'error.remote_branch_missing':
+      case 'error.branch_missing':
+        return context.resourceManager.getStringSync($r('app.string.sync_branch_missing').id)
+      case 'error.github_network_failed':
+      case 'error.dns_failed':
+      case 'error.tls_failed':
+      case 'error.network_probe_failed':
+      case 'error.network_failed':
+        return context.resourceManager.getStringSync($r('app.string.sync_network_failed').id)
+      case 'error.non_fast_forward':
+        return context.resourceManager.getStringSync($r('app.string.sync_non_fast_forward').id)
+      case 'error.unrelated_histories':
+        return context.resourceManager.getStringSync($r('app.string.sync_unrelated_histories').id)
+      case 'error.checkout_conflict':
+      case 'error.local_blocking_file':
+      case 'error.conflict':
+        return context.resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
+      case 'error.empty_url':
+      case 'error.not_configured':
+        return context.resourceManager.getStringSync($r('app.string.sync_token_missing').id)
+      case 'error.missing_permission':
+      case 'error.permission_missing':
+        return context.resourceManager.getStringSync($r('app.string.sync_network_failed').id)
+      case 'error.dirty_repo_blocked':
+        return context.resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
       case 'error.other':
         return context.resourceManager.getStringSync($r('app.string.error_other').id)
       case 'error.native_error':

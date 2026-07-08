@@ -486,17 +486,34 @@ internal class SyncSettingsHelper(
      */
     private fun errorMessageFromCategory(errorCategory: String?): String {
         return when (errorCategory) {
-            // Core 细粒度分类
+            // Core 细粒度分类 — 与 Linux_qt sync_error_category_from_code 对齐
             "token_missing" -> activity.getString(R.string.sync_token_missing)
             "token_invalid" -> activity.getString(R.string.sync_auth_failed)
             "token_permission_denied" -> activity.getString(R.string.sync_auth_failed)
+            "auth_error" -> activity.getString(R.string.sync_auth_failed)
+            "auth_failed" -> activity.getString(R.string.sync_auth_failed)
+            "github_unauthorized" -> activity.getString(R.string.sync_auth_failed)
+            "github_forbidden" -> activity.getString(R.string.sync_auth_failed)
             "repo_not_found_or_no_permission" -> activity.getString(R.string.sync_repo_not_found)
             "remote_branch_missing" -> activity.getString(R.string.sync_branch_missing)
+            "branch_missing" -> activity.getString(R.string.sync_branch_missing)
             "github_network_failed" -> activity.getString(R.string.sync_network_failed)
             "dns_failed" -> activity.getString(R.string.sync_network_failed)
             "tls_failed" -> activity.getString(R.string.sync_network_failed)
             "network_probe_failed" -> activity.getString(R.string.sync_network_failed)
+            "network_failed" -> activity.getString(R.string.sync_network_failed)
+            "empty_url" -> activity.getString(R.string.sync_token_missing)
+            "not_configured" -> activity.getString(R.string.sync_token_missing)
+            "missing_permission" -> activity.getString(R.string.sync_network_failed)
+            "permission_missing" -> activity.getString(R.string.sync_network_failed)
+            "non_fast_forward" -> activity.getString(R.string.sync_non_fast_forward)
+            "unrelated_histories" -> activity.getString(R.string.sync_unrelated_histories)
             "conflict" -> activity.getString(R.string.error_sync_conflict)
+            "checkout_conflict" -> activity.getString(R.string.error_sync_conflict)
+            "local_blocking_file" -> activity.getString(R.string.error_sync_conflict)
+            "dirty_repo_blocked" -> activity.getString(R.string.sync_dirty_repo_blocked)
+            "not_found" -> activity.getString(R.string.sync_repo_not_found)
+            "file_not_found" -> activity.getString(R.string.sync_repo_not_found)
             // WriterError 级别（兼容旧值）
             "SYNC_CONFLICT" -> activity.getString(R.string.error_sync_conflict)
             "SYNC_FAILED" -> activity.getString(R.string.error_sync_failed)

@@ -146,12 +146,28 @@ struct SettingsPage {
     try {
       const result = await this.bridge.performSync()
       if (result.success && result.data) {
-        this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', `${result.data.downloadedFiles.length}`)
-        setTimeout(() => {
-          this.syncMessage = ''
-        }, 3000)
+        const syncResult = result.data
+        if (syncResult.status === 'Conflict' || syncResult.status === 'PartialConflict') {
+          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_sync_conflict').id)
+        } else if (syncResult.status === 'DirtyRepoBlocked') {
+          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_dirty_repo_blocked').id)
+        } else if (syncResult.status === 'NoChanges') {
+          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', '0')
+          setTimeout(() => { this.syncMessage = '' }, 3000)
+        } else {
+          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_complete_format').id).replace('%s', `${syncResult.downloadedFiles.length}`)
+          setTimeout(() => { this.syncMessage = '' }, 3000)
+        }
       } else {
-        this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), result.messageKey, result.messageArgs, result.errorCode)
+        // 优先用 SyncResult.errorCategory，其次用 ResultEnvelope.messageKey
+        const errorCategory = result.data?.errorCategory
+        if (errorCategory && errorCategory.length > 0) {
+          this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), `error.${errorCategory}`, undefined, undefined)
+        } else if (result.messageKey && result.messageKey.length > 0) {
+          this.syncMessage = MessageKeyMapper.resolveMessage(getContext(this), result.messageKey, result.messageArgs, result.errorCode)
+        } else {
+          this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
+        }
       }
     } catch (err) {
       this.syncMessage = getContext(this).resourceManager.getStringSync($r('app.string.sync_error').id)
