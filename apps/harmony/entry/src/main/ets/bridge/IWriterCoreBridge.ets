@@ -23,7 +23,9 @@ import {
   LayoutPlan,
   ScreenPolicy,
   ScreenRole,
-  ShellMode
+  ShellMode,
+  EditorVisualTransaction,
+  EditorTransactionCause
 } from '../model/CoreDtos'
 
 export interface IWriterCoreBridge {
@@ -103,4 +105,15 @@ export interface IWriterCoreBridge {
   getNativeLoadStatus(): Promise<ResultEnvelope<string>>
   isWorkspaceValid(): Promise<ResultEnvelope<boolean>>
   isAiAvailable(): Promise<ResultEnvelope<boolean>>
+
+  // Editor Animation
+  editorVisualTransaction(
+    oldText: string,
+    newText: string,
+    oldCursorIndex: number,
+    newCursorIndex: number,
+    cause: EditorTransactionCause,
+    maxAnimatedChars: number,
+    animationDurationMs: number
+  ): Promise<ResultEnvelope<EditorVisualTransaction | null>>
 }

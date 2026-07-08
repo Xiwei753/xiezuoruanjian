@@ -39,7 +39,9 @@ import {
   ScreenRole,
   ActionRole,
   ActionPlacement,
-  ShellMode
+  ShellMode,
+  EditorVisualTransaction,
+  EditorTransactionCause
 } from '../model/CoreDtos'
 import { resolveLayoutFromMetrics } from '../common/LayoutPolicyHelper'
 
@@ -840,5 +842,19 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
 
   async isAiAvailable(): Promise<ResultEnvelope<boolean>> {
     return this.success(false)
+  }
+
+  // Editor Animation — mock 返回 null（不需要动画）
+  async editorVisualTransaction(
+    oldText: string,
+    newText: string,
+    oldCursorIndex: number,
+    newCursorIndex: number,
+    cause: EditorTransactionCause,
+    maxAnimatedChars: number,
+    animationDurationMs: number
+  ): Promise<ResultEnvelope<EditorVisualTransaction | null>> {
+    await this.delay(10)
+    return this.success(null)
   }
 }

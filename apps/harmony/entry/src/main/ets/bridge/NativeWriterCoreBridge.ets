@@ -25,7 +25,9 @@ import {
   LayoutPlan,
   ScreenPolicy,
   ScreenRole,
-  ShellMode
+  ShellMode,
+  EditorVisualTransaction,
+  EditorTransactionCause
 } from '../model/CoreDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 import { NativeWorkspaceBridge } from './NativeWorkspaceBridge'
@@ -355,5 +357,29 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async resolveScreenPolicy(screenRole: ScreenRole, shellMode: ShellMode): Promise<ResultEnvelope<ScreenPolicy>> {
     return this.layoutBridge.resolveScreenPolicy(screenRole, shellMode)
+  }
+
+  // ── Editor Animation ──
+  // 鸿蒙端动画暂未实现，返回 NOT_IMPLEMENTED。
+  // 等 NAPI 层接入 writer_core_editor_visual_transaction 后替换为真实调用。
+
+  async editorVisualTransaction(
+    oldText: string,
+    newText: string,
+    oldCursorIndex: number,
+    newCursorIndex: number,
+    cause: EditorTransactionCause,
+    maxAnimatedChars: number,
+    animationDurationMs: number
+  ): Promise<ResultEnvelope<EditorVisualTransaction | null>> {
+    return {
+      success: false,
+      errorCode: 'NOT_IMPLEMENTED',
+      messageKey: 'error.not_implemented',
+      messageArgs: { 'feature': 'editor_visual_transaction' } as Record<string, string>,
+      warnings: [] as string[],
+      changedPaths: [] as string[],
+      changedEntities: [] as ChangedEntity[]
+    }
   }
 }

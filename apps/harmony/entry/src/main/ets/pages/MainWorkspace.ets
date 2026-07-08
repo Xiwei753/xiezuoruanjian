@@ -91,8 +91,8 @@ struct MainWorkspace {
     windowHeight: 0,
     editorTypingAnimationEnabled: false,
     editorSmoothCursorEnabled: false,
-    editorTypingAnimationDurationMs: 0,
-    editorSmoothCursorDurationMs: 0,
+    editorTypingAnimationDurationMs: 100,
+    editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
     linuxQtSidebarWidth: 0,
     linuxQtEditorWidth: 0
@@ -105,11 +105,11 @@ struct MainWorkspace {
   @State sessionId: string = ''
   @State sessionStartTime: number = 0
 
-  // ── 编辑器动画状态 — 当前 Harmony 动画禁用，等待桌面/Android 稳定后再实现 ──
-  // 不测动画。第一版目标：能写、能保存、能滚动、能切换章节。
-  // 禁用的 overlay 代码已移至 HarmonyAnimationOverlayDisabled.ets
-  @State typingAnimationEnabled: boolean = false  // 强制关闭，不从设置读取
-  @State smoothCursorEnabled: boolean = false     // 强制关闭，不从设置读取
+  // ── 编辑器动画状态 ──
+  // 鸿蒙端动画暂未实现（需自研渲染层 + Core VisualTransaction 接入）。
+  // 设置页开关已禁用，此处不从设置读取动画开关。
+  @State typingAnimationEnabled: boolean = false
+  @State smoothCursorEnabled: boolean = false
   @State cursorVisible: boolean = true
   @State isScrolling: boolean = false
   @State scrollOffsetY: number = 0
@@ -284,7 +284,7 @@ struct MainWorkspace {
           lineHeight: result.data.editorLineSpacingMultiplier
         } as ThemeUpdateParams)
 
-        // 编辑器动画开关 — 当前 Harmony 动画禁用，等待桌面/Android 稳定后再实现
+        // 编辑器动画开关 — 鸿蒙端暂未实现，不从设置读取
         this.typingAnimationEnabled = false
         this.smoothCursorEnabled = false
 
@@ -361,13 +361,10 @@ struct MainWorkspace {
   }
 
   onContentChange(text: string) {
-    // 当前 Harmony 动画禁用（typingAnimationEnabled 强制 false）
-    // 禁用的动画代码已移至 HarmonyAnimationOverlayDisabled.ets
-
+    // 鸿蒙端动画暂未实现，不触发动画逻辑
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
 
-    // 更新字数统计
     this.bridge.calculateWordCount(text).then(count => {
       this.wordCount = count
     })

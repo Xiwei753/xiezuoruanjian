@@ -667,6 +667,82 @@
     {
       "name": "error_internal",
       "value": "应用内部错误，请查看日志"
+    },
+    {
+      "name": "sync_token_missing",
+      "value": "未设置同步令牌，请先配置同步凭证"
+    },
+    {
+      "name": "sync_auth_failed",
+      "value": "同步认证失败，请检查令牌和仓库权限"
+    },
+    {
+      "name": "sync_repo_not_found",
+      "value": "同步仓库不存在或无访问权限"
+    },
+    {
+      "name": "sync_branch_missing",
+      "value": "同步远程分支不存在"
+    },
+    {
+      "name": "sync_network_failed",
+      "value": "同步网络连接失败，请检查网络设置"
+    },
+    {
+      "name": "sync_blocked_title",
+      "value": "同步被阻止"
+    },
+    {
+      "name": "sync_blocked_message",
+      "value": "同步被阻止：本地仓库有未提交的改动，且非安全设置文件，请先提交或备份改动后再试。"
+    },
+    {
+      "name": "sync_recoverable_error_title",
+      "value": "可恢复错误"
+    },
+    {
+      "name": "sync_fatal_error_title",
+      "value": "同步失败"
+    },
+    {
+      "name": "sync_unknown_error",
+      "value": "未知同步错误"
+    },
+    {
+      "name": "sync_non_fast_forward",
+      "value": "远端有更新，请先拉取"
+    },
+    {
+      "name": "sync_unrelated_histories",
+      "value": "本地与远端历史不相关"
+    },
+    {
+      "name": "sync_dirty_repo_blocked",
+      "value": "本地有未提交变更，同步被阻止"
+    },
+    {
+      "name": "error_load_sync_config_failed",
+      "value": "加载同步配置失败"
+    },
+    {
+      "name": "error_save_sync_config_failed",
+      "value": "保存同步配置失败"
+    },
+    {
+      "name": "error_save_sync_secrets_failed",
+      "value": "保存同步密钥失败"
+    },
+    {
+      "name": "error_sync_diagnose_panic",
+      "value": "同步诊断异常"
+    },
+    {
+      "name": "error_sync_dry_run_panic",
+      "value": "同步试运行异常"
+    },
+    {
+      "name": "error_sync_panic",
+      "value": "同步异常"
     }
   ]
 }

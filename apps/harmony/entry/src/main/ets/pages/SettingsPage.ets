@@ -34,13 +34,13 @@ struct SettingsPage {
     autoSaveDelayMs: 30000,
     autoIndentEnabled: true,
     autoIndentWidth: 2,
-    editorTypingAnimationEnabled: true,
-    editorSmoothCursorEnabled: true,
+    editorTypingAnimationEnabled: false,
+    editorSmoothCursorEnabled: false,
     editorTypingAnimationDurationMs: 100,
     editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
-    linuxQtSidebarWidth: 280,
-    linuxQtEditorWidth: 820
+    linuxQtSidebarWidth: 0,
+    linuxQtEditorWidth: 0
   }
   @State syncConfig: SyncConfig | null = null
   @State isLoading: boolean = true
@@ -436,7 +436,7 @@ struct SettingsPage {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画 — Harmony 端暂未实现，开关禁用
+      // 打字动画 — 鸿蒙端暂未实现（需自研渲染层 + Core VisualTransaction 接入），开关禁用
       Row() {
         Text($r('app.string.typing_animation'))
           .fontSize(16)
@@ -447,29 +447,10 @@ struct SettingsPage {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 打字动画时长 — Harmony 动画未实现，不显示时长设置
-      if (false) {
-        Row() {
-           Text($r('app.string.typing_animation_duration'))
-            .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
-            .layoutWeight(1)
-          Text(`${this.settings.editorTypingAnimationDurationMs}ms`)
-            .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
-            .margin({ right: 16 })
-          Slider({ value: this.settings.editorTypingAnimationDurationMs, min: 30, max: 1000, step: 10 })
-            .width(120)
-            .onChange((value: number) => {
-              this.settings.editorTypingAnimationDurationMs = value
-              this.saveSettings()
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-      }
+      // 打字动画时长 — 鸿蒙端动画未实现，暂不显示时长设置
+      // 待动画功能实现后，取消下方注释并绑定 this.settings.editorTypingAnimationDurationMs
 
-      // 平滑光标 — Harmony 端暂未实现，开关禁用
+      // 平滑光标 — 鸿蒙端暂未实现，开关禁用
       Row() {
         Text($r('app.string.smooth_cursor'))
           .fontSize(16)
@@ -480,27 +461,8 @@ struct SettingsPage {
       .width('100%')
       .margin({ bottom: 16 })
 
-      // 平滑光标时长 — Harmony 动画未实现，不显示时长设置
-      if (false) {
-        Row() {
-           Text($r('app.string.smooth_cursor_duration'))
-            .fontSize(16)
-            .fontColor(this.themeConfig.colors.textPrimary)
-            .layoutWeight(1)
-          Text(`${this.settings.editorSmoothCursorDurationMs}ms`)
-            .fontSize(14)
-            .fontColor(this.themeConfig.colors.textSecondary)
-            .margin({ right: 16 })
-          Slider({ value: this.settings.editorSmoothCursorDurationMs, min: 30, max: 1000, step: 10 })
-            .width(120)
-            .onChange((value: number) => {
-              this.settings.editorSmoothCursorDurationMs = value
-              this.saveSettings()
-            })
-        }
-        .width('100%')
-        .margin({ bottom: 16 })
-      }
+      // 平滑光标时长 — 鸿蒙端动画未实现，暂不显示时长设置
+      // 待动画功能实现后，取消下方注释并绑定 this.settings.editorSmoothCursorDurationMs
     }
     .width('100%')
     .padding(16)

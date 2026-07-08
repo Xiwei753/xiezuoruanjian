@@ -13,14 +13,6 @@ interface WritingPageParams {
   volumeId: string
 }
 
-interface ChangedRange {
-  start: number
-  oldEnd: number
-  newEnd: number
-  insertedText: string
-  deletedText: string
-}
-
 @Entry
 @Component
 struct WritingPage {
@@ -46,8 +38,8 @@ struct WritingPage {
     windowHeight: 0,
     editorTypingAnimationEnabled: false,
     editorSmoothCursorEnabled: false,
-    editorTypingAnimationDurationMs: 0,
-    editorSmoothCursorDurationMs: 0,
+    editorTypingAnimationDurationMs: 100,
+    editorSmoothCursorDurationMs: 80,
     aiEnabled: false,
     linuxQtSidebarWidth: 0,
     linuxQtEditorWidth: 0
@@ -62,29 +54,14 @@ struct WritingPage {
   @State sessionStartTime: number = 0
   @State adaptiveState: AdaptiveState = getAdaptiveState()
 
-  // ── 动画相关状态 ──
+  // ── 编辑器动画状态 ──
+  // 鸿蒙端动画暂未实现（需自研渲染层 + Core VisualTransaction 接入）。
+  // 当前使用系统 TextArea，不支持 hidden range / glyph rect 动画契约。
+  // 设置页开关已禁用，此处不从设置读取动画开关。
+  @State typingAnimationEnabled: boolean = false
+  @State smoothCursorEnabled: boolean = false
   @State cursorPosition: number = 0
-  @State cursorX: number = 0
-  @State cursorY: number = 0
-  @State cursorVisible: boolean = true
-  // 编辑器动画状态 — 当前 Harmony 动画禁用，等待桌面/Android 稳定后再实现
-  @State typingAnimationEnabled: boolean = false  // 强制关闭，不从设置读取
-  @State smoothCursorEnabled: boolean = false     // 强制关闭，不从设置读取
-  @State lastInsertedText: string = ''
-  @State showInsertAnimation: boolean = false
-  @State insertAnimX: number = 0
-  @State insertAnimY: number = 0
   @State isScrolling: boolean = false
-  @State showDeleteAnimation: boolean = false
-  @State deleteAnimText: string = ''
-  @State deleteAnimX: number = 0
-  @State deleteAnimY: number = 0
-
-  @State deleteAnimTranslateX: number = 0
-  @State deleteAnimTranslateY: number = 0
-  @State deleteAnimScale: number = 1.0
-  @State deleteAnimOpacity: number = 0.8
-  @State caretOffsetApiAvailable: boolean = true
   @State scrollOffsetY: number = 0
 
   private bridge: IWriterCoreBridge = getBridge()
@@ -94,8 +71,6 @@ struct WritingPage {
   private themeObserver: ThemeObserver | null = null
   private adaptiveObserver: AdaptiveObserver | null = null
   private cursorBlinkTimer: number = -1
-  private insertAnimTimer: number = -1
-  private deleteAnimTimer: number = -1
   private textAreaController: TextAreaController = new TextAreaController()
 
   aboutToAppear() {
@@ -160,14 +135,6 @@ struct WritingPage {
       clearInterval(this.cursorBlinkTimer)
       this.cursorBlinkTimer = -1
     }
-    if (this.insertAnimTimer !== -1) {
-      clearTimeout(this.insertAnimTimer)
-      this.insertAnimTimer = -1
-    }
-    if (this.deleteAnimTimer !== -1) {
-      clearTimeout(this.deleteAnimTimer)
-      this.deleteAnimTimer = -1
-    }
     if (this.autoSaveObserver) {
       this.lifecycle.removeObserver(this.autoSaveObserver)
     }
@@ -209,8 +176,7 @@ struct WritingPage {
       const result = await this.bridge.getLocalSettings()
       if (result.success && result.data) {
         this.settings = result.data
-        // 编辑器动画开关 — 降级禁用，不从设置读取
-        // Harmony 写作区动画等桌面/Android 稳定后再做
+        // 编辑器动画开关 — 鸿蒙端暂未实现，不从设置读取
         this.typingAnimationEnabled = false
         this.smoothCursorEnabled = false
         this.themeAdapter.updateFromSettings({
@@ -290,40 +256,6 @@ struct WritingPage {
     }
   }
 
-  private findChangedRange(oldText: string, newText: string): ChangedRange {
-    const oldLen = oldText.length
-    const newLen = newText.length
-    const minLen = Math.min(oldLen, newLen)
-
-    // 找公共前缀
-    let start = 0
-    while (start < minLen && oldText.charAt(start) === newText.charAt(start)) {
-      start++
-    }
-
-    // 找公共后缀
-    let oldEnd = oldLen
-    let newEnd = newLen
-    while (oldEnd > start && newEnd > start && oldText.charAt(oldEnd - 1) === newText.charAt(newEnd - 1)) {
-      oldEnd--
-      newEnd--
-    }
-
-    const deletedText = oldText.substring(start, oldEnd)
-    const insertedText = newText.substring(start, newEnd)
-
-    const result: ChangedRange = { start: start, oldEnd: oldEnd, newEnd: newEnd, insertedText: insertedText, deletedText: deletedText }
-    return result
-  }
-
-  private getSaveStatusText(): string {
-    if (this.lastSaveFailed) return getContext(this).resourceManager.getStringSync($r('app.string.save_failed').id)
-    if (this.isSaving && this.isAutoSaving) return getContext(this).resourceManager.getStringSync($r('app.string.auto_saving').id)
-    if (this.isSaving) return getContext(this).resourceManager.getStringSync($r('app.string.saving').id)
-    if (this.hasUnsavedChanges) return getContext(this).resourceManager.getStringSync($r('app.string.unsaved').id)
-    return getContext(this).resourceManager.getStringSync($r('app.string.saved').id)
-  }
-
   private getSaveStatusColor(): ResourceColor {
     if (this.lastSaveFailed) return this.themeConfig.colors.error
     if (this.isSaving) return this.themeConfig.colors.textSecondary
@@ -333,119 +265,14 @@ struct WritingPage {
 
   onContentChange(text: string) {
     const oldContent = this.content
-    const oldLength = oldContent.length
     this.content = text
     this.hasUnsavedChanges = text !== this.lastSavedContent
 
-    // 更新字数
     this.bridge.calculateWordCount(text).then(count => {
       this.wordCount = count
     })
 
-    // ── 动画触发 ──
-    const newLength = text.length
-    const changed = this.findChangedRange(oldContent, text)
-
-    // 打字动画：检测新插入的文本
-    if (this.typingAnimationEnabled && changed.insertedText.length > 0 && changed.insertedText.length <= 3 && !this.isScrolling) {
-      if (!this.caretOffsetApiAvailable) {
-        // API 不可用时优雅降级：不播放动画
-      } else {
-        // 用 getCaretOffset 获取真实光标坐标（防御性编码：try-catch + null 检查）
-        try {
-          const caretOffset = this.textAreaController.getCaretOffset()
-          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-            const insertedText = changed.insertedText
-            // 包含换行不播放
-            if (!insertedText.includes('\n') && !insertedText.includes('\r')) {
-              this.lastInsertedText = insertedText
-              // getCaretOffset() 可能返回 TextArea 内容坐标（未扣 scroll），
-              // 如果 DevEco 实测发现返回的已是可视区坐标，则删除 `- this.scrollOffsetY` 即可
-              this.insertAnimX = caretOffset.x
-              this.insertAnimY = caretOffset.y - this.scrollOffsetY
-              this.showInsertAnimation = true
-
-              if (this.insertAnimTimer !== -1) {
-                clearTimeout(this.insertAnimTimer)
-              }
-              this.insertAnimTimer = setTimeout(() => {
-                this.showInsertAnimation = false
-                this.insertAnimTimer = -1
-              }, this.settings.editorTypingAnimationDurationMs || 150) as number
-            }
-          }
-        } catch (e) {
-          this.caretOffsetApiAvailable = false
-        }
-      }
-    }
-
-    // 删除动画：检测被删除的文本 — 吞回效果
-    if (this.typingAnimationEnabled && changed.deletedText.length > 0 && changed.deletedText.length <= 3 && !this.isScrolling) {
-      if (!this.caretOffsetApiAvailable) {
-        // API 不可用时优雅降级：不播放动画
-      } else {
-        // 只取一次当前光标坐标（删除后的位置），作为动画终点
-        try {
-          const caretOffset = this.textAreaController.getCaretOffset()
-          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-            const deletedText = changed.deletedText
-            if (!deletedText.includes('\n') && !deletedText.includes('\r')) {
-              this.deleteAnimText = deletedText
-              // 终点：当前光标位置
-              this.deleteAnimX = caretOffset.x
-              this.deleteAnimY = caretOffset.y - this.scrollOffsetY
-              // 起点偏移：从光标右侧开始，用稳定退化方案计算
-              this.deleteAnimTranslateX = deletedText.length * this.settings.editorFontSize * 0.6
-              this.deleteAnimTranslateY = 0
-              this.deleteAnimScale = 1.0
-              this.deleteAnimOpacity = 0.8
-              this.showDeleteAnimation = true
-
-              if (this.deleteAnimTimer !== -1) {
-                clearTimeout(this.deleteAnimTimer)
-              }
-              this.deleteAnimTimer = setTimeout(() => {
-                this.showDeleteAnimation = false
-                this.deleteAnimTimer = -1
-              }, this.settings.editorTypingAnimationDurationMs || 150) as number
-
-              // 吞回动画：从右侧飞回光标位置 + 缩小 + 淡出
-              animateTo({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn }, () => {
-                this.deleteAnimTranslateX = 0
-                this.deleteAnimTranslateY = 0
-                this.deleteAnimScale = 0.5
-                this.deleteAnimOpacity = 0
-              })
-            }
-          }
-        } catch (e) {
-          this.caretOffsetApiAvailable = false
-        }
-      }
-    }
-
-    // 平滑光标：用 getCaretOffset 获取真实坐标（防御性编码：try-catch + null 检查）
-    if (this.smoothCursorEnabled && !this.isScrolling) {
-      if (!this.caretOffsetApiAvailable) {
-        // API 不可用时优雅降级：不播放动画
-      } else {
-        try {
-          const caretOffset = this.textAreaController.getCaretOffset()
-          if (caretOffset && caretOffset.x >= 0 && caretOffset.y >= 0) {
-            animateTo({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut }, () => {
-              this.cursorX = caretOffset.x
-              // getCaretOffset() 可能返回 TextArea 内容坐标（未扣 scroll），
-              // 如果 DevEco 实测发现返回的已是可视区坐标，则删除 `- this.scrollOffsetY` 即可
-              this.cursorY = caretOffset.y - this.scrollOffsetY
-            })
-            this.cursorVisible = true
-          }
-        } catch (e) {
-          this.caretOffsetApiAvailable = false
-        }
-      }
-    }
+    // 鸿蒙端动画暂未实现，不触发动画逻辑
   }
 
   async clearContent() {
@@ -574,54 +401,19 @@ struct WritingPage {
         .justifyContent(FlexAlign.Center)
       } else {
         Scroll() {
-          Stack() {
-            TextArea({ text: this.content, placeholder: getContext(this).resourceManager.getStringSync($r('app.string.start_writing_placeholder').id), controller: this.textAreaController })
-              .width('100%')
-              .constraintSize({ minHeight: '100%' })
-              .fontSize(this.settings.editorFontSize)
-              .lineHeight(this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize)
-              .backgroundColor(this.themeConfig.colors.surface)
-              .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 20 })
-              .fontColor(this.themeConfig.colors.textPrimary)
-              .placeholderColor(this.themeConfig.colors.textHint)
-              .onChange((value: string): void => { this.onContentChange(value) })
-              .onTextSelectionChange((selectionStart: number, selectionEnd: number) => {
-                this.cursorPosition = selectionStart
-              })
-
-            // ── 平滑光标 overlay ──
-            if (this.smoothCursorEnabled && this.cursorVisible) {
-              Column()
-                .width(2)
-                .height(this.settings.editorFontSize * 1.2)
-                .backgroundColor(this.themeConfig.colors.primary)
-                .position({ x: this.cursorX, y: this.cursorY })
-                .opacity(0.8)
-                .animation({ duration: this.settings.editorSmoothCursorDurationMs || 80, curve: Curve.EaseOut })
-            }
-
-            // ── 打字动画 overlay ──
-            if (this.typingAnimationEnabled && this.showInsertAnimation) {
-              Text(this.lastInsertedText)
-                .fontSize(this.settings.editorFontSize)
-                .fontColor(this.themeConfig.colors.textPrimary)
-                .opacity(0.6)
-                .position({ x: this.insertAnimX, y: this.insertAnimY })
-                .scale({ x: 1.1, y: 1.1 })
-                .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseOut })
-            }
-
-            // ── 删除动画 overlay — 吞回效果：从旧位置飞向新光标位置 ──
-            if (this.typingAnimationEnabled && this.showDeleteAnimation) {
-              Text(this.deleteAnimText)
-                .fontSize(this.settings.editorFontSize)
-                .fontColor(this.themeConfig.colors.textPrimary)
-                .opacity(this.deleteAnimOpacity)
-                .position({ x: this.deleteAnimX, y: this.deleteAnimY })
-                .scale({ x: this.deleteAnimScale, y: this.deleteAnimScale })
-                .translate({ x: this.deleteAnimTranslateX, y: this.deleteAnimTranslateY })
-                .animation({ duration: this.settings.editorTypingAnimationDurationMs || 150, curve: Curve.EaseIn })
-            }
+          TextArea({ text: this.content, placeholder: getContext(this).resourceManager.getStringSync($r('app.string.start_writing_placeholder').id), controller: this.textAreaController })
+            .width('100%')
+            .constraintSize({ minHeight: '100%' })
+            .fontSize(this.settings.editorFontSize)
+            .lineHeight(this.settings.editorLineSpacingMultiplier * this.settings.editorFontSize)
+            .backgroundColor(this.themeConfig.colors.surface)
+            .padding({ left: this.adaptiveState.pagePadding, right: this.adaptiveState.pagePadding, top: 20, bottom: 20 })
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .placeholderColor(this.themeConfig.colors.textHint)
+            .onChange((value: string): void => { this.onContentChange(value) })
+            .onTextSelectionChange((selectionStart: number, selectionEnd: number) => {
+              this.cursorPosition = selectionStart
+            })
           }
           .width('100%')
           .constraintSize({ maxWidth: this.adaptiveState.contentMaxWidth })
