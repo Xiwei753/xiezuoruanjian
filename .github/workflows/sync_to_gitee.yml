@@ -17,13 +17,23 @@ jobs:
       - name: Checkout current source snapshot
         uses: actions/checkout@v4
         with:
-          # Gitee is only a source snapshot mirror. Do not fetch or push the
-          # GitHub history/tags, otherwise old large objects count against the
-          # Gitee repository quota.
           fetch-depth: 1
           fetch-tags: false
 
-      - name: Push orphan source snapshot to Gitee
+      - name: Clean untracked/ignored files from working tree
+        run: git clean -fdx
+
+      - name: Remove sensitive and large-file patterns
+        run: |
+          rm -f .github-token .gitee-token .env* secrets.json api_keys.json
+          rm -rf target/ build/ dist/ node_modules/ .gradle/ .dart_tool/
+          rm -rf apps/android/app/build/ apps/android/build/ apps/Linux_qt/build/
+          rm -rf apps/harmony/oh_modules/ apps/harmony/.hvigor/
+          rm -f *.apk *.aab *.so *.hap *.exe *.msi *.AppImage *.zip *.7z *.dmg *.dll
+          rm -rf writer_app_workspace/ workspace/ backups/ trash/ sqlite_cache/ logs/ tmp/
+          rm -f *.db *.sqlite *.sqlite3 *.jks *.keystore *.p12 *.pem *.p7b *.cer
+
+      - name: Build orphan snapshot and push to Gitee
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
@@ -40,12 +50,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Re-root the checked-out worktree onto a brand-new orphan commit so
-          # Gitee receives only the current tracked source snapshot. This avoids
-          # pushing GitHub's historical objects, tags, or old large files.
           git checkout --orphan gitee-snapshot
           git rm -r --cached . >/dev/null 2>&1 || true
           git add -A
+
+          SNAPSHOT_SIZE=$(git ls-files -z | xargs -0 du -ch 2>/dev/null | tail -1 | cut -f1)
+          echo "Snapshot size: ${SNAPSHOT_SIZE}"
+          SNAPSHOT_MB=$(du -sm . 2>/dev/null | cut -f1)
+          if [ "${SNAPSHOT_MB:-0}" -gt 500 ]; then
+            echo "ERROR: Snapshot exceeds 500 MB (${SNAPSHOT_MB} MB). Aborting push to prevent Gitee quota overflow."
+            exit 1
+          fi
+
           git commit -m "同步 GitHub 当前源码快照"
 
           git remote add gitee "https://wei-xi753:${GITEE_TOKEN}@gitee.com/wei-xi753/xiezuoruanjian.git" || true
