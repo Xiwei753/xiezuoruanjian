@@ -12,6 +12,8 @@ public sealed partial class SettingsPage : Page
     {
         InitializeComponent();
         LoadSettings();
+
+        CoordinatedCursorAnimToggle.Toggled += OnCoordinatedCursorAnimToggled;
     }
 
     private async void LoadSettings()
@@ -24,6 +26,11 @@ public sealed partial class SettingsPage : Page
             IndentBox.Value = 2;
             AutoSaveToggle.IsOn = settings.AutoSave;
             AutoIndentToggle.IsOn = settings.AutoIndent;
+            TypingAnimToggle.IsOn = settings.TypingAnimationEnabled;
+            TypingAnimDurationBox.Value = settings.TypingAnimationDurationMs;
+            CoordinatedCursorAnimToggle.IsOn = settings.CoordinatedTextCursorAnimationEnabled;
+            CoordinatedDurationBox.Value = settings.TypingAnimationDurationMs;
+            UpdateAnimationVisibility();
             ThemeRadio.SelectedIndex = settings.Theme switch
             {
                 "light" => 1,
@@ -37,6 +44,25 @@ public sealed partial class SettingsPage : Page
         }
     }
 
+    private void OnCoordinatedCursorAnimToggled(object sender, RoutedEventArgs e)
+    {
+        UpdateAnimationVisibility();
+        if (CoordinatedCursorAnimToggle.IsOn)
+        {
+            TypingAnimToggle.IsOn = true;
+            var dur = TypingAnimDurationBox.Value;
+            CoordinatedDurationBox.Value = dur;
+        }
+    }
+
+    private void UpdateAnimationVisibility()
+    {
+        var coordinated = CoordinatedCursorAnimToggle.IsOn;
+        TypingAnimToggle.Visibility = coordinated ? Visibility.Collapsed : Visibility.Visible;
+        TypingAnimDurationBox.Visibility = coordinated ? Visibility.Collapsed : Visibility.Visible;
+        CoordinatedDurationBox.Visibility = coordinated ? Visibility.Visible : Visibility.Collapsed;
+    }
+
     private async void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -47,6 +73,9 @@ public sealed partial class SettingsPage : Page
                 2 => "dark",
                 _ => "system"
             };
+            var typingAnimDuration = CoordinatedCursorAnimToggle.IsOn
+                ? (int)CoordinatedDurationBox.Value
+                : (int)TypingAnimDurationBox.Value;
             var settings = new LocalSettings
             {
                 FontSize = (float)FontSizeBox.Value,
@@ -54,6 +83,11 @@ public sealed partial class SettingsPage : Page
                 Theme = theme,
                 AutoSave = AutoSaveToggle.IsOn,
                 AutoIndent = AutoIndentToggle.IsOn,
+                TypingAnimationEnabled = TypingAnimToggle.IsOn,
+                TypingAnimationDurationMs = typingAnimDuration,
+                CoordinatedTextCursorAnimationEnabled = CoordinatedCursorAnimToggle.IsOn,
+                SmoothCursorEnabled = CoordinatedCursorAnimToggle.IsOn || TypingAnimToggle.IsOn,
+                SmoothCursorDurationMs = typingAnimDuration,
             };
             await _core.SaveSettingsAsync(settings);
             StatusText.Text = "设置已保存";

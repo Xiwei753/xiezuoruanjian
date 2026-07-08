@@ -3,6 +3,13 @@ using System.Collections.Generic;
 
 namespace Sujian.Windows.Editor.Animation;
 
+public enum GhostAnimKind
+{
+    Insert,
+    Delete,
+    Reflow
+}
+
 public sealed class ActiveAnimation
 {
     public ulong TransactionId { get; set; }
@@ -18,20 +25,26 @@ public sealed class ActiveAnimation
 public sealed class GhostGlyph
 {
     public string Char { get; set; } = "";
-    public float StartX { get; set; }
-    public float StartY { get; set; }
+    public float OriginStartX { get; set; }
+    public float OriginStartY { get; set; }
     public float EndX { get; set; }
     public float EndY { get; set; }
     public float Width { get; set; }
     public float Height { get; set; }
     public float BaselineY { get; set; }
-    public float Opacity { get; set; } = 1.0f;
+    public GhostAnimKind AnimKind { get; set; } = GhostAnimKind.Insert;
+    public float CurrentX { get; set; }
+    public float CurrentY { get; set; }
+    public float CurrentOpacity { get; set; } = 1.0f;
+    public float CurrentScale { get; set; } = 1.0f;
 }
 
 public sealed class SujianAnimationController
 {
     private readonly List<ActiveAnimation> _activeAnimations = new();
     private bool _animationEnabled = true;
+    private const double TimeoutSafetyFactor = 2.0;
+    private const double TimeoutSafetyMarginMs = 200.0;
 
     public bool AnimationEnabled
     {
@@ -102,14 +115,46 @@ public sealed class SujianAnimationController
             animation.Ghosts.Add(new GhostGlyph
             {
                 Char = glyph.Char,
-                StartX = startX,
-                StartY = startY,
+                OriginStartX = startX,
+                OriginStartY = startY,
                 EndX = (float)glyph.X,
                 EndY = (float)glyph.BaselineY,
                 Width = (float)glyph.W,
                 Height = (float)glyph.H,
-                BaselineY = (float)glyph.BaselineY
+                BaselineY = (float)glyph.BaselineY,
+                AnimKind = GhostAnimKind.Insert,
+                CurrentX = startX,
+                CurrentY = startY,
+                CurrentOpacity = 0.0f,
+                CurrentScale = 0.72f
             });
+        }
+
+        if (vt.ReflowGlyphRects != null)
+        {
+            foreach (var rr in vt.ReflowGlyphRects)
+            {
+                var dx = Math.Abs(rr.NewX - rr.OldX);
+                var dy = Math.Abs(rr.NewY - rr.OldY);
+                if (dx < 0.5 && dy < 0.5) continue;
+
+                animation.Ghosts.Add(new GhostGlyph
+                {
+                    Char = rr.Char,
+                    OriginStartX = (float)rr.OldX,
+                    OriginStartY = (float)(rr.OldBaselineY ?? rr.OldY),
+                    EndX = (float)rr.NewX,
+                    EndY = (float)(rr.NewBaselineY ?? rr.NewY),
+                    Width = (float)rr.W,
+                    Height = (float)rr.H,
+                    BaselineY = (float)(rr.NewBaselineY ?? 0),
+                    AnimKind = GhostAnimKind.Reflow,
+                    CurrentX = (float)rr.OldX,
+                    CurrentY = (float)(rr.OldBaselineY ?? rr.OldY),
+                    CurrentOpacity = 1.0f,
+                    CurrentScale = 1.0f
+                });
+            }
         }
     }
 
@@ -125,13 +170,18 @@ public sealed class SujianAnimationController
             animation.Ghosts.Add(new GhostGlyph
             {
                 Char = glyph.Char,
-                StartX = (float)glyph.X,
-                StartY = (float)glyph.BaselineY,
+                OriginStartX = (float)glyph.X,
+                OriginStartY = (float)glyph.BaselineY,
                 EndX = endX,
                 EndY = endY,
                 Width = (float)glyph.W,
                 Height = (float)glyph.H,
-                BaselineY = (float)glyph.BaselineY
+                BaselineY = (float)glyph.BaselineY,
+                AnimKind = GhostAnimKind.Delete,
+                CurrentX = (float)glyph.X,
+                CurrentY = (float)glyph.BaselineY,
+                CurrentOpacity = 1.0f,
+                CurrentScale = 1.0f
             });
         }
     }
@@ -145,13 +195,55 @@ public sealed class SujianAnimationController
         {
             var elapsed = (now - anim.StartTime).TotalMilliseconds;
             var progress = Math.Min(1.0, elapsed / anim.DurationMs);
+            var timeoutMs = anim.DurationMs * TimeoutSafetyFactor + TimeoutSafetyMarginMs;
+
+            if (elapsed > timeoutMs)
+            {
+                anim.IsFinished = true;
+                toRemove.Add(anim);
+                continue;
+            }
 
             foreach (var ghost in anim.Ghosts)
             {
-                var eased = EaseOutCubic((float)progress);
-                ghost.StartX = ghost.StartX + (ghost.EndX - ghost.StartX) * eased;
-                ghost.StartY = ghost.StartY + (ghost.EndY - ghost.StartY) * eased;
-                ghost.Opacity = 1.0f - eased;
+                float p = (float)progress;
+                switch (ghost.AnimKind)
+                {
+                    case GhostAnimKind.Insert:
+                        {
+                            var eased = EaseOutCubic(p);
+                            ghost.CurrentX = ghost.OriginStartX + (ghost.EndX - ghost.OriginStartX) * eased;
+                            ghost.CurrentY = ghost.OriginStartY + (ghost.EndY - ghost.OriginStartY) * eased;
+                            ghost.CurrentScale = 0.72f + 0.28f * eased;
+                            if (p < 0.4f)
+                            {
+                                ghost.CurrentOpacity = p / 0.4f;
+                            }
+                            else
+                            {
+                                ghost.CurrentOpacity = 1.0f - (p - 0.4f) / 0.6f;
+                            }
+                        }
+                        break;
+                    case GhostAnimKind.Delete:
+                        {
+                            var eased = EaseInCubic(p);
+                            ghost.CurrentX = ghost.OriginStartX + (ghost.EndX - ghost.OriginStartX) * eased;
+                            ghost.CurrentY = ghost.OriginStartY + (ghost.EndY - ghost.OriginStartY) * eased;
+                            ghost.CurrentOpacity = 1.0f - eased;
+                            ghost.CurrentScale = 1.0f - 0.55f * eased;
+                        }
+                        break;
+                    case GhostAnimKind.Reflow:
+                        {
+                            var eased = EaseOutCubic(p);
+                            ghost.CurrentX = ghost.OriginStartX + (ghost.EndX - ghost.OriginStartX) * eased;
+                            ghost.CurrentY = ghost.OriginStartY + (ghost.EndY - ghost.OriginStartY) * eased;
+                            ghost.CurrentOpacity = 1.0f;
+                            ghost.CurrentScale = 1.0f;
+                        }
+                        break;
+                }
             }
 
             if (progress >= 1.0)
@@ -202,6 +294,7 @@ public sealed class SujianAnimationController
     }
 
     private static float EaseOutCubic(float t) => 1.0f - (1.0f - t) * (1.0f - t) * (1.0f - t);
+    private static float EaseInCubic(float t) => t * t * t;
 }
 
 public sealed class AnimationFinishedEventArgs : EventArgs

@@ -96,7 +96,7 @@ public sealed class EditorVisualTransaction
         "ClusterAnimation" => AnimationMode.ClusterAnimation,
         "RunAnimation" => AnimationMode.RunAnimation,
         "LineReflowAnimation" => AnimationMode.LineReflowAnimation,
-        "SnapshotAnimation" => AnimationMode.SnapshotAnimation,
+        "SnapshotAnimation" => AnimationMode.RunAnimation,
         _ => AnimationMode.SystemSuppressed
     };
 

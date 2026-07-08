@@ -2,12 +2,14 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.UI.ViewManagement;
 using System;
+using Sujian.Windows.Editor.Animation;
 
 namespace Sujian.Windows.Editor;
 
 public sealed class SujianEditorHost : UserControl
 {
     private readonly SujianEditor _editor;
+    private readonly SujianAnimationOverlay _animationOverlay;
     private readonly ScrollViewer _scrollViewer;
     private InputPane? _inputPane;
     private DispatcherTimer? _autoSaveTimer;
@@ -15,6 +17,8 @@ public sealed class SujianEditorHost : UserControl
     private string? _currentVolumeId;
     private string? _currentChapterId;
     private Bridge.WriterCoreBridge? _core;
+    private bool _typingAnimationEnabled = true;
+    private bool _coordinatedCursorAnimationEnabled = true;
 
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
         nameof(Text), typeof(string), typeof(SujianEditorHost),
@@ -27,6 +31,18 @@ public sealed class SujianEditorHost : UserControl
     public static readonly DependencyProperty FirstLineIndentEmProperty = DependencyProperty.Register(
         nameof(FirstLineIndentEm), typeof(float), typeof(SujianEditorHost),
         new PropertyMetadata(2f));
+
+    public static readonly DependencyProperty TypingAnimationEnabledProperty = DependencyProperty.Register(
+        nameof(TypingAnimationEnabled), typeof(bool), typeof(SujianEditorHost),
+        new PropertyMetadata(true, OnTypingAnimationEnabledChanged));
+
+    public static readonly DependencyProperty CoordinatedCursorAnimationEnabledProperty = DependencyProperty.Register(
+        nameof(CoordinatedCursorAnimationEnabled), typeof(bool), typeof(SujianEditorHost),
+        new PropertyMetadata(true));
+
+    public static readonly DependencyProperty TypingAnimationDurationMsProperty = DependencyProperty.Register(
+        nameof(TypingAnimationDurationMs), typeof(int), typeof(SujianEditorHost),
+        new PropertyMetadata(100));
 
     public string Text
     {
@@ -46,12 +62,37 @@ public sealed class SujianEditorHost : UserControl
         set => SetValue(FirstLineIndentEmProperty, value);
     }
 
+    public bool TypingAnimationEnabled
+    {
+        get => (bool)GetValue(TypingAnimationEnabledProperty);
+        set => SetValue(TypingAnimationEnabledProperty, value);
+    }
+
+    public bool CoordinatedCursorAnimationEnabled
+    {
+        get => (bool)GetValue(CoordinatedCursorAnimationEnabledProperty);
+        set => SetValue(CoordinatedCursorAnimationEnabledProperty, value);
+    }
+
+    public int TypingAnimationDurationMs
+    {
+        get => (int)GetValue(TypingAnimationDurationMsProperty);
+        set => SetValue(TypingAnimationDurationMsProperty, value);
+    }
+
     public SujianEditorHost()
     {
         _editor = new SujianEditor();
+        _animationOverlay = new SujianAnimationOverlay();
+        _animationOverlay.Controller.AnimationFinished += OnAnimationFinished;
+
+        var grid = new Grid();
+        grid.Children.Add(_editor);
+        grid.Children.Add(_animationOverlay);
+
         _scrollViewer = new ScrollViewer
         {
-            Content = _editor,
+            Content = grid,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
         };
@@ -73,6 +114,7 @@ public sealed class SujianEditorHost : UserControl
         RegisterPropertyChangedCallback(FontSizeSettingProperty, (s, dp) =>
         {
             _editor.FontSizeSetting = FontSizeSetting;
+            _animationOverlay.FontSize = FontSizeSetting;
         });
 
         RegisterPropertyChangedCallback(FirstLineIndentEmProperty, (s, dp) =>
@@ -81,6 +123,7 @@ public sealed class SujianEditorHost : UserControl
         });
 
         Loaded += OnLoaded;
+        Unloaded += OnUnloaded;
     }
 
     public event EventHandler? TextChangedByUser;
@@ -91,6 +134,52 @@ public sealed class SujianEditorHost : UserControl
         _currentVolumeId = volumeId;
         _currentChapterId = chapterId;
         _core = core;
+    }
+
+    public void ApplyAnimationSettings(bool enabled, bool coordinatedEnabled, int durationMs)
+    {
+        _typingAnimationEnabled = enabled;
+        _coordinatedCursorAnimationEnabled = coordinatedEnabled;
+        _animationOverlay.Controller.AnimationEnabled = enabled;
+    }
+
+    public void ProcessVisualTransaction(string oldText, string newText)
+    {
+        if (!_typingAnimationEnabled || _core == null) return;
+
+        try
+        {
+            var json = _core.GetEditorVisualTransaction(oldText, newText, "", "");
+            if (string.IsNullOrEmpty(json)) return;
+
+            var vt = EditorVisualTransaction.FromJson(json);
+            if (vt == null) return;
+
+            _animationOverlay.FontSize = FontSizeSetting;
+            _animationOverlay.Controller.ProcessTransaction(vt);
+            _animationOverlay.StartTick();
+        }
+        catch { }
+    }
+
+    private void OnAnimationFinished(object? sender, AnimationFinishedEventArgs e)
+    {
+        if (_animationOverlay.Controller.ActiveAnimations.Count == 0)
+        {
+            _animationOverlay.StopTick();
+        }
+    }
+
+    private static void OnTypingAnimationEnabledChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var host = (SujianEditorHost)d;
+        host._typingAnimationEnabled = (bool)e.NewValue;
+        host._animationOverlay.Controller.AnimationEnabled = (bool)e.NewValue;
+        if (!(bool)e.NewValue)
+        {
+            host._animationOverlay.Controller.ClearAll();
+            host._animationOverlay.StopTick();
+        }
     }
 
     public void EnableAutoSave(int intervalSeconds = 30)
@@ -126,6 +215,13 @@ public sealed class SujianEditorHost : UserControl
             _inputPane.Showing += OnInputPaneShowing;
         }
         catch { }
+        _animationOverlay.FontSize = FontSizeSetting;
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        _animationOverlay.StopTick();
+        _animationOverlay.Controller.ClearAll();
     }
 
     private void OnInputPaneShowing(InputPane sender, InputPaneVisibilityEventArgs args)

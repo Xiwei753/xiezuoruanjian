@@ -14,6 +14,12 @@
             <ToggleSwitch Header="自动保存" x:Name="AutoSaveToggle" IsOn="True" />
             <ToggleSwitch Header="首行自动缩进" x:Name="AutoIndentToggle" IsOn="True" />
 
+            <TextBlock Text="动画" Style="{StaticResource SubtitleTextBlockStyle}" Margin="0,16,0,0" />
+            <ToggleSwitch Header="打字动画" x:Name="TypingAnimToggle" IsOn="True" />
+            <NumberBox Header="打字动画持续时间（ms）" x:Name="TypingAnimDurationBox" Minimum="30" Maximum="1000" Value="100" SpinButtonPlacementMode="Compact" />
+            <ToggleSwitch Header="协同光标动画" x:Name="CoordinatedCursorAnimToggle" IsOn="True" />
+            <NumberBox Header="整体动画时长（ms）" x:Name="CoordinatedDurationBox" Minimum="30" Maximum="1000" Value="100" SpinButtonPlacementMode="Compact" Visibility="Collapsed" />
+
             <TextBlock Text="外观" Style="{StaticResource SubtitleTextBlockStyle}" Margin="0,16,0,0" />
             <RadioButtons Header="主题" x:Name="ThemeRadio" SelectedIndex="0">
                 <RadioButton Content="跟随系统" />

@@ -406,6 +406,11 @@ public sealed class WriterCoreBridge
             if (env.Data.Value.TryGetProperty("theme", out var th)) s.Theme = th.GetString() ?? "system";
             if (env.Data.Value.TryGetProperty("autoSave", out var asv)) s.AutoSave = asv.GetBoolean();
             if (env.Data.Value.TryGetProperty("autoIndent", out var ai)) s.AutoIndent = ai.GetBoolean();
+            if (env.Data.Value.TryGetProperty("typingAnimationEnabled", out var tae)) s.TypingAnimationEnabled = tae.GetBoolean();
+            if (env.Data.Value.TryGetProperty("typingAnimationDurationMs", out var tadm)) s.TypingAnimationDurationMs = tadm.GetInt32();
+            if (env.Data.Value.TryGetProperty("coordinatedTextCursorAnimationEnabled", out var cca)) s.CoordinatedTextCursorAnimationEnabled = cca.GetBoolean();
+            if (env.Data.Value.TryGetProperty("smoothCursorEnabled", out var sce)) s.SmoothCursorEnabled = sce.GetBoolean();
+            if (env.Data.Value.TryGetProperty("smoothCursorDurationMs", out var scdm)) s.SmoothCursorDurationMs = scdm.GetInt32();
         }
         return Task.FromResult(s);
     }
@@ -418,7 +423,12 @@ public sealed class WriterCoreBridge
             lineHeight = settings.LineHeight,
             theme = settings.Theme,
             autoSave = settings.AutoSave,
-            autoIndent = settings.AutoIndent
+            autoIndent = settings.AutoIndent,
+            typingAnimationEnabled = settings.TypingAnimationEnabled,
+            typingAnimationDurationMs = settings.TypingAnimationDurationMs,
+            coordinatedTextCursorAnimationEnabled = settings.CoordinatedTextCursorAnimationEnabled,
+            smoothCursorEnabled = settings.SmoothCursorEnabled,
+            smoothCursorDurationMs = settings.SmoothCursorDurationMs
         });
         var jsonPtr = ToUtf8(json);
         try
@@ -628,6 +638,11 @@ public sealed class LocalSettings
     public string Theme { get; set; } = "system";
     public bool AutoSave { get; set; } = true;
     public bool AutoIndent { get; set; } = true;
+    public bool TypingAnimationEnabled { get; set; } = true;
+    public int TypingAnimationDurationMs { get; set; } = 100;
+    public bool CoordinatedTextCursorAnimationEnabled { get; set; } = true;
+    public bool SmoothCursorEnabled { get; set; } = true;
+    public int SmoothCursorDurationMs { get; set; } = 80;
 }
 
 public sealed class WriterCoreException : Exception
