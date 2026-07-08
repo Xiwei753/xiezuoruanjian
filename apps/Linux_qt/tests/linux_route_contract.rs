@@ -89,24 +89,29 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         "WritingWorkspace.qml must forward insertAnimationSkipped transactionId/rangeId/byteStart/byteEnd to SujianEditorItem"
     );
 
-    let sujian_item = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/mod.rs"))
-        .expect("SujianEditorItem source should be readable");
+    let sujian_mod = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/mod.rs"))
+        .expect("SujianEditorItem mod.rs should be readable");
+    let sujian_transaction = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/transaction.rs"))
+        .unwrap_or_default();
+    let sujian_anim_state = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/text_animation_state.rs"))
+        .unwrap_or_default();
+    let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_anim_state}");
     assert!(
-        sujian_item.contains(
+        combined.contains(
             "on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"
-        ) && sujian_item.contains(
+        ) && combined.contains(
             "on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"
         ),
         "SujianEditorItem qt_method signatures must carry transaction/range ids as strings to avoid u64 truncation"
     );
     assert!(
-        sujian_item.contains("start_insert_with_ids(")
-            && sujian_item.contains("Some(vt.id)")
-            && sujian_item.contains("hidden_range_id"),
+        combined.contains("start_insert_with_ids(")
+            && combined.contains("Some(vt.id)")
+            && combined.contains("hidden_range_id"),
         "record_transaction Insert path must start TextAnimationState with transactionId/rangeId"
     );
     assert!(
-        !sujian_item.contains("text_anim_state.start_insert(\n"),
+        !combined.contains("text_anim_state.start_insert(\n"),
         "record_transaction Insert path must not regress to start_insert byte-range-only cleanup"
     );
 }

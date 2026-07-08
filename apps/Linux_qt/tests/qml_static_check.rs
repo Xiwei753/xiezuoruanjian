@@ -595,10 +595,19 @@ fn test_qml_no_emojis_and_no_hardcoded_dark_colors() {
 fn test_editor_render_format_is_unified() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let main_rs = fs::read_to_string(manifest_dir.join("src/main.rs")).unwrap();
-    let sujian_editor_item =
+    let sujian_editor_item_mod =
         fs::read_to_string(manifest_dir.join("src/sujian_editor_item/mod.rs")).unwrap();
     let sujian_rendering =
         fs::read_to_string(manifest_dir.join("src/sujian_editor_item/rendering.rs")).unwrap();
+    let sujian_qquickitem =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/qquickitem_impl.rs")).unwrap_or_default();
+    let sujian_editing =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/editing.rs")).unwrap_or_default();
+    let sujian_properties =
+        fs::read_to_string(manifest_dir.join("src/sujian_editor_item/properties.rs")).unwrap_or_default();
+    let sujian_editor_item = format!(
+        "{sujian_editor_item_mod}\n{sujian_rendering}\n{sujian_qquickitem}\n{sujian_editing}\n{sujian_properties}"
+    );
     let editor_controller =
         fs::read_to_string(manifest_dir.join("qml/EditorController.qml")).unwrap();
     let writing_workspace =

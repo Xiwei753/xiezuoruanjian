@@ -1,7 +1,3 @@
-> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 的镜像备份。**
->
-> 反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。
-
 # 素笺写作
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
@@ -130,6 +126,3 @@ QSG_INFO=1 QSG_RENDER_LOOP=basic cargo run -p sujian-linux-qt
 - `docs/starmap_canvas_model.md`: 星图画布模型契约
 - `docs/starmap_implementation_route.md`: 星图实现路线
 - `docs/editor_engine_route.md`: 自绘编辑器与统一事件层路线
-
----
-更多赞助方式请见[源仓库](https://github.com/Xiwei753/xiezuoruanjian)
