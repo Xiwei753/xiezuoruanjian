@@ -96,27 +96,16 @@ impl super::WriterCore {
         }
         let content = serde_json::to_string_pretty(secrets)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
-        let tmp_path = secrets_path.with_extension("tmp");
+        let parent = secrets_path.parent().unwrap_or_else(|| std::path::Path::new(""));
+        let mut tmp_file = tempfile::Builder::new()
+            .prefix("sync_secrets")
+            .suffix(".tmp")
+            .tempfile_in(parent)?;
 
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let mut file = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&tmp_path)?;
-            file.write_all(content.as_bytes())?;
-        }
+        use std::io::Write;
+        tmp_file.write_all(content.as_bytes())?;
+        tmp_file.persist(secrets_path).map_err(|e| e.error)?;
 
-        #[cfg(not(unix))]
-        {
-            std::fs::write(&tmp_path, content)?;
-        }
-
-        std::fs::rename(tmp_path, secrets_path)?;
         Ok(())
     }
 
