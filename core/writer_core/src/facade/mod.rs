@@ -24,6 +24,8 @@
 //! - Facade 不允许添加 UI 逻辑（动画、窗口管理等）
 //! - Facade 不允许吞掉错误（必须返回 Result）
 
+#[cfg(test)]
+mod project_ops_tests;
 mod action_ops;
 mod project_ops;
 mod service_ops;
