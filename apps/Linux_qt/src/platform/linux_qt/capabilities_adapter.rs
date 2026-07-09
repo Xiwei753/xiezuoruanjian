@@ -13,10 +13,11 @@ use writer_core::platform_interaction::capabilities::PlatformCapabilities;
 /// - replacement commit: fcitx5 拼音修正走 sujian_ime_replace_and_commit
 /// - text animation / smooth cursor / reflow animation: Core visual transaction → QML overlay
 /// - clipboard: SujianEditorItem::clipboard_copy/paste via QClipboard
-/// - context menu: QML context menu
+/// - cursor anchor: IME query 已迁移到 Rust FFI 数据源（sujian_get_ime_query_data）
 ///
 /// 未真实接入：
-/// - cursor_anchor: CursorAnchorAdapter 为空桩，IME query 直接读 QML property
+/// - context menu: ClipboardAndFocusAdapter.show_context_menu/hide_context_menu 为空桩，
+///   编辑器右键菜单由 QML EditorContextMenu 直接处理
 pub struct LinuxQtCapabilitiesAdapter {
     capabilities: PlatformCapabilities,
 }
