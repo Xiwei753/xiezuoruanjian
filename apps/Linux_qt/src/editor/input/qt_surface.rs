@@ -34,6 +34,19 @@ cpp! {{
     extern "C" void sujian_ime_cancel(void* rust_item);
     extern "C" void sujian_request_repaint(void* rust_item);
 
+    // ── IME query data source: Rust-side state via FFI (platform adapter path) ──
+    struct SujianImeQueryData {
+        double cursor_rect_x, cursor_rect_y, cursor_rect_w, cursor_rect_h;
+        bool has_anchor_rect;
+        double anchor_rect_x, anchor_rect_y, anchor_rect_w, anchor_rect_h;
+        int cursor_char_pos, anchor_char_pos;
+        bool has_selection;
+    };
+    extern "C" bool sujian_get_ime_query_data(void* rust_item, SujianImeQueryData* out);
+    extern "C" int sujian_ime_query_text_before_cursor(void* rust_item, ushort* buf, int buf_capacity);
+    extern "C" int sujian_ime_query_text_after_cursor(void* rust_item, ushort* buf, int buf_capacity);
+    extern "C" int sujian_ime_query_selection_text(void* rust_item, ushort* buf, int buf_capacity);
+
     // PlatformImeAdapter is defined by editor/input/platform/linux/input_surface.rs.
     // Keep this file as QtInputSurface only so Linux IME policy stays isolated.
 
@@ -254,6 +267,8 @@ cpp! {{
         }
 
         // ── Layer 1: InputMethodQuery ──
+        // Data source: Rust-side state via FFI (platform adapter path),
+        // NOT QML obj->property() reads.
         bool handle_input_method_query(QObject* obj, QInputMethodQueryEvent* qe) {
             if (qe->queries() & Qt::ImEnabled) {
                 qe->setValue(Qt::ImEnabled, true);
@@ -261,84 +276,68 @@ cpp! {{
             if (qe->queries() & Qt::ImHints) {
                 qe->setValue(Qt::ImHints, static_cast<int>(Qt::ImhNoPredictiveText));
             }
+
+            SujianImeQueryData data;
+            if (!sujian_get_ime_query_data(rust_item, &data)) {
+                qe->accept();
+                return true;
+            }
+
             if (qe->queries() & Qt::ImCursorRectangle) {
-                double cx = obj->property("cursor_rect_x").toDouble();
-                double cy = obj->property("cursor_rect_y").toDouble();
-                double cw = obj->property("cursor_rect_width").toDouble();
-                double ch = obj->property("cursor_rect_height").toDouble();
-                qe->setValue(Qt::ImCursorRectangle, QRectF(cx, cy, cw, ch));
+                qe->setValue(Qt::ImCursorRectangle, QRectF(data.cursor_rect_x, data.cursor_rect_y, data.cursor_rect_w, data.cursor_rect_h));
             }
             if (qe->queries() & Qt::ImAnchorRectangle) {
-                QVariant anchorXVar = obj->property("anchor_rect_x");
-                QVariant anchorYVar = obj->property("anchor_rect_y");
-                if (anchorXVar.isValid() && anchorYVar.isValid()) {
-                    double ax = anchorXVar.toDouble();
-                    double ay = anchorYVar.toDouble();
-                    double aw = obj->property("anchor_rect_width").toDouble();
-                    double ah = obj->property("anchor_rect_height").toDouble();
-                    qe->setValue(Qt::ImAnchorRectangle, QRectF(ax, ay, aw, ah));
+                if (data.has_anchor_rect) {
+                    qe->setValue(Qt::ImAnchorRectangle, QRectF(data.anchor_rect_x, data.anchor_rect_y, data.anchor_rect_w, data.anchor_rect_h));
                 } else {
-                    double cx = obj->property("cursor_rect_x").toDouble();
-                    double cy = obj->property("cursor_rect_y").toDouble();
-                    double cw = obj->property("cursor_rect_width").toDouble();
-                    double ch = obj->property("cursor_rect_height").toDouble();
-                    qe->setValue(Qt::ImAnchorRectangle, QRectF(cx, cy, cw, ch));
+                    qe->setValue(Qt::ImAnchorRectangle, QRectF(data.cursor_rect_x, data.cursor_rect_y, data.cursor_rect_w, data.cursor_rect_h));
                 }
             }
             if (qe->queries() & Qt::ImSurroundingText) {
-                QString fullText = obj->property("plain_text").toString();
-                int cursorPos = obj->property("cursor_position").toInt();
-                int beforeLen = qMin(cursorPos, 100);
-                int afterLen = qMin(fullText.length() - cursorPos, 100);
-                QString surrounding = fullText.mid(cursorPos - beforeLen, beforeLen + afterLen);
+                ushort beforeBuf[256];
+                int beforeLen = sujian_ime_query_text_before_cursor(rust_item, beforeBuf, 256);
+                ushort afterBuf[256];
+                int afterLen = sujian_ime_query_text_after_cursor(rust_item, afterBuf, 256);
+                QString surrounding = QString::fromUtf16(beforeBuf, beforeLen) + QString::fromUtf16(afterBuf, afterLen);
                 qe->setValue(Qt::ImSurroundingText, surrounding);
             }
             if (qe->queries() & Qt::ImCursorPosition) {
-                int cursorPos = obj->property("cursor_position").toInt();
-                int beforeLen = qMin(cursorPos, 100);
+                int beforeLen = qMin(data.cursor_char_pos, 100);
                 qe->setValue(Qt::ImCursorPosition, beforeLen);
             }
             if (qe->queries() & Qt::ImCurrentSelection) {
-                QString selText = obj->property("current_selection_text").toString();
-                qe->setValue(Qt::ImCurrentSelection, selText);
+                ushort selBuf[256];
+                int selLen = sujian_ime_query_selection_text(rust_item, selBuf, 256);
+                qe->setValue(Qt::ImCurrentSelection, QString::fromUtf16(selBuf, selLen));
             }
             if (qe->queries() & Qt::ImAbsolutePosition) {
-                double cx = obj->property("cursor_rect_x").toDouble();
-                double cy = obj->property("cursor_rect_y").toDouble();
                 QQuickItem* quickItem = qobject_cast<QQuickItem*>(obj);
                 if (quickItem) {
-                    QPointF scenePos = quickItem->mapToScene(QPointF(cx, cy));
+                    QPointF scenePos = quickItem->mapToScene(QPointF(data.cursor_rect_x, data.cursor_rect_y));
                     qe->setValue(Qt::ImAbsolutePosition, scenePos);
                 }
             }
             if (qe->queries() & Qt::ImAnchorPosition) {
-                QVariant anchorPosVar = obj->property("anchor_position");
-                int cursorPos = obj->property("cursor_position").toInt();
-                int beforeLen = qMin(cursorPos, 100);
-                if (anchorPosVar.isValid()) {
-                    int anchorPos = anchorPosVar.toInt();
-                    // ImAnchorPosition: offset of anchor within surrounding text
-                    // surrounding text starts at (cursorPos - beforeLen)
-                    int anchorOffset = anchorPos - (cursorPos - beforeLen);
+                int beforeLen = qMin(data.cursor_char_pos, 100);
+                if (data.has_selection) {
+                    int anchorOffset = data.anchor_char_pos - (data.cursor_char_pos - beforeLen);
                     qe->setValue(Qt::ImAnchorPosition, anchorOffset);
                 } else {
                     qe->setValue(Qt::ImAnchorPosition, beforeLen);
                 }
             }
             if (qe->queries() & Qt::ImTextBeforeCursor) {
-                QString fullText = obj->property("plain_text").toString();
-                int cursorPos = obj->property("cursor_position").toInt();
-                int beforeLen = qMin(cursorPos, 100);
-                qe->setValue(Qt::ImTextBeforeCursor, fullText.mid(cursorPos - beforeLen, beforeLen));
+                ushort beforeBuf[256];
+                int beforeLen = sujian_ime_query_text_before_cursor(rust_item, beforeBuf, 256);
+                qe->setValue(Qt::ImTextBeforeCursor, QString::fromUtf16(beforeBuf, beforeLen));
             }
             if (qe->queries() & Qt::ImTextAfterCursor) {
-                QString fullText = obj->property("plain_text").toString();
-                int cursorPos = obj->property("cursor_position").toInt();
-                int afterLen = qMin(fullText.length() - cursorPos, 100);
-                qe->setValue(Qt::ImTextAfterCursor, fullText.mid(cursorPos, afterLen));
+                ushort afterBuf[256];
+                int afterLen = sujian_ime_query_text_after_cursor(rust_item, afterBuf, 256);
+                qe->setValue(Qt::ImTextAfterCursor, QString::fromUtf16(afterBuf, afterLen));
             }
             if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
-                qDebug("[sujian] InputMethodQuery: queries=0x%x", static_cast<unsigned>(qe->queries()));
+                qDebug("[sujian] InputMethodQuery: queries=0x%x (via Rust FFI data source)", static_cast<unsigned>(qe->queries()));
             }
             qe->accept();
             return true;
