@@ -89,14 +89,31 @@ internal class SyncSettingsHelper(
         val capability = ErrorUtil.safeRun(activity, SyncCapabilityData()) {
             settingsRepository.getSyncCapability()
         }
+        btnDryRun.isEnabled = capability.canRun
+        btnTestConnection.isEnabled = capability.canRun
+        btnPerformSync.isEnabled = capability.canRun
         if (!capability.canRun) {
-            btnDryRun.isEnabled = false
-            btnTestConnection.isEnabled = false
-            btnPerformSync.isEnabled = false
-            val blockMsg = capability.blockReasonCode ?: ""
-            if (blockMsg.isNotEmpty()) {
-                tvTokenStatus.text = blockMsg
+            val msg = blockMessageFromKey(capability.blockMessageKey, capability.messageArgs)
+            if (msg.isNotEmpty()) {
+                tvTokenStatus.text = msg
+                tvTokenStatus.setTextColor(MaterialColors.getColor(tvTokenStatus, M3Attr.colorError))
             }
+        }
+    }
+
+    private fun blockMessageFromKey(key: String?, args: Map<String, String>): String {
+        if (key.isNullOrEmpty()) return ""
+        val resId = when (key) {
+            "sync.block.disabled" -> R.string.sync_block_disabled
+            "sync.block.remote_url_missing" -> R.string.sync_block_remote_url_missing
+            "sync.block.token_missing" -> R.string.sync_block_token_missing
+            else -> return key
+        }
+        return if (args.isNotEmpty()) {
+            val argValues = args.values.toTypedArray()
+            try { activity.getString(resId, *argValues) } catch (_: Exception) { activity.getString(resId) }
+        } else {
+            activity.getString(resId)
         }
     }
 
@@ -122,19 +139,18 @@ internal class SyncSettingsHelper(
         ErrorUtil.safeRun(activity) {
             settingsRepository.saveSyncConfig(uiConfig)
             settingsRepository.saveSyncSecrets(uiSecrets)
-            // 保存设备信息
             val deviceInfo = mapOf(
                 "deviceId" to getDeviceId(),
                 "deviceClass" to determineDeviceClass(),
                 "platform" to "android"
             )
             settingsRepository.saveDeviceInfo(deviceInfo)
-            // 同时通过 Core 层写入 current_device.json
             settingsRepository.ensureDeviceInfo("android", determineDeviceClass())
         }
         currentSyncConfig = uiConfig
         currentSyncSecrets = uiSecrets
         updateTokenStatusUI()
+        applySyncCapability()
     }
 
     fun handleDryRun() {
@@ -161,9 +177,7 @@ internal class SyncSettingsHelper(
                 }
                 SyncSession.lock.set(false)
                 btnDryRun.text = activity.getString(R.string.btn_dry_run)
-                btnDryRun.isEnabled = true
-                btnPerformSync.isEnabled = true
-                btnTestConnection.isEnabled = true
+                applySyncCapability()
                 when (result) {
                     is BridgeResult.Success -> {
                         val plan = result.data
@@ -205,9 +219,7 @@ internal class SyncSettingsHelper(
                 }
                 SyncSession.lock.set(false)
                 btnTestConnection.text = activity.getString(R.string.btn_test_connection)
-                btnTestConnection.isEnabled = true
-                btnDryRun.isEnabled = true
-                btnPerformSync.isEnabled = true
+                applySyncCapability()
                 when (result) {
                     is BridgeResult.Success -> {
                         val diag = result.data
@@ -281,9 +293,7 @@ internal class SyncSettingsHelper(
         if (currentSyncSecrets.token.isNullOrEmpty()) {
             SyncSession.lock.set(false)
             btnPerformSync.text = activity.getString(R.string.btn_perform_sync)
-            btnPerformSync.isEnabled = true
-            btnDryRun.isEnabled = true
-            btnTestConnection.isEnabled = true
+            applySyncCapability()
             android.widget.Toast.makeText(activity, activity.getString(R.string.sync_error_no_token), android.widget.Toast.LENGTH_SHORT).show()
             return
         }
@@ -308,9 +318,7 @@ internal class SyncSettingsHelper(
                 }
                 SyncSession.lock.set(false)
                 btnPerformSync.text = activity.getString(R.string.btn_perform_sync)
-                btnPerformSync.isEnabled = true
-                btnDryRun.isEnabled = true
-                btnTestConnection.isEnabled = true
+                applySyncCapability()
                 when (result) {
                     is BridgeResult.Success -> {
                         val syncResult = result.data

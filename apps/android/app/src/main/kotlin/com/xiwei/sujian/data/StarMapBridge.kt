@@ -1,7 +1,5 @@
 package com.xiwei.sujian.data
 
-import com.xiwei.sujian.BuildConfig
-import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapEdgeKind
 import com.xiwei.sujian.model.StarMapEdgeRenderData
@@ -132,20 +130,10 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
         holder.service.findStarmapReferences(targetStarmapId)
     }
 
-    /**
-     * 获取星图动画策略参数。
-     *
-     * 临时兼容：当前 UniFFI 生成绑定可能尚未暴露 getStarmapMotionPolicy()，所以这里仍保留
-     * 反射探测 fallback。后续新能力必须放到领域 Bridge，不再继续往 AppServiceBridge 增加领域方法。
-     * Debug 构建只要走 fallback 必须 Log.w，避免静默返回默认值掩盖绑定缺口。
-     */
-    @Volatile
-    private var motionPolicyFallbackWarned = false
-
     fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyData> {
-        return try {
+        return holder.wrapResult {
             val dto = holder.service.getStarmapMotionPolicy()
-            BridgeResult.Success(StarMapMotionPolicyData(
+            StarMapMotionPolicyData(
                 enabled = dto.enabled,
                 idleWobbleEnabled = dto.idleWobbleEnabled,
                 idleAmplitudeVp = dto.idleAmplitudeVp,
@@ -154,16 +142,7 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
                 dragShadowBoost = dto.dragShadowBoost,
                 settleDurationMs = dto.settleDurationMs.toInt(),
                 reduceMotion = dto.reduceMotion
-            ))
-        } catch (e: NoSuchMethodException) {
-            if (BuildConfig.DEBUG && !motionPolicyFallbackWarned) {
-                motionPolicyFallbackWarned = true
-                DiagnosticsLogger.w(TAG, "Fallback: UniFFI binding has no getStarmapMotionPolicy", e)
-            }
-            BridgeResult.Success(StarMapMotionPolicyData())
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to get motion policy: ${e.message}", e)
-            BridgeResult.Success(StarMapMotionPolicyData())
+            )
         }
     }
 
