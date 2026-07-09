@@ -39,21 +39,21 @@ pub struct PlatformCapabilities {
 | 能力 | Linux Qt | Windows | Android | Harmony |
 |------|----------|---------|---------|---------|
 | IME preedit | ✓ | ✓ | ✓ | ✗ |
-| cursor anchor | ✗ (空桩) | ✓ | ✓ | ✗ |
+| cursor anchor | ✓ (Rust FFI) | ✓ | ✓ | ✗ |
 | replacement commit | ✓ | ✗ | ✗ | ✗ |
-| text animation | ✓ | ✓ | ✓ | ✗ |
-| smooth cursor | ✓ | ✓ | ✓ | ✗ |
-| reflow animation | ✓ | ✓ | ✓ | ✗ |
+| text animation | ✓ | ✗ | ✓ | ✗ |
+| smooth cursor | ✓ | ✗ | ✓ | ✗ |
+| reflow animation | ✓ | ✗ | ✓ | ✗ |
 | clipboard | ✓ | ✓ | ✓ | ✓ |
-| context menu | ✓ | ✓ | ✓ | ✓ |
+| context menu | ✓ (适配器) | ✗ | ✓ | ✓ |
 
 ### 工厂方法
 
 | 平台 | 工厂方法 | 说明 |
 |------|---------|------|
-| Linux Qt | `PlatformCapabilities::linux_qt()` | cursor_anchor 为空桩 |
+| Linux Qt | `PlatformCapabilities::linux_qt()` | IME query 已迁移到 Rust FFI 数据源 |
 | Android | `PlatformCapabilities::android()` | replacement_commit 未实现 |
-| Windows | `PlatformCapabilities::windows()` | replacement_commit 未实现 |
+| Windows | `PlatformCapabilities::windows()` | 动画/context_menu/transaction 未接入 Core |
 | Harmony | `PlatformCapabilities::harmony()` | 仅 clipboard + context_menu |
 
 ## 输入法
@@ -135,16 +135,17 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 |----|------|------|
 | Core | `AnimationDriveRequest` / `AnimationDriver` trait / `AnimationSuppressReason` 定义 | `core/.../animation_driver.rs` |
 | Core | `EditorVisualTransaction` / `AnimationMode` / `EditorEngine` | `core/.../transaction.rs` |
-| Linux Qt | QML AnimationTimer + EditorAnimationOverlay | `apps/Linux_qt/src/platform/linux_qt/animation_driver_adapter.rs` |
+| Linux Qt | AnimationDriverAdapter → QML EditorAnimationOverlay | `apps/Linux_qt/src/platform/linux_qt/animation_driver_adapter.rs` |
 | Windows | SujianAnimationController + SujianAnimationOverlay | `apps/windows/Editor/Animation/` |
 | Android | SujianEditorView animation layer | `apps/android/.../platform/AnimationDriver.kt` |
 
 ### Linux Qt 当前状态
 
 - 抑制/恢复状态管理已真实接入
-- drive_animation / cancel / finish 为空桩
-- 实际动画由 QML AnimationTimer + EditorAnimationOverlay 驱动
-- **迁移目标**：SujianEditorItem 通过 AnimationDriver 驱动动画
+- drive_animation 通过 QML visual_transaction_changed 信号驱动 EditorAnimationOverlay
+- cancel / finish 通过 QML explicit_clear_requested 信号驱动
+- 动画模式由 Core EditorVisualTransaction.animationMode 唯一决定
+- snapshotAnimation 模式 QML 侧降级为 systemSuppressed
 
 ## 同步网络能力
 
@@ -198,14 +199,22 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 - [x] 同步 capability 已由 Core `get_sync_capability()` 单一来源
 - [x] 错误提示已由 Core `message_key` + `MessageKeyMapper` 单一来源
 
+### 已完成（第二阶段）
+
+- [x] Linux Qt IME query 从 QML property 迁移到 Rust FFI 数据源（sujian_get_ime_query_data）
+- [x] Linux Qt context menu 从空桩迁移到适配器真实接入（context_menu_requested 信号）
+- [x] Linux Qt AnimationDriver 收敛：drive_animation/cancel/finish 已真实接入 QML overlay
+- [x] Windows IEditorTransactionBoundary 诚实化：重命名为 LocalStandaloneTransactionBoundary，UsesCoreEngine == false
+- [x] Windows PlatformCapabilities 诚实化：动画/context_menu 标记为 false
+
 ### 待迁移（大迁移，无法一次完成）
 
-- [ ] Linux Qt IME query 从 QML property 迁移到 CursorAnchorAdapter 数据源
 - [ ] Linux Qt IME cursor update 从 cpp! 宏迁移到 CursorAnchorAdapter
 - [ ] Linux Qt 剪贴板从 cpp! 宏迁移到 ClipboardAndFocusAdapter
 - [ ] Linux Qt 焦点从 cpp! 宏迁移到 ClipboardAndFocusAdapter
-- [ ] Linux Qt 动画驱动从 QML signal 迁移到 AnimationDriver
 - [ ] Windows SujianEditor 正文变更走 Core EditorEngine / EditorTransaction
+- [ ] Windows 动画接入 Core visual transaction
+- [ ] Windows context menu 通过适配器接入
 - [ ] Windows EnvelopeResult 对齐 Core ResultEnvelope schema (messageKey/messageArgs)
 - [ ] Windows 桥接从裸 JSON envelope 收口到 typed DTO / typed error
 - [ ] Android PlatformAdapterRegistry.initialize() 接入启动流程
