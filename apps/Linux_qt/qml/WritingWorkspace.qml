@@ -896,12 +896,22 @@ Rectangle {
                                      && !editorScroll.editorAnimationSuppressed
                             radius: 1
 
-                            onXChanged: opacity = 1.0
-                            onYChanged: opacity = 1.0
-                            onHeightChanged: opacity = 1.0
+                            onXChanged: {
+                                opacity = 1.0
+                                cursorBlinkTimer.restart()
+                            }
+                            onYChanged: {
+                                opacity = 1.0
+                                cursorBlinkTimer.restart()
+                            }
+                            onHeightChanged: {
+                                opacity = 1.0
+                                cursorBlinkTimer.restart()
+                            }
                         }
 
                         // 光标闪烁 Timer - 跟随光标矩形放在编辑器内部
+                        // 位置变化时通过 restart() 重置 blink phase，避免移动后立即闪烁
                         Timer {
                             id: cursorBlinkTimer
                             interval: 530
@@ -933,6 +943,11 @@ Rectangle {
                         repeat: true
                         onTriggered: {
                             sujianEditor.tick_cursor_animation()
+                            // 动画进行中保持光标可见，重置 blink phase
+                            if (sujianCursorRect.opacity < 0.5) {
+                                sujianCursorRect.opacity = 1.0
+                            }
+                            cursorBlinkTimer.restart()
                         }
                     }
 
@@ -1096,6 +1111,15 @@ Rectangle {
                         ""
                     );
                 }
+            }
+        }
+    }
+
+    Connections {
+        target: syncBackend
+        function onSync_status_changed() {
+            if (syncBackend && syncBackend.sync_status === "syncing") {
+                editorController.saveCurrentChapter()
             }
         }
     }

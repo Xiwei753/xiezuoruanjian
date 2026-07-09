@@ -681,7 +681,12 @@ impl SujianEditorItem {
         let max_y = (scroll_y + vp_h + overscan).min(content_h.max(vp_h));
         let buffer_h = max_y - min_y;
 
-        let miss_reason = self.scroll_buffer_miss_reason(scroll_y, vp_h, content_h, dpr);
+        let miss_reason = if self.render_dirty {
+            self.scroll_buffer_miss_reason(scroll_y, vp_h, content_h, dpr)
+                .or(Some("render_dirty_force"))
+        } else {
+            self.scroll_buffer_miss_reason(scroll_y, vp_h, content_h, dpr)
+        };
 
         let Some(miss_reason) = miss_reason else {
             self.render_dirty = false;

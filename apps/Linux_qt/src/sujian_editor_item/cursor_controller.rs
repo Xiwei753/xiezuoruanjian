@@ -226,7 +226,7 @@ impl CursorController {
         }
 
         CursorUpdateResult {
-            ime_needs_update: position_changed,
+            ime_needs_update: position_changed || scroll_changed,
             needs_repaint: pos_changed || self.animation.is_some(),
         }
     }

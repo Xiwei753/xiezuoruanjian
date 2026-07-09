@@ -321,8 +321,13 @@ class EditorViewModel(
                 return when (result) {
                     is com.xiwei.sujian.data.BridgeResult.Success -> {
                         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
+                        val pending = pendingSaveContent
                         pendingSaveContent = null
-                        true
+                        if (pending != null && pending != content) {
+                            performSave(pending, isAutoSave = true)
+                        } else {
+                            true
+                        }
                     }
                     is com.xiwei.sujian.data.BridgeResult.Error -> {
                         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
@@ -388,6 +393,18 @@ class EditorViewModel(
         super.onCleared()
         autoSaveJob?.cancel()
         // Best-effort flush on ViewModel destruction.
+        // Save current chapter content before stats flush.
+        try {
+            val pid = projectId
+            val vid = volumeId
+            val cid = chapterId
+            val content = _uiState.value.content
+            if (pid != null && vid != null && cid != null && content.isNotEmpty()) {
+                workspaceRepository.saveChapterContent(pid, vid, cid, content)
+            }
+        } catch (_: Exception) {
+            // Best-effort; non-critical
+        }
         // flushWritingStats also triggers a Core-level flush cycle.
         try {
             workspaceRepository.flushWritingStats()
