@@ -6,8 +6,12 @@
 //
 // 此接口定义 Core editor transaction 的调用边界。
 // SujianEditor 通过此接口委托正文变更，不再自己直接操作 _lines。
-// 当前默认实现（LocalEditorTransactionBoundary）仍使用本地 _lines 操作，
-// 但新增编辑路径必须通过此接口，禁止新增 UI 自己改正文路径。
+//
+// ⚠️ 当前唯一实现 LocalStandaloneTransactionBoundary 是本地独立实现，
+//    未接入 Core EditorEngine（UsesCoreEngine == false）。
+//    它做基本字符串操作，功能正确但不含 Core 语义（undo stack、visual transaction 等）。
+//    新增编辑路径必须通过 IEditorTransactionBoundary，不允许绕过。
+//    接入 Core EditorEngine 后应替换为 CoreEditorTransactionBoundary 实现。
 
 using System;
 
@@ -78,13 +82,18 @@ namespace Sujian.Windows.Editor
     }
 
     /// <summary>
-    /// 本地回退实现 — 使用 SujianEditor 内部 _lines 操作
+    /// 本地独立实现 — 未接入 Core EditorEngine
     ///
-    /// TODO(收口): 迁移到 Core EditorEngine 实现。
-    /// 当前保留此回退以确保编辑功能正常。
+    /// ⚠️ 此实现做基本字符串操作，功能正确但不包含 Core 语义：
+    /// - 无 Core undo/redo stack
+    /// - 无 Core visual transaction 生成
+    /// - 无 Core animation mode 决策
+    ///
+    /// UsesCoreEngine == false 明确标识此实现不走 Core 引擎。
+    /// 接入 Core 后应替换为 CoreEditorTransactionBoundary。
     /// 新增编辑路径必须通过 IEditorTransactionBoundary，不允许绕过。
     /// </summary>
-    public sealed class LocalEditorTransactionBoundary : IEditorTransactionBoundary
+    public sealed class LocalStandaloneTransactionBoundary : IEditorTransactionBoundary
     {
         public bool UsesCoreEngine => false;
 
