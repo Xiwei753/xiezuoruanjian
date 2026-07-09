@@ -17,33 +17,34 @@ namespace Sujian.Platform
     /// - IME preedit: CoreTextEditContext composition/commit ✓
     /// - cursor anchor: CoreTextEditContext + candidate window anchoring ✓
     /// - replacement commit: CoreTextEditContext 未实现 replacement range commit ✗
-    /// - text animation: Core visual transaction → SujianAnimationOverlay ✓
-    /// - smooth cursor: cursor blink + animation ✓
-    /// - reflow animation: Core reflow visual transaction → overlay ✓
+    /// - text animation: SujianAnimationOverlay 未接入 Core visual transaction ✗
+    /// - smooth cursor: cursor blink 仅有闪烁，无平滑移动动画 ✗
+    /// - reflow animation: 未接入 Core reflow visual transaction ✗
     /// - clipboard: Windows.ApplicationModel.DataTransfer.Clipboard ✓
-    /// - context menu: WinUI 3 context menu ✓
+    /// - context menu: WinUI 3 context menu 未通过适配器接入 ✗
+    /// - IEditorTransactionBoundary: LocalStandaloneTransactionBoundary (UsesCoreEngine == false)
     /// </summary>
     public class PlatformCapabilities
     {
         public bool SupportsImePreedit { get; init; } = true;
         public bool SupportsCursorAnchor { get; init; } = true;
         public bool SupportsReplacementCommit { get; init; } = false;
-        public bool SupportsTextAnimation { get; init; } = true;
-        public bool SupportsSmoothCursor { get; init; } = true;
-        public bool SupportsReflowAnimation { get; init; } = true;
+        public bool SupportsTextAnimation { get; init; } = false;
+        public bool SupportsSmoothCursor { get; init; } = false;
+        public bool SupportsReflowAnimation { get; init; } = false;
         public bool SupportsClipboard { get; init; } = true;
-        public bool SupportsContextMenu { get; init; } = true;
+        public bool SupportsContextMenu { get; init; } = false;
 
         public static PlatformCapabilities Windows() => new()
         {
             SupportsImePreedit = true,
             SupportsCursorAnchor = true,
             SupportsReplacementCommit = false,
-            SupportsTextAnimation = true,
-            SupportsSmoothCursor = true,
-            SupportsReflowAnimation = true,
+            SupportsTextAnimation = false,
+            SupportsSmoothCursor = false,
+            SupportsReflowAnimation = false,
             SupportsClipboard = true,
-            SupportsContextMenu = true,
+            SupportsContextMenu = false,
         };
 
         public bool HasAnyAnimationSupport() =>
