@@ -7,9 +7,13 @@
 //! - should_suppress_animation / notify_animation_suppressed / resumed 已真实接入
 //! - drive_animation() 通过 item_ptr 触发 QML visual_transaction_changed signal
 //! - cancel_all_animations / finish_all_animations 通过 item_ptr 触发 explicit_clear_requested
+//! - QML EditorAnimationOverlay 消费 visual_transaction_changed 信号渲染动画，
+//!   动画模式由 Core EditorVisualTransaction.animationMode 唯一决定
 //!
-//! 待完成迁移：
-//! - QML AnimationTimer / requestAnimationFrame 仍为独立路径，未完全收敛到 drive_animation
+//! 当前架构：
+//! - drive_animation() → QML visual_transaction_changed → EditorAnimationOverlay 渲染
+//! - 这是已收敛的动画主路径，无独立 AnimationTimer 或 requestAnimationFrame 旁路
+//! - snapshotAnimation 模式 QML 侧降级为 systemSuppressed（无渲染器）
 
 use cpp::cpp;
 use std::sync::Mutex;
