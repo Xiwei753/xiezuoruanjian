@@ -3,22 +3,28 @@
 //! 坐标填充、帧驱动、QML overlay 绘制、暂停策略收敛到此。
 //! SujianEditorItem 不直接管理动画状态，只通过此适配器。
 //!
-//! TODO(平台交互收口): drive_animation/cancel_all_animations/finish_all_animations
-//! 当前为空桩。实际动画驱动由 QML AnimationTimer + EditorAnimationOverlay 完成。
-//! 迁移计划：SujianEditorItem 在收到 Core visual transaction 后通过此适配器驱动动画，
-//! 而非直接发射 QML signal 让 QML timer 驱动。
+//! 已完成迁移：
+//! - should_suppress_animation / notify_animation_suppressed / resumed 已真实接入
+//! - drive_animation() 通过 item_ptr 触发 QML visual_transaction_changed signal
+//! - cancel_all_animations / finish_all_animations 通过 item_ptr 触发 explicit_clear_requested
+//!
+//! 待完成迁移：
+//! - QML AnimationTimer / requestAnimationFrame 仍为独立路径，未完全收敛到 drive_animation
 
+use cpp::cpp;
+use std::sync::Mutex;
 use writer_core::platform_interaction::animation_driver::{
     AnimationDriveRequest, AnimationDriver, AnimationSuppressReason,
 };
 
-/// Linux Qt AnimationDriver 实现
-///
-/// 抑制/恢复状态管理已真实接入（should_suppress_animation / notify_animation_suppressed / resumed）。
-/// 帧驱动和动画控制仍为空桩（实际由 QML AnimationTimer / requestAnimationFrame 驱动）。
+cpp! {{
+    #include <QtQuick/QQuickItem>
+}}
+
 pub struct LinuxQtAnimationDriver {
     suppressed: bool,
     suppress_reason: Option<AnimationSuppressReason>,
+    item_ptr: Mutex<*mut std::ffi::c_void>,
 }
 
 impl LinuxQtAnimationDriver {
@@ -26,6 +32,13 @@ impl LinuxQtAnimationDriver {
         Self {
             suppressed: false,
             suppress_reason: None,
+            item_ptr: Mutex::new(std::ptr::null_mut()),
+        }
+    }
+
+    pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
+        if let Ok(mut guard) = self.item_ptr.lock() {
+            *guard = ptr;
         }
     }
 }
@@ -36,10 +49,23 @@ impl Default for LinuxQtAnimationDriver {
     }
 }
 
+unsafe impl Send for LinuxQtAnimationDriver {}
+unsafe impl Sync for LinuxQtAnimationDriver {}
+
 impl AnimationDriver for LinuxQtAnimationDriver {
-    fn drive_animation(&mut self, _request: AnimationDriveRequest) {
-        // TODO(平台交互收口): 接入 SujianEditorItem transaction 系统，
-        // 替代直接发射 visual_transaction_json_changed signal
+    fn drive_animation(&mut self, request: AnimationDriveRequest) {
+        if self.suppressed {
+            return;
+        }
+        if let Ok(guard) = self.item_ptr.lock() {
+            let item_ptr = *guard;
+            if !item_ptr.is_null() {
+                let _ = request;
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    QMetaObject::invokeMethod(item_ptr, "visual_transaction_changed");
+                });
+            }
+        }
     }
 
     fn should_suppress_animation(&self) -> bool {
@@ -61,10 +87,24 @@ impl AnimationDriver for LinuxQtAnimationDriver {
     }
 
     fn cancel_all_animations(&mut self) {
-        // TODO(平台交互收口): 接入 TextAnimationState，触发 QML overlay clear
+        if let Ok(guard) = self.item_ptr.lock() {
+            let item_ptr = *guard;
+            if !item_ptr.is_null() {
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    QMetaObject::invokeMethod(item_ptr, "explicit_clear_requested");
+                });
+            }
+        }
     }
 
     fn finish_all_animations(&mut self) {
-        // TODO(平台交互收口): 接入 TextAnimationState，触发 QML overlay finish
+        if let Ok(guard) = self.item_ptr.lock() {
+            let item_ptr = *guard;
+            if !item_ptr.is_null() {
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    QMetaObject::invokeMethod(item_ptr, "explicit_clear_requested");
+                });
+            }
+        }
     }
 }

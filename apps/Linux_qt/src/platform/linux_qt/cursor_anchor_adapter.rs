@@ -3,47 +3,50 @@
 //! QInputMethod::update 和 InputMethodQuery 收敛到此。
 //! SujianEditorItem 不直接调用 QInputMethod，只通过此适配器。
 //!
-//! TODO(平台交互收口): 当前 IME query (handle_input_method_query) 在 qt_surface.rs C++ 侧
-//! 直接读取 QML property (cursor_rect_x/y, plain_text, cursor_position 等)。
-//! 最终目标：IME query 所需的 cursor rect、surrounding text、selection、anchor
-//! 全部由 CursorAnchorAdapter 数据生成，C++ 侧只负责 QInputMethodQueryEvent 协议翻译。
-//! 迁移路径：qt_surface.rs handle_input_method_query → 调用此适配器 → 读取 CursorAnchorRequest
+//! 已完成迁移：
+//! - notify_cursor_anchor_update() 缓存 CursorAnchorRequest 数据
+//! - request_candidate_window_update() 触发 QInputMethod::update
+//! - is_input_method_visible() 查询 QInputMethod::isVisible()
+//!
+//! 待完成迁移：
+//! - qt_surface.rs handle_input_method_query() 仍直接读 QML property，
+//!   需改为从此适配器 last_request() 读取数据
 
+use cpp::cpp;
+use std::cell::UnsafeCell;
+use std::sync::Mutex;
 use writer_core::platform_interaction::cursor_anchor::{
     CursorAnchorAdapter, CursorAnchorRequest, CursorAnchorUpdateReason,
     NormalizedCursorRect,
 };
 
-/// Linux Qt CursorAnchorAdapter 实现
-///
-/// 当前状态：空桩。实际的 QInputMethod::update 调用在 ime_visual.rs 的
-/// update_ime_cursor_for_preedit() 中通过 cpp! 宏直接完成。
-/// IME query 响应在 qt_surface.rs 的 handle_input_method_query() 中直接读 QML property。
-///
-/// 迁移计划：
-/// 1. SujianEditorItem 在光标/选区/preedit 变化时调用 notify_cursor_anchor_update()
-/// 2. 此适配器缓存 CursorAnchorRequest 数据
-/// 3. qt_surface.rs handle_input_method_query() 从此适配器读取数据而非 QML property
-/// 4. ime_visual.rs update_ime_cursor_for_preedit() 通过此适配器触发 QInputMethod::update()
+cpp! {{
+    #include <QtGui/QInputMethod>
+    #include <QGuiApplication>
+    #include <QtQuick/QQuickItem>
+}}
+
 pub struct LinuxQtCursorAnchorAdapter {
-    item_ptr: *mut std::ffi::c_void,
-    last_request: Option<CursorAnchorRequest>,
+    item_ptr: Mutex<*mut std::ffi::c_void>,
+    last_request: Mutex<Option<CursorAnchorRequest>>,
 }
 
 impl LinuxQtCursorAnchorAdapter {
     pub fn new(item_ptr: *mut std::ffi::c_void) -> Self {
         Self {
-            item_ptr,
-            last_request: None,
+            item_ptr: Mutex::new(item_ptr),
+            last_request: Mutex::new(None),
         }
     }
 
-    pub fn set_item_ptr(&mut self, ptr: *mut std::ffi::c_void) {
-        self.item_ptr = ptr;
+    pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
+        if let Ok(mut guard) = self.item_ptr.lock() {
+            *guard = ptr;
+        }
     }
 
-    pub fn last_request(&self) -> Option<&CursorAnchorRequest> {
-        self.last_request.as_ref()
+    pub fn last_request(&self) -> Option<CursorAnchorRequest> {
+        self.last_request.lock().ok().and_then(|g| g.clone())
     }
 }
 
@@ -56,16 +59,41 @@ impl CursorAnchorAdapter for LinuxQtCursorAnchorAdapter {
         request: &CursorAnchorRequest,
         _reason: CursorAnchorUpdateReason,
     ) {
-        // TODO(平台交互收口): 缓存 request 数据，供未来 IME query 使用
-        let _ = request;
+        if let Ok(mut guard) = self.last_request.lock() {
+            *guard = Some(request.clone());
+        }
+
+        if let Ok(guard) = self.item_ptr.lock() {
+            let item_ptr = *guard;
+            if !item_ptr.is_null() {
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    QInputMethod* im = QGuiApplication::inputMethod();
+                    if (im) {
+                        im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
+                    }
+                });
+            }
+        }
     }
 
     fn request_candidate_window_update(&self, _cursor_rect: &NormalizedCursorRect) {
-        // TODO(平台交互收口): 触发 QInputMethod::update(Qt::ImCursorRectangle)
+        if let Ok(guard) = self.item_ptr.lock() {
+            let item_ptr = *guard;
+            if !item_ptr.is_null() {
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    QInputMethod* im = QGuiApplication::inputMethod();
+                    if (im) {
+                        im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle);
+                    }
+                });
+            }
+        }
     }
 
     fn is_input_method_visible(&self) -> bool {
-        // TODO(平台交互收口): 查询 QInputMethod::isVisible()
-        false
+        cpp!(unsafe [] -> bool as "bool" {
+            QInputMethod* im = QGuiApplication::inputMethod();
+            return im ? im->isVisible() : false;
+        })
     }
 }

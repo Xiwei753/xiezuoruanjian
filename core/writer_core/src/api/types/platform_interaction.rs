@@ -63,7 +63,7 @@ mod tests {
         let caps = crate::platform_interaction::PlatformCapabilities::linux_qt();
         let dto: PlatformCapabilitiesDto = caps.into();
         assert!(dto.supports_ime_preedit);
-        assert!(!dto.supports_cursor_anchor);
+        assert!(dto.supports_cursor_anchor);
         assert!(dto.supports_replacement_commit);
         assert!(dto.supports_text_animation);
     }

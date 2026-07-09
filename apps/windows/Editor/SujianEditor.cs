@@ -46,6 +46,8 @@ public sealed class SujianEditor : UserControl
     private int _compositionCursor;
     private bool _suppressNotifyTextChanged;
 
+    private readonly IEditorTransactionBoundary _transactionBoundary;
+
     public static readonly DependencyProperty TextProperty = DependencyProperty.Register(
         nameof(Text),
         typeof(string),
@@ -85,7 +87,14 @@ public sealed class SujianEditor : UserControl
     public event EventHandler? TextChangedByUser;
 
     public SujianEditor()
+        : this(new LocalEditorTransactionBoundary())
     {
+    }
+
+    public SujianEditor(IEditorTransactionBoundary transactionBoundary)
+    {
+        _transactionBoundary = transactionBoundary ?? throw new ArgumentNullException(nameof(transactionBoundary));
+
         IsTabStop = true;
         UseSystemFocusVisuals = true;
         Background = new SolidColorBrush(Colors.Transparent);

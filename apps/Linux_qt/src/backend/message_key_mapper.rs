@@ -80,6 +80,14 @@ pub fn resolve_message_key(message_key: &str) -> &'static str {
         "sync.result.git_repo_not_workspace" => "sync.result.git_repo_not_workspace",
         "sync.result.directory_not_empty_not_workspace" => "sync.result.directory_not_empty_not_workspace",
         "sync.result.configured_not_tested" => "sync.result.configured_not_tested",
+        "sync.result.token_missing" => "sync.result.token_missing",
+        "sync.result.token_invalid" => "sync.result.token_invalid",
+        "sync.result.token_permission_denied" => "sync.result.token_permission_denied",
+        "sync.result.repo_not_found_or_no_permission" => "sync.result.repo_not_found_or_no_permission",
+        "sync.result.auth_failed" => "sync.result.auth_failed",
+        "sync.result.network_failed" => "sync.result.network_failed",
+        "sync.result.non_fast_forward" => "sync.result.non_fast_forward",
+        "sync.result.unrelated_histories" => "sync.result.unrelated_histories",
         _ => "error.other",
     }
 }

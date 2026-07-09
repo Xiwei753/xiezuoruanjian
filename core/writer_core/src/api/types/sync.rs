@@ -247,6 +247,7 @@ pub struct SyncResultDto {
     pub commit_hash: Option<String>,
     pub error: Option<String>,
     pub error_category: Option<String>,
+    pub message_key: Option<String>,
     pub first_sync_mode: String,
 }
 
@@ -264,6 +265,7 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
             commit_hash: r.commit_hash,
             error: r.error,
             error_category: r.error_category,
+            message_key: r.message_key,
             first_sync_mode: first_sync_mode_to_wire(&r.first_sync_mode),
         }
     }

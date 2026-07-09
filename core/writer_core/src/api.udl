@@ -226,6 +226,7 @@ dictionary SyncResultDto {
     string? commit_hash;
     string? error;
     string? error_category;
+    string? message_key;
     string first_sync_mode;
 };
 

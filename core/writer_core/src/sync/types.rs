@@ -198,6 +198,7 @@ pub struct SyncResult {
     pub commit_hash: Option<String>,
     pub error: Option<String>,
     pub error_category: Option<String>,
+    pub message_key: Option<String>,
     pub conflict_summary: Option<SyncConflictSummary>,
     pub first_sync_mode: FirstSyncMode,
     pub settings_conflicts: Option<Vec<SettingConflictDetail>>,
@@ -220,6 +221,7 @@ impl SyncResult {
             commit_hash: None,
             error: None,
             error_category: None,
+            message_key: None,
             conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
             settings_conflicts: None,
@@ -230,6 +232,7 @@ impl SyncResult {
     }
 
     pub fn error(status: SyncStatus, first_sync_mode: FirstSyncMode, error: String, error_category: Option<String>) -> Self {
+        let message_key = error_category.as_deref().map(|cat| sync_error_category_to_message_key(cat));
         Self {
             status,
             uploaded_files: Vec::new(),
@@ -238,7 +241,8 @@ impl SyncResult {
             conflicts: Vec::new(),
             commit_hash: None,
             error: Some(error),
-            error_category,
+            error_category: error_category.clone(),
+            message_key,
             conflict_summary: None,
             first_sync_mode,
             settings_conflicts: None,
@@ -257,7 +261,8 @@ impl SyncResult {
             conflicts,
             commit_hash: None,
             error: Some(error),
-            error_category,
+            error_category: error_category.clone(),
+            message_key: error_category.as_deref().map(|cat| sync_error_category_to_message_key(cat)),
             conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
             settings_conflicts: None,
@@ -265,6 +270,24 @@ impl SyncResult {
             remote_deletes: Vec::new(),
             overwritten_files: Vec::new(),
         }
+    }
+}
+
+fn sync_error_category_to_message_key(category: &str) -> String {
+    match category {
+        "conflict" => "sync.result.conflict_summary".to_string(),
+        "remote_branch_missing" => "sync.result.branch_recovered_summary".to_string(),
+        "token_missing" => "sync.result.token_missing".to_string(),
+        "token_invalid" => "sync.result.token_invalid".to_string(),
+        "token_permission_denied" => "sync.result.token_permission_denied".to_string(),
+        "repo_not_found_or_no_permission" => "sync.result.repo_not_found_or_no_permission".to_string(),
+        "auth_failed" => "sync.result.auth_failed".to_string(),
+        "network_failed" => "sync.result.network_failed".to_string(),
+        "non_fast_forward" => "sync.result.non_fast_forward".to_string(),
+        "unrelated_histories" => "sync.result.unrelated_histories".to_string(),
+        "not_configured" => "sync.result.configured_not_tested".to_string(),
+        "dirty_repo" => "sync.result.dirty_repo_blocked".to_string(),
+        _ => "sync.result.generic_error".to_string(),
     }
 }
 

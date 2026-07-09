@@ -17,7 +17,10 @@ internal sealed class EnvelopeResult
     public bool Success { get; set; }
     public JsonElement? Data { get; set; }
     public string? ErrorCode { get; set; }
+    public string? MessageKey { get; set; }
+    public Dictionary<string, string>? MessageArgs { get; set; }
     public string? UserMessage { get; set; }
+    public string? RawError { get; set; }
 }
 
 public sealed class WriterCoreBridge
@@ -120,14 +123,42 @@ public sealed class WriterCoreBridge
     private static EnvelopeResult ParseEnvelope(string? json)
     {
         if (json is null) return new EnvelopeResult { Success = false, ErrorCode = "NULL_RESPONSE" };
-        return JsonSerializer.Deserialize<EnvelopeResult>(json, new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
-            ?? new EnvelopeResult { Success = false, ErrorCode = "PARSE_ERROR" };
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        var result = new EnvelopeResult
+        {
+            Success = root.TryGetProperty("success", out var succ) && succ.GetBoolean(),
+            ErrorCode = root.TryGetProperty("errorCode", out var ec) ? ec.GetString() : null,
+            MessageKey = root.TryGetProperty("messageKey", out var mk) ? mk.GetString() : null,
+            RawError = root.TryGetProperty("rawError", out var re) ? re.GetString() : null,
+        };
+
+        if (root.TryGetProperty("messageArgs", out var ma) && ma.ValueKind == JsonValueKind.Object)
+        {
+            result.MessageArgs = new Dictionary<string, string>();
+            foreach (var prop in ma.EnumerateObject())
+            {
+                result.MessageArgs[prop.Name] = prop.Value.GetString() ?? "";
+            }
+        }
+
+        if (root.TryGetProperty("data", out var data) && data.ValueKind != JsonValueKind.Null)
+        {
+            result.Data = data.Clone();
+        }
+
+        return result;
     }
 
     private static void ThrowIfFailed(EnvelopeResult env)
     {
         if (!env.Success)
-            throw new WriterCoreException(env.ErrorCode ?? "UNKNOWN", env.UserMessage ?? "Unknown error");
+            throw new WriterCoreException(
+                env.ErrorCode ?? "UNKNOWN",
+                env.MessageKey,
+                env.MessageArgs,
+                env.UserMessage ?? env.RawError ?? "Unknown error");
     }
 
     public int InitWorkspace(string path)
@@ -516,5 +547,19 @@ public sealed class LocalSettings
 public sealed class WriterCoreException : Exception
 {
     public string Code { get; }
-    public WriterCoreException(string code, string message) : base($"[{code}] {message}") { Code = code; }
+    public string? MessageKey { get; }
+    public Dictionary<string, string>? MessageArgs { get; }
+
+    public WriterCoreException(string code, string? messageKey, Dictionary<string, string>? messageArgs, string message)
+        : base($"[{code}] {message}")
+    {
+        Code = code;
+        MessageKey = messageKey;
+        MessageArgs = messageArgs;
+    }
+
+    public WriterCoreException(string code, string message) : base($"[{code}] {message}")
+    {
+        Code = code;
+    }
 }

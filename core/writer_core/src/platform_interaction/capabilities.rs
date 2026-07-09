@@ -34,18 +34,16 @@ impl PlatformCapabilities {
     /// 已真实接入的能力：
     /// - IME preedit: SujianEventFilter → FFI → EditorInputController 完整链路
     /// - replacement commit: fcitx5 拼音修正走 sujian_ime_replace_and_commit
+    /// - cursor anchor: LinuxQtCursorAnchorAdapter → QInputMethod::update
     /// - text animation: Core visual transaction → QML EditorAnimationOverlay
     /// - smooth cursor: QML Rectangle cursor + cursor_rect_changed signal
     /// - reflow animation: Core reflow visual transaction → overlay
-    /// - clipboard: SujianEditorItem::clipboard_copy/paste via QClipboard
+    /// - clipboard: LinuxQtClipboardFocusAdapter → QClipboard
     /// - context menu: QML context menu
-    ///
-    /// 未真实接入：
-    /// - cursor_anchor: CursorAnchorAdapter 为空桩，IME query 直接读 QML property
     pub fn linux_qt() -> Self {
         Self {
             supports_ime_preedit: true,
-            supports_cursor_anchor: false,
+            supports_cursor_anchor: true,
             supports_replacement_commit: true,
             supports_text_animation: true,
             supports_smooth_cursor: true,
@@ -188,7 +186,7 @@ mod tests {
         assert!(caps.supports_reflow_animation);
         assert!(caps.supports_clipboard);
         assert!(caps.supports_context_menu);
-        assert!(!caps.supports_cursor_anchor);
+        assert!(caps.supports_cursor_anchor);
     }
 
     #[test]
@@ -222,7 +220,7 @@ mod tests {
 
     #[test]
     fn platform_kind_default_capabilities() {
-        assert!(!PlatformKind::LinuxQt.default_capabilities().supports_cursor_anchor);
+        assert!(PlatformKind::LinuxQt.default_capabilities().supports_cursor_anchor);
         assert!(!PlatformKind::Android.default_capabilities().supports_replacement_commit);
         assert!(!PlatformKind::Harmony.default_capabilities().supports_text_animation);
         assert!(!PlatformKind::Unknown.default_capabilities().has_any_animation_support());
