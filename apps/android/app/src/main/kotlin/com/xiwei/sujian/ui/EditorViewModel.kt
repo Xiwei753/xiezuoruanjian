@@ -263,7 +263,11 @@ class EditorViewModel(
             if (!_uiState.value.settings.autoSaveEnabled) return@launch
             delay(delayMs)
             if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
-                performSave(content, isAutoSave = true)
+                if (content.trim().isEmpty() && previousText.trim().isNotEmpty()) {
+                    clearChapterContent()
+                } else {
+                    performSave(content, isAutoSave = true)
+                }
             }
         }
     }
@@ -301,68 +305,119 @@ class EditorViewModel(
         return deferred
     }
 
+    fun clearChapterContent() {
+        val pid = projectId ?: return
+        val vid = volumeId ?: return
+        val cid = chapterId ?: return
+
+        viewModelScope.launch {
+            saveMutex.withLock {
+                try {
+                    val result = workspaceRepository.clearChapterContent(pid, vid, cid)
+                    when (result) {
+                        is com.xiwei.sujian.data.BridgeResult.Success -> {
+                            _uiState.value = _uiState.value.copy(
+                                content = "",
+                                saveStatus = SaveStatus.Saved
+                            )
+                            previousText = ""
+                        }
+                        is com.xiwei.sujian.data.BridgeResult.Error -> {
+                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                            if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
+                                _events.send(EditorEvent.ShowSaveFailedDialog(
+                                    getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)))
+                            } else {
+                                _events.send(EditorEvent.ShowSaveFailedDialog(
+                                    getApplication<Application>().getString(R.string.error_save_failed, result.message)))
+                            }
+                        }
+                        com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                        }
+                    }
+                } catch (e: Throwable) {
+                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                    _events.send(EditorEvent.ShowSaveFailedDialog(
+                        getApplication<Application>().getString(R.string.error_save_exception, e.message ?: "")))
+                }
+            }
+        }
+    }
+
     private suspend fun performSave(content: String, isAutoSave: Boolean): Boolean {
         val pid = projectId
         val vid = volumeId
         val cid = chapterId
         if (pid == null || vid == null || cid == null) return false
 
-        saveMutex.withLock {
-            val currentState = _uiState.value
-            if (currentState.saveStatus == SaveStatus.Saving) {
-                pendingSaveContent = content
-                return false
-            }
+        var currentContent = content
+        var currentIsAutoSave = isAutoSave
+        var lastSaveSuccess = false
 
-            _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
+        while (true) {
+            val contentToSave = currentContent
+            saveMutex.withLock {
+                val currentState = _uiState.value
+                if (currentState.saveStatus == SaveStatus.Saving) {
+                    pendingSaveContent = contentToSave
+                    return false
+                }
 
-            try {
-                val result = workspaceRepository.saveChapterContent(pid, vid, cid, content)
-                return when (result) {
-                    is com.xiwei.sujian.data.BridgeResult.Success -> {
-                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
-                        val pending = pendingSaveContent
-                        pendingSaveContent = null
-                        if (pending != null && pending != content) {
-                            performSave(pending, isAutoSave = true)
-                        } else {
-                            true
-                        }
-                    }
-                    is com.xiwei.sujian.data.BridgeResult.Error -> {
-                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
-                            if (!isAutoSave) {
-                                _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)))
+                _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
+
+                try {
+                    val result = workspaceRepository.saveChapterContent(pid, vid, cid, contentToSave)
+                    when (result) {
+                        is com.xiwei.sujian.data.BridgeResult.Success -> {
+                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
+                            val pending = pendingSaveContent
+                            pendingSaveContent = null
+                            if (pending != null && pending != contentToSave) {
+                                currentContent = pending
+                                currentIsAutoSave = true
+                                lastSaveSuccess = true
                             } else {
-                                emitErrorEvent(getApplication<Application>().getString(R.string.error_empty_overwrite_save_blocked))
-                            }
-                        } else {
-                            if (!isAutoSave) {
-                                _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_failed, result.message)))
-                            } else {
-                                emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_failed, result.message))
+                                lastSaveSuccess = true
+                                return true
                             }
                         }
-                        false
-                    }
-                    com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
-                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        if (!isAutoSave) {
-                            _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_native_not_loaded)))
+                        is com.xiwei.sujian.data.BridgeResult.Error -> {
+                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                            if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
+                                if (!currentIsAutoSave) {
+                                    _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)))
+                                } else {
+                                    emitErrorEvent(getApplication<Application>().getString(R.string.error_empty_overwrite_save_blocked))
+                                }
+                            } else {
+                                if (!currentIsAutoSave) {
+                                    _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_failed, result.message)))
+                                } else {
+                                    emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_failed, result.message))
+                                }
+                            }
+                            return false
                         }
-                        false
+                        com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                            if (!currentIsAutoSave) {
+                                _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_native_not_loaded)))
+                            }
+                            return false
+                        }
                     }
+                } catch (e: Throwable) {
+                    _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                    if (!currentIsAutoSave) {
+                        _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_exception, e.message ?: "")))
+                    } else {
+                        emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_exception, e.message ?: ""))
+                    }
+                    return false
                 }
-            } catch (e: Throwable) {
-                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                if (!isAutoSave) {
-                    _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_exception, e.message ?: "")))
-                } else {
-                    emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_exception, e.message ?: ""))
-                }
-                return false
             }
+            if (!lastSaveSuccess) return false
         }
     }
 

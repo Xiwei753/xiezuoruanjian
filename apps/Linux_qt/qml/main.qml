@@ -385,7 +385,8 @@ ApplicationWindow {
             sourceComponent: CreativeHub {
                 dt: designTokens
                 backendRef: projectBackend
-                editorBackendRef: editorBackend
+            editorBackendRef: editorBackend
+            editorControllerRef: editorController
                 starmapBackendRef: starmapBackend
                 starMapController: globalStarMapController
                 appState: window.appState

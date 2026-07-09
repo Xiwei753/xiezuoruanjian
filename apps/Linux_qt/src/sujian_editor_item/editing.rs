@@ -9,11 +9,15 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn tick_cursor_animation(&mut self) {
-        if self.cursor_ctrl.animation.is_none() {
-            return;
+        let still_animating = if self.cursor_ctrl.animation.is_some() {
+            self.cursor_ctrl.tick_animation()
+        } else {
+            false
+        };
+        let blink_changed = self.cursor_ctrl.tick_blink();
+        if still_animating || blink_changed {
+            self.cursor_rect_changed();
         }
-        let still_animating = self.cursor_ctrl.tick_animation();
-        self.cursor_rect_changed();
         if still_animating {
             self.request_frame_update();
         }

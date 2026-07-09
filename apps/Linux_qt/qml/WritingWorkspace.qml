@@ -883,6 +883,7 @@ Rectangle {
                         }
 
                         // QML 光标 - 作为 SujianEditorItem 子项，坐标系与编辑器一致
+                        // blink phase 由 Rust CursorController 管理，通过 cursor_blink_visible 属性驱动
                         Rectangle {
                             id: sujianCursorRect
                             x: sujianEditor.cursor_rect_x
@@ -890,40 +891,11 @@ Rectangle {
                             width: 2
                             height: sujianEditor.cursor_rect_height
                             color: sujianEditor.cursor_color
-                            visible: sujianEditor.cursor_visible
+                            visible: sujianEditor.cursor_blink_visible
                                      && sujianEditor.editor_enabled
                                      && !sujianEditor.has_selection
                                      && !editorScroll.editorAnimationSuppressed
                             radius: 1
-
-                            onXChanged: {
-                                opacity = 1.0
-                                cursorBlinkTimer.restart()
-                            }
-                            onYChanged: {
-                                opacity = 1.0
-                                cursorBlinkTimer.restart()
-                            }
-                            onHeightChanged: {
-                                opacity = 1.0
-                                cursorBlinkTimer.restart()
-                            }
-                        }
-
-                        // 光标闪烁 Timer - 跟随光标矩形放在编辑器内部
-                        // 位置变化时通过 restart() 重置 blink phase，避免移动后立即闪烁
-                        Timer {
-                            id: cursorBlinkTimer
-                            interval: 530
-                            running: sujianEditor.cursor_visible
-                                     && sujianEditor.editor_enabled
-                                     && !sujianEditor.has_selection
-                                     && !editorScroll.editorAnimationSuppressed
-                                     && sujianEditor.focus
-                            repeat: true
-                            onTriggered: {
-                                sujianCursorRect.opacity = sujianCursorRect.opacity > 0.5 ? 0.0 : 1.0
-                            }
                         }
                     }
 
@@ -934,20 +906,15 @@ Rectangle {
                         dt: root.dt
                     }
 
-                    // 光标动画 tick - 消费 Rust 侧 CursorController 的 visual_x/y 更新
+                    // 光标动画 tick - 消费 Rust 侧 CursorController 的 visual_x/y 更新和 blink phase
                     Timer {
                         id: cursorAnimationTick
                         interval: 16
-                        running: sujianEditor.smooth_cursor_enabled
-                                 && sujianEditor.editor_enabled
+                        running: sujianEditor.editor_enabled
+                                 && sujianEditor.focus
                         repeat: true
                         onTriggered: {
                             sujianEditor.tick_cursor_animation()
-                            // 动画进行中保持光标可见，重置 blink phase
-                            if (sujianCursorRect.opacity < 0.5) {
-                                sujianCursorRect.opacity = 1.0
-                            }
-                            cursorBlinkTimer.restart()
                         }
                     }
 

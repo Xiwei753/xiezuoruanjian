@@ -286,6 +286,10 @@ class EditorFragment : Fragment() {
         return viewModel.requestSave()
     }
 
+    fun clearChapterContent() {
+        viewModel.clearChapterContent()
+    }
+
     /**
      * 获取当前章节 ID
      */

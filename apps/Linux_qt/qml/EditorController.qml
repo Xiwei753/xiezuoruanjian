@@ -244,6 +244,34 @@ QtObject {
         }
     }
 
+    function flushActiveEditorBeforeSync() {
+        if (!backendRef || !chapterId || !projectId || !volumeId) return true;
+        if (saveGuardActive()) {
+            pendingAutoSaveAfterGuard = false;
+            return true;
+        }
+        var read = readEditorPlainText();
+        if (read.suspiciousEmpty) {
+            logWriterWarning("flush_before_sync_blocked_empty", "blocked suspicious empty save before sync");
+            return false;
+        }
+        var plainText = read.text;
+        if (plainText === lastSavedEditorText) return true;
+        var allowEmptyOverwrite = plainText.length === 0 && explicitEmptySavePending;
+        var result = backendRef.save_chapter(projectId, volumeId, chapterId, plainText, allowEmptyOverwrite);
+        if (result && result.success) {
+            lastSavedEditorText = plainText;
+            previousEditorText = plainText;
+            if (plainText.length === 0) {
+                explicitEmptySavePending = false;
+                lastPotentialExplicitClearAtMs = 0;
+            }
+            return true;
+        }
+        logWriterWarning("flush_before_sync_failed", "save failed before sync, blocking sync");
+        return false;
+    }
+
     // Unified save entry — always writes normalized plain text via backend.
     function saveCurrentChapter() {
         if (!backendRef || !chapterId || !projectId || !volumeId) return;

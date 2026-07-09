@@ -10,6 +10,9 @@
 
 use super::rendering::CursorAnimationState;
 use crate::editor::layout::CaretAffinity;
+use std::time::{Duration, Instant};
+
+const BLINK_INTERVAL_MS: u64 = 530;
 
 /// Isolated cursor visual state — no buffer, no layout, no QSG.
 ///
@@ -51,6 +54,11 @@ pub struct CursorController {
 
     // Snap control
     pub force_snap_next: bool,
+
+    // Blink state
+    pub blink_visible: bool,
+    pub blink_last_toggle: Instant,
+    pub blink_reset_requested: bool,
 }
 
 impl CursorController {
@@ -72,6 +80,9 @@ impl CursorController {
 
             animation: None,
             force_snap_next: false,
+            blink_visible: true,
+            blink_last_toggle: Instant::now(),
+            blink_reset_requested: false,
         }
     }
 
@@ -124,6 +135,7 @@ impl CursorController {
             self.animation = None;
             self.visual_x = cursor_x;
             self.visual_y = cursor_y;
+            self.blink_visible = true;
             if old_visible {
                 self.dirty = true;
             }
@@ -223,6 +235,8 @@ impl CursorController {
             (visual_x - old_x).abs() > 0.01 || (visual_y - old_y).abs() > 0.01 || !old_visible;
         if pos_changed {
             self.dirty = true;
+            self.blink_visible = true;
+            self.blink_last_toggle = Instant::now();
         }
 
         CursorUpdateResult {
@@ -253,6 +267,40 @@ impl CursorController {
             self.dirty = false;
             false
         }
+    }
+
+    /// Advance blink state. Returns true if blink state changed (needs QML update).
+    pub fn tick_blink(&mut self) -> bool {
+        if !self.visible {
+            if !self.blink_visible {
+                return false;
+            }
+            self.blink_visible = false;
+            return true;
+        }
+
+        if self.blink_reset_requested {
+            self.blink_visible = true;
+            self.blink_last_toggle = Instant::now();
+            self.blink_reset_requested = false;
+            return true;
+        }
+
+        let now = Instant::now();
+        let elapsed = now.duration_since(self.blink_last_toggle);
+        if elapsed >= Duration::from_millis(BLINK_INTERVAL_MS) {
+            self.blink_visible = !self.blink_visible;
+            self.blink_last_toggle = now;
+            return true;
+        }
+        false
+    }
+
+    /// Request blink phase reset (e.g. on cursor movement from QML side).
+    #[allow(dead_code)]
+    pub fn reset_blink(&mut self) {
+        self.blink_visible = true;
+        self.blink_last_toggle = Instant::now();
     }
 }
 
