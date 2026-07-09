@@ -206,6 +206,17 @@ class SettingsRepository(context: Context) {
         return syncBridge.performSync(config, forceSync)
     }
 
+    fun getSyncCapability(): SyncCapabilityData {
+        return when (val result = syncBridge.getSyncCapability()) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("Failed to get sync capability: ${result.message}")
+                SyncCapabilityData()
+            }
+            BridgeResult.NotLoaded -> SyncCapabilityData()
+        }
+    }
+
     /**
      * 保存设备信息到本地 SharedPreferences。
      * 包含 deviceId、deviceClass、platform，供同步和统计使用。

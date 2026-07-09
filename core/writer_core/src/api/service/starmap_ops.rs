@@ -100,6 +100,15 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    pub fn get_starmap_motion_policy(
+        &self,
+    ) -> ApiResult<crate::api::types::StarMapMotionPolicyDto> {
+        self.core()
+            .get_motion_policy()
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
     pub fn get_starmap_layout(
         &self,
         starmap_id: &str,

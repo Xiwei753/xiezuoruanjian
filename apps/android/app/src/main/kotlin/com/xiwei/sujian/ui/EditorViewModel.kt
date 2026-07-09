@@ -334,19 +334,21 @@ class EditorViewModel(
         saveCommandChannel.trySend(SaveCommand.Clear)
     }
 
+    private var lastSaveResult: Boolean = true
+
     private fun startSaveActor() {
         saveActorJob?.cancel()
         saveActorJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             for (cmd in saveCommandChannel) {
                 when (cmd) {
                     is SaveCommand.Save -> {
-                        performSave(cmd.content, isAutoSave = true)
+                        lastSaveResult = performSave(cmd.content, isAutoSave = true)
                     }
                     is SaveCommand.Clear -> {
-                        clearChapterContentInternal()
+                        lastSaveResult = clearChapterContentInternal()
                     }
                     is SaveCommand.Flush -> {
-                        cmd.reply.complete(true)
+                        cmd.reply.complete(lastSaveResult)
                     }
                 }
             }

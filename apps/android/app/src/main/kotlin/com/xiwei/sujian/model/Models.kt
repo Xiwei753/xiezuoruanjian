@@ -182,6 +182,13 @@ data class SyncState(
     @SerializedName("deleted_files") val deletedFiles: Set<String>? = emptySet()
 )
 
+data class SyncCapabilityData(
+    val canRun: Boolean = false,
+    val blockReasonCode: String? = null,
+    val blockMessageKey: String? = null,
+    val messageArgs: Map<String, String> = emptyMap()
+)
+
 enum class SyncStatus {
     @SerializedName("idle") Idle,
     @SerializedName("syncing") Syncing,

@@ -1,5 +1,6 @@
 package com.xiwei.sujian.data
 
+import com.xiwei.sujian.model.SyncCapabilityData
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncDiagnosticsResult
 import com.xiwei.sujian.model.SyncPlan
@@ -7,11 +8,6 @@ import com.xiwei.sujian.model.SyncResult
 import com.xiwei.sujian.model.SyncSecrets
 import com.xiwei.sujian.model.SyncState
 
-/**
- * 同步 领域 Bridge。
- *
- * 从 AppServiceBridge 拆出，负责同步相关操作。
- */
 class SyncBridge internal constructor(private val holder: WriterAppServiceHolder) {
     fun loadSyncConfig(): BridgeResult<SyncConfig> = holder.wrapResult {
         holder.service.loadSyncConfig().toModel()
@@ -31,6 +27,16 @@ class SyncBridge internal constructor(private val holder: WriterAppServiceHolder
 
     fun loadSyncState(): BridgeResult<SyncState> = holder.wrapResult {
         holder.service.loadSyncState().toModel()
+    }
+
+    fun getSyncCapability(): BridgeResult<SyncCapabilityData> = holder.wrapResult {
+        val dto = holder.service.getSyncCapability()
+        SyncCapabilityData(
+            canRun = dto.canRun,
+            blockReasonCode = dto.blockReasonCode,
+            blockMessageKey = dto.blockMessageKey,
+            messageArgs = dto.messageArgs
+        )
     }
 
     fun performSyncDiagnostics(config: SyncConfig): BridgeResult<SyncDiagnosticsResult> = holder.wrapResult {

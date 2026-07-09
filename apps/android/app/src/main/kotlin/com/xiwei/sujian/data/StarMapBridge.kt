@@ -29,6 +29,7 @@ import uniffi.writer_core.StarMapLayoutNodeDto
 import uniffi.writer_core.StarMapLinkDto
 import uniffi.writer_core.StarMapLinkPatchInputDto
 import uniffi.writer_core.StarMapMetaDto
+import uniffi.writer_core.StarMapMotionPolicyDto
 import uniffi.writer_core.StarMapNodeContentDto
 import uniffi.writer_core.StarMapNodeDto
 import uniffi.writer_core.StarMapNodeKindDto
@@ -142,36 +143,27 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
     private var motionPolicyFallbackWarned = false
 
     fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyData> {
-        fun fallback(reason: String, throwable: Throwable? = null): BridgeResult<StarMapMotionPolicyData> {
+        return try {
+            val dto = holder.service.getStarmapMotionPolicy()
+            BridgeResult.Success(StarMapMotionPolicyData(
+                enabled = dto.enabled,
+                idleWobbleEnabled = dto.idleWobbleEnabled,
+                idleAmplitudeVp = dto.idleAmplitudeVp,
+                idlePeriodMs = dto.idlePeriodMs.toInt(),
+                dragLiftScale = dto.dragLiftScale,
+                dragShadowBoost = dto.dragShadowBoost,
+                settleDurationMs = dto.settleDurationMs.toInt(),
+                reduceMotion = dto.reduceMotion
+            ))
+        } catch (e: NoSuchMethodException) {
             if (BuildConfig.DEBUG && !motionPolicyFallbackWarned) {
                 motionPolicyFallbackWarned = true
-                DiagnosticsLogger.w(TAG, "Temporary compatibility fallback for getStarmapMotionPolicy: $reason", throwable)
+                DiagnosticsLogger.w(TAG, "Fallback: UniFFI binding has no getStarmapMotionPolicy", e)
             }
-            return BridgeResult.Success(StarMapMotionPolicyData())
-        }
-
-        return try {
-            val method = holder.service.javaClass.getMethod("getStarmapMotionPolicy")
-            val dto = method.invoke(holder.service) ?: return fallback("UniFFI method returned null")
-            val dtoClass = dto.javaClass
-            val result = StarMapMotionPolicyData(
-                enabled = dtoClass.getField("enabled").getBoolean(dto),
-                idleWobbleEnabled = dtoClass.getField("idleWobbleEnabled").getBoolean(dto),
-                idleAmplitudeVp = dtoClass.getField("idleAmplitudeVp").getFloat(dto),
-                idlePeriodMs = dtoClass.getField("idlePeriodMs").getInt(dto),
-                dragLiftScale = dtoClass.getField("dragLiftScale").getFloat(dto),
-                dragShadowBoost = dtoClass.getField("dragShadowBoost").getFloat(dto),
-                settleDurationMs = dtoClass.getField("settleDurationMs").getInt(dto),
-                reduceMotion = dtoClass.getField("reduceMotion").getBoolean(dto)
-            )
-            BridgeResult.Success(result)
-        } catch (e: NoSuchMethodException) {
-            fallback("UniFFI binding has no getStarmapMotionPolicy", e)
-        } catch (e: NoSuchFieldException) {
-            fallback("DTO field mismatch", e)
+            BridgeResult.Success(StarMapMotionPolicyData())
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to get motion policy: ${e.message}", e)
-            fallback("reflection invocation failed", e)
+            BridgeResult.Success(StarMapMotionPolicyData())
         }
     }
 

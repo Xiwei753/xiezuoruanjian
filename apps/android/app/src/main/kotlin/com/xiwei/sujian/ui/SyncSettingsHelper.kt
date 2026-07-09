@@ -14,6 +14,7 @@ import com.xiwei.sujian.data.ResultEnvelope
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.SyncSession
 import com.xiwei.sujian.model.FirstSyncMode
+import com.xiwei.sujian.model.SyncCapabilityData
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncSecrets
 
@@ -81,6 +82,22 @@ internal class SyncSettingsHelper(
         sbSyncInterval.value = (currentSyncConfig.syncIntervalSeconds ?: 300).toFloat()
         tvSyncIntervalValue.text = formatSyncIntervalText(currentSyncConfig.syncIntervalSeconds ?: 300)
         updateTokenStatusUI()
+        applySyncCapability()
+    }
+
+    private fun applySyncCapability() {
+        val capability = ErrorUtil.safeRun(activity, SyncCapabilityData()) {
+            settingsRepository.getSyncCapability()
+        }
+        if (!capability.canRun) {
+            btnDryRun.isEnabled = false
+            btnTestConnection.isEnabled = false
+            btnPerformSync.isEnabled = false
+            val blockMsg = capability.blockReasonCode ?: ""
+            if (blockMsg.isNotEmpty()) {
+                tvTokenStatus.text = blockMsg
+            }
+        }
     }
 
     fun getUIConfig(): SyncConfig {

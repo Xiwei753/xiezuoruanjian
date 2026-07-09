@@ -103,24 +103,26 @@ class SujianEditorView @JvmOverloads constructor(
     // ── 内容变更监听 ──
     var onContentChanged: ((String) -> Unit)? = null
 
+    internal var suppressOnContentChanged: Boolean = false
+
     // ── 初始化 ──
     init {
         // Buffer 变更监听
         buffer.onTextChanged = { result ->
-            // 通知布局引擎文本已变
             layoutEngine.invalidate()
 
             if (insideVisualEdit) {
-                // 视觉事务期间：只做必要内容通知，不移动光标、不分发动画
-                // 光标、文字动画、ensureCursorVisible 统一由 runVisualEdit → handleVisualEdit 收口
-                onContentChanged?.invoke(result.newText)
+                if (!suppressOnContentChanged) {
+                    onContentChanged?.invoke(result.newText)
+                }
                 invalidate()
             } else {
-                // 非视觉事务（如 loadText）：正常更新光标
                 val cursorRect = layoutEngine.getCursorRect(result.newText, buffer.selection.head)
                 cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, true)
                 touchController.ensureCursorVisible()
-                onContentChanged?.invoke(result.newText)
+                if (!suppressOnContentChanged) {
+                    onContentChanged?.invoke(result.newText)
+                }
                 invalidate()
             }
         }
@@ -262,9 +264,13 @@ class SujianEditorView @JvmOverloads constructor(
      * 设置文本内容（加载章节），不触发动画
      */
     fun setText(text: String) {
-        // 章节加载时清除所有动画和 hidden range，防止旧章节的动画残留导致重影
         animationController.clearState()
-        buffer.loadText(text)
+        suppressOnContentChanged = true
+        try {
+            buffer.loadText(text)
+        } finally {
+            suppressOnContentChanged = false
+        }
         layoutEngine.invalidate()
         cursorController.onChapterLoaded()
         touchController.scrollTo(0, 0)

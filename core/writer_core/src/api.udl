@@ -721,6 +721,17 @@ enum StarMapReviewStatusDto {
     "Unknown",
 };
 
+dictionary StarMapMotionPolicyDto {
+    boolean enabled;
+    boolean idle_wobble_enabled;
+    float idle_amplitude_vp;
+    u32 idle_period_ms;
+    float drag_lift_scale;
+    float drag_shadow_boost;
+    u32 settle_duration_ms;
+    boolean reduce_motion;
+};
+
 // ============================================================
 // Action types
 // ============================================================
@@ -966,6 +977,9 @@ interface WriterAppService {
 
     [Throws=WriterError]
     sequence<StarMapReferenceDto> find_starmap_references(string target_starmap_id);
+
+    [Throws=WriterError]
+    StarMapMotionPolicyDto get_starmap_motion_policy();
 
     [Throws=WriterError]
     sequence<ActionDescriptorDto> list_registered_actions();

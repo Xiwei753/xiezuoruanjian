@@ -10,6 +10,7 @@ import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.ProjectStats
 import com.xiwei.sujian.model.ProjectWritingStatsSummary
+import com.xiwei.sujian.model.SyncCapabilityData
 import com.xiwei.sujian.model.SyncConfig
 import com.xiwei.sujian.model.SyncDiagnosticsResult
 import com.xiwei.sujian.model.SyncPlan
@@ -93,6 +94,7 @@ class AppServiceBridge(workspacePath: String) {
     fun loadSyncSecrets() = syncBridge.loadSyncSecrets()
     fun saveSyncSecrets(secrets: SyncSecrets) = syncBridge.saveSyncSecrets(secrets)
     fun loadSyncState() = syncBridge.loadSyncState()
+    fun getSyncCapability() = syncBridge.getSyncCapability()
     fun performSyncDiagnostics(config: SyncConfig) = syncBridge.performSyncDiagnostics(config)
     fun performSyncDryRun(config: SyncConfig) = syncBridge.performSyncDryRun(config)
     fun performSync(config: SyncConfig, forceSync: Boolean = false) = syncBridge.performSync(config, forceSync)

@@ -4,6 +4,7 @@ mod graph;
 mod layout;
 mod link;
 mod meta;
+mod motion_policy;
 mod node;
 mod semantic;
 
@@ -13,5 +14,6 @@ pub use graph::*;
 pub use layout::*;
 pub use link::*;
 pub use meta::*;
+pub use motion_policy::*;
 pub use node::*;
 pub use semantic::*;

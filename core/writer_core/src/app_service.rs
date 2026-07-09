@@ -535,6 +535,12 @@ impl WriterAppService {
         self.api.find_starmap_references(&target_starmap_id)
     }
 
+    pub fn get_starmap_motion_policy(
+        &self,
+    ) -> Result<crate::api::types::StarMapMotionPolicyDto, WriterError> {
+        self.api.get_starmap_motion_policy()
+    }
+
     // Actions
     pub fn list_registered_actions(
         &self,
