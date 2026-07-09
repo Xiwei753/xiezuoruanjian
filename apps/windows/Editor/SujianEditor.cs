@@ -87,7 +87,7 @@ public sealed class SujianEditor : UserControl
     public event EventHandler? TextChangedByUser;
 
     public SujianEditor()
-        : this(new LocalEditorTransactionBoundary())
+        : this(new LocalStandaloneTransactionBoundary())
     {
     }
 
