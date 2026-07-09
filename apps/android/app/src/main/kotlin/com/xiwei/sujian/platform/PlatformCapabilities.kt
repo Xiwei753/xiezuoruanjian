@@ -3,8 +3,20 @@ package com.xiwei.sujian.platform
 /**
  * 平台能力集合 — 启动时由平台适配层一次性报告
  *
- * 设置页和前端按钮按 capabilities 显示/禁用。
- * 鸿蒙未实现动画就禁用动画，Android 不支持 replacement commit 就不暴露。
+ * 能力声明必须与 core/writer_core/src/platform_interaction/capabilities.rs 的 android() 工厂方法对齐。
+ * 未真实接入的能力必须为 false，不允许吹牛。
+ *
+ * Android 已真实接入：
+ * - IME preedit: SujianInputConnection → EditorInputController
+ * - cursor anchor: CursorAnchorInfo → EditorView
+ * - text animation: Core visual transaction → SujianEditorView animation layer
+ * - smooth cursor: SujianEditorView cursor layer
+ * - reflow animation: Core reflow visual transaction → animation layer
+ * - clipboard: Android ClipboardManager
+ * - context menu: Android context menu
+ *
+ * 未真实接入：
+ * - replacement commit: Android InputConnection 未实现 setComposingRegion 修正
  */
 data class PlatformCapabilities(
     val supportsImePreedit: Boolean = false,

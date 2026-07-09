@@ -246,6 +246,7 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 | `core/writer_core/` (starmap) | `docs/starmap_semantics.md` | 星图语义模型 |
 | `core/writer_core/` (starmap) | `docs/starmap_canvas_model.md` | 星图画布模型契约 |
 | `core/writer_core/` (starmap) | `docs/starmap_implementation_route.md` | 星图实现路线 |
+| 跨平台 | `docs/platform_interaction_contract.md` | 平台系统交互契约（输入法、光标、剪贴板、动画、能力、同步） |
 
 **冲突处理规则**：
 - 如果全局文档和目录文档存在冲突，先以更严格的约束为准。

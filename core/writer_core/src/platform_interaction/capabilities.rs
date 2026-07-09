@@ -29,45 +29,81 @@ pub struct PlatformCapabilities {
 
 /// 预定义的平台能力配置
 impl PlatformCapabilities {
-    /// Linux Qt 当前能力（保守声明：adapter 尚未真实接入 QInputMethod/QClipboard/动画主路径）
+    /// Linux Qt 当前能力
+    ///
+    /// 已真实接入的能力：
+    /// - IME preedit: SujianEventFilter → FFI → EditorInputController 完整链路
+    /// - replacement commit: fcitx5 拼音修正走 sujian_ime_replace_and_commit
+    /// - text animation: Core visual transaction → QML EditorAnimationOverlay
+    /// - smooth cursor: QML Rectangle cursor + cursor_rect_changed signal
+    /// - reflow animation: Core reflow visual transaction → overlay
+    /// - clipboard: SujianEditorItem::clipboard_copy/paste via QClipboard
+    /// - context menu: QML context menu
+    ///
+    /// 未真实接入：
+    /// - cursor_anchor: CursorAnchorAdapter 为空桩，IME query 直接读 QML property
     pub fn linux_qt() -> Self {
         Self {
-            supports_ime_preedit: false,
+            supports_ime_preedit: true,
             supports_cursor_anchor: false,
-            supports_replacement_commit: false,
-            supports_text_animation: false,
-            supports_smooth_cursor: false,
-            supports_reflow_animation: false,
-            supports_clipboard: false,
-            supports_context_menu: false,
+            supports_replacement_commit: true,
+            supports_text_animation: true,
+            supports_smooth_cursor: true,
+            supports_reflow_animation: true,
+            supports_clipboard: true,
+            supports_context_menu: true,
         }
     }
 
-    /// Android 当前能力（保守声明：FFI/bridge 未完整打通）
+    /// Android 当前能力
+    ///
+    /// 已真实接入的能力：
+    /// - IME preedit: SujianInputConnection → EditorInputController
+    /// - cursor anchor: CursorAnchorInfo → EditorView
+    /// - text animation: Core visual transaction → SujianEditorView animation layer
+    /// - smooth cursor: SujianEditorView cursor layer
+    /// - reflow animation: Core reflow visual transaction → animation layer
+    /// - clipboard: Android ClipboardManager
+    /// - context menu: Android context menu
+    ///
+    /// 未真实接入：
+    /// - replacement commit: Android InputConnection 未实现 setComposingRegion 修正
     pub fn android() -> Self {
         Self {
-            supports_ime_preedit: false,
-            supports_cursor_anchor: false,
+            supports_ime_preedit: true,
+            supports_cursor_anchor: true,
             supports_replacement_commit: false,
-            supports_text_animation: false,
-            supports_smooth_cursor: false,
-            supports_reflow_animation: false,
-            supports_clipboard: false,
-            supports_context_menu: false,
+            supports_text_animation: true,
+            supports_smooth_cursor: true,
+            supports_reflow_animation: true,
+            supports_clipboard: true,
+            supports_context_menu: true,
         }
     }
 
-    /// Windows 当前能力（保守声明：未实现）
+    /// Windows 当前能力
+    ///
+    /// 已真实接入的能力：
+    /// - IME preedit: CoreTextEditContext composition/commit
+    /// - cursor anchor: CoreTextEditContext + candidate window anchoring
+    /// - text animation: Core visual transaction → SujianAnimationOverlay
+    /// - smooth cursor: cursor blink + animation
+    /// - reflow animation: Core reflow visual transaction → overlay
+    /// - clipboard: Windows.ApplicationModel.DataTransfer.Clipboard
+    /// - context menu: WinUI 3 context menu
+    ///
+    /// 未真实接入：
+    /// - replacement commit: CoreTextEditContext 未实现 replacement range commit
     pub fn windows() -> Self {
         Self {
-            supports_ime_preedit: false,
-            supports_cursor_anchor: false,
+            supports_ime_preedit: true,
+            supports_cursor_anchor: true,
             supports_replacement_commit: false,
-            supports_text_animation: false,
-            supports_smooth_cursor: false,
-            supports_reflow_animation: false,
-            supports_clipboard: false,
-            supports_context_menu: false,
+            supports_text_animation: true,
+            supports_smooth_cursor: true,
+            supports_reflow_animation: true,
+            supports_clipboard: true,
+            supports_context_menu: true,
         }
     }
 
@@ -143,16 +179,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linux_qt_capabilities_are_conservative() {
+    fn linux_qt_capabilities_reflect_real_ime() {
         let caps = PlatformCapabilities::linux_qt();
-        assert!(!caps.supports_ime_preedit);
+        assert!(caps.supports_ime_preedit);
+        assert!(caps.supports_replacement_commit);
+        assert!(caps.supports_text_animation);
+        assert!(caps.supports_smooth_cursor);
+        assert!(caps.supports_reflow_animation);
+        assert!(caps.supports_clipboard);
+        assert!(caps.supports_context_menu);
         assert!(!caps.supports_cursor_anchor);
-        assert!(!caps.supports_replacement_commit);
-        assert!(!caps.supports_text_animation);
-        assert!(!caps.supports_smooth_cursor);
-        assert!(!caps.supports_reflow_animation);
-        assert!(!caps.supports_clipboard);
-        assert!(!caps.supports_context_menu);
     }
 
     #[test]
@@ -167,16 +203,26 @@ mod tests {
     }
 
     #[test]
-    fn android_capabilities_are_conservative() {
+    fn android_capabilities_reflect_real_ime() {
         let caps = PlatformCapabilities::android();
-        assert!(!caps.supports_ime_preedit);
+        assert!(caps.supports_ime_preedit);
+        assert!(caps.supports_cursor_anchor);
         assert!(!caps.supports_replacement_commit);
-        assert!(!caps.has_any_animation_support());
+        assert!(caps.has_any_animation_support());
+    }
+
+    #[test]
+    fn windows_capabilities_reflect_real_ime() {
+        let caps = PlatformCapabilities::windows();
+        assert!(caps.supports_ime_preedit);
+        assert!(caps.supports_cursor_anchor);
+        assert!(!caps.supports_replacement_commit);
+        assert!(caps.has_any_animation_support());
     }
 
     #[test]
     fn platform_kind_default_capabilities() {
-        assert!(!PlatformKind::LinuxQt.default_capabilities().supports_replacement_commit);
+        assert!(!PlatformKind::LinuxQt.default_capabilities().supports_cursor_anchor);
         assert!(!PlatformKind::Android.default_capabilities().supports_replacement_commit);
         assert!(!PlatformKind::Harmony.default_capabilities().supports_text_animation);
         assert!(!PlatformKind::Unknown.default_capabilities().has_any_animation_support());
@@ -184,7 +230,7 @@ mod tests {
 
     #[test]
     fn has_any_animation_support() {
-        assert!(!PlatformCapabilities::linux_qt().has_any_animation_support());
+        assert!(PlatformCapabilities::linux_qt().has_any_animation_support());
         assert!(!PlatformCapabilities::harmony().has_any_animation_support());
         assert!(!PlatformCapabilities::minimal().has_any_animation_support());
     }

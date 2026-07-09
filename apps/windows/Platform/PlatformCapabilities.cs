@@ -4,11 +4,24 @@
 // 收敛到此命名空间，SujianEditor 只调用统一接口，不直接知道 WinRT 细节。
 //
 // Windows 不复用 Linux Qt 平台逻辑，只复用 Core 的 EditorVisualTransaction 语义。
+//
+// 能力声明必须与 core/writer_core/src/platform_interaction/capabilities.rs 的 windows() 工厂方法对齐。
+// 未真实接入的能力必须为 false，不允许吹牛。
 
 namespace Sujian.Platform
 {
     /// <summary>
     /// 平台能力集合 — 启动时由平台适配层一次性报告
+    ///
+    /// 与 Core PlatformCapabilities::windows() 对齐：
+    /// - IME preedit: CoreTextEditContext composition/commit ✓
+    /// - cursor anchor: CoreTextEditContext + candidate window anchoring ✓
+    /// - replacement commit: CoreTextEditContext 未实现 replacement range commit ✗
+    /// - text animation: Core visual transaction → SujianAnimationOverlay ✓
+    /// - smooth cursor: cursor blink + animation ✓
+    /// - reflow animation: Core reflow visual transaction → overlay ✓
+    /// - clipboard: Windows.ApplicationModel.DataTransfer.Clipboard ✓
+    /// - context menu: WinUI 3 context menu ✓
     /// </summary>
     public class PlatformCapabilities
     {
