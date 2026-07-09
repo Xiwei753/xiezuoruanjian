@@ -6,9 +6,8 @@
 //! - execute_clipboard() 接入 QGuiApplication::clipboard()
 //! - execute_focus() 接入 QQuickItem::forceActiveFocus / QInputMethod::show/hide
 //! - focus_state() 跟踪焦点状态
-//!
-//! 待完成迁移：
-//! - show_context_menu / hide_context_menu 仍为空桩（QML context menu 未接入）
+//! - show_context_menu() 通过 QMetaObject::invokeMethod 触发 QML context_menu_requested 信号
+//! - hide_context_menu() 通知 QML 侧关闭菜单
 
 use cpp::cpp;
 use std::sync::Mutex;
@@ -160,10 +159,28 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
     }
 
     fn show_context_menu(&mut self, _request: ContextMenuRequest) {
-        // TODO(平台交互收口): 接入 QML context menu
+        if let Ok(guard) = self.item_ptr.lock() {
+            let item_ptr = *guard;
+            if !item_ptr.is_null() {
+                let x = _request.screen_x;
+                let y = _request.screen_y;
+                cpp!(unsafe [item_ptr as "QQuickItem*", x as "double", y as "double"] {
+                    QMetaObject::invokeMethod(item_ptr, "context_menu_requested",
+                        Q_ARG(QVariant, QVariant(x)),
+                        Q_ARG(QVariant, QVariant(y)));
+                });
+            }
+        }
     }
 
     fn hide_context_menu(&mut self) {
-        // TODO(平台交互收口): 接入 QML context menu
+        if let Ok(guard) = self.item_ptr.lock() {
+            let item_ptr = *guard;
+            if !item_ptr.is_null() {
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    QMetaObject::invokeMethod(item_ptr, "hide_context_menu_requested");
+                });
+            }
+        }
     }
 }
