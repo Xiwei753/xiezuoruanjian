@@ -21,7 +21,7 @@
 ### 变更
 - 架构从 Flutter 迁移到 Rust Core + 各平台原生客户端
 - Android 端从 JNI 迁移到 UniFFI 桥接
-- Linux 客户端编辑器从 QTextDocument 路线迁移到 SujianEditorItem + QTextLayout
+- Desktop 端编辑器从 QTextDocument 路线迁移到 SujianEditorItem + QTextLayout
 - 鸿蒙端预编译 .so 从 `prebuilt/` 迁移到 `cpp/libs/`（符合华为 NAPI 标准）
 - 鸿蒙端删除手写 types/ 声明，改用 oh-package.json5 官方依赖
 
@@ -69,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 - Architecture migrated from Flutter to Rust Core + native clients per platform
 - Android migrated from JNI to UniFFI bridge
-- Linux client editor migrated from QTextDocument route to SujianEditorItem + QTextLayout
+- Desktop editor migrated from QTextDocument route to SujianEditorItem + QTextLayout
 - HarmonyOS prebuilt .so moved from `prebuilt/` to `cpp/libs/` (compliant with Huawei NAPI standard)
 - HarmonyOS removed handwritten types/ declarations, using oh-package.json5 official dependencies instead
 
@@ -83,7 +83,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 - Rust core library (core/writer_core)
 - Android native client (Kotlin)
-- Linux client (Rust + Qt6/QML)
+- Linux desktop client (Rust + Qt6/QML)
 - Project management: CRUD for projects, volumes, and chapters
 - Auto-save feature
 - One-click formatting

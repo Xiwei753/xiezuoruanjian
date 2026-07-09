@@ -138,9 +138,13 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
      * 反射探测 fallback。后续新能力必须放到领域 Bridge，不再继续往 AppServiceBridge 增加领域方法。
      * Debug 构建只要走 fallback 必须 Log.w，避免静默返回默认值掩盖绑定缺口。
      */
+    @Volatile
+    private var motionPolicyFallbackWarned = false
+
     fun getStarMapMotionPolicy(): BridgeResult<StarMapMotionPolicyData> {
         fun fallback(reason: String, throwable: Throwable? = null): BridgeResult<StarMapMotionPolicyData> {
-            if (BuildConfig.DEBUG) {
+            if (BuildConfig.DEBUG && !motionPolicyFallbackWarned) {
+                motionPolicyFallbackWarned = true
                 DiagnosticsLogger.w(TAG, "Temporary compatibility fallback for getStarmapMotionPolicy: $reason", throwable)
             }
             return BridgeResult.Success(StarMapMotionPolicyData())

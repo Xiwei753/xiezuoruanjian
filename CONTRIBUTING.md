@@ -15,7 +15,7 @@
 **在写代码之前，请务必阅读以下核心原则：**
 
 - **Rust Core 是唯一业务底层**：所有文件 I/O、项目管理、同步、格式化、设置规则必须在 `core/writer_core` 中实现。
-- **客户端做薄**：客户端（Android / Linux / Windows / HarmonyOS）只负责 UI 渲染、导航、输入法交互和主题。不允许在客户端中实现业务逻辑。
+- **客户端做薄**：客户端（Android / Desktop / HarmonyOS）只负责 UI 渲染、导航、输入法交互和主题。不允许在客户端中实现业务逻辑。
 - **正文永远是纯文本**：不允许保存 HTML、不允许为了首行缩进往正文里插入空格。
 - **工作区格式不可修改**：`docs/workspace_format.md` 是唯一事实来源，不可为 UI 妥协。
 
@@ -58,7 +58,7 @@ cargo run -p sujian-linux-qt
 - 新功能必须有对应测试覆盖
 - 遵循 `core/writer_core` 已有的模块组织方式
 
-### QML (Linux_qt)
+### QML (Desktop)
 
 - QML 只绑定数据，不写业务逻辑
 - 使用 `dt.sp16`、`dt.sp20` 等 DesignTokens，不要硬编码数字
@@ -114,7 +114,7 @@ Thank you for your interest in Sujian Writer! This document will help you unders
 **Before writing code, please read the following core principles:**
 
 - **Rust Core is the sole business layer**: All file I/O, project management, sync, formatting, and settings rules must be implemented in `core/writer_core`.
-- **Thin clients**: Clients (Android / Linux / Windows / HarmonyOS) are only responsible for UI rendering, navigation, IME interaction, and theming. Implementing business logic in clients is not allowed.
+- **Thin clients**: Clients (Android / Desktop / HarmonyOS) are only responsible for UI rendering, navigation, IME interaction, and theming. Implementing business logic in clients is not allowed.
 - **Content is always plain text**: Saving HTML is not allowed. Inserting spaces for first-line indentation is not allowed.
 - **Workspace format is immutable**: `docs/workspace_format.md` is the single source of truth and must not be compromised for UI.
 
@@ -157,7 +157,7 @@ Open the `apps/harmony/` directory in DevEco Studio. You need to build the prebu
 - New features must have corresponding test coverage
 - Follow the existing module organization in `core/writer_core`
 
-### QML (Linux_qt)
+### QML (Desktop)
 
 - QML only binds data, no business logic
 - Use DesignTokens like `dt.sp16`, `dt.sp20` instead of hardcoded numbers

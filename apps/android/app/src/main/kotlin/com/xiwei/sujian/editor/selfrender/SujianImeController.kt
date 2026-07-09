@@ -3,6 +3,7 @@ package com.xiwei.sujian.editor.selfrender
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.graphics.Matrix
 import android.view.View
 import android.view.inputmethod.CursorAnchorInfo
 import android.view.inputmethod.InputMethodManager
@@ -74,9 +75,13 @@ class SujianImeController(
      */
     fun notifyCursorAnchorInfoChanged() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val info = buildCursorAnchorInfo()
-            if (info != null) {
-                imm.updateCursorAnchorInfo(view, info)
+            try {
+                val info = buildCursorAnchorInfo()
+                if (info != null) {
+                    imm.updateCursorAnchorInfo(view, info)
+                }
+            } catch (e: Throwable) {
+                DiagnosticsLogger.e(TAG, "notifyCursorAnchorInfoChanged failed: ${e.message}")
             }
         }
     }
@@ -86,9 +91,13 @@ class SujianImeController(
      */
     fun requestCursorUpdate(cursorUpdateMode: Int) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val info = buildCursorAnchorInfo()
-            if (info != null) {
-                imm.updateCursorAnchorInfo(view, info)
+            try {
+                val info = buildCursorAnchorInfo()
+                if (info != null) {
+                    imm.updateCursorAnchorInfo(view, info)
+                }
+            } catch (e: Throwable) {
+                DiagnosticsLogger.e(TAG, "requestCursorUpdate failed: ${e.message}")
             }
         }
     }
@@ -233,28 +242,24 @@ class SujianImeController(
     
     private fun buildCursorAnchorInfo(): CursorAnchorInfo? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
-        
+
         val builder = CursorAnchorInfo.Builder()
         val text = buffer.text
-        
-        // composing 期间使用 renderer 的 composing 光标位置，让候选框跟随 composing 光标
+
         val cursorRect: SujianCursorRect
         if (buffer.hasComposing && renderer.hasComposingCursor) {
             cursorRect = SujianCursorRect(
                 renderer.composingCursorX,
                 renderer.composingCursorTop,
                 renderer.composingCursorBottom,
-                renderer.composingCursorBottom  // baselineY 近似用 bottom
+                renderer.composingCursorBottom
             )
         } else {
             cursorRect = layout.getCursorRect(text, buffer.selection.head)
         }
-        
-        // 计算光标可见性 flags
+
         val flags = computeCursorVisibilityFlags(cursorRect)
-        
-        // 内容坐标系 → View 本地坐标系转换
-        // getCursorRect 返回内容坐标系坐标，setInsertionMarkerLocation 需要 View 本地坐标系
+
         val editorView = view as? SujianEditorView
         val scrollX = editorView?.touchController?.scrollX?.toFloat() ?: 0f
         val scrollY = editorView?.touchController?.scrollY?.toFloat() ?: 0f
@@ -263,13 +268,21 @@ class SujianImeController(
 
         builder.setSelectionRange(buffer.selection.start, buffer.selection.end)
         builder.setInsertionMarkerLocation(
-            cursorRect.x + padLeft - scrollX,          // horizontal
-            cursorRect.top + padTop - scrollY,         // top
-            cursorRect.baselineY + padTop - scrollY,   // baseline — 文字基线 Y 坐标
-            cursorRect.bottom + padTop - scrollY,       // bottom
+            cursorRect.x + padLeft - scrollX,
+            cursorRect.top + padTop - scrollY,
+            cursorRect.baselineY + padTop - scrollY,
+            cursorRect.bottom + padTop - scrollY,
             flags
         )
-        
+
+        val matrix = Matrix()
+        try {
+            view.transformMatrixToGlobal(matrix)
+        } catch (_: Throwable) {
+            matrix.reset()
+        }
+        builder.setMatrix(matrix)
+
         return builder.build()
     }
     

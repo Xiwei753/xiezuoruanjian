@@ -193,6 +193,7 @@ class EditorViewModel(
         val vid = volumeId ?: return
         val cid = chapterId ?: return
 
+        isLoadingChapter = true
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val result = workspaceRepository.getChapterContentWithMeta(pid, vid, cid)
@@ -200,7 +201,6 @@ class EditorViewModel(
                 val meta = result.second
 
                 launch(kotlinx.coroutines.Dispatchers.Main) {
-                    isLoadingChapter = true
                     _uiState.value = _uiState.value.copy(
                         loading = false,
                         content = content,
@@ -209,15 +209,16 @@ class EditorViewModel(
                         saveStatus = SaveStatus.Idle
                     )
                     previousText = content
-                    isLoadingChapter = false
                     initialWordCount = calculateWordCount(content)
                     sessionStartTime = System.currentTimeMillis()
                     updateStats(content)
+                    isLoadingChapter = false
                 }
 
                 workspaceRepository.recordRecentEdit(pid, vid, cid)
             } catch (e: Throwable) {
                 launch(kotlinx.coroutines.Dispatchers.Main) {
+                    isLoadingChapter = false
                     _uiState.value = _uiState.value.copy(
                         loading = false,
                         editorEnabled = false,
@@ -232,6 +233,7 @@ class EditorViewModel(
     fun onContentChanged(newContent: String) {
         val currentState = _uiState.value
         if (currentState.loading) return
+        if (isLoadingChapter) return
 
         _uiState.value = currentState.copy(
             content = newContent,
@@ -242,7 +244,7 @@ class EditorViewModel(
         scheduleAutoSave(newContent)
         scheduleStatsUpdate(newContent)
 
-        if (!isLoadingChapter && previousText != newContent) {
+        if (previousText != newContent) {
             reportWritingEvent(previousText, newContent)
             previousText = newContent
         }
@@ -276,7 +278,9 @@ class EditorViewModel(
             if (!_uiState.value.settings.autoSaveEnabled) return@launch
             delay(delayMs)
             if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
-                if (content.trim().isEmpty()) {
+                if (content.trim().isEmpty() && !contentExplicitlyCleared) {
+                    // 非用户明确清空的空内容，不触发 clear，忽略本轮自动保存
+                } else if (content.trim().isEmpty() && contentExplicitlyCleared) {
                     saveCommandChannel.trySend(SaveCommand.Clear)
                 } else {
                     saveCommandChannel.trySend(SaveCommand.Save(content))
@@ -312,7 +316,7 @@ class EditorViewModel(
         val content = _uiState.value.content
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
         viewModelScope.launch {
-            if (content.trim().isEmpty() && !contentExplicitlyCleared) {
+            if (content.trim().isEmpty() && contentExplicitlyCleared) {
                 saveCommandChannel.trySend(SaveCommand.Clear)
             } else if (content.trim().isNotEmpty()) {
                 saveCommandChannel.trySend(SaveCommand.Save(content))
@@ -398,7 +402,11 @@ class EditorViewModel(
         if (pid == null || vid == null || cid == null) return false
 
         if (content.trim().isEmpty()) {
-            return clearChapterContentInternal()
+            if (contentExplicitlyCleared) {
+                return clearChapterContentInternal()
+            }
+            // 非用户明确清空的空内容，保持 Unsaved 但不写入空内容
+            return false
         }
 
         var currentContent = content
