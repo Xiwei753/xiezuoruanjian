@@ -19,6 +19,7 @@ Rectangle {
     property var dt: null
     property var backendRef: null
     property var editorBackendRef: backendRef
+    property var editorControllerRef: null
     property var starmapBackendRef: backendRef
     property var starMapController: null
     property var appState: ({})
@@ -36,6 +37,16 @@ Rectangle {
     signal openStarmapWorkspace(string smId, string smTitle)
     signal renameProjectRequested(string projectId, string title)
     signal deleteProjectRequested(string projectId, string title)
+
+    function flushBeforeSync() {
+        if (root.editorBackendRef && root.editorBackendRef.flush_writing_stats) {
+            root.editorBackendRef.flush_writing_stats()
+        }
+        if (root.editorControllerRef && root.editorControllerRef.flushActiveEditorBeforeSync) {
+            return root.editorControllerRef.flushActiveEditorBeforeSync()
+        }
+        return true
+    }
 
     color: dt.bg
 
@@ -175,6 +186,10 @@ Rectangle {
                             onClicked: {
                                 // 点击"同步"优先触发同步；需要改配置再进入同步设置页
                                 if (syncBackend && !syncBackend.sync_in_progress) {
+                                    if (!root.flushBeforeSync()) {
+                                        root.openSettings()
+                                        return
+                                    }
                                     syncBackend.perform_sync();
                                 }
                             }
