@@ -198,6 +198,7 @@ pub struct SujianEditorItem {
     visual_transaction_changed: qt_signal!(),
     preedit_visual_transaction_changed: qt_signal!(),
     context_menu_requested: qt_signal!(x: f32, y: f32),
+    hide_context_menu_requested: qt_signal!(),
 
     get_plain_text: qt_method!(fn(&self) -> QString),
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
@@ -335,6 +336,7 @@ impl Default for SujianEditorItem {
             visual_transaction_changed: Default::default(),
             preedit_visual_transaction_changed: Default::default(),
             context_menu_requested: Default::default(),
+            hide_context_menu_requested: Default::default(),
 
             get_plain_text: Default::default(),
             set_plain_text: Default::default(),
@@ -523,5 +525,30 @@ impl SujianEditorItem {
 
     pub(crate) fn active_reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.text_anim_state.active_reflow_byte_ranges()
+    }
+
+    pub(crate) fn ime_query_text_before_cursor(&self, max_chars: usize) -> String {
+        let text = &self.buffer.text;
+        let cursor_char = byte_to_char_index(text, self.buffer.cursor);
+        let before_char_len = cursor_char.min(max_chars);
+        text.chars()
+            .skip(cursor_char - before_char_len)
+            .take(before_char_len)
+            .collect()
+    }
+
+    pub(crate) fn ime_query_text_after_cursor(&self, max_chars: usize) -> String {
+        let text = &self.buffer.text;
+        let cursor_char = byte_to_char_index(text, self.buffer.cursor);
+        let total_chars = text.chars().count();
+        let after_char_len = total_chars.saturating_sub(cursor_char).min(max_chars);
+        text.chars()
+            .skip(cursor_char)
+            .take(after_char_len)
+            .collect()
+    }
+
+    pub(crate) fn ime_query_selected_text(&self) -> String {
+        self.buffer.selected_text()
     }
 }
