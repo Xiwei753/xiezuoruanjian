@@ -45,6 +45,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CompletableDeferred
 
 enum class SaveStatus {
     Idle,
@@ -52,6 +53,12 @@ enum class SaveStatus {
     Saving,
     Saved,
     SaveFailed
+}
+
+sealed class SaveCommand {
+    data class Save(val content: String) : SaveCommand()
+    data object Clear : SaveCommand()
+    data class Flush(val reply: kotlinx.coroutines.CompletableDeferred<Boolean>) : SaveCommand()
 }
 
 data class EditorSettingsState(
@@ -110,6 +117,9 @@ class EditorViewModel(
     private val saveMutex = Mutex()
     private var pendingSaveContent: String? = null
     private var autoSaveJob: kotlinx.coroutines.Job? = null
+    private val saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+    private var saveActorJob: kotlinx.coroutines.Job? = null
+    private var contentExplicitlyCleared = false
 
     private val statsDeviceId: String by lazy {
         val prefs = application.getSharedPreferences("writer_stats", android.content.Context.MODE_PRIVATE)
@@ -134,6 +144,8 @@ class EditorViewModel(
             loading = true,
             chapterTitle = chapterTitle
         )
+        contentExplicitlyCleared = false
+        startSaveActor()
         reloadSettings()
         loadChapter()
     }
@@ -226,6 +238,7 @@ class EditorViewModel(
             saveStatus = SaveStatus.Unsaved
         )
 
+        contentExplicitlyCleared = false
         scheduleAutoSave(newContent)
         scheduleStatsUpdate(newContent)
 
@@ -264,9 +277,9 @@ class EditorViewModel(
             delay(delayMs)
             if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
                 if (content.trim().isEmpty()) {
-                    clearChapterContentInternal()
+                    saveCommandChannel.trySend(SaveCommand.Clear)
                 } else {
-                    performSave(content, isAutoSave = true)
+                    saveCommandChannel.trySend(SaveCommand.Save(content))
                 }
             }
         }
@@ -299,15 +312,40 @@ class EditorViewModel(
         val content = _uiState.value.content
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
         viewModelScope.launch {
-            val result = performSave(content, isAutoSave = false)
+            if (content.trim().isEmpty() && !contentExplicitlyCleared) {
+                saveCommandChannel.trySend(SaveCommand.Clear)
+            } else if (content.trim().isNotEmpty()) {
+                saveCommandChannel.trySend(SaveCommand.Save(content))
+            }
+            val flushReply = CompletableDeferred<Boolean>()
+            saveCommandChannel.trySend(SaveCommand.Flush(flushReply))
+            val result = flushReply.await()
             deferred.complete(result)
         }
         return deferred
     }
 
     fun clearChapterContent() {
-        viewModelScope.launch {
-            clearChapterContentInternal()
+        contentExplicitlyCleared = true
+        saveCommandChannel.trySend(SaveCommand.Clear)
+    }
+
+    private fun startSaveActor() {
+        saveActorJob?.cancel()
+        saveActorJob = viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            for (cmd in saveCommandChannel) {
+                when (cmd) {
+                    is SaveCommand.Save -> {
+                        performSave(cmd.content, isAutoSave = true)
+                    }
+                    is SaveCommand.Clear -> {
+                        clearChapterContentInternal()
+                    }
+                    is SaveCommand.Flush -> {
+                        cmd.reply.complete(true)
+                    }
+                }
+            }
         }
     }
 
@@ -459,6 +497,7 @@ class EditorViewModel(
     override fun onCleared() {
         super.onCleared()
         autoSaveJob?.cancel()
+        saveCommandChannel.close()
         try {
             val pid = projectId
             val vid = volumeId
@@ -467,22 +506,19 @@ class EditorViewModel(
             if (pid != null && vid != null && cid != null) {
                 if (content.isNotEmpty()) {
                     workspaceRepository.saveChapterContent(pid, vid, cid, content)
-                } else if (previousText.isNotEmpty()) {
+                } else if (contentExplicitlyCleared) {
                     workspaceRepository.clearChapterContent(pid, vid, cid)
                 }
             }
         } catch (_: Exception) {
         }
-        // flushWritingStats also triggers a Core-level flush cycle.
         try {
             workspaceRepository.flushWritingStats()
         } catch (_: Exception) {
-            // Best-effort; non-critical data
         }
         try {
             workspaceRepository.flushRecentEdits()
         } catch (_: Exception) {
-            // Best-effort; non-critical data
         }
     }
 

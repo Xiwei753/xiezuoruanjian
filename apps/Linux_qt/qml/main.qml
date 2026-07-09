@@ -79,11 +79,18 @@ ApplicationWindow {
         }
     }
 
-    function flushBeforeSync() {
+    function preSyncBarrier() {
         if (appController.inWriting && writingWorkspaceLoader.item) {
-            return writingWorkspaceLoader.item.flushActiveEditorBeforeSync();
+            if (!writingWorkspaceLoader.item.flushActiveEditorBeforeSync()) return false
         }
-        return true;
+        if (editorBackend) {
+            editorBackend.flush_writing_stats()
+            editorBackend.flush_recent_edits()
+        }
+        if (settingsBackend) {
+            settingsBackend.flush_pending_settings_save()
+        }
+        return true
     }
 
     function openSettingsDialog() {
@@ -289,7 +296,7 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             if (syncBackend) {
-                if (!window.flushBeforeSync()) return;
+                if (!window.preSyncBarrier()) return;
                 syncBackend.request_auto_sync("auto_sync_on_workspace_open");
             }
         }
@@ -301,7 +308,7 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             if (syncBackend) {
-                if (!window.flushBeforeSync()) return;
+                if (!window.preSyncBarrier()) return;
                 syncBackend.maybe_auto_sync_on_foreground();
             }
         }
@@ -433,7 +440,7 @@ ApplicationWindow {
                 }
 
                 onRequestSync: {
-                    if (!window.flushBeforeSync()) return;
+                    if (!window.preSyncBarrier()) return;
                     if (syncBackend && !syncBackend.sync_in_progress) {
                         syncBackend.perform_sync();
                     }
@@ -665,7 +672,7 @@ ApplicationWindow {
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
-            beforeSyncHook: function() { return window.flushBeforeSync() }
+            beforeSyncHook: function() { return window.preSyncBarrier() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
             }

@@ -400,7 +400,6 @@ Dialog {
                     dt: root.dt
                     backendRef: root.syncBackendRef
                     beforeSyncHook: function() {
-                        if (root.editorBackendRef) root.editorBackendRef.flush_writing_stats();
                         if (typeof root.beforeSyncHook === "function") return root.beforeSyncHook();
                         return true;
                     }

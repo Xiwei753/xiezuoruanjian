@@ -326,6 +326,3 @@ mod tests {
         assert_eq!(result_valid.message.unwrap(), "Font size updated");
     }
 }
-
-#[cfg(test)]
-mod project_ops_tests;

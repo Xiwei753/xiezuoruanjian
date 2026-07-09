@@ -98,7 +98,7 @@ Item {
         case "error.save_sync_config_failed": msg = qsTr("保存同步配置失败"); break;
         case "error.save_sync_secrets_failed": msg = qsTr("保存同步密钥失败"); break;
         case "chapter.deleted_remotely_refreshed": msg = qsTr("章节已在远端被删除，已刷新列表"); break;
-        default: msg = key; break;
+        default: msg = qsTr("同步出错"); window.debugWarn("sync", "unmapped_message_key", key); break;
         }
         if (args) {
             for (var k in args) {
@@ -145,10 +145,12 @@ Item {
                         syncRawErrorRow.visible = false
                     }
                 } else {
-                    syncResultArea.text = root.currentSyncOperationState;
+                    syncResultArea.text = qsTr("同步状态解析失败，请复制诊断信息反馈");
+                    window.debugWarn("sync", "operation_state_parse_failed", root.currentSyncOperationState);
                 }
             } catch(e) {
-                syncResultArea.text = root.currentSyncOperationState;
+                syncResultArea.text = qsTr("同步状态解析失败，请复制诊断信息反馈");
+                window.debugWarn("sync", "operation_state_json_error", e.toString());
             }
         }
     }
@@ -571,7 +573,7 @@ Item {
                     id: syncResultArea
                     width: logScroll.availableWidth
                     text: ""
-                    color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.dangerContainer : resolvedDt.onSurfaceVariant
+                    color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.error : resolvedDt.onSurfaceVariant
                     font.family: "monospace"
                     font.pixelSize: resolvedDt.caption
                     readOnly: true
@@ -589,7 +591,7 @@ Item {
 
             AppText {
                 dt: root.resolvedDt
-                text: qsTr("诊断信息:")
+                text: qsTr("诊断信息可复制")
                 color: resolvedDt.onSurfaceVariant
                 font.pixelSize: resolvedDt.caption
                 font.family: resolvedDt.fontFamily
@@ -601,19 +603,6 @@ Item {
                 variant: "text"
                 onClicked: if (root.backendRef) root.backendRef.copy_text_to_clipboard(syncRawErrorArea.text)
             }
-
-            TextEdit {
-                id: syncRawErrorArea
-                Layout.fillWidth: true
-                text: ""
-                color: resolvedDt.onSurfaceVariant
-                font.family: "monospace"
-                font.pixelSize: resolvedDt.caption
-                readOnly: true
-                wrapMode: TextEdit.Wrap
-                selectByMouse: true
-                visible: text.length > 0
-            }
         }
     }
 
@@ -624,5 +613,12 @@ Item {
             syncIntervalSlider.value = (root.backendRef.sync_interval || 300) / 60
         }
         root.refreshLocalSyncState();
+        }
+
+        TextEdit {
+            id: syncRawErrorArea
+            visible: false
+            text: ""
+            readOnly: true
+        }
     }
-}
