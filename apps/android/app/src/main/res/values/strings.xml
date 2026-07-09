@@ -276,6 +276,9 @@
     <string name="sync_unknown_error">未知同步错误</string>
     <string name="sync_interval_minutes">%1$d分钟</string>
     <string name="sync_interval_minutes_effective">%1$d分钟 (有效后台间隔: 15分钟)</string>
+    <string name="sync_block_disabled">同步未启用</string>
+    <string name="sync_block_remote_url_missing">远程仓库地址未配置</string>
+    <string name="sync_block_token_missing">Token 未配置</string>
 
     <!-- WorkspaceRepository Exception messages -->
     <string name="repo_workspace_init_failed">工作区初始化失败: %1$s</string>

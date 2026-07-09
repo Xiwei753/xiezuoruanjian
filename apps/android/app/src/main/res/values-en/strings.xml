@@ -273,6 +273,9 @@
     <string name="sync_unknown_error">Unknown sync error</string>
     <string name="sync_interval_minutes">%1$d min</string>
     <string name="sync_interval_minutes_effective">%1$d min (effective background interval: 15 min)</string>
+    <string name="sync_block_disabled">Sync is not enabled</string>
+    <string name="sync_block_remote_url_missing">Remote repository URL not configured</string>
+    <string name="sync_block_token_missing">Token not configured</string>
 
     <!-- WorkspaceRepository Exception messages -->
     <string name="repo_workspace_init_failed">Workspace initialization failed: %1$s</string>
