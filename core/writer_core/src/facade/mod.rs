@@ -32,6 +32,8 @@ mod starmap_ops;
 mod sync_ops;
 mod workspace_ops;
 mod writing_stats_ops;
+#[cfg(test)]
+mod project_ops_tests;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
