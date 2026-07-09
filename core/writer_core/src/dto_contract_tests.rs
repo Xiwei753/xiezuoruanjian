@@ -1312,3 +1312,46 @@ fn test_settings_auto_indent_contract() {
     assert!(json.get("enabled").is_none());
     assert!(json.get("widthChars").is_none());
 }
+
+#[test]
+fn test_date_range_dto_contract() {
+    let dto = crate::api::types::DateRangeDto {
+        start_date: "2024-01-01".to_string(),
+        end_date: "2024-12-31".to_string(),
+    };
+    let json = serde_json::to_value(&dto).unwrap();
+    let mut expected_keys = vec!["endDate", "startDate"].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys);
+}
+
+#[test]
+fn test_speed_curve_dto_contract() {
+    let summary = crate::api::types::SpeedCurveSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-02".to_string(),
+        },
+        bucket_minutes: 60,
+        buckets: vec![
+            crate::api::types::SpeedCurvePointDto {
+                start_ms: 1000,
+                end_ms: 2000,
+                chars_typed: 50,
+                chars_per_minute: 100.0,
+            }
+        ],
+    };
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec!["bucketMinutes", "buckets", "range"].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(actual_keys, expected_keys);
+
+    let point_json = &json["buckets"][0];
+    let mut point_expected_keys = vec!["charsPerMinute", "charsTyped", "endMs", "startMs"].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    point_expected_keys.sort();
+    let point_actual_keys = sorted_keys(point_json);
+    assert_eq!(point_actual_keys, point_expected_keys);
+}
