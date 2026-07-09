@@ -129,7 +129,7 @@ internal class SyncSettingsHelper(
         )
     }
 
-    fun saveCurrentState() {
+    fun saveCurrentState(applyCapability: Boolean = true) {
         val uiConfig = getUIConfig()
         val tokenInput = etHttpsToken.text?.toString() ?: ""
         val uiSecrets = if (tokenInput.isNotEmpty()) {
@@ -150,7 +150,9 @@ internal class SyncSettingsHelper(
         currentSyncConfig = uiConfig
         currentSyncSecrets = uiSecrets
         updateTokenStatusUI()
-        applySyncCapability()
+        if (applyCapability) {
+            applySyncCapability()
+        }
     }
 
     fun handleDryRun() {
@@ -160,7 +162,17 @@ internal class SyncSettingsHelper(
         btnDryRun.isEnabled = false
         btnPerformSync.isEnabled = false
         btnTestConnection.isEnabled = false
-        saveCurrentState()
+        saveCurrentState(applyCapability = false)
+
+        val capability = ErrorUtil.safeRun(activity, SyncCapabilityData()) {
+            settingsRepository.getSyncCapability()
+        }
+        if (!capability.canRun) {
+            btnDryRun.text = activity.getString(R.string.btn_dry_run)
+            SyncSession.lock.set(false)
+            applySyncCapability()
+            return
+        }
 
         Thread {
             val result = ErrorUtil.safeRun(activity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during dry run"))) {
@@ -202,7 +214,17 @@ internal class SyncSettingsHelper(
         btnTestConnection.isEnabled = false
         btnDryRun.isEnabled = false
         btnPerformSync.isEnabled = false
-        saveCurrentState()
+        saveCurrentState(applyCapability = false)
+
+        val capability = ErrorUtil.safeRun(activity, SyncCapabilityData()) {
+            settingsRepository.getSyncCapability()
+        }
+        if (!capability.canRun) {
+            btnTestConnection.text = activity.getString(R.string.btn_test_connection)
+            SyncSession.lock.set(false)
+            applySyncCapability()
+            return
+        }
 
         Thread {
             val result = ErrorUtil.safeRun(activity, BridgeResult.Error(ResultEnvelope.error("UNKNOWN", "Exception during diagnostic run"))) {
@@ -288,7 +310,17 @@ internal class SyncSettingsHelper(
         btnPerformSync.isEnabled = false
         btnDryRun.isEnabled = false
         btnTestConnection.isEnabled = false
-        saveCurrentState()
+        saveCurrentState(applyCapability = false)
+
+        val capability = ErrorUtil.safeRun(activity, SyncCapabilityData()) {
+            settingsRepository.getSyncCapability()
+        }
+        if (!capability.canRun) {
+            btnPerformSync.text = activity.getString(R.string.btn_perform_sync)
+            SyncSession.lock.set(false)
+            applySyncCapability()
+            return
+        }
 
         if (currentSyncSecrets.token.isNullOrEmpty()) {
             SyncSession.lock.set(false)
