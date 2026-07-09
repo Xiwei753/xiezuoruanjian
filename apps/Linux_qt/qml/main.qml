@@ -385,8 +385,8 @@ ApplicationWindow {
             sourceComponent: CreativeHub {
                 dt: designTokens
                 backendRef: projectBackend
-            editorBackendRef: editorBackend
-            editorControllerRef: editorController
+                editorBackendRef: editorBackend
+                editorControllerRef: editorController
                 starmapBackendRef: starmapBackend
                 starMapController: globalStarMapController
                 appState: window.appState
@@ -651,6 +651,7 @@ ApplicationWindow {
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
+            editorControllerRef: editorController
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
             }
