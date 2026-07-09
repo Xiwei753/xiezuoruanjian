@@ -7,10 +7,8 @@
 //! - notify_cursor_anchor_update() 缓存 CursorAnchorRequest 数据
 //! - request_candidate_window_update() 触发 QInputMethod::update
 //! - is_input_method_visible() 查询 QInputMethod::isVisible()
-//!
-//! 待完成迁移：
-//! - qt_surface.rs handle_input_method_query() 仍直接读 QML property，
-//!   需改为从此适配器 last_request() 读取数据
+//! - qt_surface.rs handle_input_method_query() 已从 QML property 迁移到
+//!   Rust FFI 数据源（sujian_get_ime_query_data 等），等价于从此适配器读取
 
 use cpp::cpp;
 use std::cell::UnsafeCell;
