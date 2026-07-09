@@ -127,7 +127,7 @@ Rectangle {
             AppTextField {
                 id: renameField
                 Layout.fillWidth: true
-                dt: dt
+                dt: root.dt
                 text: renameProjectDialog.currentTitle
                 placeholderText: qsTr("作品名称")
                 onAccepted: renameConfirmButton.clicked()
@@ -137,14 +137,14 @@ Rectangle {
                 Item { Layout.fillWidth: true }
                 AppButton {
                     text: qsTr("取消")
-                    dt: dt
+                    dt: root.dt
                     variant: "text"
                     onClicked: renameProjectDialog.close()
                 }
                 AppButton {
                     id: renameConfirmButton
                     text: qsTr("确定")
-                    dt: dt
+                    dt: root.dt
                     variant: "primary"
                     onClicked: {
                         var t = renameField.text.trim();

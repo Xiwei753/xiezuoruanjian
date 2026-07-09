@@ -43,6 +43,17 @@ QtObject {
     signal errorRaised(string message)
     signal stateChanged(var state)
 
+    property var refreshDebounceTimer: Timer {
+        interval: 100
+        repeat: false
+        onTriggered: {
+            var projectApi = stateBackendRef || appBackendRef || backendRef;
+            if (!projectApi) return;
+            var state = projectApi.refresh_app_state();
+            if (state) applyState(state);
+        }
+    }
+
     function generateActionId() {
         return Math.random().toString(36).substring(2, 8);
     }
@@ -93,6 +104,10 @@ QtObject {
     }
 
     function refreshState(fallbackMessage) {
+        refreshDebounceTimer.restart();
+    }
+
+    function refreshStateImmediate(fallbackMessage) {
         var projectApi = stateBackendRef || appBackendRef || backendRef;
         if (!projectApi) return;
         var state = projectApi.refresh_app_state();
@@ -105,7 +120,7 @@ QtObject {
         if (!workspaceApi) return;
         if (appApi) appApi.query_system_color_scheme();
         workspaceApi.try_restore_last_workspace();
-        refreshState(qsTr("恢复工作区失败"));
+        refreshStateImmediate(qsTr("恢复工作区失败"));
 
         // 恢复上次导航状态
         if (workspaceApi.has_workspace) {
@@ -187,7 +202,7 @@ QtObject {
         starmapId = "";
         starmapTitle = "";
         saveNavigationState();
-        refreshState(qsTr("返回工作台失败"));
+        refreshStateImmediate(qsTr("返回工作台失败"));
     }
 
     function switchWorkspace() {
@@ -195,9 +210,8 @@ QtObject {
         if (!workspaceApi) return;
         workspaceApi.switch_workspace();
         route = "hub";
-        // 清除导航状态（切换工作区后旧状态无效）
         workspaceApi.clear_last_navigation_state();
-        refreshState(qsTr("切换工作区失败"));
+        refreshStateImmediate(qsTr("切换工作区失败"));
     }
 
     function createWorkspace(openExisting) {
@@ -210,14 +224,14 @@ QtObject {
             res = workspaceApi.create_new_workspace();
         }
         if (!res) { 
-            refreshState(qsTr("解析结果失败")); 
+            refreshStateImmediate(qsTr("解析结果失败")); 
             return; 
         }
         if (res.success) {
-            refreshState(qsTr("打开工作区成功"));
+            refreshStateImmediate(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));
-            refreshState(qsTr("打开工作区失败"));
+            refreshStateImmediate(qsTr("打开工作区失败"));
         }
     }
 
@@ -231,14 +245,14 @@ QtObject {
             res = workspaceApi.create_workspace_with_path(path);
         }
         if (!res) { 
-            refreshState(qsTr("解析结果失败")); 
+            refreshStateImmediate(qsTr("解析结果失败")); 
             return; 
         }
         if (res.success) {
-            refreshState(qsTr("打开工作区成功"));
+            refreshStateImmediate(qsTr("打开工作区成功"));
         } else {
             emitError(qsTr("打开工作区失败"));
-            refreshState(qsTr("打开工作区失败"));
+            refreshStateImmediate(qsTr("打开工作区失败"));
         }
     }
 
@@ -246,7 +260,7 @@ QtObject {
         if (!res) return false;
         if (res.success) {
             if (res.state) applyState(res.state);
-            else refreshState(qsTr("刷新操作结果失败"));
+            else refreshStateImmediate(qsTr("刷新操作结果失败"));
             return true;
         }
         emitError(fallbackMessage || qsTr("操作失败"));

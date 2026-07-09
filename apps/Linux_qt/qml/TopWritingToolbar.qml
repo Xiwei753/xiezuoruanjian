@@ -452,7 +452,7 @@ Rectangle {
                 AppSlider {
                     id: fontSlider
                     Layout.fillWidth: true
-                    dt: dt
+                    dt: root.dt
                     from: root.minFontSize
                     to: root.maxFontSize
                     stepSize: 1
@@ -596,7 +596,7 @@ Rectangle {
                 AppSlider {
                     id: lineSpacingSlider
                     Layout.fillWidth: true
-                    dt: dt
+                    dt: root.dt
                     from: 1.0
                     to: 3.0
                     stepSize: 0.1
@@ -675,7 +675,7 @@ Rectangle {
                     AppSlider {
                         id: widthSlider
                         Layout.fillWidth: true
-                        dt: dt
+                        dt: root.dt
                         from: 480
                         to: 3840
                         stepSize: 10

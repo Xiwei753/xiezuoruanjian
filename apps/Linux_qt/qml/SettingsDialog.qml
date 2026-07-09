@@ -29,7 +29,7 @@ Dialog {
     property var workspaceBackendRef: null
     property var syncBackendRef: null
     property var editorBackendRef: null
-    property var editorControllerRef: null
+    property var beforeSyncHook: null
     property var dt: theme
     property bool updatingValues: false
     property bool settingsDirty: false
@@ -401,7 +401,7 @@ Dialog {
                     backendRef: root.syncBackendRef
                     beforeSyncHook: function() {
                         if (root.editorBackendRef) root.editorBackendRef.flush_writing_stats();
-                        if (root.editorControllerRef) return root.editorControllerRef.flushActiveEditorBeforeSync();
+                        if (typeof root.beforeSyncHook === "function") return root.beforeSyncHook();
                         return true;
                     }
                     onSettingsChanged: root.settingsChanged()

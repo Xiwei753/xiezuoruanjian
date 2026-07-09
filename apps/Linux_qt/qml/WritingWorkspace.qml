@@ -59,6 +59,11 @@ Rectangle {
     signal backToProjects()
     signal openSettings()
 
+    function flushActiveEditorBeforeSync() {
+        if (!editorController.chapterId || !editorController.projectId || !editorController.volumeId) return true;
+        return editorController.flushActiveEditorBeforeSync();
+    }
+
     signal createVolumeRequested(string projectId)
     signal createChapterRequested(string projectId, string volumeId)
     signal renameItemRequested(var itemData)
@@ -137,7 +142,7 @@ Rectangle {
             }
             AppButton {
                             text: qsTr("确定")
-                dt: dt
+                dt: root.dt
                 variant: "primary"
                 Layout.alignment: Qt.AlignRight
                 onClicked: emptySaveDialog.close()
@@ -1078,15 +1083,6 @@ Rectangle {
                         ""
                     );
                 }
-            }
-        }
-    }
-
-    Connections {
-        target: syncBackend
-        function onSync_status_changed() {
-            if (syncBackend && syncBackend.sync_status === "syncing") {
-                editorController.saveCurrentChapter()
             }
         }
     }

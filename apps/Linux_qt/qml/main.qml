@@ -79,6 +79,13 @@ ApplicationWindow {
         }
     }
 
+    function flushBeforeSync() {
+        if (appController.inWriting && writingWorkspaceLoader.item) {
+            return writingWorkspaceLoader.item.flushActiveEditorBeforeSync();
+        }
+        return true;
+    }
+
     function openSettingsDialog() {
         if (!settingsDialogLoader.active) {
             settingsDialogLoader.active = true;
@@ -282,6 +289,7 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             if (syncBackend) {
+                if (!window.flushBeforeSync()) return;
                 syncBackend.request_auto_sync("auto_sync_on_workspace_open");
             }
         }
@@ -293,6 +301,7 @@ ApplicationWindow {
         repeat: false
         onTriggered: {
             if (syncBackend) {
+                if (!window.flushBeforeSync()) return;
                 syncBackend.maybe_auto_sync_on_foreground();
             }
         }
@@ -385,8 +394,7 @@ ApplicationWindow {
             sourceComponent: CreativeHub {
                 dt: designTokens
                 backendRef: projectBackend
-                editorBackendRef: editorBackend
-                editorControllerRef: writingWorkspaceLoader.item ? writingWorkspaceLoader.item : null
+            editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
                 starMapController: globalStarMapController
                 appState: window.appState
@@ -424,6 +432,12 @@ ApplicationWindow {
                     window.openSettingsDialog();
                 }
 
+                onRequestSync: {
+                    if (!window.flushBeforeSync()) return;
+                    if (syncBackend && !syncBackend.sync_in_progress) {
+                        syncBackend.perform_sync();
+                    }
+                }
 
                 onSwitchWorkspace: {
                     window.debugLog("workspace", "switch_workspace_clicked", "");
@@ -651,7 +665,7 @@ ApplicationWindow {
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
-            editorControllerRef: writingWorkspaceLoader.item ? writingWorkspaceLoader.item : null
+            beforeSyncHook: function() { return window.flushBeforeSync() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
             }

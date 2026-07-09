@@ -124,7 +124,6 @@ class EditorViewModel(
     private var statsSessionId: String = java.util.UUID.randomUUID().toString()
     private var statsLastEventMs: Long = 0
     private var previousText: String = ""
-    private var lastSavedContent: String = ""
     private var isLoadingChapter = false
 
     fun initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
@@ -198,7 +197,6 @@ class EditorViewModel(
                         saveStatus = SaveStatus.Idle
                     )
                     previousText = content
-                    lastSavedContent = content
                     isLoadingChapter = false
                     initialWordCount = calculateWordCount(content)
                     sessionStartTime = System.currentTimeMillis()
@@ -265,8 +263,8 @@ class EditorViewModel(
             if (!_uiState.value.settings.autoSaveEnabled) return@launch
             delay(delayMs)
             if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
-                if (content.trim().isEmpty() && lastSavedContent.trim().isNotEmpty()) {
-                    performClearChapterContent(showDialog = false)
+                if (content.trim().isEmpty()) {
+                    clearChapterContentInternal()
                 } else {
                     performSave(content, isAutoSave = true)
                 }
@@ -301,11 +299,7 @@ class EditorViewModel(
         val content = _uiState.value.content
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
         viewModelScope.launch {
-            val result = if (content.trim().isEmpty() && lastSavedContent.trim().isNotEmpty()) {
-                performClearChapterContent(showDialog = true)
-            } else {
-                performSave(content, isAutoSave = false)
-            }
+            val result = performSave(content, isAutoSave = false)
             deferred.complete(result)
         }
         return deferred
@@ -313,18 +307,16 @@ class EditorViewModel(
 
     fun clearChapterContent() {
         viewModelScope.launch {
-            performClearChapterContent(showDialog = true)
+            clearChapterContentInternal()
         }
     }
 
-    private suspend fun performClearChapterContent(showDialog: Boolean): Boolean {
+    private suspend fun clearChapterContentInternal(): Boolean {
         val pid = projectId ?: return false
         val vid = volumeId ?: return false
         val cid = chapterId ?: return false
-        var success = false
 
-        saveMutex.withLock {
-            _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saving)
+        return saveMutex.withLock {
             try {
                 val result = workspaceRepository.clearChapterContent(pid, vid, cid)
                 when (result) {
@@ -334,41 +326,31 @@ class EditorViewModel(
                             saveStatus = SaveStatus.Saved
                         )
                         previousText = ""
-                        lastSavedContent = ""
-                        pendingSaveContent = null
-                        success = true
+                        true
                     }
                     is com.xiwei.sujian.data.BridgeResult.Error -> {
                         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        val message = if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
-                            getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)
+                        if (result.code == "EMPTY_OVERWRITE_BLOCKED") {
+                            _events.send(EditorEvent.ShowSaveFailedDialog(
+                                getApplication<Application>().getString(R.string.error_empty_overwrite_dialog)))
                         } else {
-                            getApplication<Application>().getString(R.string.error_save_failed, result.message)
+                            _events.send(EditorEvent.ShowSaveFailedDialog(
+                                getApplication<Application>().getString(R.string.error_save_failed, result.message)))
                         }
-                        if (showDialog) {
-                            _events.send(EditorEvent.ShowSaveFailedDialog(message))
-                        } else {
-                            emitErrorEvent(message)
-                        }
+                        false
                     }
                     com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
                         _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                        if (showDialog) {
-                            _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_native_not_loaded)))
-                        }
+                        false
                     }
                 }
             } catch (e: Throwable) {
                 _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-                val message = getApplication<Application>().getString(R.string.error_save_exception, e.message ?: "")
-                if (showDialog) {
-                    _events.send(EditorEvent.ShowSaveFailedDialog(message))
-                } else {
-                    emitErrorEvent(message)
-                }
+                _events.send(EditorEvent.ShowSaveFailedDialog(
+                    getApplication<Application>().getString(R.string.error_save_exception, e.message ?: "")))
+                false
             }
         }
-        return success
     }
 
     private suspend fun performSave(content: String, isAutoSave: Boolean): Boolean {
@@ -377,25 +359,21 @@ class EditorViewModel(
         val cid = chapterId
         if (pid == null || vid == null || cid == null) return false
 
+        if (content.trim().isEmpty()) {
+            return clearChapterContentInternal()
+        }
+
         var currentContent = content
         var currentIsAutoSave = isAutoSave
+        var lastSaveSuccess = false
 
         while (true) {
-            if (currentContent.trim().isEmpty() && lastSavedContent.trim().isNotEmpty()) {
-                return performClearChapterContent(showDialog = !currentIsAutoSave)
-            }
-
             val contentToSave = currentContent
-            var nextContent: String? = null
-            var queuedBehindActiveSave = false
-            var saved = false
-
             saveMutex.withLock {
                 val currentState = _uiState.value
                 if (currentState.saveStatus == SaveStatus.Saving) {
                     pendingSaveContent = contentToSave
-                    queuedBehindActiveSave = true
-                    return@withLock
+                    return false
                 }
 
                 _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
@@ -405,12 +383,15 @@ class EditorViewModel(
                     when (result) {
                         is com.xiwei.sujian.data.BridgeResult.Success -> {
                             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
-                            lastSavedContent = contentToSave
-                            saved = true
                             val pending = pendingSaveContent
                             pendingSaveContent = null
                             if (pending != null && pending != contentToSave) {
-                                nextContent = pending
+                                currentContent = pending
+                                currentIsAutoSave = true
+                                lastSaveSuccess = true
+                            } else {
+                                lastSaveSuccess = true
+                                return true
                             }
                         }
                         is com.xiwei.sujian.data.BridgeResult.Error -> {
@@ -428,12 +409,14 @@ class EditorViewModel(
                                     emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_failed, result.message))
                                 }
                             }
+                            return false
                         }
                         com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
                             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
                             if (!currentIsAutoSave) {
                                 _events.send(EditorEvent.ShowSaveFailedDialog(getApplication<Application>().getString(R.string.error_save_native_not_loaded)))
                             }
+                            return false
                         }
                     }
                 } catch (e: Throwable) {
@@ -443,14 +426,10 @@ class EditorViewModel(
                     } else {
                         emitErrorEvent(getApplication<Application>().getString(R.string.error_auto_save_exception, e.message ?: ""))
                     }
+                    return false
                 }
             }
-
-            if (queuedBehindActiveSave) return false
-            if (!saved) return false
-            val pending = nextContent ?: return true
-            currentContent = pending
-            currentIsAutoSave = true
+            if (!lastSaveSuccess) return false
         }
     }
 
@@ -480,22 +459,19 @@ class EditorViewModel(
     override fun onCleared() {
         super.onCleared()
         autoSaveJob?.cancel()
-        // Best-effort flush on ViewModel destruction.
-        // Save current chapter content before stats flush.
         try {
             val pid = projectId
             val vid = volumeId
             val cid = chapterId
             val content = _uiState.value.content
             if (pid != null && vid != null && cid != null) {
-                if (content.trim().isEmpty() && lastSavedContent.trim().isNotEmpty()) {
-                    workspaceRepository.clearChapterContent(pid, vid, cid)
-                } else if (content.isNotEmpty()) {
+                if (content.isNotEmpty()) {
                     workspaceRepository.saveChapterContent(pid, vid, cid, content)
+                } else if (previousText.isNotEmpty()) {
+                    workspaceRepository.clearChapterContent(pid, vid, cid)
                 }
             }
         } catch (_: Exception) {
-            // Best-effort; non-critical
         }
         // flushWritingStats also triggers a Core-level flush cycle.
         try {
