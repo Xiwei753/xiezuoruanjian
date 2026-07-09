@@ -34,12 +34,12 @@ impl PlatformCapabilities {
     /// 已真实接入的能力：
     /// - IME preedit: SujianEventFilter → FFI → EditorInputController 完整链路
     /// - replacement commit: fcitx5 拼音修正走 sujian_ime_replace_and_commit
-    /// - cursor anchor: LinuxQtCursorAnchorAdapter → QInputMethod::update
+    /// - cursor anchor: IME query 已迁移到 Rust FFI 数据源（sujian_get_ime_query_data）
     /// - text animation: Core visual transaction → QML EditorAnimationOverlay
     /// - smooth cursor: QML Rectangle cursor + cursor_rect_changed signal
     /// - reflow animation: Core reflow visual transaction → overlay
     /// - clipboard: LinuxQtClipboardFocusAdapter → QClipboard
-    /// - context menu: QML context menu
+    /// - context menu: LinuxQtClipboardFocusAdapter → QML context_menu_requested signal
     pub fn linux_qt() -> Self {
         Self {
             supports_ime_preedit: true,
@@ -84,24 +84,25 @@ impl PlatformCapabilities {
     /// 已真实接入的能力：
     /// - IME preedit: CoreTextEditContext composition/commit
     /// - cursor anchor: CoreTextEditContext + candidate window anchoring
-    /// - text animation: Core visual transaction → SujianAnimationOverlay
-    /// - smooth cursor: cursor blink + animation
-    /// - reflow animation: Core reflow visual transaction → overlay
     /// - clipboard: Windows.ApplicationModel.DataTransfer.Clipboard
-    /// - context menu: WinUI 3 context menu
     ///
-    /// 未真实接入：
+    /// 未真实接入 / 使用本地独立实现：
     /// - replacement commit: CoreTextEditContext 未实现 replacement range commit
+    /// - text animation: SujianAnimationOverlay 未接入 Core visual transaction
+    /// - smooth cursor: cursor blink 仅有闪烁，无平滑移动动画
+    /// - reflow animation: 未接入 Core reflow visual transaction
+    /// - context menu: WinUI 3 context menu 未通过适配器接入
+    /// - IEditorTransactionBoundary: LocalStandaloneTransactionBoundary（UsesCoreEngine == false）
     pub fn windows() -> Self {
         Self {
             supports_ime_preedit: true,
             supports_cursor_anchor: true,
             supports_replacement_commit: false,
-            supports_text_animation: true,
-            supports_smooth_cursor: true,
-            supports_reflow_animation: true,
+            supports_text_animation: false,
+            supports_smooth_cursor: false,
+            supports_reflow_animation: false,
             supports_clipboard: true,
-            supports_context_menu: true,
+            supports_context_menu: false,
         }
     }
 
@@ -215,7 +216,8 @@ mod tests {
         assert!(caps.supports_ime_preedit);
         assert!(caps.supports_cursor_anchor);
         assert!(!caps.supports_replacement_commit);
-        assert!(caps.has_any_animation_support());
+        assert!(!caps.has_any_animation_support());
+        assert!(!caps.supports_context_menu);
     }
 
     #[test]
