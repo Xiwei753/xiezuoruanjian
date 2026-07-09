@@ -386,7 +386,7 @@ ApplicationWindow {
                 dt: designTokens
                 backendRef: projectBackend
                 editorBackendRef: editorBackend
-                editorControllerRef: editorController
+                editorControllerRef: writingWorkspaceLoader.item ? writingWorkspaceLoader.item : null
                 starmapBackendRef: starmapBackend
                 starMapController: globalStarMapController
                 appState: window.appState
@@ -651,7 +651,7 @@ ApplicationWindow {
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
-            editorControllerRef: editorController
+            editorControllerRef: writingWorkspaceLoader.item ? writingWorkspaceLoader.item : null
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
             }
