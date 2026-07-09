@@ -5,11 +5,32 @@
 //! C++ PlatformImeAdapter 类定义在 qt_surface.rs 的 cpp! 块中
 //! （cpp! 宏将所有 cpp! 块合并到同一编译单元，类定义不能重复）。
 //! 此文件只包含 Rust 侧的 FFI 回调函数。
+//!
+//! IME query 数据源迁移：
+//! handle_input_method_query() 不再直接读 QML property，
+//! 而是通过 sujian_get_ime_query_data / sujian_ime_query_text_* FFI 函数
+//! 从 SujianEditorItem 内部状态读取，等价于 CursorAnchorAdapter 数据源。
 
 use crate::sujian_editor_item::SujianEditorItem;
 use super::controller::*;
 use super::events::decode_utf16_ptr;
 use std::ffi::c_void;
+
+#[repr(C)]
+pub struct SujianImeQueryData {
+    pub cursor_rect_x: f64,
+    pub cursor_rect_y: f64,
+    pub cursor_rect_w: f64,
+    pub cursor_rect_h: f64,
+    pub has_anchor_rect: bool,
+    pub anchor_rect_x: f64,
+    pub anchor_rect_y: f64,
+    pub anchor_rect_w: f64,
+    pub anchor_rect_h: f64,
+    pub cursor_char_pos: i32,
+    pub anchor_char_pos: i32,
+    pub has_selection: bool,
+}
 
 unsafe fn item_from_ptr<'a>(rust_item: *mut c_void) -> Option<&'a mut SujianEditorItem> {
     if rust_item.is_null() {
@@ -189,4 +210,96 @@ extern "C" fn sujian_request_repaint(rust_item: *mut c_void) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         item.input_request_repaint();
     }));
+}
+
+#[no_mangle]
+extern "C" fn sujian_get_ime_query_data(
+    rust_item: *mut c_void,
+    out: *mut SujianImeQueryData,
+) -> bool {
+    let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
+        return false;
+    };
+    if out.is_null() {
+        return false;
+    }
+    let data = SujianImeQueryData {
+        cursor_rect_x: item.cursor_rect_x() as f64,
+        cursor_rect_y: item.cursor_rect_y() as f64,
+        cursor_rect_w: item.cursor_rect_width() as f64,
+        cursor_rect_h: item.cursor_rect_height() as f64,
+        has_anchor_rect: item.has_selection(),
+        anchor_rect_x: item.anchor_rect_x() as f64,
+        anchor_rect_y: item.anchor_rect_y() as f64,
+        anchor_rect_w: item.anchor_rect_width() as f64,
+        anchor_rect_h: item.anchor_rect_height() as f64,
+        cursor_char_pos: item.cursor_position() as i32,
+        anchor_char_pos: item.anchor_position() as i32,
+        has_selection: item.has_selection(),
+    };
+    unsafe { *out = data };
+    true
+}
+
+#[no_mangle]
+extern "C" fn sujian_ime_query_text_before_cursor(
+    rust_item: *mut c_void,
+    buf: *mut u16,
+    buf_capacity: i32,
+) -> i32 {
+    let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
+        return 0;
+    };
+    if buf.is_null() || buf_capacity <= 0 {
+        return 0;
+    }
+    let before_text = item.ime_query_text_before_cursor(100);
+    let utf16: Vec<u16> = before_text.encode_utf16().collect();
+    let copy_len = utf16.len().min(buf_capacity as usize);
+    unsafe {
+        std::ptr::copy_nonoverlapping(utf16.as_ptr(), buf, copy_len);
+    }
+    copy_len as i32
+}
+
+#[no_mangle]
+extern "C" fn sujian_ime_query_text_after_cursor(
+    rust_item: *mut c_void,
+    buf: *mut u16,
+    buf_capacity: i32,
+) -> i32 {
+    let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
+        return 0;
+    };
+    if buf.is_null() || buf_capacity <= 0 {
+        return 0;
+    }
+    let after_text = item.ime_query_text_after_cursor(100);
+    let utf16: Vec<u16> = after_text.encode_utf16().collect();
+    let copy_len = utf16.len().min(buf_capacity as usize);
+    unsafe {
+        std::ptr::copy_nonoverlapping(utf16.as_ptr(), buf, copy_len);
+    }
+    copy_len as i32
+}
+
+#[no_mangle]
+extern "C" fn sujian_ime_query_selection_text(
+    rust_item: *mut c_void,
+    buf: *mut u16,
+    buf_capacity: i32,
+) -> i32 {
+    let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
+        return 0;
+    };
+    if buf.is_null() || buf_capacity <= 0 {
+        return 0;
+    }
+    let sel_text = item.ime_query_selected_text();
+    let utf16: Vec<u16> = sel_text.encode_utf16().collect();
+    let copy_len = utf16.len().min(buf_capacity as usize);
+    unsafe {
+        std::ptr::copy_nonoverlapping(utf16.as_ptr(), buf, copy_len);
+    }
+    copy_len as i32
 }
