@@ -679,9 +679,9 @@ fn test_editor_render_format_is_unified() {
     );
 
     assert!(
-        design_tokens.contains("property color onSurface: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
+        design_tokens.contains("property color onSurface: _schemeColor(\"onSurface\")")
             && design_tokens
-                .contains("property color textPrimary: isDark ? \"#E2E2E5\" : \"#1A1C1E\"")
+                .contains("property color textPrimary: onSurface")
             && design_tokens.contains("property color editorText: textPrimary"),
         "DesignTokens.editorText must remain the semantic editor foreground token"
     );

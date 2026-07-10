@@ -267,6 +267,70 @@ Dialog {
                         }
                     }
                 }
+                SettingsRow {
+                    dt: root.dt
+                    visible: backendRef ? backendRef.setting_color_source === "built_in" : false
+                    title: qsTr("内置主题")
+                    description: qsTr("选择内置主题配色方案")
+                    ModernComboBox {
+                        id: builtinThemeCombo
+                        dt: root.dt
+                        property var _themes: {
+                            if (!backendRef) return []
+                            try { return JSON.parse(backendRef.list_builtin_themes_json) } catch(e) { return [] }
+                        }
+                        model: _themes.map(function(t) { return t.name || t.themeId })
+                        onActivated: function(index) {
+                            if (!backendRef || root.updatingValues) return
+                            var themeId = _themes[index] ? _themes[index].themeId : ""
+                            if (themeId.length > 0) {
+                                backendRef.setting_selected_builtin_theme_id = themeId
+                                root.dt.selectedBuiltinThemeId = themeId
+                                root.settingsDirty = true
+                                root.saveAndNotify()
+                            }
+                        }
+                        Component.onCompleted: {
+                            var selId = backendRef ? backendRef.setting_selected_builtin_theme_id : ""
+                            for (var i = 0; i < _themes.length; i++) {
+                                if (_themes[i].themeId === selId) { currentIndex = i; break }
+                            }
+                        }
+                    }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    visible: backendRef ? backendRef.setting_color_source === "saved_palette" : false
+                    title: qsTr("已保存配色")
+                    description: qsTr("选择已保存的设备调色板")
+                    ModernComboBox {
+                        id: paletteRecordCombo
+                        dt: root.dt
+                        property var _records: {
+                            if (!backendRef) return []
+                            try { return JSON.parse(backendRef.list_palette_records_json) } catch(e) { return [] }
+                        }
+                        model: _records.map(function(r) {
+                            var d = new Date(r.capturedAtMs)
+                            return (r.sourcePlatform || "") + " · " + (r.sourceDeviceId || "") + " · " + d.toLocaleDateString()
+                        })
+                        onActivated: function(index) {
+                            if (!backendRef || root.updatingValues) return
+                            var paletteId = _records[index] ? _records[index].paletteId : ""
+                            if (paletteId.length > 0) {
+                                backendRef.setting_selected_palette_id = paletteId
+                                root.settingsDirty = true
+                                root.saveAndNotify()
+                            }
+                        }
+                        Component.onCompleted: {
+                            var selId = backendRef ? backendRef.setting_selected_palette_id : ""
+                            for (var i = 0; i < _records.length; i++) {
+                                if (_records[i].paletteId === selId) { currentIndex = i; break }
+                            }
+                        }
+                    }
+                }
             }
 
             // ── 2. 编辑器和动画 (editor + animation) ──

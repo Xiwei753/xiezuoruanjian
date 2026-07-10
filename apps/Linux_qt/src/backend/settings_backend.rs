@@ -787,10 +787,11 @@ impl AppBackend {
                         self.current_setting_font_size = 16.0;
                     }
                 }
-                self.current_setting_theme_mode = sync_settings.theme_mode.clone();
-                self.current_setting_monet_color = sync_settings.monet_color.clone();
-                self.current_setting_theme_palette_json = sync_settings.theme_palette_json.clone();
                 if let Ok(local) = core.load_local_settings() {
+                self.current_setting_theme_mode = local.appearance_mode.clone();
+                if self.current_setting_theme_mode.is_empty() {
+                    self.current_setting_theme_mode = local.theme_mode.clone().unwrap_or_else(|| "system".to_string());
+                }
                 self.current_setting_color_source = local.color_source.clone();
                 self.current_setting_appearance_mode = local.appearance_mode.clone();
                 self.current_setting_dynamic_color_enabled = local.dynamic_color_enabled;
@@ -916,10 +917,6 @@ impl AppBackend {
                 )
             });
             syncable.font_size = self.current_setting_font_size as f64;
-            syncable.theme_mode = self.current_setting_theme_mode.clone();
-            #[allow(deprecated)]
-            { syncable.monet_color = String::new(); }
-            syncable.theme_palette_json = self.current_setting_theme_palette_json.clone();
 
             let syncable_result = core.save_syncable_settings(syncable.clone());
             let syncable_json = match syncable_result {

@@ -69,6 +69,51 @@ private fun schemeFromRecord(
     )
 }
 
+private fun schemeFromBuiltin(
+    theme: uniffi.writer_core.BuiltinThemeDto,
+    isDark: Boolean
+): androidx.compose.material3.ColorScheme {
+    val scheme = if (isDark) theme.darkScheme else theme.lightScheme
+    return androidx.compose.material3.ColorScheme(
+        primary = hexToColor(scheme.primary),
+        onPrimary = hexToColor(scheme.on_primary),
+        primaryContainer = hexToColor(scheme.primary_container),
+        onPrimaryContainer = hexToColor(scheme.on_primary_container),
+        inversePrimary = hexToColor(scheme.inverse_primary),
+        secondary = hexToColor(scheme.secondary),
+        onSecondary = hexToColor(scheme.on_secondary),
+        secondaryContainer = hexToColor(scheme.secondary_container),
+        onSecondaryContainer = hexToColor(scheme.on_secondary_container),
+        tertiary = hexToColor(scheme.tertiary),
+        onTertiary = hexToColor(scheme.on_tertiary),
+        tertiaryContainer = hexToColor(scheme.tertiary_container),
+        onTertiaryContainer = hexToColor(scheme.on_tertiary_container),
+        background = hexToColor(scheme.background),
+        onBackground = hexToColor(scheme.on_background),
+        surface = hexToColor(scheme.surface),
+        onSurface = hexToColor(scheme.on_surface),
+        surfaceVariant = hexToColor(scheme.surface_variant),
+        onSurfaceVariant = hexToColor(scheme.on_surface_variant),
+        surfaceTint = hexToColor(scheme.surface_tint),
+        inverseSurface = hexToColor(scheme.inverse_surface),
+        inverseOnSurface = hexToColor(scheme.inverse_on_surface),
+        error = hexToColor(scheme.error),
+        onError = hexToColor(scheme.on_error),
+        errorContainer = hexToColor(scheme.error_container),
+        onErrorContainer = hexToColor(scheme.on_error_container),
+        outline = hexToColor(scheme.outline),
+        outlineVariant = hexToColor(scheme.outline_variant),
+        scrim = hexToColor(scheme.scrim),
+        surfaceBright = hexToColor(scheme.surface_bright),
+        surfaceDim = hexToColor(scheme.surface_dim),
+        surfaceContainer = hexToColor(scheme.surface_container),
+        surfaceContainerHigh = hexToColor(scheme.surface_container_high),
+        surfaceContainerHighest = hexToColor(scheme.surface_container_highest),
+        surfaceContainerLow = hexToColor(scheme.surface_container_low),
+        surfaceContainerLowest = hexToColor(scheme.surface_container_lowest),
+    )
+}
+
 private val SujianDefaultLightScheme = lightColorScheme(
     primary = Color(0xFF006493),
     onPrimary = Color(0xFFFFFFFF),
@@ -155,15 +200,19 @@ enum class ColorSource {
 
 @Composable
 fun SujianTheme(
-    colorSource: ColorSource = ColorSource.BUILT_IN,
-    selectedPaletteRecord: uniffi.writer_core.ThemePaletteRecordDto? = null,
+    uiState: ThemeUiState = ThemeUiState(),
     content: @Composable () -> Unit
 ) {
-    val isDark = isSystemInDarkTheme()
+    val systemDark = isSystemInDarkTheme()
+    val isDark = when {
+        uiState.isDark -> true
+        uiState.isLight -> false
+        else -> systemDark
+    }
     val context = LocalContext.current
 
-    val colorScheme = remember(colorSource, isDark, selectedPaletteRecord) {
-        when (colorSource) {
+    val colorScheme = remember(uiState, isDark) {
+        when (uiState.resolvedColorSource) {
             ColorSource.ANDROID_DYNAMIC -> {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     if (isDark) dynamicDarkColorScheme(context)
@@ -173,14 +222,20 @@ fun SujianTheme(
                 }
             }
             ColorSource.SAVED_PALETTE -> {
-                if (selectedPaletteRecord != null) {
-                    schemeFromRecord(selectedPaletteRecord, isDark)
+                val record = uiState.selectedPaletteRecord
+                if (record != null) {
+                    schemeFromRecord(record, isDark)
                 } else {
                     if (isDark) SujianDefaultDarkScheme else SujianDefaultLightScheme
                 }
             }
             ColorSource.BUILT_IN -> {
-                if (isDark) SujianDefaultDarkScheme else SujianDefaultLightScheme
+                val builtin = uiState.selectedBuiltinTheme
+                if (builtin != null) {
+                    schemeFromBuiltin(builtin, isDark)
+                } else {
+                    if (isDark) SujianDefaultDarkScheme else SujianDefaultLightScheme
+                }
             }
         }
     }

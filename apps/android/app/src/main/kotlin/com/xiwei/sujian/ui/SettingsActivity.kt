@@ -40,6 +40,9 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var actvTheme: MaterialAutoCompleteTextView
     private lateinit var actvColorSource: MaterialAutoCompleteTextView
     private lateinit var switchDynamicColor: MaterialSwitch
+    private lateinit var actvBuiltinTheme: MaterialAutoCompleteTextView
+    private lateinit var actvPaletteRecord: MaterialAutoCompleteTextView
+    private lateinit var btnDeletePalette: com.google.android.material.button.MaterialButton
     private lateinit var tvWorkspacePath: TextView
     private lateinit var tvVersionInfo: TextView
 
@@ -125,6 +128,9 @@ class SettingsActivity : AppCompatActivity() {
         actvTheme = findViewById(R.id.actvTheme)
         actvColorSource = findViewById(R.id.actvColorSource)
         switchDynamicColor = findViewById(R.id.switchDynamicColor)
+        actvBuiltinTheme = findViewById(R.id.actvBuiltinTheme)
+        actvPaletteRecord = findViewById(R.id.actvPaletteRecord)
+        btnDeletePalette = findViewById(R.id.btnDeletePalette)
 
         tvFontSizeValue = findViewById(R.id.tvFontSizeValue)
         tvLineSpacingValue = findViewById(R.id.tvLineSpacingValue)
@@ -210,6 +216,50 @@ class SettingsActivity : AppCompatActivity() {
                 "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
                 "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
                 else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+            }
+        }
+
+        val builtinThemes = try {
+            settingsRepository.listBuiltinThemes()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val builtinThemeNames = builtinThemes.map { it.name }.toTypedArray()
+        val builtinThemeAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, builtinThemeNames)
+        actvBuiltinTheme.setAdapter(builtinThemeAdapter)
+        actvBuiltinTheme.setOnItemClickListener { _, _, position, _ ->
+            if (isRendering) return@setOnItemClickListener
+            val themeId = builtinThemes[position].themeId
+            updateLocalSettings { it.copy(selectedBuiltinThemeId = themeId, colorSource = "built_in") }
+            actvColorSource.setText("素笺默认", false)
+        }
+
+        val paletteRecords = try {
+            settingsRepository.listPaletteRecords()
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val paletteNames = paletteRecords.map {
+            "${it.sourcePlatform} · ${it.sourceDeviceId} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)}"
+        }.toTypedArray()
+        val paletteAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, paletteNames)
+        actvPaletteRecord.setAdapter(paletteAdapter)
+        actvPaletteRecord.setOnItemClickListener { _, _, position, _ ->
+            if (isRendering) return@setOnItemClickListener
+            val paletteId = paletteRecords[position].paletteId
+            updateLocalSettings { it.copy(selectedPaletteId = paletteId, colorSource = "saved_palette") }
+            actvColorSource.setText("已保存的设备配色", false)
+        }
+
+        btnDeletePalette.setOnClickListener {
+            if (currentSettings.selectedPaletteId.isNotEmpty()) {
+                val parts = currentSettings.selectedPaletteId.split(":")
+                if (parts.size == 2) {
+                    settingsRepository.deletePaletteRecord(parts[0], parts[1])
+                    updateLocalSettings { it.copy(selectedPaletteId = "", colorSource = "built_in") }
+                    actvColorSource.setText("素笺默认", false)
+                    actvPaletteRecord.setText("", false)
+                }
             }
         }
 
@@ -459,11 +509,9 @@ class SettingsActivity : AppCompatActivity() {
                 CoreSettingsEvents.markEditorChanged()
             }
         }
-        val themeStr = currentSettings.themeMode
         val currentSyncable = settingsRepository.getSyncableSettings()
         val newSyncable = currentSyncable.copy(
-            fontSize = sbFontSize.value.toDouble(),
-            themeMode = themeStr ?: "system"
+            fontSize = sbFontSize.value.toDouble()
         )
         ErrorUtil.safeRun(this) {
             if (::settingsRepository.isInitialized) {

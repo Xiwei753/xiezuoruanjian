@@ -221,22 +221,12 @@ class SettingsRepository(context: Context) {
      * 保存设备信息到本地 SharedPreferences。
      * 包含 deviceId、deviceClass、platform，供同步和统计使用。
      */
+    @Deprecated("Use loadDeviceInfo(): DeviceInfo from Core instead", replaceWith = ReplaceWith("loadDeviceInfo()"))
     fun saveDeviceInfo(deviceInfo: Map<String, String>) {
         devicePrefs.edit().apply {
             deviceInfo.forEach { (key, value) -> putString(key, value) }
             apply()
         }
-    }
-
-    /**
-     * 加载已保存的设备信息。
-     */
-    fun loadDeviceInfo(): Map<String, String> {
-        return mapOf(
-            "deviceId" to (devicePrefs.getString("deviceId", null) ?: ""),
-            "deviceClass" to (devicePrefs.getString("deviceClass", null) ?: ""),
-            "platform" to (devicePrefs.getString("platform", null) ?: "android")
-        )
     }
 
     /**
@@ -268,105 +258,59 @@ class SettingsRepository(context: Context) {
         }
     }
 
-    fun saveDynamicColorPaletteToCatalog(paletteJson: String) {
-        try {
-            val paletteObj = com.google.gson.JsonParser.parseString(paletteJson).asJsonObject
-            val deviceId = paletteObj.get("device_id")?.asString ?: ""
-            val source = paletteObj.get("source")?.asString ?: "android_dynamic_color"
-            val variant = paletteObj.get("variant")?.asString ?: "system_selected"
-            val updatedAtMs = paletteObj.get("updated_at_ms")?.asLong ?: System.currentTimeMillis()
+    fun listBuiltinThemes(): List<uniffi.writer_core.BuiltinThemeDto> {
+        return try {
+            settingsBridge.listBuiltinThemes()
+        } catch (e: Exception) {
+            DiagnosticsLogger.w("SettingsRepository", "Failed to list builtin themes", e)
+            emptyList()
+        }
+    }
 
-            val lightScheme = uniffi.writer_core.ThemeColorSchemeDto(
-                primary = paletteObj.get("light_primary")?.asString ?: "",
-                on_primary = paletteObj.get("light_on_primary")?.asString ?: "",
-                primary_container = paletteObj.get("light_primary_container")?.asString ?: "",
-                on_primary_container = paletteObj.get("light_on_primary_container")?.asString ?: "",
-                inverse_primary = paletteObj.get("light_inverse_primary")?.asString ?: "",
-                secondary = paletteObj.get("light_secondary")?.asString ?: "",
-                on_secondary = paletteObj.get("light_on_secondary")?.asString ?: "",
-                secondary_container = paletteObj.get("light_secondary_container")?.asString ?: "",
-                on_secondary_container = paletteObj.get("light_on_secondary_container")?.asString ?: "",
-                tertiary = paletteObj.get("light_tertiary")?.asString ?: "",
-                on_tertiary = paletteObj.get("light_on_tertiary")?.asString ?: "",
-                tertiary_container = paletteObj.get("light_tertiary_container")?.asString ?: "",
-                on_tertiary_container = paletteObj.get("light_on_tertiary_container")?.asString ?: "",
-                background = paletteObj.get("light_background")?.asString ?: "",
-                on_background = paletteObj.get("light_on_background")?.asString ?: "",
-                surface = paletteObj.get("light_surface")?.asString ?: "",
-                on_surface = paletteObj.get("light_on_surface")?.asString ?: "",
-                surface_variant = paletteObj.get("light_surface_variant")?.asString ?: "",
-                on_surface_variant = paletteObj.get("light_on_surface_variant")?.asString ?: "",
-                surface_tint = paletteObj.get("light_surface_tint")?.asString ?: "",
-                surface_dim = paletteObj.get("light_surface_dim")?.asString ?: "",
-                surface_bright = paletteObj.get("light_surface_bright")?.asString ?: "",
-                surface_container_lowest = paletteObj.get("light_surface_container_lowest")?.asString ?: "",
-                surface_container_low = paletteObj.get("light_surface_container_low")?.asString ?: "",
-                surface_container = paletteObj.get("light_surface_container")?.asString ?: "",
-                surface_container_high = paletteObj.get("light_surface_container_high")?.asString ?: "",
-                surface_container_highest = paletteObj.get("light_surface_container_highest")?.asString ?: "",
-                inverse_surface = paletteObj.get("light_inverse_surface")?.asString ?: "",
-                inverse_on_surface = paletteObj.get("light_inverse_on_surface")?.asString ?: "",
-                error = paletteObj.get("light_error")?.asString ?: "",
-                on_error = paletteObj.get("light_on_error")?.asString ?: "",
-                error_container = paletteObj.get("light_error_container")?.asString ?: "",
-                on_error_container = paletteObj.get("light_on_error_container")?.asString ?: "",
-                outline = paletteObj.get("light_outline")?.asString ?: "",
-                outline_variant = paletteObj.get("light_outline_variant")?.asString ?: "",
-                scrim = paletteObj.get("light_scrim")?.asString ?: ""
-            )
-            val darkScheme = uniffi.writer_core.ThemeColorSchemeDto(
-                primary = paletteObj.get("dark_primary")?.asString ?: "",
-                on_primary = paletteObj.get("dark_on_primary")?.asString ?: "",
-                primary_container = paletteObj.get("dark_primary_container")?.asString ?: "",
-                on_primary_container = paletteObj.get("dark_on_primary_container")?.asString ?: "",
-                inverse_primary = paletteObj.get("dark_inverse_primary")?.asString ?: "",
-                secondary = paletteObj.get("dark_secondary")?.asString ?: "",
-                on_secondary = paletteObj.get("dark_on_secondary")?.asString ?: "",
-                secondary_container = paletteObj.get("dark_secondary_container")?.asString ?: "",
-                on_secondary_container = paletteObj.get("dark_on_secondary_container")?.asString ?: "",
-                tertiary = paletteObj.get("dark_tertiary")?.asString ?: "",
-                on_tertiary = paletteObj.get("dark_on_tertiary")?.asString ?: "",
-                tertiary_container = paletteObj.get("dark_tertiary_container")?.asString ?: "",
-                on_tertiary_container = paletteObj.get("dark_on_tertiary_container")?.asString ?: "",
-                background = paletteObj.get("dark_background")?.asString ?: "",
-                on_background = paletteObj.get("dark_on_background")?.asString ?: "",
-                surface = paletteObj.get("dark_surface")?.asString ?: "",
-                on_surface = paletteObj.get("dark_on_surface")?.asString ?: "",
-                surface_variant = paletteObj.get("dark_surface_variant")?.asString ?: "",
-                on_surface_variant = paletteObj.get("dark_on_surface_variant")?.asString ?: "",
-                surface_tint = paletteObj.get("dark_surface_tint")?.asString ?: "",
-                surface_dim = paletteObj.get("dark_surface_dim")?.asString ?: "",
-                surface_bright = paletteObj.get("dark_surface_bright")?.asString ?: "",
-                surface_container_lowest = paletteObj.get("dark_surface_container_lowest")?.asString ?: "",
-                surface_container_low = paletteObj.get("dark_surface_container_low")?.asString ?: "",
-                surface_container = paletteObj.get("dark_surface_container")?.asString ?: "",
-                surface_container_high = paletteObj.get("dark_surface_container_high")?.asString ?: "",
-                surface_container_highest = paletteObj.get("dark_surface_container_highest")?.asString ?: "",
-                inverse_surface = paletteObj.get("dark_inverse_surface")?.asString ?: "",
-                inverse_on_surface = paletteObj.get("dark_inverse_on_surface")?.asString ?: "",
-                error = paletteObj.get("dark_error")?.asString ?: "",
-                on_error = paletteObj.get("dark_on_error")?.asString ?: "",
-                error_container = paletteObj.get("dark_error_container")?.asString ?: "",
-                on_error_container = paletteObj.get("dark_on_error_container")?.asString ?: "",
-                outline = paletteObj.get("dark_outline")?.asString ?: "",
-                outline_variant = paletteObj.get("dark_outline_variant")?.asString ?: "",
-                scrim = paletteObj.get("dark_scrim")?.asString ?: ""
-            )
+    fun listPaletteRecords(): List<uniffi.writer_core.ThemePaletteRecordDto> {
+        return when (val result = settingsBridge.listPaletteRecords()) {
+            is BridgeResult.Success -> result.data ?: emptyList()
+            is BridgeResult.Error -> {
+                warn("Failed to list palette records: ${result.message}")
+                emptyList()
+            }
+            BridgeResult.NotLoaded -> emptyList()
+        }
+    }
+
+    fun deletePaletteRecord(deviceId: String, fingerprint: String): Boolean {
+        return when (val result = settingsBridge.deletePaletteRecord(deviceId, fingerprint)) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("Failed to delete palette record: ${result.message}")
+                false
+            }
+            BridgeResult.NotLoaded -> false
+        }
+    }
+
+    fun saveDynamicColorPaletteToCatalog(
+        lightScheme: uniffi.writer_core.ThemeColorSchemeDto,
+        darkScheme: uniffi.writer_core.ThemeColorSchemeDto,
+        deviceClass: String = "phone"
+    ) {
+        try {
+            val deviceInfo = loadDeviceInfo()
+            val deviceId = deviceInfo.deviceId.ifEmpty { "legacy" }
 
             val fingerprint = settingsBridge.computePaletteFingerprint(lightScheme, darkScheme)
-            val effectiveDeviceId = if (deviceId.isEmpty()) "legacy" else deviceId
-            val paletteId = "$effectiveDeviceId:$fingerprint"
+            val paletteId = "$deviceId:$fingerprint"
 
             val record = uniffi.writer_core.ThemePaletteRecordDto(
                 schema_version = 1u,
                 palette_id = paletteId,
                 palette_fingerprint = fingerprint,
-                source = source,
+                source = "android_dynamic_color",
                 source_platform = "android",
-                source_device_id = effectiveDeviceId,
-                source_device_class = "phone",
-                captured_at_ms = updatedAtMs,
-                variant = variant,
+                source_device_id = deviceId,
+                source_device_class = deviceClass,
+                captured_at_ms = System.currentTimeMillis(),
+                variant = "system_selected",
                 light_scheme = lightScheme,
                 dark_scheme = darkScheme
             )
