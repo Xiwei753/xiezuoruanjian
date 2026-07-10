@@ -11,6 +11,7 @@ data class ThemeUiState(
     val selectedPaletteId: String = "",
     val selectedBuiltinTheme: BuiltinThemeDto? = null,
     val selectedPaletteRecord: ThemePaletteRecordDto? = null,
+    val paletteRecords: List<ThemePaletteRecordDto> = emptyList(),
 ) {
     val isDark: Boolean
         get() = appearanceMode == "dark"

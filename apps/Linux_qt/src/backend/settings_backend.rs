@@ -39,6 +39,8 @@ pub struct SettingsBackend {
     resolved_theme_palette_json: qt_property!(QString; READ resolved_theme_palette_json NOTIFY settings_changed),
     resolved_builtin_themes_json: qt_property!(QString; READ resolved_builtin_themes_json NOTIFY settings_changed),
     resolved_palette_records_json: qt_property!(QString; READ resolved_palette_records_json NOTIFY settings_changed),
+    resolved_appearance_mode: qt_property!(QString; READ resolved_appearance_mode NOTIFY settings_changed),
+    resolved_color_source: qt_property!(QString; READ resolved_color_source NOTIFY settings_changed),
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
@@ -220,7 +222,7 @@ impl SettingsBackend {
         self.with_app("".into(), |app| {
             let color_source = app.setting_color_source().to_string();
             if color_source != "saved_palette" {
-                return app.setting_theme_palette_json();
+                return "".into();
             }
             let palette_id = app.setting_selected_palette_id().to_string();
             if palette_id.is_empty() {
@@ -248,6 +250,12 @@ impl SettingsBackend {
     }
     fn resolved_palette_records_json(&self) -> QString {
         self.list_palette_records_json()
+    }
+    fn resolved_appearance_mode(&self) -> QString {
+        self.setting_appearance_mode()
+    }
+    fn resolved_color_source(&self) -> QString {
+        self.setting_color_source()
     }
     fn setting_typing_animation_enabled(&self) -> bool {
         self.with_app(true, |app| app.setting_typing_animation_enabled())

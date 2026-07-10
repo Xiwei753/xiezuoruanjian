@@ -106,7 +106,7 @@ Dialog {
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
         diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
         diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
-        useAndroidTheme.checked = root.dt.useThemePalette
+        useAndroidTheme.checked = backendRef ? backendRef.setting_color_source === "saved_palette" : false
         updatingValues = false
         if (coordinatedFixed) {
             root.settingsDirty = true
@@ -255,7 +255,6 @@ Dialog {
                             if (!backendRef || root.updatingValues) return
                             var source = ["built_in", "saved_palette"][index]
                             backendRef.setting_color_source = source
-                            root.dt.colorSource = source
                             root.settingsDirty = true
                             root.saveAndNotify()
                         }
@@ -283,7 +282,6 @@ Dialog {
                             var themeId = _themes[index] ? _themes[index].themeId : ""
                             if (themeId.length > 0) {
                                 backendRef.setting_selected_builtin_theme_id = themeId
-                                root.dt.selectedBuiltinThemeId = themeId
                                 root.settingsDirty = true
                                 root.saveAndNotify()
                             }
@@ -310,7 +308,7 @@ Dialog {
                         }
                         model: _records.map(function(r) {
                             var d = new Date(r.capturedAtMs)
-                            return (r.sourcePlatform || "") + " · " + (r.sourceDeviceId || "") + " · " + d.toLocaleDateString()
+                            return (r.sourcePlatform || "") + " · " + (r.sourceDeviceClass || "") + " · " + (r.sourceDeviceId || "") + " · " + d.toLocaleDateString()
                         })
                         onActivated: function(index) {
                             if (!backendRef || root.updatingValues) return

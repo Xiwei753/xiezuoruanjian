@@ -30,6 +30,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var currentSettings: LocalSettings
     private lateinit var syncHelper: SyncSettingsHelper
     private var isRendering: Boolean = false
+    private var currentPaletteRecords: List<uniffi.writer_core.ThemePaletteRecordDto> = emptyList()
 
     private var systemBarsController: SystemBarsController? = null
 
@@ -239,14 +240,12 @@ class SettingsActivity : AppCompatActivity() {
         } catch (_: Exception) {
             emptyList<uniffi.writer_core.ThemePaletteRecordDto>()
         }
-        val paletteNames = paletteRecords.map {
-            "${it.sourcePlatform} · ${it.sourceDeviceId} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)}"
-        }.toTypedArray()
-        val paletteAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, paletteNames)
-        actvPaletteRecord.setAdapter(paletteAdapter)
+        refreshPaletteRecordAdapter(paletteRecords)
         actvPaletteRecord.setOnItemClickListener { _, _, position, _ ->
             if (isRendering) return@setOnItemClickListener
-            val paletteId = paletteRecords[position].paletteId
+            val currentRecords = currentPaletteRecords
+            if (position < 0 || position >= currentRecords.size) return@setOnItemClickListener
+            val paletteId = currentRecords[position].paletteId
             updateLocalSettings { it.copy(selectedPaletteId = paletteId, colorSource = "saved_palette") }
             actvColorSource.setText("已保存的设备配色", false)
         }
@@ -277,6 +276,9 @@ class SettingsActivity : AppCompatActivity() {
             val dynamicEnabled = colorSource == "android_dynamic"
             updateLocalSettings { it.copy(colorSource = colorSource, dynamicColorEnabled = dynamicEnabled) }
             switchDynamicColor.isChecked = dynamicEnabled
+            if (dynamicEnabled) {
+                captureDynamicColor()
+            }
         }
 
         switchDynamicColor.setOnCheckedChangeListener { _, isChecked ->
@@ -284,6 +286,9 @@ class SettingsActivity : AppCompatActivity() {
             val newColorSource = if (isChecked) "android_dynamic" else "built_in"
             updateLocalSettings { it.copy(dynamicColorEnabled = isChecked, colorSource = newColorSource) }
             actvColorSource.setText(if (isChecked) "使用本机动态配色" else "素笺默认", false)
+            if (isChecked) {
+                captureDynamicColor()
+            }
         }
 
         renderSettings(currentSettings, fromOnCreate = true)
@@ -556,9 +561,24 @@ class SettingsActivity : AppCompatActivity() {
         } catch (_: Exception) {
             emptyList<uniffi.writer_core.ThemePaletteRecordDto>()
         }
+        currentPaletteRecords = records
+        refreshPaletteRecordAdapter(records)
+    }
+
+    private fun refreshPaletteRecordAdapter(records: List<uniffi.writer_core.ThemePaletteRecordDto>) {
+        currentPaletteRecords = records
         val names = records.map {
-            "${it.sourcePlatform} · ${it.sourceDeviceId} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)}"
+            "${it.sourcePlatform} · ${it.sourceDeviceClass} · ${it.sourceDeviceId} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)}"
         }.toTypedArray()
         actvPaletteRecord.setAdapter(ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, names))
+    }
+
+    private fun captureDynamicColor() {
+        val result = com.xiwei.sujian.ui.ThemePaletteHelper.extractDynamicColorSchemes(this) ?: return
+        settingsRepository.saveDynamicColorPaletteToCatalog(
+            lightScheme = result.lightScheme,
+            darkScheme = result.darkScheme,
+        )
+        refreshPaletteRecords()
     }
 }

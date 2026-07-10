@@ -209,13 +209,13 @@ ApplicationWindow {
     DesignTokens {
         id: designTokens
         isDark: {
-            var mode = settingsBackend !== null ? settingsBackend.setting_appearance_mode : "system"
+            var mode = settingsBackend !== null ? settingsBackend.resolved_appearance_mode : "system"
             if (mode === "dark") return true;
             if (mode === "light") return false;
             return window.systemThemeIsDark();
         }
         themePaletteJson: settingsBackend !== null ? settingsBackend.resolved_theme_palette_json : ""
-        colorSource: settingsBackend !== null ? settingsBackend.setting_color_source : "built_in"
+        colorSource: settingsBackend !== null ? settingsBackend.resolved_color_source : "built_in"
         selectedBuiltinThemeId: settingsBackend !== null ? settingsBackend.setting_selected_builtin_theme_id : ""
         builtinThemesJson: settingsBackend !== null ? settingsBackend.resolved_builtin_themes_json : "[]"
     }

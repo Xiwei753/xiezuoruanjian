@@ -32,7 +32,7 @@ QtObject {
         if (_themePalette.lightScheme && _themePalette.darkScheme) return true
         return false
     }
-    property bool useThemePalette: hasThemePalette && colorSource === "saved_palette"
+    property bool useThemePalette: colorSource === "saved_palette" && hasThemePalette
 
     function _schemeColor(key) {
         var schemeKey = isDark ? "darkScheme" : "lightScheme"

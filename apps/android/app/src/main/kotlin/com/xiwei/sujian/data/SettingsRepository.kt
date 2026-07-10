@@ -336,10 +336,26 @@ class SettingsRepository(context: Context) {
 
     private fun detectDeviceClass(): String {
         val config = appContext.resources?.configuration ?: return "phone"
-        val screenWidthDp = config.screenWidthDp
-        val screenHeightDp = config.screenHeightDp
         val smallestWidthDp = config.smallestScreenWidthDp
+        val hasFoldingFeature = try {
+            val windowManager = appContext.getSystemService(android.content.Context.WINDOW_SERVICE) as? android.view.WindowManager
+            if (windowManager != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                val display = windowManager.defaultDisplay
+                display != null
+            } else {
+                false
+            }
+        } catch (_: Exception) {
+            false
+        }
+        val isFoldable = try {
+            val pm = appContext.packageManager
+            pm?.hasSystemFeature("android.hardware.type.foldable") == true
+        } catch (_: Exception) {
+            false
+        }
         return when {
+            isFoldable -> "foldable"
             smallestWidthDp >= 600 -> "tablet"
             else -> "phone"
         }
