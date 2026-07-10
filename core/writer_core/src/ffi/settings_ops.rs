@@ -10,7 +10,8 @@ pub unsafe extern "C" fn writer_core_load_local_settings() -> *mut c_char {
             "fontSize": settings.editor_font_size,
             "lineHeight": settings.editor_line_spacing_multiplier,
             "fontFamily": "HarmonyOS Sans",
-            "theme": settings.theme_mode.as_deref().unwrap_or("system"),
+            "theme": settings.appearance_mode.as_str(),
+            "appearanceMode": settings.appearance_mode,
             "autoSave": settings.auto_save_enabled,
             "autoSaveInterval": settings.auto_save_delay_ms as f64 / 1000.0,
             "autoIndent": settings.auto_indent_enabled,
@@ -58,7 +59,11 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
             settings.auto_indent_enabled = v;
         }
         if let Some(v) = val.get("theme").and_then(|v| v.as_str()) {
+            settings.appearance_mode = v.to_string();
             settings.theme_mode = Some(v.to_string());
+        }
+        if let Some(v) = val.get("appearanceMode").and_then(|v| v.as_str()) {
+            settings.appearance_mode = v.to_string();
         }
         core.save_local_settings(&settings)
             .map_err(|e| format!("{}", e))?;

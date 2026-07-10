@@ -85,7 +85,7 @@ class SettingsActivity : AppCompatActivity() {
             val settings = ErrorUtil.safeRun(this, LocalSettings()) {
                 settingsRepository.getLocalSettings()
             }
-            when (settings.themeMode) {
+            when (settings.appearanceMode) {
                 "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
                 "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
                 else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
@@ -211,7 +211,7 @@ class SettingsActivity : AppCompatActivity() {
                 2 -> "dark"
                 else -> "system"
             }
-            updateLocalSettings { it.copy(themeMode = themeStr, appearanceMode = themeStr) }
+            updateLocalSettings { it.copy(appearanceMode = themeStr) }
             when (themeStr) {
                 "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
                 "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
@@ -222,7 +222,7 @@ class SettingsActivity : AppCompatActivity() {
         val builtinThemes = try {
             settingsRepository.listBuiltinThemes()
         } catch (_: Exception) {
-            emptyList()
+            emptyList<uniffi.writer_core.BuiltinThemeDto>()
         }
         val builtinThemeNames = builtinThemes.map { it.name }.toTypedArray()
         val builtinThemeAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, builtinThemeNames)
@@ -234,10 +234,10 @@ class SettingsActivity : AppCompatActivity() {
             actvColorSource.setText("素笺默认", false)
         }
 
-        val paletteRecords = try {
+        var paletteRecords = try {
             settingsRepository.listPaletteRecords()
         } catch (_: Exception) {
-            emptyList()
+            emptyList<uniffi.writer_core.ThemePaletteRecordDto>()
         }
         val paletteNames = paletteRecords.map {
             "${it.sourcePlatform} · ${it.sourceDeviceId} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)}"
@@ -259,6 +259,7 @@ class SettingsActivity : AppCompatActivity() {
                     updateLocalSettings { it.copy(selectedPaletteId = "", colorSource = "built_in") }
                     actvColorSource.setText("素笺默认", false)
                     actvPaletteRecord.setText("", false)
+                    refreshPaletteRecords()
                 }
             }
         }
@@ -464,7 +465,7 @@ class SettingsActivity : AppCompatActivity() {
             DiagnosticsLogger.setVerbose(settings.diagnosticsVerbose)
             EditorEventRingBuffer.setEnabled(settings.diagnosticsEnabled)
 
-            actvTheme.setText(when (settings.themeMode) {
+            actvTheme.setText(when (settings.appearanceMode) {
                 "light" -> getString(R.string.theme_light)
                 "dark" -> getString(R.string.theme_dark)
                 else -> getString(R.string.theme_system)
@@ -547,5 +548,17 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         finish()
+    }
+
+    private fun refreshPaletteRecords() {
+        val records = try {
+            settingsRepository.listPaletteRecords()
+        } catch (_: Exception) {
+            emptyList<uniffi.writer_core.ThemePaletteRecordDto>()
+        }
+        val names = records.map {
+            "${it.sourcePlatform} · ${it.sourceDeviceId} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)}"
+        }.toTypedArray()
+        actvPaletteRecord.setAdapter(ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, names))
     }
 }

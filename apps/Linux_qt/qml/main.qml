@@ -212,14 +212,12 @@ ApplicationWindow {
             var mode = settingsBackend !== null ? settingsBackend.setting_appearance_mode : "system"
             if (mode === "dark") return true;
             if (mode === "light") return false;
-            if (settingsBackend !== null && settingsBackend.setting_theme_mode === "dark") return true;
-            if (settingsBackend !== null && settingsBackend.setting_theme_mode === "light") return false;
             return window.systemThemeIsDark();
         }
-        themePaletteJson: settingsBackend !== null ? settingsBackend.setting_theme_palette_json : ""
+        themePaletteJson: settingsBackend !== null ? settingsBackend.resolved_theme_palette_json : ""
         colorSource: settingsBackend !== null ? settingsBackend.setting_color_source : "built_in"
         selectedBuiltinThemeId: settingsBackend !== null ? settingsBackend.setting_selected_builtin_theme_id : ""
-        builtinThemesJson: settingsBackend !== null ? settingsBackend.list_builtin_themes_json : "[]"
+        builtinThemesJson: settingsBackend !== null ? settingsBackend.resolved_builtin_themes_json : "[]"
     }
 
     Connections {

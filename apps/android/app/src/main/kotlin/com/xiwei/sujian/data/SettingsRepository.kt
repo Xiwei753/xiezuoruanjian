@@ -278,6 +278,17 @@ class SettingsRepository(context: Context) {
         }
     }
 
+    fun loadPaletteRecord(deviceId: String, fingerprint: String): uniffi.writer_core.ThemePaletteRecordDto? {
+        return when (val result = settingsBridge.loadPaletteRecord(deviceId, fingerprint)) {
+            is BridgeResult.Success -> result.data
+            is BridgeResult.Error -> {
+                warn("Failed to load palette record: ${result.message}")
+                null
+            }
+            BridgeResult.NotLoaded -> null
+        }
+    }
+
     fun deletePaletteRecord(deviceId: String, fingerprint: String): Boolean {
         return when (val result = settingsBridge.deletePaletteRecord(deviceId, fingerprint)) {
             is BridgeResult.Success -> result.data
@@ -292,11 +303,13 @@ class SettingsRepository(context: Context) {
     fun saveDynamicColorPaletteToCatalog(
         lightScheme: uniffi.writer_core.ThemeColorSchemeDto,
         darkScheme: uniffi.writer_core.ThemeColorSchemeDto,
-        deviceClass: String = "phone"
+        deviceClass: String? = null
     ) {
         try {
             val deviceInfo = loadDeviceInfo()
             val deviceId = deviceInfo.deviceId.ifEmpty { "legacy" }
+            val effectiveDeviceClass = deviceClass
+                ?: deviceInfo.deviceClass.ifEmpty { detectDeviceClass() }
 
             val fingerprint = settingsBridge.computePaletteFingerprint(lightScheme, darkScheme)
             val paletteId = "$deviceId:$fingerprint"
@@ -308,7 +321,7 @@ class SettingsRepository(context: Context) {
                 source = "android_dynamic_color",
                 source_platform = "android",
                 source_device_id = deviceId,
-                source_device_class = deviceClass,
+                source_device_class = effectiveDeviceClass,
                 captured_at_ms = System.currentTimeMillis(),
                 variant = "system_selected",
                 light_scheme = lightScheme,
@@ -316,16 +329,19 @@ class SettingsRepository(context: Context) {
             )
 
             settingsBridge.savePaletteRecord(record)
-
-            val local = getLocalSettings()
-            if (local.selectedPaletteId.isEmpty()) {
-                saveLocalSettings(local.copy(
-                    selectedPaletteId = paletteId,
-                    colorSource = "saved_palette"
-                ))
-            }
         } catch (e: Exception) {
             DiagnosticsLogger.w("SettingsRepository", "Failed to save palette to catalog", e)
+        }
+    }
+
+    private fun detectDeviceClass(): String {
+        val config = appContext.resources?.configuration ?: return "phone"
+        val screenWidthDp = config.screenWidthDp
+        val screenHeightDp = config.screenHeightDp
+        val smallestWidthDp = config.smallestScreenWidthDp
+        return when {
+            smallestWidthDp >= 600 -> "tablet"
+            else -> "phone"
         }
     }
 

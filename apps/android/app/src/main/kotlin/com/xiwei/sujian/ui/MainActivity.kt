@@ -17,7 +17,7 @@ class MainActivity : AppCompatActivity() {
             val settings = ErrorUtil.safeRun(this, LocalSettings()) {
                 settingsRepository.getLocalSettings()
             }
-            when (settings.themeMode) {
+            when (settings.appearanceMode) {
                 "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
                 "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
                 else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)

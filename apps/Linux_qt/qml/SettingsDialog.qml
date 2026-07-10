@@ -101,7 +101,7 @@ Dialog {
                 smoothCursorDuration.value = coordDur
             }
         }
-        var mode = backendRef.setting_theme_mode
+        var mode = backendRef.setting_appearance_mode
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
         diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
@@ -187,7 +187,7 @@ Dialog {
                         model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
                         onActivated: function(index) {
                             if (!backendRef || root.updatingValues) return
-                            backendRef.setting_theme_mode = ["system", "light", "dark"][index]
+                            backendRef.setting_appearance_mode = ["system", "light", "dark"][index]
                             root.settingsDirty = true
                             root.saveAndNotify()
                         }
@@ -227,14 +227,12 @@ Dialog {
                     clickable: true
                     onClicked: {
                         useAndroidTheme.checked = !useAndroidTheme.checked
-                        root.dt.useThemePalette = useAndroidTheme.checked
                     }
                     ModernSwitch {
                         id: useAndroidTheme
                         dt: root.dt
                         checked: true
                         onToggled: function(v) {
-                            root.dt.useThemePalette = v
                             if (v) {
                                 backendRef.setting_color_source = "saved_palette"
                             } else {
@@ -277,7 +275,7 @@ Dialog {
                         dt: root.dt
                         property var _themes: {
                             if (!backendRef) return []
-                            try { return JSON.parse(backendRef.list_builtin_themes_json) } catch(e) { return [] }
+                            try { return JSON.parse(backendRef.list_builtin_themes_json()) } catch(e) { return [] }
                         }
                         model: _themes.map(function(t) { return t.name || t.themeId })
                         onActivated: function(index) {
@@ -308,7 +306,7 @@ Dialog {
                         dt: root.dt
                         property var _records: {
                             if (!backendRef) return []
-                            try { return JSON.parse(backendRef.list_palette_records_json) } catch(e) { return [] }
+                            try { return JSON.parse(backendRef.list_palette_records_json()) } catch(e) { return [] }
                         }
                         model: _records.map(function(r) {
                             var d = new Date(r.capturedAtMs)
