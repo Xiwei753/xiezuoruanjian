@@ -489,3 +489,39 @@ impl From<ThemePaletteRecordDto> for crate::settings::ThemePaletteRecord {
         }
     }
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct BuiltinThemeDto {
+    pub theme_id: String,
+    pub name: String,
+    pub light_scheme: ThemeColorSchemeDto,
+    pub dark_scheme: ThemeColorSchemeDto,
+}
+
+impl From<crate::settings::BuiltinTheme> for BuiltinThemeDto {
+    fn from(t: crate::settings::BuiltinTheme) -> Self {
+        Self {
+            theme_id: t.theme_id.to_string(),
+            name: t.name.to_string(),
+            light_scheme: t.light_scheme.into(),
+            dark_scheme: t.dark_scheme.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct DeviceInfoDto {
+    pub device_id: String,
+    pub device_class: String,
+    pub platform: String,
+}
+
+impl From<crate::settings::DeviceInfo> for DeviceInfoDto {
+    fn from(d: crate::settings::DeviceInfo) -> Self {
+        Self {
+            device_id: d.device_id,
+            device_class: d.device_class,
+            platform: d.platform,
+        }
+    }
+}

@@ -177,6 +177,19 @@ dictionary ThemePaletteRecordDto {
     ThemeColorSchemeDto dark_scheme;
 };
 
+dictionary BuiltinThemeDto {
+    string theme_id;
+    string name;
+    ThemeColorSchemeDto light_scheme;
+    ThemeColorSchemeDto dark_scheme;
+};
+
+dictionary DeviceInfoDto {
+    string device_id;
+    string device_class;
+    string platform;
+};
+
 dictionary SyncConfigDto {
     boolean enabled;
     string backend_type;
@@ -988,6 +1001,9 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean ensure_device_info(string platform, string device_class);
 
+    [Throws=WriterError]
+    DeviceInfoDto load_device_info();
+
     // StarMap typed methods
     [Throws=WriterError]
     sequence<StarMapMetaDto> list_starmaps();
@@ -1047,6 +1063,29 @@ interface WriterAppService {
     ActionResultDto execute_action(string action_id, string args_json, string context_json);
 
     boolean ai_available();
+
+    // ── Palette Catalog ──
+
+    [Throws=WriterError]
+    boolean save_palette_record(ThemePaletteRecordDto record);
+
+    [Throws=WriterError]
+    ThemePaletteRecordDto load_palette_record(string device_id, string fingerprint);
+
+    [Throws=WriterError]
+    sequence<ThemePaletteRecordDto> list_palette_records();
+
+    [Throws=WriterError]
+    boolean delete_palette_record(string device_id, string fingerprint);
+
+    [Throws=WriterError]
+    boolean migrate_legacy_theme_palette();
+
+    string compute_palette_fingerprint(ThemeColorSchemeDto light_scheme, ThemeColorSchemeDto dark_scheme);
+
+    // ── Built-in Themes ──
+
+    sequence<BuiltinThemeDto> list_builtin_themes();
 
     // ── Layout Policy ──
 

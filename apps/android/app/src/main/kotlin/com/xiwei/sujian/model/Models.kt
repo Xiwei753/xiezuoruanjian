@@ -25,6 +25,12 @@ data class WorkspaceManifest(
     val version: Int
 )
 
+data class DeviceInfo(
+    val deviceId: String = "",
+    val deviceClass: String = "",
+    val platform: String = ""
+)
+
 data class LocalSettings(
     val themeMode: String? = "system",
     val appearanceMode: String = "system",

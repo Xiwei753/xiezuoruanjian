@@ -462,7 +462,10 @@ pub struct ThemePaletteRecord {
 pub struct SyncableSettings {
     #[serde(default)]
     pub font_size: f64,
+    /// Deprecated: appearance_mode is now per-device in LocalSettings.
+    /// Retained for backward-compatible reading and migration.
     #[serde(default)]
+    #[deprecated(note = "use LocalSettings.appearance_mode instead")]
     pub theme_mode: String,
     /// Deprecated: use theme_palette instead. Retained for backward-compatible reading.
     #[serde(default)]
@@ -825,6 +828,96 @@ pub fn migrate_legacy_theme_palette(workspace_path: &Path) -> Result<bool> {
         save_local_settings(workspace_path, &local)?;
     }
     Ok(true)
+}
+
+pub struct BuiltinTheme {
+    pub theme_id: &'static str,
+    pub name: &'static str,
+    pub light_scheme: ThemeColorScheme,
+    pub dark_scheme: ThemeColorScheme,
+}
+
+pub fn list_builtin_themes() -> Vec<BuiltinTheme> {
+    vec![BuiltinTheme {
+        theme_id: "sujian_default",
+        name: "素笺默认",
+        light_scheme: ThemeColorScheme {
+            primary: "#006493".to_string(),
+            on_primary: "#FFFFFF".to_string(),
+            primary_container: "#C9E6FF".to_string(),
+            on_primary_container: "#001E2F".to_string(),
+            inverse_primary: "#87CEFF".to_string(),
+            secondary: "#50606E".to_string(),
+            on_secondary: "#FFFFFF".to_string(),
+            secondary_container: "#D3E5F5".to_string(),
+            on_secondary_container: "#0C1D29".to_string(),
+            tertiary: "#65587B".to_string(),
+            on_tertiary: "#FFFFFF".to_string(),
+            tertiary_container: "#EBDDFF".to_string(),
+            on_tertiary_container: "#201634".to_string(),
+            background: "#F6FAFE".to_string(),
+            on_background: "#171C1F".to_string(),
+            surface: "#F6FAFE".to_string(),
+            on_surface: "#171C1F".to_string(),
+            surface_variant: "#DDE3EA".to_string(),
+            on_surface_variant: "#41484D".to_string(),
+            surface_tint: "#006493".to_string(),
+            surface_dim: "#D7DADE".to_string(),
+            surface_bright: "#F6FAFE".to_string(),
+            surface_container_lowest: "#FFFFFF".to_string(),
+            surface_container_low: "#F0F4F8".to_string(),
+            surface_container: "#EBEEF2".to_string(),
+            surface_container_high: "#E5E8EC".to_string(),
+            surface_container_highest: "#DFE3E7".to_string(),
+            inverse_surface: "#2C3134".to_string(),
+            inverse_on_surface: "#ECF0F4".to_string(),
+            error: "#BA1A1A".to_string(),
+            on_error: "#FFFFFF".to_string(),
+            error_container: "#FFDAD6".to_string(),
+            on_error_container: "#410002".to_string(),
+            outline: "#71787D".to_string(),
+            outline_variant: "#C1C7CE".to_string(),
+            scrim: "#000000".to_string(),
+        },
+        dark_scheme: ThemeColorScheme {
+            primary: "#87CEFF".to_string(),
+            on_primary: "#00344D".to_string(),
+            primary_container: "#004B6E".to_string(),
+            on_primary_container: "#C9E6FF".to_string(),
+            inverse_primary: "#006493".to_string(),
+            secondary: "#B7C9D8".to_string(),
+            on_secondary: "#22323F".to_string(),
+            secondary_container: "#384956".to_string(),
+            on_secondary_container: "#D3E5F5".to_string(),
+            tertiary: "#CFC0E7".to_string(),
+            on_tertiary: "#362E4A".to_string(),
+            tertiary_container: "#4D4462".to_string(),
+            on_tertiary_container: "#EBDDFF".to_string(),
+            background: "#0F1417".to_string(),
+            on_background: "#DFE3E7".to_string(),
+            surface: "#0F1417".to_string(),
+            on_surface: "#DFE3E7".to_string(),
+            surface_variant: "#41484D".to_string(),
+            on_surface_variant: "#C1C7CE".to_string(),
+            surface_tint: "#87CEFF".to_string(),
+            surface_dim: "#0F1417".to_string(),
+            surface_bright: "#353A3D".to_string(),
+            surface_container_lowest: "#0A0F12".to_string(),
+            surface_container_low: "#171C1F".to_string(),
+            surface_container: "#1C2023".to_string(),
+            surface_container_high: "#262B2E".to_string(),
+            surface_container_highest: "#313539".to_string(),
+            inverse_surface: "#DFE3E7".to_string(),
+            inverse_on_surface: "#2C3134".to_string(),
+            error: "#FFB4AB".to_string(),
+            on_error: "#690005".to_string(),
+            error_container: "#93000A".to_string(),
+            on_error_container: "#FFDAD6".to_string(),
+            outline: "#8B9198".to_string(),
+            outline_variant: "#41484D".to_string(),
+            scrim: "#000000".to_string(),
+        },
+    }]
 }
 
 #[cfg(test)]
@@ -1198,5 +1291,177 @@ mod tests {
         assert!(content.contains("\"deviceId\""), "should serialize as camelCase");
         assert!(content.contains("\"deviceClass\""), "should serialize as camelCase");
         assert!(!content.contains("\"device_id\""), "should not use snake_case");
+    }
+
+    #[test]
+    fn test_compute_palette_fingerprint_deterministic() {
+        let light = ThemeColorScheme {
+            primary: "#006493".to_string(),
+            on_primary: "#FFFFFF".to_string(),
+            ..ThemeColorScheme::default()
+        };
+        let dark = ThemeColorScheme {
+            primary: "#87CEFF".to_string(),
+            on_primary: "#00344D".to_string(),
+            ..ThemeColorScheme::default()
+        };
+        let fp1 = compute_palette_fingerprint(&light, &dark);
+        let fp2 = compute_palette_fingerprint(&light, &dark);
+        assert_eq!(fp1, fp2, "fingerprint should be deterministic");
+        assert_eq!(fp1.len(), 16, "fingerprint should be 16 hex chars");
+    }
+
+    #[test]
+    fn test_compute_palette_fingerprint_differs_for_different_schemes() {
+        let light1 = ThemeColorScheme {
+            primary: "#006493".to_string(),
+            ..ThemeColorScheme::default()
+        };
+        let light2 = ThemeColorScheme {
+            primary: "#FF0000".to_string(),
+            ..ThemeColorScheme::default()
+        };
+        let dark = ThemeColorScheme::default();
+        let fp1 = compute_palette_fingerprint(&light1, &dark);
+        let fp2 = compute_palette_fingerprint(&light2, &dark);
+        assert_ne!(fp1, fp2, "different schemes should have different fingerprints");
+    }
+
+    #[test]
+    fn test_save_and_load_palette_record() {
+        let temp_dir = tempdir().unwrap();
+        let record = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "test-device:abcdef1234567890".to_string(),
+            palette_fingerprint: "abcdef1234567890".to_string(),
+            source: "android_dynamic_color".to_string(),
+            source_platform: "android".to_string(),
+            source_device_id: "test-device".to_string(),
+            source_device_class: "phone".to_string(),
+            captured_at_ms: 1000000,
+            variant: "system_selected".to_string(),
+            light_scheme: ThemeColorScheme {
+                primary: "#006493".to_string(),
+                ..ThemeColorScheme::default()
+            },
+            dark_scheme: ThemeColorScheme {
+                primary: "#87CEFF".to_string(),
+                ..ThemeColorScheme::default()
+            },
+        };
+        save_palette_record(temp_dir.path(), &record).unwrap();
+        let loaded = load_palette_record(temp_dir.path(), "test-device", "abcdef1234567890").unwrap();
+        assert_eq!(loaded.palette_id, record.palette_id);
+        assert_eq!(loaded.light_scheme.primary, "#006493");
+        assert_eq!(loaded.dark_scheme.primary, "#87CEFF");
+    }
+
+    #[test]
+    fn test_save_palette_record_idempotent() {
+        let temp_dir = tempdir().unwrap();
+        let record = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "dev:fp1".to_string(),
+            palette_fingerprint: "fp1".to_string(),
+            source_device_id: "dev".to_string(),
+            captured_at_ms: 1000,
+            ..ThemePaletteRecord::default()
+        };
+        save_palette_record(temp_dir.path(), &record).unwrap();
+        save_palette_record(temp_dir.path(), &record).unwrap();
+    }
+
+    #[test]
+    fn test_list_palette_records() {
+        let temp_dir = tempdir().unwrap();
+        let r1 = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "dev1:fp1".to_string(),
+            palette_fingerprint: "fp1".to_string(),
+            source_device_id: "dev1".to_string(),
+            captured_at_ms: 2000,
+            ..ThemePaletteRecord::default()
+        };
+        let r2 = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "dev2:fp2".to_string(),
+            palette_fingerprint: "fp2".to_string(),
+            source_device_id: "dev2".to_string(),
+            captured_at_ms: 1000,
+            ..ThemePaletteRecord::default()
+        };
+        save_palette_record(temp_dir.path(), &r1).unwrap();
+        save_palette_record(temp_dir.path(), &r2).unwrap();
+        let records = list_palette_records(temp_dir.path()).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].palette_id, "dev1:fp1", "should be sorted by captured_at_ms desc");
+        assert_eq!(records[1].palette_id, "dev2:fp2");
+    }
+
+    #[test]
+    fn test_delete_palette_record() {
+        let temp_dir = tempdir().unwrap();
+        let record = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "dev:fp1".to_string(),
+            palette_fingerprint: "fp1".to_string(),
+            source_device_id: "dev".to_string(),
+            captured_at_ms: 1000,
+            ..ThemePaletteRecord::default()
+        };
+        save_palette_record(temp_dir.path(), &record).unwrap();
+        delete_palette_record(temp_dir.path(), "dev", "fp1").unwrap();
+        let records = list_palette_records(temp_dir.path()).unwrap();
+        assert!(records.is_empty());
+    }
+
+    #[test]
+    fn test_legacy_palette_to_record_empty_device_id() {
+        let palette = ThemePalette {
+            source: "android_dynamic_color".to_string(),
+            variant: "tonal_spot".to_string(),
+            device_id: String::new(),
+            light_primary: "#006493".to_string(),
+            ..ThemePalette::default()
+        };
+        let record = legacy_palette_to_record(&palette);
+        assert_eq!(record.source_device_id, "legacy", "empty device_id should become 'legacy'");
+        assert_eq!(record.variant, "system_selected", "tonal_spot from android_dynamic_color should become system_selected");
+    }
+
+    #[test]
+    fn test_legacy_palette_to_record_with_device_id() {
+        let palette = ThemePalette {
+            source: "android_dynamic_color".to_string(),
+            variant: "custom".to_string(),
+            device_id: "real-device-uuid".to_string(),
+            light_primary: "#006493".to_string(),
+            ..ThemePalette::default()
+        };
+        let record = legacy_palette_to_record(&palette);
+        assert_eq!(record.source_device_id, "real-device-uuid");
+        assert_eq!(record.variant, "custom", "non-tonal_spot variant should be preserved");
+    }
+
+    #[test]
+    fn test_list_builtin_themes_has_default() {
+        let themes = list_builtin_themes();
+        assert!(!themes.is_empty(), "should have at least one built-in theme");
+        assert_eq!(themes[0].theme_id, "sujian_default");
+        assert!(!themes[0].light_scheme.primary.is_empty(), "light primary should not be empty");
+        assert!(!themes[0].dark_scheme.primary.is_empty(), "dark primary should not be empty");
+    }
+
+    #[test]
+    fn test_builtin_theme_complete_color_roles() {
+        let themes = list_builtin_themes();
+        let theme = &themes[0];
+        assert!(!theme.light_scheme.error.is_empty(), "light error should be defined");
+        assert!(!theme.light_scheme.on_error.is_empty(), "light on_error should be defined");
+        assert!(!theme.light_scheme.inverse_surface.is_empty(), "light inverse_surface should be defined");
+        assert!(!theme.light_scheme.surface_tint.is_empty(), "light surface_tint should be defined");
+        assert!(!theme.light_scheme.scrim.is_empty(), "light scrim should be defined");
+        assert!(!theme.dark_scheme.error.is_empty(), "dark error should be defined");
+        assert!(!theme.dark_scheme.on_error.is_empty(), "dark on_error should be defined");
     }
 }

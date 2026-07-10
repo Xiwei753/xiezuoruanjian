@@ -20,7 +20,12 @@ Supersedes: None
 ### `app-meta/settings/settings.local.json`
 存储设备特定的配置，**不应**在设备间同步。
 包括：
-- `themeMode`（字符串，如 "system"、"dark"、"light"）
+- `themeMode`（字符串，如 "system"、"dark"、"light"）[DEPRECATED — 使用 appearanceMode]
+- `appearanceMode`（字符串，"system"|"light"|"dark"，每设备独立，默认 "system"）
+- `colorSource`（字符串，"built_in"|"android_dynamic"|"saved_palette"，颜色来源，默认 "built_in"）
+- `dynamicColorEnabled`（布尔值，Android Dynamic Color 开关，默认 false）
+- `selectedBuiltinThemeId`（字符串，选中的内置主题 ID，默认空）
+- `selectedPaletteId`（字符串，选中的调色板 ID，格式 `<device_id>:<fingerprint>`，默认空）
 - `locale`（字符串）
 - `editorFontSize`（浮点数）
 - `editorLineSpacingMultiplier`（浮点数）
@@ -45,7 +50,24 @@ Supersedes: None
 存储**应该**在所有设备间同步的用户偏好。
 包括：
 - AI API 密钥（以明文保存，由用户设计明确接受）
-- 编辑器偏好（`fontSize`、`themeMode`、缩进样式）
+- 编辑器偏好（`fontSize`、缩进样式）
+- `themeMode`（字符串）[DEPRECATED — 使用 LocalSettings.appearanceMode]
+- `monetColor`（字符串）[DEPRECATED — 使用调色板目录]
+- `themePaletteJson`（字符串）[DEPRECATED — 使用调色板目录]
+
+### `app-meta/themes/palettes/<device_id>/<fingerprint>.json`
+不可变调色板记录目录。每个文件是一份完整的 Material 3 主题快照。
+包括：
+- `schemaVersion`（整数，当前 1）
+- `paletteId`（字符串，格式 `<device_id>:<fingerprint>`）
+- `paletteFingerprint`（字符串，SHA-256 前 8 字节 hex）
+- `source`（字符串，如 "android_dynamic_color"）
+- `sourcePlatform`（字符串）
+- `sourceDeviceId`（字符串，Core 持久化设备 UUID；旧数据迁移为 "legacy"）
+- `sourceDeviceClass`（字符串）
+- `capturedAtMs`（整数，Unix 时间戳毫秒）
+- `variant`（字符串，无法可靠识别时为 "system_selected"）
+- `lightScheme` / `darkScheme`（ThemeColorScheme，完整 Material 3 语义角色）
 
 ### `app-meta/sync/sync_config.json`
 存储同步配置。定义哪些文件/目录应该被同步。

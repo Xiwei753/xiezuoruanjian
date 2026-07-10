@@ -62,4 +62,13 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
     fun ensureDeviceInfo(platform: String, deviceClass: String): BridgeResult<Boolean> = holder.wrapResult {
         holder.service.ensureDeviceInfo(platform, deviceClass)
     }
+
+    fun loadDeviceInfo(): BridgeResult<com.xiwei.sujian.model.DeviceInfo> = holder.wrapResult {
+        val dto = holder.service.loadDeviceInfo()
+        com.xiwei.sujian.model.DeviceInfo(
+            deviceId = dto.deviceId,
+            deviceClass = dto.deviceClass,
+            platform = dto.platform,
+        )
+    }
 }

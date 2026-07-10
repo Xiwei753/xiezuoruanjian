@@ -188,7 +188,17 @@ object ThemePaletteHelper {
      */
     fun extractThemePaletteJson(context: Context): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
-        return extractThemePaletteJson(DefaultColorResolver(context))
+        val deviceId = try {
+            val repo = com.xiwei.sujian.data.SettingsRepository(context)
+            repo.ensureDeviceInfo("android", "phone")
+            when (val result = repo.loadDeviceInfo()) {
+                is com.xiwei.sujian.data.BridgeResult.Success -> result.data.deviceId
+                else -> ""
+            }
+        } catch (_: Exception) {
+            ""
+        }
+        return extractThemePaletteJson(DefaultColorResolver(context), deviceId)
     }
 
     /**
@@ -198,11 +208,15 @@ object ThemePaletteHelper {
      * (which lack the Android stub `org.json`) can execute this path.
      */
     fun extractThemePaletteJson(resolver: ColorResolver): String? {
+        return extractThemePaletteJson(resolver, "")
+    }
+
+    fun extractThemePaletteJson(resolver: ColorResolver, deviceId: String): String? {
         return try {
             val sb = StringBuilder()
             sb.append("{\"source\":\"android_dynamic_color\",")
             sb.append("\"updated_at_ms\":${System.currentTimeMillis()},")
-            sb.append("\"device_id\":\"\",")
+            sb.append("\"device_id\":\"$deviceId\",")
             sb.append("\"variant\":\"system_selected\",")
 
             val allEntries = lightColorEntries + darkColorEntries

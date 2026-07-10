@@ -261,4 +261,11 @@ class SettingsRepository(context: Context) {
         }
     }
 
+    fun loadDeviceInfo(): com.xiwei.sujian.model.DeviceInfo {
+        return when (val result = settingsBridge.loadDeviceInfo()) {
+            is BridgeResult.Success -> result.data
+            else -> com.xiwei.sujian.model.DeviceInfo()
+        }
+    }
+
 }
