@@ -17,6 +17,7 @@ Rectangle {
     id: root
     property var dt: null
     property var backendRef: null
+    property var projectBackendRef: null
     property var appState: ({})
     property var tree: []
 
@@ -36,14 +37,25 @@ Rectangle {
         return projects
     }
 
+    property var _cachedSummaries: ({})
+
+    function refreshSummaries() {
+        if (!projectBackendRef) return
+        try {
+            var jsonStr = projectBackendRef.get_project_summaries_json()
+            var arr = JSON.parse(jsonStr)
+            if (!arr || !Array.isArray(arr)) return
+            var map = {}
+            for (var i = 0; i < arr.length; i++) {
+                map[arr[i].projectId] = arr[i]
+            }
+            root._cachedSummaries = map
+        } catch (e) {}
+    }
+
     function getProjectWordCount(projectId) {
-        var count = 0
-        if (!tree) return count
-        for (var i = 0; i < tree.length; i++) {
-            var item = tree[i]
-            if (item.type === "chapter" && item.projectId === projectId) count += (item.wordCount || 0)
-        }
-        return count
+        var s = root._cachedSummaries[projectId]
+        return s ? (s.totalWordCount || 0) : 0
     }
 
     function getTodayInput(projectId) {
@@ -164,18 +176,20 @@ Rectangle {
     ListModel { id: projectModel }
 
     function refreshProjects() {
+        refreshSummaries()
         projectModel.clear()
         var projects = getProjects()
         var accentColors = dt.projectAccentColors
         for (var i = 0; i < projects.length; i++) {
             var p = projects[i]
+            var summary = root._cachedSummaries[p.id] || {}
             projectModel.append({
                 projectId: p.id,
                 projectTitle: p.title || qsTr("未命名作品"),
-                projectWordCount: getProjectWordCount(p.id),
+                projectWordCount: summary.totalWordCount || 0,
                 projectTodayInput: getTodayInput(p.id),
-                projectLastEdited: p.updatedAt || "",
-                projectSyncStatus: "none",
+                projectLastEdited: summary.updatedAt || p.updatedAt || "",
+                projectSyncStatus: summary.syncStatus || "none",
                 projectAccent: accentColors[i % accentColors.length]
             })
         }

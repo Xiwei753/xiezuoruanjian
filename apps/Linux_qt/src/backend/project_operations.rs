@@ -605,6 +605,28 @@ impl AppBackend {
         self.cached_tree.clone()
     }
 
+    pub(crate) fn get_project_summaries_json(&self) -> QString {
+        let mut summaries = Vec::new();
+        if let Some(core) = self.core_api() {
+            if let Ok(projects) = core.list_projects() {
+                for p in &projects {
+                    let stats = core.get_project_stats(&p.id).ok();
+                    let summary = serde_json::json!({
+                        "projectId": p.id,
+                        "title": p.title,
+                        "totalWordCount": stats.as_ref().map(|s| s.total_word_count).unwrap_or(0),
+                        "volumeCount": stats.as_ref().map(|s| s.volume_count).unwrap_or(0),
+                        "chapterCount": stats.as_ref().map(|s| s.chapter_count).unwrap_or(0),
+                        "updatedAt": p.updated_at,
+                        "syncStatus": "none"
+                    });
+                    summaries.push(summary);
+                }
+            }
+        }
+        serde_json::to_string(&summaries).unwrap_or_else(|_| "[]".to_string()).into()
+    }
+
     pub(crate) fn create_new_volume(
         &mut self,
         project_id: QString,

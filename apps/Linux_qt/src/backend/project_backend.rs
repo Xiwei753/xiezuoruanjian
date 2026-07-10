@@ -23,6 +23,7 @@ pub struct ProjectBackend {
     refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
     get_tree_model_json: qt_method!(fn(&self) -> QString),
     get_tree_model: qt_method!(fn(&self) -> QJsonArray),
+    get_project_summaries_json: qt_method!(fn(&self) -> QString),
     create_project: qt_method!(fn(&mut self, title: QString, action_id: QString) -> QJsonObject),
     create_volume: qt_method!(
         fn(&mut self, project_id: QString, title: QString, action_id: QString) -> QJsonObject
@@ -148,6 +149,9 @@ impl ProjectBackend {
     }
     fn get_tree_model(&self) -> QJsonArray {
         self.with_app(QJsonArray::default(), |app| app.get_tree_model())
+    }
+    fn get_project_summaries_json(&self) -> QString {
+        self.with_app("[]".into(), |app| app.get_project_summaries_json())
     }
     fn create_project(&mut self, title: QString, action_id: QString) -> QJsonObject {
         let out = self.with_app_mut("{}".into(), |app| app.create_project_json(title, action_id));

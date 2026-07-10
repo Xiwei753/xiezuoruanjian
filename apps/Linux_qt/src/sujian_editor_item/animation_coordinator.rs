@@ -79,6 +79,185 @@ pub(crate) struct ReflowHiddenRangeEntry {
     pub byte_range: (usize, usize),
 }
 
+// =============================================================================
+// ActiveVisualTransactionQueue — Rust-owned animation transaction queue
+// =============================================================================
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VisualTransactionState {
+    Pending,
+    Prepared,
+    Rendering,
+    Completed,
+    Cancelled,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ActiveVisualTransaction {
+    pub transaction_id: u64,
+    pub generation: u64,
+    pub state: VisualTransactionState,
+    pub kind: OverlayAnimationKind,
+    pub animation_mode: AnimationMode,
+    pub duration_ms: u64,
+    pub start_time: Instant,
+    pub insert_glyph_rects: Vec<GlyphRect>,
+    pub deleted_glyph_rects: Vec<GlyphRect>,
+    pub reflow_glyph_rects: Vec<ReflowGlyphRect>,
+    pub inserted_range: Option<(usize, usize)>,
+    pub old_cursor_rect: Option<CursorRect>,
+    pub new_cursor_rect: Option<CursorRect>,
+    pub cancel_reason: Option<String>,
+}
+
+pub(crate) struct ActiveVisualTransactionQueue {
+    transactions: Vec<ActiveVisualTransaction>,
+    next_transaction_id: u64,
+}
+
+impl ActiveVisualTransactionQueue {
+    pub fn new() -> Self {
+        Self {
+            transactions: Vec::new(),
+            next_transaction_id: 1,
+        }
+    }
+
+    pub fn enqueue(
+        &mut self,
+        vt: &EditorVisualTransaction,
+        animation_mode: AnimationMode,
+    ) -> u64 {
+        let tid = self.next_transaction_id;
+        self.next_transaction_id += 1;
+
+        let kind = vt.kind.into();
+        self.transactions.push(ActiveVisualTransaction {
+            transaction_id: tid,
+            generation: vt.id,
+            state: VisualTransactionState::Prepared,
+            kind,
+            animation_mode,
+            duration_ms: vt.duration_ms,
+            start_time: Instant::now(),
+            insert_glyph_rects: vt.insert_glyph_rects.clone().unwrap_or_default(),
+            deleted_glyph_rects: vt.deleted_glyph_rects.clone().unwrap_or_default(),
+            reflow_glyph_rects: vt.reflow_glyph_rects.clone().unwrap_or_default(),
+            inserted_range: vt.inserted_range,
+            old_cursor_rect: vt.old_cursor_rect.clone(),
+            new_cursor_rect: vt.new_cursor_rect.clone(),
+            cancel_reason: None,
+        });
+
+        let log_msg = format!(
+            "VTQueue::enqueue: tid={}, gen={}, kind={:?}, mode={:?}, duration_ms={}",
+            tid, vt.id, kind, animation_mode, vt.duration_ms
+        );
+        let log_msg = format!(
+            "VTQueue::enqueue: tid={}, gen={}, kind={:?}, mode={:?}, duration_ms={}",
+            tid, vt.id, kind, animation_mode, vt.duration_ms
+        );
+        super::editor_animation_debug_log(&log_msg);
+
+        tid
+    }
+
+    pub fn mark_rendering(&mut self, transaction_id: u64) {
+        if let Some(tx) = self.transactions.iter_mut().find(|t| t.transaction_id == transaction_id) {
+            tx.state = VisualTransactionState::Rendering;
+        }
+    }
+
+    pub fn complete(&mut self, transaction_id: u64, generation: u64) -> bool {
+        let before = self.transactions.len();
+        self.transactions.retain(|t| {
+            if t.transaction_id == transaction_id && t.generation == generation {
+                false
+            } else {
+                true
+            }
+        });
+        let removed = self.transactions.len() < before;
+        if removed {
+            super::editor_animation_debug_log(&format!(
+                "VTQueue::complete: tid={}, gen={}",
+                transaction_id, generation
+            ));
+        }
+        removed
+    }
+
+    pub fn cancel(&mut self, transaction_id: u64, generation: u64, reason: &str) -> bool {
+        let before = self.transactions.len();
+        self.transactions.retain(|t| {
+            if t.transaction_id == transaction_id && t.generation == generation {
+                false
+            } else {
+                true
+            }
+        });
+        let removed = self.transactions.len() < before;
+        if removed {
+            super::editor_animation_debug_log(&format!(
+                "VTQueue::cancel: tid={}, gen={}, reason={}",
+                transaction_id, generation, reason
+            ));
+        }
+        removed
+    }
+
+    pub fn cancel_all(&mut self, reason: &str) {
+        if !self.transactions.is_empty() {
+            super::editor_animation_debug_log(&format!(
+                "VTQueue::cancel_all: count={}, reason={}",
+                self.transactions.len(),
+                reason
+            ));
+        }
+        self.transactions.clear();
+    }
+
+    pub fn active_transactions(&self) -> &[ActiveVisualTransaction] {
+        &self.transactions
+    }
+
+    pub fn rendering_transactions(&self) -> Vec<&ActiveVisualTransaction> {
+        self.transactions
+            .iter()
+            .filter(|t| t.state == VisualTransactionState::Rendering)
+            .collect()
+    }
+
+    pub fn has_active(&self) -> bool {
+        !self.transactions.is_empty()
+    }
+
+    pub fn tick(&mut self, now: Instant) -> bool {
+        if self.transactions.is_empty() {
+            return false;
+        }
+        let before = self.transactions.len();
+        self.transactions.retain(|t| {
+            let elapsed = now.duration_since(t.start_time).as_millis() as u64;
+            let timeout = t.duration_ms * 3 + 500;
+            if elapsed > timeout {
+                super::editor_animation_debug_log(&format!(
+                    "VTQueue::tick: expired tid={}, gen={}, elapsed={}ms, timeout={}ms",
+                    t.transaction_id, t.generation, elapsed, timeout
+                ));
+                false
+            } else {
+                true
+            }
+        });
+        self.transactions.len() != before
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.transactions.is_empty()
+    }
+}
+
 pub(crate) struct AnimationRangeRegistry {
     entries: Vec<AnimationRangeEntry>,
     next_generation: u64,
@@ -481,6 +660,7 @@ pub(crate) struct CoordinatorOutput {
 pub(crate) struct LinuxEditorAnimationCoordinator {
     registry: AnimationRangeRegistry,
     last_overlay_plan_id: u64,
+    pub(crate) vt_queue: ActiveVisualTransactionQueue,
 }
 
 impl LinuxEditorAnimationCoordinator {
@@ -488,6 +668,7 @@ impl LinuxEditorAnimationCoordinator {
         Self {
             registry: AnimationRangeRegistry::new(),
             last_overlay_plan_id: 0,
+            vt_queue: ActiveVisualTransactionQueue::new(),
         }
     }
 
@@ -558,6 +739,7 @@ impl LinuxEditorAnimationCoordinator {
                                 mode,
                                 vt.duration_ms,
                             );
+                            self.vt_queue.enqueue(vt, mode);
                         }
                     }
                 }
@@ -593,6 +775,7 @@ impl LinuxEditorAnimationCoordinator {
                                     .start_delete((range_start, range_end), mode, vt.duration_ms);
                             }
                         }
+                        self.vt_queue.enqueue(vt, mode);
                     }
                 }
                 EditorAnimationKind::Cursor => {}
@@ -632,20 +815,31 @@ impl LinuxEditorAnimationCoordinator {
         byte_start: usize,
         byte_end: usize,
     ) -> bool {
-        self.registry
-            .finish_by_id(transaction_id, range_id, byte_start, byte_end)
+        let registry_result = self
+            .registry
+            .finish_by_id(transaction_id, range_id, byte_start, byte_end);
+        if registry_result {
+            if let Some(tid) = transaction_id {
+                let gen = self.registry.generation_for(transaction_id, range_id).unwrap_or(0);
+                self.vt_queue.complete(tid, gen);
+            }
+        }
+        registry_result
     }
 
     pub fn suppress_all(&mut self) -> bool {
-        if self.registry.is_empty() {
+        if self.registry.is_empty() && self.vt_queue.is_empty() {
             return false;
         }
         self.registry.clear();
+        self.vt_queue.cancel_all("suppress_all");
         true
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
-        self.registry.tick(now)
+        let registry_changed = self.registry.tick(now);
+        let queue_changed = self.vt_queue.tick(now);
+        registry_changed || queue_changed
     }
 
     pub fn has_active_insert(&self) -> bool {
