@@ -233,6 +233,13 @@ ApplicationWindow {
         }
     }
 
+    Connections {
+        target: syncBackend
+        function onSync_action_completed() {
+            if (settingsBackend) settingsBackend.refresh_theme_data()
+        }
+    }
+
     AppController {
         id: appController
         backendRef: backend

@@ -19,6 +19,7 @@ import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.ui.compose.adaptive.rememberAdaptiveWindowState
 import com.xiwei.sujian.ui.compose.navigation.SujianNavigationSuite
 import com.xiwei.sujian.ui.compose.theme.SujianTheme
+import com.xiwei.sujian.ui.compose.theme.ThemeStore
 import com.xiwei.sujian.ui.compose.theme.rememberThemeController
 
 @Composable
@@ -39,6 +40,12 @@ fun SujianApp() {
 
     LaunchedEffect(windowState.foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
         appState.updateFoldFeaturesFromAdaptive(windowState.foldingFeatures)
+        val hasFoldFeature = windowState.foldingFeatures.isNotEmpty()
+        val settingsRepo = SettingsRepository(context)
+        val deviceClass = settingsRepo.detectDeviceClassFromFoldFeature(
+            hasFoldFeature, configuration.smallestScreenWidthDp
+        )
+        ThemeStore.setFoldDeviceClass(deviceClass)
         val metrics = WindowMetrics(
             widthDp = configuration.screenWidthDp.toFloat(),
             heightDp = configuration.screenHeightDp.toFloat(),

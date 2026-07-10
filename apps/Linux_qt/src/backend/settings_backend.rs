@@ -28,17 +28,17 @@ pub struct SettingsBackend {
     setting_auto_save_delay_ms: qt_property!(u32; READ setting_auto_save_delay_ms WRITE set_setting_auto_save_delay_ms NOTIFY settings_changed),
     setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
     setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
-    setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
-    setting_monet_color: qt_property!(QString; READ setting_monet_color WRITE set_setting_monet_color NOTIFY settings_changed),
-    setting_theme_palette_json: qt_property!(QString; READ setting_theme_palette_json WRITE set_setting_theme_palette_json NOTIFY settings_changed),
+    setting_theme_mode: qt_property!(QString; READ setting_theme_mode NOTIFY settings_changed),
+    setting_monet_color: qt_property!(QString; READ setting_monet_color NOTIFY settings_changed),
+    setting_theme_palette_json: qt_property!(QString; READ setting_theme_palette_json NOTIFY settings_changed),
     setting_color_source: qt_property!(QString; READ setting_color_source WRITE set_setting_color_source NOTIFY settings_changed),
     setting_appearance_mode: qt_property!(QString; READ setting_appearance_mode WRITE set_setting_appearance_mode NOTIFY settings_changed),
     setting_dynamic_color_enabled: qt_property!(bool; READ setting_dynamic_color_enabled WRITE set_setting_dynamic_color_enabled NOTIFY settings_changed),
     setting_selected_palette_id: qt_property!(QString; READ setting_selected_palette_id WRITE set_setting_selected_palette_id NOTIFY settings_changed),
     setting_selected_builtin_theme_id: qt_property!(QString; READ setting_selected_builtin_theme_id WRITE set_setting_selected_builtin_theme_id NOTIFY settings_changed),
-    resolved_theme_palette_json: qt_property!(QString; READ resolved_theme_palette_json NOTIFY settings_changed),
-    resolved_builtin_themes_json: qt_property!(QString; READ resolved_builtin_themes_json NOTIFY settings_changed),
-    resolved_palette_records_json: qt_property!(QString; READ resolved_palette_records_json NOTIFY settings_changed),
+    resolved_theme_palette_json: qt_property!(QString; READ resolved_theme_palette_json NOTIFY theme_data_changed),
+    resolved_builtin_themes_json: qt_property!(QString; READ resolved_builtin_themes_json NOTIFY theme_data_changed),
+    resolved_palette_records_json: qt_property!(QString; READ resolved_palette_records_json NOTIFY theme_data_changed),
     resolved_appearance_mode: qt_property!(QString; READ resolved_appearance_mode NOTIFY settings_changed),
     resolved_color_source: qt_property!(QString; READ resolved_color_source NOTIFY settings_changed),
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
@@ -53,7 +53,7 @@ pub struct SettingsBackend {
     setting_diagnostics_enabled: qt_property!(bool; READ setting_diagnostics_enabled WRITE set_setting_diagnostics_enabled NOTIFY settings_changed),
     setting_diagnostics_verbose: qt_property!(bool; READ setting_diagnostics_verbose WRITE set_setting_diagnostics_verbose NOTIFY settings_changed),
     settings_changed: qt_signal!(),
-    /// 设置变更后发出，QML 层用 Timer 延迟调用 do_save_local_settings()
+    theme_data_changed: qt_signal!(),
     save_requested: qt_signal!(),
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),
@@ -73,6 +73,7 @@ pub struct SettingsBackend {
     list_palette_records_json: qt_method!(fn(&self) -> QString),
     list_builtin_themes_json: qt_method!(fn(&self) -> QString),
     load_selected_palette_json: qt_method!(fn(&self) -> QString),
+    refresh_theme_data: qt_method!(fn(&mut self)),
     /// 标记是否有待保存的设置
     pending_save: bool,
     app: SafeAppPtr,
@@ -161,27 +162,11 @@ impl SettingsBackend {
     fn setting_theme_mode(&self) -> QString {
         self.with_app("system".into(), |app| app.setting_theme_mode())
     }
-    fn set_setting_theme_mode(&mut self, val: QString) {
-        let val_str = val.to_string();
-        self.with_app_mut((), |app| {
-            app.set_setting_theme_mode(val.clone());
-            app.set_setting_appearance_mode(val);
-        });
-        self.settings_changed();
-    }
     fn setting_monet_color(&self) -> QString {
         self.with_app("".into(), |app| app.setting_monet_color())
     }
-    fn set_setting_monet_color(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_monet_color(val));
-        self.settings_changed();
-    }
     fn setting_theme_palette_json(&self) -> QString {
         self.with_app("".into(), |app| app.setting_theme_palette_json())
-    }
-    fn set_setting_theme_palette_json(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_theme_palette_json(val));
-        self.settings_changed();
     }
     fn setting_color_source(&self) -> QString {
         self.with_app("built_in".into(), |app| app.setting_color_source())
@@ -335,12 +320,12 @@ impl SettingsBackend {
     }
     fn load_local_settings(&mut self) {
         self.with_app_mut((), |app| app.load_local_settings());
-        // 同步 diagnostics_enabled 和 verbose 状态到 diagnostics 全局变量
         let enabled = self.with_app(true, |app| app.setting_diagnostics_enabled());
         let verbose = self.with_app(true, |app| app.setting_diagnostics_verbose());
         crate::backend::diagnostics::set_diagnostics_enabled(enabled);
         crate::backend::diagnostics::set_verbose_enabled(verbose);
         self.settings_changed();
+        self.theme_data_changed();
     }
     fn save_local_settings(&mut self) -> bool {
         self.pending_save = false;
@@ -514,6 +499,10 @@ impl SettingsBackend {
             }
         })
     }
+
+    fn refresh_theme_data(&mut self) {
+        self.theme_data_changed();
+    }
 }
 
 impl AppBackend {
@@ -597,32 +586,12 @@ impl AppBackend {
         }
     }
 
-    // AppBackend::set_setting_theme_mode
-    pub(crate) fn set_setting_theme_mode(&mut self, val: QString) {
-        self.current_setting_theme_mode = val.to_string();
-        self.settings_changed();
-    }
-
-    // AppBackend::setting_monet_color
     pub(crate) fn setting_monet_color(&self) -> QString {
         self.current_setting_monet_color.clone().into()
     }
 
-    // AppBackend::set_setting_monet_color
-    pub(crate) fn set_setting_monet_color(&mut self, val: QString) {
-        self.current_setting_monet_color = val.to_string();
-        self.settings_changed();
-    }
-
-    // AppBackend::setting_theme_palette_json
     pub(crate) fn setting_theme_palette_json(&self) -> QString {
         self.current_setting_theme_palette_json.clone().into()
-    }
-
-    // AppBackend::set_setting_theme_palette_json
-    pub(crate) fn set_setting_theme_palette_json(&mut self, val: QString) {
-        self.current_setting_theme_palette_json = val.to_string();
-        self.settings_changed();
     }
 
     pub(crate) fn setting_color_source(&self) -> QString {
