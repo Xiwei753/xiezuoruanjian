@@ -198,6 +198,7 @@ ApplicationWindow {
             return window.systemThemeIsDark();
         }
         themePaletteJson: settingsBackend !== null ? settingsBackend.setting_theme_palette_json : ""
+        colorSource: settingsBackend !== null ? settingsBackend.setting_color_source : "built_in"
     }
 
     Connections {

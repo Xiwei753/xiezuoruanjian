@@ -90,6 +90,11 @@ dictionary RecentEditDto {
 
 dictionary LocalSettingsDto {
     string? theme_mode;
+    string appearance_mode;
+    string color_source;
+    boolean dynamic_color_enabled;
+    string selected_builtin_theme_id;
+    string selected_palette_id;
     string? locale;
     boolean auto_save_enabled;
     f32 editor_font_size;
@@ -117,6 +122,59 @@ dictionary SyncableSettingsDto {
     string theme_mode;
     string monet_color;
     string theme_palette_json;
+};
+
+dictionary ThemeColorSchemeDto {
+    string primary;
+    string on_primary;
+    string primary_container;
+    string on_primary_container;
+    string inverse_primary;
+    string secondary;
+    string on_secondary;
+    string secondary_container;
+    string on_secondary_container;
+    string tertiary;
+    string on_tertiary;
+    string tertiary_container;
+    string on_tertiary_container;
+    string background;
+    string on_background;
+    string surface;
+    string on_surface;
+    string surface_variant;
+    string on_surface_variant;
+    string surface_tint;
+    string surface_dim;
+    string surface_bright;
+    string surface_container_lowest;
+    string surface_container_low;
+    string surface_container;
+    string surface_container_high;
+    string surface_container_highest;
+    string inverse_surface;
+    string inverse_on_surface;
+    string error;
+    string on_error;
+    string error_container;
+    string on_error_container;
+    string outline;
+    string outline_variant;
+    string scrim;
+};
+
+dictionary ThemePaletteRecordDto {
+    u32 schema_version;
+    string palette_id;
+    string palette_fingerprint;
+    string source;
+    string source_platform;
+    string source_device_id;
+    string source_device_class;
+    i64 captured_at_ms;
+    string variant;
+    ThemeColorSchemeDto light_scheme;
+    ThemeColorSchemeDto dark_scheme;
 };
 
 dictionary SyncConfigDto {
@@ -1005,11 +1063,31 @@ interface WriterAppService {
 
 // ── Layout Policy DTOs ──
 
-enum FoldPostureDto {
-    "Unknown",
-    "FullyOpened",
+enum FoldStateDto {
+    "None",
+    "Flat",
     "HalfOpened",
-    "Closed",
+};
+
+enum FoldOrientationDto {
+    "Horizontal",
+    "Vertical",
+};
+
+enum FoldOcclusionDto {
+    "None",
+    "Full",
+};
+
+dictionary FoldFeatureInfoDto {
+    FoldStateDto state;
+    FoldOrientationDto orientation;
+    boolean is_separating;
+    FoldOcclusionDto occlusion;
+    float bounds_left_vp;
+    float bounds_top_vp;
+    float bounds_right_vp;
+    float bounds_bottom_vp;
 };
 
 enum OrientationDto {
@@ -1029,6 +1107,8 @@ enum WidthClassDto {
     "Compact",
     "Medium",
     "Expanded",
+    "Large",
+    "ExtraLarge",
 };
 
 enum HeightClassDto {
@@ -1041,6 +1121,7 @@ enum ShellModeDto {
     "SinglePane",
     "SupportingPane",
     "TwoPane",
+    "ThreePane",
 };
 
 enum EditorModeDto {
@@ -1053,13 +1134,45 @@ enum NavigationModeDto {
     "ListDetail",
 };
 
+enum NavigationPresentationDto {
+    "BottomBar",
+    "NavigationRail",
+    "PermanentDrawer",
+};
+
+enum WorkspacePaneModeDto {
+    "SinglePane",
+    "ListDetail",
+    "ThreePane",
+};
+
+dictionary VisiblePaneRolesDto {
+    boolean show_project_list;
+    boolean show_chapter_tree;
+    boolean show_editor;
+    boolean show_supporting;
+};
+
+dictionary PaneWidthConstraintDto {
+    float min_dp;
+    float preferred_dp;
+    float max_dp;
+};
+
+dictionary AvoidRegionDto {
+    float left_dp;
+    float top_dp;
+    float right_dp;
+    float bottom_dp;
+};
+
 dictionary WindowMetricsDto {
-    float width_vp;
-    float height_vp;
-    float safe_top_vp;
-    float safe_bottom_vp;
+    float width_dp;
+    float height_dp;
+    float safe_top_dp;
+    float safe_bottom_dp;
     boolean keyboard_visible;
-    FoldPostureDto fold_posture;
+    FoldFeatureInfoDto fold_feature;
     OrientationDto orientation;
     PointerKindDto pointer;
 };
@@ -1070,22 +1183,31 @@ dictionary LayoutPlanDto {
     ShellModeDto shell_mode;
     EditorModeDto editor_mode;
     NavigationModeDto navigation_mode;
-    float content_max_width_vp;
-    float page_padding_vp;
+    NavigationPresentationDto navigation_presentation;
+    WorkspacePaneModeDto workspace_pane_mode;
+    VisiblePaneRolesDto visible_pane_roles;
+    float content_max_width_dp;
+    float page_padding_dp;
     u8 grid_columns;
-    boolean show_side_panel;
     boolean show_bottom_bar;
-    float side_panel_width_vp;
-    float primary_pane_weight;
-    float detail_panel_max_width_vp;
+    PaneWidthConstraintDto list_pane_width;
+    float editor_content_max_width_dp;
+    float primary_pane_min_dp;
+    float primary_pane_preferred_dp;
+    float primary_pane_max_dp;
+    WorkspacePaneModeDto? supporting_pane_mode;
+    sequence<AvoidRegionDto> avoid_regions;
 };
 
 // ── Screen Policy DTOs ──
 
 enum ScreenRoleDto {
     "Home",
-    "Workspace",
+    "ProjectList",
+    "ProjectWorkspace",
     "Writing",
+    "StarMap",
+    "Stats",
     "Settings",
     "Sync"
 };
@@ -1095,7 +1217,8 @@ enum PaneRoleDto {
     "Detail",
     "Editor",
     "Inspector",
-    "Drawer"
+    "Drawer",
+    "Supporting"
 };
 
 enum ActionRoleDto {
@@ -1108,7 +1231,8 @@ enum ActionRoleDto {
     "Rename",
     "Settings",
     "Sync",
-    "Search"
+    "Search",
+    "Sort"
 };
 
 enum ActionPlacementDto {
@@ -1117,7 +1241,11 @@ enum ActionPlacementDto {
     "Floating",
     "BottomBar",
     "ContextMenu",
-    "SidePanel"
+    "SidePanel",
+    "Navigation",
+    "ListHeader",
+    "ItemTrailing",
+    "EmptyState"
 };
 
 dictionary ActionSlotDto {

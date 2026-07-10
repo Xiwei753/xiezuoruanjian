@@ -23,12 +23,13 @@ QtObject {
     // --- Theme palette (synced from Android Dynamic Color) ---
     // Non-Android clients only consume this; they never produce it.
     property string themePaletteJson: ""
+    property string colorSource: "built_in"
     property var _themePalette: {
         if (themePaletteJson.length === 0) return null
         try { return JSON.parse(themePaletteJson) } catch(e) { return null }
     }
     property bool hasThemePalette: _themePalette !== null && _themePalette.source === "android_dynamic_color"
-    property bool useThemePalette: true
+    property bool useThemePalette: hasThemePalette && colorSource === "saved_palette"
 
     function _paletteColor(lightKey, darkKey) {
         if (!(hasThemePalette && useThemePalette)) return undefined

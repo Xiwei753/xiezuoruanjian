@@ -19,7 +19,11 @@ class SujianApp : Application(), DefaultLifecycleObserver {
 
     override fun onCreate() {
         super<Application>.onCreate()
-        DynamicColors.applyToActivitiesIfAvailable(this)
+        val repo = SettingsRepository(this)
+        val localSettings = repo.getLocalSettings()
+        if (localSettings.dynamicColorEnabled) {
+            DynamicColors.applyToActivitiesIfAvailable(this)
+        }
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
         initDiagnostics()
         installCrashHandler()

@@ -1,6 +1,11 @@
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct LocalSettingsDto {
     pub theme_mode: Option<String>,
+    pub appearance_mode: String,
+    pub color_source: String,
+    pub dynamic_color_enabled: bool,
+    pub selected_builtin_theme_id: String,
+    pub selected_palette_id: String,
     pub locale: Option<String>,
     pub auto_save_enabled: bool,
     pub editor_font_size: f32,
@@ -27,6 +32,11 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
     fn from(s: crate::settings::LocalSettings) -> Self {
         Self {
             theme_mode: s.theme_mode,
+            appearance_mode: s.appearance_mode,
+            color_source: s.color_source,
+            dynamic_color_enabled: s.dynamic_color_enabled,
+            selected_builtin_theme_id: s.selected_builtin_theme_id,
+            selected_palette_id: s.selected_palette_id,
             locale: s.locale,
             auto_save_enabled: s.auto_save_enabled,
             editor_font_size: s.editor_font_size,
@@ -55,6 +65,11 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
     fn from(s: LocalSettingsDto) -> Self {
         crate::settings::LocalSettings {
             theme_mode: s.theme_mode,
+            appearance_mode: s.appearance_mode,
+            color_source: s.color_source,
+            dynamic_color_enabled: s.dynamic_color_enabled,
+            selected_builtin_theme_id: s.selected_builtin_theme_id,
+            selected_palette_id: s.selected_palette_id,
             locale: s.locale,
             auto_save_enabled: s.auto_save_enabled,
             editor_font_size: s.editor_font_size,
@@ -294,6 +309,183 @@ impl From<SyncableSettingsDto> for crate::settings::SyncableSettings {
             theme_mode: s.theme_mode,
             monet_color: s.monet_color,
             theme_palette: palette.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub struct ThemeColorSchemeDto {
+    pub primary: String,
+    pub on_primary: String,
+    pub primary_container: String,
+    pub on_primary_container: String,
+    pub inverse_primary: String,
+    pub secondary: String,
+    pub on_secondary: String,
+    pub secondary_container: String,
+    pub on_secondary_container: String,
+    pub tertiary: String,
+    pub on_tertiary: String,
+    pub tertiary_container: String,
+    pub on_tertiary_container: String,
+    pub background: String,
+    pub on_background: String,
+    pub surface: String,
+    pub on_surface: String,
+    pub surface_variant: String,
+    pub on_surface_variant: String,
+    pub surface_tint: String,
+    pub surface_dim: String,
+    pub surface_bright: String,
+    pub surface_container_lowest: String,
+    pub surface_container_low: String,
+    pub surface_container: String,
+    pub surface_container_high: String,
+    pub surface_container_highest: String,
+    pub inverse_surface: String,
+    pub inverse_on_surface: String,
+    pub error: String,
+    pub on_error: String,
+    pub error_container: String,
+    pub on_error_container: String,
+    pub outline: String,
+    pub outline_variant: String,
+    pub scrim: String,
+}
+
+impl From<crate::settings::ThemeColorScheme> for ThemeColorSchemeDto {
+    fn from(s: crate::settings::ThemeColorScheme) -> Self {
+        Self {
+            primary: s.primary,
+            on_primary: s.on_primary,
+            primary_container: s.primary_container,
+            on_primary_container: s.on_primary_container,
+            inverse_primary: s.inverse_primary,
+            secondary: s.secondary,
+            on_secondary: s.on_secondary,
+            secondary_container: s.secondary_container,
+            on_secondary_container: s.on_secondary_container,
+            tertiary: s.tertiary,
+            on_tertiary: s.on_tertiary,
+            tertiary_container: s.tertiary_container,
+            on_tertiary_container: s.on_tertiary_container,
+            background: s.background,
+            on_background: s.on_background,
+            surface: s.surface,
+            on_surface: s.on_surface,
+            surface_variant: s.surface_variant,
+            on_surface_variant: s.on_surface_variant,
+            surface_tint: s.surface_tint,
+            surface_dim: s.surface_dim,
+            surface_bright: s.surface_bright,
+            surface_container_lowest: s.surface_container_lowest,
+            surface_container_low: s.surface_container_low,
+            surface_container: s.surface_container,
+            surface_container_high: s.surface_container_high,
+            surface_container_highest: s.surface_container_highest,
+            inverse_surface: s.inverse_surface,
+            inverse_on_surface: s.inverse_on_surface,
+            error: s.error,
+            on_error: s.on_error,
+            error_container: s.error_container,
+            on_error_container: s.on_error_container,
+            outline: s.outline,
+            outline_variant: s.outline_variant,
+            scrim: s.scrim,
+        }
+    }
+}
+
+impl From<ThemeColorSchemeDto> for crate::settings::ThemeColorScheme {
+    fn from(s: ThemeColorSchemeDto) -> Self {
+        Self {
+            primary: s.primary,
+            on_primary: s.on_primary,
+            primary_container: s.primary_container,
+            on_primary_container: s.on_primary_container,
+            inverse_primary: s.inverse_primary,
+            secondary: s.secondary,
+            on_secondary: s.on_secondary,
+            secondary_container: s.secondary_container,
+            on_secondary_container: s.on_secondary_container,
+            tertiary: s.tertiary,
+            on_tertiary: s.on_tertiary,
+            tertiary_container: s.tertiary_container,
+            on_tertiary_container: s.on_tertiary_container,
+            background: s.background,
+            on_background: s.on_background,
+            surface: s.surface,
+            on_surface: s.on_surface,
+            surface_variant: s.surface_variant,
+            on_surface_variant: s.on_surface_variant,
+            surface_tint: s.surface_tint,
+            surface_dim: s.surface_dim,
+            surface_bright: s.surface_bright,
+            surface_container_lowest: s.surface_container_lowest,
+            surface_container_low: s.surface_container_low,
+            surface_container: s.surface_container,
+            surface_container_high: s.surface_container_high,
+            surface_container_highest: s.surface_container_highest,
+            inverse_surface: s.inverse_surface,
+            inverse_on_surface: s.inverse_on_surface,
+            error: s.error,
+            on_error: s.on_error,
+            error_container: s.error_container,
+            on_error_container: s.on_error_container,
+            outline: s.outline,
+            outline_variant: s.outline_variant,
+            scrim: s.scrim,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub struct ThemePaletteRecordDto {
+    pub schema_version: u32,
+    pub palette_id: String,
+    pub palette_fingerprint: String,
+    pub source: String,
+    pub source_platform: String,
+    pub source_device_id: String,
+    pub source_device_class: String,
+    pub captured_at_ms: i64,
+    pub variant: String,
+    pub light_scheme: ThemeColorSchemeDto,
+    pub dark_scheme: ThemeColorSchemeDto,
+}
+
+impl From<crate::settings::ThemePaletteRecord> for ThemePaletteRecordDto {
+    fn from(r: crate::settings::ThemePaletteRecord) -> Self {
+        Self {
+            schema_version: r.schema_version,
+            palette_id: r.palette_id,
+            palette_fingerprint: r.palette_fingerprint,
+            source: r.source,
+            source_platform: r.source_platform,
+            source_device_id: r.source_device_id,
+            source_device_class: r.source_device_class,
+            captured_at_ms: r.captured_at_ms,
+            variant: r.variant,
+            light_scheme: r.light_scheme.into(),
+            dark_scheme: r.dark_scheme.into(),
+        }
+    }
+}
+
+impl From<ThemePaletteRecordDto> for crate::settings::ThemePaletteRecord {
+    fn from(r: ThemePaletteRecordDto) -> Self {
+        Self {
+            schema_version: r.schema_version,
+            palette_id: r.palette_id,
+            palette_fingerprint: r.palette_fingerprint,
+            source: r.source,
+            source_platform: r.source_platform,
+            source_device_id: r.source_device_id,
+            source_device_class: r.source_device_class,
+            captured_at_ms: r.captured_at_ms,
+            variant: r.variant,
+            light_scheme: r.light_scheme.into(),
+            dark_scheme: r.dark_scheme.into(),
         }
     }
 }

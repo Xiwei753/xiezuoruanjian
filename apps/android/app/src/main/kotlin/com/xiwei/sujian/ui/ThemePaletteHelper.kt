@@ -203,7 +203,7 @@ object ThemePaletteHelper {
             sb.append("{\"source\":\"android_dynamic_color\",")
             sb.append("\"updated_at_ms\":${System.currentTimeMillis()},")
             sb.append("\"device_id\":\"\",")
-            sb.append("\"variant\":\"tonal_spot\",")
+            sb.append("\"variant\":\"system_selected\",")
 
             val allEntries = lightColorEntries + darkColorEntries
             for ((i, entry) in allEntries.withIndex()) {

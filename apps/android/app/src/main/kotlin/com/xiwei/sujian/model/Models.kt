@@ -27,6 +27,11 @@ data class WorkspaceManifest(
 
 data class LocalSettings(
     val themeMode: String? = "system",
+    val appearanceMode: String = "system",
+    val colorSource: String = "built_in",
+    val dynamicColorEnabled: Boolean = false,
+    val selectedBuiltinThemeId: String = "",
+    val selectedPaletteId: String = "",
     val locale: String? = null,
     val editorFontSize: Float = 16f,
     val editorLineSpacingMultiplier: Float = 1.5f,

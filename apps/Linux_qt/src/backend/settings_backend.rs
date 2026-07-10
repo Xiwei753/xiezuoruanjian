@@ -31,6 +31,9 @@ pub struct SettingsBackend {
     setting_theme_mode: qt_property!(QString; READ setting_theme_mode WRITE set_setting_theme_mode NOTIFY settings_changed),
     setting_monet_color: qt_property!(QString; READ setting_monet_color WRITE set_setting_monet_color NOTIFY settings_changed),
     setting_theme_palette_json: qt_property!(QString; READ setting_theme_palette_json WRITE set_setting_theme_palette_json NOTIFY settings_changed),
+    setting_color_source: qt_property!(QString; READ setting_color_source WRITE set_setting_color_source NOTIFY settings_changed),
+    setting_appearance_mode: qt_property!(QString; READ setting_appearance_mode WRITE set_setting_appearance_mode NOTIFY settings_changed),
+    setting_dynamic_color_enabled: qt_property!(bool; READ setting_dynamic_color_enabled WRITE set_setting_dynamic_color_enabled NOTIFY settings_changed),
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
@@ -164,6 +167,27 @@ impl SettingsBackend {
     }
     fn set_setting_theme_palette_json(&mut self, val: QString) {
         self.with_app_mut((), |app| app.set_setting_theme_palette_json(val));
+        self.settings_changed();
+    }
+    fn setting_color_source(&self) -> QString {
+        self.with_app("built_in".into(), |app| app.setting_color_source())
+    }
+    fn set_setting_color_source(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_setting_color_source(val));
+        self.settings_changed();
+    }
+    fn setting_appearance_mode(&self) -> QString {
+        self.with_app("system".into(), |app| app.setting_appearance_mode())
+    }
+    fn set_setting_appearance_mode(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_setting_appearance_mode(val));
+        self.settings_changed();
+    }
+    fn setting_dynamic_color_enabled(&self) -> bool {
+        self.with_app(false, |app| app.setting_dynamic_color_enabled())
+    }
+    fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
+        self.with_app_mut((), |app| app.set_setting_dynamic_color_enabled(val));
         self.settings_changed();
     }
     fn setting_typing_animation_enabled(&self) -> bool {
@@ -482,6 +506,33 @@ impl AppBackend {
         self.settings_changed();
     }
 
+    pub(crate) fn setting_color_source(&self) -> QString {
+        self.current_setting_color_source.clone().into()
+    }
+
+    pub(crate) fn set_setting_color_source(&mut self, val: QString) {
+        self.current_setting_color_source = val.to_string();
+        self.settings_changed();
+    }
+
+    pub(crate) fn setting_appearance_mode(&self) -> QString {
+        self.current_setting_appearance_mode.clone().into()
+    }
+
+    pub(crate) fn set_setting_appearance_mode(&mut self, val: QString) {
+        self.current_setting_appearance_mode = val.to_string();
+        self.settings_changed();
+    }
+
+    pub(crate) fn setting_dynamic_color_enabled(&self) -> bool {
+        self.current_setting_dynamic_color_enabled
+    }
+
+    pub(crate) fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
+        self.current_setting_dynamic_color_enabled = val;
+        self.settings_changed();
+    }
+
     // AppBackend::setting_typing_animation_enabled
     pub(crate) fn setting_typing_animation_enabled(&self) -> bool {
         self.current_setting_typing_animation_enabled
@@ -588,6 +639,9 @@ impl AppBackend {
         self.current_setting_theme_mode = "system".to_string();
         self.current_setting_monet_color = "".to_string();
         self.current_setting_theme_palette_json = "".to_string();
+        self.current_setting_color_source = "built_in".to_string();
+        self.current_setting_appearance_mode = "system".to_string();
+        self.current_setting_dynamic_color_enabled = false;
         self.settings_changed();
     }
 
@@ -647,9 +701,17 @@ impl AppBackend {
                 self.current_setting_theme_mode = sync_settings.theme_mode.clone();
                 self.current_setting_monet_color = sync_settings.monet_color.clone();
                 self.current_setting_theme_palette_json = sync_settings.theme_palette_json.clone();
+                if let Ok(local) = core.load_local_settings() {
+                    self.current_setting_color_source = local.color_source.clone();
+                    self.current_setting_appearance_mode = local.appearance_mode.clone();
+                    self.current_setting_dynamic_color_enabled = local.dynamic_color_enabled;
+                }
             } else {
                 self.current_setting_monet_color = "".to_string();
                 self.current_setting_theme_palette_json = "".to_string();
+                self.current_setting_color_source = "built_in".to_string();
+                self.current_setting_appearance_mode = "system".to_string();
+                self.current_setting_dynamic_color_enabled = false;
                 if let Ok(local) = core.load_local_settings() {
                     self.current_setting_font_size = local.editor_font_size;
                 }

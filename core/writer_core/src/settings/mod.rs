@@ -45,6 +45,16 @@ pub mod ranges {
 pub struct LocalSettings {
     #[serde(default)]
     pub theme_mode: Option<String>,
+    #[serde(default = "default_appearance_mode")]
+    pub appearance_mode: String,
+    #[serde(default = "default_color_source")]
+    pub color_source: String,
+    #[serde(default)]
+    pub dynamic_color_enabled: bool,
+    #[serde(default)]
+    pub selected_builtin_theme_id: String,
+    #[serde(default)]
+    pub selected_palette_id: String,
     #[serde(default)]
     pub locale: Option<String>,
     #[serde(default = "default_editor_font_size")]
@@ -92,6 +102,14 @@ pub struct LocalSettings {
     pub diagnostics_enabled: bool,
     #[serde(default = "default_diagnostics_verbose")]
     pub diagnostics_verbose: bool,
+}
+
+fn default_appearance_mode() -> String {
+    "system".to_string()
+}
+
+fn default_color_source() -> String {
+    "built_in".to_string()
 }
 
 fn default_linux_qt_sidebar_width() -> f64 {
@@ -179,6 +197,11 @@ impl Default for LocalSettings {
     fn default() -> Self {
         Self {
             theme_mode: Some("system".to_string()),
+            appearance_mode: default_appearance_mode(),
+            color_source: default_color_source(),
+            dynamic_color_enabled: false,
+            selected_builtin_theme_id: String::new(),
+            selected_palette_id: String::new(),
             locale: None,
             editor_font_size: default_editor_font_size(),
             editor_line_spacing_multiplier: default_editor_line_spacing_multiplier(),
@@ -326,6 +349,114 @@ pub struct ThemePalette {
     pub dark_outline_variant: String,
 }
 
+/// Complete Material 3 ColorScheme for a single light or dark theme.
+/// Covers all semantic roles defined by Material 3.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemeColorScheme {
+    #[serde(default)]
+    pub primary: String,
+    #[serde(default)]
+    pub on_primary: String,
+    #[serde(default)]
+    pub primary_container: String,
+    #[serde(default)]
+    pub on_primary_container: String,
+    #[serde(default)]
+    pub inverse_primary: String,
+    #[serde(default)]
+    pub secondary: String,
+    #[serde(default)]
+    pub on_secondary: String,
+    #[serde(default)]
+    pub secondary_container: String,
+    #[serde(default)]
+    pub on_secondary_container: String,
+    #[serde(default)]
+    pub tertiary: String,
+    #[serde(default)]
+    pub on_tertiary: String,
+    #[serde(default)]
+    pub tertiary_container: String,
+    #[serde(default)]
+    pub on_tertiary_container: String,
+    #[serde(default)]
+    pub background: String,
+    #[serde(default)]
+    pub on_background: String,
+    #[serde(default)]
+    pub surface: String,
+    #[serde(default)]
+    pub on_surface: String,
+    #[serde(default)]
+    pub surface_variant: String,
+    #[serde(default)]
+    pub on_surface_variant: String,
+    #[serde(default)]
+    pub surface_tint: String,
+    #[serde(default)]
+    pub surface_dim: String,
+    #[serde(default)]
+    pub surface_bright: String,
+    #[serde(default)]
+    pub surface_container_lowest: String,
+    #[serde(default)]
+    pub surface_container_low: String,
+    #[serde(default)]
+    pub surface_container: String,
+    #[serde(default)]
+    pub surface_container_high: String,
+    #[serde(default)]
+    pub surface_container_highest: String,
+    #[serde(default)]
+    pub inverse_surface: String,
+    #[serde(default)]
+    pub inverse_on_surface: String,
+    #[serde(default)]
+    pub error: String,
+    #[serde(default)]
+    pub on_error: String,
+    #[serde(default)]
+    pub error_container: String,
+    #[serde(default)]
+    pub on_error_container: String,
+    #[serde(default)]
+    pub outline: String,
+    #[serde(default)]
+    pub outline_variant: String,
+    #[serde(default)]
+    pub scrim: String,
+}
+
+/// Immutable theme palette record stored in the palette catalog.
+/// Each record is a complete snapshot of a Material 3 theme from one device.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ThemePaletteRecord {
+    #[serde(default)]
+    pub schema_version: u32,
+    #[serde(default)]
+    pub palette_id: String,
+    #[serde(default)]
+    pub palette_fingerprint: String,
+    #[serde(default)]
+    pub source: String,
+    #[serde(default)]
+    pub source_platform: String,
+    #[serde(default)]
+    pub source_device_id: String,
+    #[serde(default)]
+    pub source_device_class: String,
+    #[serde(default)]
+    pub captured_at_ms: i64,
+    #[serde(default)]
+    pub variant: String,
+    #[serde(default)]
+    pub light_scheme: ThemeColorScheme,
+    #[serde(default)]
+    pub dark_scheme: ThemeColorScheme,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncableSettings {
@@ -337,7 +468,10 @@ pub struct SyncableSettings {
     #[serde(default)]
     #[deprecated(note = "use theme_palette instead")]
     pub monet_color: String,
+    /// Deprecated: use palette catalog (app-meta/themes/palettes/) instead.
+    /// Retained for backward-compatible reading and migration.
     #[serde(default)]
+    #[deprecated(note = "use palette catalog instead")]
     pub theme_palette: ThemePalette,
 }
 
@@ -460,6 +594,237 @@ pub fn set_editor_font_size(workspace_path: &Path, font_size: f64) -> Result<()>
     let mut syncable = load_syncable_settings(workspace_path).unwrap_or_default();
     syncable.font_size = font_size;
     save_syncable_settings(workspace_path, &syncable)
+}
+
+// ── Palette catalog operations ──
+
+/// Base directory for palette catalog.
+fn palettes_base_dir(workspace_path: &Path) -> std::path::PathBuf {
+    workspace_path.join("app-meta/themes/palettes")
+}
+
+/// Compute a stable fingerprint for a pair of color schemes.
+/// Uses SHA-256 on the normalized JSON of light + dark schemes.
+pub fn compute_palette_fingerprint(light: &ThemeColorScheme, dark: &ThemeColorScheme) -> String {
+    use sha2::Digest;
+    use std::fmt::Write;
+    let mut hasher = sha2::Sha256::new();
+    sha2::Digest::update(&mut hasher, serde_json::to_string(light).unwrap_or_default().as_bytes());
+    sha2::Digest::update(&mut hasher, serde_json::to_string(dark).unwrap_or_default().as_bytes());
+    let hash = sha2::Digest::finalize(hasher);
+    let mut hex = String::with_capacity(16);
+    for byte in &hash[..8] {
+        write!(&mut hex, "{:02x}", byte).unwrap();
+    }
+    hex
+}
+
+/// Save a palette record to the catalog.
+/// Path: `app-meta/themes/palettes/<device_id>/<fingerprint>.json`
+/// If the file already exists, it is not overwritten (immutable).
+pub fn save_palette_record(workspace_path: &Path, record: &ThemePaletteRecord) -> Result<()> {
+    let dir = palettes_base_dir(workspace_path)
+        .join(&record.source_device_id);
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("{}.json", record.palette_fingerprint));
+    if path.exists() {
+        return Ok(());
+    }
+    let content = serde_json::to_string_pretty(record)?;
+    crate::storage::atomic_write_string(&path, &content)
+}
+
+/// Load a specific palette record by device_id and fingerprint.
+pub fn load_palette_record(
+    workspace_path: &Path,
+    device_id: &str,
+    fingerprint: &str,
+) -> Result<ThemePaletteRecord> {
+    let path = palettes_base_dir(workspace_path)
+        .join(device_id)
+        .join(format!("{}.json", fingerprint));
+    let content = fs::read_to_string(&path)?;
+    Ok(serde_json::from_str(&content)?)
+}
+
+/// List all palette records in the catalog.
+/// Scans `app-meta/themes/palettes/<device_id>/<fingerprint>.json` recursively.
+pub fn list_palette_records(workspace_path: &Path) -> Result<Vec<ThemePaletteRecord>> {
+    let base = palettes_base_dir(workspace_path);
+    if !base.exists() {
+        return Ok(Vec::new());
+    }
+    let mut records = Vec::new();
+    for device_dir in fs::read_dir(&base)? {
+        let device_dir = device_dir?;
+        if !device_dir.file_type()?.is_dir() {
+            continue;
+        }
+        for file_entry in fs::read_dir(device_dir.path())? {
+            let file_entry = file_entry?;
+            let path = file_entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(record) = serde_json::from_str::<ThemePaletteRecord>(&content) {
+                    records.push(record);
+                }
+            }
+        }
+    }
+    records.sort_by(|a, b| b.captured_at_ms.cmp(&a.captured_at_ms));
+    Ok(records)
+}
+
+/// Delete a specific palette record.
+pub fn delete_palette_record(
+    workspace_path: &Path,
+    device_id: &str,
+    fingerprint: &str,
+) -> Result<()> {
+    let path = palettes_base_dir(workspace_path)
+        .join(device_id)
+        .join(format!("{}.json", fingerprint));
+    if path.exists() {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+/// Convert legacy ThemePalette to ThemePaletteRecord for migration.
+/// Legacy ThemePalette has flat light_/dark_ prefixed fields;
+/// this converts them into the new ThemeColorScheme structure.
+#[allow(deprecated)]
+pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
+    let light = ThemeColorScheme {
+        primary: palette.light_primary.clone(),
+        on_primary: palette.light_on_primary.clone(),
+        primary_container: palette.light_primary_container.clone(),
+        on_primary_container: palette.light_on_primary_container.clone(),
+        inverse_primary: String::new(),
+        secondary: palette.light_secondary.clone(),
+        on_secondary: palette.light_on_secondary.clone(),
+        secondary_container: palette.light_secondary_container.clone(),
+        on_secondary_container: palette.light_on_secondary_container.clone(),
+        tertiary: palette.light_tertiary.clone(),
+        on_tertiary: palette.light_on_tertiary.clone(),
+        tertiary_container: palette.light_tertiary_container.clone(),
+        on_tertiary_container: palette.light_on_tertiary_container.clone(),
+        background: palette.light_background.clone(),
+        on_background: palette.light_on_background.clone(),
+        surface: palette.light_surface.clone(),
+        on_surface: palette.light_on_surface.clone(),
+        surface_variant: palette.light_surface_variant.clone(),
+        on_surface_variant: palette.light_on_surface_variant.clone(),
+        surface_tint: String::new(),
+        surface_dim: String::new(),
+        surface_bright: String::new(),
+        surface_container_lowest: palette.light_surface_container_lowest.clone(),
+        surface_container_low: palette.light_surface_container_low.clone(),
+        surface_container: palette.light_surface_container.clone(),
+        surface_container_high: palette.light_surface_container_high.clone(),
+        surface_container_highest: palette.light_surface_container_highest.clone(),
+        inverse_surface: String::new(),
+        inverse_on_surface: String::new(),
+        error: String::new(),
+        on_error: String::new(),
+        error_container: String::new(),
+        on_error_container: String::new(),
+        outline: palette.light_outline.clone(),
+        outline_variant: palette.light_outline_variant.clone(),
+        scrim: String::new(),
+    };
+    let dark = ThemeColorScheme {
+        primary: palette.dark_primary.clone(),
+        on_primary: palette.dark_on_primary.clone(),
+        primary_container: palette.dark_primary_container.clone(),
+        on_primary_container: palette.dark_on_primary_container.clone(),
+        inverse_primary: String::new(),
+        secondary: palette.dark_secondary.clone(),
+        on_secondary: palette.dark_on_secondary.clone(),
+        secondary_container: palette.dark_secondary_container.clone(),
+        on_secondary_container: palette.dark_on_secondary_container.clone(),
+        tertiary: palette.dark_tertiary.clone(),
+        on_tertiary: palette.dark_on_tertiary.clone(),
+        tertiary_container: palette.dark_tertiary_container.clone(),
+        on_tertiary_container: palette.dark_on_tertiary_container.clone(),
+        background: palette.dark_background.clone(),
+        on_background: palette.dark_on_background.clone(),
+        surface: palette.dark_surface.clone(),
+        on_surface: palette.dark_on_surface.clone(),
+        surface_variant: palette.dark_surface_variant.clone(),
+        on_surface_variant: palette.dark_on_surface_variant.clone(),
+        surface_tint: String::new(),
+        surface_dim: String::new(),
+        surface_bright: String::new(),
+        surface_container_lowest: palette.dark_surface_container_lowest.clone(),
+        surface_container_low: palette.dark_surface_container_low.clone(),
+        surface_container: palette.dark_surface_container.clone(),
+        surface_container_high: palette.dark_surface_container_high.clone(),
+        surface_container_highest: palette.dark_surface_container_highest.clone(),
+        inverse_surface: String::new(),
+        inverse_on_surface: String::new(),
+        error: String::new(),
+        on_error: String::new(),
+        error_container: String::new(),
+        on_error_container: String::new(),
+        outline: palette.dark_outline.clone(),
+        outline_variant: palette.dark_outline_variant.clone(),
+        scrim: String::new(),
+    };
+    let fingerprint = compute_palette_fingerprint(&light, &dark);
+    let device_id = if palette.device_id.is_empty() {
+        "legacy".to_string()
+    } else {
+        palette.device_id.clone()
+    };
+    let palette_id = format!("{}:{}", device_id, fingerprint);
+    let variant = if palette.variant == "tonal_spot" && palette.source == "android_dynamic_color" {
+        "system_selected".to_string()
+    } else {
+        palette.variant.clone()
+    };
+    ThemePaletteRecord {
+        schema_version: 1,
+        palette_id,
+        palette_fingerprint: fingerprint,
+        source: palette.source.clone(),
+        source_platform: String::new(),
+        source_device_id: device_id,
+        source_device_class: String::new(),
+        captured_at_ms: palette.updated_at_ms,
+        variant,
+        light_scheme: light,
+        dark_scheme: dark,
+    }
+}
+
+/// Migrate legacy ThemePalette from SyncableSettings to palette catalog.
+/// Does nothing if the legacy palette is empty/default.
+/// Returns true if migration was performed.
+#[allow(deprecated)]
+pub fn migrate_legacy_theme_palette(workspace_path: &Path) -> Result<bool> {
+    let syncable = load_syncable_settings(workspace_path)?;
+    if syncable.theme_palette.source.is_empty() && syncable.theme_palette.light_primary.is_empty() {
+        return Ok(false);
+    }
+    let record = legacy_palette_to_record(&syncable.theme_palette);
+    save_palette_record(workspace_path, &record)?;
+    let mut local = load_local_settings(workspace_path)?;
+    let need_palette_update = local.selected_palette_id.is_empty();
+    if need_palette_update {
+        local.selected_palette_id = record.palette_id.clone();
+        local.color_source = "saved_palette".to_string();
+    }
+    let need_appearance_update = local.appearance_mode == "system" && syncable.theme_mode != "system" && !syncable.theme_mode.is_empty();
+    if need_appearance_update {
+        local.appearance_mode = syncable.theme_mode.clone();
+    }
+    if need_palette_update || need_appearance_update {
+        save_local_settings(workspace_path, &local)?;
+    }
+    Ok(true)
 }
 
 #[cfg(test)]

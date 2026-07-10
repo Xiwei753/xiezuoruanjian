@@ -112,6 +112,11 @@ internal fun ChapterSaveReceiptDto.toModel() = ChapterSaveReceipt(
 
 internal fun LocalSettingsDto.toModel() = LocalSettings(
     themeMode = themeMode,
+    appearanceMode = appearanceMode,
+    colorSource = colorSource,
+    dynamicColorEnabled = dynamicColorEnabled,
+    selectedBuiltinThemeId = selectedBuiltinThemeId,
+    selectedPaletteId = selectedPaletteId,
     locale = locale,
     autoSaveEnabled = autoSaveEnabled,
     editorFontSize = editorFontSize,
@@ -132,11 +137,16 @@ internal fun LocalSettingsDto.toModel() = LocalSettings(
     editorCoordinatedTextCursorAnimationEnabled = editorCoordinatedTextCursorAnimationEnabled,
     diagnosticsEnabled = diagnosticsEnabled,
     diagnosticsVerbose = diagnosticsVerbose,
-    useSelfRenderEditorOnAndroid = true  // 默认开启自研写作区；保留"回退到系统 EditText"的开发开关，不给普通用户暴露
+    useSelfRenderEditorOnAndroid = true
 )
 
 internal fun LocalSettings.toDto() = LocalSettingsDto(
     themeMode = themeMode,
+    appearanceMode = appearanceMode,
+    colorSource = colorSource,
+    dynamicColorEnabled = dynamicColorEnabled,
+    selectedBuiltinThemeId = selectedBuiltinThemeId,
+    selectedPaletteId = selectedPaletteId,
     locale = locale,
     autoSaveEnabled = autoSaveEnabled,
     editorFontSize = editorFontSize,
