@@ -111,7 +111,7 @@ class SujianAppState(
         foldFeatureInfo = info
     }
 
-    fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>) {
+    fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) {
         val coreFoldInfo = if (features.isNotEmpty()) {
             val feature = features.first()
             val info = AndroidAdaptiveWindowAdapter.toFoldFeatureInfo(feature)
@@ -124,10 +124,10 @@ class SujianAppState(
                 orientation = if (info.orientation == AdaptiveFoldOrientation.Horizontal) FoldOrientation.Horizontal else FoldOrientation.Vertical,
                 isSeparating = info.isSeparating,
                 occlusion = if (info.occlusionType == FoldOcclusionType.Full) FoldOcclusion.Full else FoldOcclusion.None,
-                boundsLeftVp = info.boundsLeft.toFloat(),
-                boundsTopVp = info.boundsTop.toFloat(),
-                boundsRightVp = info.boundsRight.toFloat(),
-                boundsBottomVp = info.boundsBottom.toFloat()
+                boundsLeftVp = info.boundsLeft.toFloat() / density,
+                boundsTopVp = info.boundsTop.toFloat() / density,
+                boundsRightVp = info.boundsRight.toFloat() / density,
+                boundsBottomVp = info.boundsBottom.toFloat() / density
             )
         } else {
             FoldFeatureInfo()

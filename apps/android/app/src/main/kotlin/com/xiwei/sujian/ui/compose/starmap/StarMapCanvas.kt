@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui.compose.starmap
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gesture.detectDragGestures
+import androidx.compose.foundation.gesture.detectTapGestures
 import androidx.compose.foundation.gesture.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
@@ -31,7 +32,9 @@ private data class NodeDragState(
     val startLayoutX: Float,
     val startLayoutY: Float,
     val startOffsetX: Float,
-    val startOffsetY: Float
+    val startOffsetY: Float,
+    var currentLayoutX: Float,
+    var currentLayoutY: Float
 )
 
 @Composable
@@ -55,6 +58,14 @@ fun StarMapCanvas(
         data.graph.nodes.associateBy { it.id }
     }
 
+    val effectiveLayoutNodes = remember(data.layout.nodes, dragState) {
+        if (dragState == null) data.layout.nodes
+        else data.layout.nodes.map {
+            if (it.nodeId == dragState!!.nodeId) it.copy(x = dragState!!.currentLayoutX, y = dragState!!.currentLayoutY)
+            else it
+        }
+    }
+
     Canvas(
         modifier = modifier
             .fillMaxSize()
@@ -63,9 +74,6 @@ fun StarMapCanvas(
                     scale = (scale * zoom).coerceIn(0.2f, 5f)
                     offsetX += pan.x / scale
                     offsetY += pan.y / scale
-                    onViewportChange?.invoke(
-                        StarMapViewportData(scale = scale, offsetX = offsetX, offsetY = offsetY)
-                    )
                 }
             }
             .pointerInput(data.graph.starmapId) {
@@ -86,7 +94,9 @@ fun StarMapCanvas(
                                     startLayoutX = layoutNode.x,
                                     startLayoutY = layoutNode.y,
                                     startOffsetX = offset.x,
-                                    startOffsetY = offset.y
+                                    startOffsetY = offset.y,
+                                    currentLayoutX = layoutNode.x,
+                                    currentLayoutY = layoutNode.y
                                 )
                             }
                         }
@@ -94,11 +104,17 @@ fun StarMapCanvas(
                     onDrag = { change, dragAmount ->
                         if (dragState != null) {
                             change.consume()
+                            val dx = dragAmount.x / scale
+                            val dy = dragAmount.y / scale
+                            dragState = dragState!!.copy(
+                                currentLayoutX = dragState!!.currentLayoutX + dx,
+                                currentLayoutY = dragState!!.currentLayoutY + dy
+                            )
                         }
                     },
                     onDragEnd = {
                         dragState?.let { state ->
-                            onNodeDrag?.invoke(state.nodeId, state.startLayoutX, state.startLayoutY)
+                            onNodeDrag?.invoke(state.nodeId, state.currentLayoutX, state.currentLayoutY)
                             dragState = null
                         }
                     },
@@ -106,6 +122,20 @@ fun StarMapCanvas(
                         dragState = null
                     }
                 )
+            }
+            .pointerInput(data.graph.starmapId) {
+                detectTapGestures { offset ->
+                    val hitNodeId = hitTestNode(
+                        nodeLayoutMap = nodeLayoutMap,
+                        offset = offset,
+                        scale = scale,
+                        offsetX = offsetX,
+                        offsetY = offsetY
+                    )
+                    if (hitNodeId != null) {
+                        onNodeTap?.invoke(hitNodeId)
+                    }
+                }
             }
     ) {
         val canvasWidth = size.width
@@ -122,7 +152,7 @@ fun StarMapCanvas(
             )
         }
 
-        for (layoutNode in data.layout.nodes) {
+        for (layoutNode in effectiveLayoutNodes) {
             val graphNode = nodeGraphMap[layoutNode.nodeId]
             drawNode(
                 layoutNode = layoutNode,
@@ -264,4 +294,4 @@ private fun DrawScope.drawNode(
 private fun Color.toArgb(): Int = ((alpha * 255).toInt() shl 24) or
         ((red * 255).toInt() shl 16) or
         ((green * 255).toInt() shl 8) or
-        (blue * 255).toInt()
+        (blue * 255).toInt())

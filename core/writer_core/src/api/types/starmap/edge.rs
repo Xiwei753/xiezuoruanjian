@@ -89,3 +89,31 @@ impl From<StarMapEdgePatchDto> for crate::starmap::types::StarMapEdgePatch {
         }
     }
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapEdgePatchInputDto {
+    pub kind: Option<StarMapEdgeKindDto>,
+    pub label: Option<String>,
+    pub clear_label: bool,
+}
+
+impl From<StarMapEdgePatchInputDto> for StarMapEdgePatchDto {
+    fn from(d: StarMapEdgePatchInputDto) -> Self {
+        Self {
+            kind: d.kind,
+            label: if d.clear_label {
+                Some(None)
+            } else {
+                d.label.map(Some)
+            },
+            payload: None,
+            from_target: None,
+            to_target: None,
+            from_endpoint: None,
+            to_endpoint: None,
+            from_endpoint_path: None,
+            to_endpoint_path: None,
+        }
+    }
+}

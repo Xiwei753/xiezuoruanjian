@@ -144,28 +144,76 @@ class EditorViewModel(
 
     suspend fun switchChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
         val oldSession = currentSession
+
+        if (oldSession != null && oldSession.projectId == projectId && oldSession.volumeId == volumeId && oldSession.chapterId == chapterId) {
+            return
+        }
+
         inputFrozen = true
 
         if (oldSession != null) {
             autoSaveJob?.cancel()
+            saveActorJob?.cancel()
+            saveCommandChannel.close()
+
             val content = _uiState.value.content
-            if (content.trim().isNotEmpty()) {
+            val saveOk = if (content.trim().isNotEmpty()) {
                 saveMutex.withLock {
                     try {
-                        workspaceRepository.saveChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId, content)
-                    } catch (_: Exception) { }
+                        when (val result = workspaceRepository.saveChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId, content)) {
+                            is com.xiwei.sujian.data.BridgeResult.Success -> true
+                            is com.xiwei.sujian.data.BridgeResult.Error -> {
+                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                emitErrorEvent(getApplication<Application>().getString(R.string.error_save_failed, result.message))
+                                false
+                            }
+                            com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                emitErrorEvent(getApplication<Application>().getString(R.string.error_save_native_not_loaded))
+                                false
+                            }
+                        }
+                    } catch (e: Exception) {
+                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                        emitErrorEvent(getApplication<Application>().getString(R.string.error_save_exception, e.message ?: ""))
+                        false
+                    }
                 }
             } else if (contentExplicitlyCleared) {
                 saveMutex.withLock {
                     try {
-                        workspaceRepository.clearChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)
-                    } catch (_: Exception) { }
+                        when (val result = workspaceRepository.clearChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)) {
+                            is com.xiwei.sujian.data.BridgeResult.Success -> true
+                            is com.xiwei.sujian.data.BridgeResult.Error -> {
+                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                emitErrorEvent(getApplication<Application>().getString(R.string.error_save_failed, result.message))
+                                false
+                            }
+                            com.xiwei.sujian.data.BridgeResult.NotLoaded -> {
+                                _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                                false
+                            }
+                        }
+                    } catch (e: Exception) {
+                        _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
+                        false
+                    }
                 }
+            } else {
+                true
             }
+
+            if (!saveOk) {
+                saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+                startSaveActor()
+                inputFrozen = false
+                return
+            }
+        } else {
+            saveActorJob?.cancel()
+            saveCommandChannel.close()
         }
 
-        saveActorJob?.cancel()
-        saveCommandChannel.close()
         saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
 
         val newSession = EditorSession(
@@ -378,13 +426,25 @@ class EditorViewModel(
         viewModelScope.launch {
             if (session != null) {
                 if (content.trim().isEmpty() && contentExplicitlyCleared) {
-                    saveCommandChannel.trySend(SaveCommand.Clear(session))
+                    val sendResult = saveCommandChannel.trySend(SaveCommand.Clear(session))
+                    if (sendResult.isFailure) {
+                        deferred.complete(false)
+                        return@launch
+                    }
                 } else if (content.trim().isNotEmpty()) {
-                    saveCommandChannel.trySend(SaveCommand.Save(content, session))
+                    val sendResult = saveCommandChannel.trySend(SaveCommand.Save(content, session))
+                    if (sendResult.isFailure) {
+                        deferred.complete(false)
+                        return@launch
+                    }
                 }
             }
             val flushReply = CompletableDeferred<Boolean>()
-            saveCommandChannel.trySend(SaveCommand.Flush(flushReply))
+            val flushResult = saveCommandChannel.trySend(SaveCommand.Flush(flushReply))
+            if (flushResult.isFailure) {
+                deferred.complete(false)
+                return@launch
+            }
             val result = flushReply.await()
             deferred.complete(result)
         }

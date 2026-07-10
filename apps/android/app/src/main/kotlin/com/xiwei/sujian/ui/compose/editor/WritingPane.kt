@@ -10,7 +10,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -24,7 +23,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.BridgeProvider
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.editor.selfrender.SujianEditorView
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
@@ -161,12 +159,6 @@ fun WritingPane(
                 },
                 modifier = Modifier.weight(1f).fillMaxWidth()
             )
-        }
-    }
-
-    DisposableEffect(projectId, volumeId, chapterId) {
-        onDispose {
-            viewModel.requestSave()
         }
     }
 }

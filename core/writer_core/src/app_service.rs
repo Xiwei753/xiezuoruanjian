@@ -483,6 +483,56 @@ impl WriterAppService {
         self.api.add_starmap_node(&starmap_id, node, x, y)
     }
 
+    pub fn update_starmap_node(
+        &self,
+        starmap_id: String,
+        node_id: String,
+        patch: crate::api::types::StarMapNodePatchInputDto,
+    ) -> Result<crate::api::types::StarMapNodeDto, WriterError> {
+        self.api.update_starmap_node(&starmap_id, &node_id, patch.into())
+    }
+
+    pub fn delete_starmap_node(
+        &self,
+        starmap_id: String,
+        node_id: String,
+    ) -> Result<bool, WriterError> {
+        self.api.delete_starmap_node(&starmap_id, &node_id)
+    }
+
+    pub fn add_starmap_edge(
+        &self,
+        starmap_id: String,
+        edge: crate::api::types::StarMapEdgeDto,
+    ) -> Result<crate::api::types::StarMapEdgeDto, WriterError> {
+        self.api.add_starmap_edge(&starmap_id, edge)
+    }
+
+    pub fn update_starmap_edge(
+        &self,
+        starmap_id: String,
+        edge_id: String,
+        patch: crate::api::types::StarMapEdgePatchInputDto,
+    ) -> Result<crate::api::types::StarMapEdgeDto, WriterError> {
+        self.api.update_starmap_edge(&starmap_id, &edge_id, patch.into())
+    }
+
+    pub fn delete_starmap_edge(
+        &self,
+        starmap_id: String,
+        edge_id: String,
+    ) -> Result<bool, WriterError> {
+        self.api.delete_starmap_edge(&starmap_id, &edge_id)
+    }
+
+    pub fn save_starmap_graph(
+        &self,
+        starmap_id: String,
+        graph: crate::api::types::StarMapGraphDto,
+    ) -> Result<bool, WriterError> {
+        self.api.save_starmap_graph(&starmap_id, &graph)
+    }
+
     pub fn save_starmap_layout(
         &self,
         starmap_id: String,

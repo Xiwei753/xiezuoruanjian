@@ -10,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
@@ -37,9 +38,10 @@ fun SujianApp() {
 
     val windowState = rememberAdaptiveWindowState()
     val configuration = LocalConfiguration.current
+    val density = LocalDensity.current.density
 
     LaunchedEffect(windowState.foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
-        appState.updateFoldFeaturesFromAdaptive(windowState.foldingFeatures)
+        appState.updateFoldFeaturesFromAdaptive(windowState.foldingFeatures, density)
         val hasFoldFeature = windowState.foldingFeatures.isNotEmpty()
         val settingsRepo = SettingsRepository(context)
         val deviceClass = settingsRepo.detectDeviceClassFromFoldFeature(

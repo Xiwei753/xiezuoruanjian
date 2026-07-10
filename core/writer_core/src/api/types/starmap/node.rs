@@ -252,3 +252,34 @@ impl From<StarMapNodeKindDto> for crate::starmap::types::StarMapNodeKind {
         }
     }
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct StarMapNodePatchInputDto {
+    pub title: Option<String>,
+    pub kind: Option<StarMapNodeKindDto>,
+    pub payload: Option<String>,
+    pub clear_payload: bool,
+    pub tags: Option<Vec<String>>,
+}
+
+impl From<StarMapNodePatchInputDto> for StarMapNodePatchDto {
+    fn from(d: StarMapNodePatchInputDto) -> Self {
+        Self {
+            title: d.title,
+            kind: d.kind,
+            payload: if d.clear_payload {
+                Some(None)
+            } else {
+                d.payload.map(Some)
+            },
+            tags: d.tags,
+            content: None,
+            anchors: None,
+            portal: None,
+            display_policy: None,
+            open_behavior: None,
+            provenance: None,
+        }
+    }
+}

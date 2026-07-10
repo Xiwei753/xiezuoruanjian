@@ -710,6 +710,20 @@ dictionary StarMapLinkPatchInputDto {
     boolean clear_label;
 };
 
+dictionary StarMapNodePatchInputDto {
+    string? title;
+    StarMapNodeKindDto? kind;
+    string? payload;
+    boolean clear_payload;
+    sequence<string>? tags;
+};
+
+dictionary StarMapEdgePatchInputDto {
+    StarMapEdgeKindDto? kind;
+    string? label;
+    boolean clear_label;
+};
+
 enum StarMapNodeKindDto {
     "Character",
     "Event",
@@ -1016,6 +1030,24 @@ interface WriterAppService {
 
     [Throws=WriterError]
     StarMapNodeDto add_starmap_node(string starmap_id, StarMapNodeDto node, float x, float y);
+
+    [Throws=WriterError]
+    StarMapNodeDto update_starmap_node(string starmap_id, string node_id, StarMapNodePatchInputDto patch);
+
+    [Throws=WriterError]
+    boolean delete_starmap_node(string starmap_id, string node_id);
+
+    [Throws=WriterError]
+    StarMapEdgeDto add_starmap_edge(string starmap_id, StarMapEdgeDto edge);
+
+    [Throws=WriterError]
+    StarMapEdgeDto update_starmap_edge(string starmap_id, string edge_id, StarMapEdgePatchInputDto patch);
+
+    [Throws=WriterError]
+    boolean delete_starmap_edge(string starmap_id, string edge_id);
+
+    [Throws=WriterError]
+    boolean save_starmap_graph(string starmap_id, StarMapGraphDto graph);
 
     [Throws=WriterError]
     boolean save_starmap_layout(string starmap_id, StarMapLayoutDto layout);

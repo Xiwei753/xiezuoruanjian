@@ -17,6 +17,7 @@ import com.google.gson.Gson
 import uniffi.writer_core.StarMapDisplayPolicyDto
 import uniffi.writer_core.StarMapEdgeDto
 import uniffi.writer_core.StarMapEdgeKindDto
+import uniffi.writer_core.StarMapEdgePatchInputDto
 import uniffi.writer_core.StarMapEdgeRenderDto
 import uniffi.writer_core.StarMapEmbedDto
 import uniffi.writer_core.StarMapEmbedPatchInputDto
@@ -31,6 +32,7 @@ import uniffi.writer_core.StarMapMotionPolicyDto
 import uniffi.writer_core.StarMapNodeContentDto
 import uniffi.writer_core.StarMapNodeDto
 import uniffi.writer_core.StarMapNodeKindDto
+import uniffi.writer_core.StarMapNodePatchInputDto
 import uniffi.writer_core.StarMapOpenBehaviorDto
 import uniffi.writer_core.StarMapProvenanceDto
 import uniffi.writer_core.StarMapReferenceDto
@@ -80,6 +82,30 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
 
     fun addStarMapNode(starmapId: String, node: StarMapNodeDto, x: Float, y: Float): BridgeResult<StarMapNodeDto> = holder.wrapResult {
         holder.service.addStarmapNode(starmapId, node, x, y)
+    }
+
+    fun updateStarMapNode(starmapId: String, nodeId: String, patch: StarMapNodePatchInputDto): BridgeResult<StarMapNodeDto> = holder.wrapResult {
+        holder.service.updateStarmapNode(starmapId, nodeId, patch)
+    }
+
+    fun deleteStarMapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.deleteStarmapNode(starmapId, nodeId)
+    }
+
+    fun addStarMapEdge(starmapId: String, edge: StarMapEdgeDto): BridgeResult<StarMapEdgeDto> = holder.wrapResult {
+        holder.service.addStarmapEdge(starmapId, edge)
+    }
+
+    fun updateStarMapEdge(starmapId: String, edgeId: String, patch: StarMapEdgePatchInputDto): BridgeResult<StarMapEdgeDto> = holder.wrapResult {
+        holder.service.updateStarmapEdge(starmapId, edgeId, patch)
+    }
+
+    fun deleteStarMapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.deleteStarmapEdge(starmapId, edgeId)
+    }
+
+    fun saveStarMapGraph(starmapId: String, graph: StarMapGraphDto): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.saveStarmapGraph(starmapId, graph)
     }
 
     fun saveStarMapLayout(starmapId: String, layout: StarMapLayoutDto): BridgeResult<Boolean> = holder.wrapResult {
@@ -190,6 +216,82 @@ class StarMapBridge internal constructor(private val holder: WriterAppServiceHol
                 rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
                     .nodes[result.data.id] = result.data
                 BridgeResult.Success(result.data.toGraphNode())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun updateStarmapNode(starmapId: String, nodeId: String, title: String? = null, kind: StarMapNodeKind? = null, tags: List<String>? = null): BridgeResult<StarMapGraphNode> {
+        val patch = StarMapNodePatchInputDto(
+            title = title,
+            kind = kind?.toDto(),
+            payload = null,
+            clearPayload = false,
+            tags = tags
+        )
+        return when (val result = updateStarMapNode(starmapId, nodeId, patch)) {
+            is BridgeResult.Success -> {
+                rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
+                    .nodes[result.data.id] = result.data
+                BridgeResult.Success(result.data.toGraphNode())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun deleteStarmapNode(starmapId: String, nodeId: String): BridgeResult<Boolean> {
+        return when (val result = deleteStarMapNode(starmapId, nodeId)) {
+            is BridgeResult.Success -> {
+                rawCacheByStarmapId[starmapId]?.nodes?.remove(nodeId)
+                rawCacheByStarmapId[starmapId]?.layoutNodes?.remove(nodeId)
+                BridgeResult.Success(result.data)
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun addStarmapEdge(starmapId: String, from: String, to: String, kind: StarMapEdgeKind = StarMapEdgeKind.RelatedTo, label: String? = null): BridgeResult<StarMapGraphEdge> {
+        val cache = when (val cacheResult = refreshRawCache(starmapId)) {
+            is BridgeResult.Success -> cacheResult.data
+            is BridgeResult.Error -> return BridgeResult.Error(cacheResult.envelope)
+            BridgeResult.NotLoaded -> return BridgeResult.NotLoaded
+        }
+        val edgeId = java.util.UUID.randomUUID().toString()
+        val edgeDto = StarMapEdgeDto(
+            id = edgeId,
+            from = from,
+            to = to,
+            kind = kind.toDto(),
+            label = label,
+            payload = null,
+            fromTarget = null,
+            toTarget = null,
+            fromEndpoint = null,
+            toEndpoint = null,
+            fromEndpointPath = null,
+            toEndpointPath = null,
+            createdAt = System.currentTimeMillis().toULong(),
+            updatedAt = System.currentTimeMillis().toULong()
+        )
+        return when (val result = addStarMapEdge(starmapId, edgeDto)) {
+            is BridgeResult.Success -> {
+                rawCacheByStarmapId.getOrPut(starmapId) { StarMapRawCache() }
+                    .edges[result.data.id] = result.data
+                BridgeResult.Success(result.data.toGraphEdge())
+            }
+            is BridgeResult.Error -> BridgeResult.Error(result.envelope)
+            BridgeResult.NotLoaded -> BridgeResult.NotLoaded
+        }
+    }
+
+    fun deleteStarmapEdge(starmapId: String, edgeId: String): BridgeResult<Boolean> {
+        return when (val result = deleteStarMapEdge(starmapId, edgeId)) {
+            is BridgeResult.Success -> {
+                rawCacheByStarmapId[starmapId]?.edges?.remove(edgeId)
+                BridgeResult.Success(result.data)
             }
             is BridgeResult.Error -> BridgeResult.Error(result.envelope)
             BridgeResult.NotLoaded -> BridgeResult.NotLoaded
@@ -526,6 +628,22 @@ private fun StarMapEdgeKindDto.toModel(): StarMapEdgeKind = when (this) {
     StarMapEdgeKindDto.DEPENDS_ON -> StarMapEdgeKind.DependsOn
     StarMapEdgeKindDto.CONFLICTS_WITH -> StarMapEdgeKind.ConflictsWith
     StarMapEdgeKindDto.CUSTOM -> StarMapEdgeKind.Custom
+}
+
+private fun StarMapEdgeKind.toDto(): StarMapEdgeKindDto = when (this) {
+    StarMapEdgeKind.Contains -> StarMapEdgeKindDto.CONTAINS
+    StarMapEdgeKind.References -> StarMapEdgeKindDto.REFERENCES
+    StarMapEdgeKind.AppearsIn -> StarMapEdgeKindDto.APPEARS_IN
+    StarMapEdgeKind.Causes -> StarMapEdgeKindDto.CAUSES
+    StarMapEdgeKind.RelatedTo -> StarMapEdgeKindDto.RELATED_TO
+    StarMapEdgeKind.LocatedAt -> StarMapEdgeKindDto.LOCATED_AT
+    StarMapEdgeKind.CharacterRelation -> StarMapEdgeKindDto.CHARACTER_RELATION
+    StarMapEdgeKind.Timeline -> StarMapEdgeKindDto.TIMELINE
+    StarMapEdgeKind.Foreshadows -> StarMapEdgeKindDto.FORESHADOWS
+    StarMapEdgeKind.Resolves -> StarMapEdgeKindDto.RESOLVES
+    StarMapEdgeKind.DependsOn -> StarMapEdgeKindDto.DEPENDS_ON
+    StarMapEdgeKind.ConflictsWith -> StarMapEdgeKindDto.CONFLICTS_WITH
+    StarMapEdgeKind.Custom -> StarMapEdgeKindDto.CUSTOM
 }
 
 private fun defaultStarMapDisplayPolicy() = StarMapDisplayPolicyDto(

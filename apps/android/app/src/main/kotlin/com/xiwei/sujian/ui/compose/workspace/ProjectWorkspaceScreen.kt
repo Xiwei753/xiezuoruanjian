@@ -14,11 +14,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.data.WorkspaceRepository
+import com.xiwei.sujian.model.AvoidRegion
 import com.xiwei.sujian.model.WidthClass
 import com.xiwei.sujian.model.WorkspacePaneMode
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
@@ -50,6 +54,17 @@ fun ProjectWorkspaceScreen(
     }
 
     val paneMode = layoutPlan?.workspacePaneMode ?: WorkspacePaneMode.SinglePane
+    val listPaneWidth = layoutPlan?.listPaneWidth
+    val editorContentMaxWidthDp = layoutPlan?.editorContentMaxWidthDp ?: 0f
+    val pagePaddingDp = layoutPlan?.pagePaddingDp ?: 0f
+    val avoidRegions = layoutPlan?.avoidRegions ?: emptyList()
+    val visiblePaneRoles = layoutPlan?.visiblePaneRoles
+
+    val listWidth = if (listPaneWidth != null && listPaneWidth.preferredDp > 0f) {
+        listPaneWidth.preferredDp.dp
+    } else {
+        280.dp
+    }
 
     when (paneMode) {
         WorkspacePaneMode.ThreePane -> {
@@ -60,6 +75,10 @@ fun ProjectWorkspaceScreen(
                 currentChapterId = currentChapterId,
                 currentChapterTitle = currentChapterTitle,
                 workspaceRepository = workspaceRepository,
+                listWidth = listWidth,
+                editorContentMaxWidthDp = editorContentMaxWidthDp,
+                pagePaddingDp = pagePaddingDp,
+                avoidRegions = avoidRegions,
                 modifier = modifier
             )
         }
@@ -71,6 +90,10 @@ fun ProjectWorkspaceScreen(
                 currentChapterId = currentChapterId,
                 currentChapterTitle = currentChapterTitle,
                 workspaceRepository = workspaceRepository,
+                listWidth = listWidth,
+                editorContentMaxWidthDp = editorContentMaxWidthDp,
+                pagePaddingDp = pagePaddingDp,
+                avoidRegions = avoidRegions,
                 modifier = modifier
             )
         }
@@ -96,23 +119,32 @@ private fun ThreePaneLayout(
     currentChapterId: String?,
     currentChapterTitle: String,
     workspaceRepository: WorkspaceRepository,
+    listWidth: androidx.compose.ui.unit.Dp,
+    editorContentMaxWidthDp: Float,
+    pagePaddingDp: Float,
+    avoidRegions: List<AvoidRegion>,
     modifier: Modifier = Modifier
 ) {
+    val projectListWidth = (listWidth.value * 0.7f).dp
+
     Row(modifier = modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
-                .width(200.dp)
+                .width(projectListWidth)
                 .fillMaxHeight()
         ) {
             ProjectListScreen(
                 appState = appState,
-                onSelectProject = { _, _ -> },
+                onSelectProject = { projectId, projectTitle ->
+                    appState.selectProject(projectId, projectTitle)
+                    appState.clearChapterSelection()
+                },
                 modifier = Modifier.fillMaxSize()
             )
         }
         Box(
             modifier = Modifier
-                .width(280.dp)
+                .width(listWidth)
                 .fillMaxHeight()
         ) {
             VolumeChapterTree(
@@ -132,7 +164,16 @@ private fun ThreePaneLayout(
                     volumeId = currentVolumeId,
                     chapterId = currentChapterId,
                     chapterTitle = currentChapterTitle,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                            else Modifier
+                        )
+                        .then(
+                            if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                            else Modifier
+                        )
                 )
             } else {
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -151,12 +192,16 @@ private fun ListDetailLayout(
     currentChapterId: String?,
     currentChapterTitle: String,
     workspaceRepository: WorkspaceRepository,
+    listWidth: androidx.compose.ui.unit.Dp,
+    editorContentMaxWidthDp: Float,
+    pagePaddingDp: Float,
+    avoidRegions: List<AvoidRegion>,
     modifier: Modifier = Modifier
 ) {
     Row(modifier = modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
-                .width(280.dp)
+                .width(listWidth)
                 .fillMaxHeight()
         ) {
             VolumeChapterTree(
@@ -180,7 +225,16 @@ private fun ListDetailLayout(
                     volumeId = currentVolumeId,
                     chapterId = currentChapterId,
                     chapterTitle = currentChapterTitle,
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                            else Modifier
+                        )
+                        .then(
+                            if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                            else Modifier
+                        )
                 )
             } else {
                 Box(modifier = Modifier.fillMaxSize()) {
@@ -201,12 +255,46 @@ private fun SinglePaneLayout(
     workspaceRepository: WorkspaceRepository,
     modifier: Modifier = Modifier
 ) {
-    val showEditor = currentVolumeId != null && currentChapterId != null
+    var navigationStack by remember { mutableStateOf<List<SinglePanePage>>(listOf(SinglePanePage.ProjectList)) }
+
+    val currentPage = navigationStack.lastOrNull() ?: SinglePanePage.ProjectList
+
+    LaunchedEffect(currentProjectId, currentVolumeId, currentChapterId) {
+        if (currentChapterId != null && currentVolumeId != null) {
+            if (currentPage != SinglePanePage.Editor) {
+                navigationStack = navigationStack + SinglePanePage.Editor
+            }
+        } else if (currentProjectId != null) {
+            if (currentPage == SinglePanePage.ProjectList) {
+                navigationStack = listOf(SinglePanePage.ProjectList, SinglePanePage.ChapterTree)
+            }
+        }
+    }
+
+    fun navigateBack(): Boolean {
+        if (navigationStack.size > 1) {
+            navigationStack = navigationStack.dropLast(1)
+            val targetPage = navigationStack.last()
+            when (targetPage) {
+                SinglePanePage.ProjectList -> {
+                    appState.clearChapterSelection()
+                    appState.currentProjectId = null
+                    appState.currentProjectTitle = ""
+                }
+                SinglePanePage.ChapterTree -> {
+                    appState.clearChapterSelection()
+                }
+                SinglePanePage.Editor -> {}
+            }
+            return true
+        }
+        return false
+    }
 
     AnimatedContent(
-        targetState = showEditor,
+        targetState = currentPage,
         transitionSpec = {
-            if (targetState) {
+            if (targetState.ordinal > initialState.ordinal) {
                 slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
             } else {
                 slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
@@ -214,29 +302,53 @@ private fun SinglePaneLayout(
         },
         modifier = modifier.fillMaxSize(),
         label = "workspace_single_pane"
-    ) { editing ->
-        if (editing && currentVolumeId != null && currentChapterId != null) {
-            SujianEditorHost(
-                projectId = currentProjectId,
-                volumeId = currentVolumeId,
-                chapterId = currentChapterId,
-                chapterTitle = currentChapterTitle,
-                modifier = Modifier.fillMaxSize()
-            )
-        } else {
-            VolumeChapterTree(
-                projectId = currentProjectId,
-                workspaceRepository = workspaceRepository,
-                onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                    appState.selectChapter(volumeId, chapterId, chapterTitle)
-                },
-                onBackToProjects = {
-                    appState.clearChapterSelection()
-                    appState.currentProjectId = null
-                    appState.currentProjectTitle = ""
-                },
-                modifier = Modifier.fillMaxSize()
-            )
+    ) { page ->
+        when (page) {
+            SinglePanePage.ProjectList -> {
+                ProjectListScreen(
+                    appState = appState,
+                    onSelectProject = { projectId, projectTitle ->
+                        appState.selectProject(projectId, projectTitle)
+                        navigationStack = listOf(SinglePanePage.ProjectList, SinglePanePage.ChapterTree)
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            SinglePanePage.ChapterTree -> {
+                VolumeChapterTree(
+                    projectId = currentProjectId,
+                    workspaceRepository = workspaceRepository,
+                    onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                        appState.selectChapter(volumeId, chapterId, chapterTitle)
+                        navigationStack = listOf(SinglePanePage.ProjectList, SinglePanePage.ChapterTree, SinglePanePage.Editor)
+                    },
+                    onBackToProjects = {
+                        navigationStack = listOf(SinglePanePage.ProjectList)
+                        appState.clearChapterSelection()
+                        appState.currentProjectId = null
+                        appState.currentProjectTitle = ""
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            SinglePanePage.Editor -> {
+                if (currentVolumeId != null && currentChapterId != null) {
+                    SujianEditorHost(
+                        projectId = currentProjectId,
+                        volumeId = currentVolumeId,
+                        chapterId = currentChapterId,
+                        chapterTitle = currentChapterTitle,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    navigateBack()
+                    Box(modifier = Modifier.fillMaxSize())
+                }
+            }
         }
     }
+}
+
+private enum class SinglePanePage {
+    ProjectList, ChapterTree, Editor
 }
