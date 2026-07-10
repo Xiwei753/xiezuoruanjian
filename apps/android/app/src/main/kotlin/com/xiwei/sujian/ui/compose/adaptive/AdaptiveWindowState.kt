@@ -1,15 +1,16 @@
 package com.xiwei.sujian.ui.compose.adaptive
 
+import android.app.Activity
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.calculateListDetailPaneScaffoldDirective
-import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.window.layout.DisplayFeature
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.window.layout.FoldingFeature
-import androidx.window.layout.WindowInfoTracker
-import androidx.window.layout.WindowLayoutInfo
-import kotlinx.coroutines.flow.StateFlow
 
 data class AdaptiveWindowState(
     val scaffoldDirective: androidx.compose.material3.adaptive.PaneScaffoldDirective,
@@ -22,9 +23,24 @@ fun rememberAdaptiveWindowState(): AdaptiveWindowState {
     val directive = remember(windowAdaptiveInfo) {
         calculateListDetailPaneScaffoldDirective(windowAdaptiveInfo)
     }
-    return remember(directive) {
+
+    val activity = LocalContext.current as? Activity
+    var foldingFeatures by remember { mutableStateOf<List<FoldingFeature>>(emptyList()) }
+
+    if (activity != null) {
+        val adapter = remember { AndroidAdaptiveWindowAdapter(activity) }
+        DisposableEffect(adapter) {
+            adapter.startCollecting { features ->
+                foldingFeatures = features
+            }
+            onDispose { }
+        }
+    }
+
+    return remember(directive, foldingFeatures) {
         AdaptiveWindowState(
-            scaffoldDirective = directive
+            scaffoldDirective = directive,
+            foldingFeatures = foldingFeatures
         )
     }
 }

@@ -122,9 +122,25 @@ ApplicationWindow {
         if (appBackend === null) return;
         var w = window.width;
         var h = window.height;
-        // Linux_qt 默认密度为 1.0（逻辑像素 = vp）
-        var plan = appBackend.resolve_layout(w, h, 0, 0, false, "Unknown",
-            w > h ? "Landscape" : "Portrait", "Mouse");
+        var safeTop = 0;
+        var safeBottom = 0;
+        var keyboardVisible = false;
+        var foldState = "None";
+        var foldOrientation = "Vertical";
+        var foldIsSeparating = false;
+        var foldOcclusion = "None";
+        var foldBoundsLeft = 0;
+        var foldBoundsTop = 0;
+        var foldBoundsRight = 0;
+        var foldBoundsBottom = 0;
+        var orientation = w > h ? "Landscape" : "Portrait";
+        var pointer = "Mouse";
+        var plan = appBackend.resolve_layout(
+            w, h, safeTop, safeBottom, keyboardVisible,
+            foldState, foldOrientation, foldIsSeparating, foldOcclusion,
+            foldBoundsLeft, foldBoundsTop, foldBoundsRight, foldBoundsBottom,
+            orientation, pointer
+        );
         if (plan) {
             window.layoutPlan = plan;
         }
@@ -193,12 +209,17 @@ ApplicationWindow {
     DesignTokens {
         id: designTokens
         isDark: {
-            if (appState.settings && appState.settings.themeMode === "dark") return true;
-            if (appState.settings && appState.settings.themeMode === "light") return false;
+            var mode = settingsBackend !== null ? settingsBackend.setting_appearance_mode : "system"
+            if (mode === "dark") return true;
+            if (mode === "light") return false;
+            if (settingsBackend !== null && settingsBackend.setting_theme_mode === "dark") return true;
+            if (settingsBackend !== null && settingsBackend.setting_theme_mode === "light") return false;
             return window.systemThemeIsDark();
         }
         themePaletteJson: settingsBackend !== null ? settingsBackend.setting_theme_palette_json : ""
         colorSource: settingsBackend !== null ? settingsBackend.setting_color_source : "built_in"
+        selectedBuiltinThemeId: settingsBackend !== null ? settingsBackend.setting_selected_builtin_theme_id : ""
+        builtinThemesJson: settingsBackend !== null ? settingsBackend.list_builtin_themes_json : "[]"
     }
 
     Connections {

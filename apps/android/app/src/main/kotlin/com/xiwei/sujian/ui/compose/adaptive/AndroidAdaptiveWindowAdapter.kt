@@ -6,20 +6,21 @@ import androidx.window.layout.FoldingFeature
 import androidx.window.layout.WindowInfoTracker
 import androidx.window.layout.WindowLayoutInfo
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 class AndroidAdaptiveWindowAdapter(private val activity: Activity) {
 
     private val windowInfoTracker = WindowInfoTracker.getOrCreate(activity)
-
-    val windowLayoutInfo: StateFlow<WindowLayoutInfo>? = null
+    private val _windowLayoutInfo = MutableStateFlow(WindowLayoutInfo(emptyList()))
+    val windowLayoutInfo: StateFlow<WindowLayoutInfo> = _windowLayoutInfo.asStateFlow()
 
     fun startCollecting(onFoldFeatureChanged: (List<FoldingFeature>) -> Unit) {
         activity.lifecycleScope.launch {
             windowInfoTracker.windowLayoutInfo(activity)
                 .collect { info ->
+                    _windowLayoutInfo.value = info
                     val features = info.displayFeatures
                         .filterIsInstance<FoldingFeature>()
                     onFoldFeatureChanged(features)

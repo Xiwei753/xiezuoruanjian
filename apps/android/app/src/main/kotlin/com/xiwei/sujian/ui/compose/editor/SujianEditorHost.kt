@@ -8,17 +8,17 @@ import com.xiwei.sujian.editor.selfrender.SujianEditorView
 
 @Composable
 fun SujianEditorHost(
+    projectId: String,
+    volumeId: String,
+    chapterId: String,
+    chapterTitle: String,
     modifier: Modifier = Modifier
 ) {
-    AndroidView(
-        factory = { context ->
-            SujianEditorView(context).apply {
-                layoutParams = android.widget.FrameLayout.LayoutParams(
-                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-                )
-            }
-        },
+    WritingPane(
+        projectId = projectId,
+        volumeId = volumeId,
+        chapterId = chapterId,
+        chapterTitle = chapterTitle,
         modifier = modifier.fillMaxSize()
     )
 }
