@@ -428,6 +428,7 @@ ApplicationWindow {
             sourceComponent: CreativeHub {
                 dt: designTokens
                 backendRef: projectBackend
+                projectBackendRef: projectBackend
             editorBackendRef: editorBackend
                 starmapBackendRef: starmapBackend
                 starMapController: globalStarMapController

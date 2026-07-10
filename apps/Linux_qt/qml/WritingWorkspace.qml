@@ -887,22 +887,7 @@ Rectangle {
                             }
                         }
 
-                        // QML 光标 - 作为 SujianEditorItem 子项，坐标系与编辑器一致
-                        // visible 绑定 cursor_should_be_visible（不受 text animation / overlay 影响）
-                        // opacity 绑定 cursor_blink_opacity（协同动画期间锁定 1.0，不闪烁）
-                        Rectangle {
-                            id: sujianCursorRect
-                            x: sujianEditor.cursor_rect_x
-                            y: sujianEditor.cursor_rect_y
-                            width: 2
-                            height: sujianEditor.cursor_rect_height
-                            color: sujianEditor.cursor_color
-                            visible: sujianEditor.cursor_should_be_visible
-                                     && sujianEditor.editor_enabled
-                                     && !sujianEditor.has_selection
-                            opacity: sujianEditor.cursor_blink_opacity
-                            radius: 1
-                        }
+                        // Cursor is now rendered in SujianEditorItem Scene Graph (child[3])
                     }
 
                     // 编辑器上下文菜单
@@ -924,34 +909,8 @@ Rectangle {
                         }
                     }
 
-                    // QML overlay 层 - 消费 Core animation events，叠加动画效果
-                    EditorAnimationOverlay {
-                        id: sujianAnimationOverlay
-                        x: sujianEditor.x
-                        y: sujianEditor.y
-                        width: sujianEditor.width
-                        height: sujianEditor.height
-                        editorItem: sujianEditor
-                        dt: root.dt
-                        animationEnabled: sujianEditor.typing_animation_enabled
-                        suppressed: editorController.isLoadingChapter
-                                    || editorController.isApplyingFormat
-                                    || editorController.isApplyingSettings
-                                    || editorScroll.editorAnimationSuppressed
-                        visible: true
-
-                        // 真吐字：Insert 动画完成时通知 Rust 清除 hidden range
-                        // 优先使用 transactionId/rangeId 精确清理；byte range 仅旧数据兜底。
-                        onInsertAnimationFinished: function(transactionId, rangeId, byteStart, byteEnd) {
-                            sujianEditor.on_insert_animation_finished_by_id(transactionId, rangeId, byteStart, byteEnd)
-                        }
-
-                        // Insert 动画被跳过时通知 Rust 清除 hidden range
-                        // 防止 Rust 已创建 hidden range 但 QML 跳过动画导致文字消失
-                        onInsertAnimationSkipped: function(transactionId, rangeId, byteStart, byteEnd) {
-                            sujianEditor.on_insert_animation_skipped_by_id(transactionId, rangeId, byteStart, byteEnd)
-                        }
-                    }
+                    // Animation overlay removed — text animation is now handled in
+                    // SujianEditorItem Scene Graph (child[1]) via ActiveVisualTransactionQueue
 
                     EditorWheelScroller {
                         id: editorWheelScroller

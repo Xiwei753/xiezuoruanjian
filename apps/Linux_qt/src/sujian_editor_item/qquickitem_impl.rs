@@ -88,7 +88,7 @@ impl QQuickItem for SujianEditorItem {
         let final_root;
 
         if !root_raw.is_null() && !item_ptr.is_null() {
-            scene_graph::ensure_single_image_node(root_raw, item_ptr);
+            scene_graph::ensure_four_layer_nodes(root_raw, item_ptr);
         }
 
         if self.render_dirty {
@@ -162,6 +162,37 @@ impl QQuickItem for SujianEditorItem {
                 "sujian_update_paint_node: total_ms={}",
                 total_elapsed.as_millis(),
             ));
+        }
+
+        // Update cursor node in Scene Graph (child[3])
+        if !final_root.is_null() && !item_ptr.is_null() && self.current_editor_enabled {
+            let cursor_visible = self.cursor_ctrl.visible
+                && !self.buffer.has_selection();
+            let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
+                && self.animation_coordinator.has_active_insert()
+            {
+                animation_coordinator::CursorBlinkMode::Suppressed
+            } else {
+                animation_coordinator::CursorBlinkMode::Normal
+            };
+            let cursor_opacity = if cursor_visible {
+                self.cursor_ctrl.cursor_blink_opacity(blink_mode)
+            } else {
+                0.0
+            };
+            let color_bytes = self.current_cursor_color.to_string();
+            let color_cstr = color_bytes.as_bytes();
+            scene_graph::update_cursor_node(
+                final_root,
+                item_ptr,
+                self.cursor_ctrl.visual_x,
+                self.cursor_ctrl.visual_y,
+                2.0,
+                self.cursor_ctrl.visual_h,
+                cursor_opacity,
+                color_cstr.as_ptr(),
+                color_cstr.len(),
+            );
         }
 
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }

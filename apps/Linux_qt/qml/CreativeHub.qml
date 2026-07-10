@@ -18,6 +18,7 @@ Rectangle {
     id: root
     property var dt: null
     property var backendRef: null
+    property var projectBackendRef: null
     property var editorBackendRef: backendRef
     property var starmapBackendRef: backendRef
     property var starMapController: null
@@ -251,6 +252,7 @@ Rectangle {
                 sourceComponent: ProjectHomePage {
                     dt: root.dt
                     backendRef: root.editorBackendRef
+                    projectBackendRef: root.projectBackendRef
                     appState: root.appState
                     tree: root.tree
                     onOpenProject: function(projectId) {
