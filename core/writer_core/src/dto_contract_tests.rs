@@ -1335,3 +1335,239 @@ fn test_settings_auto_indent_contract() {
     assert!(json.get("enabled").is_none());
     assert!(json.get("widthChars").is_none());
 }
+#[test]
+fn action_dto_fields_match() {
+    use crate::api::types::ActionDescriptorDto;
+    use crate::action_registry::{ActionDescriptor, ActionKind, ActionRiskLevel};
+
+    let original = ActionDescriptor {
+        id: "test".into(),
+        title: "Test Action".into(),
+        description: "Test Desc".into(),
+        category: "Test Cat".into(),
+        kind: ActionKind::Mutation,
+        risk_level: ActionRiskLevel::SafeWrite,
+        confirm_required: false,
+        undoable: true,
+        platforms: vec!["all".into()],
+        input_schema: None,
+        ui_schema: None,
+    };
+
+    let dto: ActionDescriptorDto = original.into();
+    let json_str = serde_json::to_string(&dto).unwrap();
+    let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let mut expected_keys = vec![
+        "id", "title", "description", "category", "kind", "riskLevel",
+        "confirmRequired", "undoable", "platforms", "inputSchema", "uiSchema"
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let mut actual_keys = json_val.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_keys.sort();
+
+    assert_eq!(actual_keys, expected_keys);
+}
+#[test]
+fn action_result_dto_fields_match() {
+    use crate::api::types::ActionResultDto;
+    use crate::action_registry::ActionResult;
+
+    let original = ActionResult {
+        success: true,
+        message: Some("Ok".into()),
+        data: Some(serde_json::json!({"id": 1})),
+        proposed_ui: Some(serde_json::json!({"type": "dialog"})),
+        requires_confirmation: Some(false),
+    };
+
+    let dto: ActionResultDto = original.into();
+    let json_str = serde_json::to_string(&dto).unwrap();
+    let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let mut expected_keys = vec![
+        "success", "message", "data", "proposedUi", "requiresConfirmation"
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let mut actual_keys = json_val.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_keys.sort();
+
+    assert_eq!(actual_keys, expected_keys);
+}
+#[test]
+fn workspace_diagnostics_dto_fields_match() {
+    use crate::api::types::WorkspaceDiagnosticsDto;
+
+    let dto = WorkspaceDiagnosticsDto {
+        has_workspace: true,
+        workspace_path: "/test".into(),
+        core_initialized: true,
+        path_exists: true,
+        is_dir: true,
+        manifest_path: "/test/manifest.json".into(),
+        manifest_exists: true,
+        projects_path: "/test/projects".into(),
+        projects_dir_exists: true,
+        app_meta_exists: true,
+        writable: true,
+        writable_error: "".into(),
+        validate_workspace: true,
+        tree_count: 1,
+        last_workspace_path: "/last".into(),
+        create_project_available: true,
+    };
+
+    let json_str = serde_json::to_string(&dto).unwrap();
+    let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let mut expected_keys = vec![
+        "hasWorkspace", "workspacePath", "coreInitialized", "pathExists", "isDir",
+        "manifestPath", "manifestExists", "projectsPath", "projectsDirExists",
+        "appMetaExists", "writable", "writableError", "validateWorkspace", "treeCount",
+        "lastWorkspacePath", "createProjectAvailable"
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let mut actual_keys = json_val.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_keys.sort();
+
+    assert_eq!(actual_keys, expected_keys);
+}
+#[test]
+fn platform_capabilities_dto_fields_match() {
+    use crate::api::types::PlatformCapabilitiesDto;
+
+    let dto = PlatformCapabilitiesDto {
+        supports_ime_preedit: true,
+        supports_cursor_anchor: true,
+        supports_replacement_commit: true,
+        supports_text_animation: true,
+        supports_smooth_cursor: true,
+        supports_reflow_animation: true,
+        supports_clipboard: true,
+        supports_context_menu: true,
+    };
+
+    let json_str = serde_json::to_string(&dto).unwrap();
+    let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let mut expected_keys = vec![
+        "supportsImePreedit", "supportsCursorAnchor", "supportsReplacementCommit",
+        "supportsTextAnimation", "supportsSmoothCursor", "supportsReflowAnimation",
+        "supportsClipboard", "supportsContextMenu"
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let mut actual_keys = json_val.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_keys.sort();
+
+    assert_eq!(actual_keys, expected_keys);
+}
+#[test]
+fn platform_kind_dto_fields_match() {
+    use crate::api::types::PlatformKindDto;
+
+    let dto = PlatformKindDto::Android;
+    let json_str = serde_json::to_string(&dto).unwrap();
+    assert_eq!(json_str, "\"android\"");
+
+    let dto = PlatformKindDto::LinuxQt;
+    let json_str = serde_json::to_string(&dto).unwrap();
+    assert_eq!(json_str, "\"linuxQt\"");
+}
+#[test]
+fn screen_role_dto_fields_match() {
+    use crate::api::types::ScreenRoleDto;
+
+    let dto = ScreenRoleDto::ProjectWorkspace;
+    let json_str = serde_json::to_string(&dto).unwrap();
+    assert_eq!(json_str, "\"ProjectWorkspace\"");
+
+    let dto = ScreenRoleDto::Home;
+    let json_str = serde_json::to_string(&dto).unwrap();
+    assert_eq!(json_str, "\"Home\"");
+}
+#[test]
+fn chapter_stats_dto_fields_match() {
+    use crate::api::types::{ChapterStatsRecordDto, ChapterStatsSummaryDto, DateRangeDto};
+
+    let record = ChapterStatsRecordDto {
+        chapter_id: "ch1".into(),
+        human_typed_chars: 100,
+        pasted_chars: 0,
+        deleted_chars: 0,
+        ai_inserted_chars: 0,
+        net_delta_chars: 100,
+        active_seconds: 60,
+    };
+
+    let summary = ChapterStatsSummaryDto {
+        range: DateRangeDto {
+            start_date: "2024-01-01".into(),
+            end_date: "2024-01-01".into(),
+        },
+        chapters: vec![record],
+    };
+
+    let json_str = serde_json::to_string(&summary).unwrap();
+    let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let mut expected_keys = vec!["range", "chapters"].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+    let mut actual_keys = json_val.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_keys.sort();
+    assert_eq!(actual_keys, expected_keys);
+
+    let chapter_json = &json_val["chapters"][0];
+    let mut expected_chapter_keys = vec![
+        "chapterId", "humanTypedChars", "pastedChars", "deletedChars", "aiInsertedChars",
+        "netDeltaChars", "activeSeconds"
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_chapter_keys.sort();
+
+    let mut actual_chapter_keys = chapter_json.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_chapter_keys.sort();
+    assert_eq!(actual_chapter_keys, expected_chapter_keys);
+}
+
+#[test]
+fn speed_curve_dto_fields_match() {
+    use crate::api::types::{SpeedCurvePointDto, SpeedCurveSummaryDto, DateRangeDto};
+
+    let point = SpeedCurvePointDto {
+        start_ms: 1000,
+        end_ms: 2000,
+        chars_typed: 10,
+        chars_per_minute: 60.0,
+    };
+
+    let summary = SpeedCurveSummaryDto {
+        range: DateRangeDto {
+            start_date: "2024-01-01".into(),
+            end_date: "2024-01-01".into(),
+        },
+        bucket_minutes: 1,
+        buckets: vec![point],
+    };
+
+    let json_str = serde_json::to_string(&summary).unwrap();
+    let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+
+    let mut expected_keys = vec!["range", "bucketMinutes", "buckets"].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+    let mut actual_keys = json_val.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_keys.sort();
+    assert_eq!(actual_keys, expected_keys);
+
+    let bucket_json = &json_val["buckets"][0];
+    let mut expected_bucket_keys = vec![
+        "startMs", "endMs", "charsTyped", "charsPerMinute"
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_bucket_keys.sort();
+
+    let mut actual_bucket_keys = bucket_json.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    actual_bucket_keys.sort();
+    assert_eq!(actual_bucket_keys, expected_bucket_keys);
+}
