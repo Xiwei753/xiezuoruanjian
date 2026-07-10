@@ -29,110 +29,40 @@ impl SujianEditorItem {
 
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
-                match vt.kind {
-                    EditorAnimationKind::Insert => {
-                        if let Some((range_start, range_end)) = vt.inserted_range {
-                            let insert_len = range_end - range_start;
-                            let had_active_before = self.text_anim_state.has_active_insert();
-                            self.text_anim_state
-                                .map_ranges_for_insert(range_start, insert_len);
-                            if had_active_before && !self.text_anim_state.has_active_insert() {
-                                self.request_static_repaint();
-                            }
-                            let mut mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
-                            if self.current_is_scrolling
-                                || self.current_is_loading
-                                || self.current_is_applying_format
-                                || self.current_is_applying_settings
-                                || !self.current_typing_animation_enabled
-                            {
-                                mode = AnimationMode::SystemSuppressed;
-                            }
-                            if mode != AnimationMode::SystemSuppressed {
-                                let reflow_ranges: Vec<(usize, usize)> = vt
-                                    .reflow_glyph_rects
-                                    .as_ref()
-                                    .map(|rects| {
-                                        rects
-                                            .iter()
-                                            .map(|r| (r.byte_start, r.byte_end))
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-                                let hidden_range_id = vt.hidden_visual_ranges.first().map(|r| r.id);
-                                self.text_anim_state.start_insert_with_ids(
-                                    Some(vt.id),
-                                    hidden_range_id,
-                                    (range_start, range_end),
-                                    reflow_ranges,
-                                    mode,
-                                    vt.duration_ms,
-                                );
-                                // Sync text animation state to cursor controller for coordinated blink
-                                self.cursor_ctrl.set_has_active_text_animation(self.text_anim_state.has_active_insert());
-                                self.cursor_ctrl.set_coordinated_enabled(self.current_coordinated_text_cursor_animation_enabled);
-                                editor_animation_debug_log(&format!(
-                                    "record_transaction: created Insert animation transaction_id={}, range_id={:?}, mode={:?}, byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
-                                    vt.id,
-                                    hidden_range_id,
-                                    mode,
-                                    range_start,
-                                    range_end,
-                                    vt.reflow_glyph_rects.as_ref().map(|r| r.len()).unwrap_or(0),
-                                    vt.duration_ms
-                                ));
-                            } else {
-                                editor_animation_debug_log(&format!(
-                                    "record_transaction: Insert SystemSuppressed, byte_range=({},{}), no hidden range",
-                                    range_start, range_end
-                                ));
-                            }
-                        }
-                    }
-                    EditorAnimationKind::Delete => {
-                        let mut mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
-                        if self.current_is_scrolling
-                            || self.current_is_loading
-                            || self.current_is_applying_format
-                            || self.current_is_applying_settings
-                            || !self.current_typing_animation_enabled
-                        {
-                            mode = AnimationMode::SystemSuppressed;
-                        }
-                        if mode != AnimationMode::SystemSuppressed {
-                            let changes =
-                                writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
-                            for change in &changes {
-                                if let writer_core::editor::EditorChange::Delete { index, text } =
-                                    change
-                                {
-                                    let range_start = *index;
-                                    let delete_len = text.len();
-                                    let had_active_before =
-                                        self.text_anim_state.has_active_insert();
-                                    self.text_anim_state
-                                        .map_ranges_for_delete(range_start, delete_len);
-                                    if had_active_before
-                                        && !self.text_anim_state.has_active_insert()
-                                    {
-                                        self.request_static_repaint();
-                                    }
-                                }
-                            }
-                            for change in &changes {
-                                if let writer_core::editor::EditorChange::Delete { index, text } =
-                                    change
-                                {
-                                    let range_start = *index;
-                                    let range_end = range_start + text.len();
-                                    self.text_anim_state
-                                        .start_delete((range_start, range_end), mode, vt.duration_ms);
-                                }
-                            }
-                        }
-                    }
-                    EditorAnimationKind::Cursor => {}
-                }
+                self.animation_coordinator.process_transaction(
+                    vt,
+                    self.current_typing_animation_enabled,
+                    self.current_is_scrolling,
+                    self.current_is_loading,
+                    self.current_is_applying_format,
+                    self.current_is_applying_settings,
+                    vt.old_cursor_rect.clone(),
+                    vt.new_cursor_rect.clone(),
+                    self.cursor_ctrl.target_x,
+                    self.cursor_ctrl.target_y,
+                    self.cursor_ctrl.visual_h,
+                    self.current_editor_enabled,
+                    self.buffer.has_selection(),
+                    self.current_viewport_height.max(1.0) as f64,
+                    self.buffer.selection_anchor != self.buffer.cursor,
+                    !self.preedit_text.is_empty(),
+                    self.current_smooth_cursor_enabled,
+                    self.current_cursor_animation_duration_ms,
+                    self.current_coordinated_text_cursor_animation_enabled,
+                    self.current_scroll_y as f64,
+                    self.cursor_ctrl.last_scroll_y,
+                    self.cursor_ctrl.visible,
+                    self.cursor_ctrl.blink_visible,
+                    self.cursor_ctrl.visual_x,
+                    self.cursor_ctrl.visual_y,
+                    self.cursor_ctrl.force_snap_next,
+                    self.cursor_ctrl.animation.as_ref(),
+                );
+                editor_animation_debug_log(&format!(
+                    "record_transaction: processed via coordinator, kind={:?}, has_active_insert={}",
+                    vt.kind,
+                    self.animation_coordinator.has_active_insert()
+                ));
             }
         }
 
@@ -155,13 +85,14 @@ impl SujianEditorItem {
             self.current_is_scrolling,
         ));
         if let Some(ref vt) = vt {
-            match serde_json::to_string(vt) {
+            let overlay_plan = self.animation_coordinator.build_overlay_plan_for_vt(vt);
+            match serde_json::to_string(&overlay_plan) {
                 Ok(json) => {
                     self.last_visual_transaction_json = json.into();
                 }
                 Err(e) => {
                     editor_animation_debug_log(&format!(
-                        "record_transaction: failed to serialize visual transaction: {}",
+                        "record_transaction: failed to serialize overlay plan: {}",
                         e
                     ));
                     self.last_visual_transaction_json = "{}".into();

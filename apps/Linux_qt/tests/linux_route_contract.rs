@@ -93,9 +93,9 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         .expect("SujianEditorItem mod.rs should be readable");
     let sujian_transaction = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/transaction.rs"))
         .unwrap_or_default();
-    let sujian_anim_state = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/text_animation_state.rs"))
+    let sujian_coordinator = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/animation_coordinator.rs"))
         .unwrap_or_default();
-    let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_anim_state}");
+    let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_coordinator}");
     assert!(
         combined.contains(
             "on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"
@@ -105,14 +105,10 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         "SujianEditorItem qt_method signatures must carry transaction/range ids as strings to avoid u64 truncation"
     );
     assert!(
-        combined.contains("start_insert_with_ids(")
+        combined.contains("start_insert(")
             && combined.contains("Some(vt.id)")
             && combined.contains("hidden_range_id"),
-        "record_transaction Insert path must start TextAnimationState with transactionId/rangeId"
-    );
-    assert!(
-        !combined.contains("text_anim_state.start_insert(\n"),
-        "record_transaction Insert path must not regress to start_insert byte-range-only cleanup"
+        "record_transaction Insert path must start AnimationRangeRegistry with transactionId/rangeId via coordinator"
     );
 }
 

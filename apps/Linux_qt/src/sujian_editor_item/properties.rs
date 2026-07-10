@@ -583,7 +583,15 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn cursor_blink_opacity(&self) -> f32 {
-        self.cursor_ctrl.cursor_blink_opacity() as f32
+        use animation_coordinator::CursorBlinkMode;
+        let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
+            && self.animation_coordinator.has_active_insert()
+        {
+            CursorBlinkMode::Suppressed
+        } else {
+            CursorBlinkMode::Normal
+        };
+        self.cursor_ctrl.cursor_blink_opacity(blink_mode) as f32
     }
 
     pub(crate) fn current_selection_text(&self) -> QString {

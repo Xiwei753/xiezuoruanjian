@@ -1,23 +1,28 @@
 // =============================================================================
 // EditorAnimationOverlay.qml — QML overlay animation layer for SujianEditorItem
 // =============================================================================
-// Consumes EditorVisualTransaction JSON from Rust core and renders short-lived
-// insert/delete animations as QML items. This is the only animation route:
-// Core transaction → visual_transaction_json signal → QML overlay rendering.
-// The static text texture (Layer 0) and QML cursor remain unchanged.
+// Consumes OverlayAnimationPlan JSON from LinuxEditorAnimationCoordinator and
+// renders short-lived insert/delete animations as QML items.
 //
-// Core `EditorVisualTransaction.animationMode` is the only semantic source.
-// QML may only downgrade it to systemSuppressed when the overlay is disabled,
-// suppressed, component-not-ready, or when Linux_qt lacks a real renderer for
-// a mode (currently snapshotAnimation).
-// - 如果已经 start_insert 但 overlay 跳过，必须立即通知 Rust 清除 hidden range
+// Architecture (four-layer):
+//   Core semantic transaction
+//   → LinuxEditorAnimationCoordinator
+//   → StaticTextRenderPlan / OverlayAnimationPlan / CursorAnimationPlan / ImeUpdatePlan
+//   → renderer / QML overlay / cursor layer / input method adapter
+//
+// QML overlay is a pure OverlayAnimationPlan consumer. It only creates ghosts,
+// plays property animations, and reports plan_id/generation/range_id on finish.
+// It does NOT decide whether hidden ranges exist, does NOT infer lifecycle from
+// Core visual transaction JSON, does NOT directly call hidden range cleanup.
+// When overlay skip / component not ready / systemSuppressed / glyph limit exceeded,
+// it MUST call back to coordinator via finish_overlay_plan entry point.
 //
 // Animation mechanism:
 // - Insert: during animation, the static text layer (Layer 0) temporarily skips the inserted range.
 //   This is an internal rendering state of the self-rendered editor, NOT text data pollution.
 //   The overlay renders ghost glyphs that fly from the cursor to their final positions.
-//   When animation finishes, insertAnimationFinished signal notifies Rust to clear the hidden range
-//   and restore full text rendering.
+//   When animation finishes, insertAnimationFinished signal notifies Rust coordinator to clear
+//   the hidden range and restore full text rendering.
 // - Delete: the overlay holds old glyph snapshots (pre-deletion positions) and renders them
 //   flying back toward the cursor. The static text layer already reflects the post-deletion state.
 // - The overlay is an animation layer, NOT a full text overlay masquerading as real text rendering.
@@ -59,19 +64,17 @@ Item {
         return /^[0-9]+$/.test(s) && s !== "0" ? s : ""
     }
 
-    function _transactionId(vt) {
-        return _safeIdString(vt ? vt.id : "")
+    function _transactionId(entry) {
+        return _safeIdString(entry ? entry.transactionId : "")
     }
 
-    function _rangeId(vt) {
-        if (!vt || !vt.hiddenVisualRanges || !Array.isArray(vt.hiddenVisualRanges) || vt.hiddenVisualRanges.length === 0) return ""
-        return _safeIdString(vt.hiddenVisualRanges[0].id)
+    function _rangeId(entry) {
+        return _safeIdString(entry ? entry.rangeId : "")
     }
 
     function _matchesTransaction(tx, transactionId, rangeId, byteStart, byteEnd) {
         if (rangeId !== "" && tx.rangeId === rangeId) return true
         if (transactionId !== "" && tx.transactionId === transactionId) return true
-        // byte range 只能作为旧数据兜底：只有双方都没有稳定 id 时才按 byteStart/byteEnd 匹配。
         if ((tx.rangeId || "") === "" && (tx.transactionId || "") === "" && rangeId === "" && transactionId === "") {
             return tx.byteStart === byteStart && tx.byteEnd === byteEnd
         }
@@ -85,11 +88,9 @@ Item {
     property var _activeTransactions: []
     property Component _glyphGhostComponent: Qt.createComponent("EditorGlyphGhost.qml")
 
-    function _modeFromCore(vt, componentReady) {
+    function _modeFromPlan(entry, componentReady) {
         if (!root.animationEnabled || root.suppressed || !componentReady) return "systemSuppressed"
-        var mode = vt && vt.animationMode ? String(vt.animationMode) : "systemSuppressed"
-        // Snapshot/text-run rendering is not implemented yet; do not create an
-        // empty ghost or rely on hidden range. Let Rust restore normal drawing.
+        var mode = entry && entry.animationMode ? String(entry.animationMode) : "systemSuppressed"
         if (mode === "snapshotAnimation") return "systemSuppressed"
         return mode
     }
@@ -127,28 +128,33 @@ Item {
                 return
             }
             root._log("received: jsonLen=" + jsonStr.length)
-            var vt
+            var plan
             try {
-                vt = JSON.parse(jsonStr)
+                plan = JSON.parse(jsonStr)
             } catch (e) {
                 root._log("JSON parse error: " + e)
                 return
             }
-            if (!vt || !vt.kind) {
-                root._log("skipped: vt missing kind field")
+            if (!plan || !plan.entries || !Array.isArray(plan.entries) || plan.entries.length === 0) {
+                root._log("skipped: plan missing entries")
                 return
             }
-            if (!root.animationEnabled || root.suppressed) {
-                root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
-                // 动画被跳过，但 Rust 可能已创建 hidden range，必须立即通知清除
-                // 否则正文层会永久跳过该 range 导致文字消失
-                if (vt.kind === "insert") {
-                    _notifySkippedIfHasRange(vt)
+            for (var ei = 0; ei < plan.entries.length; ei++) {
+                var entry = plan.entries[ei]
+                if (!entry || !entry.kind) {
+                    root._log("skipped: entry missing kind field")
+                    continue
                 }
-                return
+                if (!root.animationEnabled || root.suppressed) {
+                    root._log("skipped: animationEnabled=" + root.animationEnabled + " suppressed=" + root.suppressed)
+                    if (entry.kind === "insert") {
+                        _notifySkippedIfHasRange(entry)
+                    }
+                    continue
+                }
+                root._log("entry kind=" + entry.kind + " durationMs=" + entry.durationMs)
+                root._handleTransaction(entry)
             }
-            root._log("vt kind=" + vt.kind + " durationMs=" + vt.durationMs)
-            root._handleTransaction(vt)
         }
 
         function onPreedit_visual_transaction_changed() {
@@ -197,15 +203,14 @@ Item {
         return false
     }
 
-    function _handleTransaction(vt) {
-        if (!vt) return
-        var kind = vt.kind
+    function _handleTransaction(entry) {
+        if (!entry) return
+        var kind = entry.kind
         if (kind === "insert") {
-            _createInsertAnimation(vt)
+            _createInsertAnimation(entry)
         } else if (kind === "delete") {
-            _createDeleteAnimation(vt)
+            _createDeleteAnimation(entry)
         }
-        // Cursor kind: 不需要动画
     }
 
     function _trackGhost(ghost, animKind, transactionId, rangeId, byteStart, byteEnd) {
@@ -236,44 +241,37 @@ Item {
         ghost.startAnimation()
     }
 
-    function _createInsertAnimation(vt) {
-        // 使用 vt.oldCursorRect 作为起点（插入前的光标位置）
-        // 使用 baselineY 作为 Y 坐标（文字基线），回退到 top（兼容旧数据）
-        var startX = vt.oldCursorRect ? vt.oldCursorRect.x : editorItem.cursor_rect_x
-        var startY = vt.oldCursorRect ? (vt.oldCursorRect.baselineY || vt.oldCursorRect.top) : editorItem.cursor_rect_y
-        var duration = Math.max(30, Math.min(1000, vt.durationMs || 100))
+    function _createInsertAnimation(entry) {
+        var startX = entry.oldCursorRect ? entry.oldCursorRect.x : editorItem.cursor_rect_x
+        var startY = entry.oldCursorRect ? (entry.oldCursorRect.baselineY || entry.oldCursorRect.top) : editorItem.cursor_rect_y
+        var duration = Math.max(30, Math.min(1000, entry.durationMs || 100))
 
-        // 从 vt.insertGlyphRects 读取 glyph 位置
-        var glyphRects = vt.insertGlyphRects
+        var glyphRects = entry.glyphRects
         if (!glyphRects || !Array.isArray(glyphRects) || glyphRects.length === 0) {
-            root._log("insert skipped: insertGlyphRects empty")
-            // 通知 Rust 清除可能已创建的 hidden range
-            _notifySkippedIfHasRange(vt)
+            root._log("insert skipped: glyphRects empty")
+            _notifySkippedIfHasRange(entry)
             return
         }
 
-        // byte range for insert animation — used to notify Rust when animation finishes
-        // 从 vt.insertedRange 读取 hidden range
-        var transactionId = root._transactionId(vt)
-        var rangeId = root._rangeId(vt)
+        var transactionId = root._transactionId(entry)
+        var rangeId = root._rangeId(entry)
         var insertByteStart = 0
         var insertByteEnd = 0
-        if (vt.insertedRange && Array.isArray(vt.insertedRange) && vt.insertedRange.length === 2) {
-            insertByteStart = vt.insertedRange[0]
-            insertByteEnd = vt.insertedRange[1]
+        if (entry.insertedRange && Array.isArray(entry.insertedRange) && entry.insertedRange.length === 2) {
+            insertByteStart = entry.insertedRange[0]
+            insertByteEnd = entry.insertedRange[1]
         }
 
-        // ── Core is the only semantic source for animation mode ──
         var component = root._glyphGhostComponent
         var componentReady = component && component.status === Component.Ready
-        var mode = root._modeFromCore(vt, componentReady)
+        var mode = root._modeFromPlan(entry, componentReady)
 
-        root._log("insert mode=" + mode + " coreMode=" + vt.animationMode + " glyphRects=" + glyphRects.length + " componentReady=" + componentReady)
+        root._log("insert mode=" + mode + " planMode=" + entry.animationMode + " glyphRects=" + glyphRects.length + " componentReady=" + componentReady)
 
         if (mode === "systemSuppressed") {
             root._log("insert skipped: mode=systemSuppressed")
             // 通知 Rust 清除可能已创建的 hidden range
-            _notifySkippedIfHasRange(vt)
+            _notifySkippedIfHasRange(entry)
             return
         }
 
@@ -283,8 +281,8 @@ Item {
         var createdGhosts = []
 
         if (mode === "clusterAnimation") {
-            // ClusterAnimation：从 vt.clusterRects 读取 cluster 信息，整簇作为单个 ghost
-            var clusterRects = vt.clusterRects
+            // ClusterAnimation：从 entry.clusterRects 读取 cluster 信息，整簇作为单个 ghost
+            var clusterRects = entry.clusterRects
             if (clusterRects && Array.isArray(clusterRects)) {
                 for (var ci = 0; ci < clusterRects.length; ci++) {
                     var cluster = clusterRects[ci]
@@ -350,8 +348,8 @@ Item {
                 }
             }
         } else if (mode === "runAnimation") {
-            // RunAnimation：从 vt.clusterRuns 读取 run 信息，每个 run 一个 ghost
-            var clusterRuns = vt.clusterRuns
+            // RunAnimation：从 entry.clusterRuns 读取 run 信息，每个 run 一个 ghost
+            var clusterRuns = entry.clusterRuns
             if (clusterRuns && Array.isArray(clusterRuns)) {
                 for (var ri = 0; ri < clusterRuns.length; ri++) {
                     var run = clusterRuns[ri]
@@ -423,8 +421,8 @@ Item {
             // No overlay, no hidden range created.
         } else if (mode === "lineReflowAnimation") {
             // LineReflowAnimation：换行场景，做行级 reflow 动画
-            // 从 vt.clusterRects 收集 cluster 信息创建 ghost，复杂字符不跳过
-            var clusterRects = vt.clusterRects
+            // 从 entry.clusterRects 收集 cluster 信息创建 ghost，复杂字符不跳过
+            var clusterRects = entry.clusterRects
             if (clusterRects && Array.isArray(clusterRects)) {
                 for (var ci = 0; ci < clusterRects.length; ci++) {
                     var cluster = clusterRects[ci]
@@ -521,7 +519,7 @@ Item {
         // 静态正文层在动画期间跳过 reflow ranges，由 overlay reflow ghost 显示位移动画。
         // 动画结束后清除 reflow hidden ranges，正文层恢复完整绘制。
         // 复杂字符也参与 reflow 动画
-        var reflowRects = vt.reflowGlyphRects
+        var reflowRects = entry.reflowGlyphRects
         if (reflowRects && Array.isArray(reflowRects) && reflowRects.length > 0) {
             root._log("insert creating " + reflowRects.length + " reflow ghosts")
             for (var ri = 0; ri < reflowRects.length; ri++) {
@@ -559,7 +557,7 @@ Item {
         // 如果没有 ghost 被创建，立即通知 Rust 清除 hidden range
         if (createdGhosts.length === 0) {
             root._log("insert skipped: no ghosts actually created (createdGhosts.length=0)")
-            _notifySkippedIfHasRange(vt)
+            _notifySkippedIfHasRange(entry)
             return
         }
 
@@ -608,37 +606,33 @@ Item {
     /// 当 QML overlay 跳过 Insert 动画时，通知 Rust 清除可能已创建的 hidden range。
     /// 这是防止文字短暂消失的关键：Rust 可能已经在 record_transaction 中
     /// 创建了 hidden range，但 QML 因各种原因跳过了动画。
-    function _notifySkippedIfHasRange(vt) {
-        if (vt.insertedRange && Array.isArray(vt.insertedRange) && vt.insertedRange.length === 2) {
-            var byteStart = vt.insertedRange[0]
-            var byteEnd = vt.insertedRange[1]
-            var transactionId = root._transactionId(vt)
-            var rangeId = root._rangeId(vt)
+    function _notifySkippedIfHasRange(entry) {
+        if (entry.insertedRange && Array.isArray(entry.insertedRange) && entry.insertedRange.length === 2) {
+            var byteStart = entry.insertedRange[0]
+            var byteEnd = entry.insertedRange[1]
+            var transactionId = root._transactionId(entry)
+            var rangeId = root._rangeId(entry)
             root._log("insert skipped, notifying Rust to clear hidden range: transactionId=" + transactionId + " rangeId=" + rangeId + " byteStart=" + byteStart + " byteEnd=" + byteEnd)
             root.insertAnimationSkipped(transactionId, rangeId, byteStart, byteEnd)
         }
     }
 
-    function _createDeleteAnimation(vt) {
-        // 使用 vt.newCursorRect 作为终点（删除后的新光标位置）
-        // 使用 baselineY 作为 Y 坐标（文字基线），回退到 top（兼容旧数据）
-        var endX = vt.newCursorRect ? vt.newCursorRect.x : editorItem.cursor_rect_x
-        var endY = vt.newCursorRect ? (vt.newCursorRect.baselineY || vt.newCursorRect.top) : editorItem.cursor_rect_y
-        var duration = Math.max(30, Math.min(1000, vt.durationMs || 100))
+    function _createDeleteAnimation(entry) {
+        var endX = entry.newCursorRect ? entry.newCursorRect.x : editorItem.cursor_rect_x
+        var endY = entry.newCursorRect ? (entry.newCursorRect.baselineY || entry.newCursorRect.top) : editorItem.cursor_rect_y
+        var duration = Math.max(30, Math.min(1000, entry.durationMs || 100))
 
-        // 从 vt.deletedGlyphRects 读取被删 glyph 位置
-        var glyphRects = vt.deletedGlyphRects
+        var glyphRects = entry.deletedGlyphRects
         if (!glyphRects || !Array.isArray(glyphRects) || glyphRects.length === 0) {
             root._log("delete skipped: deletedGlyphRects empty")
             return
         }
 
-        // ── Core is the only semantic source for animation mode ──
         var component = root._glyphGhostComponent
         var componentReady = component && component.status === Component.Ready
-        var mode = root._modeFromCore(vt, componentReady)
+        var mode = root._modeFromPlan(entry, componentReady)
 
-        root._log("delete mode=" + mode + " coreMode=" + vt.animationMode + " glyphRects=" + glyphRects.length + " componentReady=" + componentReady)
+        root._log("delete mode=" + mode + " planMode=" + entry.animationMode + " glyphRects=" + glyphRects.length + " componentReady=" + componentReady)
 
         if (mode === "systemSuppressed") {
             root._log("delete skipped: mode=systemSuppressed")
@@ -649,8 +643,8 @@ Item {
         root._log("delete creating " + glyphRects.length + " ghosts, cursorRect=(" + endX + "," + endY + ")")
 
         if (mode === "clusterAnimation") {
-            // ClusterAnimation：从 vt.clusterRects 读取 cluster 信息，整簇作为单个 ghost
-            var clusterRects = vt.clusterRects
+            // ClusterAnimation：从 entry.clusterRects 读取 cluster 信息，整簇作为单个 ghost
+            var clusterRects = entry.clusterRects
             if (clusterRects && Array.isArray(clusterRects)) {
                 for (var ci = 0; ci < clusterRects.length; ci++) {
                     var cluster = clusterRects[ci]
@@ -716,8 +710,8 @@ Item {
                 }
             }
         } else if (mode === "runAnimation") {
-            // RunAnimation：从 vt.clusterRuns 读取 run 信息，每个 run 一个 ghost
-            var clusterRuns = vt.clusterRuns
+            // RunAnimation：从 entry.clusterRuns 读取 run 信息，每个 run 一个 ghost
+            var clusterRuns = entry.clusterRuns
             if (clusterRuns && Array.isArray(clusterRuns)) {
                 for (var ri = 0; ri < clusterRuns.length; ri++) {
                     var run = clusterRuns[ri]

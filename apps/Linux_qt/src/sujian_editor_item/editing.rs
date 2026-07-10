@@ -9,16 +9,21 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn tick_cursor_animation(&mut self) {
-        // Sync text animation state to cursor controller for coordinated blink suppression
-        self.cursor_ctrl.set_has_active_text_animation(self.text_anim_state.has_active_insert());
-        self.cursor_ctrl.set_coordinated_enabled(self.current_coordinated_text_cursor_animation_enabled);
+        use animation_coordinator::CursorBlinkMode;
+        let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
+            && self.animation_coordinator.has_active_insert()
+        {
+            CursorBlinkMode::Suppressed
+        } else {
+            CursorBlinkMode::Normal
+        };
 
         let still_animating = if self.cursor_ctrl.animation.is_some() {
             self.cursor_ctrl.tick_animation()
         } else {
             false
         };
-        let blink_changed = self.cursor_ctrl.tick_blink();
+        let blink_changed = self.cursor_ctrl.tick_blink(blink_mode);
         if still_animating || blink_changed {
             self.cursor_rect_changed();
         }
@@ -29,7 +34,7 @@ impl SujianEditorItem {
 
     pub(crate) fn tick_text_animations(&mut self) {
         let now = Instant::now();
-        if self.text_anim_state.tick(now) {
+        if self.animation_coordinator.tick(now) {
             editor_animation_debug_log("tick_text_animations: cleared timed-out animations");
             self.request_static_repaint();
         }

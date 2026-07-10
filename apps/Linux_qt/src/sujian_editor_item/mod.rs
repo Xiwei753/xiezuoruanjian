@@ -9,6 +9,7 @@
 // sujian_editor_item - Linux_qt self-rendered editor item
 // =============================================================================
 
+pub(crate) mod animation_coordinator;
 pub(crate) mod buffer;
 pub(crate) mod cursor_controller;
 pub(crate) mod editing;
@@ -18,7 +19,6 @@ pub(crate) mod layout_ops;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod rendering;
-pub(crate) mod text_animation_state;
 pub(crate) mod transaction;
 #[cfg(test)]
 mod tests;
@@ -42,13 +42,15 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
-use text_animation_state::{AnimationMode, TextAnimationState};
+use animation_coordinator::LinuxEditorAnimationCoordinator;
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
     EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
     ReflowGlyphRect,
 };
+
+use animation_coordinator::AnimationMode;
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreeditAttribute {
@@ -276,7 +278,7 @@ pub struct SujianEditorItem {
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
-    text_anim_state: TextAnimationState,
+    animation_coordinator: LinuxEditorAnimationCoordinator,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
 }
 
@@ -417,7 +419,7 @@ impl Default for SujianEditorItem {
             scroll_buffer: None,
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
-            text_anim_state: TextAnimationState::new(),
+            animation_coordinator: LinuxEditorAnimationCoordinator::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
         }
     }
@@ -440,12 +442,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn clear_active_text_animations(&mut self) {
-        if !self.text_anim_state.is_empty() {
-            self.text_anim_state.clear();
-            // Sync text animation state to cursor controller
-            self.cursor_ctrl.set_has_active_text_animation(false);
+        if self.animation_coordinator.suppress_all() {
             self.request_static_repaint();
-            // Emit cursor_rect_changed so QML picks up blink_opacity change
             self.cursor_rect_changed();
         }
     }
@@ -509,11 +507,9 @@ impl SujianEditorItem {
         let bs = byte_start.max(0) as usize;
         let be = byte_end.max(0) as usize;
         let removed = self
-            .text_anim_state
-            .on_insert_animation_finished_by_id(transaction_id, range_id, bs, be);
+            .animation_coordinator
+            .finish_overlay_plan(transaction_id, range_id, bs, be);
         if removed {
-            // Sync text animation state to cursor controller
-            self.cursor_ctrl.set_has_active_text_animation(self.text_anim_state.has_active_insert());
             editor_animation_debug_log(&format!(
                 "on_insert_animation_{}: transaction_id={:?}, range_id={:?}, byte_range=({},{}), cleared hidden range, has_active_insert={}",
                 if skipped { "skipped" } else { "finished" },
@@ -521,24 +517,23 @@ impl SujianEditorItem {
                 range_id,
                 bs,
                 be,
-                self.text_anim_state.has_active_insert()
+                self.animation_coordinator.has_active_insert()
             ));
             self.request_static_repaint();
-            // Emit cursor_rect_changed so QML picks up blink_opacity change
             self.cursor_rect_changed();
         }
     }
 
     pub(crate) fn has_active_insert_animation(&self) -> bool {
-        self.text_anim_state.has_active_insert()
+        self.animation_coordinator.has_active_insert()
     }
 
     pub(crate) fn active_insert_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.text_anim_state.active_insert_byte_ranges()
+        self.animation_coordinator.insert_byte_ranges()
     }
 
     pub(crate) fn active_reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.text_anim_state.active_reflow_byte_ranges()
+        self.animation_coordinator.reflow_byte_ranges()
     }
 
     pub(crate) fn ime_query_text_before_cursor(&self, max_chars: usize) -> String {

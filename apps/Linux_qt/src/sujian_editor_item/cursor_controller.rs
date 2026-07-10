@@ -1,77 +1,29 @@
-// cursor_controller — Isolated cursor visual state (CursorVisualController)
-// =============================================================================
-// Enforces the boundary: cursor visual position / IME / animation must NOT
-// directly touch buffer, layout, or QSG nodes.
-//
-// Design principles (per AGENTS.md §2.3):
-// - cursor_should_be_visible is NEVER affected by text animation / overlay state.
-//   It is only controlled by: editor_enabled, has_selection, viewport visibility, focus.
-// - cursor_blink_opacity is decoupled from visible: QML Rectangle.visible binds
-//   shouldBeVisible, opacity binds blinkOpacity.
-// - During coordinated text animation, blink is suppressed (opacity locked to 1.0)
-//   so the cursor stays solid while glyphs fly in.
-// - CursorController does NOT directly read TextAnimationState; the caller passes
-//   `has_active_text_animation` to gate blink suppression.
-
+use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::rendering::CursorAnimationState;
 use crate::editor::layout::CaretAffinity;
 use std::time::{Duration, Instant};
 
 const BLINK_INTERVAL_MS: u64 = 530;
 
-/// Isolated cursor visual state — no buffer, no layout, no QSG.
-///
-/// Invariants:
-/// - `target_cursor_x/y` are the layout-computed cursor positions (document coords).
-/// - `visual_x/y` are the positions actually rendered (may lag due to animation).
-/// - `cursor_should_be_visible` is independent of text animation / overlay state.
-/// - `cursor_blink_opacity` is 0.0 or 1.0; during coordinated animation it is
-///   locked to 1.0 (no blink) so cursor stays solid while glyphs animate.
-/// - `CursorUpdateResult` tracks what changed so the caller can emit the
-///   appropriate QML signals without coupling to IME update timing.
 pub struct CursorController {
-    // Target position (from layout)
     pub target_x: f64,
     pub target_y: f64,
-
-    // Visual position (what's actually rendered, may be mid-animation)
     pub visual_x: f64,
     pub visual_y: f64,
     pub visual_h: f64,
-
-    // Visibility — independent of text animation / overlay state
     pub visible: bool,
     pub dirty: bool,
-
-    // Affinity
     pub affinity: CaretAffinity,
-
-    // Visual line tracking
     pub current_visual_line_id: Option<usize>,
     pub last_scroll_y: f64,
-
-    // IME
     pub ime_cursor_rect_h: f64,
-
-    // Anchor visual position (for ImAnchorRectangle / ImAnchorPosition)
     pub anchor_visual_x: Option<f64>,
     pub anchor_visual_y: Option<f64>,
-
-    // Animation
     pub animation: Option<CursorAnimationState>,
-
-    // Snap control
     pub force_snap_next: bool,
-
-    // Blink state — decoupled from visible
     pub blink_visible: bool,
     pub blink_last_toggle: Instant,
     pub blink_reset_requested: bool,
-
-    // Coordinated animation state
-    // When true and has_active_text_animation, blink is suppressed (opacity=1.0)
-    pub coordinated_enabled: bool,
-    pub has_active_text_animation: bool,
 }
 
 impl CursorController {
@@ -90,33 +42,23 @@ impl CursorController {
             ime_cursor_rect_h: 0.0,
             anchor_visual_x: None,
             anchor_visual_y: None,
-
             animation: None,
             force_snap_next: false,
             blink_visible: true,
             blink_last_toggle: Instant::now(),
             blink_reset_requested: false,
-            coordinated_enabled: true,
-            has_active_text_animation: false,
         }
     }
 
-    /// cursor_should_be_visible: QML Rectangle.visible binding.
-    /// NEVER affected by text animation / overlay state.
-    /// Only controlled by: editor_enabled, has_selection, viewport visibility.
     pub fn cursor_should_be_visible(&self) -> bool {
         self.visible
     }
 
-    /// cursor_blink_opacity: QML Rectangle.opacity binding (0.0 or 1.0).
-    /// During coordinated text animation (coordinated_enabled && has_active_text_animation),
-    /// blink is suppressed — opacity stays 1.0 so cursor stays solid while glyphs animate.
-    /// When not in coordinated animation, follows normal blink phase.
-    pub fn cursor_blink_opacity(&self) -> f64 {
+    pub fn cursor_blink_opacity(&self, blink_mode: CursorBlinkMode) -> f64 {
         if !self.visible {
             return 0.0;
         }
-        if self.coordinated_enabled && self.has_active_text_animation {
+        if blink_mode == CursorBlinkMode::Suppressed {
             return 1.0;
         }
         if self.blink_visible {
@@ -126,78 +68,30 @@ impl CursorController {
         }
     }
 
-    /// Update coordinated animation state. Called by the coordinator
-    /// (SujianEditorItem) when text animation starts/stops.
-    pub fn set_has_active_text_animation(&mut self, has: bool) {
-        self.has_active_text_animation = has;
-    }
-
-    /// Update coordinated animation enabled setting.
-    pub fn set_coordinated_enabled(&mut self, enabled: bool) {
-        self.coordinated_enabled = enabled;
-    }
-
-    /// Update cursor visual state from layout-computed position.
-    ///
-    /// Returns `CursorUpdateResult` indicating what deferred work the caller
-    /// needs to do on the GUI thread.
-    ///
-    /// **IMPORTANT**: This method MUST only be called from the GUI thread.
-    /// It must NOT touch any GUI objects (signals, inputMethod, QML bindings).
-    pub fn update(
-        &mut self,
-        cursor_x: f64,
-        cursor_y: f64,
-        cursor_h: f64,
-        visual_line_id: usize,
-        scroll_y: f64,
-        smooth_enabled: bool,
-        smooth_duration_ms: u32,
-        is_scrolling: bool,
-        is_selecting: bool,
-        is_preediting: bool,
-        editor_enabled: bool,
-        has_selection: bool,
-        viewport_height: f64,
-        coordinated_enabled: bool,
-        has_active_text_animation: bool,
-    ) -> CursorUpdateResult {
-        use std::time::Instant;
-
+    pub fn apply_plan(&mut self, plan: &CursorAnimationPlan) -> CursorUpdateResult {
         let old_x = self.target_x;
         let old_y = self.target_y;
         let old_visible = self.visible;
         let old_blink_visible = self.blink_visible;
 
-        self.coordinated_enabled = coordinated_enabled;
-        self.has_active_text_animation = has_active_text_animation;
+        self.target_x = plan.cursor_x;
+        self.target_y = plan.cursor_y;
+        self.visual_h = plan.cursor_h;
+        self.ime_cursor_rect_h = plan.cursor_h;
+        self.visible = plan.should_be_visible;
 
-        self.target_x = cursor_x;
-        self.target_y = cursor_y;
-        self.visual_h = cursor_h;
-        self.ime_cursor_rect_h = cursor_h;
-        self.current_visual_line_id = Some(visual_line_id);
+        let visibility_changed = old_visible != plan.should_be_visible;
 
-        let scroll_changed = (self.last_scroll_y - scroll_y).abs() > 0.01;
-        self.last_scroll_y = scroll_y;
-
-        let position_changed = (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01;
-
-        // Determine visibility — NEVER affected by text animation / overlay state
-        let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
-        let new_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
-        self.visible = new_visible;
-
-        let visibility_changed = old_visible != new_visible;
-
-        if !new_visible {
+        if !plan.should_be_visible {
             self.animation = None;
-            self.visual_x = cursor_x;
-            self.visual_y = cursor_y;
+            self.visual_x = plan.cursor_x;
+            self.visual_y = plan.cursor_y;
             self.blink_visible = true;
             if old_visible {
                 self.dirty = true;
             }
+            let position_changed =
+                (old_x - plan.cursor_x).abs() > 0.01 || (old_y - plan.cursor_y).abs() > 0.01;
             return CursorUpdateResult {
                 ime_needs_update: position_changed,
                 needs_repaint: old_visible,
@@ -207,97 +101,82 @@ impl CursorController {
             };
         }
 
-        // NOTE: is_preediting is intentionally NOT in should_snap — preedit
-        // phase should allow cursor animation (e.g. preedit cursor moving
-        // within the composition). Only truly disruptive events should snap.
-        // is_preediting is kept as a parameter for potential future use
-        // (e.g. IME candidate window positioning) but must NOT suppress
-        // cursor animation or blink.
-        let _ = is_preediting;
-
-        // Determine if we should snap (no animation)
-        // force_snap_next is NOT here: it only gates large_distance below,
-        // so small-distance clicks still animate, while huge jumps snap.
-        let should_snap = is_scrolling || is_selecting || !old_visible || scroll_changed;
-
-        // Large-distance snap: when force_snap_next is true AND the
-        // cursor moved a large distance. This prevents animating across
-        // huge jumps (click far away, chapter switch) while allowing
-        // normal typing / IME / Enter to animate even across lines.
-        // dy threshold: 1.5x cursor_h allows Enter/newline vertical animation.
-        let dx = (cursor_x - self.visual_x).abs();
-        let dy = (cursor_y - self.visual_y).abs();
-        let large_distance = self.force_snap_next && (dx > 80.0 || dy > cursor_h * 1.5);
-
-        // Safety snap: even without force_snap_next, if the cursor moves
-        // more than 3 lines vertically, snap instead of animating.
-        // This covers IME commit scenarios where preedit was on a different
-        // line (e.g. cross-line preedit, candidate replacement with large
-        // cursor retreat/advance). 3 lines = 3 * cursor_h is a reasonable
-        // threshold — normal typing/IME/Enter stays within 1-2 lines.
-        let safety_snap = dy > cursor_h * 3.0;
-
         let now = Instant::now();
 
-        // Respect user setting for smooth cursor duration (30~1000ms).
-        // Core already validates the range; client must not silently override.
-        let effective_duration_ms = if smooth_enabled {
-            (smooth_duration_ms as u64).clamp(30, 1000)
-        } else {
-            0
-        };
+        match &plan.transition {
+            CursorTransition::Snap => {
+                self.visual_x = plan.cursor_x;
+                self.visual_y = plan.cursor_y;
+                self.animation = None;
+            }
+            CursorTransition::Tween {
+                old_rect,
+                new_rect,
+                duration_ms,
+            } => {
+                let start_x = old_rect.x;
+                let start_y = old_rect.top;
+                let target_x = new_rect.x;
+                let target_y = new_rect.top;
+                let dur = *duration_ms;
 
-        // When coordinated animation is enabled and text animation is active,
-        // use the visual transaction's old/new cursor rect for tween.
-        // When coordinated is disabled, cursor snaps to new position but stays visible.
-        let (visual_x, visual_y, new_animation) =
-            if should_snap || !smooth_enabled || large_distance || safety_snap {
-                (cursor_x, cursor_y, None)
-            } else if let Some(ref anim) = self.animation {
-                if (anim.target_x - cursor_x).abs() > 0.01
-                    || (anim.target_y - cursor_y).abs() > 0.01
-                {
-                    let (cur_x, cur_y) = anim.current_position(now);
-                    let new_anim = CursorAnimationState {
-                        start_x: cur_x,
-                        start_y: cur_y,
-                        target_x: cursor_x,
-                        target_y: cursor_y,
-                        start_time: now,
-                        duration_ms: effective_duration_ms,
-                    };
-                    (cur_x, cur_y, Some(new_anim))
-                } else if anim.is_finished(now) {
-                    (anim.target_x, anim.target_y, None)
+                if let Some(ref anim) = self.animation {
+                    if (anim.target_x - target_x).abs() > 0.01
+                        || (anim.target_y - target_y).abs() > 0.01
+                    {
+                        let (cur_x, cur_y) = anim.current_position(now);
+                        self.animation = Some(CursorAnimationState {
+                            start_x: cur_x,
+                            start_y: cur_y,
+                            target_x,
+                            target_y,
+                            start_time: now,
+                            duration_ms: dur,
+                        });
+                        self.visual_x = cur_x;
+                        self.visual_y = cur_y;
+                    } else if anim.is_finished(now) {
+                        self.visual_x = anim.target_x;
+                        self.visual_y = anim.target_y;
+                        self.animation = None;
+                    } else {
+                        let (cur_x, cur_y) = anim.current_position(now);
+                        self.visual_x = cur_x;
+                        self.visual_y = cur_y;
+                    }
                 } else {
-                    let (cur_x, cur_y) = anim.current_position(now);
-                    (cur_x, cur_y, Some(anim.clone()))
+                    let prev_vx = self.visual_x;
+                    let prev_vy = self.visual_y;
+                    if (prev_vx - target_x).abs() > 0.01 || (prev_vy - target_y).abs() > 0.01 {
+                        self.animation = Some(CursorAnimationState {
+                            start_x: if (start_x - prev_vx).abs() < 0.01 && (start_y - prev_vy).abs() < 0.01 {
+                                prev_vx
+                            } else {
+                                start_x
+                            },
+                            start_y: if (start_x - prev_vx).abs() < 0.01 && (start_y - prev_vy).abs() < 0.01 {
+                                prev_vy
+                            } else {
+                                start_y
+                            },
+                            target_x,
+                            target_y,
+                            start_time: now,
+                            duration_ms: dur,
+                        });
+                    } else {
+                        self.visual_x = target_x;
+                        self.visual_y = target_y;
+                    }
                 }
-            } else {
-                let prev_vx = self.visual_x;
-                let prev_vy = self.visual_y;
-                if (prev_vx - cursor_x).abs() > 0.01 || (prev_vy - cursor_y).abs() > 0.01 {
-                    let new_anim = CursorAnimationState {
-                        start_x: prev_vx,
-                        start_y: prev_vy,
-                        target_x: cursor_x,
-                        target_y: cursor_y,
-                        start_time: now,
-                        duration_ms: effective_duration_ms,
-                    };
-                    (prev_vx, prev_vy, Some(new_anim))
-                } else {
-                    (cursor_x, cursor_y, None)
-                }
-            };
+            }
+        }
 
-        self.animation = new_animation;
-        self.visual_x = visual_x;
-        self.visual_y = visual_y;
         self.force_snap_next = false;
 
-        let pos_changed =
-            (visual_x - old_x).abs() > 0.01 || (visual_y - old_y).abs() > 0.01 || !old_visible;
+        let pos_changed = (self.visual_x - old_x).abs() > 0.01
+            || (self.visual_y - old_y).abs() > 0.01
+            || !old_visible;
         if pos_changed {
             self.dirty = true;
             self.blink_visible = true;
@@ -306,8 +185,11 @@ impl CursorController {
 
         let blink_changed = old_blink_visible != self.blink_visible;
 
+        let position_changed =
+            (old_x - plan.cursor_x).abs() > 0.01 || (old_y - plan.cursor_y).abs() > 0.01;
+
         CursorUpdateResult {
-            ime_needs_update: position_changed || scroll_changed,
+            ime_needs_update: position_changed,
             needs_repaint: pos_changed || self.animation.is_some(),
             visibility_changed,
             blink_changed,
@@ -315,10 +197,7 @@ impl CursorController {
         }
     }
 
-    /// Advance cursor animation by one frame.
-    /// Returns true if the animation is still active (needs another frame).
     pub fn tick_animation(&mut self) -> bool {
-        use std::time::Instant;
         let now = Instant::now();
         if let Some(ref anim) = self.animation {
             if anim.is_finished(now) {
@@ -339,10 +218,7 @@ impl CursorController {
         }
     }
 
-    /// Advance blink state. Returns true if blink state changed (needs QML update).
-    /// During coordinated text animation, blink is suppressed — opacity stays 1.0
-    /// so cursor stays solid while glyphs animate.
-    pub fn tick_blink(&mut self) -> bool {
+    pub fn tick_blink(&mut self, blink_mode: CursorBlinkMode) -> bool {
         if !self.visible {
             if !self.blink_visible {
                 return false;
@@ -351,8 +227,7 @@ impl CursorController {
             return true;
         }
 
-        // During coordinated text animation, suppress blink — keep opacity at 1.0
-        if self.coordinated_enabled && self.has_active_text_animation {
+        if blink_mode == CursorBlinkMode::Suppressed {
             if !self.blink_visible {
                 self.blink_visible = true;
                 return true;
@@ -377,7 +252,6 @@ impl CursorController {
         false
     }
 
-    /// Request blink phase reset (e.g. on cursor movement from QML side).
     #[allow(dead_code)]
     pub fn reset_blink(&mut self) {
         self.blink_visible = true;
@@ -385,18 +259,10 @@ impl CursorController {
     }
 }
 
-/// Result of a cursor update — tells the caller what deferred
-/// GUI-thread work is needed.
 pub struct CursorUpdateResult {
-    /// True if the cursor position changed and IME needs updating
-    /// (performed directly on the GUI thread by the caller).
     pub ime_needs_update: bool,
-    /// True if a repaint is needed.
     pub needs_repaint: bool,
-    /// True if cursor visibility changed (QML cursor_should_be_visible changed).
     pub visibility_changed: bool,
-    /// True if blink state changed (QML cursor_blink_opacity changed).
     pub blink_changed: bool,
-    /// True if visual position changed (QML cursor_rect_x/y changed).
     pub visual_position_changed: bool,
 }

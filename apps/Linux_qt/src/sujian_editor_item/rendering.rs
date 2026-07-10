@@ -9,6 +9,7 @@ use qmetaobject::{
 use std::time::Instant;
 
 use super::SujianEditorItem;
+use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition, StaticTextRenderPlan};
 use super::cursor_controller::CursorUpdateResult;
 
 pub struct ScrollBuffer {
@@ -182,23 +183,8 @@ impl SujianEditorItem {
         // the text rendering uses the same shaping data as cursorToX(),
         // fixing mixed-script cursor issues (e.g. "]\"" where cursor
         // lands inside the Chinese quote).
-        let insert_ranges = self.active_insert_byte_ranges();
-        let reflow_ranges = self.active_reflow_byte_ranges();
-        // 合并 insert ranges 和 reflow ranges，统一跳过
-        let mut all_skip_ranges: Vec<(usize, usize)> = insert_ranges;
-        all_skip_ranges.extend(reflow_ranges);
-        all_skip_ranges.sort_by_key(|r| r.0);
-        // 合并重叠/相邻的 ranges
-        let mut merged_skip_ranges: Vec<(usize, usize)> = Vec::new();
-        for (rs, re) in all_skip_ranges {
-            if let Some(last) = merged_skip_ranges.last_mut() {
-                if rs <= last.1 {
-                    last.1 = last.1.max(re);
-                    continue;
-                }
-            }
-            merged_skip_ranges.push((rs, re));
-        }
+        let render_plan = self.animation_coordinator.current_static_render_plan();
+        let merged_skip_ranges = render_plan.merged_byte_ranges();
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
             let text_y = self
@@ -789,31 +775,50 @@ impl SujianEditorItem {
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.preedit_text.is_empty();
 
-        let result = self.cursor_ctrl.update(
+        let cursor_plan = CursorAnimationPlan {
+            should_be_visible: self.current_editor_enabled
+                && !self.buffer.has_selection()
+                && cursor_y + cursor_h > 0.0
+                && cursor_y < vp_h
+                && !self.current_is_scrolling,
+            blink_mode: if self.current_coordinated_text_cursor_animation_enabled
+                && self.animation_coordinator.has_active_insert()
+            {
+                CursorBlinkMode::Suppressed
+            } else {
+                CursorBlinkMode::Normal
+            },
+            transition: if self.current_smooth_cursor_enabled {
+                CursorTransition::Tween {
+                    old_rect: writer_core::editor::CursorRect {
+                        x: self.cursor_ctrl.visual_x,
+                        top: self.cursor_ctrl.visual_y,
+                        bottom: self.cursor_ctrl.visual_y + cursor_h,
+                        baseline_y: self.cursor_ctrl.visual_y + cursor_h * 0.8,
+                    },
+                    new_rect: writer_core::editor::CursorRect {
+                        x: cursor_x,
+                        top: cursor_y,
+                        bottom: cursor_y + cursor_h,
+                        baseline_y: cursor_y + cursor_h * 0.8,
+                    },
+                    duration_ms: self.current_cursor_animation_duration_ms as u64,
+                }
+            } else {
+                CursorTransition::Snap
+            },
             cursor_x,
             cursor_y,
             cursor_h,
-            visual_line_id,
-            scroll_y,
-            self.current_smooth_cursor_enabled,
-            self.current_cursor_animation_duration_ms,
-            self.current_is_scrolling,
-            is_selecting,
-            is_preediting,
-            self.current_editor_enabled,
-            self.buffer.has_selection(),
-            vp_h,
-            self.current_coordinated_text_cursor_animation_enabled,
-            self.text_anim_state.has_active_insert(),
-        );
+        };
+
+        let result = self.cursor_ctrl.apply_plan(&cursor_plan);
 
         if result.needs_repaint {
             let item = self as &dyn QQuickItem;
             item.update();
         }
 
-        // Emit cursor_rect_changed whenever visibility, blink, or visual position changes.
-        // This decouples QML cursor refresh from IME update timing.
         if result.ime_needs_update
             || result.visibility_changed
             || result.blink_changed
@@ -822,7 +827,6 @@ impl SujianEditorItem {
             self.cursor_rect_changed();
         }
 
-        // GUI 线程直接 IME 更新 — only for position/selection/surrounding text changes
         if result.ime_needs_update {
             let obj_ptr = self.get_cpp_object();
             if !obj_ptr.is_null() {
@@ -863,7 +867,6 @@ impl SujianEditorItem {
             self.request_frame_update();
         }
 
-        // Update anchor visual position for ImAnchorRectangle
         if self.buffer.has_selection() {
             let anchor_layout = self.editor_layout_cursor_rect(
                 self.buffer.selection_anchor,
