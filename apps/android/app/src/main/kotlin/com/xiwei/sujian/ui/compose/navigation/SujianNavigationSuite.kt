@@ -1,13 +1,9 @@
 package com.xiwei.sujian.ui.compose.navigation
 
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
@@ -33,6 +29,7 @@ fun SujianNavigationSuite(
                 item(
                     selected = appState.currentDestination == destination,
                     onClick = { appState.navigateTo(destination) },
+                    icon = {},
                     label = { Text(destination.label) }
                 )
             }
