@@ -26,6 +26,7 @@ import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.editor.selfrender.SujianEditorView
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
+import com.xiwei.sujian.ui.compose.theme.BindEditorThemeColors
 
 @Composable
 fun WritingPane(
@@ -55,6 +56,8 @@ fun WritingPane(
     }
 
     val uiState by viewModel.uiState.collectAsState()
+
+    BindEditorThemeColors(editorView)
 
     editorView?.let { view ->
         val settings = uiState.settings

@@ -12,6 +12,8 @@ import {
   StarMapMotionPolicy,
   LocalSettings,
   SyncableSettings,
+  ThemePaletteRecordDto,
+  BuiltinThemeDto,
   ResultEnvelope,
   ProjectTree,
   WritingStats,
@@ -80,6 +82,12 @@ export interface IWriterCoreBridge {
   saveLocalSettings(settings: LocalSettings): Promise<ResultEnvelope<boolean>>
   getSyncableSettings(): Promise<ResultEnvelope<SyncableSettings>>
   saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>>
+
+  // Theme Palette
+  listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>>
+  loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>>
+  deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>>
+  listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>>
 
   // Sync
   loadSyncConfig(): Promise<ResultEnvelope<SyncConfig>>

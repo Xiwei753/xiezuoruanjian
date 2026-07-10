@@ -869,6 +869,21 @@ class SujianEditorView @JvmOverloads constructor(
         layoutEngine.invalidate()
     }
 
+    fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
+        setBackgroundColor(colors.background)
+        textPaint.color = colors.text
+        renderer.setThemeColorsExtended(
+            textColor = colors.text,
+            cursorColor = colors.cursor,
+            composingColor = colors.composing,
+            selectionColor = colors.selection,
+            borderColor = colors.border,
+            helperTextColor = colors.helperText
+        )
+        invalidate()
+        layoutEngine.invalidate()
+    }
+
     // ── Accessibility ──
 
     override fun onInitializeAccessibilityEvent(event: AccessibilityEvent) {

@@ -13,6 +13,8 @@ import {
   StarMapMotionPolicy,
   LocalSettings,
   SyncableSettings,
+  ThemePaletteRecordDto,
+  BuiltinThemeDto,
   ResultEnvelope,
   ProjectTree,
   WritingStats,
@@ -261,6 +263,22 @@ export class NativeWriterCoreBridge implements IWriterCoreBridge {
 
   async saveSyncableSettings(settings: SyncableSettings): Promise<ResultEnvelope<boolean>> {
     return this.settingsBridge.saveSyncableSettings(settings)
+  }
+
+  async listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>> {
+    return this.settingsBridge.listPaletteRecords()
+  }
+
+  async loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>> {
+    return this.settingsBridge.loadPaletteRecord(deviceId, fingerprint)
+  }
+
+  async deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>> {
+    return this.settingsBridge.deletePaletteRecord(deviceId, fingerprint)
+  }
+
+  async listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>> {
+    return this.settingsBridge.listBuiltinThemes()
   }
 
   // ── Sync ──

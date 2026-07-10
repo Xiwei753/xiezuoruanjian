@@ -27,6 +27,15 @@
                 <RadioButton Content="深色" />
             </RadioButtons>
 
+            <TextBlock Text="颜色主题" Style="{StaticResource SubtitleTextBlockStyle}" Margin="0,16,0,0" />
+            <RadioButtons Header="配色来源" x:Name="ColorSourceRadio" SelectedIndex="0">
+                <RadioButton Content="素笺默认" />
+                <RadioButton Content="已保存的设备配色" />
+            </RadioButtons>
+
+            <ComboBox Header="内置主题" x:Name="BuiltinThemeCombo" Margin="0,8,0,0" />
+            <ComboBox Header="设备配色" x:Name="PaletteRecordCombo" Margin="0,8,0,0" />
+
             <Button Content="保存设置" Click="SaveSettings_Click" Style="{StaticResource AccentButtonStyle}" Margin="0,16,0,0" />
             <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
         </StackPanel>

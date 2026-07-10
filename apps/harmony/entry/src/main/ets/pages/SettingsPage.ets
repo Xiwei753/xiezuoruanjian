@@ -7,9 +7,11 @@ import {
   SyncResult,
   SyncDiagnosticsResult,
   ThemeMode,
+  ThemePaletteRecordDto,
+  BuiltinThemeDto,
   ResultEnvelope
 } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeUpdateParams, ThemeObserverImpl, ColorSource } from '../system/HarmonyThemeAdapter'
 import { DesignTokens } from '../system/DesignTokens'
 import { getBridge } from '../common/AppContext'
 import { AdaptiveContext, AdaptiveState, AdaptiveObserver, SimpleAdaptiveObserver, getAdaptiveState } from '../common/AdaptiveContext'
@@ -26,6 +28,11 @@ interface SettingsSelectOption {
 struct SettingsPage {
   @State settings: LocalSettings = {
     themeMode: 'system',
+    appearanceMode: 'system',
+    colorSource: 'built_in',
+    dynamicColorEnabled: false,
+    selectedBuiltinThemeId: '',
+    selectedPaletteId: '',
     autoSaveEnabled: true,
     editorFontSize: 16,
     editorLineSpacingMultiplier: 1.8,
@@ -42,6 +49,8 @@ struct SettingsPage {
     linuxQtSidebarWidth: 0,
     linuxQtEditorWidth: 0
   }
+  @State paletteRecords: ThemePaletteRecordDto[] = []
+  @State builtinThemes: BuiltinThemeDto[] = []
   @State syncConfig: SyncConfig | null = null
   @State isLoading: boolean = true
   @State isSaving: boolean = false
@@ -94,8 +103,15 @@ struct SettingsPage {
 
       if (settingsResult.success && settingsResult.data) {
         this.settings = settingsResult.data
+        const appearanceMode = settingsResult.data.appearanceMode || settingsResult.data.themeMode || 'system'
+        this.themeAdapter.updateFromLocalSettings(
+          appearanceMode,
+          settingsResult.data.colorSource || 'built_in',
+          settingsResult.data.selectedPaletteId || '',
+          settingsResult.data.selectedBuiltinThemeId || ''
+        )
         this.themeAdapter.updateFromSettings({
-          theme: settingsResult.data.themeMode || 'system',
+          theme: appearanceMode as ThemeMode,
           fontSize: settingsResult.data.editorFontSize,
           fontFamily: 'HarmonyOS Sans',
           lineHeight: settingsResult.data.editorLineSpacingMultiplier
@@ -105,6 +121,22 @@ struct SettingsPage {
       if (syncConfigResult.success && syncConfigResult.data) {
         this.syncConfig = syncConfigResult.data
       }
+
+      try {
+        const paletteResult = await this.bridge.listPaletteRecords()
+        if (paletteResult.success && paletteResult.data) {
+          this.paletteRecords = paletteResult.data
+          this.themeAdapter.setPaletteRecords(paletteResult.data)
+        }
+      } catch (_e) { }
+
+      try {
+        const builtinResult = await this.bridge.listBuiltinThemes()
+        if (builtinResult.success && builtinResult.data) {
+          this.builtinThemes = builtinResult.data
+          this.themeAdapter.setBuiltinThemes(builtinResult.data)
+        }
+      } catch (_e) { }
     } catch (err) {
       console.error('Failed to load settings:', err)
     } finally {
@@ -120,8 +152,15 @@ struct SettingsPage {
       const result = await this.bridge.saveLocalSettings(this.settings)
       if (result.success) {
         this.saveMessage = getContext(this).resourceManager.getStringSync($r('app.string.settings_saved').id)
+        const appearanceMode = this.settings.appearanceMode || this.settings.themeMode || 'system'
+        this.themeAdapter.updateFromLocalSettings(
+          appearanceMode,
+          this.settings.colorSource || 'built_in',
+          this.settings.selectedPaletteId || '',
+          this.settings.selectedBuiltinThemeId || ''
+        )
         this.themeAdapter.updateFromSettings({
-          theme: this.settings.themeMode || 'system',
+          theme: appearanceMode as ThemeMode,
           fontSize: this.settings.editorFontSize,
           fontFamily: 'HarmonyOS Sans',
           lineHeight: this.settings.editorLineSpacingMultiplier
@@ -337,6 +376,7 @@ struct SettingsPage {
           .onSelect((index: number) => {
             const themes: ThemeMode[] = ['system', 'light', 'dark']
             const selectedTheme: ThemeMode = themes[index]
+            this.settings.appearanceMode = selectedTheme
             this.settings.themeMode = selectedTheme
             this.themeAdapter.setMode(selectedTheme)
             this.saveSettings()
@@ -344,6 +384,82 @@ struct SettingsPage {
       }
       .width('100%')
       .margin({ bottom: 16 })
+
+      // 颜色主题来源
+      Row() {
+        Text('颜色主题')
+          .fontSize(16)
+          .fontColor(this.themeConfig.colors.textPrimary)
+          .layoutWeight(1)
+
+        Select([
+          { value: '素笺默认', icon: '' },
+          { value: '已保存的设备配色', icon: '' }
+        ] as SettingsSelectOption[])
+          .selected(this.getColorSourceIndex())
+          .value(this.getColorSourceName())
+          .onSelect((index: number) => {
+            const sources: ColorSource[] = ['built_in', 'saved_palette']
+            const selected = sources[index]
+            this.settings.colorSource = selected
+            this.themeAdapter.setColorSource(selected)
+            this.saveSettings()
+          })
+      }
+      .width('100%')
+      .margin({ bottom: 16 })
+
+      // 内置主题选择
+      if (this.settings.colorSource === 'built_in' && this.builtinThemes.length > 0) {
+        Row() {
+          Text('内置主题')
+            .fontSize(16)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .layoutWeight(1)
+
+          Select(this.builtinThemes.map(t => ({ value: t.name, icon: '' }) as SettingsSelectOption[]))
+            .selected(this.getSelectedBuiltinThemeIndex())
+            .value(this.getSelectedBuiltinThemeName())
+            .onSelect((index: number) => {
+              if (index < this.builtinThemes.length) {
+                const themeId = this.builtinThemes[index].theme_id
+                this.settings.selectedBuiltinThemeId = themeId
+                this.themeAdapter.setSelectedBuiltinThemeId(themeId)
+                this.saveSettings()
+              }
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+      }
+
+      // 已保存调色板选择
+      if (this.settings.colorSource === 'saved_palette' && this.paletteRecords.length > 0) {
+        Row() {
+          Text('设备配色')
+            .fontSize(16)
+            .fontColor(this.themeConfig.colors.textPrimary)
+            .layoutWeight(1)
+
+          Select(this.paletteRecords.map(r => {
+            const date = new Date(r.captured_at_ms)
+            const dateStr = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
+            return { value: `${r.source_device_class} · ${dateStr}`, icon: '' } as SettingsSelectOption
+          }))
+            .selected(this.getSelectedPaletteIndex())
+            .value(this.getSelectedPaletteName())
+            .onSelect((index: number) => {
+              if (index < this.paletteRecords.length) {
+                const paletteId = this.paletteRecords[index].palette_id
+                this.settings.selectedPaletteId = paletteId
+                this.themeAdapter.setSelectedPaletteId(paletteId)
+                this.saveSettings()
+              }
+            })
+        }
+        .width('100%')
+        .margin({ bottom: 16 })
+      }
 
       // 字体大小
       Row() {
@@ -894,15 +1010,62 @@ struct SettingsPage {
 
   // 主题选项顺序：system→light→dark
   getThemeIndex(): number {
+    const mode = this.settings.appearanceMode || this.settings.themeMode || 'system'
     const themes = ['system', 'light', 'dark']
-    return themes.indexOf(this.settings.themeMode || 'system')
+    return themes.indexOf(mode)
   }
 
   getThemeName(): string {
-    if (this.settings.themeMode === 'system') return getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id)
-    if (this.settings.themeMode === 'light') return getContext(this).resourceManager.getStringSync($r('app.string.light_mode').id)
-    if (this.settings.themeMode === 'dark') return getContext(this).resourceManager.getStringSync($r('app.string.dark_mode').id)
+    const mode = this.settings.appearanceMode || this.settings.themeMode || 'system'
+    if (mode === 'system') return getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id)
+    if (mode === 'light') return getContext(this).resourceManager.getStringSync($r('app.string.light_mode').id)
+    if (mode === 'dark') return getContext(this).resourceManager.getStringSync($r('app.string.dark_mode').id)
     return getContext(this).resourceManager.getStringSync($r('app.string.follow_system').id)
+  }
+
+  getColorSourceIndex(): number {
+    const sources: string[] = ['built_in', 'saved_palette']
+    return sources.indexOf(this.settings.colorSource || 'built_in')
+  }
+
+  getColorSourceName(): string {
+    const s = this.settings.colorSource || 'built_in'
+    if (s === 'saved_palette') return '已保存的设备配色'
+    return '素笺默认'
+  }
+
+  getSelectedBuiltinThemeIndex(): number {
+    const id = this.settings.selectedBuiltinThemeId || ''
+    if (id.length === 0) return 0
+    return this.builtinThemes.findIndex(t => t.theme_id === id)
+  }
+
+  getSelectedBuiltinThemeName(): string {
+    const id = this.settings.selectedBuiltinThemeId || ''
+    if (id.length === 0) return '素笺默认'
+    const theme = this.builtinThemes.find(t => t.theme_id === id)
+    return theme ? theme.name : '素笺默认'
+  }
+
+  getSelectedPaletteIndex(): number {
+    const id = this.settings.selectedPaletteId || ''
+    if (id.length === 0) return 0
+    return this.paletteRecords.findIndex(r => r.palette_id === id)
+  }
+
+  getSelectedPaletteName(): string {
+    const id = this.settings.selectedPaletteId || ''
+    if (id.length === 0 && this.paletteRecords.length > 0) {
+      const r = this.paletteRecords[0]
+      const date = new Date(r.captured_at_ms)
+      return `${r.source_device_class} · ${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
+    }
+    const record = this.paletteRecords.find(r => r.palette_id === id)
+    if (record) {
+      const date = new Date(record.captured_at_ms)
+      return `${record.source_device_class} · ${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getDate().toString().padStart(2, '0')}`
+    }
+    return ''
   }
 
   getSyncProviderIndex(): number {

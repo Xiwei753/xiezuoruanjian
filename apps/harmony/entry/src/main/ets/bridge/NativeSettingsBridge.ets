@@ -1,4 +1,4 @@
-import { ChangedEntity, ResultEnvelope, LocalSettings, SyncableSettings } from '../model/CoreDtos'
+import { ChangedEntity, ResultEnvelope, LocalSettings, SyncableSettings, ThemePaletteRecordDto, BuiltinThemeDto } from '../model/CoreDtos'
 import { NativeCoreModule } from './NativeCoreModule'
 
 function nativeError<T>(e: unknown): ResultEnvelope<T> {
@@ -34,5 +34,33 @@ export class NativeSettingsBridge {
       const jsonStr: string = this.core.getNativeModule().nativeSaveSyncableSettings(JSON.stringify(settings))
       return this.core.parseEnvelope<boolean>(jsonStr)
     } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  async listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeListPaletteRecords()
+      return this.core.parseEnvelope<ThemePaletteRecordDto[]>(jsonStr)
+    } catch (e) { return nativeError<ThemePaletteRecordDto[]>(e) }
+  }
+
+  async loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeLoadPaletteRecord(deviceId, fingerprint)
+      return this.core.parseEnvelope<ThemePaletteRecordDto>(jsonStr)
+    } catch (e) { return nativeError<ThemePaletteRecordDto>(e) }
+  }
+
+  async deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeDeletePaletteRecord(deviceId, fingerprint)
+      return this.core.parseEnvelope<boolean>(jsonStr)
+    } catch (e) { return nativeError<boolean>(e) }
+  }
+
+  async listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>> {
+    try {
+      const jsonStr: string = this.core.getNativeModule().nativeListBuiltinThemes()
+      return this.core.parseEnvelope<BuiltinThemeDto[]>(jsonStr)
+    } catch (e) { return nativeError<BuiltinThemeDto[]>(e) }
   }
 }

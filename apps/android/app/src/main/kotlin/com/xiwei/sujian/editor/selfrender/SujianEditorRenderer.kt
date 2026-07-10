@@ -95,6 +95,9 @@ class SujianEditorRenderer(
      * 从主题注入颜色，覆盖所有硬编码默认值。
      * 由 SujianEditorView.applyThemeColors() 调用。
      */
+    private var borderColor: Int = 0
+    private var helperTextColor: Int = 0
+
     fun setThemeColors(textColor: Int, cursorColor: Int, composingColor: Int, selectionColor: Int) {
         cursorPaint.color = cursorColor
         composingUnderlinePaint.color = composingColor
@@ -102,6 +105,26 @@ class SujianEditorRenderer(
         animTextPaint.color = textColor
         searchHighlightPaint.color = selectionColor
     }
+
+    fun setThemeColorsExtended(
+        textColor: Int,
+        cursorColor: Int,
+        composingColor: Int,
+        selectionColor: Int,
+        borderColor: Int,
+        helperTextColor: Int
+    ) {
+        cursorPaint.color = cursorColor
+        composingUnderlinePaint.color = composingColor
+        selectionPaint.color = selectionColor
+        animTextPaint.color = textColor
+        searchHighlightPaint.color = selectionColor
+        this.borderColor = borderColor
+        this.helperTextColor = helperTextColor
+    }
+
+    fun getBorderColor(): Int = borderColor
+    fun getHelperTextColor(): Int = helperTextColor
 
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
         searchHighlights = highlights

@@ -225,7 +225,7 @@ class SettingsActivity : AppCompatActivity() {
         } catch (_: Exception) {
             emptyList<uniffi.writer_core.BuiltinThemeDto>()
         }
-        val builtinThemeNames = builtinThemes.map { it.name }.toTypedArray()
+        val builtinThemeNames = builtinThemes.map { "${it.name} (亮色: ${it.lightScheme.primary} / 暗色: ${it.darkScheme.primary})" }.toTypedArray()
         val builtinThemeAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, builtinThemeNames)
         actvBuiltinTheme.setAdapter(builtinThemeAdapter)
         actvBuiltinTheme.setOnItemClickListener { _, _, position, _ ->
@@ -568,7 +568,8 @@ class SettingsActivity : AppCompatActivity() {
     private fun refreshPaletteRecordAdapter(records: List<uniffi.writer_core.ThemePaletteRecordDto>) {
         currentPaletteRecords = records
         val names = records.map {
-            "${it.sourcePlatform} · ${it.sourceDeviceClass} · ${it.sourceDeviceId} · ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)}"
+            val date = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(it.capturedAtMs)
+            "${it.sourceDeviceClass} · ${it.sourceDeviceId.take(8)} · $date · ${it.paletteFingerprint.take(8)}"
         }.toTypedArray()
         actvPaletteRecord.setAdapter(ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, names))
     }

@@ -19,6 +19,9 @@ import {
   StarMapMotionPolicy,
   LocalSettings,
   SyncableSettings,
+  ThemePaletteRecordDto,
+  ThemeColorSchemeDto,
+  BuiltinThemeDto,
   ResultEnvelope,
   ProjectTree,
   VolumeTree,
@@ -639,6 +642,31 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     if (settings.fontSize !== undefined) this.mockSettings.editorFontSize = settings.fontSize
     if (settings.themeMode !== undefined) this.mockSettings.themeMode = settings.themeMode
     return this.success(true)
+  }
+
+  async listPaletteRecords(): Promise<ResultEnvelope<ThemePaletteRecordDto[]>> {
+    await this.delay(100)
+    return this.success([] as ThemePaletteRecordDto[])
+  }
+
+  async loadPaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<ThemePaletteRecordDto>> {
+    await this.delay(100)
+    return this.error('NOT_FOUND', 'Palette record not found')
+  }
+
+  async deletePaletteRecord(deviceId: string, fingerprint: string): Promise<ResultEnvelope<boolean>> {
+    await this.delay(100)
+    return this.success(true)
+  }
+
+  async listBuiltinThemes(): Promise<ResultEnvelope<BuiltinThemeDto[]>> {
+    await this.delay(100)
+    return this.success([{
+      theme_id: 'sujian_default',
+      name: '素笺默认',
+      light_scheme: {} as ThemeColorSchemeDto,
+      dark_scheme: {} as ThemeColorSchemeDto
+    }] as BuiltinThemeDto[])
   }
 
   // Sync methods

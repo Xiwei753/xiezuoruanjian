@@ -12,6 +12,10 @@ pub unsafe extern "C" fn writer_core_load_local_settings() -> *mut c_char {
             "fontFamily": "HarmonyOS Sans",
             "theme": settings.appearance_mode.as_str(),
             "appearanceMode": settings.appearance_mode,
+            "colorSource": settings.color_source,
+            "dynamicColorEnabled": settings.dynamic_color_enabled,
+            "selectedBuiltinThemeId": settings.selected_builtin_theme_id,
+            "selectedPaletteId": settings.selected_palette_id,
             "autoSave": settings.auto_save_enabled,
             "autoSaveInterval": settings.auto_save_delay_ms as f64 / 1000.0,
             "autoIndent": settings.auto_indent_enabled,
@@ -64,6 +68,18 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
         }
         if let Some(v) = val.get("appearanceMode").and_then(|v| v.as_str()) {
             settings.appearance_mode = v.to_string();
+        }
+        if let Some(v) = val.get("colorSource").and_then(|v| v.as_str()) {
+            settings.color_source = v.to_string();
+        }
+        if let Some(v) = val.get("dynamicColorEnabled").and_then(|v| v.as_bool()) {
+            settings.dynamic_color_enabled = v;
+        }
+        if let Some(v) = val.get("selectedBuiltinThemeId").and_then(|v| v.as_str()) {
+            settings.selected_builtin_theme_id = v.to_string();
+        }
+        if let Some(v) = val.get("selectedPaletteId").and_then(|v| v.as_str()) {
+            settings.selected_palette_id = v.to_string();
         }
         core.save_local_settings(&settings)
             .map_err(|e| format!("{}", e))?;
@@ -350,5 +366,71 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
     }) {
         Ok(data) => ok_json(data),
         Err(e) => err_json("SETTINGS_INVALID", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_list_palette_records() -> *mut c_char {
+    match with_core(|core| {
+        let records = core.list_palette_records().map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!(records))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("PALETTE_LIST_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_load_palette_record(
+    device_id: *const c_char,
+    fingerprint: *const c_char,
+) -> *mut c_char {
+    let device_id_str = match c_str_to_rust(device_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARG", &format!("device_id error: {}", e)),
+    };
+    let fingerprint_str = match c_str_to_rust(fingerprint) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARG", &format!("fingerprint error: {}", e)),
+    };
+    match with_core(|core| {
+        let record = core.load_palette_record(&device_id_str, &fingerprint_str).map_err(|e| format!("{}", e))?;
+        Ok(serde_json::json!(record))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("PALETTE_LOAD_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_delete_palette_record(
+    device_id: *const c_char,
+    fingerprint: *const c_char,
+) -> *mut c_char {
+    let device_id_str = match c_str_to_rust(device_id) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARG", &format!("device_id error: {}", e)),
+    };
+    let fingerprint_str = match c_str_to_rust(fingerprint) {
+        Ok(s) => s,
+        Err(e) => return err_json("INVALID_ARG", &format!("fingerprint error: {}", e)),
+    };
+    match with_core(|core| {
+        core.delete_palette_record(&device_id_str, &fingerprint_str).map_err(|e| format!("{}", e))?;
+        Ok(true)
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("PALETTE_DELETE_ERROR", &e),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn writer_core_list_builtin_themes() -> *mut c_char {
+    match with_core(|core| {
+        let themes = core.list_builtin_themes();
+        Ok(serde_json::json!(themes))
+    }) {
+        Ok(data) => ok_json(data),
+        Err(e) => err_json("BUILTIN_THEMES_ERROR", &e),
     }
 }

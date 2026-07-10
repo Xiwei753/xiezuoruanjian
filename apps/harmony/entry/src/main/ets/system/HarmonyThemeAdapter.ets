@@ -1,6 +1,9 @@
 import window from '@ohos.window'
+import { ThemePaletteRecordDto, ThemeColorSchemeDto, BuiltinThemeDto } from '../model/CoreDtos'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
+
+export type ColorSource = 'built_in' | 'saved_palette'
 
 export interface ThemeColors {
   // Primary
@@ -58,6 +61,9 @@ export interface ThemeColors {
 
 export interface ThemeConfig {
   mode: ThemeMode
+  colorSource: ColorSource
+  selectedPaletteId: string
+  selectedBuiltinThemeId: string
   colors: ThemeColors
   fontSize: number
   fontFamily: string
@@ -160,6 +166,9 @@ export interface ThemeObserver {
 
 export interface ThemeUpdateParams {
   theme: ThemeMode
+  colorSource?: ColorSource
+  selectedPaletteId?: string
+  selectedBuiltinThemeId?: string
   fontSize: number
   fontFamily: string
   lineHeight: number
@@ -171,6 +180,9 @@ export class HarmonyThemeAdapter {
   private systemColorMode: number = 0 // 0=light, 1=dark (ConfigurationConstant.ColorMode)
   private currentTheme: ThemeConfig = {
     mode: 'system',
+    colorSource: 'built_in',
+    selectedPaletteId: '',
+    selectedBuiltinThemeId: '',
     colors: LightTheme,
     fontSize: 16,
     fontFamily: 'HarmonyOS Sans',
@@ -178,6 +190,8 @@ export class HarmonyThemeAdapter {
   }
   private observers: Set<ThemeObserver> = new Set()
   private systemThemeListener: ((isDark: boolean) => void) | null = null
+  private paletteRecords: ThemePaletteRecordDto[] = []
+  private builtinThemes: BuiltinThemeDto[] = []
 
   static getInstance(): HarmonyThemeAdapter {
     if (!HarmonyThemeAdapter.instance) {
@@ -193,6 +207,9 @@ export class HarmonyThemeAdapter {
   getCurrentTheme(): ThemeConfig {
     const c: ThemeConfig = {
       mode: this.currentTheme.mode,
+      colorSource: this.currentTheme.colorSource,
+      selectedPaletteId: this.currentTheme.selectedPaletteId,
+      selectedBuiltinThemeId: this.currentTheme.selectedBuiltinThemeId,
       colors: this.currentTheme.colors,
       fontSize: this.currentTheme.fontSize,
       fontFamily: this.currentTheme.fontFamily,
@@ -202,7 +219,6 @@ export class HarmonyThemeAdapter {
   }
 
   getColors(): ThemeColors {
-    // 直接返回当前主题引用，ThemeColors 已包含全部字段
     return this.currentTheme.colors
   }
 
@@ -210,10 +226,62 @@ export class HarmonyThemeAdapter {
     return this.currentTheme.mode
   }
 
+  getColorSource(): ColorSource {
+    return this.currentTheme.colorSource
+  }
+
+  getSelectedPaletteId(): string {
+    return this.currentTheme.selectedPaletteId
+  }
+
+  getSelectedBuiltinThemeId(): string {
+    return this.currentTheme.selectedBuiltinThemeId
+  }
+
+  getPaletteRecords(): ThemePaletteRecordDto[] {
+    return this.paletteRecords
+  }
+
+  getBuiltinThemes(): BuiltinThemeDto[] {
+    return this.builtinThemes
+  }
+
   setMode(mode: ThemeMode): void {
     this.currentTheme.mode = mode
     this.updateColors()
     this.notifyObservers()
+  }
+
+  setColorSource(colorSource: ColorSource): void {
+    this.currentTheme.colorSource = colorSource
+    this.updateColors()
+    this.notifyObservers()
+  }
+
+  setSelectedPaletteId(paletteId: string): void {
+    this.currentTheme.selectedPaletteId = paletteId
+    if (paletteId.length > 0) {
+      this.currentTheme.colorSource = 'saved_palette'
+    }
+    this.updateColors()
+    this.notifyObservers()
+  }
+
+  setSelectedBuiltinThemeId(themeId: string): void {
+    this.currentTheme.selectedBuiltinThemeId = themeId
+    if (themeId.length > 0) {
+      this.currentTheme.colorSource = 'built_in'
+    }
+    this.updateColors()
+    this.notifyObservers()
+  }
+
+  setPaletteRecords(records: ThemePaletteRecordDto[]): void {
+    this.paletteRecords = records
+  }
+
+  setBuiltinThemes(themes: BuiltinThemeDto[]): void {
+    this.builtinThemes = themes
   }
 
   setFontSize(fontSize: number): void {
@@ -240,6 +308,15 @@ export class HarmonyThemeAdapter {
     this.notifyObservers()
   }
 
+  updateFromLocalSettings(appearanceMode: string, colorSource: string, selectedPaletteId: string, selectedBuiltinThemeId: string): void {
+    this.currentTheme.mode = appearanceMode as ThemeMode
+    this.currentTheme.colorSource = colorSource as ColorSource
+    this.currentTheme.selectedPaletteId = selectedPaletteId
+    this.currentTheme.selectedBuiltinThemeId = selectedBuiltinThemeId
+    this.updateColors()
+    this.notifyObservers()
+  }
+
   addObserver(observer: ThemeObserver): void {
     this.observers.add(observer)
   }
@@ -248,10 +325,6 @@ export class HarmonyThemeAdapter {
     this.observers.delete(observer)
   }
 
-  /**
-   * 外部（如 EntryAbility.onConfigurationUpdate）注入系统 colorMode 变化。
-   * colorMode: 0 = COLOR_MODE_LIGHT, 1 = COLOR_MODE_DARK
-   */
   onConfigurationUpdate(colorMode: number): void {
     this.systemColorMode = colorMode
     this.applySystemColorMode(colorMode)
@@ -261,12 +334,10 @@ export class HarmonyThemeAdapter {
   }
 
   startSystemThemeListener(): void {
-    // 使用缓存的 systemColorMode，不再从 WindowProperties.configuration 获取
     this.applySystemColorMode(this.systemColorMode)
   }
 
   private applySystemColorMode(colorMode: number): void {
-    // ColorMode.COLOR_MODE_DARK = 1, COLOR_MODE_LIGHT = 0
     if (colorMode === 1) {
       this.currentTheme.colors = DarkTheme
     } else {
@@ -282,7 +353,37 @@ export class HarmonyThemeAdapter {
     return this.currentTheme.colors === DarkTheme
   }
 
+  private isCurrentlyDark(): boolean {
+    if (this.currentTheme.mode === 'dark') return true
+    if (this.currentTheme.mode === 'light') return false
+    return this.systemColorMode === 1
+  }
+
   private updateColors(): void {
+    const isDark = this.isCurrentlyDark()
+
+    if (this.currentTheme.colorSource === 'saved_palette' && this.currentTheme.selectedPaletteId.length > 0) {
+      const record = this.findPaletteRecord(this.currentTheme.selectedPaletteId)
+      if (record !== null) {
+        this.currentTheme.colors = schemeToThemeColors(
+          isDark ? record.dark_scheme : record.light_scheme,
+          isDark
+        )
+        return
+      }
+    }
+
+    if (this.currentTheme.colorSource === 'built_in' && this.currentTheme.selectedBuiltinThemeId.length > 0) {
+      const theme = this.findBuiltinTheme(this.currentTheme.selectedBuiltinThemeId)
+      if (theme !== null) {
+        this.currentTheme.colors = schemeToThemeColors(
+          isDark ? theme.dark_scheme : theme.light_scheme,
+          isDark
+        )
+        return
+      }
+    }
+
     switch (this.currentTheme.mode) {
       case 'light':
         this.currentTheme.colors = LightTheme
@@ -291,16 +392,83 @@ export class HarmonyThemeAdapter {
         this.currentTheme.colors = DarkTheme
         break
       case 'system':
-        // 使用缓存的 systemColorMode，不再从 WindowProperties.configuration 获取
         this.applySystemColorMode(this.systemColorMode)
         break
     }
+  }
+
+  private findPaletteRecord(paletteId: string): ThemePaletteRecordDto | null {
+    for (const r of this.paletteRecords) {
+      if (r.palette_id === paletteId) return r
+    }
+    return null
+  }
+
+  private findBuiltinTheme(themeId: string): BuiltinThemeDto | null {
+    for (const t of this.builtinThemes) {
+      if (t.theme_id === themeId) return t
+    }
+    return null
   }
 
   private notifyObservers(): void {
     const theme = this.getCurrentTheme()
     this.observers.forEach(obs => obs.onThemeChanged(theme))
   }
+}
+
+function schemeToThemeColors(scheme: ThemeColorSchemeDto, isDark: boolean): ThemeColors {
+  const base = isDark ? DarkTheme : LightTheme
+  const result: ThemeColors = { ...base }
+
+  const merge = (key: keyof ThemeColors, value: string | undefined) => {
+    if (value && value.length > 0) {
+      (result as Record<string, string>)[key] = value
+    }
+  }
+
+  merge('primary', scheme.primary)
+  merge('onPrimary', scheme.on_primary)
+  merge('primaryContainer', scheme.primary_container)
+  merge('onPrimaryContainer', scheme.on_primary_container)
+  merge('secondary', scheme.secondary)
+  merge('onSecondary', scheme.on_secondary)
+  merge('secondaryContainer', scheme.secondary_container)
+  merge('onSecondaryContainer', scheme.on_secondary_container)
+  merge('tertiary', scheme.tertiary)
+  merge('onTertiary', scheme.on_tertiary)
+  merge('tertiaryContainer', scheme.tertiary_container)
+  merge('onTertiaryContainer', scheme.on_tertiary_container)
+  merge('error', scheme.error)
+  merge('onError', scheme.on_error)
+  merge('errorContainer', scheme.error_container)
+  merge('onErrorContainer', scheme.on_error_container)
+  merge('background', scheme.background)
+  merge('onBackground', scheme.on_background)
+  merge('surface', scheme.surface)
+  merge('onSurface', scheme.on_surface)
+  merge('surfaceVariant', scheme.surface_variant)
+  merge('onSurfaceVariant', scheme.on_surface_variant)
+  merge('surfaceContainerLowest', scheme.surface_container_lowest)
+  merge('surfaceContainerLow', scheme.surface_container_low)
+  merge('surfaceContainer', scheme.surface_container)
+  merge('surfaceContainerHigh', scheme.surface_container_high)
+  merge('surfaceContainerHighest', scheme.surface_container_highest)
+  merge('surfaceDim', scheme.surface_dim)
+  merge('surfaceBright', scheme.surface_bright)
+  merge('outline', scheme.outline)
+  merge('outlineVariant', scheme.outline_variant)
+  merge('inverseSurface', scheme.inverse_surface)
+  merge('inverseOnSurface', scheme.inverse_on_surface)
+  merge('inversePrimary', scheme.inverse_primary)
+  merge('scrim', scheme.scrim)
+
+  result.textPrimary = result.onSurface
+  result.textSecondary = result.onSurfaceVariant
+  result.textHint = result.outline
+  result.divider = result.outlineVariant
+
+  return result
 }
 
 export class ThemeObserverImpl implements ThemeObserver {

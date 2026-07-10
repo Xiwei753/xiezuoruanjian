@@ -55,6 +55,18 @@ public sealed class WriterCoreBridge
     private static extern IntPtr writer_core_save_local_settings(IntPtr settingsJson);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_list_palette_records();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_load_palette_record(IntPtr deviceId, IntPtr fingerprint);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_delete_palette_record(IntPtr deviceId, IntPtr fingerprint);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    private static extern IntPtr writer_core_list_builtin_themes();
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     private static extern int writer_core_calculate_word_count(IntPtr text);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -436,6 +448,11 @@ public sealed class WriterCoreBridge
             if (env.Data.Value.TryGetProperty("fontSize", out var fs)) s.FontSize = (float)fs.GetDouble();
             if (env.Data.Value.TryGetProperty("lineHeight", out var lh)) s.LineHeight = (float)lh.GetDouble();
             if (env.Data.Value.TryGetProperty("theme", out var th)) s.Theme = th.GetString() ?? "system";
+            if (env.Data.Value.TryGetProperty("appearanceMode", out var am)) s.AppearanceMode = am.GetString() ?? "system";
+            if (env.Data.Value.TryGetProperty("colorSource", out var cs)) s.ColorSource = cs.GetString() ?? "built_in";
+            if (env.Data.Value.TryGetProperty("dynamicColorEnabled", out var dce)) s.DynamicColorEnabled = dce.GetBoolean();
+            if (env.Data.Value.TryGetProperty("selectedBuiltinThemeId", out var sbti)) s.SelectedBuiltinThemeId = sbti.GetString() ?? "";
+            if (env.Data.Value.TryGetProperty("selectedPaletteId", out var spi)) s.SelectedPaletteId = spi.GetString() ?? "";
             if (env.Data.Value.TryGetProperty("autoSave", out var asv)) s.AutoSave = asv.GetBoolean();
             if (env.Data.Value.TryGetProperty("autoIndent", out var ai)) s.AutoIndent = ai.GetBoolean();
             if (env.Data.Value.TryGetProperty("typingAnimationEnabled", out var tae)) s.TypingAnimationEnabled = tae.GetBoolean();
@@ -454,6 +471,11 @@ public sealed class WriterCoreBridge
             fontSize = settings.FontSize,
             lineHeight = settings.LineHeight,
             theme = settings.Theme,
+            appearanceMode = settings.AppearanceMode,
+            colorSource = settings.ColorSource,
+            dynamicColorEnabled = settings.DynamicColorEnabled,
+            selectedBuiltinThemeId = settings.SelectedBuiltinThemeId,
+            selectedPaletteId = settings.SelectedPaletteId,
             autoSave = settings.AutoSave,
             autoIndent = settings.AutoIndent,
             typingAnimationEnabled = settings.TypingAnimationEnabled,
@@ -488,6 +510,114 @@ public sealed class WriterCoreBridge
         {
             Marshal.FreeHGlobal(textPtr);
         }
+    }
+
+    public Task<IReadOnlyList<ThemePaletteRecordDto>> ListPaletteRecordsAsync()
+    {
+        var resultPtr = writer_core_list_palette_records();
+        var json = PtrToStringAndFree(resultPtr);
+        var env = ParseEnvelope(json);
+        ThrowIfFailed(env);
+
+        var list = new List<ThemePaletteRecordDto>();
+        if (env.Data?.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in env.Data.Value.EnumerateArray())
+            {
+                list.Add(ParsePaletteRecord(item));
+            }
+        }
+        return Task.FromResult<IReadOnlyList<ThemePaletteRecordDto>>(list);
+    }
+
+    public Task<IReadOnlyList<BuiltinThemeDto>> ListBuiltinThemesAsync()
+    {
+        var resultPtr = writer_core_list_builtin_themes();
+        var json = PtrToStringAndFree(resultPtr);
+        var env = ParseEnvelope(json);
+        ThrowIfFailed(env);
+
+        var list = new List<BuiltinThemeDto>();
+        if (env.Data?.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in env.Data.Value.EnumerateArray())
+            {
+                list.Add(ParseBuiltinTheme(item));
+            }
+        }
+        return Task.FromResult<IReadOnlyList<BuiltinThemeDto>>(list);
+    }
+
+    private static ThemeColorSchemeDto ParseColorScheme(JsonElement el)
+    {
+        var s = new ThemeColorSchemeDto();
+        if (el.ValueKind != JsonValueKind.Object) return s;
+        if (el.TryGetProperty("primary", out var p)) s.Primary = p.GetString() ?? "";
+        if (el.TryGetProperty("on_primary", out var op)) s.OnPrimary = op.GetString() ?? "";
+        if (el.TryGetProperty("primary_container", out var pc)) s.PrimaryContainer = pc.GetString() ?? "";
+        if (el.TryGetProperty("on_primary_container", out var opc)) s.OnPrimaryContainer = opc.GetString() ?? "";
+        if (el.TryGetProperty("inverse_primary", out var ip)) s.InversePrimary = ip.GetString() ?? "";
+        if (el.TryGetProperty("secondary", out var sec)) s.Secondary = sec.GetString() ?? "";
+        if (el.TryGetProperty("on_secondary", out var osec)) s.OnSecondary = osec.GetString() ?? "";
+        if (el.TryGetProperty("secondary_container", out var sc)) s.SecondaryContainer = sc.GetString() ?? "";
+        if (el.TryGetProperty("on_secondary_container", out var osc)) s.OnSecondaryContainer = osc.GetString() ?? "";
+        if (el.TryGetProperty("tertiary", out var ter)) s.Tertiary = ter.GetString() ?? "";
+        if (el.TryGetProperty("on_tertiary", out var oter)) s.OnTertiary = oter.GetString() ?? "";
+        if (el.TryGetProperty("tertiary_container", out var tc)) s.TertiaryContainer = tc.GetString() ?? "";
+        if (el.TryGetProperty("on_tertiary_container", out var otc)) s.OnTertiaryContainer = otc.GetString() ?? "";
+        if (el.TryGetProperty("background", out var bg)) s.Background = bg.GetString() ?? "";
+        if (el.TryGetProperty("on_background", out var obg)) s.OnBackground = obg.GetString() ?? "";
+        if (el.TryGetProperty("surface", out var sf)) s.Surface = sf.GetString() ?? "";
+        if (el.TryGetProperty("on_surface", out var osf)) s.OnSurface = osf.GetString() ?? "";
+        if (el.TryGetProperty("surface_variant", out var sv)) s.SurfaceVariant = sv.GetString() ?? "";
+        if (el.TryGetProperty("on_surface_variant", out var osv)) s.OnSurfaceVariant = osv.GetString() ?? "";
+        if (el.TryGetProperty("surface_tint", out var st)) s.SurfaceTint = st.GetString() ?? "";
+        if (el.TryGetProperty("surface_dim", out var sd)) s.SurfaceDim = sd.GetString() ?? "";
+        if (el.TryGetProperty("surface_bright", out var sb)) s.SurfaceBright = sb.GetString() ?? "";
+        if (el.TryGetProperty("surface_container_lowest", out var scl)) s.SurfaceContainerLowest = scl.GetString() ?? "";
+        if (el.TryGetProperty("surface_container_low", out var sclw)) s.SurfaceContainerLow = sclw.GetString() ?? "";
+        if (el.TryGetProperty("surface_container", out var sc2)) s.SurfaceContainer = sc2.GetString() ?? "";
+        if (el.TryGetProperty("surface_container_high", out var sch)) s.SurfaceContainerHigh = sch.GetString() ?? "";
+        if (el.TryGetProperty("surface_container_highest", out var schs)) s.SurfaceContainerHighest = schs.GetString() ?? "";
+        if (el.TryGetProperty("inverse_surface", out var isf)) s.InverseSurface = isf.GetString() ?? "";
+        if (el.TryGetProperty("inverse_on_surface", out var iosf)) s.InverseOnSurface = iosf.GetString() ?? "";
+        if (el.TryGetProperty("error", out var err)) s.Error = err.GetString() ?? "";
+        if (el.TryGetProperty("on_error", out var oerr)) s.OnError = oerr.GetString() ?? "";
+        if (el.TryGetProperty("error_container", out var ec)) s.ErrorContainer = ec.GetString() ?? "";
+        if (el.TryGetProperty("on_error_container", out var oec)) s.OnErrorContainer = oec.GetString() ?? "";
+        if (el.TryGetProperty("outline", out var ol)) s.Outline = ol.GetString() ?? "";
+        if (el.TryGetProperty("outline_variant", out var olv)) s.OutlineVariant = olv.GetString() ?? "";
+        if (el.TryGetProperty("scrim", out var scr)) s.Scrim = scr.GetString() ?? "";
+        return s;
+    }
+
+    private static ThemePaletteRecordDto ParsePaletteRecord(JsonElement el)
+    {
+        var r = new ThemePaletteRecordDto();
+        if (el.ValueKind != JsonValueKind.Object) return r;
+        if (el.TryGetProperty("schema_version", out var sv)) r.SchemaVersion = sv.GetUInt32();
+        if (el.TryGetProperty("palette_id", out var pid)) r.PaletteId = pid.GetString() ?? "";
+        if (el.TryGetProperty("palette_fingerprint", out var pf)) r.PaletteFingerprint = pf.GetString() ?? "";
+        if (el.TryGetProperty("source", out var src)) r.Source = src.GetString() ?? "";
+        if (el.TryGetProperty("source_platform", out var sp)) r.SourcePlatform = sp.GetString() ?? "";
+        if (el.TryGetProperty("source_device_id", out var sdi)) r.SourceDeviceId = sdi.GetString() ?? "";
+        if (el.TryGetProperty("source_device_class", out var sdc)) r.SourceDeviceClass = sdc.GetString() ?? "";
+        if (el.TryGetProperty("captured_at_ms", out var cam)) r.CapturedAtMs = cam.GetInt64();
+        if (el.TryGetProperty("variant", out var v)) r.Variant = v.GetString() ?? "";
+        if (el.TryGetProperty("light_scheme", out var ls)) r.LightScheme = ParseColorScheme(ls);
+        if (el.TryGetProperty("dark_scheme", out var ds)) r.DarkScheme = ParseColorScheme(ds);
+        return r;
+    }
+
+    private static BuiltinThemeDto ParseBuiltinTheme(JsonElement el)
+    {
+        var t = new BuiltinThemeDto();
+        if (el.ValueKind != JsonValueKind.Object) return t;
+        if (el.TryGetProperty("theme_id", out var tid)) t.ThemeId = tid.GetString() ?? "";
+        if (el.TryGetProperty("name", out var n)) t.Name = n.GetString() ?? "";
+        if (el.TryGetProperty("light_scheme", out var ls)) t.LightScheme = ParseColorScheme(ls);
+        if (el.TryGetProperty("dark_scheme", out var ds)) t.DarkScheme = ParseColorScheme(ds);
+        return t;
     }
 
     public Task<SyncConfigDto> LoadSyncConfigAsync()
@@ -670,6 +800,11 @@ public sealed class LocalSettings
     public float FontSize { get; set; } = 16f;
     public float LineHeight { get; set; } = 1.5f;
     public string Theme { get; set; } = "system";
+    public string AppearanceMode { get; set; } = "system";
+    public string ColorSource { get; set; } = "built_in";
+    public bool DynamicColorEnabled { get; set; } = false;
+    public string SelectedBuiltinThemeId { get; set; } = "";
+    public string SelectedPaletteId { get; set; } = "";
     public bool AutoSave { get; set; } = true;
     public bool AutoIndent { get; set; } = true;
     public bool TypingAnimationEnabled { get; set; } = true;
@@ -677,6 +812,69 @@ public sealed class LocalSettings
     public bool CoordinatedTextCursorAnimationEnabled { get; set; } = true;
     public bool SmoothCursorEnabled { get; set; } = true;
     public int SmoothCursorDurationMs { get; set; } = 80;
+}
+
+public sealed class ThemeColorSchemeDto
+{
+    public string Primary { get; set; } = "";
+    public string OnPrimary { get; set; } = "";
+    public string PrimaryContainer { get; set; } = "";
+    public string OnPrimaryContainer { get; set; } = "";
+    public string InversePrimary { get; set; } = "";
+    public string Secondary { get; set; } = "";
+    public string OnSecondary { get; set; } = "";
+    public string SecondaryContainer { get; set; } = "";
+    public string OnSecondaryContainer { get; set; } = "";
+    public string Tertiary { get; set; } = "";
+    public string OnTertiary { get; set; } = "";
+    public string TertiaryContainer { get; set; } = "";
+    public string OnTertiaryContainer { get; set; } = "";
+    public string Background { get; set; } = "";
+    public string OnBackground { get; set; } = "";
+    public string Surface { get; set; } = "";
+    public string OnSurface { get; set; } = "";
+    public string SurfaceVariant { get; set; } = "";
+    public string OnSurfaceVariant { get; set; } = "";
+    public string SurfaceTint { get; set; } = "";
+    public string SurfaceDim { get; set; } = "";
+    public string SurfaceBright { get; set; } = "";
+    public string SurfaceContainerLowest { get; set; } = "";
+    public string SurfaceContainerLow { get; set; } = "";
+    public string SurfaceContainer { get; set; } = "";
+    public string SurfaceContainerHigh { get; set; } = "";
+    public string SurfaceContainerHighest { get; set; } = "";
+    public string InverseSurface { get; set; } = "";
+    public string InverseOnSurface { get; set; } = "";
+    public string Error { get; set; } = "";
+    public string OnError { get; set; } = "";
+    public string ErrorContainer { get; set; } = "";
+    public string OnErrorContainer { get; set; } = "";
+    public string Outline { get; set; } = "";
+    public string OutlineVariant { get; set; } = "";
+    public string Scrim { get; set; } = "";
+}
+
+public sealed class ThemePaletteRecordDto
+{
+    public uint SchemaVersion { get; set; }
+    public string PaletteId { get; set; } = "";
+    public string PaletteFingerprint { get; set; } = "";
+    public string Source { get; set; } = "";
+    public string SourcePlatform { get; set; } = "";
+    public string SourceDeviceId { get; set; } = "";
+    public string SourceDeviceClass { get; set; } = "";
+    public long CapturedAtMs { get; set; }
+    public string Variant { get; set; } = "";
+    public ThemeColorSchemeDto? LightScheme { get; set; }
+    public ThemeColorSchemeDto? DarkScheme { get; set; }
+}
+
+public sealed class BuiltinThemeDto
+{
+    public string ThemeId { get; set; } = "";
+    public string Name { get; set; } = "";
+    public ThemeColorSchemeDto? LightScheme { get; set; }
+    public ThemeColorSchemeDto? DarkScheme { get; set; }
 }
 
 public sealed class WriterCoreException : Exception

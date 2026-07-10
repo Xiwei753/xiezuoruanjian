@@ -1,6 +1,7 @@
 package com.xiwei.sujian.ui.compose.theme
 
 import android.content.Context
+import android.content.res.Configuration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -76,6 +77,10 @@ fun rememberThemeController(context: Context): ThemeController {
                     ThemeStore.onSyncCompleted()
                 }
                 controller.reload()
+                val uiState = store.uiState.value
+                if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {
+                    store.captureDynamicColorAndSave(context)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -86,6 +91,15 @@ fun rememberThemeController(context: Context): ThemeController {
 
     DisposableEffect(Unit) {
         controller.reload()
+        onDispose { }
+    }
+
+    val configuration = context.resources?.configuration
+    DisposableEffect(configuration) {
+        val uiState = store.uiState.value
+        if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {
+            store.captureDynamicColorAndSave(context)
+        }
         onDispose { }
     }
 
