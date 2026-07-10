@@ -195,7 +195,7 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 
 - [x] Core `PlatformCapabilities` 工厂方法更新为各端真实能力
 - [x] Linux Qt `LinuxQtCapabilitiesAdapter` 使用 Core 工厂方法
-- [x] 各端适配器添加 TODO 注释标记迁移路径
+- [x] 各端适配器添加注释标记迁移路径
 - [x] 同步 capability 已由 Core `get_sync_capability()` 单一来源
 - [x] 错误提示已由 Core `message_key` + `MessageKeyMapper` 单一来源
 
