@@ -53,12 +53,13 @@ Supersedes: AGENTS.md (previous version)
 | **唯一技术路线** | `docs/TECHNICAL_ROUTE.md` 是唯一的全局技术路线。 |
 | **自研写作区路线** | Linux_qt 自研写作区唯一主路径：`SujianEditorItem(QQuickItem)` + `QTextLayout/QTextLine` + `QImage static texture` + `QSGImageNode` + QML Rectangle cursor + QML `EditorAnimationOverlay`。 |
 | **平台路线收口** | Linux_qt/Android 自研写作区已收口（SujianEditorItem + SujianEditorView），不再维护旧 WriterEditText fallback；Harmony 默认 native bridge，不要求 HAP 编译/真机，只要求静态守卫和代码测试。 |
-
-| **正式图谱路线** | 正式图谱是 `starmap`。所有新增图谱能力必须走 StarMapCapability。 |
+| **禁止旧路线** | **禁止**用 `DocumentHandler` / `TextArea` / `QTextDocument` / `QQuickPaintedItem` / QSG 三层 overlay 修自研写作区。这些是旧 fallback 路径，只允许保留兼容，不允许新增依赖；不得作为可开发路线。 |
+| **正式图谱路线** | `mind_map` 是 legacy（已废弃），正式图谱是 `starmap`。所有新增图谱能力必须走 StarMapCapability。 |
+| **淘汰 envelope_json** | `envelope_json` 是 legacy 兼容，新功能**绝对禁止**使用，必须完全采用 typed DTO。 |
 | **光标修复要求** | 修光标必须先保证 `QTextLine` `xToCursor/cursorToX` roundtrip。 |
 | **工作区格式神圣不可侵犯** | 不要仅仅为了迁就 UI 需求而修改 `workspace_format.md` 或改变文件在磁盘上的存储方式。工作区格式是唯一的事实来源。 |
 | **保持核心纯净** | 不要将平台特定的 UI 逻辑、动画循环、窗口管理或输入法（IME）处理注入 `writer_core`。核心严格用于数据、逻辑和文件 I/O。 |
-| **动画/hidden range 生命周期守卫** | `active_text_animations`、`animatedInsertRange`、光标动画是编辑器内部渲染状态，不是正文数据。
+| **动画/hidden range 生命周期守卫** | `active_text_animations`、`animatedInsertRange`、光标动画是编辑器内部渲染状态，不是正文数据。**禁止**将 hidden range、动画 overlay、光标动画重新拆成旧路线（TextArea fallback、QTextDocument 字符格式隐藏、正文透明 span/透明颜色污染正文数据、正文完整绘制+overlay冒充真吐字）。关闭动画设置时必须立即清除 hidden range，不依赖 timeout 恢复文字。 |
 
 ---
 
@@ -84,6 +85,16 @@ Supersedes: AGENTS.md (previous version)
 - `openChapter()` 比较 projectId/volumeId/chapterId + `isLoadingChapter` 检查。
 - `chapter_path_changed` 信号 **不** 重新触发打开章节。
 - 修改加载逻辑时必须验证不会无限刷 `open_chapter_json_start`。
+
+### 3.5 常见陷阱
+
+| 陷阱 | 正确做法 |
+|------|---------|
+| 正文最大宽度未限制，宽屏下每行无限拉长 | ScrollView 锚定 paperBg（max-width 820px），设置 `contentWidth: availableWidth` |
+| 一键排版压缩连续空行 | 只清理段首缩进空格和行尾空格，保留空行 |
+| 保存时误存 HTML | 保存前调用 `sanitizePlainText()` 检测并剥离 HTML 标签 |
+| 切换字号/行距触发重新打开章节 | 通过 property binding 自动更新，不触发 save/reload |
+| autosave 时传入 HTML | 统一走 `saveCurrentChapter()` → `getEditorPlainText()` → `sanitizePlainText()` |
 
 ---
 
@@ -131,12 +142,23 @@ cd apps/Linux_qt && cargo check && cargo test
 - 修改 Rust core 后必须有对应 `cargo test` 覆盖。
 - 修改 QML 后验证括号平衡：`python3 -c "..."` 检查 `{` `}` 数量。
 
+### 6.3 实机验证步骤
+
+1. 新建作品。
+2. 进入作品，确认自动出现"第一卷"。
+3. 点击新建章节，输入内容。
+4. 确认自动保存。
+5. 退出后重新进入该章节，确认内容仍在。
+6. 调整字号/行距/首行缩进，确认正文文件内容不变。
+7. 宽屏下确认正文居中且最大宽度稳定。
+8. 一键排版确认不吞连续空行。
+
 ---
 
 ## 7. Git 规则
 
-- 修改完成后必须推送到 GitHub main。
-- 提交信息用中文。
+- 修改完成后必须推送到 GitHub main（除非用户明确禁止）。
+- 提交信息用中文，说明改了哪些文件和为什么。
 - 不要提交构建产物（target/、build/、*.o、*.so）。
 - 不要提交临时日志、测试垃圾文件。
 - 不要顺手改不相关的模块（星图、同步、统计、Monet 等）。
@@ -163,9 +185,54 @@ cd apps/Linux_qt && cargo check && cargo test
 ### 8.3 修改后
 
 1. **运行最小测试/构建命令**：`cargo check` + `cargo test`（Rust），括号检查（QML）。
-2. **推送到 GitHub main**。
+2. **说明改了哪些文件**。
+3. **推送到 GitHub main**。
 
 ---
+
+## 9. 文件权限矩阵
+
+| 文件/目录 | 允许修改 | 禁止修改 |
+|-----------|---------|---------|
+| `core/writer_core/` | Rust 核心逻辑 | — |
+| `apps/Linux_qt/src/main.rs` | AppBackend 绑定 | 不要新增写作排版细节 |
+| `apps/Linux_qt/src/document_handler.rs` | — | 已删除（legacy），不得恢复 |
+| `apps/Linux_qt/qml/*.qml` | UI 组件和状态绑定 | 不要写复杂业务逻辑 |
+| `apps/android/` | Android 客户端 | 不要硬编码输入法逻辑 |
+| `.github/` | CI/CD 配置 | — |
+| `docs/*.md` | 文档 | — |
+| `workspace_format.md` | — | **绝对禁止修改** |
+
+---
+
+## 10. 一句话总结
+
+> **Rust Core 管逻辑，客户端管展示，QML 只绑定不计算，正文永远是纯文本。**
+
+---
+
+## 11. 沟通与输出简洁
+
+- **开始任务时可以简短确认目标、列出计划，然后立即执行**；不要写长篇开场白。
+- **过程中不要把阅读代码、搜索、推理过程写成长篇说明**；除非用户要求，不要复述仓库结构、技术路线、文件逐项长表。
+- **最终回复只保留必要结果**：做了什么、验证结果、提交/推送/CI 状态、阻塞项（如有）。
+- **禁止生成"长技术文档式最终报告"**；失败原因只写关键根因和修复方向，不展开大段背景。
+- **安全信息不得输出**：token、密钥、用户稿件内容等一律禁止出现在回复中。
+
+---
+
+## 12. Windows 本地开发注意事项
+
+### 12.1 文件删除必须用 deleteFile 工具
+
+- **删除文件时必须调用 `deleteFile` 工具**，绝对不要在终端里使用 `del`、`rm`、`Remove-Item` 等命令。
+- 原因：`deleteFile` 走已授权的静默通道，不会触发终端高危拦截弹窗；而终端 `del`/`rm` 会弹出确认弹窗，阻塞自动化流程。
+
+### 12.2 PowerShell 语法
+
+- Windows 环境下 Shell 为 PowerShell 5.1，`&&` 不是有效语句分隔符。
+- 顺序执行用 `;`，条件执行用 `if ($?) { cmd2 }`。
+- 不要使用 `cd <dir> && <command>` 模式，改用 Bash 工具的 `workdir` 参数。
 
 ### 12.3 GitHub 操作必须走 GitHub API
 
@@ -215,3 +282,18 @@ python tools/api_push.py "<token>" Xiwei753/xiezuoruanjian main
 - Android：仅支持 `arm64-v8a` 构建。
 
 ---
+
+## 13. DeepSeek Thinking Mode + Tool Calls 注意事项
+
+由于 DeepSeek API 在使用 Thinking Mode（深度思考模式）时，对工具调用（Tool Calls）有特殊要求，本项目在底层做做出特定的兼容处理：
+
+- **tool_calls 场景下 reasoning_content 必须完整回传**：当 assistant 产生工具调用请求时，其返回的 `reasoning_content` 必须在随后的请求中原样附带回传，否则会触发 DeepSeek API 返回 400 错误。
+- **普通无工具调用对话不应该把旧 reasoning_content 带回**：如果 assistant 没有产生任何工具调用，而是直接输出了回复结果，此时之前的 `reasoning_content` 已经完成使命，在未来的多轮对话上下文中会自动剔除（丢弃），不再回传以节省 tokens 并且避免造成上下文污染。
+- 本项目通过 **DeepSeekMessageSerializer** 和 **AIConversationSession** 实现针对 provider 特殊行为的隔离与适配：
+  - `DeepSeekMessageSerializer` 负责根据 assistant 是否存在 `tool_calls` 以及提供商是否为 DeepSeek 来动态决定是否序列化保留 `reasoning_content`。
+  - `AIConversationSession` 用于记录会话上下文，如果触发工具调用，它标记 `requiresReasoningContentEcho = true` 来帮助系统进行流转控制。
+- `reasoning_content` 是属于提供商在生成结果过程中的隐藏计算过程数据：
+  - **不展示给用户**（UI 不应把它当成普通的 `content` 处理）。
+  - **不写入正文**（它不是用户的写作数据，不可进入 `chapter.md` 等文档）。
+  - **不写入日志**（考虑可能会占用较多内存和控制台空间）。
+  - 需要持久化记录时只能进入 `app-meta/ai/traces/` 目录下的跟踪文件。
