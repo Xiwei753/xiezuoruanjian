@@ -30,39 +30,142 @@ impl From<PlatformDto> for crate::writing_stats::Platform {
 // ── Layout Policy DTOs ──
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
-pub enum FoldPostureDto {
+pub enum FoldStateDto {
     #[default]
-    Unknown,
-    FullyOpened,
+    None,
+    Flat,
     HalfOpened,
-    Closed,
 }
 
-impl From<crate::layout_policy::FoldPosture> for FoldPostureDto {
-    fn from(p: crate::layout_policy::FoldPosture) -> Self {
-        match p {
-            crate::layout_policy::FoldPosture::Unknown => Self::Unknown,
-            crate::layout_policy::FoldPosture::FullyOpened => Self::FullyOpened,
-            crate::layout_policy::FoldPosture::HalfOpened => Self::HalfOpened,
-            crate::layout_policy::FoldPosture::Closed => Self::Closed,
+impl From<crate::layout_policy::FoldState> for FoldStateDto {
+    fn from(s: crate::layout_policy::FoldState) -> Self {
+        match s {
+            crate::layout_policy::FoldState::None => Self::None,
+            crate::layout_policy::FoldState::Flat => Self::Flat,
+            crate::layout_policy::FoldState::HalfOpened => Self::HalfOpened,
         }
     }
 }
 
-impl From<FoldPostureDto> for crate::layout_policy::FoldPosture {
-    fn from(dto: FoldPostureDto) -> Self {
+impl From<FoldStateDto> for crate::layout_policy::FoldState {
+    fn from(dto: FoldStateDto) -> Self {
         match dto {
-            FoldPostureDto::Unknown => Self::Unknown,
-            FoldPostureDto::FullyOpened => Self::FullyOpened,
-            FoldPostureDto::HalfOpened => Self::HalfOpened,
-            FoldPostureDto::Closed => Self::Closed,
+            FoldStateDto::None => Self::None,
+            FoldStateDto::Flat => Self::Flat,
+            FoldStateDto::HalfOpened => Self::HalfOpened,
         }
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub enum FoldOrientationDto {
+    #[default]
+    Horizontal,
+    Vertical,
+}
 
+impl From<crate::layout_policy::FoldOrientation> for FoldOrientationDto {
+    fn from(o: crate::layout_policy::FoldOrientation) -> Self {
+        match o {
+            crate::layout_policy::FoldOrientation::Horizontal => Self::Horizontal,
+            crate::layout_policy::FoldOrientation::Vertical => Self::Vertical,
+        }
+    }
+}
+
+impl From<FoldOrientationDto> for crate::layout_policy::FoldOrientation {
+    fn from(dto: FoldOrientationDto) -> Self {
+        match dto {
+            FoldOrientationDto::Horizontal => Self::Horizontal,
+            FoldOrientationDto::Vertical => Self::Vertical,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub enum FoldOcclusionDto {
+    #[default]
+    None,
+    Full,
+}
+
+impl From<crate::layout_policy::FoldOcclusion> for FoldOcclusionDto {
+    fn from(o: crate::layout_policy::FoldOcclusion) -> Self {
+        match o {
+            crate::layout_policy::FoldOcclusion::None => Self::None,
+            crate::layout_policy::FoldOcclusion::Full => Self::Full,
+        }
+    }
+}
+
+impl From<FoldOcclusionDto> for crate::layout_policy::FoldOcclusion {
+    fn from(dto: FoldOcclusionDto) -> Self {
+        match dto {
+            FoldOcclusionDto::None => Self::None,
+            FoldOcclusionDto::Full => Self::Full,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FoldFeatureInfoDto {
+    pub state: FoldStateDto,
+    pub orientation: FoldOrientationDto,
+    pub is_separating: bool,
+    pub occlusion: FoldOcclusionDto,
+    pub bounds_left_vp: f32,
+    pub bounds_top_vp: f32,
+    pub bounds_right_vp: f32,
+    pub bounds_bottom_vp: f32,
+}
+
+impl Default for FoldFeatureInfoDto {
+    fn default() -> Self {
+        Self {
+            state: FoldStateDto::None,
+            orientation: FoldOrientationDto::Vertical,
+            is_separating: false,
+            occlusion: FoldOcclusionDto::None,
+            bounds_left_vp: 0.0,
+            bounds_top_vp: 0.0,
+            bounds_right_vp: 0.0,
+            bounds_bottom_vp: 0.0,
+        }
+    }
+}
+
+impl From<crate::layout_policy::FoldFeatureInfo> for FoldFeatureInfoDto {
+    fn from(f: crate::layout_policy::FoldFeatureInfo) -> Self {
+        Self {
+            state: f.state.into(),
+            orientation: f.orientation.into(),
+            is_separating: f.is_separating,
+            occlusion: f.occlusion.into(),
+            bounds_left_vp: f.bounds_left_vp,
+            bounds_top_vp: f.bounds_top_vp,
+            bounds_right_vp: f.bounds_right_vp,
+            bounds_bottom_vp: f.bounds_bottom_vp,
+        }
+    }
+}
+
+impl From<FoldFeatureInfoDto> for crate::layout_policy::FoldFeatureInfo {
+    fn from(dto: FoldFeatureInfoDto) -> Self {
+        Self {
+            state: dto.state.into(),
+            orientation: dto.orientation.into(),
+            is_separating: dto.is_separating,
+            occlusion: dto.occlusion.into(),
+            bounds_left_vp: dto.bounds_left_vp,
+            bounds_top_vp: dto.bounds_top_vp,
+            bounds_right_vp: dto.bounds_right_vp,
+            bounds_bottom_vp: dto.bounds_bottom_vp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum OrientationDto {
     #[default]
     Unknown,
@@ -91,7 +194,6 @@ impl From<OrientationDto> for crate::layout_policy::Orientation {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum PointerKindDto {
     #[default]
     Unknown,
@@ -123,12 +225,13 @@ impl From<PointerKindDto> for crate::layout_policy::PointerKind {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum WidthClassDto {
     #[default]
     Compact,
     Medium,
     Expanded,
+    Large,
+    ExtraLarge,
 }
 
 impl From<crate::layout_policy::WidthClass> for WidthClassDto {
@@ -137,6 +240,8 @@ impl From<crate::layout_policy::WidthClass> for WidthClassDto {
             crate::layout_policy::WidthClass::Compact => Self::Compact,
             crate::layout_policy::WidthClass::Medium => Self::Medium,
             crate::layout_policy::WidthClass::Expanded => Self::Expanded,
+            crate::layout_policy::WidthClass::Large => Self::Large,
+            crate::layout_policy::WidthClass::ExtraLarge => Self::ExtraLarge,
         }
     }
 }
@@ -147,12 +252,13 @@ impl From<WidthClassDto> for crate::layout_policy::WidthClass {
             WidthClassDto::Compact => Self::Compact,
             WidthClassDto::Medium => Self::Medium,
             WidthClassDto::Expanded => Self::Expanded,
+            WidthClassDto::Large => Self::Large,
+            WidthClassDto::ExtraLarge => Self::ExtraLarge,
         }
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum HeightClassDto {
     #[default]
     Compact,
@@ -181,12 +287,12 @@ impl From<HeightClassDto> for crate::layout_policy::HeightClass {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum ShellModeDto {
     #[default]
     SinglePane,
     SupportingPane,
     TwoPane,
+    ThreePane,
 }
 
 impl From<crate::layout_policy::ShellMode> for ShellModeDto {
@@ -195,6 +301,7 @@ impl From<crate::layout_policy::ShellMode> for ShellModeDto {
             crate::layout_policy::ShellMode::SinglePane => Self::SinglePane,
             crate::layout_policy::ShellMode::SupportingPane => Self::SupportingPane,
             crate::layout_policy::ShellMode::TwoPane => Self::TwoPane,
+            crate::layout_policy::ShellMode::ThreePane => Self::ThreePane,
         }
     }
 }
@@ -205,12 +312,12 @@ impl From<ShellModeDto> for crate::layout_policy::ShellMode {
             ShellModeDto::SinglePane => Self::SinglePane,
             ShellModeDto::SupportingPane => Self::SupportingPane,
             ShellModeDto::TwoPane => Self::TwoPane,
+            ShellModeDto::ThreePane => Self::ThreePane,
         }
     }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum EditorModeDto {
     #[default]
     FullWidth,
@@ -236,7 +343,6 @@ impl From<EditorModeDto> for crate::layout_policy::EditorMode {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
-
 pub enum NavigationModeDto {
     #[default]
     Stack,
@@ -261,15 +367,184 @@ impl From<NavigationModeDto> for crate::layout_policy::NavigationMode {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub enum NavigationPresentationDto {
+    #[default]
+    BottomBar,
+    NavigationRail,
+    PermanentDrawer,
+}
+
+impl From<crate::layout_policy::NavigationPresentation> for NavigationPresentationDto {
+    fn from(n: crate::layout_policy::NavigationPresentation) -> Self {
+        match n {
+            crate::layout_policy::NavigationPresentation::BottomBar => Self::BottomBar,
+            crate::layout_policy::NavigationPresentation::NavigationRail => Self::NavigationRail,
+            crate::layout_policy::NavigationPresentation::PermanentDrawer => Self::PermanentDrawer,
+        }
+    }
+}
+
+impl From<NavigationPresentationDto> for crate::layout_policy::NavigationPresentation {
+    fn from(dto: NavigationPresentationDto) -> Self {
+        match dto {
+            NavigationPresentationDto::BottomBar => Self::BottomBar,
+            NavigationPresentationDto::NavigationRail => Self::NavigationRail,
+            NavigationPresentationDto::PermanentDrawer => Self::PermanentDrawer,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+pub enum WorkspacePaneModeDto {
+    #[default]
+    SinglePane,
+    ListDetail,
+    ThreePane,
+}
+
+impl From<crate::layout_policy::WorkspacePaneMode> for WorkspacePaneModeDto {
+    fn from(w: crate::layout_policy::WorkspacePaneMode) -> Self {
+        match w {
+            crate::layout_policy::WorkspacePaneMode::SinglePane => Self::SinglePane,
+            crate::layout_policy::WorkspacePaneMode::ListDetail => Self::ListDetail,
+            crate::layout_policy::WorkspacePaneMode::ThreePane => Self::ThreePane,
+        }
+    }
+}
+
+impl From<WorkspacePaneModeDto> for crate::layout_policy::WorkspacePaneMode {
+    fn from(dto: WorkspacePaneModeDto) -> Self {
+        match dto {
+            WorkspacePaneModeDto::SinglePane => Self::SinglePane,
+            WorkspacePaneModeDto::ListDetail => Self::ListDetail,
+            WorkspacePaneModeDto::ThreePane => Self::ThreePane,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct VisiblePaneRolesDto {
+    pub show_project_list: bool,
+    pub show_chapter_tree: bool,
+    pub show_editor: bool,
+    pub show_supporting: bool,
+}
+
+impl Default for VisiblePaneRolesDto {
+    fn default() -> Self {
+        Self {
+            show_project_list: true,
+            show_chapter_tree: true,
+            show_editor: true,
+            show_supporting: false,
+        }
+    }
+}
+
+impl From<crate::layout_policy::VisiblePaneRoles> for VisiblePaneRolesDto {
+    fn from(v: crate::layout_policy::VisiblePaneRoles) -> Self {
+        Self {
+            show_project_list: v.show_project_list,
+            show_chapter_tree: v.show_chapter_tree,
+            show_editor: v.show_editor,
+            show_supporting: v.show_supporting,
+        }
+    }
+}
+
+impl From<VisiblePaneRolesDto> for crate::layout_policy::VisiblePaneRoles {
+    fn from(dto: VisiblePaneRolesDto) -> Self {
+        Self {
+            show_project_list: dto.show_project_list,
+            show_chapter_tree: dto.show_chapter_tree,
+            show_editor: dto.show_editor,
+            show_supporting: dto.show_supporting,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PaneWidthConstraintDto {
+    pub min_dp: f32,
+    pub preferred_dp: f32,
+    pub max_dp: f32,
+}
+
+impl Default for PaneWidthConstraintDto {
+    fn default() -> Self {
+        Self { min_dp: 0.0, preferred_dp: 0.0, max_dp: 0.0 }
+    }
+}
+
+impl From<crate::layout_policy::PaneWidthConstraint> for PaneWidthConstraintDto {
+    fn from(p: crate::layout_policy::PaneWidthConstraint) -> Self {
+        Self {
+            min_dp: p.min_dp,
+            preferred_dp: p.preferred_dp,
+            max_dp: p.max_dp,
+        }
+    }
+}
+
+impl From<PaneWidthConstraintDto> for crate::layout_policy::PaneWidthConstraint {
+    fn from(dto: PaneWidthConstraintDto) -> Self {
+        Self {
+            min_dp: dto.min_dp,
+            preferred_dp: dto.preferred_dp,
+            max_dp: dto.max_dp,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AvoidRegionDto {
+    pub left_dp: f32,
+    pub top_dp: f32,
+    pub right_dp: f32,
+    pub bottom_dp: f32,
+}
+
+impl Default for AvoidRegionDto {
+    fn default() -> Self {
+        Self { left_dp: 0.0, top_dp: 0.0, right_dp: 0.0, bottom_dp: 0.0 }
+    }
+}
+
+impl From<crate::layout_policy::AvoidRegion> for AvoidRegionDto {
+    fn from(a: crate::layout_policy::AvoidRegion) -> Self {
+        Self {
+            left_dp: a.left_dp,
+            top_dp: a.top_dp,
+            right_dp: a.right_dp,
+            bottom_dp: a.bottom_dp,
+        }
+    }
+}
+
+impl From<AvoidRegionDto> for crate::layout_policy::AvoidRegion {
+    fn from(dto: AvoidRegionDto) -> Self {
+        Self {
+            left_dp: dto.left_dp,
+            top_dp: dto.top_dp,
+            right_dp: dto.right_dp,
+            bottom_dp: dto.bottom_dp,
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WindowMetricsDto {
-    pub width_vp: f32,
-    pub height_vp: f32,
-    pub safe_top_vp: f32,
-    pub safe_bottom_vp: f32,
+    pub width_dp: f32,
+    pub height_dp: f32,
+    pub safe_top_dp: f32,
+    pub safe_bottom_dp: f32,
     pub keyboard_visible: bool,
-    pub fold_posture: FoldPostureDto,
+    pub fold_feature: FoldFeatureInfoDto,
     pub orientation: OrientationDto,
     pub pointer: PointerKindDto,
 }
@@ -277,12 +552,12 @@ pub struct WindowMetricsDto {
 impl From<crate::layout_policy::WindowMetrics> for WindowMetricsDto {
     fn from(m: crate::layout_policy::WindowMetrics) -> Self {
         Self {
-            width_vp: m.width_vp,
-            height_vp: m.height_vp,
-            safe_top_vp: m.safe_top_vp,
-            safe_bottom_vp: m.safe_bottom_vp,
+            width_dp: m.width_dp,
+            height_dp: m.height_dp,
+            safe_top_dp: m.safe_top_dp,
+            safe_bottom_dp: m.safe_bottom_dp,
             keyboard_visible: m.keyboard_visible,
-            fold_posture: m.fold_posture.into(),
+            fold_feature: m.fold_feature.into(),
             orientation: m.orientation.into(),
             pointer: m.pointer.into(),
         }
@@ -292,12 +567,12 @@ impl From<crate::layout_policy::WindowMetrics> for WindowMetricsDto {
 impl From<WindowMetricsDto> for crate::layout_policy::WindowMetrics {
     fn from(dto: WindowMetricsDto) -> Self {
         Self {
-            width_vp: dto.width_vp,
-            height_vp: dto.height_vp,
-            safe_top_vp: dto.safe_top_vp,
-            safe_bottom_vp: dto.safe_bottom_vp,
+            width_dp: dto.width_dp,
+            height_dp: dto.height_dp,
+            safe_top_dp: dto.safe_top_dp,
+            safe_bottom_dp: dto.safe_bottom_dp,
             keyboard_visible: dto.keyboard_visible,
-            fold_posture: dto.fold_posture.into(),
+            fold_feature: dto.fold_feature.into(),
             orientation: dto.orientation.into(),
             pointer: dto.pointer.into(),
         }
@@ -312,14 +587,20 @@ pub struct LayoutPlanDto {
     pub shell_mode: ShellModeDto,
     pub editor_mode: EditorModeDto,
     pub navigation_mode: NavigationModeDto,
-    pub content_max_width_vp: f32,
-    pub page_padding_vp: f32,
+    pub navigation_presentation: NavigationPresentationDto,
+    pub workspace_pane_mode: WorkspacePaneModeDto,
+    pub visible_pane_roles: VisiblePaneRolesDto,
+    pub content_max_width_dp: f32,
+    pub page_padding_dp: f32,
     pub grid_columns: u8,
-    pub show_side_panel: bool,
     pub show_bottom_bar: bool,
-    pub side_panel_width_vp: f32,
-    pub primary_pane_weight: f32,
-    pub detail_panel_max_width_vp: f32,
+    pub list_pane_width: PaneWidthConstraintDto,
+    pub editor_content_max_width_dp: f32,
+    pub primary_pane_min_dp: f32,
+    pub primary_pane_preferred_dp: f32,
+    pub primary_pane_max_dp: f32,
+    pub supporting_pane_mode: Option<WorkspacePaneModeDto>,
+    pub avoid_regions: Vec<AvoidRegionDto>,
 }
 
 impl From<crate::layout_policy::LayoutPlan> for LayoutPlanDto {
@@ -330,14 +611,20 @@ impl From<crate::layout_policy::LayoutPlan> for LayoutPlanDto {
             shell_mode: p.shell_mode.into(),
             editor_mode: p.editor_mode.into(),
             navigation_mode: p.navigation_mode.into(),
-            content_max_width_vp: p.content_max_width_vp,
-            page_padding_vp: p.page_padding_vp,
+            navigation_presentation: p.navigation_presentation.into(),
+            workspace_pane_mode: p.workspace_pane_mode.into(),
+            visible_pane_roles: p.visible_pane_roles.into(),
+            content_max_width_dp: p.content_max_width_dp,
+            page_padding_dp: p.page_padding_dp,
             grid_columns: p.grid_columns,
-            show_side_panel: p.show_side_panel,
             show_bottom_bar: p.show_bottom_bar,
-            side_panel_width_vp: p.side_panel_width_vp,
-            primary_pane_weight: p.primary_pane_weight,
-            detail_panel_max_width_vp: p.detail_panel_max_width_vp,
+            list_pane_width: p.list_pane_width.into(),
+            editor_content_max_width_dp: p.editor_content_max_width_dp,
+            primary_pane_min_dp: p.primary_pane_min_dp,
+            primary_pane_preferred_dp: p.primary_pane_preferred_dp,
+            primary_pane_max_dp: p.primary_pane_max_dp,
+            supporting_pane_mode: p.supporting_pane_mode.map(Into::into),
+            avoid_regions: p.avoid_regions.into_iter().map(Into::into).collect(),
         }
     }
 }

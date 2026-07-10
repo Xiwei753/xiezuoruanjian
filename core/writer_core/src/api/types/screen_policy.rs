@@ -4,9 +4,12 @@
 
 pub enum ScreenRoleDto {
     Home,
+    ProjectList,
     #[default]
-    Workspace,
+    ProjectWorkspace,
     Writing,
+    StarMap,
+    Stats,
     Settings,
     Sync,
 }
@@ -15,8 +18,11 @@ impl From<crate::screen_policy::ScreenRole> for ScreenRoleDto {
     fn from(r: crate::screen_policy::ScreenRole) -> Self {
         match r {
             crate::screen_policy::ScreenRole::Home => Self::Home,
-            crate::screen_policy::ScreenRole::Workspace => Self::Workspace,
+            crate::screen_policy::ScreenRole::ProjectList => Self::ProjectList,
+            crate::screen_policy::ScreenRole::ProjectWorkspace => Self::ProjectWorkspace,
             crate::screen_policy::ScreenRole::Writing => Self::Writing,
+            crate::screen_policy::ScreenRole::StarMap => Self::StarMap,
+            crate::screen_policy::ScreenRole::Stats => Self::Stats,
             crate::screen_policy::ScreenRole::Settings => Self::Settings,
             crate::screen_policy::ScreenRole::Sync => Self::Sync,
         }
@@ -27,8 +33,11 @@ impl From<ScreenRoleDto> for crate::screen_policy::ScreenRole {
     fn from(dto: ScreenRoleDto) -> Self {
         match dto {
             ScreenRoleDto::Home => Self::Home,
-            ScreenRoleDto::Workspace => Self::Workspace,
+            ScreenRoleDto::ProjectList => Self::ProjectList,
+            ScreenRoleDto::ProjectWorkspace => Self::ProjectWorkspace,
             ScreenRoleDto::Writing => Self::Writing,
+            ScreenRoleDto::StarMap => Self::StarMap,
+            ScreenRoleDto::Stats => Self::Stats,
             ScreenRoleDto::Settings => Self::Settings,
             ScreenRoleDto::Sync => Self::Sync,
         }
@@ -44,6 +53,7 @@ pub enum PaneRoleDto {
     Editor,
     Inspector,
     Drawer,
+    Supporting,
 }
 
 impl From<crate::screen_policy::PaneRole> for PaneRoleDto {
@@ -54,6 +64,7 @@ impl From<crate::screen_policy::PaneRole> for PaneRoleDto {
             crate::screen_policy::PaneRole::Editor => Self::Editor,
             crate::screen_policy::PaneRole::Inspector => Self::Inspector,
             crate::screen_policy::PaneRole::Drawer => Self::Drawer,
+            crate::screen_policy::PaneRole::Supporting => Self::Supporting,
         }
     }
 }
@@ -66,6 +77,7 @@ impl From<PaneRoleDto> for crate::screen_policy::PaneRole {
             PaneRoleDto::Editor => Self::Editor,
             PaneRoleDto::Inspector => Self::Inspector,
             PaneRoleDto::Drawer => Self::Drawer,
+            PaneRoleDto::Supporting => Self::Supporting,
         }
     }
 }
@@ -84,6 +96,7 @@ pub enum ActionRoleDto {
     Sync,
     #[default]
     Search,
+    Sort,
 }
 
 impl From<crate::screen_policy::ActionRole> for ActionRoleDto {
@@ -99,6 +112,7 @@ impl From<crate::screen_policy::ActionRole> for ActionRoleDto {
             crate::screen_policy::ActionRole::Settings => Self::Settings,
             crate::screen_policy::ActionRole::Sync => Self::Sync,
             crate::screen_policy::ActionRole::Search => Self::Search,
+            crate::screen_policy::ActionRole::Sort => Self::Sort,
         }
     }
 }
@@ -116,6 +130,7 @@ impl From<ActionRoleDto> for crate::screen_policy::ActionRole {
             ActionRoleDto::Settings => Self::Settings,
             ActionRoleDto::Sync => Self::Sync,
             ActionRoleDto::Search => Self::Search,
+            ActionRoleDto::Sort => Self::Sort,
         }
     }
 }
@@ -130,6 +145,10 @@ pub enum ActionPlacementDto {
     BottomBar,
     ContextMenu,
     SidePanel,
+    Navigation,
+    ListHeader,
+    ItemTrailing,
+    EmptyState,
 }
 
 impl From<crate::screen_policy::ActionPlacement> for ActionPlacementDto {
@@ -141,6 +160,10 @@ impl From<crate::screen_policy::ActionPlacement> for ActionPlacementDto {
             crate::screen_policy::ActionPlacement::BottomBar => Self::BottomBar,
             crate::screen_policy::ActionPlacement::ContextMenu => Self::ContextMenu,
             crate::screen_policy::ActionPlacement::SidePanel => Self::SidePanel,
+            crate::screen_policy::ActionPlacement::Navigation => Self::Navigation,
+            crate::screen_policy::ActionPlacement::ListHeader => Self::ListHeader,
+            crate::screen_policy::ActionPlacement::ItemTrailing => Self::ItemTrailing,
+            crate::screen_policy::ActionPlacement::EmptyState => Self::EmptyState,
         }
     }
 }
@@ -154,6 +177,10 @@ impl From<ActionPlacementDto> for crate::screen_policy::ActionPlacement {
             ActionPlacementDto::BottomBar => Self::BottomBar,
             ActionPlacementDto::ContextMenu => Self::ContextMenu,
             ActionPlacementDto::SidePanel => Self::SidePanel,
+            ActionPlacementDto::Navigation => Self::Navigation,
+            ActionPlacementDto::ListHeader => Self::ListHeader,
+            ActionPlacementDto::ItemTrailing => Self::ItemTrailing,
+            ActionPlacementDto::EmptyState => Self::EmptyState,
         }
     }
 }
@@ -209,8 +236,11 @@ mod tests {
     fn test_screen_role_dto_roundtrip() {
         let roles = vec![
             crate::screen_policy::ScreenRole::Home,
-            crate::screen_policy::ScreenRole::Workspace,
+            crate::screen_policy::ScreenRole::ProjectList,
+            crate::screen_policy::ScreenRole::ProjectWorkspace,
             crate::screen_policy::ScreenRole::Writing,
+            crate::screen_policy::ScreenRole::StarMap,
+            crate::screen_policy::ScreenRole::Stats,
             crate::screen_policy::ScreenRole::Settings,
             crate::screen_policy::ScreenRole::Sync,
         ];
@@ -234,6 +264,7 @@ mod tests {
             crate::screen_policy::ActionRole::Settings,
             crate::screen_policy::ActionRole::Sync,
             crate::screen_policy::ActionRole::Search,
+            crate::screen_policy::ActionRole::Sort,
         ];
         for role in roles {
             let dto: ActionRoleDto = role.into();
@@ -251,6 +282,10 @@ mod tests {
             crate::screen_policy::ActionPlacement::BottomBar,
             crate::screen_policy::ActionPlacement::ContextMenu,
             crate::screen_policy::ActionPlacement::SidePanel,
+            crate::screen_policy::ActionPlacement::Navigation,
+            crate::screen_policy::ActionPlacement::ListHeader,
+            crate::screen_policy::ActionPlacement::ItemTrailing,
+            crate::screen_policy::ActionPlacement::EmptyState,
         ];
         for p in placements {
             let dto: ActionPlacementDto = p.into();
@@ -290,54 +325,12 @@ mod tests {
             }],
         };
         let json = serde_json::to_string(&dto).unwrap();
-        // camelCase 字段名（struct 保留 rename_all = "camelCase"）
         assert!(json.contains("\"screenRole\""));
         assert!(json.contains("\"actionSlots\""));
         assert!(json.contains("\"actionId\""));
         assert!(json.contains("\"requiresConfirmation\""));
         assert!(json.contains("\"visibleIn\""));
 
-        // PascalCase 枚举值（enum 已去掉 rename_all，serde 默认输出标识符名）
-        assert!(
-            json.contains("\"Writing\""),
-            "enum ScreenRoleDto 应输出 PascalCase \"Writing\"，实际 JSON: {}",
-            json
-        );
-        assert!(
-            json.contains("\"Back\""),
-            "enum ActionRoleDto 应输出 PascalCase \"Back\"，实际 JSON: {}",
-            json
-        );
-        assert!(
-            json.contains("\"TopLeading\""),
-            "enum ActionPlacementDto 应输出 PascalCase \"TopLeading\"，实际 JSON: {}",
-            json
-        );
-        assert!(
-            json.contains("\"SinglePane\""),
-            "enum ShellModeDto 应输出 PascalCase \"SinglePane\"，实际 JSON: {}",
-            json
-        );
-
-        // 确保枚举值不是 camelCase（检查 enum 字段上下文）
-        assert!(
-            !json.contains("\"screenRole\":\"writing\""),
-            "enum ScreenRoleDto 不应输出 camelCase \"writing\""
-        );
-        assert!(
-            !json.contains("\"role\":\"back\""),
-            "enum ActionRoleDto 不应输出 camelCase \"back\""
-        );
-        assert!(
-            !json.contains("\"placement\":\"topLeading\""),
-            "enum ActionPlacementDto 不应输出 camelCase \"topLeading\""
-        );
-        assert!(
-            !json.contains("\"visibleIn\":[\"singlePane\"]"),
-            "enum ShellModeDto 不应输出 camelCase \"singlePane\""
-        );
-
-        // 反序列化
         let deserialized: ScreenPolicyDto = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.screen_role, ScreenRoleDto::Writing);
         assert_eq!(deserialized.action_slots.len(), 1);

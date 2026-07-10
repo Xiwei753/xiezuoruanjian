@@ -282,7 +282,7 @@ pub struct AppBackend {
     pub(crate) current_setting_diagnostics_verbose: bool,
 
     // ── Layout Policy ──
-    resolve_layout: qt_method!(fn(&self, width_vp: f64, height_vp: f64, safe_top_vp: f64, safe_bottom_vp: f64, keyboard_visible: bool, fold_posture: QString, orientation: QString, pointer: QString) -> QJsonObject),
+    resolve_layout: qt_method!(fn(&self, width_dp: f64, height_dp: f64, safe_top_dp: f64, safe_bottom_dp: f64, keyboard_visible: bool, fold_state: QString, fold_orientation: QString, fold_is_separating: bool, fold_occlusion: QString, fold_bounds_left: f64, fold_bounds_top: f64, fold_bounds_right: f64, fold_bounds_bottom: f64, orientation: QString, pointer: QString) -> QJsonObject),
 
     // ── Screen Policy ──
     resolve_screen_policy: qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
@@ -438,24 +438,49 @@ impl AppBackend {
 
     fn resolve_layout(
         &self,
-        width_vp: f64,
-        height_vp: f64,
-        safe_top_vp: f64,
-        safe_bottom_vp: f64,
+        width_dp: f64,
+        height_dp: f64,
+        safe_top_dp: f64,
+        safe_bottom_dp: f64,
         keyboard_visible: bool,
-        fold_posture: QString,
+        fold_state: QString,
+        fold_orientation: QString,
+        fold_is_separating: bool,
+        fold_occlusion: QString,
+        fold_bounds_left: f64,
+        fold_bounds_top: f64,
+        fold_bounds_right: f64,
+        fold_bounds_bottom: f64,
         orientation: QString,
         pointer: QString,
     ) -> QJsonObject {
         use writer_core::layout_policy::{
-            FoldPosture, Orientation, PointerKind, WindowMetrics, resolve_layout,
+            FoldState, FoldOrientation, FoldOcclusion, FoldFeatureInfo,
+            Orientation, PointerKind, WindowMetrics, resolve_layout,
         };
 
-        let fp = match fold_posture.to_string().as_str() {
-            "FullyOpened" => FoldPosture::FullyOpened,
-            "HalfOpened" => FoldPosture::HalfOpened,
-            "Closed" => FoldPosture::Closed,
-            _ => FoldPosture::Unknown,
+        let fs = match fold_state.to_string().as_str() {
+            "Flat" => FoldState::Flat,
+            "HalfOpened" => FoldState::HalfOpened,
+            _ => FoldState::None,
+        };
+        let fo = match fold_orientation.to_string().as_str() {
+            "Horizontal" => FoldOrientation::Horizontal,
+            _ => FoldOrientation::Vertical,
+        };
+        let foc = match fold_occlusion.to_string().as_str() {
+            "Full" => FoldOcclusion::Full,
+            _ => FoldOcclusion::None,
+        };
+        let fold_feature = FoldFeatureInfo {
+            state: fs,
+            orientation: fo,
+            is_separating: fold_is_separating,
+            occlusion: foc,
+            bounds_left_vp: fold_bounds_left as f32,
+            bounds_top_vp: fold_bounds_top as f32,
+            bounds_right_vp: fold_bounds_right as f32,
+            bounds_bottom_vp: fold_bounds_bottom as f32,
         };
         let orient = match orientation.to_string().as_str() {
             "Portrait" => Orientation::Portrait,
@@ -470,12 +495,12 @@ impl AppBackend {
         };
 
         let metrics = WindowMetrics {
-            width_vp: width_vp as f32,
-            height_vp: height_vp as f32,
-            safe_top_vp: safe_top_vp as f32,
-            safe_bottom_vp: safe_bottom_vp as f32,
+            width_dp: width_dp as f32,
+            height_dp: height_dp as f32,
+            safe_top_dp: safe_top_dp as f32,
+            safe_bottom_dp: safe_bottom_dp as f32,
             keyboard_visible,
-            fold_posture: fp,
+            fold_feature,
             orientation: orient,
             pointer: ptr,
         };
@@ -500,8 +525,11 @@ impl AppBackend {
 
         let role = match screen_role.to_string().as_str() {
             "Home" => ScreenRole::Home,
-            "Workspace" => ScreenRole::Workspace,
+            "ProjectList" => ScreenRole::ProjectList,
+            "ProjectWorkspace" => ScreenRole::ProjectWorkspace,
             "Writing" => ScreenRole::Writing,
+            "StarMap" => ScreenRole::StarMap,
+            "Stats" => ScreenRole::Stats,
             "Settings" => ScreenRole::Settings,
             "Sync" => ScreenRole::Sync,
             _ => ScreenRole::Home,
@@ -510,6 +538,7 @@ impl AppBackend {
             "SinglePane" => ShellMode::SinglePane,
             "SupportingPane" => ShellMode::SupportingPane,
             "TwoPane" => ShellMode::TwoPane,
+            "ThreePane" => ShellMode::ThreePane,
             _ => ShellMode::SinglePane,
         };
 

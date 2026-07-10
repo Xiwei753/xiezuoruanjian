@@ -21,8 +21,11 @@ use crate::layout_policy::ShellMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScreenRole {
     Home,
-    Workspace,
+    ProjectList,
+    ProjectWorkspace,
     Writing,
+    StarMap,
+    Stats,
     Settings,
     Sync,
 }
@@ -35,6 +38,7 @@ pub enum PaneRole {
     Editor,
     Inspector,
     Drawer,
+    Supporting,
 }
 
 /// 动作角色
@@ -50,6 +54,7 @@ pub enum ActionRole {
     Settings,
     Sync,
     Search,
+    Sort,
 }
 
 /// 动作放置位置
@@ -61,6 +66,10 @@ pub enum ActionPlacement {
     BottomBar,
     ContextMenu,
     SidePanel,
+    Navigation,
+    ListHeader,
+    ItemTrailing,
+    EmptyState,
 }
 
 // ========== 结构体定义 ==========
@@ -93,27 +102,18 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 action_id: "settings".to_string(),
                 role: ActionRole::Settings,
                 placement: ActionPlacement::TopTrailing,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
             ActionSlot {
                 action_id: "search".to_string(),
                 role: ActionRole::Search,
                 placement: ActionPlacement::TopTrailing,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
         ],
-        ScreenRole::Workspace => vec![
-            // CreateProject: SinglePane 下放 Floating
+        ScreenRole::ProjectList => vec![
             ActionSlot {
                 action_id: "create_project".to_string(),
                 role: ActionRole::CreateProject,
@@ -121,34 +121,104 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 visible_in: vec![ShellMode::SinglePane],
                 requires_confirmation: false,
             },
-            // CreateProject: SupportingPane + TwoPane 下放 TopTrailing
             ActionSlot {
                 action_id: "create_project".to_string(),
                 role: ActionRole::CreateProject,
                 placement: ActionPlacement::TopTrailing,
-                visible_in: vec![ShellMode::SupportingPane, ShellMode::TwoPane],
+                visible_in: vec![ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
             ActionSlot {
-                action_id: "delete".to_string(),
+                action_id: "delete_project".to_string(),
                 role: ActionRole::Delete,
                 placement: ActionPlacement::ContextMenu,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: true,
             },
             ActionSlot {
-                action_id: "rename".to_string(),
+                action_id: "rename_project".to_string(),
                 role: ActionRole::Rename,
                 placement: ActionPlacement::ContextMenu,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+        ],
+        ScreenRole::ProjectWorkspace => vec![
+            ActionSlot {
+                action_id: "create_volume".to_string(),
+                role: ActionRole::CreateVolume,
+                placement: ActionPlacement::Floating,
+                visible_in: vec![ShellMode::SinglePane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "create_volume".to_string(),
+                role: ActionRole::CreateVolume,
+                placement: ActionPlacement::TopTrailing,
+                visible_in: vec![ShellMode::SupportingPane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "create_volume".to_string(),
+                role: ActionRole::CreateVolume,
+                placement: ActionPlacement::ListHeader,
+                visible_in: vec![ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "create_chapter".to_string(),
+                role: ActionRole::CreateChapter,
+                placement: ActionPlacement::ItemTrailing,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "create_chapter_empty".to_string(),
+                role: ActionRole::CreateChapter,
+                placement: ActionPlacement::EmptyState,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "delete_volume".to_string(),
+                role: ActionRole::Delete,
+                placement: ActionPlacement::ContextMenu,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: true,
+            },
+            ActionSlot {
+                action_id: "delete_chapter".to_string(),
+                role: ActionRole::Delete,
+                placement: ActionPlacement::ContextMenu,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: true,
+            },
+            ActionSlot {
+                action_id: "rename_volume".to_string(),
+                role: ActionRole::Rename,
+                placement: ActionPlacement::ContextMenu,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "rename_chapter".to_string(),
+                role: ActionRole::Rename,
+                placement: ActionPlacement::ContextMenu,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "sort".to_string(),
+                role: ActionRole::Sort,
+                placement: ActionPlacement::TopTrailing,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+            ActionSlot {
+                action_id: "search".to_string(),
+                role: ActionRole::Search,
+                placement: ActionPlacement::TopTrailing,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
         ],
@@ -157,22 +227,32 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 action_id: "back".to_string(),
                 role: ActionRole::Back,
                 placement: ActionPlacement::TopLeading,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
             ActionSlot {
                 action_id: "save".to_string(),
                 role: ActionRole::Save,
                 placement: ActionPlacement::TopTrailing,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+        ],
+        ScreenRole::StarMap => vec![
+            ActionSlot {
+                action_id: "back".to_string(),
+                role: ActionRole::Back,
+                placement: ActionPlacement::TopLeading,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
+                requires_confirmation: false,
+            },
+        ],
+        ScreenRole::Stats => vec![
+            ActionSlot {
+                action_id: "back".to_string(),
+                role: ActionRole::Back,
+                placement: ActionPlacement::TopLeading,
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
         ],
@@ -180,11 +260,7 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
             action_id: "back".to_string(),
             role: ActionRole::Back,
             placement: ActionPlacement::TopLeading,
-            visible_in: vec![
-                ShellMode::SinglePane,
-                ShellMode::SupportingPane,
-                ShellMode::TwoPane,
-            ],
+            visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
             requires_confirmation: false,
         }],
         ScreenRole::Sync => vec![
@@ -192,22 +268,14 @@ fn base_slots(screen_role: ScreenRole) -> Vec<ActionSlot> {
                 action_id: "back".to_string(),
                 role: ActionRole::Back,
                 placement: ActionPlacement::TopLeading,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
             ActionSlot {
                 action_id: "sync".to_string(),
                 role: ActionRole::Sync,
                 placement: ActionPlacement::Floating,
-                visible_in: vec![
-                    ShellMode::SinglePane,
-                    ShellMode::SupportingPane,
-                    ShellMode::TwoPane,
-                ],
+                visible_in: vec![ShellMode::SinglePane, ShellMode::SupportingPane, ShellMode::TwoPane, ShellMode::ThreePane],
                 requires_confirmation: false,
             },
         ],
@@ -224,12 +292,15 @@ mod tests {
     fn test_screen_role_variants() {
         let variants = vec![
             ScreenRole::Home,
-            ScreenRole::Workspace,
+            ScreenRole::ProjectList,
+            ScreenRole::ProjectWorkspace,
             ScreenRole::Writing,
+            ScreenRole::StarMap,
+            ScreenRole::Stats,
             ScreenRole::Settings,
             ScreenRole::Sync,
         ];
-        assert_eq!(variants.len(), 5);
+        assert_eq!(variants.len(), 8);
     }
 
     #[test]
@@ -240,8 +311,9 @@ mod tests {
             PaneRole::Editor,
             PaneRole::Inspector,
             PaneRole::Drawer,
+            PaneRole::Supporting,
         ];
-        assert_eq!(variants.len(), 5);
+        assert_eq!(variants.len(), 6);
     }
 
     #[test]
@@ -257,8 +329,9 @@ mod tests {
             ActionRole::Settings,
             ActionRole::Sync,
             ActionRole::Search,
+            ActionRole::Sort,
         ];
-        assert_eq!(variants.len(), 10);
+        assert_eq!(variants.len(), 11);
     }
 
     #[test]
@@ -270,8 +343,12 @@ mod tests {
             ActionPlacement::BottomBar,
             ActionPlacement::ContextMenu,
             ActionPlacement::SidePanel,
+            ActionPlacement::Navigation,
+            ActionPlacement::ListHeader,
+            ActionPlacement::ItemTrailing,
+            ActionPlacement::EmptyState,
         ];
-        assert_eq!(variants.len(), 6);
+        assert_eq!(variants.len(), 10);
     }
 
     #[test]
@@ -292,8 +369,7 @@ mod tests {
 
     #[test]
     fn test_workspace_single_pane() {
-        let slots = resolve_screen_policy(ScreenRole::Workspace, ShellMode::SinglePane);
-        // SinglePane 下应该有: CreateProject(Floating), Delete(ContextMenu), Rename(ContextMenu)
+        let slots = resolve_screen_policy(ScreenRole::ProjectList, ShellMode::SinglePane);
         assert_eq!(slots.len(), 3);
 
         let create_project = slots
@@ -305,8 +381,7 @@ mod tests {
 
     #[test]
     fn test_workspace_two_pane() {
-        let slots = resolve_screen_policy(ScreenRole::Workspace, ShellMode::TwoPane);
-        // TwoPane 下应该有: CreateProject(TopTrailing), Delete(ContextMenu), Rename(ContextMenu)
+        let slots = resolve_screen_policy(ScreenRole::ProjectList, ShellMode::TwoPane);
         assert_eq!(slots.len(), 3);
 
         let create_project = slots
@@ -315,11 +390,27 @@ mod tests {
             .unwrap();
         assert_eq!(create_project.placement, ActionPlacement::TopTrailing);
 
-        // 不含 Floating 放置的 CreateProject
         let floating_create = slots.iter().find(|s| {
             s.role == ActionRole::CreateProject && s.placement == ActionPlacement::Floating
         });
         assert!(floating_create.is_none());
+    }
+
+    #[test]
+    fn test_project_workspace_single_pane() {
+        let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace, ShellMode::SinglePane);
+        let create_volume = slots.iter().find(|s| s.role == ActionRole::CreateVolume).unwrap();
+        assert_eq!(create_volume.placement, ActionPlacement::Floating);
+
+        let create_chapter = slots.iter().find(|s| s.role == ActionRole::CreateChapter && s.placement == ActionPlacement::ItemTrailing).unwrap();
+        assert_eq!(create_chapter.action_id, "create_chapter");
+    }
+
+    #[test]
+    fn test_project_workspace_two_pane() {
+        let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace, ShellMode::TwoPane);
+        let create_volume = slots.iter().find(|s| s.role == ActionRole::CreateVolume).unwrap();
+        assert_eq!(create_volume.placement, ActionPlacement::ListHeader);
     }
 
     #[test]
@@ -367,37 +458,33 @@ mod tests {
 
     #[test]
     fn test_delete_requires_confirmation() {
-        let slots = resolve_screen_policy(ScreenRole::Workspace, ShellMode::SinglePane);
-        let delete_slot = slots.iter().find(|s| s.role == ActionRole::Delete).unwrap();
-        assert!(delete_slot.requires_confirmation);
+        let slots = resolve_screen_policy(ScreenRole::ProjectWorkspace, ShellMode::SinglePane);
+        let delete_slots: Vec<_> = slots.iter().filter(|s| s.role == ActionRole::Delete).collect();
+        for slot in delete_slots {
+            assert!(slot.requires_confirmation);
+        }
     }
 
     #[test]
     fn test_shell_mode_filtering() {
-        // Workspace 的 base_slots 有两个 CreateProject：一个 visible_in=[SinglePane]，一个 visible_in=[SupportingPane, TwoPane]
-        // 在 SinglePane 下，只应出现 Floating 的 CreateProject
-        let single_slots = resolve_screen_policy(ScreenRole::Workspace, ShellMode::SinglePane);
+        let single_slots = resolve_screen_policy(ScreenRole::ProjectList, ShellMode::SinglePane);
         let single_create = single_slots
             .iter()
             .find(|s| s.role == ActionRole::CreateProject)
             .unwrap();
         assert_eq!(single_create.placement, ActionPlacement::Floating);
 
-        // 在 TwoPane 下，只应出现 TopTrailing 的 CreateProject
-        let two_slots = resolve_screen_policy(ScreenRole::Workspace, ShellMode::TwoPane);
+        let two_slots = resolve_screen_policy(ScreenRole::ProjectList, ShellMode::TwoPane);
         let two_create = two_slots
             .iter()
             .find(|s| s.role == ActionRole::CreateProject)
             .unwrap();
         assert_eq!(two_create.placement, ActionPlacement::TopTrailing);
 
-        // 验证 visible_in 不包含当前 ShellMode 的被过滤
-        // SinglePane 结果中不应有 TopTrailing 的 CreateProject
         assert!(single_slots
             .iter()
             .all(|s| !(s.role == ActionRole::CreateProject
                 && s.placement == ActionPlacement::TopTrailing)));
-        // TwoPane 结果中不应有 Floating 的 CreateProject
         assert!(two_slots
             .iter()
             .all(|s| !(s.role == ActionRole::CreateProject

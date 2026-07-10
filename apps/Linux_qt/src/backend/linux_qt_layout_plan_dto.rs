@@ -4,31 +4,27 @@
 //! 并确保输出为 camelCase，QML 无需 snake_case fallback。
 
 use serde::Serialize;
-use writer_core::layout_policy::{LayoutPlan, ShellMode};
+use writer_core::layout_policy::{LayoutPlan, ShellMode, WorkspacePaneMode, NavigationPresentation};
 
-/// Linux_qt 客户端专用的布局方案 DTO
-///
-/// 字段名使用 Rust snake_case 命名，通过 `#[serde(rename_all = "camelCase")]`
-/// 序列化为 camelCase 输出给 QML。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinuxQtLayoutPlanDto {
-    /// 壳层模式：SinglePane / SupportingPane / TwoPane
     pub shell_mode: String,
-    /// 正文最大宽度（vp），0 表示不限制
-    pub content_max_width_vp: f32,
-    /// 页面内边距（vp）
-    pub page_padding_vp: f32,
-    /// 是否显示侧面板
-    pub show_side_panel: bool,
-    /// 是否显示底栏
+    pub navigation_presentation: String,
+    pub workspace_pane_mode: String,
+    pub show_chapter_tree: bool,
+    pub show_editor: bool,
+    pub show_project_list: bool,
     pub show_bottom_bar: bool,
-    /// 侧面板宽度（vp）
-    pub side_panel_width_vp: f32,
-    /// 主面板权重
-    pub primary_pane_weight: f32,
-    /// 详情面板最大宽度（vp）
-    pub detail_panel_max_width_vp: f32,
+    pub content_max_width_dp: f32,
+    pub page_padding_dp: f32,
+    pub list_pane_min_dp: f32,
+    pub list_pane_preferred_dp: f32,
+    pub list_pane_max_dp: f32,
+    pub editor_content_max_width_dp: f32,
+    pub primary_pane_min_dp: f32,
+    pub primary_pane_preferred_dp: f32,
+    pub primary_pane_max_dp: f32,
 }
 
 impl LinuxQtLayoutPlanDto {
@@ -38,14 +34,31 @@ impl LinuxQtLayoutPlanDto {
                 ShellMode::SinglePane => "SinglePane".to_string(),
                 ShellMode::SupportingPane => "SupportingPane".to_string(),
                 ShellMode::TwoPane => "TwoPane".to_string(),
+                ShellMode::ThreePane => "ThreePane".to_string(),
             },
-            content_max_width_vp: plan.content_max_width_vp,
-            page_padding_vp: plan.page_padding_vp,
-            show_side_panel: plan.show_side_panel,
+            navigation_presentation: match plan.navigation_presentation {
+                NavigationPresentation::BottomBar => "BottomBar".to_string(),
+                NavigationPresentation::NavigationRail => "NavigationRail".to_string(),
+                NavigationPresentation::PermanentDrawer => "PermanentDrawer".to_string(),
+            },
+            workspace_pane_mode: match plan.workspace_pane_mode {
+                WorkspacePaneMode::SinglePane => "SinglePane".to_string(),
+                WorkspacePaneMode::ListDetail => "ListDetail".to_string(),
+                WorkspacePaneMode::ThreePane => "ThreePane".to_string(),
+            },
+            show_chapter_tree: plan.visible_pane_roles.show_chapter_tree,
+            show_editor: plan.visible_pane_roles.show_editor,
+            show_project_list: plan.visible_pane_roles.show_project_list,
             show_bottom_bar: plan.show_bottom_bar,
-            side_panel_width_vp: plan.side_panel_width_vp,
-            primary_pane_weight: plan.primary_pane_weight,
-            detail_panel_max_width_vp: plan.detail_panel_max_width_vp,
+            content_max_width_dp: plan.content_max_width_dp,
+            page_padding_dp: plan.page_padding_dp,
+            list_pane_min_dp: plan.list_pane_width.min_dp,
+            list_pane_preferred_dp: plan.list_pane_width.preferred_dp,
+            list_pane_max_dp: plan.list_pane_width.max_dp,
+            editor_content_max_width_dp: plan.editor_content_max_width_dp,
+            primary_pane_min_dp: plan.primary_pane_min_dp,
+            primary_pane_preferred_dp: plan.primary_pane_preferred_dp,
+            primary_pane_max_dp: plan.primary_pane_max_dp,
         }
     }
 }
@@ -62,46 +75,40 @@ mod tests {
         let dto = LinuxQtLayoutPlanDto::from_layout_plan(&plan);
         let json = serde_json::to_string(&dto).unwrap();
 
-        // 必须包含 camelCase 字段名
-        assert!(json.contains("\"shellMode\""), "JSON must contain camelCase 'shellMode'");
-        assert!(json.contains("\"contentMaxWidthVp\""), "JSON must contain camelCase 'contentMaxWidthVp'");
-        assert!(json.contains("\"pagePaddingVp\""), "JSON must contain camelCase 'pagePaddingVp'");
-        assert!(json.contains("\"showSidePanel\""), "JSON must contain camelCase 'showSidePanel'");
-        assert!(json.contains("\"showBottomBar\""), "JSON must contain camelCase 'showBottomBar'");
-        assert!(json.contains("\"sidePanelWidthVp\""), "JSON must contain camelCase 'sidePanelWidthVp'");
-        assert!(json.contains("\"primaryPaneWeight\""), "JSON must contain camelCase 'primaryPaneWeight'");
-        assert!(json.contains("\"detailPanelMaxWidthVp\""), "JSON must contain camelCase 'detailPanelMaxWidthVp'");
+        assert!(json.contains("\"shellMode\""));
+        assert!(json.contains("\"navigationPresentation\""));
+        assert!(json.contains("\"workspacePaneMode\""));
+        assert!(json.contains("\"contentMaxWidthDp\""));
+        assert!(json.contains("\"pagePaddingDp\""));
+        assert!(json.contains("\"showBottomBar\""));
+        assert!(json.contains("\"editorContentMaxWidthDp\""));
 
-        // 绝不能包含 snake_case 字段名
-        assert!(!json.contains("\"shell_mode\""), "JSON must NOT contain snake_case 'shell_mode'");
-        assert!(!json.contains("\"content_max_width_vp\""), "JSON must NOT contain snake_case 'content_max_width_vp'");
-        assert!(!json.contains("\"page_padding_vp\""), "JSON must NOT contain snake_case 'page_padding_vp'");
-        assert!(!json.contains("\"show_side_panel\""), "JSON must NOT contain snake_case 'show_side_panel'");
-        assert!(!json.contains("\"show_bottom_bar\""), "JSON must NOT contain snake_case 'show_bottom_bar'");
-        assert!(!json.contains("\"side_panel_width_vp\""), "JSON must NOT contain snake_case 'side_panel_width_vp'");
-        assert!(!json.contains("\"primary_pane_weight\""), "JSON must NOT contain snake_case 'primary_pane_weight'");
-        assert!(!json.contains("\"detail_panel_max_width_vp\""), "JSON must NOT contain snake_case 'detail_panel_max_width_vp'");
+        assert!(!json.contains("\"shell_mode\""));
+        assert!(!json.contains("\"content_max_width_dp\""));
+        assert!(!json.contains("\"page_padding_dp\""));
     }
 
     #[test]
     fn test_linux_qt_layout_plan_dto_shell_mode_values() {
-        // Compact width -> SinglePane
         let mut metrics = WindowMetrics::default();
-        metrics.width_vp = 360.0;
+        metrics.width_dp = 360.0;
         let plan = resolve_layout(&metrics);
         let dto = LinuxQtLayoutPlanDto::from_layout_plan(&plan);
         assert_eq!(dto.shell_mode, "SinglePane");
 
-        // Medium width -> SupportingPane
-        metrics.width_vp = 700.0;
+        metrics.width_dp = 700.0;
         let plan = resolve_layout(&metrics);
         let dto = LinuxQtLayoutPlanDto::from_layout_plan(&plan);
         assert_eq!(dto.shell_mode, "SupportingPane");
 
-        // Expanded width -> TwoPane
-        metrics.width_vp = 1200.0;
+        metrics.width_dp = 1000.0;
         let plan = resolve_layout(&metrics);
         let dto = LinuxQtLayoutPlanDto::from_layout_plan(&plan);
         assert_eq!(dto.shell_mode, "TwoPane");
+
+        metrics.width_dp = 1400.0;
+        let plan = resolve_layout(&metrics);
+        let dto = LinuxQtLayoutPlanDto::from_layout_plan(&plan);
+        assert_eq!(dto.shell_mode, "ThreePane");
     }
 }

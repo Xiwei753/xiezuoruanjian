@@ -1,44 +1,16 @@
 package com.xiwei.sujian.data
 
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
-import com.xiwei.sujian.model.EditorMode
-import com.xiwei.sujian.model.FoldPosture
-import com.xiwei.sujian.model.HeightClass
-import com.xiwei.sujian.model.LayoutPlan
-import com.xiwei.sujian.model.NavigationMode
-import com.xiwei.sujian.model.Orientation
-import com.xiwei.sujian.model.PointerKind
-import com.xiwei.sujian.model.ShellMode
-import com.xiwei.sujian.model.WidthClass
-import com.xiwei.sujian.model.WindowMetrics
-import uniffi.writer_core.EditorModeDto
-import uniffi.writer_core.FoldPostureDto
-import uniffi.writer_core.HeightClassDto
-import uniffi.writer_core.NavigationModeDto
-import uniffi.writer_core.OrientationDto
-import uniffi.writer_core.PointerKindDto
-import uniffi.writer_core.ScreenPolicyDto
-import uniffi.writer_core.ScreenRoleDto
-import uniffi.writer_core.ShellModeDto
-import uniffi.writer_core.WidthClassDto
+import com.xiwei.sujian.model.*
+import uniffi.writer_core.*
 
-/**
- * Layout Policy Bridge — 通过 Core resolve_layout 获取跨端统一布局计划。
- *
- * Android 端测量窗口尺寸后传入 WindowMetrics，调用 Core 的 resolve_layout 获取 LayoutPlan。
- * 不允许 Android 端自己判断 isTablet 或自己发明断点。
- *
- * 通过 WriterAppServiceHolder 直接调用 Core 服务，不再依赖 AppServiceBridge。
- */
 class LayoutPolicyBridge internal constructor(private val holder: WriterAppServiceHolder) {
 
     companion object {
         private const val TAG = "LayoutPolicyBridge"
     }
 
-    // ── DTO 层 API（供 AppServiceBridge 门面委托） ──
-
-    fun resolveLayout(metrics: uniffi.writer_core.WindowMetricsDto): BridgeResult<uniffi.writer_core.LayoutPlanDto> = holder.wrapResult {
+    fun resolveLayout(metrics: WindowMetricsDto): BridgeResult<LayoutPlanDto> = holder.wrapResult {
         holder.service.resolveLayout(metrics)
     }
 
@@ -46,17 +18,15 @@ class LayoutPolicyBridge internal constructor(private val holder: WriterAppServi
         holder.service.resolveScreenPolicy(screenRole, shellMode)
     }
 
-    // ── Model 层 API（供 UI 层使用，保留向后兼容） ──
-
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? {
         return try {
-            val dto = uniffi.writer_core.WindowMetricsDto(
-                widthVp = metrics.widthVp,
-                heightVp = metrics.heightVp,
-                safeTopVp = metrics.safeTopVp,
-                safeBottomVp = metrics.safeBottomVp,
+            val dto = WindowMetricsDto(
+                widthDp = metrics.widthDp,
+                heightDp = metrics.heightDp,
+                safeTopDp = metrics.safeTopDp,
+                safeBottomDp = metrics.safeBottomDp,
                 keyboardVisible = metrics.keyboardVisible,
-                foldPosture = metrics.foldPosture.toDto(),
+                foldFeature = metrics.foldFeature.toDto(),
                 orientation = metrics.orientation.toDto(),
                 pointer = metrics.pointer.toDto()
             )
@@ -71,13 +41,31 @@ class LayoutPolicyBridge internal constructor(private val holder: WriterAppServi
         }
     }
 
-    // ── DTO conversion helpers ──
+    private fun FoldFeatureInfo.toDto(): FoldFeatureInfoDto = FoldFeatureInfoDto(
+        state = state.toDto(),
+        orientation = orientation.toDto(),
+        isSeparating = isSeparating,
+        occlusion = occlusion.toDto(),
+        boundsLeftVp = boundsLeftVp,
+        boundsTopVp = boundsTopVp,
+        boundsRightVp = boundsRightVp,
+        boundsBottomVp = boundsBottomVp
+    )
 
-    private fun FoldPosture.toDto(): FoldPostureDto = when (this) {
-        FoldPosture.Unknown -> FoldPostureDto.UNKNOWN
-        FoldPosture.FullyOpened -> FoldPostureDto.FULLY_OPENED
-        FoldPosture.HalfOpened -> FoldPostureDto.HALF_OPENED
-        FoldPosture.Closed -> FoldPostureDto.CLOSED
+    private fun FoldState.toDto(): FoldStateDto = when (this) {
+        FoldState.None -> FoldStateDto.NONE
+        FoldState.Flat -> FoldStateDto.FLAT
+        FoldState.HalfOpened -> FoldStateDto.HALF_OPENED
+    }
+
+    private fun FoldOrientation.toDto(): FoldOrientationDto = when (this) {
+        FoldOrientation.Horizontal -> FoldOrientationDto.HORIZONTAL
+        FoldOrientation.Vertical -> FoldOrientationDto.VERTICAL
+    }
+
+    private fun FoldOcclusion.toDto(): FoldOcclusionDto = when (this) {
+        FoldOcclusion.None -> FoldOcclusionDto.NONE
+        FoldOcclusion.Full -> FoldOcclusionDto.FULL
     }
 
     private fun Orientation.toDto(): OrientationDto = when (this) {
@@ -97,6 +85,8 @@ class LayoutPolicyBridge internal constructor(private val holder: WriterAppServi
         WidthClassDto.COMPACT -> WidthClass.Compact
         WidthClassDto.MEDIUM -> WidthClass.Medium
         WidthClassDto.EXPANDED -> WidthClass.Expanded
+        WidthClassDto.LARGE -> WidthClass.Large
+        WidthClassDto.EXTRA_LARGE -> WidthClass.ExtraLarge
     }
 
     private fun HeightClassDto.toModel(): HeightClass = when (this) {
@@ -109,6 +99,7 @@ class LayoutPolicyBridge internal constructor(private val holder: WriterAppServi
         ShellModeDto.SINGLE_PANE -> ShellMode.SinglePane
         ShellModeDto.SUPPORTING_PANE -> ShellMode.SupportingPane
         ShellModeDto.TWO_PANE -> ShellMode.TwoPane
+        ShellModeDto.THREE_PANE -> ShellMode.ThreePane
     }
 
     private fun EditorModeDto.toModel(): EditorMode = when (this) {
@@ -121,19 +112,57 @@ class LayoutPolicyBridge internal constructor(private val holder: WriterAppServi
         NavigationModeDto.LIST_DETAIL -> NavigationMode.ListDetail
     }
 
-    private fun uniffi.writer_core.LayoutPlanDto.toModel(): LayoutPlan = LayoutPlan(
+    private fun NavigationPresentationDto.toModel(): NavigationPresentation = when (this) {
+        NavigationPresentationDto.BOTTOM_BAR -> NavigationPresentation.BottomBar
+        NavigationPresentationDto.NAVIGATION_RAIL -> NavigationPresentation.NavigationRail
+        NavigationPresentationDto.PERMANENT_DRAWER -> NavigationPresentation.PermanentDrawer
+    }
+
+    private fun WorkspacePaneModeDto.toModel(): WorkspacePaneMode = when (this) {
+        WorkspacePaneModeDto.SINGLE_PANE -> WorkspacePaneMode.SinglePane
+        WorkspacePaneModeDto.LIST_DETAIL -> WorkspacePaneMode.ListDetail
+        WorkspacePaneModeDto.THREE_PANE -> WorkspacePaneMode.ThreePane
+    }
+
+    private fun VisiblePaneRolesDto.toModel(): VisiblePaneRoles = VisiblePaneRoles(
+        showProjectList = showProjectList,
+        showChapterTree = showChapterTree,
+        showEditor = showEditor,
+        showSupporting = showSupporting
+    )
+
+    private fun PaneWidthConstraintDto.toModel(): PaneWidthConstraint = PaneWidthConstraint(
+        minDp = minDp,
+        preferredDp = preferredDp,
+        maxDp = maxDp
+    )
+
+    private fun AvoidRegionDto.toModel(): AvoidRegion = AvoidRegion(
+        leftDp = leftDp,
+        topDp = topDp,
+        rightDp = rightDp,
+        bottomDp = bottomDp
+    )
+
+    private fun LayoutPlanDto.toModel(): LayoutPlan = LayoutPlan(
         widthClass = widthClass.toModel(),
         heightClass = heightClass.toModel(),
         shellMode = shellMode.toModel(),
         editorMode = editorMode.toModel(),
         navigationMode = navigationMode.toModel(),
-        contentMaxWidthVp = contentMaxWidthVp,
-        pagePaddingVp = pagePaddingVp,
+        navigationPresentation = navigationPresentation.toModel(),
+        workspacePaneMode = workspacePaneMode.toModel(),
+        visiblePaneRoles = visiblePaneRoles.toModel(),
+        contentMaxWidthDp = contentMaxWidthDp,
+        pagePaddingDp = pagePaddingDp,
         gridColumns = gridColumns.toInt(),
-        showSidePanel = showSidePanel,
         showBottomBar = showBottomBar,
-        sidePanelWidthVp = sidePanelWidthVp,
-        primaryPaneWeight = primaryPaneWeight,
-        detailPanelMaxWidthVp = detailPanelMaxWidthVp
+        listPaneWidth = listPaneWidth.toModel(),
+        editorContentMaxWidthDp = editorContentMaxWidthDp,
+        primaryPaneMinDp = primaryPaneMinDp,
+        primaryPanePreferredDp = primaryPanePreferredDp,
+        primaryPaneMaxDp = primaryPaneMaxDp,
+        supportingPaneMode = supportingPaneMode?.toModel(),
+        avoidRegions = avoidRegions.map { it.toModel() }
     )
 }

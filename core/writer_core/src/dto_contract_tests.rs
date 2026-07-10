@@ -604,24 +604,24 @@ fn window_metrics_dto_fields_match_harmony() {
     // Core uses snake_case internally, but FFI JSON output uses camelCase
     // Verify the expected camelCase keys exist when serialized through FFI
     let ffi_json = json!({
-        "widthVp": metrics.width_vp,
-        "heightVp": metrics.height_vp,
-        "safeTopVp": metrics.safe_top_vp,
-        "safeBottomVp": metrics.safe_bottom_vp,
+        "widthDp": metrics.width_dp,
+        "heightDp": metrics.height_dp,
+        "safeTopDp": metrics.safe_top_dp,
+        "safeBottomDp": metrics.safe_bottom_dp,
         "keyboardVisible": metrics.keyboard_visible,
-        "foldPosture": "Unknown",
+        "foldFeature": {"state":"None","orientation":"Vertical","isSeparating":false,"occlusion":"None","boundsLeftVp":0.0,"boundsTopVp":0.0,"boundsRightVp":0.0,"boundsBottomVp":0.0},
         "orientation": "Portrait",
         "pointer": "Touch"
     });
     let expected_keys = vec![
-        "foldPosture",
-        "heightVp",
+        "foldFeature",
+        "heightDp",
         "keyboardVisible",
         "orientation",
         "pointer",
-        "safeBottomVp",
-        "safeTopVp",
-        "widthVp",
+        "safeBottomDp",
+        "safeTopDp",
+        "widthDp",
     ];
     let actual_keys = sorted_keys(&ffi_json);
     assert_eq!(
@@ -645,8 +645,8 @@ fn layout_plan_dto_fields_match_harmony() {
         "Core internal LayoutPlan uses snake_case 'shell_mode'"
     );
     assert!(
-        json.get("content_max_width_vp").is_some(),
-        "Core internal LayoutPlan uses snake_case 'content_max_width_vp'"
+        json.get("content_max_width_dp").is_some(),
+        "Core internal LayoutPlan uses snake_case 'content_max_width_dp'"
     );
 
     // Verify FFI output uses camelCase
@@ -656,23 +656,41 @@ fn layout_plan_dto_fields_match_harmony() {
         "shellMode": "SinglePane",
         "editorMode": "FullWidth",
         "navigationMode": "Stack",
-        "contentMaxWidthVp": 0.0,
-        "pagePaddingVp": 16.0,
+        "navigationPresentation": "BottomBar",
+        "workspacePaneMode": "SinglePane",
+        "visiblePaneRoles": {"showProjectList":true,"showChapterTree":true,"showEditor":true,"showSupporting":false},
+        "contentMaxWidthDp": 0.0,
+        "pagePaddingDp": 16.0,
         "gridColumns": 2,
-        "showSidePanel": false,
-        "showBottomBar": true
+        "showBottomBar": true,
+        "listPaneWidth": {"minDp":0.0,"preferredDp":0.0,"maxDp":0.0},
+        "editorContentMaxWidthDp": 0.0,
+        "primaryPaneMinDp": 0.0,
+        "primaryPanePreferredDp": 0.0,
+        "primaryPaneMaxDp": 0.0,
+        "supportingPaneMode": null,
+        "avoidRegions": []
     });
     let expected_keys = vec![
-        "contentMaxWidthVp",
+        "avoidRegions",
+        "contentMaxWidthDp",
+        "editorContentMaxWidthDp",
         "editorMode",
         "gridColumns",
         "heightClass",
+        "listPaneWidth",
         "navigationMode",
-        "pagePaddingVp",
+        "navigationPresentation",
+        "pagePaddingDp",
+        "primaryPaneMaxDp",
+        "primaryPaneMinDp",
+        "primaryPanePreferredDp",
         "shellMode",
         "showBottomBar",
-        "showSidePanel",
+        "supportingPaneMode",
+        "visiblePaneRoles",
         "widthClass",
+        "workspacePaneMode",
     ];
     let actual_keys = sorted_keys(&ffi_json);
     assert_eq!(

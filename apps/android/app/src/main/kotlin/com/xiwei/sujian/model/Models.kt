@@ -483,9 +483,28 @@ data class ProjectStatsSummary(
 
 // ── Layout Policy Models ──
 
-enum class FoldPosture {
-    Unknown, FullyOpened, HalfOpened, Closed
+enum class FoldState {
+    None, Flat, HalfOpened
 }
+
+enum class FoldOrientation {
+    Horizontal, Vertical
+}
+
+enum class FoldOcclusion {
+    None, Full
+}
+
+data class FoldFeatureInfo(
+    val state: FoldState = FoldState.None,
+    val orientation: FoldOrientation = FoldOrientation.Vertical,
+    val isSeparating: Boolean = false,
+    val occlusion: FoldOcclusion = FoldOcclusion.None,
+    val boundsLeftVp: Float = 0f,
+    val boundsTopVp: Float = 0f,
+    val boundsRightVp: Float = 0f,
+    val boundsBottomVp: Float = 0f
+)
 
 enum class Orientation {
     Unknown, Portrait, Landscape
@@ -496,7 +515,7 @@ enum class PointerKind {
 }
 
 enum class WidthClass {
-    Compact, Medium, Expanded
+    Compact, Medium, Expanded, Large, ExtraLarge
 }
 
 enum class HeightClass {
@@ -504,7 +523,7 @@ enum class HeightClass {
 }
 
 enum class ShellMode {
-    SinglePane, SupportingPane, TwoPane
+    SinglePane, SupportingPane, TwoPane, ThreePane
 }
 
 enum class EditorMode {
@@ -515,13 +534,41 @@ enum class NavigationMode {
     Stack, ListDetail
 }
 
+enum class NavigationPresentation {
+    BottomBar, NavigationRail, PermanentDrawer
+}
+
+enum class WorkspacePaneMode {
+    SinglePane, ListDetail, ThreePane
+}
+
+data class VisiblePaneRoles(
+    val showProjectList: Boolean = true,
+    val showChapterTree: Boolean = true,
+    val showEditor: Boolean = true,
+    val showSupporting: Boolean = false
+)
+
+data class PaneWidthConstraint(
+    val minDp: Float = 0f,
+    val preferredDp: Float = 0f,
+    val maxDp: Float = 0f
+)
+
+data class AvoidRegion(
+    val leftDp: Float = 0f,
+    val topDp: Float = 0f,
+    val rightDp: Float = 0f,
+    val bottomDp: Float = 0f
+)
+
 data class WindowMetrics(
-    val widthVp: Float,
-    val heightVp: Float,
-    val safeTopVp: Float = 0f,
-    val safeBottomVp: Float = 0f,
+    val widthDp: Float,
+    val heightDp: Float,
+    val safeTopDp: Float = 0f,
+    val safeBottomDp: Float = 0f,
     val keyboardVisible: Boolean = false,
-    val foldPosture: FoldPosture = FoldPosture.Unknown,
+    val foldFeature: FoldFeatureInfo = FoldFeatureInfo(),
     val orientation: Orientation = Orientation.Portrait,
     val pointer: PointerKind = PointerKind.Touch
 )
@@ -532,32 +579,38 @@ data class LayoutPlan(
     val shellMode: ShellMode,
     val editorMode: EditorMode,
     val navigationMode: NavigationMode,
-    val contentMaxWidthVp: Float,
-    val pagePaddingVp: Float,
+    val navigationPresentation: NavigationPresentation,
+    val workspacePaneMode: WorkspacePaneMode,
+    val visiblePaneRoles: VisiblePaneRoles,
+    val contentMaxWidthDp: Float,
+    val pagePaddingDp: Float,
     val gridColumns: Int,
-    val showSidePanel: Boolean,
     val showBottomBar: Boolean,
-    val sidePanelWidthVp: Float = 0f,
-    val primaryPaneWeight: Float = 1f,
-    val detailPanelMaxWidthVp: Float = 0f
+    val listPaneWidth: PaneWidthConstraint,
+    val editorContentMaxWidthDp: Float,
+    val primaryPaneMinDp: Float,
+    val primaryPanePreferredDp: Float,
+    val primaryPaneMaxDp: Float,
+    val supportingPaneMode: WorkspacePaneMode? = null,
+    val avoidRegions: List<AvoidRegion> = emptyList()
 )
 
 // ── Screen Policy 类型（Core screen_policy） ──
 
 enum class ScreenRole {
-    Home, Workspace, Writing, Settings, Sync
+    Home, ProjectList, ProjectWorkspace, Writing, StarMap, Stats, Settings, Sync
 }
 
 enum class ActionRole {
-    Back, Save, CreateProject, CreateVolume, CreateChapter, Delete, Rename, Settings, Sync, Search
+    Back, Save, CreateProject, CreateVolume, CreateChapter, Delete, Rename, Settings, Sync, Search, Sort
 }
 
 enum class ActionPlacement {
-    TopLeading, TopTrailing, Floating, BottomBar, ContextMenu, SidePanel
+    TopLeading, TopTrailing, Floating, BottomBar, ContextMenu, SidePanel, Navigation, ListHeader, ItemTrailing, EmptyState
 }
 
 enum class PaneRole {
-    PrimaryList, Detail, Editor, Inspector, Drawer
+    PrimaryList, Detail, Editor, Inspector, Drawer, Supporting
 }
 
 data class ActionSlot(
