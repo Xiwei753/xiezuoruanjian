@@ -1,6 +1,6 @@
 package com.xiwei.sujian.ui.compose.adaptive
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.calculateListDetailPaneScaffoldDirective
 import androidx.compose.runtime.Composable
@@ -24,7 +24,7 @@ fun rememberAdaptiveWindowState(): AdaptiveWindowState {
         calculateListDetailPaneScaffoldDirective(windowAdaptiveInfo)
     }
 
-    val activity = LocalContext.current as? Activity
+    val activity = LocalContext.current as? ComponentActivity
     var foldingFeatures by remember { mutableStateOf<List<FoldingFeature>>(emptyList()) }
 
     if (activity != null) {
@@ -33,7 +33,9 @@ fun rememberAdaptiveWindowState(): AdaptiveWindowState {
             adapter.startCollecting { features ->
                 foldingFeatures = features
             }
-            onDispose { }
+            onDispose {
+                adapter.stopCollecting()
+            }
         }
     }
 

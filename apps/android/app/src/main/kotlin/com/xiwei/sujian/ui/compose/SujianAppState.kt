@@ -22,8 +22,12 @@ import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.model.ShellMode
 import com.xiwei.sujian.model.WindowMetrics
-import com.xiwei.sujian.ui.compose.adaptive.AndroidFoldFeatureInfo
+import com.xiwei.sujian.ui.compose.adaptive.AndroidAdaptiveWindowAdapter
+import com.xiwei.sujian.ui.compose.adaptive.FoldState as AdaptiveFoldState
+import com.xiwei.sujian.ui.compose.adaptive.FoldOrientation as AdaptiveFoldOrientation
+import com.xiwei.sujian.ui.compose.adaptive.FoldOcclusionType
 import com.xiwei.sujian.ui.compose.navigation.SujianDestination
+import androidx.window.layout.FoldingFeature
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -43,10 +47,10 @@ class SujianAppState(
         private set
 
     var currentProjectId by mutableStateOf<String?>(null)
-        private set
+        internal set
 
     var currentProjectTitle by mutableStateOf("")
-        private set
+        internal set
 
     var currentVolumeId by mutableStateOf<String?>(null)
         private set
@@ -105,6 +109,30 @@ class SujianAppState(
 
     fun updateFoldFeature(info: FoldFeatureInfo) {
         foldFeatureInfo = info
+    }
+
+    fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>) {
+        val coreFoldInfo = if (features.isNotEmpty()) {
+            val feature = features.first()
+            val info = AndroidAdaptiveWindowAdapter.toFoldFeatureInfo(feature)
+            FoldFeatureInfo(
+                state = when (info.state) {
+                    AdaptiveFoldState.Flat -> FoldState.Flat
+                    AdaptiveFoldState.HalfOpened -> FoldState.HalfOpened
+                    else -> FoldState.None
+                },
+                orientation = if (info.orientation == AdaptiveFoldOrientation.Horizontal) FoldOrientation.Horizontal else FoldOrientation.Vertical,
+                isSeparating = info.isSeparating,
+                occlusion = if (info.occlusionType == FoldOcclusionType.Full) FoldOcclusion.Full else FoldOcclusion.None,
+                boundsLeftVp = info.boundsLeft.toFloat(),
+                boundsTopVp = info.boundsTop.toFloat(),
+                boundsRightVp = info.boundsRight.toFloat(),
+                boundsBottomVp = info.boundsBottom.toFloat()
+            )
+        } else {
+            FoldFeatureInfo()
+        }
+        foldFeatureInfo = coreFoldInfo
     }
 
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? {

@@ -161,6 +161,74 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun moveVolumeUp(volumeId: String) {
+        val pid = currentProjectId ?: return
+        val repo = workspaceRepository ?: return
+        val currentVolumes = _uiState.value.volumes
+        val currentIndex = currentVolumes.indexOfFirst { it.id == volumeId }
+        if (currentIndex <= 0) return
+        val reordered = currentVolumes.toMutableList()
+        reordered.add(currentIndex - 1, reordered.removeAt(currentIndex))
+        val orderedIds = reordered.map { it.id }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try { repo.reorderVolumes(pid, orderedIds) } catch (_: Exception) { }
+            }
+            loadVolumes()
+        }
+    }
+
+    fun moveVolumeDown(volumeId: String) {
+        val pid = currentProjectId ?: return
+        val repo = workspaceRepository ?: return
+        val currentVolumes = _uiState.value.volumes
+        val currentIndex = currentVolumes.indexOfFirst { it.id == volumeId }
+        if (currentIndex < 0 || currentIndex >= currentVolumes.size - 1) return
+        val reordered = currentVolumes.toMutableList()
+        reordered.add(currentIndex + 1, reordered.removeAt(currentIndex))
+        val orderedIds = reordered.map { it.id }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try { repo.reorderVolumes(pid, orderedIds) } catch (_: Exception) { }
+            }
+            loadVolumes()
+        }
+    }
+
+    fun moveChapterUp(volumeId: String, chapterId: String) {
+        val pid = currentProjectId ?: return
+        val repo = workspaceRepository ?: return
+        val volume = _uiState.value.volumes.find { it.id == volumeId } ?: return
+        val currentIndex = volume.chapters.indexOfFirst { it.id == chapterId }
+        if (currentIndex <= 0) return
+        val reordered = volume.chapters.toMutableList()
+        reordered.add(currentIndex - 1, reordered.removeAt(currentIndex))
+        val orderedIds = reordered.map { it.id }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try { repo.reorderChapters(pid, volumeId, orderedIds) } catch (_: Exception) { }
+            }
+            loadVolumes()
+        }
+    }
+
+    fun moveChapterDown(volumeId: String, chapterId: String) {
+        val pid = currentProjectId ?: return
+        val repo = workspaceRepository ?: return
+        val volume = _uiState.value.volumes.find { it.id == volumeId } ?: return
+        val currentIndex = volume.chapters.indexOfFirst { it.id == chapterId }
+        if (currentIndex < 0 || currentIndex >= volume.chapters.size - 1) return
+        val reordered = volume.chapters.toMutableList()
+        reordered.add(currentIndex + 1, reordered.removeAt(currentIndex))
+        val orderedIds = reordered.map { it.id }
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                try { repo.reorderChapters(pid, volumeId, orderedIds) } catch (_: Exception) { }
+            }
+            loadVolumes()
+        }
+    }
+
     private fun loadProjectStats(projectId: String) {
         val repo = workspaceRepository ?: return
         viewModelScope.launch {
