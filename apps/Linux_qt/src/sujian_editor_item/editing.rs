@@ -9,6 +9,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn tick_cursor_animation(&mut self) {
+        // Sync text animation state to cursor controller for coordinated blink suppression
+        self.cursor_ctrl.set_has_active_text_animation(self.text_anim_state.has_active_insert());
+        self.cursor_ctrl.set_coordinated_enabled(self.current_coordinated_text_cursor_animation_enabled);
+
         let still_animating = if self.cursor_ctrl.animation.is_some() {
             self.cursor_ctrl.tick_animation()
         } else {

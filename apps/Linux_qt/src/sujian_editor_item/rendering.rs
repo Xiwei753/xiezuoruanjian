@@ -803,6 +803,8 @@ impl SujianEditorItem {
             self.current_editor_enabled,
             self.buffer.has_selection(),
             vp_h,
+            self.current_coordinated_text_cursor_animation_enabled,
+            self.text_anim_state.has_active_insert(),
         );
 
         if result.needs_repaint {
@@ -810,9 +812,18 @@ impl SujianEditorItem {
             item.update();
         }
 
-        // GUI 线程直接 IME 更新
-        if result.ime_needs_update {
+        // Emit cursor_rect_changed whenever visibility, blink, or visual position changes.
+        // This decouples QML cursor refresh from IME update timing.
+        if result.ime_needs_update
+            || result.visibility_changed
+            || result.blink_changed
+            || result.visual_position_changed
+        {
             self.cursor_rect_changed();
+        }
+
+        // GUI 线程直接 IME 更新 — only for position/selection/surrounding text changes
+        if result.ime_needs_update {
             let obj_ptr = self.get_cpp_object();
             if !obj_ptr.is_null() {
                 cpp!(unsafe [obj_ptr as "QQuickItem*"] {

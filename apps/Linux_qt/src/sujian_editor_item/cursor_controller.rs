@@ -1,12 +1,17 @@
-// cursor_controller — Isolated cursor visual state
+// cursor_controller — Isolated cursor visual state (CursorVisualController)
 // =============================================================================
-// Extracted from SujianEditorItem to enforce the boundary:
-// cursor visual position / IME / animation must NOT directly touch
-// buffer, layout, or QSG nodes.
+// Enforces the boundary: cursor visual position / IME / animation must NOT
+// directly touch buffer, layout, or QSG nodes.
 //
-// The controller only computes target positions and animation state.
-// The QML signal emission and inputMethod()->update() are performed
-// directly on the GUI thread by the caller (update_cursor_visual_position).
+// Design principles (per AGENTS.md §2.3):
+// - cursor_should_be_visible is NEVER affected by text animation / overlay state.
+//   It is only controlled by: editor_enabled, has_selection, viewport visibility, focus.
+// - cursor_blink_opacity is decoupled from visible: QML Rectangle.visible binds
+//   shouldBeVisible, opacity binds blinkOpacity.
+// - During coordinated text animation, blink is suppressed (opacity locked to 1.0)
+//   so the cursor stays solid while glyphs fly in.
+// - CursorController does NOT directly read TextAnimationState; the caller passes
+//   `has_active_text_animation` to gate blink suppression.
 
 use super::rendering::CursorAnimationState;
 use crate::editor::layout::CaretAffinity;
@@ -19,8 +24,11 @@ const BLINK_INTERVAL_MS: u64 = 530;
 /// Invariants:
 /// - `target_cursor_x/y` are the layout-computed cursor positions (document coords).
 /// - `visual_x/y` are the positions actually rendered (may lag due to animation).
-/// - `CursorUpdateResult.ime_needs_update` indicates when the cursor position
-///   changed and IME needs updating (performed on the GUI thread by the caller).
+/// - `cursor_should_be_visible` is independent of text animation / overlay state.
+/// - `cursor_blink_opacity` is 0.0 or 1.0; during coordinated animation it is
+///   locked to 1.0 (no blink) so cursor stays solid while glyphs animate.
+/// - `CursorUpdateResult` tracks what changed so the caller can emit the
+///   appropriate QML signals without coupling to IME update timing.
 pub struct CursorController {
     // Target position (from layout)
     pub target_x: f64,
@@ -31,7 +39,7 @@ pub struct CursorController {
     pub visual_y: f64,
     pub visual_h: f64,
 
-    // Visibility
+    // Visibility — independent of text animation / overlay state
     pub visible: bool,
     pub dirty: bool,
 
@@ -55,10 +63,15 @@ pub struct CursorController {
     // Snap control
     pub force_snap_next: bool,
 
-    // Blink state
+    // Blink state — decoupled from visible
     pub blink_visible: bool,
     pub blink_last_toggle: Instant,
     pub blink_reset_requested: bool,
+
+    // Coordinated animation state
+    // When true and has_active_text_animation, blink is suppressed (opacity=1.0)
+    pub coordinated_enabled: bool,
+    pub has_active_text_animation: bool,
 }
 
 impl CursorController {
@@ -83,7 +96,45 @@ impl CursorController {
             blink_visible: true,
             blink_last_toggle: Instant::now(),
             blink_reset_requested: false,
+            coordinated_enabled: true,
+            has_active_text_animation: false,
         }
+    }
+
+    /// cursor_should_be_visible: QML Rectangle.visible binding.
+    /// NEVER affected by text animation / overlay state.
+    /// Only controlled by: editor_enabled, has_selection, viewport visibility.
+    pub fn cursor_should_be_visible(&self) -> bool {
+        self.visible
+    }
+
+    /// cursor_blink_opacity: QML Rectangle.opacity binding (0.0 or 1.0).
+    /// During coordinated text animation (coordinated_enabled && has_active_text_animation),
+    /// blink is suppressed — opacity stays 1.0 so cursor stays solid while glyphs animate.
+    /// When not in coordinated animation, follows normal blink phase.
+    pub fn cursor_blink_opacity(&self) -> f64 {
+        if !self.visible {
+            return 0.0;
+        }
+        if self.coordinated_enabled && self.has_active_text_animation {
+            return 1.0;
+        }
+        if self.blink_visible {
+            1.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Update coordinated animation state. Called by the coordinator
+    /// (SujianEditorItem) when text animation starts/stops.
+    pub fn set_has_active_text_animation(&mut self, has: bool) {
+        self.has_active_text_animation = has;
+    }
+
+    /// Update coordinated animation enabled setting.
+    pub fn set_coordinated_enabled(&mut self, enabled: bool) {
+        self.coordinated_enabled = enabled;
     }
 
     /// Update cursor visual state from layout-computed position.
@@ -108,12 +159,18 @@ impl CursorController {
         editor_enabled: bool,
         has_selection: bool,
         viewport_height: f64,
+        coordinated_enabled: bool,
+        has_active_text_animation: bool,
     ) -> CursorUpdateResult {
         use std::time::Instant;
 
         let old_x = self.target_x;
         let old_y = self.target_y;
         let old_visible = self.visible;
+        let old_blink_visible = self.blink_visible;
+
+        self.coordinated_enabled = coordinated_enabled;
+        self.has_active_text_animation = has_active_text_animation;
 
         self.target_x = cursor_x;
         self.target_y = cursor_y;
@@ -126,10 +183,12 @@ impl CursorController {
 
         let position_changed = (old_x - cursor_x).abs() > 0.01 || (old_y - cursor_y).abs() > 0.01;
 
-        // Determine visibility
+        // Determine visibility — NEVER affected by text animation / overlay state
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let new_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
         self.visible = new_visible;
+
+        let visibility_changed = old_visible != new_visible;
 
         if !new_visible {
             self.animation = None;
@@ -142,6 +201,9 @@ impl CursorController {
             return CursorUpdateResult {
                 ime_needs_update: position_changed,
                 needs_repaint: old_visible,
+                visibility_changed,
+                blink_changed: old_blink_visible != self.blink_visible,
+                visual_position_changed: position_changed,
             };
         }
 
@@ -185,6 +247,9 @@ impl CursorController {
             0
         };
 
+        // When coordinated animation is enabled and text animation is active,
+        // use the visual transaction's old/new cursor rect for tween.
+        // When coordinated is disabled, cursor snaps to new position but stays visible.
         let (visual_x, visual_y, new_animation) =
             if should_snap || !smooth_enabled || large_distance || safety_snap {
                 (cursor_x, cursor_y, None)
@@ -239,9 +304,14 @@ impl CursorController {
             self.blink_last_toggle = Instant::now();
         }
 
+        let blink_changed = old_blink_visible != self.blink_visible;
+
         CursorUpdateResult {
             ime_needs_update: position_changed || scroll_changed,
             needs_repaint: pos_changed || self.animation.is_some(),
+            visibility_changed,
+            blink_changed,
+            visual_position_changed: pos_changed,
         }
     }
 
@@ -270,6 +340,8 @@ impl CursorController {
     }
 
     /// Advance blink state. Returns true if blink state changed (needs QML update).
+    /// During coordinated text animation, blink is suppressed — opacity stays 1.0
+    /// so cursor stays solid while glyphs animate.
     pub fn tick_blink(&mut self) -> bool {
         if !self.visible {
             if !self.blink_visible {
@@ -277,6 +349,15 @@ impl CursorController {
             }
             self.blink_visible = false;
             return true;
+        }
+
+        // During coordinated text animation, suppress blink — keep opacity at 1.0
+        if self.coordinated_enabled && self.has_active_text_animation {
+            if !self.blink_visible {
+                self.blink_visible = true;
+                return true;
+            }
+            return false;
         }
 
         if self.blink_reset_requested {
@@ -312,4 +393,10 @@ pub struct CursorUpdateResult {
     pub ime_needs_update: bool,
     /// True if a repaint is needed.
     pub needs_repaint: bool,
+    /// True if cursor visibility changed (QML cursor_should_be_visible changed).
+    pub visibility_changed: bool,
+    /// True if blink state changed (QML cursor_blink_opacity changed).
+    pub blink_changed: bool,
+    /// True if visual position changed (QML cursor_rect_x/y changed).
+    pub visual_position_changed: bool,
 }

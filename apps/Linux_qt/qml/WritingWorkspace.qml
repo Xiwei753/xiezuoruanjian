@@ -888,7 +888,8 @@ Rectangle {
                         }
 
                         // QML 光标 - 作为 SujianEditorItem 子项，坐标系与编辑器一致
-                        // blink phase 由 Rust CursorController 管理，通过 cursor_blink_visible 属性驱动
+                        // visible 绑定 cursor_should_be_visible（不受 text animation / overlay 影响）
+                        // opacity 绑定 cursor_blink_opacity（协同动画期间锁定 1.0，不闪烁）
                         Rectangle {
                             id: sujianCursorRect
                             x: sujianEditor.cursor_rect_x
@@ -896,10 +897,10 @@ Rectangle {
                             width: 2
                             height: sujianEditor.cursor_rect_height
                             color: sujianEditor.cursor_color
-                            visible: sujianEditor.cursor_blink_visible
+                            visible: sujianEditor.cursor_should_be_visible
                                      && sujianEditor.editor_enabled
                                      && !sujianEditor.has_selection
-                                     && !editorScroll.editorAnimationSuppressed
+                            opacity: sujianEditor.cursor_blink_opacity
                             radius: 1
                         }
                     }

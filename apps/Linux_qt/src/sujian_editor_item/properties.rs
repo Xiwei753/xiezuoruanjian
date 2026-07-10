@@ -578,6 +578,14 @@ impl SujianEditorItem {
         self.cursor_ctrl.blink_visible
     }
 
+    pub(crate) fn cursor_should_be_visible(&self) -> bool {
+        self.cursor_ctrl.cursor_should_be_visible()
+    }
+
+    pub(crate) fn cursor_blink_opacity(&self) -> f32 {
+        self.cursor_ctrl.cursor_blink_opacity() as f32
+    }
+
     pub(crate) fn current_selection_text(&self) -> QString {
         self.buffer.selected_text().into()
     }

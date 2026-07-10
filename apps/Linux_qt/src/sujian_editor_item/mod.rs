@@ -178,6 +178,8 @@ pub struct SujianEditorItem {
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
     cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
     cursor_blink_visible: qt_property!(bool; READ cursor_blink_visible NOTIFY cursor_rect_changed),
+    cursor_should_be_visible: qt_property!(bool; READ cursor_should_be_visible NOTIFY cursor_rect_changed),
+    cursor_blink_opacity: qt_property!(f32; READ cursor_blink_opacity NOTIFY cursor_rect_changed),
     anchor_rect_x: qt_property!(f32; READ anchor_rect_x NOTIFY selection_changed),
     anchor_rect_y: qt_property!(f32; READ anchor_rect_y NOTIFY selection_changed),
     anchor_rect_width: qt_property!(f32; READ anchor_rect_width NOTIFY selection_changed),
@@ -317,6 +319,8 @@ impl Default for SujianEditorItem {
             cursor_rect_height: Default::default(),
             cursor_visible: Default::default(),
             cursor_blink_visible: Default::default(),
+            cursor_should_be_visible: Default::default(),
+            cursor_blink_opacity: Default::default(),
             anchor_rect_x: Default::default(),
             anchor_rect_y: Default::default(),
             anchor_rect_width: Default::default(),
@@ -438,7 +442,11 @@ impl SujianEditorItem {
     pub(crate) fn clear_active_text_animations(&mut self) {
         if !self.text_anim_state.is_empty() {
             self.text_anim_state.clear();
+            // Sync text animation state to cursor controller
+            self.cursor_ctrl.set_has_active_text_animation(false);
             self.request_static_repaint();
+            // Emit cursor_rect_changed so QML picks up blink_opacity change
+            self.cursor_rect_changed();
         }
     }
 
@@ -504,6 +512,8 @@ impl SujianEditorItem {
             .text_anim_state
             .on_insert_animation_finished_by_id(transaction_id, range_id, bs, be);
         if removed {
+            // Sync text animation state to cursor controller
+            self.cursor_ctrl.set_has_active_text_animation(self.text_anim_state.has_active_insert());
             editor_animation_debug_log(&format!(
                 "on_insert_animation_{}: transaction_id={:?}, range_id={:?}, byte_range=({},{}), cleared hidden range, has_active_insert={}",
                 if skipped { "skipped" } else { "finished" },
@@ -514,6 +524,8 @@ impl SujianEditorItem {
                 self.text_anim_state.has_active_insert()
             ));
             self.request_static_repaint();
+            // Emit cursor_rect_changed so QML picks up blink_opacity change
+            self.cursor_rect_changed();
         }
     }
 

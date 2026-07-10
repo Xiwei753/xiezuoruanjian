@@ -68,6 +68,9 @@ impl SujianEditorItem {
                                     mode,
                                     vt.duration_ms,
                                 );
+                                // Sync text animation state to cursor controller for coordinated blink
+                                self.cursor_ctrl.set_has_active_text_animation(self.text_anim_state.has_active_insert());
+                                self.cursor_ctrl.set_coordinated_enabled(self.current_coordinated_text_cursor_animation_enabled);
                                 editor_animation_debug_log(&format!(
                                     "record_transaction: created Insert animation transaction_id={}, range_id={:?}, mode={:?}, byte_range=({},{}), reflow_ranges={:?}, duration_ms={}",
                                     vt.id,
