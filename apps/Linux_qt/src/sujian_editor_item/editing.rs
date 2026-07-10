@@ -393,7 +393,7 @@ impl SujianEditorItem {
         self.buffer.cursor = byte_end;
     }
 
-    pub(crate) fn clipboard_copy(&self) -> bool {
+    pub(crate) fn clipboard_copy(&mut self) -> bool {
         if !self.buffer.has_selection() {
             return false;
         }
@@ -401,28 +401,21 @@ impl SujianEditorItem {
         if text.is_empty() {
             return false;
         }
-        let qtext: QString = text.into();
-        cpp!(unsafe [qtext as "QString"] {
-            QClipboard *clipboard = QGuiApplication::clipboard();
-            if (clipboard) clipboard->setText(qtext, QClipboard::Clipboard);
-        });
-        true
+        use writer_core::platform_interaction::clipboard_focus::{ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult};
+        let result = ClipboardAndFocusAdapter::execute_clipboard(&mut self.clipboard_adapter, ClipboardRequest::Copy { text });
+        matches!(result, ClipboardResult::Copied)
     }
 
     pub(crate) fn clipboard_paste(&mut self) {
         if !self.current_editor_enabled {
             return;
         }
-        let pasted: QString = cpp!(unsafe [] -> QString as "QString" {
-            QClipboard *clipboard = QGuiApplication::clipboard();
-            return clipboard ? clipboard->text(QClipboard::Clipboard) : QString();
-        });
-        let s = pasted.to_string();
-        if s.is_empty() {
-            return;
+        use writer_core::platform_interaction::clipboard_focus::{ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult};
+        let result = ClipboardAndFocusAdapter::execute_clipboard(&mut self.clipboard_adapter, ClipboardRequest::Paste);
+        if let ClipboardResult::Pasted { text } = result {
+            let normalized = normalize_plain_text(&text);
+            self.insert_text_with_cause(normalized.into(), Some(EditorTransactionCause::Paste));
         }
-        let normalized = normalize_plain_text(&s);
-        self.insert_text_with_cause(normalized.into(), Some(EditorTransactionCause::Paste));
     }
 
     pub(crate) fn insert_preedit(&mut self, text: QString) {

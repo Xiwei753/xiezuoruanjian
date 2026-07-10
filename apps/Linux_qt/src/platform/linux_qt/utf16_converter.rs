@@ -12,6 +12,9 @@ pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
             break;
         }
         utf16_count += ch.len_utf16() as usize;
+        if utf16_count > utf16_offset {
+            break;
+        }
         utf8_pos += ch.len_utf8();
     }
     utf8_pos
@@ -63,8 +66,8 @@ mod tests {
     #[test]
     fn emoji_surrogate_pair() {
         let text = "😀";
-        assert_eq!(text.len_utf8(), 4);
-        assert_eq!(text.len_utf16(), 2);
+        assert_eq!(text.len(), 4);
+        assert_eq!(text.encode_utf16().count(), 2);
         assert_eq!(utf16_to_utf8_offset(text, 0), 0);
         assert_eq!(utf16_to_utf8_offset(text, 1), 0);
         assert_eq!(utf16_to_utf8_offset(text, 2), 4);

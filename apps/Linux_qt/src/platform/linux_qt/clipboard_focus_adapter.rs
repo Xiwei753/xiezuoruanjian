@@ -10,6 +10,7 @@
 //! - hide_context_menu() 通知 QML 侧关闭菜单
 
 use cpp::cpp;
+use qmetaobject::QString;
 use std::sync::Mutex;
 use writer_core::platform_interaction::clipboard_focus::{
     ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult,
@@ -61,7 +62,7 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
             ClipboardRequest::Copy { text } => {
                 let text_utf16: Vec<u16> = text.encode_utf16().collect();
                 let ptr = text_utf16.as_ptr();
-                let len = text_utf16.len();
+                let len = text_utf16.len() as i32;
                 cpp!(unsafe [ptr as "const ushort*", len as "int"] {
                     QClipboard* cb = QGuiApplication::clipboard();
                     if (cb) {
@@ -72,30 +73,20 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
                 ClipboardResult::Copied
             }
             ClipboardRequest::Paste => {
-                let text_ptr = cpp!(unsafe [] -> *mut std::ffi::c_void as "void*" {
+                let qtext: QString = cpp!(unsafe [] -> QString as "QString" {
                     QClipboard* cb = QGuiApplication::clipboard();
-                    if (cb) {
-                        QString text = cb->text();
-                        QByteArray utf8 = text.toUtf8();
-                        char* copy = new char[utf8.size() + 1];
-                        memcpy(copy, utf8.constData(), utf8.size());
-                        copy[utf8.size()] = '\0';
-                        return copy;
-                    }
-                    return nullptr;
+                    return cb ? cb->text(QClipboard::Clipboard) : QString();
                 });
-                if text_ptr.is_null() {
+                let text = qtext.to_string();
+                if text.is_empty() {
                     return ClipboardResult::Unavailable;
                 }
-                let c_str = unsafe { std::ffi::CStr::from_ptr(text_ptr as *const i8) };
-                let text = c_str.to_string_lossy().into_owned();
-                unsafe { libc::free(text_ptr as *mut libc::c_void) };
                 ClipboardResult::Pasted { text }
             }
             ClipboardRequest::Cut { text } => {
                 let text_utf16: Vec<u16> = text.encode_utf16().collect();
                 let ptr = text_utf16.as_ptr();
-                let len = text_utf16.len();
+                let len = text_utf16.len() as i32;
                 cpp!(unsafe [ptr as "const ushort*", len as "int"] {
                     QClipboard* cb = QGuiApplication::clipboard();
                     if (cb) {

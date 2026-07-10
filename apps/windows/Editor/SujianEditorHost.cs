@@ -2,6 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.UI.ViewManagement;
 using System;
+using System.Text.Json;
 using Sujian.Windows.Editor.Animation;
 
 namespace Sujian.Windows.Editor;
@@ -143,14 +144,21 @@ public sealed class SujianEditorHost : UserControl
         _animationOverlay.Controller.AnimationEnabled = enabled;
     }
 
-    public void ProcessVisualTransaction(string oldText, string newText)
+    public void ProcessVisualTransaction(string oldText, string newText,
+        uint oldCursorIndex, uint newCursorIndex, string cause,
+        uint maxAnimatedChars = 20, uint animationDurationMs = 300)
     {
         if (!_typingAnimationEnabled || _core == null) return;
 
         try
         {
-            var json = _core.GetEditorVisualTransaction(oldText, newText, "", "");
+            var json = _core.GetEditorVisualTransaction(
+                oldText, newText, oldCursorIndex, newCursorIndex,
+                cause, maxAnimatedChars, animationDurationMs);
             if (string.IsNullOrEmpty(json)) return;
+
+            var env = ParseEnvelope(json);
+            if (env.Data == null) return;
 
             var vt = EditorVisualTransaction.FromJson(json);
             if (vt == null) return;
@@ -160,6 +168,31 @@ public sealed class SujianEditorHost : UserControl
             _animationOverlay.StartTick();
         }
         catch { }
+    }
+
+    private static EnvelopeResult ParseEnvelope(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return new EnvelopeResult { Ok = false, Error = "empty" };
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json!);
+            var root = doc.RootElement;
+            var ok = root.TryGetProperty("ok", out var okEl) && okEl.GetBoolean();
+            var error = root.TryGetProperty("error", out var errEl) ? errEl.GetString() : null;
+            var data = root.TryGetProperty("data", out var dataEl) ? dataEl : (JsonElement?)null;
+            return new EnvelopeResult { Ok = ok, Error = error, Data = data };
+        }
+        catch
+        {
+            return new EnvelopeResult { Ok = false, Error = "parse_error" };
+        }
+    }
+
+    private sealed class EnvelopeResult
+    {
+        public bool Ok;
+        public string? Error;
+        public JsonElement? Data;
     }
 
     private void OnAnimationFinished(object? sender, AnimationFinishedEventArgs e)

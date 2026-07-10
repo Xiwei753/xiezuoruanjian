@@ -23,6 +23,8 @@ namespace Sujian.Platform
     /// - clipboard: Windows.ApplicationModel.DataTransfer.Clipboard ✓
     /// - context menu: WinUI 3 context menu 未通过适配器接入 ✗
     /// - IEditorTransactionBoundary: LocalStandaloneTransactionBoundary (UsesCoreEngine == false)
+    ///   SujianEditor 编辑路径已全部走 IEditorTransactionBoundary，
+    ///   不再直接操作 _lines。
     /// </summary>
     public class PlatformCapabilities
     {

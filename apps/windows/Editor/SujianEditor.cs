@@ -168,13 +168,17 @@ public sealed class SujianEditor : UserControl
         _suppressNotifyTextChanged = true;
         try
         {
-            PushUndo();
-            LoadPlainText(newText);
-
             var startOffset = Math.Min(args.Range.StartCaretPosition, args.Range.EndCaretPosition);
             var endOffset = Math.Max(args.Range.StartCaretPosition, args.Range.EndCaretPosition);
-            var newEndOffset = args.NewSelection.EndCaretPosition;
+            var replaceLength = endOffset - startOffset;
+            var replacementText = newText.Substring(startOffset, newText.Length - (oldText.Length - endOffset) - startOffset);
 
+            var result = _transactionBoundary.ReplaceRange(
+                oldText, startOffset, startOffset, startOffset, replaceLength,
+                replacementText, EditorTransactionCause.ImeCommit);
+
+            LoadPlainText(result.NewText);
+            var newEndOffset = args.NewSelection.EndCaretPosition;
             OffsetToLineColumn(newEndOffset, out _cursorLine, out _cursorColumn);
             ClearSelection();
             PublishText();
@@ -368,6 +372,57 @@ public sealed class SujianEditor : UserControl
         editor._canvas?.Invalidate();
     }
 
+    private int GetFlatCursorOffset()
+    {
+        int offset = 0;
+        for (int i = 0; i < _cursorLine; i++)
+            offset += _lines[i].Length + 1;
+        offset += _cursorColumn;
+        return offset;
+    }
+
+    private int GetFlatAnchorOffset()
+    {
+        if (!_hasSelection) return GetFlatCursorOffset();
+        int offset = 0;
+        int anchorLine = _selectionStartLine;
+        int anchorCol = _selectionStartColumn;
+        for (int i = 0; i < anchorLine; i++)
+            offset += _lines[i].Length + 1;
+        offset += anchorCol;
+        return offset;
+    }
+
+    private int GetFlatSelectionStartOffset()
+    {
+        GetSelectionBounds(out int startLine, out int startCol, out _, out _);
+        int offset = 0;
+        for (int i = 0; i < startLine; i++)
+            offset += _lines[i].Length + 1;
+        offset += startCol;
+        return offset;
+    }
+
+    private int GetSelectionLength()
+    {
+        GetSelectionBounds(out int startLine, out int startCol, out int endLine, out int endCol);
+        if (startLine == endLine) return endCol - startCol;
+        int len = _lines[startLine].Length - startCol;
+        for (int i = startLine + 1; i < endLine; i++)
+            len += _lines[i].Length + 1;
+        len += endCol + 1;
+        return len;
+    }
+
+    private void ApplyTransactionResult(EditorTransactionResult result)
+    {
+        LoadPlainText(result.NewText);
+        OffsetToLineColumn(result.NewCursorOffset, out _cursorLine, out _cursorColumn);
+        ClearSelection();
+        PublishText();
+        TextChangedByUser?.Invoke(this, EventArgs.Empty);
+    }
+
     private void LoadPlainText(string text)
     {
         _lines.Clear();
@@ -388,18 +443,26 @@ public sealed class SujianEditor : UserControl
         _undoIndex = _undoStack.Count;
     }
 
-    private void CommitText(string text)
+    private void CommitText(string text, EditorTransactionCause cause = EditorTransactionCause.Typing)
     {
-        PushUndo();
-        if (_hasSelection) DeleteSelection();
-        foreach (var ch in text)
+        var oldText = string.Join('\n', _lines);
+        int cursorOffset = GetFlatCursorOffset();
+        int anchorOffset = GetFlatAnchorOffset();
+
+        if (_hasSelection)
         {
-            if (ch == '\r') continue;
-            if (ch == '\n') InsertNewLine();
-            else InsertChar(ch);
+            int selStart = GetFlatSelectionStartOffset();
+            int selLen = GetSelectionLength();
+            var result = _transactionBoundary.ReplaceRange(
+                oldText, cursorOffset, anchorOffset, selStart, selLen, text, cause);
+            ApplyTransactionResult(result);
         }
-        PublishText();
-        TextChangedByUser?.Invoke(this, EventArgs.Empty);
+        else
+        {
+            var result = _transactionBoundary.InsertText(
+                oldText, cursorOffset, anchorOffset, text, cause);
+            ApplyTransactionResult(result);
+        }
     }
 
     private void InsertChar(char ch)
@@ -422,56 +485,46 @@ public sealed class SujianEditor : UserControl
 
     private void DeleteBackward()
     {
-        PushUndo();
+        var oldText = string.Join('\n', _lines);
+        int cursorOffset = GetFlatCursorOffset();
+        int anchorOffset = GetFlatAnchorOffset();
+
         if (_hasSelection)
         {
-            DeleteSelection();
-            PublishText();
-            TextChangedByUser?.Invoke(this, EventArgs.Empty);
-            return;
+            int selStart = GetFlatSelectionStartOffset();
+            int selLen = GetSelectionLength();
+            var result = _transactionBoundary.ReplaceRange(
+                oldText, cursorOffset, anchorOffset, selStart, selLen, "", EditorTransactionCause.DeleteBackward);
+            ApplyTransactionResult(result);
         }
-        if (_cursorColumn > 0)
+        else
         {
-            var line = _lines[_cursorLine];
-            _lines[_cursorLine] = line.Remove(_cursorColumn - 1, 1);
-            _cursorColumn--;
+            var result = _transactionBoundary.DeleteBackward(
+                oldText, cursorOffset, anchorOffset, EditorTransactionCause.DeleteBackward);
+            ApplyTransactionResult(result);
         }
-        else if (_cursorLine > 0)
-        {
-            var previousLength = _lines[_cursorLine - 1].Length;
-            _lines[_cursorLine - 1] += _lines[_cursorLine];
-            _lines.RemoveAt(_cursorLine);
-            _cursorLine--;
-            _cursorColumn = previousLength;
-        }
-        ClearSelection();
-        PublishText();
-        TextChangedByUser?.Invoke(this, EventArgs.Empty);
     }
 
     private void DeleteForward()
     {
-        PushUndo();
+        var oldText = string.Join('\n', _lines);
+        int cursorOffset = GetFlatCursorOffset();
+        int anchorOffset = GetFlatAnchorOffset();
+
         if (_hasSelection)
         {
-            DeleteSelection();
-            PublishText();
-            TextChangedByUser?.Invoke(this, EventArgs.Empty);
-            return;
+            int selStart = GetFlatSelectionStartOffset();
+            int selLen = GetSelectionLength();
+            var result = _transactionBoundary.ReplaceRange(
+                oldText, cursorOffset, anchorOffset, selStart, selLen, "", EditorTransactionCause.DeleteForward);
+            ApplyTransactionResult(result);
         }
-        var line = _lines[_cursorLine];
-        if (_cursorColumn < line.Length)
+        else
         {
-            _lines[_cursorLine] = line.Remove(_cursorColumn, 1);
+            var result = _transactionBoundary.DeleteForward(
+                oldText, cursorOffset, anchorOffset, EditorTransactionCause.DeleteForward);
+            ApplyTransactionResult(result);
         }
-        else if (_cursorLine + 1 < _lines.Count)
-        {
-            _lines[_cursorLine] += _lines[_cursorLine + 1];
-            _lines.RemoveAt(_cursorLine + 1);
-        }
-        ClearSelection();
-        PublishText();
-        TextChangedByUser?.Invoke(this, EventArgs.Empty);
     }
 
     private void Undo()
@@ -625,10 +678,14 @@ public sealed class SujianEditor : UserControl
     {
         if (!_hasSelection) return;
         CopyToClipboard();
-        PushUndo();
-        DeleteSelection();
-        PublishText();
-        TextChangedByUser?.Invoke(this, EventArgs.Empty);
+        var oldText = string.Join('\n', _lines);
+        int cursorOffset = GetFlatCursorOffset();
+        int anchorOffset = GetFlatAnchorOffset();
+        int selStart = GetFlatSelectionStartOffset();
+        int selLen = GetSelectionLength();
+        var result = _transactionBoundary.ReplaceRange(
+            oldText, cursorOffset, anchorOffset, selStart, selLen, "", EditorTransactionCause.Cut);
+        ApplyTransactionResult(result);
     }
 
     private async void PasteFromClipboard()
@@ -641,7 +698,7 @@ public sealed class SujianEditor : UserControl
                 var text = await content.GetTextAsync();
                 if (!string.IsNullOrEmpty(text))
                 {
-                    CommitText(text.Replace("\r\n", "\n").Replace('\r', '\n'));
+                    CommitText(text.Replace("\r\n", "\n").Replace('\r', '\n'), EditorTransactionCause.Paste);
                 }
             }
         }

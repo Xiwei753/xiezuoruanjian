@@ -31,6 +31,7 @@ use crate::editor::layout::{
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
+use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use buffer::{
     byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
     prev_char_boundary, EditorBuffer, EditorSnapshot,
@@ -68,7 +69,6 @@ pub(crate) enum PreeditAttributeKind {
 cpp! {{
     #include <QtGui/QFont>
     #include <QtGui/QPainter>
-    #include <QtGui/QClipboard>
     #include <QByteArray>
     #include <QGuiApplication>
     #include <QMetaMethod>
@@ -215,7 +215,7 @@ pub struct SujianEditorItem {
     handle_key: qt_method!(fn(&mut self, key: i32, modifiers: i32) -> bool),
     click_at: qt_method!(fn(&mut self, x: f32, y: f32, extend: bool)),
     drag_select_at: qt_method!(fn(&mut self, x: f32, y: f32)),
-    clipboard_copy: qt_method!(fn(&self) -> bool),
+    clipboard_copy: qt_method!(fn(&mut self) -> bool),
     clipboard_paste: qt_method!(fn(&mut self)),
     insert_preedit: qt_method!(fn(&mut self, text: QString)),
     commit_preedit: qt_method!(fn(&mut self, text: QString)),
@@ -275,6 +275,7 @@ pub struct SujianEditorItem {
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
     text_anim_state: TextAnimationState,
+    clipboard_adapter: LinuxQtClipboardFocusAdapter,
 }
 
 impl Default for SujianEditorItem {
@@ -413,6 +414,7 @@ impl Default for SujianEditorItem {
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
             text_anim_state: TextAnimationState::new(),
+            clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
         }
     }
 }

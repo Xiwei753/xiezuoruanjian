@@ -12,7 +12,7 @@ use writer_core::platform_interaction::capabilities::PlatformCapabilities;
 /// - IME preedit: SujianEventFilter → FFI → EditorInputController 完整链路
 /// - replacement commit: fcitx5 拼音修正走 sujian_ime_replace_and_commit
 /// - text animation / smooth cursor / reflow animation: Core visual transaction → QML overlay
-/// - clipboard: SujianEditorItem::clipboard_copy/paste via QClipboard
+/// - clipboard: SujianEditorItem::clipboard_copy/paste via LinuxQtClipboardFocusAdapter
 /// - cursor anchor: IME query 已迁移到 Rust FFI 数据源（sujian_get_ime_query_data）
 ///
 /// 未真实接入：

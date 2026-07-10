@@ -49,6 +49,7 @@ use std::sync::{Mutex, OnceLock};
 
 mod backend;
 mod editor;
+mod platform;
 mod starmap_bridge;
 mod sujian_editor_item;
 mod sync_bridge;

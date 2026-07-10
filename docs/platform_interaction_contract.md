@@ -1,7 +1,7 @@
 # 平台系统交互契约
 
 Status: active
-Last verified: 2026-07-09
+Last verified: 2026-07-10
 Truth source: code (core/writer_core/src/platform_interaction/)
 
 ## 目的
@@ -39,7 +39,7 @@ pub struct PlatformCapabilities {
 | 能力 | Linux Qt | Windows | Android | Harmony |
 |------|----------|---------|---------|---------|
 | IME preedit | ✓ | ✓ | ✓ | ✗ |
-| cursor anchor | ✓ (Rust FFI) | ✓ | ✓ | ✗ |
+| cursor anchor | ✓ (adapter+FFI) | ✓ | ✓ | ✗ |
 | replacement commit | ✓ | ✗ | ✗ | ✗ |
 | text animation | ✓ | ✗ | ✓ | ✗ |
 | smooth cursor | ✓ | ✗ | ✓ | ✗ |
@@ -98,16 +98,16 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 | 层 | 职责 | 文件 |
 |----|------|------|
 | Core | `CursorAnchorRequest` / `CursorAnchorAdapter` trait 定义 | `core/.../cursor_anchor.rs` |
-| Linux Qt | QInputMethod::update 触发、IME query 响应 | `apps/Linux_qt/src/platform/linux_qt/cursor_anchor_adapter.rs` (空桩) |
+| Linux Qt | QInputMethod::update 触发、IME query 响应 | `apps/Linux_qt/src/platform/linux_qt/cursor_anchor_adapter.rs` |
 | Windows | CoreTextEditContext candidate window anchoring | `apps/windows/Platform/IPlatformAdapters.cs` |
 | Android | CursorAnchorInfo → EditorView | `apps/android/.../platform/CursorAnchorAdapter.kt` |
 
 ### Linux Qt 当前状态
 
-- `LinuxQtCursorAnchorAdapter` 为空桩
-- IME query 在 `qt_surface.rs` C++ 侧直接读 QML property
+- `LinuxQtCursorAnchorAdapter` 已实现 `notify_cursor_anchor_update`、`request_candidate_window_update`、`is_input_method_visible`
+- IME query 在 `qt_surface.rs` C++ 侧通过 Rust FFI 数据源（`sujian_get_ime_query_data`）获取数据，C++ 只做协议翻译
 - IME cursor update 在 `ime_visual.rs` 通过 cpp! 宏直接调用 `QInputMethod::update()`
-- **迁移目标**：IME query 所需数据由 CursorAnchorAdapter 提供，C++ 只做协议翻译
+- **待迁移**：IME cursor update 从 cpp! 宏迁移到 CursorAnchorAdapter
 
 ## 剪贴板与焦点
 
@@ -116,16 +116,16 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 | 层 | 职责 | 文件 |
 |----|------|------|
 | Core | `ClipboardRequest` / `ClipboardResult` / `FocusRequest` / `FocusState` 定义 | `core/.../clipboard_focus.rs` |
-| Linux Qt | QClipboard / forceActiveFocus / QMenu | `apps/Linux_qt/src/platform/linux_qt/clipboard_focus_adapter.rs` (空桩) |
+| Linux Qt | QClipboard / forceActiveFocus / QMenu | `apps/Linux_qt/src/platform/linux_qt/clipboard_focus_adapter.rs` |
 | Windows | WinRT Clipboard / Focus | `apps/windows/Platform/IPlatformAdapters.cs` |
 | Android | ClipboardManager / InputMethodManager | `apps/android/.../platform/ClipboardFocusAdapter.kt` |
 
 ### Linux Qt 当前状态
 
-- `LinuxQtClipboardFocusAdapter` 所有操作返回 Unavailable
-- 实际剪贴板在 `SujianEditorItem::clipboard_copy/paste()` 通过 cpp! 宏直接调用 QClipboard
-- 实际焦点在 `input::focus_item()` 通过 cpp! 宏直接调用 forceActiveFocus
-- **迁移目标**：cpp! 剪贴板/焦点调用收敛到适配器
+- `LinuxQtClipboardFocusAdapter` 已实现 Copy/Paste/Cut/HasText（通过 QClipboard）和 focus 管理
+- `SujianEditorItem::clipboard_copy/paste` 已走 `LinuxQtClipboardFocusAdapter`
+- 焦点管理已通过 adapter 的 `execute_focus()` 实现
+- **待迁移**：IME cursor update 从 cpp! 宏迁移到 ClipboardAndFocusAdapter
 
 ## 动画驱动
 
@@ -206,13 +206,17 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 - [x] Linux Qt AnimationDriver 收敛：drive_animation/cancel/finish 已真实接入 QML overlay
 - [x] Windows IEditorTransactionBoundary 诚实化：重命名为 LocalStandaloneTransactionBoundary，UsesCoreEngine == false
 - [x] Windows PlatformCapabilities 诚实化：动画/context_menu 标记为 false
+- [x] Linux Qt 剪贴板从 cpp! 宏迁移到 ClipboardAndFocusAdapter
+- [x] Linux Qt platform 模块纳入 crate（main.rs mod platform;）
+- [x] Linux Qt SujianEditorItem 持有并使用 LinuxQtClipboardFocusAdapter
+- [x] Windows SujianEditor 编辑路径走 IEditorTransactionBoundary
+- [x] Windows C# P/Invoke 签名与 Rust C ABI 统一（writer_core_editor_visual_transaction）
+- [x] Windows ProcessVisualTransaction 解析 ResultEnvelope，data=null 时不播放动画
 
 ### 待迁移（大迁移，无法一次完成）
 
 - [ ] Linux Qt IME cursor update 从 cpp! 宏迁移到 CursorAnchorAdapter
-- [ ] Linux Qt 剪贴板从 cpp! 宏迁移到 ClipboardAndFocusAdapter
 - [ ] Linux Qt 焦点从 cpp! 宏迁移到 ClipboardAndFocusAdapter
-- [ ] Windows SujianEditor 正文变更走 Core EditorEngine / EditorTransaction
 - [ ] Windows 动画接入 Core visual transaction
 - [ ] Windows context menu 通过适配器接入
 - [ ] Windows EnvelopeResult 对齐 Core ResultEnvelope schema (messageKey/messageArgs)
