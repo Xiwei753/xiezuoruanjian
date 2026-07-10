@@ -43,7 +43,9 @@ fun SujianNavigationSuite(
             SujianDestination.Works -> ProjectWorkspaceScreen(appState = appState)
             SujianDestination.StarMap -> StarMapScreen()
             SujianDestination.Stats -> StatsScreen()
-            SujianDestination.Settings -> SettingsScreen()
+            SujianDestination.Settings -> SettingsScreen(
+                onReturnFromSettings = { appState.navigateTo(SujianDestination.Works) }
+            )
         }
     }
 }

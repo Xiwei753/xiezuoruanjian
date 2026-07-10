@@ -11,6 +11,7 @@ import com.xiwei.sujian.ui.SettingsActivity
 
 @Composable
 fun SettingsScreen(
+    onReturnFromSettings: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -18,7 +19,9 @@ fun SettingsScreen(
     DisposableEffect(Unit) {
         val intent = Intent(context, SettingsActivity::class.java)
         context.startActivity(intent)
-        onDispose { }
+        onDispose {
+            onReturnFromSettings?.invoke()
+        }
     }
 
     Box(modifier = modifier.fillMaxSize())

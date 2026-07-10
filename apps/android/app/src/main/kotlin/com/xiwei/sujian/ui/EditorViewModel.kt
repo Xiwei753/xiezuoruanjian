@@ -55,9 +55,16 @@ enum class SaveStatus {
     SaveFailed
 }
 
+data class EditorSession(
+    val sessionId: String,
+    val projectId: String,
+    val volumeId: String,
+    val chapterId: String
+)
+
 sealed class SaveCommand {
-    data class Save(val content: String) : SaveCommand()
-    data object Clear : SaveCommand()
+    data class Save(val content: String, val session: EditorSession) : SaveCommand()
+    data class Clear(val session: EditorSession) : SaveCommand()
     data class Flush(val reply: kotlinx.coroutines.CompletableDeferred<Boolean>) : SaveCommand()
 }
 
@@ -107,9 +114,7 @@ class EditorViewModel(
     private val _events = Channel<EditorEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    private var projectId: String? = null
-    private var volumeId: String? = null
-    private var chapterId: String? = null
+    private var currentSession: EditorSession? = null
 
     private var initialWordCount = 0
     private var sessionStartTime = System.currentTimeMillis()
@@ -117,7 +122,7 @@ class EditorViewModel(
     private val saveMutex = Mutex()
     private var pendingSaveContent: String? = null
     private var autoSaveJob: kotlinx.coroutines.Job? = null
-    private val saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+    private var saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
     private var saveActorJob: kotlinx.coroutines.Job? = null
     private var contentExplicitlyCleared = false
 
@@ -135,11 +140,66 @@ class EditorViewModel(
     private var statsLastEventMs: Long = 0
     private var previousText: String = ""
     private var isLoadingChapter = false
+    private var inputFrozen = false
+
+    suspend fun switchChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
+        val oldSession = currentSession
+        inputFrozen = true
+
+        if (oldSession != null) {
+            autoSaveJob?.cancel()
+            val content = _uiState.value.content
+            if (content.trim().isNotEmpty()) {
+                saveMutex.withLock {
+                    try {
+                        workspaceRepository.saveChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId, content)
+                    } catch (_: Exception) { }
+                }
+            } else if (contentExplicitlyCleared) {
+                saveMutex.withLock {
+                    try {
+                        workspaceRepository.clearChapterContent(oldSession.projectId, oldSession.volumeId, oldSession.chapterId)
+                    } catch (_: Exception) { }
+                }
+            }
+        }
+
+        saveActorJob?.cancel()
+        saveCommandChannel.close()
+        saveCommandChannel = Channel<SaveCommand>(Channel.UNLIMITED)
+
+        val newSession = EditorSession(
+            sessionId = java.util.UUID.randomUUID().toString(),
+            projectId = projectId,
+            volumeId = volumeId,
+            chapterId = chapterId
+        )
+        currentSession = newSession
+
+        _uiState.value = _uiState.value.copy(
+            loading = true,
+            chapterTitle = chapterTitle,
+            saveStatus = SaveStatus.Idle
+        )
+        contentExplicitlyCleared = false
+        startSaveActor()
+        reloadSettings()
+        loadChapter(newSession)
+        inputFrozen = false
+    }
 
     fun initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
-        this.projectId = projectId
-        this.volumeId = volumeId
-        this.chapterId = chapterId
+        val existing = currentSession
+        if (existing != null && existing.projectId == projectId && existing.volumeId == volumeId && existing.chapterId == chapterId) {
+            return
+        }
+
+        currentSession = EditorSession(
+            sessionId = java.util.UUID.randomUUID().toString(),
+            projectId = projectId,
+            volumeId = volumeId,
+            chapterId = chapterId
+        )
         _uiState.value = _uiState.value.copy(
             loading = true,
             chapterTitle = chapterTitle
@@ -147,7 +207,7 @@ class EditorViewModel(
         contentExplicitlyCleared = false
         startSaveActor()
         reloadSettings()
-        loadChapter()
+        loadChapter(currentSession!!)
     }
 
     fun initErrorState(errorMessage: String) {
@@ -188,19 +248,18 @@ class EditorViewModel(
         }
     }
 
-    private fun loadChapter() {
-        val pid = projectId ?: return
-        val vid = volumeId ?: return
-        val cid = chapterId ?: return
-
+    private fun loadChapter(session: EditorSession) {
         isLoadingChapter = true
+        val sessionId = session.sessionId
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                val result = workspaceRepository.getChapterContentWithMeta(pid, vid, cid)
+                val result = workspaceRepository.getChapterContentWithMeta(session.projectId, session.volumeId, session.chapterId)
                 val content = result.first
                 val meta = result.second
 
                 launch(kotlinx.coroutines.Dispatchers.Main) {
+                    if (currentSession?.sessionId != sessionId) return@launch
+
                     _uiState.value = _uiState.value.copy(
                         loading = false,
                         content = content,
@@ -215,9 +274,10 @@ class EditorViewModel(
                     isLoadingChapter = false
                 }
 
-                workspaceRepository.recordRecentEdit(pid, vid, cid)
+                workspaceRepository.recordRecentEdit(session.projectId, session.volumeId, session.chapterId)
             } catch (e: Throwable) {
                 launch(kotlinx.coroutines.Dispatchers.Main) {
+                    if (currentSession?.sessionId != sessionId) return@launch
                     isLoadingChapter = false
                     _uiState.value = _uiState.value.copy(
                         loading = false,
@@ -234,6 +294,7 @@ class EditorViewModel(
         val currentState = _uiState.value
         if (currentState.loading) return
         if (isLoadingChapter) return
+        if (inputFrozen) return
 
         _uiState.value = currentState.copy(
             content = newContent,
@@ -251,9 +312,7 @@ class EditorViewModel(
     }
 
     private fun reportWritingEvent(oldText: String, newText: String) {
-        val pid = projectId ?: return
-        val vid = volumeId ?: return
-        val cid = chapterId ?: return
+        val session = currentSession ?: return
 
         val nowMs = System.currentTimeMillis()
         if (statsLastEventMs == 0L || (nowMs - statsLastEventMs) > 5 * 60 * 1000) {
@@ -267,11 +326,12 @@ class EditorViewModel(
         statsLastEventMs = nowMs
 
         workspaceRepository.processWritingEvent(
-            statsDeviceId, "android", pid, vid, cid, oldText, newText, durationSeconds, statsSessionId
+            statsDeviceId, "android", session.projectId, session.volumeId, session.chapterId, oldText, newText, durationSeconds, statsSessionId
         )
     }
 
     private fun scheduleAutoSave(content: String) {
+        val session = currentSession ?: return
         autoSaveJob?.cancel()
         autoSaveJob = viewModelScope.launch {
             val delayMs = _uiState.value.settings.autoSaveDelayMs
@@ -279,11 +339,10 @@ class EditorViewModel(
             delay(delayMs)
             if (_uiState.value.saveStatus == SaveStatus.Unsaved) {
                 if (content.trim().isEmpty() && !contentExplicitlyCleared) {
-                    // 非用户明确清空的空内容，不触发 clear，忽略本轮自动保存
                 } else if (content.trim().isEmpty() && contentExplicitlyCleared) {
-                    saveCommandChannel.trySend(SaveCommand.Clear)
+                    saveCommandChannel.trySend(SaveCommand.Clear(session))
                 } else {
-                    saveCommandChannel.trySend(SaveCommand.Save(content))
+                    saveCommandChannel.trySend(SaveCommand.Save(content, session))
                 }
             }
         }
@@ -314,12 +373,15 @@ class EditorViewModel(
 
     fun requestSave(): kotlinx.coroutines.Deferred<Boolean> {
         val content = _uiState.value.content
+        val session = currentSession
         val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
         viewModelScope.launch {
-            if (content.trim().isEmpty() && contentExplicitlyCleared) {
-                saveCommandChannel.trySend(SaveCommand.Clear)
-            } else if (content.trim().isNotEmpty()) {
-                saveCommandChannel.trySend(SaveCommand.Save(content))
+            if (session != null) {
+                if (content.trim().isEmpty() && contentExplicitlyCleared) {
+                    saveCommandChannel.trySend(SaveCommand.Clear(session))
+                } else if (content.trim().isNotEmpty()) {
+                    saveCommandChannel.trySend(SaveCommand.Save(content, session))
+                }
             }
             val flushReply = CompletableDeferred<Boolean>()
             saveCommandChannel.trySend(SaveCommand.Flush(flushReply))
@@ -330,8 +392,9 @@ class EditorViewModel(
     }
 
     fun clearChapterContent() {
+        val session = currentSession ?: return
         contentExplicitlyCleared = true
-        saveCommandChannel.trySend(SaveCommand.Clear)
+        saveCommandChannel.trySend(SaveCommand.Clear(session))
     }
 
     private var lastSaveResult: Boolean = true
@@ -342,10 +405,14 @@ class EditorViewModel(
             for (cmd in saveCommandChannel) {
                 when (cmd) {
                     is SaveCommand.Save -> {
-                        lastSaveResult = performSave(cmd.content, isAutoSave = true)
+                        if (cmd.session.sessionId == currentSession?.sessionId) {
+                            lastSaveResult = performSave(cmd.content, cmd.session, isAutoSave = true)
+                        }
                     }
                     is SaveCommand.Clear -> {
-                        lastSaveResult = clearChapterContentInternal()
+                        if (cmd.session.sessionId == currentSession?.sessionId) {
+                            lastSaveResult = clearChapterContentInternal(cmd.session)
+                        }
                     }
                     is SaveCommand.Flush -> {
                         cmd.reply.complete(lastSaveResult)
@@ -355,14 +422,10 @@ class EditorViewModel(
         }
     }
 
-    private suspend fun clearChapterContentInternal(): Boolean {
-        val pid = projectId ?: return false
-        val vid = volumeId ?: return false
-        val cid = chapterId ?: return false
-
+    private suspend fun clearChapterContentInternal(session: EditorSession): Boolean {
         return saveMutex.withLock {
             try {
-                val result = workspaceRepository.clearChapterContent(pid, vid, cid)
+                val result = workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
                 when (result) {
                     is com.xiwei.sujian.data.BridgeResult.Success -> {
                         _uiState.value = _uiState.value.copy(
@@ -397,17 +460,11 @@ class EditorViewModel(
         }
     }
 
-    private suspend fun performSave(content: String, isAutoSave: Boolean): Boolean {
-        val pid = projectId
-        val vid = volumeId
-        val cid = chapterId
-        if (pid == null || vid == null || cid == null) return false
-
+    private suspend fun performSave(content: String, session: EditorSession, isAutoSave: Boolean): Boolean {
         if (content.trim().isEmpty()) {
             if (contentExplicitlyCleared) {
-                return clearChapterContentInternal()
+                return clearChapterContentInternal(session)
             }
-            // 非用户明确清空的空内容，保持 Unsaved 但不写入空内容
             return false
         }
 
@@ -427,7 +484,7 @@ class EditorViewModel(
                 _uiState.value = currentState.copy(saveStatus = SaveStatus.Saving)
 
                 try {
-                    val result = workspaceRepository.saveChapterContent(pid, vid, cid, contentToSave)
+                    val result = workspaceRepository.saveChapterContent(session.projectId, session.volumeId, session.chapterId, contentToSave)
                     when (result) {
                         is com.xiwei.sujian.data.BridgeResult.Success -> {
                             _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.Saved)
@@ -482,13 +539,11 @@ class EditorViewModel(
     }
 
     fun updateChapterNote(newNote: String) {
-        val pid = projectId ?: return
-        val vid = volumeId ?: return
-        val cid = chapterId ?: return
+        val session = currentSession ?: return
 
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
-                workspaceRepository.updateChapterNote(pid, vid, cid, newNote)
+                workspaceRepository.updateChapterNote(session.projectId, session.volumeId, session.chapterId, newNote)
                 launch(kotlinx.coroutines.Dispatchers.Main) {
                     _uiState.value = _uiState.value.copy(chapterNote = newNote)
                 }
@@ -509,15 +564,13 @@ class EditorViewModel(
         autoSaveJob?.cancel()
         saveCommandChannel.close()
         try {
-            val pid = projectId
-            val vid = volumeId
-            val cid = chapterId
+            val session = currentSession
             val content = _uiState.value.content
-            if (pid != null && vid != null && cid != null) {
+            if (session != null) {
                 if (content.isNotEmpty()) {
-                    workspaceRepository.saveChapterContent(pid, vid, cid, content)
+                    workspaceRepository.saveChapterContent(session.projectId, session.volumeId, session.chapterId, content)
                 } else if (contentExplicitlyCleared) {
-                    workspaceRepository.clearChapterContent(pid, vid, cid)
+                    workspaceRepository.clearChapterContent(session.projectId, session.volumeId, session.chapterId)
                 }
             }
         } catch (_: Exception) {

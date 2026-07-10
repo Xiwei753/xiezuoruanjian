@@ -53,8 +53,7 @@ fun WritingPane(
     var lastCoordinatedAnimEnabled by remember { mutableStateOf(false) }
 
     LaunchedEffect(projectId, volumeId, chapterId) {
-        viewModel.requestSave()
-        viewModel.initChapter(projectId, volumeId, chapterId, chapterTitle)
+        viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)
     }
 
     val uiState by viewModel.uiState.collectAsState()
