@@ -71,4 +71,35 @@ class SettingsBridge internal constructor(private val holder: WriterAppServiceHo
             platform = dto.platform,
         )
     }
+
+    fun savePaletteRecord(record: uniffi.writer_core.ThemePaletteRecordDto): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.savePaletteRecord(record)
+    }
+
+    fun listPaletteRecords(): BridgeResult<List<uniffi.writer_core.ThemePaletteRecordDto>> = holder.wrapResult {
+        holder.service.listPaletteRecords()
+    }
+
+    fun loadPaletteRecord(deviceId: String, fingerprint: String): BridgeResult<uniffi.writer_core.ThemePaletteRecordDto> = holder.wrapResult {
+        holder.service.loadPaletteRecord(deviceId, fingerprint)
+    }
+
+    fun deletePaletteRecord(deviceId: String, fingerprint: String): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.deletePaletteRecord(deviceId, fingerprint)
+    }
+
+    fun migrateLegacyThemePalette(): BridgeResult<Boolean> = holder.wrapResult {
+        holder.service.migrateLegacyThemePalette()
+    }
+
+    fun computePaletteFingerprint(
+        lightScheme: uniffi.writer_core.ThemeColorSchemeDto,
+        darkScheme: uniffi.writer_core.ThemeColorSchemeDto
+    ): String {
+        return holder.service.computePaletteFingerprint(lightScheme, darkScheme)
+    }
+
+    fun listBuiltinThemes(): List<uniffi.writer_core.BuiltinThemeDto> {
+        return holder.service.listBuiltinThemes()
+    }
 }

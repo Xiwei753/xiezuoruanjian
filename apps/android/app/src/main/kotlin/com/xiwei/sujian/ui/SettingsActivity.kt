@@ -38,6 +38,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var switchAutoSave: MaterialSwitch
     private lateinit var sbAutoSaveDelay: Slider
     private lateinit var actvTheme: MaterialAutoCompleteTextView
+    private lateinit var actvColorSource: MaterialAutoCompleteTextView
+    private lateinit var switchDynamicColor: MaterialSwitch
     private lateinit var tvWorkspacePath: TextView
     private lateinit var tvVersionInfo: TextView
 
@@ -121,6 +123,8 @@ class SettingsActivity : AppCompatActivity() {
         switchAutoSave = findViewById(R.id.switchAutoSave)
         sbAutoSaveDelay = findViewById(R.id.sbAutoSaveDelay)
         actvTheme = findViewById(R.id.actvTheme)
+        actvColorSource = findViewById(R.id.actvColorSource)
+        switchDynamicColor = findViewById(R.id.switchDynamicColor)
 
         tvFontSizeValue = findViewById(R.id.tvFontSizeValue)
         tvLineSpacingValue = findViewById(R.id.tvLineSpacingValue)
@@ -201,12 +205,34 @@ class SettingsActivity : AppCompatActivity() {
                 2 -> "dark"
                 else -> "system"
             }
-            updateLocalSettings { it.copy(themeMode = themeStr) }
+            updateLocalSettings { it.copy(themeMode = themeStr, appearanceMode = themeStr) }
             when (themeStr) {
                 "light" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_NO)
                 "dark" -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
                 else -> AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
             }
+        }
+
+        val colorSourceOptions = arrayOf("素笺默认", "使用本机动态配色", "已保存的设备配色")
+        val colorSourceAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, colorSourceOptions)
+        actvColorSource.setAdapter(colorSourceAdapter)
+        actvColorSource.setOnItemClickListener { _, _, position, _ ->
+            if (isRendering) return@setOnItemClickListener
+            val colorSource = when (position) {
+                1 -> "android_dynamic"
+                2 -> "saved_palette"
+                else -> "built_in"
+            }
+            val dynamicEnabled = colorSource == "android_dynamic"
+            updateLocalSettings { it.copy(colorSource = colorSource, dynamicColorEnabled = dynamicEnabled) }
+            switchDynamicColor.isChecked = dynamicEnabled
+        }
+
+        switchDynamicColor.setOnCheckedChangeListener { _, isChecked ->
+            if (isRendering) return@setOnCheckedChangeListener
+            val newColorSource = if (isChecked) "android_dynamic" else "built_in"
+            updateLocalSettings { it.copy(dynamicColorEnabled = isChecked, colorSource = newColorSource) }
+            actvColorSource.setText(if (isChecked) "使用本机动态配色" else "素笺默认", false)
         }
 
         renderSettings(currentSettings, fromOnCreate = true)
@@ -393,6 +419,13 @@ class SettingsActivity : AppCompatActivity() {
                 "dark" -> getString(R.string.theme_dark)
                 else -> getString(R.string.theme_system)
             }, false)
+
+            actvColorSource.setText(when (settings.colorSource) {
+                "android_dynamic" -> "使用本机动态配色"
+                "saved_palette" -> "已保存的设备配色"
+                else -> "素笺默认"
+            }, false)
+            switchDynamicColor.isChecked = settings.dynamicColorEnabled
 
             if (!fromOnCreate) {
                 syncHelper.loadSyncState()

@@ -235,6 +235,35 @@ Dialog {
                         checked: true
                         onToggled: function(v) {
                             root.dt.useThemePalette = v
+                            if (v) {
+                                backendRef.setting_color_source = "saved_palette"
+                            } else {
+                                backendRef.setting_color_source = "built_in"
+                            }
+                            root.settingsDirty = true
+                            root.saveAndNotify()
+                        }
+                    }
+                }
+                SettingsRow {
+                    dt: root.dt
+                    title: qsTr("颜色来源")
+                    description: qsTr("选择素笺默认主题或已保存的设备配色")
+                    ModernComboBox {
+                        id: colorSourceCombo
+                        dt: root.dt
+                        model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
+                        onActivated: function(index) {
+                            if (!backendRef || root.updatingValues) return
+                            var source = ["built_in", "saved_palette"][index]
+                            backendRef.setting_color_source = source
+                            root.dt.colorSource = source
+                            root.settingsDirty = true
+                            root.saveAndNotify()
+                        }
+                        Component.onCompleted: {
+                            var src = backendRef ? backendRef.setting_color_source : "built_in"
+                            currentIndex = src === "saved_palette" ? 1 : 0
                         }
                     }
                 }

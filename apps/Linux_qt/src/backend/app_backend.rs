@@ -272,6 +272,8 @@ pub struct AppBackend {
     current_setting_color_source: String,
     current_setting_appearance_mode: String,
     current_setting_dynamic_color_enabled: bool,
+    current_setting_selected_palette_id: String,
+    current_setting_selected_builtin_theme_id: String,
     current_setting_typing_animation_enabled: bool,
     current_setting_smooth_cursor_enabled: bool,
     current_setting_typing_animation_duration_ms: u32,

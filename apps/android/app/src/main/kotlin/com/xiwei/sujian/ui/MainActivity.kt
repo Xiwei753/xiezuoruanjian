@@ -786,21 +786,10 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 try {
                     val paletteJson = ThemePaletteHelper.extractThemePaletteJson(this@MainActivity)
-                    val colorInt = resources.getColor(android.R.color.system_accent1_500, theme)
-                    val monetColor = String.format("#%06X", 0xFFFFFF and colorInt)
 
-                    if (::settingsRepository.isInitialized) {
+                    if (::settingsRepository.isInitialized && paletteJson != null) {
                         withContext(Dispatchers.IO) {
-                            val syncable = settingsRepository.getSyncableSettings()
-                            val needsMonetUpdate = syncable.monetColor != monetColor
-                            val needsPaletteUpdate = paletteJson != null && syncable.themePaletteJson != paletteJson
-                            if (needsMonetUpdate || needsPaletteUpdate) {
-                                @Suppress("DEPRECATION")
-                                settingsRepository.saveSyncableSettings(syncable.copy(
-                                    monetColor = monetColor,
-                                    themePaletteJson = paletteJson ?: syncable.themePaletteJson
-                                ))
-                            }
+                            settingsRepository.saveDynamicColorPaletteToCatalog(paletteJson)
                         }
                     }
                 } catch (e: Exception) {

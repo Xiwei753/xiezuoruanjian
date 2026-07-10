@@ -34,6 +34,8 @@ pub struct SettingsBackend {
     setting_color_source: qt_property!(QString; READ setting_color_source WRITE set_setting_color_source NOTIFY settings_changed),
     setting_appearance_mode: qt_property!(QString; READ setting_appearance_mode WRITE set_setting_appearance_mode NOTIFY settings_changed),
     setting_dynamic_color_enabled: qt_property!(bool; READ setting_dynamic_color_enabled WRITE set_setting_dynamic_color_enabled NOTIFY settings_changed),
+    setting_selected_palette_id: qt_property!(QString; READ setting_selected_palette_id WRITE set_setting_selected_palette_id NOTIFY settings_changed),
+    setting_selected_builtin_theme_id: qt_property!(QString; READ setting_selected_builtin_theme_id WRITE set_setting_selected_builtin_theme_id NOTIFY settings_changed),
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
@@ -63,6 +65,9 @@ pub struct SettingsBackend {
     copy_device_info: qt_method!(fn(&self) -> QString),
     open_log_directory: qt_method!(fn(&self) -> QString),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
+    list_palette_records_json: qt_method!(fn(&self) -> QString),
+    list_builtin_themes_json: qt_method!(fn(&self) -> QString),
+    load_selected_palette_json: qt_method!(fn(&self) -> QString),
     /// 标记是否有待保存的设置
     pending_save: bool,
     app: SafeAppPtr,
@@ -188,6 +193,20 @@ impl SettingsBackend {
     }
     fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
         self.with_app_mut((), |app| app.set_setting_dynamic_color_enabled(val));
+        self.settings_changed();
+    }
+    fn setting_selected_palette_id(&self) -> QString {
+        self.with_app("".into(), |app| app.setting_selected_palette_id())
+    }
+    fn set_setting_selected_palette_id(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_setting_selected_palette_id(val));
+        self.settings_changed();
+    }
+    fn setting_selected_builtin_theme_id(&self) -> QString {
+        self.with_app("".into(), |app| app.setting_selected_builtin_theme_id())
+    }
+    fn set_setting_selected_builtin_theme_id(&mut self, val: QString) {
+        self.with_app_mut((), |app| app.set_setting_selected_builtin_theme_id(val));
         self.settings_changed();
     }
     fn setting_typing_animation_enabled(&self) -> bool {
@@ -395,6 +414,58 @@ impl SettingsBackend {
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
         self.with_app_mut("".into(), |app| app.copy_text_to_clipboard(text))
     }
+
+    fn list_palette_records_json(&self) -> QString {
+        self.with_app("[]".into(), |app| {
+            if let Some(core) = app.core_api() {
+                match core.list_palette_records() {
+                    Ok(records) => {
+                        let dtos: Vec<writer_core::api::types::ThemePaletteRecordDto> =
+                            records.into_iter().map(Into::into).collect();
+                        QString::from(serde_json::to_string(&dtos).unwrap_or_else(|_| "[]".to_string()))
+                    }
+                    Err(_) => QString::from("[]"),
+                }
+            } else {
+                QString::from("[]")
+            }
+        })
+    }
+
+    fn list_builtin_themes_json(&self) -> QString {
+        self.with_app("[]".into(), |app| {
+            if let Some(core) = app.core_api() {
+                let themes = core.list_builtin_themes();
+                QString::from(serde_json::to_string(&themes).unwrap_or_else(|_| "[]".to_string()))
+            } else {
+                QString::from("[]")
+            }
+        })
+    }
+
+    fn load_selected_palette_json(&self) -> QString {
+        self.with_app("".into(), |app| {
+            let palette_id = app.setting_selected_palette_id().to_string();
+            if palette_id.is_empty() {
+                return QString::from("");
+            }
+            let parts: Vec<&str> = palette_id.splitn(2, ':').collect();
+            if parts.len() != 2 {
+                return QString::from("");
+            }
+            if let Some(core) = app.core_api() {
+                match core.load_palette_record(parts[0], parts[1]) {
+                    Ok(record) => {
+                        let json = serde_json::to_string(&record).unwrap_or_default();
+                        QString::from(json)
+                    }
+                    Err(_) => QString::from(""),
+                }
+            } else {
+                QString::from("")
+            }
+        })
+    }
 }
 
 impl AppBackend {
@@ -530,6 +601,24 @@ impl AppBackend {
 
     pub(crate) fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
         self.current_setting_dynamic_color_enabled = val;
+        self.settings_changed();
+    }
+
+    pub(crate) fn setting_selected_palette_id(&self) -> QString {
+        self.current_setting_selected_palette_id.clone().into()
+    }
+
+    pub(crate) fn set_setting_selected_palette_id(&mut self, val: QString) {
+        self.current_setting_selected_palette_id = val.to_string();
+        self.settings_changed();
+    }
+
+    pub(crate) fn setting_selected_builtin_theme_id(&self) -> QString {
+        self.current_setting_selected_builtin_theme_id.clone().into()
+    }
+
+    pub(crate) fn set_setting_selected_builtin_theme_id(&mut self, val: QString) {
+        self.current_setting_selected_builtin_theme_id = val.to_string();
         self.settings_changed();
     }
 
@@ -702,9 +791,23 @@ impl AppBackend {
                 self.current_setting_monet_color = sync_settings.monet_color.clone();
                 self.current_setting_theme_palette_json = sync_settings.theme_palette_json.clone();
                 if let Ok(local) = core.load_local_settings() {
-                    self.current_setting_color_source = local.color_source.clone();
-                    self.current_setting_appearance_mode = local.appearance_mode.clone();
-                    self.current_setting_dynamic_color_enabled = local.dynamic_color_enabled;
+                self.current_setting_color_source = local.color_source.clone();
+                self.current_setting_appearance_mode = local.appearance_mode.clone();
+                self.current_setting_dynamic_color_enabled = local.dynamic_color_enabled;
+                self.current_setting_selected_palette_id = local.selected_palette_id.clone();
+                self.current_setting_selected_builtin_theme_id = local.selected_builtin_theme_id.clone();
+
+                // Auto-load selected palette into theme_palette_json for QML consumption
+                if local.color_source == "saved_palette" && !local.selected_palette_id.is_empty() {
+                    let parts: Vec<&str> = local.selected_palette_id.splitn(2, ':').collect();
+                    if parts.len() == 2 {
+                        if let Ok(record) = core.load_palette_record(parts[0], parts[1]) {
+                            if let Ok(json) = serde_json::to_string(&record) {
+                                self.current_setting_theme_palette_json = json;
+                            }
+                        }
+                    }
+                }
                 }
             } else {
                 self.current_setting_monet_color = "".to_string();
@@ -712,6 +815,8 @@ impl AppBackend {
                 self.current_setting_color_source = "built_in".to_string();
                 self.current_setting_appearance_mode = "system".to_string();
                 self.current_setting_dynamic_color_enabled = false;
+                self.current_setting_selected_palette_id = String::new();
+                self.current_setting_selected_builtin_theme_id = String::new();
                 if let Ok(local) = core.load_local_settings() {
                     self.current_setting_font_size = local.editor_font_size;
                 }
@@ -768,6 +873,11 @@ impl AppBackend {
             local.linux_qt_editor_width = self.current_setting_linux_qt_editor_width;
             local.diagnostics_enabled = self.current_setting_diagnostics_enabled;
             local.diagnostics_verbose = self.current_setting_diagnostics_verbose;
+            local.color_source = self.current_setting_color_source.clone();
+            local.appearance_mode = self.current_setting_appearance_mode.clone();
+            local.dynamic_color_enabled = self.current_setting_dynamic_color_enabled;
+            local.selected_palette_id = self.current_setting_selected_palette_id.clone();
+            local.selected_builtin_theme_id = self.current_setting_selected_builtin_theme_id.clone();
 
             let local_result = core.save_local_settings(local.clone());
             let local_json = match local_result {

@@ -22,18 +22,43 @@ QtObject {
 
     // --- Theme palette (synced from Android Dynamic Color) ---
     // Non-Android clients only consume this; they never produce it.
+    // Supports both legacy flat format (light_xxx/dark_xxx) and new ThemePaletteRecord format (lightScheme.xxx/darkScheme.xxx)
     property string themePaletteJson: ""
     property string colorSource: "built_in"
     property var _themePalette: {
         if (themePaletteJson.length === 0) return null
         try { return JSON.parse(themePaletteJson) } catch(e) { return null }
     }
-    property bool hasThemePalette: _themePalette !== null && _themePalette.source === "android_dynamic_color"
+    property bool hasThemePalette: {
+        if (!_themePalette) return false
+        if (_themePalette.source === "android_dynamic_color") return true
+        if (_themePalette.lightScheme && _themePalette.darkScheme) return true
+        return false
+    }
     property bool useThemePalette: hasThemePalette && colorSource === "saved_palette"
 
     function _paletteColor(lightKey, darkKey) {
         if (!(hasThemePalette && useThemePalette)) return undefined
         var key = isDark ? darkKey : lightKey
+        // Try new ThemePaletteRecord format first (lightScheme.primary / darkScheme.primary)
+        var schemeKey = isDark ? "darkScheme" : "lightScheme"
+        var scheme = _themePalette[schemeKey]
+        if (scheme) {
+            // Convert snake_case key to camelCase for nested scheme
+            var camelKey = key.replace(/_[a-z]/g, function(match) { return match.charAt(1).toUpperCase() })
+            // Remove the "light_" or "dark_" prefix since we're already in the scheme
+            var strippedKey = camelKey.replace(/^(light|dark)/, function(m) { return m.charAt(0).toLowerCase() })
+            var val = scheme[strippedKey]
+            if (val && val.length > 0 && val.charAt(0) === '#') {
+                return Qt.rgba(
+                    parseInt(val.substring(1,3), 16) / 255,
+                    parseInt(val.substring(3,5), 16) / 255,
+                    parseInt(val.substring(5,7), 16) / 255,
+                    1
+                )
+            }
+        }
+        // Fallback to legacy flat format (light_primary / dark_primary)
         var val = _themePalette[key]
         if (val && val.length > 0 && val.charAt(0) === '#') {
             return Qt.rgba(
