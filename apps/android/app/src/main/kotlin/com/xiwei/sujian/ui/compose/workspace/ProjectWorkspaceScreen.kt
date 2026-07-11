@@ -86,9 +86,7 @@ fun ProjectWorkspaceScreen(
     }
 
     BackHandler(enabled = !navigator.canNavigateBack() && currentProjectId != null) {
-        appState.clearChapterSelection()
-        appState.currentProjectId = null
-        appState.currentProjectTitle = ""
+        appState.clearProjectSelection()
     }
 
     LaunchedEffect(currentChapterId) {
@@ -142,9 +140,7 @@ fun ProjectWorkspaceScreen(
                             }
                         },
                         onBackToProjects = {
-                            appState.clearChapterSelection()
-                            appState.currentProjectId = null
-                            appState.currentProjectTitle = ""
+                            appState.clearProjectSelection()
                         },
                         modifier = listPaneModifier
                     )

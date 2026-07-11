@@ -103,35 +103,67 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn extract_shaped_glyphs_for_transaction(
-        &self,
+        &mut self,
         vt: &EditorVisualTransaction,
     ) -> Vec<super::visual_payload::ShapedGlyphInfo> {
-        let font_family = self.current_font_family.to_string();
+        let width = self.bounding_width();
+        let font_size = self.current_font_pixel_size as f64;
+        let scroll_y = self.current_scroll_y as f64;
+        let viewport_h = self.current_viewport_height.max(1.0) as f64;
         let mut result = Vec::new();
 
         match vt.kind {
             EditorAnimationKind::Insert => {
                 if let Some(ref rects) = vt.insert_glyph_rects {
-                    for (i, g) in rects.iter().enumerate() {
+                    let snapshot = self.layout_snapshot_for_text(&self.plain_text.to_string(), width);
+                    for g in rects {
+                        let line = snapshot.lines.iter().find(|l| {
+                            l.byte_start <= g.byte_start && l.byte_end >= g.byte_end && !l.para_text.is_empty()
+                        });
+                        let (glyph_idx, raw_font) = match line {
+                            Some(l) => {
+                                let glyph_data = self.editor_layout.glyph_positions_on_line(
+                                    l, g.byte_start, g.byte_end, font_size, &self.current_font_family.to_string(),
+                                );
+                                match glyph_data.first() {
+                                    Some((_, _, _, gi, rf)) => (*gi, rf.clone()),
+                                    None => (0u32, self.current_font_family.to_string()),
+                                }
+                            }
+                            None => (0u32, self.current_font_family.to_string()),
+                        };
+                        let line_baseline_y = line.map(|l|
+                            super::super::editor::layout::text_baseline_y(l, font_size, &self.current_font_family.to_string()) - scroll_y
+                        ).unwrap_or(g.baseline_y);
+                        let visible = line.map(|l| {
+                            let line_top = l.y - scroll_y;
+                            let line_bottom = line_top + l.height;
+                            line_bottom >= 0.0 && line_top <= viewport_h
+                        }).unwrap_or(true);
+                        if !visible {
+                            continue;
+                        }
                         result.push(super::visual_payload::ShapedGlyphInfo {
-                            font_id: font_family.clone(),
-                            glyph_index: i as u32,
+                            font_id: if raw_font.is_empty() { self.current_font_family.to_string() } else { raw_font.clone() },
+                            glyph_index: glyph_idx,
                             glyph_position_x: g.x,
-                            glyph_position_y: g.baseline_y,
+                            glyph_position_y: line_baseline_y,
                             string_index: g.byte_start,
+                            raw_font_family: raw_font,
                         });
                     }
                 }
             }
             EditorAnimationKind::Delete => {
                 if let Some(ref rects) = vt.deleted_glyph_rects {
-                    for (i, g) in rects.iter().enumerate() {
+                    for g in rects {
                         result.push(super::visual_payload::ShapedGlyphInfo {
-                            font_id: font_family.clone(),
-                            glyph_index: i as u32,
+                            font_id: self.current_font_family.to_string(),
+                            glyph_index: 0,
                             glyph_position_x: g.x,
                             glyph_position_y: g.baseline_y,
                             string_index: g.byte_start,
+                            raw_font_family: String::new(),
                         });
                     }
                 }
@@ -243,7 +275,7 @@ impl SujianEditorItem {
                         );
                         let line_baseline_y =
                             text_baseline_y(line, font_size, font_family) - scroll_y;
-                        for (abs_byte, x_pos, ch_w) in glyph_data {
+                        for (abs_byte, x_pos, ch_w, _glyph_idx, _raw_font) in glyph_data {
                             if abs_byte >= text.len() {
                                 continue;
                             }
@@ -311,7 +343,7 @@ impl SujianEditorItem {
                                 );
                                 let line_baseline_y =
                                     text_baseline_y(line, font_size, font_family) - scroll_y;
-                                for (abs_byte, x_pos, ch_w) in &glyph_data {
+                                for (abs_byte, x_pos, ch_w, _glyph_idx, _raw_font) in &glyph_data {
                                     let glyph_right = line.x + x_pos + ch_w;
                                     let glyph_bottom = line.y - scroll_y + line.height;
                                     if line.x + *x_pos < min_x {
@@ -393,7 +425,7 @@ impl SujianEditorItem {
                             font_family,
                         );
 
-                        for (abs_byte, new_x_pos, ch_w) in &new_glyph_data {
+                        for (abs_byte, new_x_pos, ch_w, _glyph_idx, _raw_font) in &new_glyph_data {
                             if *abs_byte >= text.len() {
                                 continue;
                             }
@@ -429,7 +461,7 @@ impl SujianEditorItem {
                                             font_family,
                                         );
                                     match old_glyph_data.first() {
-                                        Some((_, ox, _)) => {
+                                        Some((_, ox, _, _, _)) => {
                                             let old_line_baseline_y =
                                                 text_baseline_y(ol, font_size, font_family)
                                                     - scroll_y;
@@ -542,7 +574,7 @@ impl SujianEditorItem {
                             );
                             let line_baseline_y =
                                 text_baseline_y(line, font_size, font_family) - scroll_y;
-                            for (abs_byte, x_pos, ch_w) in glyph_data {
+                            for (abs_byte, x_pos, ch_w, _glyph_idx, _raw_font) in glyph_data {
                                 if abs_byte >= old_text.len() {
                                     continue;
                                 }
@@ -610,7 +642,7 @@ impl SujianEditorItem {
                                     );
                                     let line_baseline_y =
                                         text_baseline_y(line, font_size, font_family) - scroll_y;
-                                    for (abs_byte, x_pos, ch_w) in &glyph_data {
+                                    for (abs_byte, x_pos, ch_w, _glyph_idx, _raw_font) in &glyph_data {
                                         let glyph_right = line.x + x_pos + ch_w;
                                         let glyph_bottom = line.y - scroll_y + line.height;
                                         if line.x + *x_pos < min_x {

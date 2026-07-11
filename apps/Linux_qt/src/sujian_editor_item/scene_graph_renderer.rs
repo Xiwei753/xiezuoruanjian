@@ -16,6 +16,7 @@ pub(crate) fn render_frame(
     }
 
     render_text_animation_layer(root_raw, item_ptr, plan, texture_cache, dpr);
+    render_selection_preedit_layer(root_raw, item_ptr, plan);
     render_cursor_layer(root_raw, item_ptr, plan);
 }
 
@@ -125,5 +126,54 @@ fn render_cursor_layer(
         opacity,
         color_str.as_ptr(),
         color_str.len(),
+    );
+}
+
+fn render_selection_preedit_layer(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    plan: &RenderPlan,
+) {
+    let sp = &plan.selection_preedit;
+    let total_count = sp.selection_ranges.len() + sp.preedit_ranges.len();
+    if total_count == 0 {
+        scene_graph::update_selection_preedit_layer(root_raw, item_ptr, 0, std::ptr::null());
+        return;
+    }
+
+    let mut rect_data: Vec<f64> = Vec::with_capacity(total_count * 10);
+
+    fn parse_hex_color(hex: &str) -> (f64, f64, f64, f64) {
+        if hex.starts_with('#') && hex.len() >= 7 {
+            let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(0) as f64 / 255.0;
+            let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(0) as f64 / 255.0;
+            let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(0) as f64 / 255.0;
+            let a = if hex.len() >= 9 {
+                u8::from_str_radix(&hex[7..9], 16).unwrap_or(255) as f64 / 255.0
+            } else {
+                1.0
+            };
+            (r, g, b, a)
+        } else {
+            (0.5, 0.82, 0.82, 0.2)
+        }
+    }
+
+    for sel in &sp.selection_ranges {
+        let (r, g, b, a) = parse_hex_color(&sel.color);
+        rect_data.extend_from_slice(&[sel.x, sel.y, sel.w, sel.h, r, g, b, a, 0.0, 0.0]);
+    }
+
+    for pre in &sp.preedit_ranges {
+        let (r, g, b, a) = parse_hex_color(&pre.color);
+        let underline = if pre.underline { 1.0 } else { 0.0 };
+        rect_data.extend_from_slice(&[pre.x, pre.y, pre.w, pre.h, r, g, b, a, underline, 0.0]);
+    }
+
+    scene_graph::update_selection_preedit_layer(
+        root_raw,
+        item_ptr,
+        total_count as i32,
+        rect_data.as_ptr(),
     );
 }

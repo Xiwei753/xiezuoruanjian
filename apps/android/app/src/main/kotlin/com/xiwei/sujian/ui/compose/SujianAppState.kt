@@ -49,10 +49,10 @@ class SujianAppViewModel(
         private set
 
     var currentProjectId by mutableStateOf<String?>(savedStateHandle["currentProjectId"])
-        internal set
+        private set
 
     var currentProjectTitle by mutableStateOf(savedStateHandle["currentProjectTitle"] ?: "")
-        internal set
+        private set
 
     var currentVolumeId by mutableStateOf<String?>(savedStateHandle["currentVolumeId"])
         private set
@@ -113,6 +113,19 @@ class SujianAppViewModel(
         currentVolumeId = null
         currentChapterId = null
         currentChapterTitle = ""
+        savedStateHandle.remove<String>("currentVolumeId")
+        savedStateHandle.remove<String>("currentChapterId")
+        savedStateHandle["currentChapterTitle"] = ""
+    }
+
+    fun clearProjectSelection() {
+        currentProjectId = null
+        currentProjectTitle = ""
+        currentVolumeId = null
+        currentChapterId = null
+        currentChapterTitle = ""
+        savedStateHandle.remove<String>("currentProjectId")
+        savedStateHandle["currentProjectTitle"] = ""
         savedStateHandle.remove<String>("currentVolumeId")
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
@@ -239,6 +252,7 @@ class SujianAppState(
     fun selectProject(projectId: String, projectTitle: String) = viewModel.selectProject(projectId, projectTitle)
     fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = viewModel.selectChapter(volumeId, chapterId, chapterTitle)
     fun clearChapterSelection() = viewModel.clearChapterSelection()
+    fun clearProjectSelection() = viewModel.clearProjectSelection()
     fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) = viewModel.updateFoldFeaturesFromAdaptive(features, density)
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? = viewModel.resolveLayout(metrics)
     fun refreshProjects() = viewModel.refreshProjects()

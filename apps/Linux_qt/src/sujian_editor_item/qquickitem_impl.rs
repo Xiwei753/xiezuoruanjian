@@ -334,8 +334,8 @@ impl QQuickItem for SujianEditorItem {
                     self.cursor_ctrl.force_snap_next,
                     self.cursor_ctrl.animation.as_ref(),
                 );
-                let ime_plan = self.animation_coordinator.build_ime_plan(false, false);
-                let selection_preedit = animation_coordinator::SelectionPreeditPlan::default();
+                let ime_plan = self.animation_coordinator.build_ime_plan(true, false);
+                let selection_preedit = self.build_selection_preedit_plan();
 
                 let render_plan = self.animation_coordinator.build_render_plan_full(
                     cursor_plan, ime_plan, selection_preedit,

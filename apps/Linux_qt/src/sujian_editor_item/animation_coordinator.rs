@@ -626,13 +626,13 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
-    pub(crate) fn build_render_plan(&self) -> RenderPlan {
+    pub(crate) fn build_render_plan(&self, selection_preedit: SelectionPreeditPlan) -> RenderPlan {
         let static_text = self.build_static_render_plan();
         let text_animation = self.build_text_animation_plan();
         RenderPlan {
             static_text,
             text_animation,
-            selection_preedit: SelectionPreeditPlan::default(),
+            selection_preedit,
             cursor: CursorAnimationPlan::default(),
             ime: ImeUpdatePlan::default(),
         }

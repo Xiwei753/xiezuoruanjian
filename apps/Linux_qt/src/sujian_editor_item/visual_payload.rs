@@ -30,6 +30,7 @@ pub(crate) struct ShapedGlyphInfo {
     pub glyph_position_x: f64,
     pub glyph_position_y: f64,
     pub string_index: usize,
+    pub raw_font_family: String,
 }
 
 impl VisualRunSnapshot {
@@ -161,7 +162,7 @@ impl VisualPayload {
         has_reflow: bool,
         animation_mode: AnimationMode,
         old_text: &str,
-        font_family: &str,
+        _font_family: &str,
         shaped_glyphs: &[ShapedGlyphInfo],
     ) -> Self {
         let insert_runs: Vec<VisualRunSnapshot> = insert_glyph_rects.iter().map(|g| {
@@ -171,14 +172,12 @@ impl VisualPayload {
             );
             VisualRunSnapshot::from_glyph_rect_with_shaping(g, shaping)
                 .with_old_paragraph(para_text)
-                .with_font_id(font_family)
         }).collect();
         let reflow_runs: Vec<ReflowRunSnapshot> = reflow_glyph_rects.iter().map(|r| {
             let shaping = shaped_glyphs.iter().find(|s|
                 s.string_index <= r.byte_end && s.string_index >= r.byte_start
             );
             ReflowRunSnapshot::from_reflow_glyph_rect_with_shaping(r, shaping)
-                .with_font_id(font_family)
         }).collect();
 
         if has_reflow && !reflow_runs.is_empty() {
@@ -208,7 +207,7 @@ impl VisualPayload {
         new_cursor_rect: Option<CursorRect>,
         animation_mode: AnimationMode,
         old_text: &str,
-        font_family: &str,
+        _font_family: &str,
         shaped_glyphs: &[ShapedGlyphInfo],
     ) -> Self {
         let delete_runs: Vec<VisualRunSnapshot> = deleted_glyph_rects.iter().map(|g| {
@@ -218,7 +217,6 @@ impl VisualPayload {
             );
             VisualRunSnapshot::from_glyph_rect_with_shaping(g, shaping)
                 .with_old_paragraph(para_text)
-                .with_font_id(font_family)
         }).collect();
         VisualPayload::DeleteRuns {
             delete_runs,

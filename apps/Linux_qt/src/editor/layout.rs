@@ -29,6 +29,8 @@ cpp! {{
         int stringIndex;    // QChar index in the source string
         double xPos;        // Left edge of the glyph
         double width;       // Advance width of the glyph
+        unsigned int glyphIndex;  // Real glyph index from QGlyphRun
+        char rawFontKey[256];     // Font family name from QRawFont (for font_id)
     };
     thread_local std::vector<GlyphEntry> g_glyph_buf;
 
@@ -255,7 +257,13 @@ cpp! {{
                 for (const auto& run : glyphRuns) {
                     const auto& positions = run.positions();
                     const auto& stringIndexes = run.stringIndexes();
+                    const auto& glyphIndexes = run.glyphIndexes();
                     int count = positions.size();
+
+                    // Extract real raw font family for font_id
+                    QRawFont rawFont = run.rawFont();
+                    QString rawFontFamily = rawFont.familyName();
+                    QByteArray rawFontKeyBytes = rawFontFamily.toUtf8();
 
                     for (int i = 0; i < count; i++) {
                         int strIdx = (i < stringIndexes.size())
@@ -291,13 +299,22 @@ cpp! {{
                         e.stringIndex = strIdx;
                         e.xPos = x;
                         e.width = w;
+                        // Real glyph index from QGlyphRun
+                        e.glyphIndex = (i < glyphIndexes.size())
+                            ? glyphIndexes[i] : 0;
+                        // Real raw font family for font_id
+                        memset(e.rawFontKey, 0, sizeof(e.rawFontKey));
+                        if (rawFontKeyBytes.size() > 0) {
+                            int copyLen = rawFontKeyBytes.size();
+                            if (copyLen > (int)sizeof(e.rawFontKey) - 1)
+                                copyLen = (int)sizeof(e.rawFontKey) - 1;
+                            memcpy(e.rawFontKey, rawFontKeyBytes.constData(), copyLen);
+                        }
                         g_glyph_buf.push_back(e);
                     }
                 }
 #else
                 // Qt < 6.5: stringIndexes() unavailable, use cursorToX per character
-                // This is simpler but equally effective — directly compute each QChar's
-                // x position and width from QTextLine::cursorToX().
                 int line_start = line.textStart();
                 int line_end = line_start + line.textLength();
                 int range_start = (range_qchar_start > line_start) ? range_qchar_start : line_start;
@@ -313,6 +330,8 @@ cpp! {{
                     e.stringIndex = idx;
                     e.xPos = x;
                     e.width = w;
+                    e.glyphIndex = 0;
+                    memset(e.rawFontKey, 0, sizeof(e.rawFontKey));
                     g_glyph_buf.push_back(e);
                 }
 #endif
@@ -579,7 +598,7 @@ impl EditorLayout {
         range_end: usize,
         font_size: f64,
         font_family: &str,
-    ) -> Vec<(usize, f64, f64)> {
+    ) -> Vec<(usize, f64, f64, u32, String)> {
         qtextlayout_glyph_positions_on_line(
             &line.para_text,
             range_start,
@@ -1243,7 +1262,7 @@ pub fn qtextlayout_glyph_positions_on_line(
     paragraph_wrap_w: f64,
     indent_w: f64,
     qtextline_idx: i32,
-) -> Vec<(usize, f64, f64)> {
+) -> Vec<(usize, f64, f64, u32, String)> {
     let seg_start_in_para = range_start.saturating_sub(para_start);
     let seg_end_in_para = range_end.saturating_sub(para_start).min(para_text.len());
     let qchar_start = byte_offset_to_qchar_offset(para_text, seg_start_in_para) as i32;
@@ -1278,9 +1297,16 @@ pub fn qtextlayout_glyph_positions_on_line(
         let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             return g_glyph_buf[idx].xPos;
         });
+        let glyph_idx = cpp!(unsafe [idx as "int"] -> u32 as "quint32" {
+            return g_glyph_buf[idx].glyphIndex;
+        });
+        let raw_font_family = cpp!(unsafe [idx as "int"] -> QString as "QString" {
+            return QString::fromUtf8(g_glyph_buf[idx].rawFontKey);
+        });
+        let raw_font_family_str = raw_font_family.to_string();
         let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off);
         let abs_byte = para_start + para_byte;
-        result.push((abs_byte, x_pos, w));
+        result.push((abs_byte, x_pos, w, glyph_idx, raw_font_family_str));
     }
     result
 }

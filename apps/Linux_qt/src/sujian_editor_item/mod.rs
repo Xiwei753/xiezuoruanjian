@@ -575,4 +575,81 @@ impl SujianEditorItem {
     pub(crate) fn ime_query_selected_text(&self) -> String {
         self.buffer.selected_text()
     }
+
+    pub(crate) fn build_selection_preedit_plan(&mut self) -> animation_coordinator::SelectionPreeditPlan {
+        use animation_coordinator::{SelectionRange, PreeditRange};
+
+        let mut plan = animation_coordinator::SelectionPreeditPlan::default();
+
+        if self.buffer.has_selection() {
+            plan.has_selection = true;
+            let width = self.bounding_width();
+            let font_size = self.current_font_pixel_size as f64;
+            let font_family = &self.current_font_family.to_string();
+            let scroll_y = self.current_scroll_y as f64;
+            let viewport_h = self.current_viewport_height.max(1.0) as f64;
+            let snapshot = self.layout_snapshot(width);
+
+            let anchor = self.buffer.selection_anchor.min(self.buffer.cursor);
+            let head = self.buffer.selection_anchor.max(self.buffer.cursor);
+
+            for line in &snapshot.lines {
+                if line.para_text.is_empty() { continue; }
+                if line.byte_end <= anchor || line.byte_start >= head { continue; }
+                let line_top = line.y - scroll_y;
+                let line_bottom = line_top + line.height;
+                if line_bottom < 0.0 || line_top > viewport_h { continue; }
+
+                let seg_start = anchor.max(line.byte_start);
+                let seg_end = head.min(line.byte_end);
+                if seg_start >= seg_end { continue; }
+
+                let start_x = self.editor_layout.cursor_x_for_line(
+                    &snapshot, line, seg_start, crate::editor::layout::CaretAffinity::Downstream,
+                );
+                let end_x = self.editor_layout.cursor_x_for_line(
+                    &snapshot, line, seg_end, crate::editor::layout::CaretAffinity::Downstream,
+                );
+                let left_x = start_x.min(end_x);
+                let sel_w = (end_x - start_x).abs();
+
+                plan.selection_ranges.push(SelectionRange {
+                    x: left_x,
+                    y: line_top,
+                    w: sel_w,
+                    h: line.height,
+                    color: "#3381D1D1".to_string(),
+                });
+            }
+        }
+
+        if !self.preedit_text.is_empty() {
+            plan.has_preedit = true;
+            if let Some(ref preedit_rect) = self.preedit_cursor_rect {
+                let width = self.bounding_width();
+                let font_size = self.current_font_pixel_size as f64;
+                let font_family = &self.current_font_family.to_string();
+                let scroll_y = self.current_scroll_y as f64;
+                let snapshot = self.layout_snapshot(width);
+                let cursor_byte = self.buffer.cursor;
+
+                if let Some(line) = snapshot.lines.iter().find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte) {
+                    let start_x = self.editor_layout.cursor_x_for_line(
+                        &snapshot, line, cursor_byte, crate::editor::layout::CaretAffinity::Downstream,
+                    );
+                    let preedit_w = self.editor_layout.text_width(&self.preedit_text, font_size, font_family);
+                    plan.preedit_ranges.push(PreeditRange {
+                        x: start_x,
+                        y: line.y - scroll_y,
+                        w: preedit_w,
+                        h: line.height,
+                        color: "#1A81D1D1".to_string(),
+                        underline: true,
+                    });
+                }
+            }
+        }
+
+        plan
+    }
 }

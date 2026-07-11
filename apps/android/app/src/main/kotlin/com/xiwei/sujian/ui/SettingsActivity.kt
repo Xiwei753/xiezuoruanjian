@@ -509,6 +509,7 @@ class SettingsActivity : AppCompatActivity() {
             if (::settingsRepository.isInitialized) {
                 settingsRepository.saveLocalSettings(currentSettings)
                 CoreSettingsEvents.markEditorChanged()
+                com.xiwei.sujian.ui.compose.theme.ThemeStore.reload()
             }
         }
         val currentSyncable = settingsRepository.getSyncableSettings()
@@ -571,11 +572,7 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun captureDynamicColor() {
-        val result = com.xiwei.sujian.ui.ThemePaletteHelper.extractDynamicColorSchemes(this) ?: return
-        settingsRepository.saveDynamicColorPaletteToCatalog(
-            lightScheme = result.lightScheme,
-            darkScheme = result.darkScheme,
-        )
+        com.xiwei.sujian.ui.compose.theme.ThemeStore.captureDynamicColorAndSave(this)
         refreshPaletteRecords()
     }
 }

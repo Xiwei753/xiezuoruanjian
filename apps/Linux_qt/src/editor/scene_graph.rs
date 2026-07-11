@@ -6,6 +6,7 @@ cpp! {{
     #include <QtQuick/QSGTransformNode>
     #include <QtQuick/QSGOpacityNode>
     #include <QtQuick/QSGImageNode>
+    #include <QtQuick/QSGFlatColorMaterial>
     #include <QtGui/QColor>
     #include <QDebug>
 
@@ -406,6 +407,102 @@ pub fn clear_animation_layer(
             QSGNode *child = animLayer->firstChild();
             animLayer->removeChildNode(child);
             delete child;
+        }
+    })
+}
+
+/// Update the selection/preedit layer (child[2]) with colored rectangles.
+/// rect_data: flat array of [x, y, w, h, r, g, b, a, underline] per rect.
+pub fn update_selection_preedit_layer(
+    root_raw: *mut std::ffi::c_void,
+    item_ptr: *mut std::ffi::c_void,
+    rect_count: i32,
+    rect_data: *const f64,
+) {
+    cpp!(unsafe [
+        root_raw as "QSGNode*",
+        item_ptr as "QQuickItem*",
+        rect_count as "int",
+        rect_data as "const double*"
+    ] {
+        auto *root = static_cast<QSGTransformNode*>(root_raw);
+        if (!root) return;
+
+        ensure_four_layer_nodes(root, item_ptr);
+
+        QSGTransformNode *selLayer = dynamic_cast<QSGTransformNode*>(child_at(root, 2));
+        if (!selLayer) return;
+
+        // Remove excess children
+        while (selLayer->childCount() > rect_count) {
+            QSGNode *child = selLayer->lastChild();
+            selLayer->removeChildNode(child);
+            delete child;
+        }
+
+        // Each rect: 10 doubles = x, y, w, h, r, g, b, a, underline_flag, _reserved
+        for (int i = 0; i < rect_count; i++) {
+            const double *d = rect_data + i * 10;
+            double rx = d[0], ry = d[1], rw = d[2], rh = d[3];
+            int r = static_cast<int>(d[4] * 255);
+            int g = static_cast<int>(d[5] * 255);
+            int b = static_cast<int>(d[6] * 255);
+            int a = static_cast<int>(d[7] * 255);
+            bool underline = d[8] > 0.5;
+
+            QColor color(r, g, b, a);
+
+            QSGFlatColorMaterial *matNode = nullptr;
+            QSGGeometryNode *geoNode = nullptr;
+
+            if (i < selLayer->childCount()) {
+                geoNode = static_cast<QSGGeometryNode*>(child_at(selLayer, i));
+                if (geoNode) {
+                    matNode = static_cast<QSGFlatColorMaterial*>(geoNode->material());
+                }
+            } else {
+                geoNode = new QSGGeometryNode;
+                matNode = new QSGFlatColorMaterial;
+                matNode->setFlag(QSGMaterial::Blending);
+                geoNode->setMaterial(matNode);
+                geoNode->setFlag(QSGNode::OwnsMaterial);
+                selLayer->appendChildNode(geoNode);
+            }
+
+            if (!geoNode || !matNode) continue;
+
+            matNode->setColor(color);
+
+            if (underline) {
+                // Draw thin underline bar
+                double lineH = 2.0;
+                QSGGeometry *geo = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
+                geo->setDrawingMode(QSGGeometry::DrawTriangleStrip);
+                QSGGeometry::Point2D *v = geo->vertexDataAsPoint2D();
+                v[0].set(rx, ry + rh - lineH);
+                v[1].set(rx + rw, ry + rh - lineH);
+                v[2].set(rx, ry + rh);
+                v[3].set(rx + rw, ry + rh);
+                geoNode->setGeometry(geo);
+                geoNode->setFlag(QSGNode::OwnsGeometry);
+            } else {
+                // Draw filled rectangle
+                QSGGeometry *geo = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
+                geo->setDrawingMode(QSGGeometry::DrawTriangleStrip);
+                QSGGeometry::Point2D *v = geo->vertexDataAsPoint2D();
+                v[0].set(rx, ry);
+                v[1].set(rx + rw, ry);
+                v[2].set(rx, ry + rh);
+                v[3].set(rx + rw, ry + rh);
+                geoNode->setGeometry(geo);
+                geoNode->setFlag(QSGNode::OwnsGeometry);
+            }
+
+            geoNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+        }
+
+        if (rect_count > 0) {
+            selLayer->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
         }
     })
 }
