@@ -15,9 +15,9 @@ pub(crate) use super::render_plan::{
     ImeUpdateKind, ImeUpdatePlan, RenderPlan,
 
 };
-pub(crate) use super::texture_cache::{TextureCache, TexturePhase, TextureCacheKey};
-pub(crate) use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, ReflowVisualSnapshot, derive_clusters_from_glyphs, RawFontCacheKey, RunFlags, RunMapping};
-use super::visual_payload::{ShapedGlyphInfo, GlyphBounds, TextureRegion};
+pub(crate) use super::texture_cache::{TextureCache, TexturePhase};
+pub(crate) use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, ReflowVisualSnapshot};
+use super::visual_payload::ShapedGlyphInfo;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextAnimationKind {
@@ -1208,6 +1208,7 @@ impl LinuxEditorAnimationCoordinator {
 #[cfg(test)]
  mod tests {
      use super::*;
+     use super::super::shaped_visual_run::{RawFontCacheKey, RunFlags};
      use std::time::Duration;
      use writer_core::editor::AnimationMode as CoreAnimationMode;
      use writer_core::editor::{GlyphRect, ReflowGlyphRect};

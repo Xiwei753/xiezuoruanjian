@@ -2,7 +2,6 @@ use super::input_host::is_left_button_pressed;
 use super::*;
 use super::transaction_key::VisualTransactionKey;
 use super::transaction_queue::VisualTransactionState;
-use super::texture_cache::{TexturePhase, TextureCacheKey};
 
 use super::render_plan::{FrameContext, CursorStyle};
 use std::time::Instant;

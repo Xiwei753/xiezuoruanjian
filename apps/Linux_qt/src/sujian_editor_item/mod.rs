@@ -533,7 +533,7 @@ impl SujianEditorItem {
                     tid,
                     self.animation_coordinator.has_active_insert()
                 ));
-                self.texture_cache.remove(&key);
+                self.texture_cache.remove_for_transaction(&key);
                 self.request_static_repaint();
                 self.cursor_rect_changed();
             }

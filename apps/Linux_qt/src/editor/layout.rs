@@ -379,6 +379,8 @@ cpp! {{
         double visualY;
         double visualW;
         double visualH;
+        double textureTranslateX;
+        double textureTranslateY;
     };
     thread_local std::vector<ShapedRunEntry> g_shaped_run_buf;
 
@@ -441,10 +443,12 @@ cpp! {{
                     QString rawFontStyle;
                     int rawFontWeight = derivedFont.weight();
 
-                    // Compute run-level string range and visual bounds
+                    // Compute run-level string range and real visual bounds
+                    // using QRawFont::boundingRect(glyphIndex) + glyph position
                     int strStart = INT_MAX;
                     int strEnd = 0;
-                    double minX = 1e9, maxX = -1e9;
+                    double unionMinX = 1e9, unionMinY = 1e9;
+                    double unionMaxX = -1e9, unionMaxY = -1e9;
                     for (int i = 0; i < count; i++) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                         int si = (i < stringIndexes.size()) ? stringIndexes[i] : -1;
@@ -455,9 +459,18 @@ cpp! {{
                             if (si < strStart) strStart = si;
                             if (si + 1 > strEnd) strEnd = si + 1;
                         }
+                        quint32 gIdx = (i < glyphIndexes.size()) ? glyphIndexes[i] : 0;
+                        QRectF glyphBounds = rawFont.boundingRect(gIdx);
                         double gx = positions[i].x();
-                        if (gx < minX) minX = gx;
-                        if (gx > maxX) maxX = gx;
+                        double gy = positions[i].y();
+                        double gLeft   = gx + glyphBounds.left();
+                        double gRight  = gx + glyphBounds.right();
+                        double gTop    = gy + glyphBounds.top();
+                        double gBottom = gy + glyphBounds.bottom();
+                        if (gLeft   < unionMinX) unionMinX = gLeft;
+                        if (gRight  > unionMaxX) unionMaxX = gRight;
+                        if (gTop    < unionMinY) unionMinY = gTop;
+                        if (gBottom > unionMaxY) unionMaxY = gBottom;
                     }
                     if (strStart == INT_MAX) strStart = 0;
                     if (strEnd == 0) strEnd = strStart;
@@ -467,8 +480,17 @@ cpp! {{
                         runIdx++; continue;
                     }
 
-                    double runW = maxX - minX;
+                    // Anti-aliasing margin (1px on each side in logical coords)
+                    double aaMargin = 1.0;
+                    double runW = (unionMaxX - unionMinX) + aaMargin * 2.0;
+                    double runH = (unionMaxY - unionMinY) + aaMargin * 2.0;
                     if (runW < 0.01 && count > 0) runW = 10.0;
+                    if (runH < 0.01 && count > 0) runH = lineH;
+
+                    // Texture translation: shift glyph positions so union bounds
+                    // top-left maps to (aaMargin, aaMargin) in the texture
+                    double texTransX = -unionMinX + aaMargin;
+                    double texTransY = -unionMinY + aaMargin;
 
                     ShapedRunEntry re;
                     re.runIndex = runIdx;
@@ -488,10 +510,12 @@ cpp! {{
                     re.rawFontWeight = rawFontWeight;
                     re.rawFontPixelSize = static_cast<int>(fs);
                     re.baselineY = lineY + lineAscent;
-                    re.visualX = minX;
-                    re.visualY = lineY;
+                    re.visualX = unionMinX - aaMargin;
+                    re.visualY = unionMinY - aaMargin;
                     re.visualW = runW;
-                    re.visualH = lineH;
+                    re.visualH = runH;
+                    re.textureTranslateX = texTransX;
+                    re.textureTranslateY = texTransY;
                     g_shaped_run_buf.push_back(re);
 
                     // Extract per-glyph data
@@ -530,12 +554,17 @@ cpp! {{
     }
 
     // Render a specific QGlyphRun to a QImage using QPainter::drawGlyphRun
+    // Uses real union bounds from QRawFont::boundingRect + glyph position.
+    // clip_x/clip_y are the visual origin, clip_w/clip_h are the texture size.
+    // tex_trans_x/tex_trans_y are the translation to apply to glyph positions
+    // so they map correctly into the texture coordinate space.
     void editor_render_glyph_run_texture(
         QImage* img, const QString& paraText,
         double fs, const QString& ff,
         double paragraph_wrap_w, double indent_w, int qtextline_idx,
         int target_run_index, double dpr, double clip_x, double clip_y,
-        double clip_w, double clip_h, const QColor& textColor
+        double clip_w, double clip_h, double tex_trans_x, double tex_trans_y,
+        const QColor& textColor
     ) {
         if (!img) return;
         QPainter painter(img);
@@ -562,9 +591,9 @@ cpp! {{
                 int runIdx = 0;
                 for (const auto& run : glyphRuns) {
                     if (runIdx == target_run_index) {
-                        // Compute offset: shift glyph positions so they start at (0, baseline_offset)
-                        double baseline_offset = clip_h * 0.8;
-                        QPointF runOrigin(0.0 - clip_x, baseline_offset - line.ascent() - clip_y);
+                        // Use real translation computed from union bounds
+                        // tex_trans_x/tex_trans_y already account for clip offset
+                        QPointF runOrigin(tex_trans_x, tex_trans_y);
                         painter.setClipRect(QRectF(0, 0, clip_w, clip_h));
                         QGlyphRun drawRun = run;
                         painter.drawGlyphRun(runOrigin, drawRun);
@@ -1547,6 +1576,8 @@ pub struct ShapedRunData {
     pub visual_y: f64,
     pub visual_w: f64,
     pub visual_h: f64,
+    pub texture_translate_x: f64,
+    pub texture_translate_y: f64,
     pub glyphs: Vec<RunGlyphData>,
 }
 
@@ -1643,6 +1674,12 @@ pub fn extract_shaped_runs_on_line(
         let visual_h = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             return g_shaped_run_buf[idx].visualH;
         });
+        let texture_translate_x = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].textureTranslateX;
+        });
+        let texture_translate_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].textureTranslateY;
+        });
 
         let mut glyphs = Vec::with_capacity(glyph_count as usize);
         let glyph_offset: i32 = (0..i).map(|prev_idx| {
@@ -1706,6 +1743,8 @@ pub fn extract_shaped_runs_on_line(
             visual_y,
             visual_w,
             visual_h,
+            texture_translate_x,
+            texture_translate_y,
             glyphs,
         });
     }
@@ -1725,6 +1764,8 @@ pub fn render_glyph_run_texture(
     clip_y: f64,
     clip_w: f64,
     clip_h: f64,
+    tex_trans_x: f64,
+    tex_trans_y: f64,
     dpr: f64,
     text_color: &str,
 ) -> Option<qmetaobject::QImage> {
@@ -1766,11 +1807,14 @@ pub fn render_glyph_run_texture(
         clip_y as "double",
         clip_w as "double",
         clip_h as "double",
+        tex_trans_x as "double",
+        tex_trans_y as "double",
         color as "QColor"
     ] {
         editor_render_glyph_run_texture(
             img_ptr, para, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx,
-            target_run_index, dpr, clip_x, clip_y, clip_w, clip_h, color
+            target_run_index, dpr, clip_x, clip_y, clip_w, clip_h,
+            tex_trans_x, tex_trans_y, color
         );
     });
 

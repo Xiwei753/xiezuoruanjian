@@ -201,7 +201,7 @@ impl SujianEditorItem {
         Vec<super::shaped_visual_run::ShapedVisualRun>,
         Vec<super::shaped_visual_run::ShapedVisualRun>,
     ) {
-        use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, RawFontCacheKey, RunFlags, derive_clusters_from_glyphs};
+        use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, RawFontCacheKey, RunFlags, derive_clusters_from_glyphs};
         use crate::editor::layout::{extract_shaped_runs_on_line, ShapedRunData};
 
         let width = self.bounding_width();
