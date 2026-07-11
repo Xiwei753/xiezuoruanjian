@@ -2,7 +2,6 @@ use super::input_host::is_left_button_pressed;
 use super::*;
 use super::transaction_key::VisualTransactionKey;
 use super::transaction_queue::VisualTransactionState;
-use super::visual_payload::VisualPayload;
 
 use super::render_plan::{FrameContext, CursorStyle};
 use std::time::Instant;
@@ -162,337 +161,110 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-            if !final_root.is_null() && !item_ptr.is_null() {
-                let now = Instant::now();
-                let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
-                    self.animation_coordinator.vt_queue.active_transactions().to_vec();
+        if !final_root.is_null() && !item_ptr.is_null() {
+            let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
+                self.animation_coordinator.vt_queue.active_transactions().to_vec();
 
-                if active_txs.is_empty() {
-                    self.texture_cache.clear();
-                    scene_graph::clear_animation_layer(final_root, item_ptr);
+            if active_txs.is_empty() {
+                self.texture_cache.clear();
+                scene_graph::clear_animation_layer(final_root, item_ptr);
+            }
 
-                    let cursor_plan = self.animation_coordinator.build_cursor_plan(
-                        None, None,
-                        self.cursor_ctrl.visual_x,
-                        self.cursor_ctrl.visual_y,
-                        self.cursor_ctrl.visual_h,
-                        self.current_editor_enabled,
-                        self.buffer.has_selection(),
-                        self.current_viewport_height as f64,
-                        false,
-                        false,
-                        false,
-                        self.current_smooth_cursor_enabled,
-                        self.current_cursor_animation_duration_ms,
-                        self.current_coordinated_text_cursor_animation_enabled,
-                        self.current_scroll_y as f64,
-                        self.cursor_ctrl.last_scroll_y,
-                        self.cursor_ctrl.visible,
-                        self.cursor_ctrl.blink_visible,
-                        self.cursor_ctrl.visual_x,
-                        self.cursor_ctrl.visual_y,
-                        self.cursor_ctrl.force_snap_next,
-                        self.cursor_ctrl.animation.as_ref(),
-                    );
-                    let ime_plan = self.animation_coordinator.build_ime_plan(false, false);
-                    let selection_preedit = self.build_selection_preedit_plan();
+            let old_cursor_rect = active_txs.first().and_then(|tx| tx.payload.cursor_rects().0.cloned());
+            let new_cursor_rect = active_txs.first().and_then(|tx| tx.payload.cursor_rects().1.cloned());
+            let has_active_txs = !active_txs.is_empty();
 
-                    let frame_context = FrameContext {
-                        viewport_height: vp_h,
-                        scroll_offset_y: scroll_y,
-                        dpr,
-                        active_transaction_keys: Vec::new(),
-                        keys_to_complete: Vec::new(),
-                        keys_to_cancel: Vec::new(),
-                    };
-                    let cursor_style = CursorStyle {
-                        color: self.current_cursor_color.to_string(),
-                        width: 2.0,
-                    };
+            let cursor_plan = self.animation_coordinator.build_cursor_plan(
+                old_cursor_rect,
+                new_cursor_rect,
+                self.cursor_ctrl.visual_x,
+                self.cursor_ctrl.visual_y,
+                self.cursor_ctrl.visual_h,
+                self.current_editor_enabled,
+                self.buffer.has_selection(),
+                self.current_viewport_height as f64,
+                false,
+                false,
+                false,
+                self.current_smooth_cursor_enabled,
+                self.current_cursor_animation_duration_ms,
+                self.current_coordinated_text_cursor_animation_enabled,
+                self.current_scroll_y as f64,
+                self.cursor_ctrl.last_scroll_y,
+                self.cursor_ctrl.visible,
+                self.cursor_ctrl.blink_visible,
+                self.cursor_ctrl.visual_x,
+                self.cursor_ctrl.visual_y,
+                self.cursor_ctrl.force_snap_next,
+                self.cursor_ctrl.animation.as_ref(),
+            );
+            let ime_plan = self.animation_coordinator.build_ime_plan(
+                has_active_txs,
+                false,
+            );
+            let selection_preedit = self.build_selection_preedit_plan();
 
-                    let render_plan = self.animation_coordinator.build_render_plan_full(
-                        cursor_plan, ime_plan, selection_preedit,
-                        frame_context, cursor_style,
-                    );
+            let frame_context = FrameContext {
+                viewport_height: vp_h,
+                scroll_offset_y: scroll_y,
+                dpr,
+                active_transaction_keys: Vec::new(),
+                keys_to_complete: Vec::new(),
+                keys_to_cancel: Vec::new(),
+            };
+            let cursor_style = CursorStyle {
+                color: self.current_cursor_color.to_string(),
+                width: 2.0,
+            };
 
-                    scene_graph_renderer::render_frame(
-                        final_root,
-                        item_ptr,
-                        &render_plan,
-                        &self.texture_cache,
-                    );
-                } else {
-                let mut txs_to_mark_rendering: Vec<VisualTransactionKey> = Vec::new();
-                let mut txs_to_complete: Vec<VisualTransactionKey> = Vec::new();
-                let mut keys_with_texture_failure: Vec<VisualTransactionKey> = Vec::new();
-                let mut active_keys: Vec<VisualTransactionKey> = Vec::new();
+            let render_plan = self.animation_coordinator.build_render_plan_full(
+                cursor_plan, ime_plan, selection_preedit,
+                frame_context, cursor_style,
+            );
 
-                for tx in &active_txs {
-                    active_keys.push(tx.key);
+            scene_graph_renderer::render_frame(
+                final_root,
+                item_ptr,
+                &render_plan,
+                &self.texture_cache,
+            );
 
-                    if tx.state == VisualTransactionState::Prepared {
-                        txs_to_mark_rendering.push(tx.key);
-                    }
-
-                    let just_prepared = !tx.texture_prepared;
-                    if just_prepared {
-                        let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::new();
-                        let font_size = self.current_font_pixel_size as f64;
-                        let font_family = self.current_font_family.to_string();
-
-                        match &tx.payload {
-                            VisualPayload::InsertRuns { insert_runs, reflow_runs, .. } => {
-                                for run in insert_runs {
-                                    let para_text;
-                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
-                                        t.as_str()
-                                    } else {
-                                        para_text = Self::extract_paragraph_for_glyph(
-                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
-                                        );
-                                        para_text.as_str()
-                                    };
-                                    textures.push(self.render_snapshot_from_static_layout(
-                                        para_text_ref, run.x, run.y, run.w, run.h,
-                                        run.baseline_y, font_size, &font_family, dpr,
-                                    ).or_else(|| self.render_glyph_texture_from_layout(
-                                        &run.char_, run.w, run.h,
-                                        run.baseline_y - run.y, dpr,
-                                    )));
-                                }
-                                for run in reflow_runs {
-                                    let plain_text = self.plain_text.to_string();
-                                    let para_text = Self::extract_paragraph_for_glyph(
-                                        &plain_text, run.byte_start, run.byte_end,
-                                    );
-                                    textures.push(self.render_snapshot_from_static_layout(
-                                        &para_text, run.new_x, run.new_y, run.w, run.h,
-                                        run.new_baseline_y, font_size, &font_family, dpr,
-                                    ).or_else(|| self.render_glyph_texture_from_layout(
-                                        &run.char_, run.w, run.h,
-                                        run.new_baseline_y - run.new_y, dpr,
-                                    )));
-                                }
-                            }
-                            VisualPayload::DeleteRuns { delete_runs, .. } => {
-                                for run in delete_runs {
-                                    let para_text;
-                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
-                                        t.as_str()
-                                    } else {
-                                        para_text = Self::extract_paragraph_for_glyph(
-                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
-                                        );
-                                        para_text.as_str()
-                                    };
-                                    textures.push(self.render_snapshot_from_static_layout(
-                                        para_text_ref, run.x, run.y, run.w, run.h,
-                                        run.baseline_y, font_size, &font_family, dpr,
-                                    ).or_else(|| self.render_glyph_texture_from_layout(
-                                        &run.char_, run.w, run.h,
-                                        run.baseline_y - run.y, dpr,
-                                    )));
-                                }
-                            }
-                            VisualPayload::ReflowRuns { insert_runs, reflow_runs, .. } => {
-                                for run in insert_runs {
-                                    let para_text;
-                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
-                                        t.as_str()
-                                    } else {
-                                        para_text = Self::extract_paragraph_for_glyph(
-                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
-                                        );
-                                        para_text.as_str()
-                                    };
-                                    textures.push(self.render_snapshot_from_static_layout(
-                                        para_text_ref, run.x, run.y, run.w, run.h,
-                                        run.baseline_y, font_size, &font_family, dpr,
-                                    ).or_else(|| self.render_glyph_texture_from_layout(
-                                        &run.char_, run.w, run.h,
-                                        run.baseline_y - run.y, dpr,
-                                    )));
-                                }
-                                for run in reflow_runs {
-                                    let plain_text = self.plain_text.to_string();
-                                    let para_text = Self::extract_paragraph_for_glyph(
-                                        &plain_text, run.byte_start, run.byte_end,
-                                    );
-                                    textures.push(self.render_snapshot_from_static_layout(
-                                        &para_text, run.new_x, run.new_y, run.w, run.h,
-                                        run.new_baseline_y, font_size, &font_family, dpr,
-                                    ).or_else(|| self.render_glyph_texture_from_layout(
-                                        &run.char_, run.w, run.h,
-                                        run.new_baseline_y - run.new_y, dpr,
-                                    )));
-                                }
-                            }
-                            VisualPayload::CursorTransition { .. } => {}
-                            VisualPayload::GlyphPayload { payload, .. } => {
-                                let run = &payload.snapshot;
-                                let para_text;
-                                let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
-                                    t.as_str()
-                                } else {
-                                    para_text = Self::extract_paragraph_for_glyph(
-                                        &self.plain_text.to_string(), run.byte_start, run.byte_end,
-                                    );
-                                    para_text.as_str()
-                                };
-                                textures.push(self.render_snapshot_from_static_layout(
-                                    para_text_ref, run.x, run.y, run.w, run.h,
-                                    run.baseline_y, font_size, &font_family, dpr,
-                                ).or_else(|| self.render_glyph_texture_from_layout(
-                                    &run.char_, run.w, run.h,
-                                    run.baseline_y - run.y, dpr,
-                                )));
-                            }
-                            VisualPayload::ClusterPayload { payload, .. } => {
-                                for run in &payload.snapshots {
-                                    let para_text;
-                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
-                                        t.as_str()
-                                    } else {
-                                        para_text = Self::extract_paragraph_for_glyph(
-                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
-                                        );
-                                        para_text.as_str()
-                                    };
-                                    textures.push(self.render_snapshot_from_static_layout(
-                                        para_text_ref, run.x, run.y, run.w, run.h,
-                                        run.baseline_y, font_size, &font_family, dpr,
-                                    ).or_else(|| self.render_glyph_texture_from_layout(
-                                        &run.char_, run.w, run.h,
-                                        run.baseline_y - run.y, dpr,
-                                    )));
-                                }
-                            }
-                            VisualPayload::RunPayload { payload, .. } => {
-                                let run = &payload.shaped_run;
-                                textures.push(self.render_shaped_run_texture_from_visual(run, font_size, &font_family, dpr));
-                            }
-                            VisualPayload::LineReflowPayload { payload, .. } => {
-                                for insert_run in &payload.insert_shaped_runs {
-                                    textures.push(self.render_shaped_run_texture_from_visual(insert_run, font_size, &font_family, dpr));
-                                }
-                                for new_run in &payload.reflow_snapshot.new_shaped_runs {
-                                    textures.push(self.render_shaped_run_texture_from_visual(new_run, font_size, &font_family, dpr));
-                                }
-                            }
-                        }
-
-                        let any_failed = textures.iter().any(|t| t.is_none());
-                        if any_failed {
-                            keys_with_texture_failure.push(tx.key);
-                            editor_animation_debug_log(&format!(
-                                "update_paint_node: texture failed for tid={}, cancelling this transaction only",
-                                tx.key.transaction_id
-                            ));
-                        } else {
-                            self.texture_cache.insert(
-                                tx.key,
-                                textures.into_iter().map(|t| t.unwrap()).collect(),
-                            );
-                            self.animation_coordinator.vt_queue.mark_texture_prepared(tx.key);
-                        }
-                    }
-
-                    let elapsed_ms = now.duration_since(tx.start_time).as_millis() as f64;
-                    let progress = (elapsed_ms / tx.duration_ms as f64).min(1.0);
-
-                    if progress >= 1.0 {
-                        txs_to_complete.push(tx.key);
-                        continue;
-                    }
-
-                    if keys_with_texture_failure.contains(&tx.key) {
-                        continue;
-                    }
+            let mut txs_to_mark_rendering: Vec<VisualTransactionKey> = Vec::new();
+            for tx in active_txs {
+                if tx.state == VisualTransactionState::Prepared {
+                    txs_to_mark_rendering.push(tx.key);
                 }
+            }
 
-                let cursor_plan = self.animation_coordinator.build_cursor_plan(
-                    self.animation_coordinator.vt_queue.active_transactions().first()
-                        .and_then(|tx| tx.payload.cursor_rects().0.cloned()),
-                    self.animation_coordinator.vt_queue.active_transactions().first()
-                        .and_then(|tx| tx.payload.cursor_rects().1.cloned()),
-                    self.cursor_ctrl.visual_x,
-                    self.cursor_ctrl.visual_y,
-                    self.cursor_ctrl.visual_h,
-                    self.current_editor_enabled,
-                    self.buffer.has_selection(),
-                    self.current_viewport_height as f64,
-                    false,
-                    false,
-                    false,
-                    self.current_smooth_cursor_enabled,
-                    self.current_cursor_animation_duration_ms,
-                    self.current_coordinated_text_cursor_animation_enabled,
-                    self.current_scroll_y as f64,
-                    self.cursor_ctrl.last_scroll_y,
-                    self.cursor_ctrl.visible,
-                    self.cursor_ctrl.blink_visible,
-                    self.cursor_ctrl.visual_x,
-                    self.cursor_ctrl.visual_y,
-                    self.cursor_ctrl.force_snap_next,
-                    self.cursor_ctrl.animation.as_ref(),
-                );
-                let ime_plan = self.animation_coordinator.build_ime_plan(true, false);
-                let selection_preedit = self.build_selection_preedit_plan();
+            for key in &render_plan.frame_context.keys_to_complete {
+                self.animation_coordinator.finish_by_key(*key);
+                self.texture_cache.remove(key);
+                editor_animation_debug_log(&format!(
+                    "update_paint_node: VT tid={}, gen={} completed (progress >= 1.0)",
+                    key.transaction_id, key.generation
+                ));
+            }
 
-                let frame_context = FrameContext {
-                    viewport_height: vp_h,
-                    scroll_offset_y: scroll_y,
-                    dpr,
-                    active_transaction_keys: active_keys,
-                    keys_to_complete: txs_to_complete.clone(),
-                    keys_to_cancel: keys_with_texture_failure.clone(),
-                };
-                let cursor_style = CursorStyle {
-                    color: self.current_cursor_color.to_string(),
-                    width: 2.0,
-                };
+            for key in &render_plan.frame_context.keys_to_cancel {
+                self.animation_coordinator.cancel_by_key(*key, "texture_failed");
+                self.texture_cache.remove(key);
+            }
 
-                let render_plan = self.animation_coordinator.build_render_plan_full(
-                    cursor_plan, ime_plan, selection_preedit,
-                    frame_context, cursor_style,
-                );
+            for key in &txs_to_mark_rendering {
+                self.animation_coordinator.vt_queue.mark_rendering(*key);
+                editor_animation_debug_log(&format!(
+                    "update_paint_node: VT tid={} → Rendering", key.transaction_id
+                ));
+            }
 
-                scene_graph_renderer::render_frame(
-                    final_root,
-                    item_ptr,
-                    &render_plan,
-                    &self.texture_cache,
-                );
+            if !render_plan.frame_context.keys_to_complete.is_empty() {
+                self.render_dirty = true;
+            }
 
-                for key in &txs_to_mark_rendering {
-                    self.animation_coordinator.vt_queue.mark_rendering(*key);
-                    editor_animation_debug_log(&format!(
-                        "update_paint_node: VT tid={} → Rendering", key.transaction_id
-                    ));
-                }
-
-                for key in &keys_with_texture_failure {
-                    self.animation_coordinator.cancel_by_key(*key, "texture_failed");
-                    self.texture_cache.remove(key);
-                    self.render_dirty = true;
-                }
-
-                for key in &txs_to_complete {
-                    self.animation_coordinator.finish_by_key(*key);
-                    self.texture_cache.remove(key);
-                    editor_animation_debug_log(&format!(
-                        "update_paint_node: VT tid={}, gen={} completed (progress >= 1.0)",
-                        key.transaction_id, key.generation
-                    ));
-                }
-
-                if !txs_to_complete.is_empty() {
-                    self.render_dirty = true;
-                }
-
-                if self.animation_coordinator.vt_queue.has_active() || !txs_to_complete.is_empty() {
-                    self.request_frame_update();
-                }
+            if self.animation_coordinator.vt_queue.has_active()
+                || !render_plan.frame_context.keys_to_complete.is_empty()
+            {
+                self.request_frame_update();
             }
         }
 
@@ -509,46 +281,86 @@ impl QQuickItem for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    fn extract_paragraph_for_glyph(plain_text: &str, byte_start: usize, byte_end: usize) -> String {
-        let text_bytes = plain_text.as_bytes();
-        let mut para_start = byte_start;
-        while para_start > 0 && text_bytes[para_start - 1] != b'\n' {
-            para_start -= 1;
+    pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
+        let dpr = {
+            let item_ptr = self.get_cpp_object();
+            if !item_ptr.is_null() {
+                renderer::sujian_item_dpr(item_ptr)
+            } else {
+                1.0
+            }
+        };
+
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = self.current_font_family.to_string();
+
+        let runs: Vec<super::shaped_visual_run::ShapedVisualRun> = {
+            let tx = self.animation_coordinator.vt_queue.active_transactions()
+                .iter()
+                .find(|t| t.key == key);
+            match tx {
+                Some(t) => t.payload.shaped_runs_for_texture().into_iter().cloned().collect(),
+                None => return,
+            }
+        };
+
+        if runs.is_empty() {
+            self.animation_coordinator.vt_queue.mark_texture_prepared(key);
+            return;
         }
-        let mut para_end = byte_end.min(text_bytes.len());
-        while para_end < text_bytes.len() && text_bytes[para_end] != b'\n' {
-            para_end += 1;
+
+        let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::with_capacity(runs.len());
+        for run in &runs {
+            textures.push(self.render_shaped_run_texture_via_glyph_run(run, font_size, &font_family, dpr));
         }
-        plain_text[para_start..para_end].to_string()
+
+        let any_failed = textures.iter().any(|t| t.is_none());
+        if any_failed {
+            editor_animation_debug_log(&format!(
+                "prepare_transaction_textures: texture failed for tid={}, cancelling",
+                key.transaction_id
+            ));
+            self.animation_coordinator.cancel_by_key(key, "texture_failed");
+            self.render_dirty = true;
+        } else {
+            self.texture_cache.insert(
+                key,
+                textures.into_iter().map(|t| t.unwrap()).collect(),
+            );
+            self.animation_coordinator.vt_queue.mark_texture_prepared(key);
+        }
     }
 
-    fn render_shaped_run_texture_from_visual(
+    fn render_shaped_run_texture_via_glyph_run(
         &mut self,
         run: &super::shaped_visual_run::ShapedVisualRun,
         font_size: f64,
-        font_family: &str,
+        _font_family: &str,
         dpr: f64,
     ) -> Option<qmetaobject::QImage> {
-        let snapshot = self.layout_snapshot(self.bounding_width());
-        let line = snapshot.lines.iter().find(|l| {
-            l.byte_start <= run.source_string_start && l.byte_end >= run.source_string_end && !l.para_text.is_empty()
-        });
-
-        let para_text = match line {
-            Some(l) => l.para_text.clone(),
-            None => return None,
+        let para_text = match &run.para_text {
+            Some(t) if !t.is_empty() => t.clone(),
+            _ => return None,
         };
+        let qtextline_idx = run.qtextline_idx.unwrap_or(0);
+        let wrap_w = run.paragraph_wrap_w.unwrap_or(99999.0);
+        let indent_w = run.para_indent.unwrap_or(0.0);
+        let run_family = run.raw_font_key.raw_font_family_parsed();
 
-        self.render_snapshot_from_static_layout(
+        crate::editor::layout::render_glyph_run_texture(
             &para_text,
-            run.visual_x,
-            run.visual_y,
+            font_size,
+            run_family,
+            wrap_w,
+            indent_w,
+            qtextline_idx,
+            run.qglyphrun_index,
+            0.0,
+            0.0,
             run.visual_w,
             run.visual_h,
-            run.baseline_y,
-            font_size,
-            font_family,
             dpr,
+            &self.current_text_color.to_string(),
         )
     }
 }

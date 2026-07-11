@@ -1,21 +1,22 @@
-use super::visual_payload::VisualRunSnapshot;
+use super::shaped_visual_run::ShapedVisualRun;
 use super::insert_animation::GlyphFrameData;
 
+#[allow(dead_code)]
 pub(crate) fn compute_glyph_delete_animation_frame(
-    delete_runs: &[VisualRunSnapshot],
+    delete_runs: &[ShapedVisualRun],
     progress: f64,
 ) -> Vec<GlyphFrameData> {
     let opacity = 1.0 - progress;
     let mut frames = Vec::with_capacity(delete_runs.len());
 
     for run in delete_runs {
-        let _baseline_in_quad = run.baseline_y - run.y;
+        let _baseline_in_quad = run.baseline_y - run.visual_y;
         let scale = 1.0 - progress * 0.15;
-        let dw = run.w * scale;
-        let dh = run.h * scale;
-        let dx = run.x + (run.w - dw) * 0.5;
-        let dy = run.y + (run.h - dh) * 0.5;
-        let bl_offset = (run.baseline_y - run.y) * scale;
+        let dw = run.visual_w * scale;
+        let dh = run.visual_h * scale;
+        let dx = run.visual_x + (run.visual_w - dw) * 0.5;
+        let dy = run.visual_y + (run.visual_h - dh) * 0.5;
+        let bl_offset = (run.baseline_y - run.visual_y) * scale;
 
         frames.push(GlyphFrameData {
             x: dx,
@@ -24,16 +25,17 @@ pub(crate) fn compute_glyph_delete_animation_frame(
             h: dh,
             opacity,
             baseline_in_quad: bl_offset,
-            byte_start: run.byte_start,
-            byte_end: run.byte_end,
+            byte_start: run.source_string_start,
+            byte_end: run.source_string_end,
         });
     }
 
     frames
 }
 
+#[allow(dead_code)]
 pub(crate) fn compute_cluster_delete_animation_frame(
-    delete_runs: &[VisualRunSnapshot],
+    delete_runs: &[ShapedVisualRun],
     progress: f64,
 ) -> Vec<GlyphFrameData> {
     let eased = 1.0 - (1.0 - progress).powi(2);
@@ -41,24 +43,25 @@ pub(crate) fn compute_cluster_delete_animation_frame(
     let mut frames = Vec::with_capacity(delete_runs.len());
 
     for run in delete_runs {
-        let baseline_in_quad = run.baseline_y - run.y;
+        let baseline_in_quad = run.baseline_y - run.visual_y;
         frames.push(GlyphFrameData {
-            x: run.x,
-            y: run.y,
-            w: run.w,
-            h: run.h,
+            x: run.visual_x,
+            y: run.visual_y,
+            w: run.visual_w,
+            h: run.visual_h,
             opacity,
             baseline_in_quad,
-            byte_start: run.byte_start,
-            byte_end: run.byte_end,
+            byte_start: run.source_string_start,
+            byte_end: run.source_string_end,
         });
     }
 
     frames
 }
 
+#[allow(dead_code)]
 pub(crate) fn compute_run_delete_animation_frame(
-    delete_runs: &[VisualRunSnapshot],
+    delete_runs: &[ShapedVisualRun],
     progress: f64,
 ) -> Vec<GlyphFrameData> {
     let eased = 1.0 - (1.0 - progress).powi(3);
@@ -66,42 +69,43 @@ pub(crate) fn compute_run_delete_animation_frame(
     let mut frames = Vec::with_capacity(delete_runs.len());
 
     for run in delete_runs {
-        let baseline_in_quad = run.baseline_y - run.y;
-        let shift_x = run.x - eased * run.w * 0.3;
+        let baseline_in_quad = run.baseline_y - run.visual_y;
+        let shift_x = run.visual_x - eased * run.visual_w * 0.3;
         frames.push(GlyphFrameData {
             x: shift_x,
-            y: run.y,
-            w: run.w,
-            h: run.h,
+            y: run.visual_y,
+            w: run.visual_w,
+            h: run.visual_h,
             opacity,
             baseline_in_quad,
-            byte_start: run.byte_start,
-            byte_end: run.byte_end,
+            byte_start: run.source_string_start,
+            byte_end: run.source_string_end,
         });
     }
 
     frames
 }
 
+#[allow(dead_code)]
 pub(crate) fn compute_line_reflow_delete_animation_frame(
-    delete_runs: &[VisualRunSnapshot],
+    delete_runs: &[ShapedVisualRun],
     progress: f64,
 ) -> Vec<GlyphFrameData> {
     let opacity = 1.0 - progress;
     let mut frames = Vec::with_capacity(delete_runs.len());
 
     for run in delete_runs {
-        let baseline_in_quad = run.baseline_y - run.y;
-        let collapse_y = run.y + progress * run.h * 0.5;
+        let baseline_in_quad = run.baseline_y - run.visual_y;
+        let collapse_y = run.visual_y + progress * run.visual_h * 0.5;
         frames.push(GlyphFrameData {
-            x: run.x,
+            x: run.visual_x,
             y: collapse_y,
-            w: run.w,
-            h: run.h * (1.0 - progress * 0.5),
+            w: run.visual_w,
+            h: run.visual_h * (1.0 - progress * 0.5),
             opacity,
             baseline_in_quad,
-            byte_start: run.byte_start,
-            byte_end: run.byte_end,
+            byte_start: run.source_string_start,
+            byte_end: run.source_string_end,
         });
     }
 

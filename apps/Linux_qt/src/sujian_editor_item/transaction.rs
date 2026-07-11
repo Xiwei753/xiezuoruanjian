@@ -30,6 +30,8 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
                 let shaped_glyphs = self.extract_shaped_glyphs_for_transaction(vt);
+                let (old_layout_runs, new_layout_runs, insert_runs, reflow_old_runs, reflow_new_runs) =
+                    self.extract_shaped_runs_for_transaction(vt);
                 self.animation_coordinator.process_transaction(
                     vt,
                     self.current_typing_animation_enabled,
@@ -60,6 +62,12 @@ impl SujianEditorItem {
                     self.cursor_ctrl.animation.as_ref(),
                     &self.current_font_family.to_string(),
                     &shaped_glyphs,
+                    self.current_font_pixel_size as f64,
+                    &old_layout_runs,
+                    &new_layout_runs,
+                    &insert_runs,
+                    &reflow_old_runs,
+                    &reflow_new_runs,
                 );
                 editor_animation_debug_log(&format!(
                     "record_transaction: processed via coordinator, kind={:?}, has_active_insert={}",
@@ -172,6 +180,203 @@ impl SujianEditorItem {
         }
 
         result
+    }
+
+    pub(crate) fn extract_shaped_runs_for_transaction(
+        &mut self,
+        vt: &EditorVisualTransaction,
+    ) -> (
+        Vec<super::shaped_visual_run::ShapedVisualRun>,
+        Vec<super::shaped_visual_run::ShapedVisualRun>,
+        Vec<super::shaped_visual_run::ShapedVisualRun>,
+        Vec<super::shaped_visual_run::ShapedVisualRun>,
+        Vec<super::shaped_visual_run::ShapedVisualRun>,
+    ) {
+        use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, RawFontCacheKey, RunFlags, derive_clusters_from_glyphs};
+        use crate::editor::layout::{extract_shaped_runs_on_line, ShapedRunData};
+
+        let width = self.bounding_width();
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+        let scroll_y = self.current_scroll_y as f64;
+        let viewport_h = self.current_viewport_height.max(1.0) as f64;
+
+        let mut old_layout_runs = Vec::new();
+        let mut new_layout_runs = Vec::new();
+        let mut insert_runs = Vec::new();
+        let mut reflow_old_runs = Vec::new();
+        let mut reflow_new_runs = Vec::new();
+
+        fn convert_shaped_run_data(srd: &ShapedRunData, para_text: &str, qtextline_idx: i32, wrap_w: f64, indent: f64) -> ShapedVisualRun {
+            let font_key = RawFontCacheKey::new(
+                &srd.raw_font_family,
+                &srd.raw_font_style,
+                srd.raw_font_weight,
+                srd.raw_font_pixel_size,
+            );
+            let mut flags = RunFlags::empty();
+            if srd.is_rtl { flags |= RunFlags::RTL; }
+            if srd.has_underline { flags |= RunFlags::UNDERLINE; }
+            let glyphs: Vec<ShapedGlyph> = srd.glyphs.iter().map(|g| ShapedGlyph {
+                glyph_index: g.glyph_index,
+                glyph_position_x: g.position_x,
+                glyph_position_y: g.position_y,
+                string_index: g.string_index.max(0) as usize,
+                advance_width: g.advance_width,
+            }).collect();
+            let clusters = derive_clusters_from_glyphs(&glyphs);
+            ShapedVisualRun {
+                glyphs,
+                clusters,
+                raw_font_key: font_key,
+                flags,
+                source_string_start: srd.string_start,
+                source_string_end: srd.string_end,
+                baseline_y: srd.baseline_y,
+                visual_x: srd.visual_x,
+                visual_y: srd.visual_y,
+                visual_w: srd.visual_w,
+                visual_h: srd.visual_h,
+                texture_atlas_x: 0.0,
+                texture_atlas_y: 0.0,
+                texture_atlas_w: srd.visual_w,
+                texture_atlas_h: srd.visual_h,
+                qglyphrun_index: srd.run_index,
+                para_text: Some(para_text.to_string()),
+                qtextline_idx: Some(qtextline_idx),
+                paragraph_wrap_w: Some(wrap_w),
+                para_indent: Some(indent),
+            }
+        }
+
+        match vt.kind {
+            EditorAnimationKind::Insert => {
+                if let Some((range_start, range_end)) = vt.inserted_range {
+                    let new_snapshot = self.layout_snapshot_for_text(&self.plain_text.to_string(), width);
+                    let old_snapshot = self.layout_snapshot_for_text(&vt.old_text, width);
+
+                    for line in &old_snapshot.lines {
+                        if line.para_text.is_empty() { continue; }
+                        let line_top = line.y - scroll_y;
+                        let line_bottom = line_top + line.height;
+                        if line_bottom < 0.0 || line_top > viewport_h { continue; }
+                        let wrap_w = width - line.x;
+                        let indent = self.current_text_indent as f64;
+                        let runs = extract_shaped_runs_on_line(
+                            &line.para_text, line.byte_start, line.byte_end, line.byte_start,
+                            font_size, font_family, wrap_w, indent, line.qtextline_idx,
+                        );
+                        for srd in &runs {
+                            old_layout_runs.push(convert_shaped_run_data(srd, &line.para_text, line.qtextline_idx, wrap_w, indent));
+                        }
+                    }
+
+                    for line in &new_snapshot.lines {
+                        if line.para_text.is_empty() { continue; }
+                        let line_top = line.y - scroll_y;
+                        let line_bottom = line_top + line.height;
+                        if line_bottom < 0.0 || line_top > viewport_h { continue; }
+                        let wrap_w = width - line.x;
+                        let indent = self.current_text_indent as f64;
+                        let runs = extract_shaped_runs_on_line(
+                            &line.para_text, line.byte_start, line.byte_end, line.byte_start,
+                            font_size, font_family, wrap_w, indent, line.qtextline_idx,
+                        );
+                        for srd in &runs {
+                            let run = convert_shaped_run_data(srd, &line.para_text, line.qtextline_idx, wrap_w, indent);
+                            let run_start = run.source_string_start;
+                            let run_end = run.source_string_end;
+
+                            if run_start >= range_start && run_end <= range_end {
+                                insert_runs.push(run);
+                            } else if run_end > range_start && run_start < range_end {
+                                insert_runs.push(run);
+                            } else {
+                                new_layout_runs.push(run);
+                            }
+                        }
+                    }
+
+                    for line in &new_snapshot.lines {
+                        if line.para_text.is_empty() { continue; }
+                        let line_top = line.y - scroll_y;
+                        let line_bottom = line_top + line.height;
+                        if line_bottom < 0.0 || line_top > viewport_h { continue; }
+                        if line.byte_end <= range_end { continue; }
+
+                        let reflow_start = range_end.max(line.byte_start);
+                        let reflow_end = line.byte_end;
+                        if reflow_start >= reflow_end { continue; }
+
+                        let wrap_w = width - line.x;
+                        let indent = self.current_text_indent as f64;
+                        let new_runs = extract_shaped_runs_on_line(
+                            &line.para_text, reflow_start, reflow_end, line.byte_start,
+                            font_size, font_family, wrap_w, indent, line.qtextline_idx,
+                        );
+                        for srd in &new_runs {
+                            reflow_new_runs.push(convert_shaped_run_data(srd, &line.para_text, line.qtextline_idx, wrap_w, indent));
+                        }
+
+                        let old_byte_start = reflow_start.saturating_sub(range_end - range_start);
+                        let old_byte_end = reflow_end.saturating_sub(range_end - range_start);
+                        let old_line = old_snapshot.lines.iter().find(|l| {
+                            l.byte_start <= old_byte_start && l.byte_end >= old_byte_end && !l.para_text.is_empty()
+                        });
+                        if let Some(ol) = old_line {
+                            let old_wrap_w = width - ol.x;
+                            let old_indent = self.current_text_indent as f64;
+                            let old_runs = extract_shaped_runs_on_line(
+                                &ol.para_text, old_byte_start, old_byte_end, ol.byte_start,
+                                font_size, font_family, old_wrap_w, old_indent, ol.qtextline_idx,
+                            );
+                            for srd in &old_runs {
+                                reflow_old_runs.push(convert_shaped_run_data(srd, &ol.para_text, ol.qtextline_idx, old_wrap_w, old_indent));
+                            }
+                        }
+                    }
+                }
+            }
+            EditorAnimationKind::Delete => {
+                let old_snapshot = self.layout_snapshot_for_text(&vt.old_text, width);
+                let new_snapshot = self.layout_snapshot_for_text(&vt.new_text, width);
+
+                for line in &old_snapshot.lines {
+                    if line.para_text.is_empty() { continue; }
+                    let line_top = line.y - scroll_y;
+                    let line_bottom = line_top + line.height;
+                    if line_bottom < 0.0 || line_top > viewport_h { continue; }
+                    let wrap_w = width - line.x;
+                    let indent = self.current_text_indent as f64;
+                    let runs = extract_shaped_runs_on_line(
+                        &line.para_text, line.byte_start, line.byte_end, line.byte_start,
+                        font_size, font_family, wrap_w, indent, line.qtextline_idx,
+                    );
+                    for srd in &runs {
+                        old_layout_runs.push(convert_shaped_run_data(srd, &line.para_text, line.qtextline_idx, wrap_w, indent));
+                    }
+                }
+
+                for line in &new_snapshot.lines {
+                    if line.para_text.is_empty() { continue; }
+                    let line_top = line.y - scroll_y;
+                    let line_bottom = line_top + line.height;
+                    if line_bottom < 0.0 || line_top > viewport_h { continue; }
+                    let wrap_w = width - line.x;
+                    let indent = self.current_text_indent as f64;
+                    let runs = extract_shaped_runs_on_line(
+                        &line.para_text, line.byte_start, line.byte_end, line.byte_start,
+                        font_size, font_family, wrap_w, indent, line.qtextline_idx,
+                    );
+                    for srd in &runs {
+                        new_layout_runs.push(convert_shaped_run_data(srd, &line.para_text, line.qtextline_idx, wrap_w, indent));
+                    }
+                }
+            }
+            EditorAnimationKind::Cursor => {}
+        }
+
+        (old_layout_runs, new_layout_runs, insert_runs, reflow_old_runs, reflow_new_runs)
     }
 
     pub(crate) fn fill_visual_transaction_coords(
