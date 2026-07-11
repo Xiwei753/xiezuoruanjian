@@ -1,5 +1,6 @@
 use writer_core::editor::{CursorRect, GlyphRect, ReflowGlyphRect};
 use super::animation_mode::AnimationMode;
+use super::shaped_visual_run::{ShapedVisualRun, ReflowVisualSnapshot};
 
 #[derive(Clone, Debug)]
 pub(crate) struct VisualRunSnapshot {
@@ -21,6 +22,7 @@ pub(crate) struct VisualRunSnapshot {
     pub texture_atlas_y: f64,
     pub texture_atlas_w: f64,
     pub texture_atlas_h: f64,
+    pub shaped_run: Option<ShapedVisualRun>,
 }
 
 #[derive(Clone, Debug)]
@@ -54,6 +56,7 @@ impl VisualRunSnapshot {
             texture_atlas_y: 0.0,
             texture_atlas_w: g.w,
             texture_atlas_h: g.h,
+            shaped_run: None,
         }
     }
 
@@ -76,6 +79,11 @@ impl VisualRunSnapshot {
         self.string_index = idx;
         self
     }
+
+    pub fn with_shaped_run(mut self, run: ShapedVisualRun) -> Self {
+        self.shaped_run = Some(run);
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -94,6 +102,8 @@ pub(crate) struct ReflowRunSnapshot {
     pub font_id: String,
     pub glyph_index: u32,
     pub string_index: usize,
+    pub old_shaped_run: Option<ShapedVisualRun>,
+    pub new_shaped_run: Option<ShapedVisualRun>,
 }
 
 impl ReflowRunSnapshot {
@@ -113,6 +123,8 @@ impl ReflowRunSnapshot {
             font_id: shaping.map(|s| s.font_id.clone()).unwrap_or_default(),
             glyph_index: shaping.map(|s| s.glyph_index).unwrap_or(0),
             string_index: shaping.map(|s| s.string_index).unwrap_or(0),
+            old_shaped_run: None,
+            new_shaped_run: None,
         }
     }
 
@@ -120,6 +132,47 @@ impl ReflowRunSnapshot {
         self.font_id = id.to_string();
         self
     }
+
+    pub fn with_old_shaped_run(mut self, run: ShapedVisualRun) -> Self {
+        self.old_shaped_run = Some(run);
+        self
+    }
+
+    pub fn with_new_shaped_run(mut self, run: ShapedVisualRun) -> Self {
+        self.new_shaped_run = Some(run);
+        self
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GlyphAnimationPayload {
+    pub snapshot: VisualRunSnapshot,
+    pub old_cursor_rect: Option<CursorRect>,
+    pub new_cursor_rect: Option<CursorRect>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ClusterAnimationPayload {
+    pub snapshots: Vec<VisualRunSnapshot>,
+    pub old_cursor_rect: Option<CursorRect>,
+    pub new_cursor_rect: Option<CursorRect>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct RunAnimationPayload {
+    pub shaped_run: ShapedVisualRun,
+    pub reflow_snapshot: Option<ReflowVisualSnapshot>,
+    pub old_cursor_rect: Option<CursorRect>,
+    pub new_cursor_rect: Option<CursorRect>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LineReflowAnimationPayload {
+    pub insert_shaped_runs: Vec<ShapedVisualRun>,
+    pub reflow_snapshot: ReflowVisualSnapshot,
+    pub inserted_range: Option<(usize, usize)>,
+    pub old_cursor_rect: Option<CursorRect>,
+    pub new_cursor_rect: Option<CursorRect>,
 }
 
 #[derive(Clone, Debug)]
@@ -149,6 +202,22 @@ pub(crate) enum VisualPayload {
     CursorTransition {
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
+    },
+    GlyphPayload {
+        payload: GlyphAnimationPayload,
+        animation_mode: AnimationMode,
+    },
+    ClusterPayload {
+        payload: ClusterAnimationPayload,
+        animation_mode: AnimationMode,
+    },
+    RunPayload {
+        payload: RunAnimationPayload,
+        animation_mode: AnimationMode,
+    },
+    LineReflowPayload {
+        payload: LineReflowAnimationPayload,
+        animation_mode: AnimationMode,
     },
 }
 
@@ -226,12 +295,86 @@ impl VisualPayload {
         }
     }
 
+    pub fn from_glyph_payload(
+        snapshot: VisualRunSnapshot,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        animation_mode: AnimationMode,
+    ) -> Self {
+        VisualPayload::GlyphPayload {
+            payload: GlyphAnimationPayload {
+                snapshot,
+                old_cursor_rect,
+                new_cursor_rect,
+            },
+            animation_mode,
+        }
+    }
+
+    pub fn from_cluster_payload(
+        snapshots: Vec<VisualRunSnapshot>,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        animation_mode: AnimationMode,
+    ) -> Self {
+        VisualPayload::ClusterPayload {
+            payload: ClusterAnimationPayload {
+                snapshots,
+                old_cursor_rect,
+                new_cursor_rect,
+            },
+            animation_mode,
+        }
+    }
+
+    pub fn from_run_payload(
+        shaped_run: ShapedVisualRun,
+        reflow_snapshot: Option<ReflowVisualSnapshot>,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        animation_mode: AnimationMode,
+    ) -> Self {
+        VisualPayload::RunPayload {
+            payload: RunAnimationPayload {
+                shaped_run,
+                reflow_snapshot,
+                old_cursor_rect,
+                new_cursor_rect,
+            },
+            animation_mode,
+        }
+    }
+
+    pub fn from_line_reflow_payload(
+        insert_shaped_runs: Vec<ShapedVisualRun>,
+        reflow_snapshot: ReflowVisualSnapshot,
+        inserted_range: Option<(usize, usize)>,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        animation_mode: AnimationMode,
+    ) -> Self {
+        VisualPayload::LineReflowPayload {
+            payload: LineReflowAnimationPayload {
+                insert_shaped_runs,
+                reflow_snapshot,
+                inserted_range,
+                old_cursor_rect,
+                new_cursor_rect,
+            },
+            animation_mode,
+        }
+    }
+
     pub fn cursor_rects(&self) -> (Option<&CursorRect>, Option<&CursorRect>) {
         match self {
             VisualPayload::InsertRuns { old_cursor_rect, new_cursor_rect, .. } => (old_cursor_rect.as_ref(), new_cursor_rect.as_ref()),
             VisualPayload::DeleteRuns { old_cursor_rect, new_cursor_rect, .. } => (old_cursor_rect.as_ref(), new_cursor_rect.as_ref()),
             VisualPayload::ReflowRuns { old_cursor_rect, new_cursor_rect, .. } => (old_cursor_rect.as_ref(), new_cursor_rect.as_ref()),
             VisualPayload::CursorTransition { old_cursor_rect, new_cursor_rect } => (old_cursor_rect.as_ref(), new_cursor_rect.as_ref()),
+            VisualPayload::GlyphPayload { payload, .. } => (payload.old_cursor_rect.as_ref(), payload.new_cursor_rect.as_ref()),
+            VisualPayload::ClusterPayload { payload, .. } => (payload.old_cursor_rect.as_ref(), payload.new_cursor_rect.as_ref()),
+            VisualPayload::RunPayload { payload, .. } => (payload.old_cursor_rect.as_ref(), payload.new_cursor_rect.as_ref()),
+            VisualPayload::LineReflowPayload { payload, .. } => (payload.old_cursor_rect.as_ref(), payload.new_cursor_rect.as_ref()),
         }
     }
 
@@ -241,6 +384,13 @@ impl VisualPayload {
             VisualPayload::DeleteRuns { delete_runs, .. } => delete_runs.len(),
             VisualPayload::ReflowRuns { insert_runs, reflow_runs, .. } => insert_runs.len() + reflow_runs.len(),
             VisualPayload::CursorTransition { .. } => 0,
+            VisualPayload::GlyphPayload { .. } => 1,
+            VisualPayload::ClusterPayload { payload, .. } => payload.snapshots.len(),
+            VisualPayload::RunPayload { payload, .. } => payload.shaped_run.glyphs.len(),
+            VisualPayload::LineReflowPayload { payload, .. } => {
+                payload.insert_shaped_runs.iter().map(|r| r.glyphs.len()).sum::<usize>()
+                    + payload.reflow_snapshot.new_shaped_runs.iter().map(|r| r.glyphs.len()).sum::<usize>()
+            }
         }
     }
 
@@ -250,7 +400,130 @@ impl VisualPayload {
             VisualPayload::DeleteRuns { animation_mode, .. } => *animation_mode,
             VisualPayload::ReflowRuns { animation_mode, .. } => *animation_mode,
             VisualPayload::CursorTransition { .. } => AnimationMode::GlyphAnimation,
+            VisualPayload::GlyphPayload { animation_mode, .. } => *animation_mode,
+            VisualPayload::ClusterPayload { animation_mode, .. } => *animation_mode,
+            VisualPayload::RunPayload { animation_mode, .. } => *animation_mode,
+            VisualPayload::LineReflowPayload { animation_mode, .. } => *animation_mode,
         }
+    }
+
+    pub fn is_insert(&self) -> bool {
+        matches!(self, VisualPayload::InsertRuns { .. } | VisualPayload::GlyphPayload { .. } | VisualPayload::ClusterPayload { .. } | VisualPayload::RunPayload { .. } | VisualPayload::LineReflowPayload { .. })
+    }
+
+    pub fn is_delete(&self) -> bool {
+        matches!(self, VisualPayload::DeleteRuns { .. })
+    }
+
+    pub fn insert_runs(&self) -> &[VisualRunSnapshot] {
+        match self {
+            VisualPayload::InsertRuns { insert_runs, .. } => insert_runs,
+            VisualPayload::ReflowRuns { insert_runs, .. } => insert_runs,
+            _ => &[],
+        }
+    }
+
+    pub fn reflow_runs(&self) -> &[ReflowRunSnapshot] {
+        match self {
+            VisualPayload::InsertRuns { reflow_runs, .. } => reflow_runs,
+            VisualPayload::ReflowRuns { reflow_runs, .. } => reflow_runs,
+            _ => &[],
+        }
+    }
+
+    pub fn delete_runs(&self) -> &[VisualRunSnapshot] {
+        match self {
+            VisualPayload::DeleteRuns { delete_runs, .. } => delete_runs,
+            _ => &[],
+        }
+    }
+
+    pub fn inserted_range(&self) -> Option<(usize, usize)> {
+        match self {
+            VisualPayload::InsertRuns { inserted_range, .. } => *inserted_range,
+            VisualPayload::ReflowRuns { inserted_range, .. } => *inserted_range,
+            VisualPayload::LineReflowPayload { payload, .. } => payload.inserted_range,
+            _ => None,
+        }
+    }
+
+    pub fn reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
+        match self {
+            VisualPayload::InsertRuns { reflow_runs, .. } => {
+                reflow_runs.iter().map(|r| (r.byte_start, r.byte_end)).collect()
+            }
+            VisualPayload::ReflowRuns { reflow_runs, .. } => {
+                reflow_runs.iter().map(|r| (r.byte_start, r.byte_end)).collect()
+            }
+            VisualPayload::LineReflowPayload { payload, .. } => {
+                payload.reflow_snapshot.new_shaped_runs.iter()
+                    .map(|r| r.string_range())
+                    .collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn shaped_runs_for_texture(&self) -> Vec<&ShapedVisualRun> {
+        let mut runs = Vec::new();
+        match self {
+            VisualPayload::InsertRuns { insert_runs, reflow_runs, .. } => {
+                for r in insert_runs {
+                    if let Some(ref sr) = r.shaped_run {
+                        runs.push(sr);
+                    }
+                }
+                for r in reflow_runs {
+                    if let Some(ref sr) = r.new_shaped_run {
+                        runs.push(sr);
+                    }
+                }
+            }
+            VisualPayload::DeleteRuns { delete_runs, .. } => {
+                for r in delete_runs {
+                    if let Some(ref sr) = r.shaped_run {
+                        runs.push(sr);
+                    }
+                }
+            }
+            VisualPayload::ReflowRuns { insert_runs, reflow_runs, .. } => {
+                for r in insert_runs {
+                    if let Some(ref sr) = r.shaped_run {
+                        runs.push(sr);
+                    }
+                }
+                for r in reflow_runs {
+                    if let Some(ref sr) = r.new_shaped_run {
+                        runs.push(sr);
+                    }
+                }
+            }
+            VisualPayload::GlyphPayload { payload, .. } => {
+                if let Some(ref sr) = payload.snapshot.shaped_run {
+                    runs.push(sr);
+                }
+            }
+            VisualPayload::ClusterPayload { payload, .. } => {
+                for s in &payload.snapshots {
+                    if let Some(ref sr) = s.shaped_run {
+                        runs.push(sr);
+                    }
+                }
+            }
+            VisualPayload::RunPayload { payload, .. } => {
+                runs.push(&payload.shaped_run);
+            }
+            VisualPayload::LineReflowPayload { payload, .. } => {
+                for r in &payload.insert_shaped_runs {
+                    runs.push(r);
+                }
+                for r in &payload.reflow_snapshot.new_shaped_runs {
+                    runs.push(r);
+                }
+            }
+            VisualPayload::CursorTransition { .. } => {}
+        }
+        runs
     }
 }
 

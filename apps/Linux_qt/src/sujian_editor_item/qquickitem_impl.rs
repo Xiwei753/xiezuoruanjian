@@ -6,6 +6,7 @@ use super::visual_payload::VisualPayload;
 use super::animation_mode::AnimationMode;
 use super::cursor_animation::CursorBlinkMode;
 use super::texture_cache::TextureCache;
+use super::render_plan::{FrameContext, CursorStyle};
 use std::time::Instant;
 
 impl QQuickItem for SujianEditorItem {
@@ -163,7 +164,6 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-            // ── Build full RenderPlan (including cursor) from coordinator ──
             if !final_root.is_null() && !item_ptr.is_null() {
                 let now = Instant::now();
                 let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
@@ -172,12 +172,66 @@ impl QQuickItem for SujianEditorItem {
                 if active_txs.is_empty() {
                     self.texture_cache.clear();
                     scene_graph::clear_animation_layer(final_root, item_ptr);
+
+                    let cursor_plan = self.animation_coordinator.build_cursor_plan(
+                        None, None,
+                        self.cursor_ctrl.visual_x,
+                        self.cursor_ctrl.visual_y,
+                        self.cursor_ctrl.visual_h,
+                        self.current_editor_enabled,
+                        self.buffer.has_selection(),
+                        self.current_viewport_height as f64,
+                        false,
+                        false,
+                        false,
+                        self.current_smooth_cursor_enabled,
+                        self.current_cursor_animation_duration_ms,
+                        self.current_coordinated_text_cursor_animation_enabled,
+                        self.current_scroll_y as f64,
+                        self.cursor_ctrl.last_scroll_y,
+                        self.cursor_ctrl.visible,
+                        self.cursor_ctrl.blink_visible,
+                        self.cursor_ctrl.visual_x,
+                        self.cursor_ctrl.visual_y,
+                        self.cursor_ctrl.force_snap_next,
+                        self.cursor_ctrl.animation.as_ref(),
+                    );
+                    let ime_plan = self.animation_coordinator.build_ime_plan(false, false);
+                    let selection_preedit = self.build_selection_preedit_plan();
+
+                    let frame_context = FrameContext {
+                        viewport_height: vp_h,
+                        scroll_offset_y: scroll_y,
+                        dpr,
+                        active_transaction_keys: Vec::new(),
+                        keys_to_complete: Vec::new(),
+                        keys_to_cancel: Vec::new(),
+                    };
+                    let cursor_style = CursorStyle {
+                        color: self.current_cursor_color.to_string(),
+                        width: 2.0,
+                    };
+
+                    let render_plan = self.animation_coordinator.build_render_plan_full(
+                        cursor_plan, ime_plan, selection_preedit,
+                        frame_context, cursor_style,
+                    );
+
+                    scene_graph_renderer::render_frame(
+                        final_root,
+                        item_ptr,
+                        &render_plan,
+                        &self.texture_cache,
+                    );
                 } else {
                 let mut txs_to_mark_rendering: Vec<VisualTransactionKey> = Vec::new();
                 let mut txs_to_complete: Vec<VisualTransactionKey> = Vec::new();
                 let mut keys_with_texture_failure: Vec<VisualTransactionKey> = Vec::new();
+                let mut active_keys: Vec<VisualTransactionKey> = Vec::new();
 
                 for tx in &active_txs {
+                    active_keys.push(tx.key);
+
                     if tx.state == VisualTransactionState::Prepared {
                         txs_to_mark_rendering.push(tx.key);
                     }
@@ -276,6 +330,57 @@ impl QQuickItem for SujianEditorItem {
                                 }
                             }
                             VisualPayload::CursorTransition { .. } => {}
+                            VisualPayload::GlyphPayload { payload, .. } => {
+                                let run = &payload.snapshot;
+                                let para_text;
+                                let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
+                                    t.as_str()
+                                } else {
+                                    para_text = Self::extract_paragraph_for_glyph(
+                                        &self.plain_text.to_string(), run.byte_start, run.byte_end,
+                                    );
+                                    para_text.as_str()
+                                };
+                                textures.push(self.render_snapshot_from_static_layout(
+                                    para_text_ref, run.x, run.y, run.w, run.h,
+                                    run.baseline_y, font_size, &font_family, dpr,
+                                ).or_else(|| self.render_glyph_texture_from_layout(
+                                    &run.char_, run.w, run.h,
+                                    run.baseline_y - run.y, dpr,
+                                )));
+                            }
+                            VisualPayload::ClusterPayload { payload, .. } => {
+                                for run in &payload.snapshots {
+                                    let para_text;
+                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
+                                        t.as_str()
+                                    } else {
+                                        para_text = Self::extract_paragraph_for_glyph(
+                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
+                                        );
+                                        para_text.as_str()
+                                    };
+                                    textures.push(self.render_snapshot_from_static_layout(
+                                        para_text_ref, run.x, run.y, run.w, run.h,
+                                        run.baseline_y, font_size, &font_family, dpr,
+                                    ).or_else(|| self.render_glyph_texture_from_layout(
+                                        &run.char_, run.w, run.h,
+                                        run.baseline_y - run.y, dpr,
+                                    )));
+                                }
+                            }
+                            VisualPayload::RunPayload { payload, .. } => {
+                                let run = &payload.shaped_run;
+                                textures.push(self.render_shaped_run_texture_from_visual(run, font_size, &font_family, dpr));
+                            }
+                            VisualPayload::LineReflowPayload { payload, .. } => {
+                                for insert_run in &payload.insert_shaped_runs {
+                                    textures.push(self.render_shaped_run_texture_from_visual(insert_run, font_size, &font_family, dpr));
+                                }
+                                for new_run in &payload.reflow_snapshot.new_shaped_runs {
+                                    textures.push(self.render_shaped_run_texture_from_visual(new_run, font_size, &font_family, dpr));
+                                }
+                            }
                         }
 
                         let any_failed = textures.iter().any(|t| t.is_none());
@@ -307,7 +412,6 @@ impl QQuickItem for SujianEditorItem {
                     }
                 }
 
-                // ── Build full RenderPlan and delegate to scene_graph_renderer ──
                 let cursor_plan = self.animation_coordinator.build_cursor_plan(
                     self.animation_coordinator.vt_queue.active_transactions().first()
                         .and_then(|tx| tx.payload.cursor_rects().0.cloned()),
@@ -337,8 +441,22 @@ impl QQuickItem for SujianEditorItem {
                 let ime_plan = self.animation_coordinator.build_ime_plan(true, false);
                 let selection_preedit = self.build_selection_preedit_plan();
 
+                let frame_context = FrameContext {
+                    viewport_height: vp_h,
+                    scroll_offset_y: scroll_y,
+                    dpr,
+                    active_transaction_keys: active_keys,
+                    keys_to_complete: txs_to_complete.clone(),
+                    keys_to_cancel: keys_with_texture_failure.clone(),
+                };
+                let cursor_style = CursorStyle {
+                    color: self.current_cursor_color.to_string(),
+                    width: 2.0,
+                };
+
                 let render_plan = self.animation_coordinator.build_render_plan_full(
                     cursor_plan, ime_plan, selection_preedit,
+                    frame_context, cursor_style,
                 );
 
                 scene_graph_renderer::render_frame(
@@ -346,7 +464,6 @@ impl QQuickItem for SujianEditorItem {
                     item_ptr,
                     &render_plan,
                     &self.texture_cache,
-                    dpr,
                 );
 
                 for key in &txs_to_mark_rendering {
@@ -379,9 +496,6 @@ impl QQuickItem for SujianEditorItem {
                     self.request_frame_update();
                 }
             }
-
-            // ── Cursor is now handled inside RenderPlan via scene_graph_renderer ──
-            // No separate cursor update outside RenderPlan
         }
 
         let total_elapsed = frame_start.elapsed();
@@ -408,5 +522,35 @@ impl SujianEditorItem {
             para_end += 1;
         }
         plain_text[para_start..para_end].to_string()
+    }
+
+    fn render_shaped_run_texture_from_visual(
+        &mut self,
+        run: &super::shaped_visual_run::ShapedVisualRun,
+        font_size: f64,
+        font_family: &str,
+        dpr: f64,
+    ) -> Option<qmetaobject::QImage> {
+        let snapshot = self.layout_snapshot(self.bounding_width());
+        let line = snapshot.lines.iter().find(|l| {
+            l.byte_start <= run.source_string_start && l.byte_end >= run.source_string_end && !l.para_text.is_empty()
+        });
+
+        let para_text = match line {
+            Some(l) => l.para_text.clone(),
+            None => return None,
+        };
+
+        self.render_snapshot_from_static_layout(
+            &para_text,
+            run.visual_x,
+            run.visual_y,
+            run.visual_w,
+            run.visual_h,
+            run.baseline_y,
+            font_size,
+            font_family,
+            dpr,
+        )
     }
 }

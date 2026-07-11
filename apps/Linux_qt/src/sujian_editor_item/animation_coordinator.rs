@@ -14,6 +14,7 @@ pub(crate) use super::render_plan::{
     HiddenRangeInfo, StaticTextPlan, TextAnimationPlan, TextAnimationGlyphInfo,
     SelectionPreeditPlan, SelectionRange, PreeditRange,
     ImeUpdateKind, ImeUpdatePlan, RenderPlan,
+    FrameContext, CursorStyle,
 };
 pub(crate) use super::texture_cache::TextureCache;
 pub(crate) use super::{insert_animation, delete_animation, reflow_animation};
@@ -614,6 +615,8 @@ impl LinuxEditorAnimationCoordinator {
         cursor_plan: CursorAnimationPlan,
         ime_plan: ImeUpdatePlan,
         selection_preedit: SelectionPreeditPlan,
+        frame_context: super::render_plan::FrameContext,
+        cursor_style: super::render_plan::CursorStyle,
     ) -> RenderPlan {
         let static_text = self.build_static_render_plan();
         let text_animation = self.build_text_animation_plan();
@@ -623,6 +626,8 @@ impl LinuxEditorAnimationCoordinator {
             selection_preedit,
             cursor: cursor_plan,
             ime: ime_plan,
+            frame_context,
+            cursor_style,
         }
     }
 
@@ -635,6 +640,8 @@ impl LinuxEditorAnimationCoordinator {
             selection_preedit,
             cursor: CursorAnimationPlan::default(),
             ime: ImeUpdatePlan::default(),
+            frame_context: super::render_plan::FrameContext::default(),
+            cursor_style: super::render_plan::CursorStyle::default(),
         }
     }
 
@@ -682,6 +689,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: false,
                             old_paragraph_text: run.and_then(|r| r.old_paragraph_text.clone()),
                             font_id: run.map(|r| r.font_id.clone()).unwrap_or_default(),
+                            shaped_run_index: None,
                         });
                     }
                 }
@@ -705,6 +713,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: true,
                             old_paragraph_text: run.and_then(|r| r.old_paragraph_text.clone()),
                             font_id: run.map(|r| r.font_id.clone()).unwrap_or_default(),
+                            shaped_run_index: None,
                         });
                     }
                 }
@@ -732,10 +741,166 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: false,
                             old_paragraph_text: run.and_then(|r| r.old_paragraph_text.clone()),
                             font_id: run.map(|r| r.font_id.clone()).unwrap_or_default(),
+                            shaped_run_index: None,
                         });
                     }
                 }
                 VisualPayload::CursorTransition { .. } => {}
+                VisualPayload::GlyphPayload { payload, .. } => {
+                    let snapshot = &payload.snapshot;
+                    let frames = dispatch_animation_frames(
+                        mode, std::slice::from_ref(snapshot), &[], payload.old_cursor_rect.as_ref(), progress, false,
+                    );
+                    for frame in &frames {
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: frame.x,
+                            y: frame.y,
+                            w: frame.w,
+                            h: frame.h,
+                            opacity: frame.opacity,
+                            baseline_in_quad: frame.baseline_in_quad,
+                            byte_start: frame.byte_start,
+                            byte_end: frame.byte_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: snapshot.old_paragraph_text.clone(),
+                            font_id: snapshot.font_id.clone(),
+                            shaped_run_index: None,
+                        });
+                    }
+                }
+                VisualPayload::ClusterPayload { payload, .. } => {
+                    let frames = dispatch_animation_frames(
+                        mode, &payload.snapshots, &[], payload.old_cursor_rect.as_ref(), progress, false,
+                    );
+                    for (i, frame) in frames.iter().enumerate() {
+                        let run = payload.snapshots.get(i);
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: frame.x,
+                            y: frame.y,
+                            w: frame.w,
+                            h: frame.h,
+                            opacity: frame.opacity,
+                            baseline_in_quad: frame.baseline_in_quad,
+                            byte_start: frame.byte_start,
+                            byte_end: frame.byte_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: run.and_then(|r| r.old_paragraph_text.clone()),
+                            font_id: run.map(|r| r.font_id.clone()).unwrap_or_default(),
+                            shaped_run_index: None,
+                        });
+                    }
+                }
+                VisualPayload::RunPayload { payload, .. } => {
+                    let shaped_run = &payload.shaped_run;
+                    let frame = super::reflow_animation::compute_run_reflow_animation_frame(
+                        std::slice::from_ref(&VisualRunSnapshot::from_glyph_rect_with_shaping(
+                            &writer_core::editor::GlyphRect {
+                                x: shaped_run.visual_x,
+                                y: shaped_run.visual_y,
+                                w: shaped_run.visual_w,
+                                h: shaped_run.visual_h,
+                                char_: String::new(),
+                                baseline_y: shaped_run.baseline_y,
+                                byte_start: shaped_run.source_string_start,
+                                byte_end: shaped_run.source_string_end,
+                            },
+                            None,
+                        )),
+                        &[],
+                        payload.old_cursor_rect.as_ref(),
+                        progress,
+                    );
+                    for f in &frame {
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: f.x,
+                            y: f.y,
+                            w: f.w,
+                            h: f.h,
+                            opacity: f.opacity,
+                            baseline_in_quad: f.baseline_in_quad,
+                            byte_start: f.byte_start,
+                            byte_end: f.byte_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: None,
+                            font_id: shaped_run.font_id(),
+                            shaped_run_index: None,
+                        });
+                    }
+                }
+                VisualPayload::LineReflowPayload { payload, .. } => {
+                    for new_run in &payload.reflow_snapshot.new_shaped_runs {
+                        let run_idx = payload.reflow_snapshot.new_shaped_runs.iter().position(|r| std::ptr::eq(r, new_run)).unwrap_or(0);
+                        let can_reuse = payload.reflow_snapshot.can_reuse_texture_for_run(run_idx);
+                        let needs_crossfade = payload.reflow_snapshot.run_needs_crossfade(run_idx);
+
+                        let (frame_x, frame_y, frame_opacity) = if can_reuse && !needs_crossfade {
+                            let old_pos = payload.reflow_snapshot.old_positions.get(run_idx);
+                            let new_pos = payload.reflow_snapshot.new_positions.get(run_idx);
+                            let eased = 1.0 - (1.0 - progress).powi(2);
+                            match (old_pos, new_pos) {
+                                (Some((ox, oy, _)), Some((nx, ny, _))) => {
+                                    (ox + (nx - ox) * eased, oy + (ny - oy) * eased, 1.0)
+                                }
+                                _ => (new_run.visual_x, new_run.visual_y, 1.0),
+                            }
+                        } else if needs_crossfade {
+                            let eased = 1.0 - (1.0 - progress).powi(2);
+                            (new_run.visual_x, new_run.visual_y, eased)
+                        } else {
+                            (new_run.visual_x, new_run.visual_y, 1.0)
+                        };
+
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: frame_x,
+                            y: frame_y,
+                            w: new_run.visual_w,
+                            h: new_run.visual_h,
+                            opacity: frame_opacity,
+                            baseline_in_quad: new_run.baseline_y - frame_y,
+                            byte_start: new_run.source_string_start,
+                            byte_end: new_run.source_string_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: None,
+                            font_id: new_run.font_id(),
+                            shaped_run_index: None,
+                        });
+                    }
+
+                    for insert_run in &payload.insert_shaped_runs {
+                        let eased = 1.0 - (1.0 - progress).powi(3);
+                        let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(insert_run.visual_x);
+                        let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(insert_run.visual_y);
+                        let dx = insert_run.visual_x - old_cx;
+                        let dy = insert_run.visual_y - old_cy;
+                        let gx = old_cx + dx * eased;
+                        let gy = old_cy + dy * eased;
+
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: gx,
+                            y: gy,
+                            w: insert_run.visual_w,
+                            h: insert_run.visual_h,
+                            opacity: eased,
+                            baseline_in_quad: (insert_run.baseline_y - insert_run.visual_y) + (insert_run.visual_y - gy),
+                            byte_start: insert_run.source_string_start,
+                            byte_end: insert_run.source_string_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: None,
+                            font_id: insert_run.font_id(),
+                            shaped_run_index: None,
+                        });
+                    }
+                }
             }
         }
 

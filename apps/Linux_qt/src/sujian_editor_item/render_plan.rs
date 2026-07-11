@@ -52,6 +52,7 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub is_delete: bool,
     pub old_paragraph_text: Option<String>,
     pub font_id: String,
+    pub shaped_run_index: Option<i32>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -105,6 +106,31 @@ pub(crate) struct ImeUpdatePlan {
     pub anchor_changed: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FrameContext {
+    pub viewport_height: f64,
+    pub scroll_offset_y: f64,
+    pub dpr: f64,
+    pub active_transaction_keys: Vec<VisualTransactionKey>,
+    pub keys_to_complete: Vec<VisualTransactionKey>,
+    pub keys_to_cancel: Vec<VisualTransactionKey>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct CursorStyle {
+    pub color: String,
+    pub width: f64,
+}
+
+impl Default for CursorStyle {
+    fn default() -> Self {
+        Self {
+            color: "#006497".to_string(),
+            width: 2.0,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RenderPlan {
     pub static_text: StaticTextPlan,
@@ -112,4 +138,6 @@ pub(crate) struct RenderPlan {
     pub selection_preedit: SelectionPreeditPlan,
     pub cursor: CursorAnimationPlan,
     pub ime: ImeUpdatePlan,
+    pub frame_context: FrameContext,
+    pub cursor_style: CursorStyle,
 }

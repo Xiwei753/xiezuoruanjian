@@ -9,13 +9,12 @@ pub(crate) fn render_frame(
     item_ptr: *mut std::ffi::c_void,
     plan: &RenderPlan,
     texture_cache: &TextureCache,
-    dpr: f64,
 ) {
     if root_raw.is_null() || item_ptr.is_null() {
         return;
     }
 
-    render_text_animation_layer(root_raw, item_ptr, plan, texture_cache, dpr);
+    render_text_animation_layer(root_raw, item_ptr, plan, texture_cache);
     render_selection_preedit_layer(root_raw, item_ptr, plan);
     render_cursor_layer(root_raw, item_ptr, plan);
 }
@@ -25,7 +24,6 @@ fn render_text_animation_layer(
     item_ptr: *mut std::ffi::c_void,
     plan: &RenderPlan,
     texture_cache: &TextureCache,
-    _dpr: f64,
 ) {
     if plan.text_animation.glyphs.is_empty() {
         scene_graph::clear_animation_layer(root_raw, item_ptr);
@@ -95,17 +93,19 @@ fn render_cursor_layer(
     plan: &RenderPlan,
 ) {
     let cursor_plan = &plan.cursor;
+    let cursor_style = &plan.cursor_style;
+
     if !cursor_plan.should_be_visible {
         scene_graph::update_cursor_node(
             root_raw,
             item_ptr,
             cursor_plan.cursor_x,
             cursor_plan.cursor_y,
-            2.0,
+            cursor_style.width,
             cursor_plan.cursor_h,
             0.0,
-            "#000000".as_ptr(),
-            7,
+            cursor_style.color.as_ptr(),
+            cursor_style.color.len(),
         );
         return;
     }
@@ -115,17 +115,16 @@ fn render_cursor_layer(
         super::cursor_animation::CursorBlinkMode::Normal => 1.0,
     };
 
-    let color_str = "#006497";
     scene_graph::update_cursor_node(
         root_raw,
         item_ptr,
         cursor_plan.cursor_x,
         cursor_plan.cursor_y,
-        2.0,
+        cursor_style.width,
         cursor_plan.cursor_h,
         opacity,
-        color_str.as_ptr(),
-        color_str.len(),
+        cursor_style.color.as_ptr(),
+        cursor_style.color.len(),
     );
 }
 

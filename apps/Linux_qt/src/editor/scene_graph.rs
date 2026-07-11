@@ -413,6 +413,8 @@ pub fn clear_animation_layer(
 
 /// Update the selection/preedit layer (child[2]) with colored rectangles.
 /// rect_data: flat array of [x, y, w, h, r, g, b, a, underline] per rect.
+/// Reuses existing QSGGeometryNode and only updates vertex data in-place,
+/// avoiding per-frame heap allocation of QSGGeometry.
 pub fn update_selection_preedit_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
@@ -466,6 +468,11 @@ pub fn update_selection_preedit_layer(
                 matNode->setFlag(QSGMaterial::Blending);
                 geoNode->setMaterial(matNode);
                 geoNode->setFlag(QSGNode::OwnsMaterial);
+                // Pre-allocate geometry with 4 vertices; will update in-place later
+                QSGGeometry *geo = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
+                geo->setDrawingMode(QSGGeometry::DrawTriangleStrip);
+                geoNode->setGeometry(geo);
+                geoNode->setFlag(QSGNode::OwnsGeometry);
                 selLayer->appendChildNode(geoNode);
             }
 
@@ -473,30 +480,30 @@ pub fn update_selection_preedit_layer(
 
             matNode->setColor(color);
 
-            if (underline) {
-                // Draw thin underline bar
-                double lineH = 2.0;
-                QSGGeometry *geo = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
+            // Reuse existing geometry — only update vertex data in-place
+            QSGGeometry *geo = geoNode->geometry();
+            if (!geo || geo->vertexCount() < 4) {
+                // Fallback: should not happen, but create if missing
+                geo = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
                 geo->setDrawingMode(QSGGeometry::DrawTriangleStrip);
-                QSGGeometry::Point2D *v = geo->vertexDataAsPoint2D();
+                geoNode->setGeometry(geo);
+                geoNode->setFlag(QSGNode::OwnsGeometry);
+            }
+
+            QSGGeometry::Point2D *v = geo->vertexDataAsPoint2D();
+            if (underline) {
+                double lineH = 2.0;
                 v[0].set(rx, ry + rh - lineH);
                 v[1].set(rx + rw, ry + rh - lineH);
                 v[2].set(rx, ry + rh);
                 v[3].set(rx + rw, ry + rh);
-                geoNode->setGeometry(geo);
-                geoNode->setFlag(QSGNode::OwnsGeometry);
             } else {
-                // Draw filled rectangle
-                QSGGeometry *geo = new QSGGeometry(QSGGeometry::defaultAttributes_Point2D(), 4);
-                geo->setDrawingMode(QSGGeometry::DrawTriangleStrip);
-                QSGGeometry::Point2D *v = geo->vertexDataAsPoint2D();
                 v[0].set(rx, ry);
                 v[1].set(rx + rw, ry);
                 v[2].set(rx, ry + rh);
                 v[3].set(rx + rw, ry + rh);
-                geoNode->setGeometry(geo);
-                geoNode->setFlag(QSGNode::OwnsGeometry);
             }
+            geo->markVertexDataDirty();
 
             geoNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
         }

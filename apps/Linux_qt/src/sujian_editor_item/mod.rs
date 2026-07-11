@@ -27,6 +27,7 @@ pub(crate) mod reflow_animation;
 pub(crate) mod render_plan;
 pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
+pub(crate) mod shaped_visual_run;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
 pub(crate) mod transaction_key;
@@ -581,6 +582,8 @@ impl SujianEditorItem {
 
         let mut plan = animation_coordinator::SelectionPreeditPlan::default();
 
+        let selection_color = self.current_selection_color.to_string();
+
         if self.buffer.has_selection() {
             plan.has_selection = true;
             let width = self.bounding_width();
@@ -613,12 +616,21 @@ impl SujianEditorItem {
                 let left_x = start_x.min(end_x);
                 let sel_w = (end_x - start_x).abs();
 
+                let sel_color = if selection_color.starts_with('#') && selection_color.len() >= 7 {
+                    let r = u8::from_str_radix(&selection_color[1..3], 16).unwrap_or(0);
+                    let g = u8::from_str_radix(&selection_color[3..5], 16).unwrap_or(0);
+                    let b = u8::from_str_radix(&selection_color[5..7], 16).unwrap_or(0);
+                    format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, 0x33)
+                } else {
+                    "#3381D1D1".to_string()
+                };
+
                 plan.selection_ranges.push(SelectionRange {
                     x: left_x,
                     y: line_top,
                     w: sel_w,
                     h: line.height,
-                    color: "#3381D1D1".to_string(),
+                    color: sel_color,
                 });
             }
         }
@@ -638,12 +650,22 @@ impl SujianEditorItem {
                         &snapshot, line, cursor_byte, crate::editor::layout::CaretAffinity::Downstream,
                     );
                     let preedit_w = self.editor_layout.text_width(&self.preedit_text, font_size, font_family);
+
+                    let preedit_color = if selection_color.starts_with('#') && selection_color.len() >= 7 {
+                        let r = u8::from_str_radix(&selection_color[1..3], 16).unwrap_or(0);
+                        let g = u8::from_str_radix(&selection_color[3..5], 16).unwrap_or(0);
+                        let b = u8::from_str_radix(&selection_color[5..7], 16).unwrap_or(0);
+                        format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, 0x1A)
+                    } else {
+                        "#1A81D1D1".to_string()
+                    };
+
                     plan.preedit_ranges.push(PreeditRange {
                         x: start_x,
                         y: line.y - scroll_y,
                         w: preedit_w,
                         h: line.height,
-                        color: "#1A81D1D1".to_string(),
+                        color: preedit_color,
                         underline: true,
                     });
                 }

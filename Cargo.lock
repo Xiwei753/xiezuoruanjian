@@ -2726,6 +2726,7 @@ name = "sujian-linux-qt"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "bitflags",
  "chrono",
  "cpp",
  "cpp_build",

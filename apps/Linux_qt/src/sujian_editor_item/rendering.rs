@@ -641,6 +641,7 @@ impl SujianEditorItem {
         None
     }
 
+    #[deprecated(note = "Legacy fallback: re-shapes text with new QTextLayout. Use render_shaped_run_texture instead which uses QPainter::drawGlyphRun from the same shaping pass.")]
     pub(crate) fn render_glyph_texture_from_layout(
         &self,
         ch: &str,
@@ -728,6 +729,38 @@ impl SujianEditorItem {
         renderer::sujian_delete_painter(painter_ptr);
 
         Some(image)
+    }
+
+    pub(crate) fn render_shaped_run_texture(
+        &self,
+        para_text: &str,
+        font_size: f64,
+        font_family: &str,
+        paragraph_wrap_w: f64,
+        indent_w: f64,
+        qtextline_idx: i32,
+        target_run_index: i32,
+        clip_x: f64,
+        clip_y: f64,
+        clip_w: f64,
+        clip_h: f64,
+        dpr: f64,
+    ) -> Option<QImage> {
+        crate::editor::layout::render_glyph_run_texture(
+            para_text,
+            font_size,
+            font_family,
+            paragraph_wrap_w,
+            indent_w,
+            qtextline_idx,
+            target_run_index,
+            clip_x,
+            clip_y,
+            clip_w,
+            clip_h,
+            dpr,
+            &self.current_text_color.to_string(),
+        )
     }
 
     pub(crate) fn render_snapshot_from_static_layout(

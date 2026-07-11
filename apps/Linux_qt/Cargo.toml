@@ -19,6 +19,7 @@ chrono = "0.4"
 cpp = "0.5.11"
 zip = "2.2"
 regex = "1"
+bitflags = "2"
 
 [build-dependencies]
 cpp_build = "0.5.11"

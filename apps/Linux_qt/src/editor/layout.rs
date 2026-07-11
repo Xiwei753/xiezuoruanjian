@@ -362,6 +362,224 @@ cpp! {{
     // This ensures the text rendering uses the same shaping data as
     // cursorToX() / xToCursor(), fixing mixed-script cursor issues
     // (e.g. "]\"" where cursor lands inside the Chinese quote).
+    // Per-run data for QGlyphRun-level extraction
+    struct ShapedRunEntry {
+        int runIndex;
+        int glyphCount;
+        int stringStart;
+        int stringEnd;
+        bool isRTL;
+        bool hasUnderline;
+        char rawFontFamily[256];
+        char rawFontStyle[128];
+        int rawFontWeight;
+        int rawFontPixelSize;
+        double baselineY;
+        double visualX;
+        double visualY;
+        double visualW;
+        double visualH;
+    };
+    thread_local std::vector<ShapedRunEntry> g_shaped_run_buf;
+
+    // Per-glyph data within a specific run
+    struct RunGlyphEntry {
+        int runIndex;
+        unsigned int glyphIndex;
+        double positionX;
+        double positionY;
+        int stringIndex;
+        double advanceWidth;
+    };
+    thread_local std::vector<RunGlyphEntry> g_run_glyph_buf;
+
+    void editor_layout_shaped_runs_on_line(
+        const QString& paraText, int range_qchar_start, int range_qchar_end,
+        double fs, const QString& ff, double paragraph_wrap_w, double indent_w, int qtextline_idx
+    ) {
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+
+        g_shaped_run_buf.clear();
+        g_run_glyph_buf.clear();
+        int cur_idx = 0;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
+            line.setLineWidth(lineWrap);
+            if (cur_idx == qtextline_idx) {
+                const auto glyphRuns = line.glyphRuns();
+                double lineY = line.y();
+                double lineH = line.height();
+                double lineAscent = line.ascent();
+
+                int runIdx = 0;
+                for (const auto& run : glyphRuns) {
+                    const auto& positions = run.positions();
+                    const auto& glyphIndexes = run.glyphIndexes();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+                    const auto& stringIndexes = run.stringIndexes();
+#endif
+                    int count = positions.size();
+                    if (count == 0) { runIdx++; continue; }
+
+                    QRawFont rawFont = run.rawFont();
+                    QString rawFontFamily = rawFont.familyName();
+                    QByteArray rawFontKeyBytes = rawFontFamily.toUtf8();
+
+                    // Extract font properties for stable cache key
+                    QFont derivedFont;
+                    derivedFont.setFamily(rawFontFamily);
+                    derivedFont.setPixelSize(static_cast<int>(fs));
+                    QString rawFontStyle;
+                    int rawFontWeight = derivedFont.weight();
+
+                    // Compute run-level string range and visual bounds
+                    int strStart = INT_MAX;
+                    int strEnd = 0;
+                    double minX = 1e9, maxX = -1e9;
+                    for (int i = 0; i < count; i++) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+                        int si = (i < stringIndexes.size()) ? stringIndexes[i] : -1;
+#else
+                        int si = -1;
+#endif
+                        if (si >= 0) {
+                            if (si < strStart) strStart = si;
+                            if (si + 1 > strEnd) strEnd = si + 1;
+                        }
+                        double gx = positions[i].x();
+                        if (gx < minX) minX = gx;
+                        if (gx > maxX) maxX = gx;
+                    }
+                    if (strStart == INT_MAX) strStart = 0;
+                    if (strEnd == 0) strEnd = strStart;
+
+                    // Filter: skip runs entirely outside requested range
+                    if (strEnd <= range_qchar_start || strStart >= range_qchar_end) {
+                        runIdx++; continue;
+                    }
+
+                    double runW = maxX - minX;
+                    if (runW < 0.01 && count > 0) runW = 10.0;
+
+                    ShapedRunEntry re;
+                    re.runIndex = runIdx;
+                    re.glyphCount = count;
+                    re.stringStart = strStart;
+                    re.stringEnd = strEnd;
+                    re.isRTL = run.isRightToLeft();
+                    re.hasUnderline = false;
+                    memset(re.rawFontFamily, 0, sizeof(re.rawFontFamily));
+                    if (rawFontKeyBytes.size() > 0) {
+                        int copyLen = rawFontKeyBytes.size();
+                        if (copyLen > (int)sizeof(re.rawFontFamily) - 1)
+                            copyLen = (int)sizeof(re.rawFontFamily) - 1;
+                        memcpy(re.rawFontFamily, rawFontKeyBytes.constData(), copyLen);
+                    }
+                    memset(re.rawFontStyle, 0, sizeof(re.rawFontStyle));
+                    re.rawFontWeight = rawFontWeight;
+                    re.rawFontPixelSize = static_cast<int>(fs);
+                    re.baselineY = lineY + lineAscent;
+                    re.visualX = minX;
+                    re.visualY = lineY;
+                    re.visualW = runW;
+                    re.visualH = lineH;
+                    g_shaped_run_buf.push_back(re);
+
+                    // Extract per-glyph data
+                    for (int i = 0; i < count; i++) {
+                        RunGlyphEntry ge;
+                        ge.runIndex = runIdx;
+                        ge.glyphIndex = (i < glyphIndexes.size()) ? glyphIndexes[i] : 0;
+                        ge.positionX = positions[i].x();
+                        ge.positionY = positions[i].y();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+                        ge.stringIndex = (i < stringIndexes.size()) ? stringIndexes[i] : -1;
+#else
+                        ge.stringIndex = -1;
+#endif
+                        ge.advanceWidth = 0.0;
+                        if (i + 1 < count) {
+                            ge.advanceWidth = positions[i + 1].x() - positions[i].x();
+                        }
+                        if (ge.advanceWidth < 0.01 && ge.stringIndex >= 0) {
+                            double cxNext = line.cursorToX(ge.stringIndex + 1);
+                            double cxThis = line.cursorToX(ge.stringIndex);
+                            ge.advanceWidth = cxNext - cxThis;
+                        }
+                        if (ge.advanceWidth < 0) ge.advanceWidth = -ge.advanceWidth;
+                        g_run_glyph_buf.push_back(ge);
+                    }
+
+                    runIdx++;
+                }
+                break;
+            }
+            first = false;
+            cur_idx++;
+        }
+        layout.endLayout();
+    }
+
+    // Render a specific QGlyphRun to a QImage using QPainter::drawGlyphRun
+    void editor_render_glyph_run_texture(
+        QImage* img, const QString& paraText,
+        double fs, const QString& ff,
+        double paragraph_wrap_w, double indent_w, int qtextline_idx,
+        int target_run_index, double dpr, double clip_x, double clip_y,
+        double clip_w, double clip_h, const QColor& textColor
+    ) {
+        if (!img) return;
+        QPainter painter(img);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.scale(dpr, dpr);
+
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+
+        int cur_idx = 0;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
+            line.setLineWidth(lineWrap);
+            if (cur_idx == qtextline_idx) {
+                const auto glyphRuns = line.glyphRuns();
+                int runIdx = 0;
+                for (const auto& run : glyphRuns) {
+                    if (runIdx == target_run_index) {
+                        // Compute offset: shift glyph positions so they start at (0, baseline_offset)
+                        double baseline_offset = clip_h * 0.8;
+                        QPointF runOrigin(0.0 - clip_x, baseline_offset - line.ascent() - clip_y);
+                        painter.setClipRect(QRectF(0, 0, clip_w, clip_h));
+                        QGlyphRun drawRun = run;
+                        painter.drawGlyphRun(runOrigin, drawRun);
+                        break;
+                    }
+                    runIdx++;
+                }
+                break;
+            }
+            first = false;
+            cur_idx++;
+        }
+        layout.endLayout();
+    }
+
     void editor_draw_line_text(
         QPainter* painter, const QString& paraText,
         double fs, const QString& ff,
@@ -1311,7 +1529,249 @@ pub fn qtextlayout_glyph_positions_on_line(
     result
 }
 
-/// Draw a full line of text using QTextLine::draw().
+#[derive(Clone, Debug)]
+pub struct ShapedRunData {
+    pub run_index: i32,
+    pub glyph_count: usize,
+    pub string_start: usize,
+    pub string_end: usize,
+    pub is_rtl: bool,
+    pub has_underline: bool,
+    pub raw_font_family: String,
+    pub raw_font_style: String,
+    pub raw_font_weight: i32,
+    pub raw_font_pixel_size: i32,
+    pub baseline_y: f64,
+    pub visual_x: f64,
+    pub visual_y: f64,
+    pub visual_w: f64,
+    pub visual_h: f64,
+    pub glyphs: Vec<RunGlyphData>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RunGlyphData {
+    pub glyph_index: u32,
+    pub position_x: f64,
+    pub position_y: f64,
+    pub string_index: i32,
+    pub advance_width: f64,
+}
+
+pub fn extract_shaped_runs_on_line(
+    para_text: &str,
+    range_start: usize,
+    range_end: usize,
+    para_start: usize,
+    font_size: f64,
+    font_family: &str,
+    paragraph_wrap_w: f64,
+    indent_w: f64,
+    qtextline_idx: i32,
+) -> Vec<ShapedRunData> {
+    let seg_start_in_para = range_start.saturating_sub(para_start);
+    let seg_end_in_para = range_end.saturating_sub(para_start).min(para_text.len());
+    let qchar_start = byte_offset_to_qchar_offset(para_text, seg_start_in_para) as i32;
+    let qchar_end = byte_offset_to_qchar_offset(para_text, seg_end_in_para) as i32;
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    let run_count = cpp!(unsafe [
+        para as "QString",
+        qchar_start as "int",
+        qchar_end as "int",
+        fs as "float",
+        ff as "QString",
+        paragraph_wrap_w as "double",
+        indent_w as "double",
+        qtextline_idx as "int"
+    ] -> i32 as "int" {
+        editor_layout_shaped_runs_on_line(
+            para, qchar_start, qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx
+        );
+        return static_cast<int>(g_shaped_run_buf.size());
+    });
+
+    let mut result = Vec::with_capacity(run_count as usize);
+    for i in 0..run_count {
+        let idx = i;
+        let run_index = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            return g_shaped_run_buf[idx].runIndex;
+        });
+        let glyph_count = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            return g_shaped_run_buf[idx].glyphCount;
+        });
+        let str_start = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            return g_shaped_run_buf[idx].stringStart;
+        });
+        let str_end = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            return g_shaped_run_buf[idx].stringEnd;
+        });
+        let is_rtl = cpp!(unsafe [idx as "int"] -> bool as "bool" {
+            return g_shaped_run_buf[idx].isRTL;
+        });
+        let has_underline = cpp!(unsafe [idx as "int"] -> bool as "bool" {
+            return g_shaped_run_buf[idx].hasUnderline;
+        });
+        let raw_font_family = cpp!(unsafe [idx as "int"] -> QString as "QString" {
+            return QString::fromUtf8(g_shaped_run_buf[idx].rawFontFamily);
+        });
+        let raw_font_style = cpp!(unsafe [idx as "int"] -> QString as "QString" {
+            return QString::fromUtf8(g_shaped_run_buf[idx].rawFontStyle);
+        });
+        let raw_font_weight = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            return g_shaped_run_buf[idx].rawFontWeight;
+        });
+        let raw_font_pixel_size = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            return g_shaped_run_buf[idx].rawFontPixelSize;
+        });
+        let baseline_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].baselineY;
+        });
+        let visual_x = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].visualX;
+        });
+        let visual_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].visualY;
+        });
+        let visual_w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].visualW;
+        });
+        let visual_h = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].visualH;
+        });
+
+        let mut glyphs = Vec::with_capacity(glyph_count as usize);
+        let glyph_offset: i32 = (0..i).map(|prev_idx| {
+            let prev_count = cpp!(unsafe [prev_idx as "int"] -> i32 as "int" {
+                return g_shaped_run_buf[prev_idx].glyphCount;
+            });
+            prev_count
+        }).sum();
+        for gi in 0..glyph_count {
+            let glyph_idx_in_buf = glyph_offset + gi;
+            let g_glyph_index = cpp!(unsafe [glyph_idx_in_buf as "int"] -> u32 as "quint32" {
+                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
+                    return g_run_glyph_buf[glyph_idx_in_buf].glyphIndex;
+                return 0u;
+            });
+            let g_pos_x = cpp!(unsafe [glyph_idx_in_buf as "int"] -> f64 as "double" {
+                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
+                    return g_run_glyph_buf[glyph_idx_in_buf].positionX;
+                return 0.0;
+            });
+            let g_pos_y = cpp!(unsafe [glyph_idx_in_buf as "int"] -> f64 as "double" {
+                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
+                    return g_run_glyph_buf[glyph_idx_in_buf].positionY;
+                return 0.0;
+            });
+            let g_string_index = cpp!(unsafe [glyph_idx_in_buf as "int"] -> i32 as "int" {
+                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
+                    return g_run_glyph_buf[glyph_idx_in_buf].stringIndex;
+                return -1;
+            });
+            let g_advance = cpp!(unsafe [glyph_idx_in_buf as "int"] -> f64 as "double" {
+                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
+                    return g_run_glyph_buf[glyph_idx_in_buf].advanceWidth;
+                return 0.0;
+            });
+            glyphs.push(RunGlyphData {
+                glyph_index: g_glyph_index,
+                position_x: g_pos_x,
+                position_y: g_pos_y,
+                string_index: g_string_index,
+                advance_width: g_advance,
+            });
+        }
+
+        let str_start_byte = para_start + qchar_offset_to_byte_offset(para_text, str_start as usize);
+        let str_end_byte = para_start + qchar_offset_to_byte_offset(para_text, str_end as usize);
+
+        result.push(ShapedRunData {
+            run_index,
+            glyph_count: glyph_count as usize,
+            string_start: str_start_byte,
+            string_end: str_end_byte,
+            is_rtl,
+            has_underline,
+            raw_font_family: raw_font_family.to_string(),
+            raw_font_style: raw_font_style.to_string(),
+            raw_font_weight,
+            raw_font_pixel_size,
+            baseline_y,
+            visual_x,
+            visual_y,
+            visual_w,
+            visual_h,
+            glyphs,
+        });
+    }
+    result
+}
+
+pub fn render_glyph_run_texture(
+    para_text: &str,
+    font_size: f64,
+    font_family: &str,
+    paragraph_wrap_w: f64,
+    indent_w: f64,
+    qtextline_idx: i32,
+    target_run_index: i32,
+    clip_x: f64,
+    clip_y: f64,
+    clip_w: f64,
+    clip_h: f64,
+    dpr: f64,
+    text_color: &str,
+) -> Option<qmetaobject::QImage> {
+    let phys_w = (clip_w * dpr).ceil() as u32;
+    let phys_h = (clip_h * dpr).ceil() as u32;
+    if phys_w == 0 || phys_h == 0 || phys_w > 4096 || phys_h > 4096 {
+        return None;
+    }
+
+    let mut image = qmetaobject::QImage::new(
+        qmetaobject::QSize { width: phys_w, height: phys_h },
+        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+    );
+    {
+        let img_ptr = &mut image as *mut qmetaobject::QImage;
+        cpp!(unsafe [img_ptr as "QImage*"] {
+            img_ptr->setDevicePixelRatio(1.0);
+        });
+    }
+    image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
+
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    let color = qmetaobject::QColor::from_name(text_color);
+
+    let img_ptr = &mut image as *mut qmetaobject::QImage;
+    cpp!(unsafe [
+        img_ptr as "QImage*",
+        para as "QString",
+        fs as "float",
+        ff as "QString",
+        paragraph_wrap_w as "double",
+        indent_w as "double",
+        qtextline_idx as "int",
+        target_run_index as "int",
+        dpr as "double",
+        clip_x as "double",
+        clip_y as "double",
+        clip_w as "double",
+        clip_h as "double",
+        color as "QColor"
+    ] {
+        editor_render_glyph_run_texture(
+            img_ptr, para, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx,
+            target_run_index, dpr, clip_x, clip_y, clip_w, clip_h, color
+        );
+    });
+
+    Some(image)
+}
 /// This ensures the text rendering uses the same shaping data as
 /// cursorToX() / xToCursor(), fixing mixed-script cursor issues.
 pub fn draw_line_text(

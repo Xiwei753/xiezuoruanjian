@@ -36,7 +36,7 @@ impl ActiveVisualTransaction {
     }
 
     pub fn is_insert(&self) -> bool {
-        matches!(self.payload, VisualPayload::InsertRuns { .. })
+        matches!(self.payload, VisualPayload::InsertRuns { .. } | VisualPayload::GlyphPayload { .. } | VisualPayload::ClusterPayload { .. } | VisualPayload::RunPayload { .. } | VisualPayload::LineReflowPayload { .. })
     }
 
     pub fn is_delete(&self) -> bool {
@@ -44,7 +44,7 @@ impl ActiveVisualTransaction {
     }
 
     pub fn is_reflow(&self) -> bool {
-        matches!(self.payload, VisualPayload::ReflowRuns { .. })
+        matches!(self.payload, VisualPayload::ReflowRuns { .. } | VisualPayload::LineReflowPayload { .. })
     }
 
     pub fn is_cursor(&self) -> bool {
@@ -52,23 +52,11 @@ impl ActiveVisualTransaction {
     }
 
     pub fn inserted_byte_range(&self) -> Option<(usize, usize)> {
-        match &self.payload {
-            VisualPayload::InsertRuns { inserted_range, .. } => *inserted_range,
-            VisualPayload::ReflowRuns { inserted_range, .. } => *inserted_range,
-            _ => None,
-        }
+        self.payload.inserted_range()
     }
 
     pub fn reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        match &self.payload {
-            VisualPayload::InsertRuns { reflow_runs, .. } => {
-                reflow_runs.iter().map(|r| (r.byte_start, r.byte_end)).collect()
-            }
-            VisualPayload::ReflowRuns { reflow_runs, .. } => {
-                reflow_runs.iter().map(|r| (r.byte_start, r.byte_end)).collect()
-            }
-            _ => Vec::new(),
-        }
+        self.payload.reflow_byte_ranges()
     }
 }
 
@@ -89,6 +77,10 @@ impl ActiveVisualTransactionQueue {
             VisualPayload::DeleteRuns { .. } => "Delete",
             VisualPayload::ReflowRuns { .. } => "Reflow",
             VisualPayload::CursorTransition { .. } => "Cursor",
+            VisualPayload::GlyphPayload { .. } => "Glyph",
+            VisualPayload::ClusterPayload { .. } => "Cluster",
+            VisualPayload::RunPayload { .. } => "Run",
+            VisualPayload::LineReflowPayload { .. } => "LineReflow",
         };
         self.transactions.push(ActiveVisualTransaction {
             key,
