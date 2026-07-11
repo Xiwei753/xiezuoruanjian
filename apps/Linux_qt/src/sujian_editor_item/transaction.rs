@@ -32,7 +32,7 @@ impl SujianEditorItem {
                 let shaped_glyphs = self.extract_shaped_glyphs_for_transaction(vt);
                 let (old_layout_runs, new_layout_runs, insert_runs, reflow_old_runs, reflow_new_runs) =
                     self.extract_shaped_runs_for_transaction(vt);
-                self.animation_coordinator.process_transaction(
+                let key = self.animation_coordinator.process_transaction(
                     vt,
                     self.current_typing_animation_enabled,
                     self.current_is_scrolling,
@@ -69,6 +69,15 @@ impl SujianEditorItem {
                     &reflow_old_runs,
                     &reflow_new_runs,
                 );
+                if let Some(key) = key {
+                    self.prepare_transaction_textures(key);
+                    let is_prepared = self.animation_coordinator.vt_queue.active_transactions()
+                        .iter()
+                        .any(|t| t.key == key && t.texture_prepared);
+                    if is_prepared {
+                        self.animation_coordinator.vt_queue.mark_prepared(key);
+                    }
+                }
                 editor_animation_debug_log(&format!(
                     "record_transaction: processed via coordinator, kind={:?}, has_active_insert={}",
                     vt.kind,
@@ -241,6 +250,8 @@ impl SujianEditorItem {
                 texture_atlas_y: 0.0,
                 texture_atlas_w: srd.visual_w,
                 texture_atlas_h: srd.visual_h,
+                texture_translate_x: srd.texture_translate_x,
+                texture_translate_y: srd.texture_translate_y,
                 qglyphrun_index: srd.run_index,
                 para_text: Some(para_text.to_string()),
                 qtextline_idx: Some(qtextline_idx),

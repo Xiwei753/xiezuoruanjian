@@ -14,10 +14,19 @@ pub(crate) enum VisualTransactionState {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VisualOperationKind {
+    Insert,
+    Delete,
+    Reflow,
+    Cursor,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveVisualTransaction {
     pub key: VisualTransactionKey,
     pub state: VisualTransactionState,
+    pub operation_kind: VisualOperationKind,
     pub animation_mode: AnimationMode,
     pub duration_ms: u64,
     pub start_time: Instant,
@@ -36,27 +45,35 @@ impl ActiveVisualTransaction {
     }
 
     pub fn is_insert(&self) -> bool {
-        matches!(self.payload, VisualPayload::GlyphPayload { .. } | VisualPayload::ClusterPayload { .. } | VisualPayload::RunPayload { .. } | VisualPayload::LineReflowPayload { .. })
+        self.operation_kind == VisualOperationKind::Insert
     }
 
     pub fn is_delete(&self) -> bool {
-        false
+        self.operation_kind == VisualOperationKind::Delete
     }
 
     pub fn is_reflow(&self) -> bool {
-        matches!(self.payload, VisualPayload::LineReflowPayload { .. } | VisualPayload::RunPayload { .. })
+        self.operation_kind == VisualOperationKind::Reflow
     }
 
     pub fn is_cursor(&self) -> bool {
-        matches!(self.payload, VisualPayload::CursorTransition { .. })
+        self.operation_kind == VisualOperationKind::Cursor
     }
 
     pub fn inserted_byte_range(&self) -> Option<(usize, usize)> {
-        self.payload.inserted_range()
+        if self.operation_kind == VisualOperationKind::Insert {
+            self.payload.inserted_range()
+        } else {
+            None
+        }
     }
 
     pub fn reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.payload.reflow_byte_ranges()
+        if self.operation_kind == VisualOperationKind::Reflow || self.operation_kind == VisualOperationKind::Insert {
+            self.payload.reflow_byte_ranges()
+        } else {
+            Vec::new()
+        }
     }
 }
 
@@ -71,17 +88,17 @@ impl ActiveVisualTransactionQueue {
         }
     }
 
-    pub fn enqueue(&mut self, key: VisualTransactionKey, payload: VisualPayload, animation_mode: AnimationMode, duration_ms: u64) {
-        let kind_str = match &payload {
-            VisualPayload::CursorTransition { .. } => "Cursor",
-            VisualPayload::GlyphPayload { .. } => "Glyph",
-            VisualPayload::ClusterPayload { .. } => "Cluster",
-            VisualPayload::RunPayload { .. } => "Run",
-            VisualPayload::LineReflowPayload { .. } => "LineReflow",
+    pub fn enqueue(&mut self, key: VisualTransactionKey, operation_kind: VisualOperationKind, payload: VisualPayload, animation_mode: AnimationMode, duration_ms: u64) {
+        let kind_str = match operation_kind {
+            VisualOperationKind::Insert => "Insert",
+            VisualOperationKind::Delete => "Delete",
+            VisualOperationKind::Reflow => "Reflow",
+            VisualOperationKind::Cursor => "Cursor",
         };
         self.transactions.push(ActiveVisualTransaction {
             key,
-            state: VisualTransactionState::Prepared,
+            state: VisualTransactionState::Pending,
+            operation_kind,
             animation_mode,
             duration_ms,
             start_time: Instant::now(),
@@ -94,6 +111,20 @@ impl ActiveVisualTransactionQueue {
             "VTQueue::enqueue: tid={}, gen={}, kind={}, mode={:?}, duration_ms={}",
             key.transaction_id, key.generation, kind_str, animation_mode, duration_ms
         ));
+    }
+
+    pub fn mark_prepared(&mut self, key: VisualTransactionKey) -> bool {
+        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
+            if tx.state == VisualTransactionState::Pending {
+                tx.state = VisualTransactionState::Prepared;
+                editor_animation_debug_log(&format!(
+                    "VTQueue::mark_prepared: tid={}, gen={}",
+                    key.transaction_id, key.generation
+                ));
+                return true;
+            }
+        }
+        false
     }
 
     pub fn mark_rendering(&mut self, key: VisualTransactionKey) {
@@ -163,7 +194,7 @@ impl ActiveVisualTransactionQueue {
     }
 
     pub fn has_active_insert(&self) -> bool {
-        self.transactions.iter().any(|t| t.is_insert() || t.is_reflow())
+        self.transactions.iter().any(|t| t.is_insert() || t.is_reflow() || t.is_delete())
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {

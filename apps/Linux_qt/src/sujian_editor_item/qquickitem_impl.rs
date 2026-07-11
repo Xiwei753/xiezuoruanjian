@@ -2,6 +2,7 @@ use super::input_host::is_left_button_pressed;
 use super::*;
 use super::transaction_key::VisualTransactionKey;
 use super::transaction_queue::VisualTransactionState;
+use super::texture_cache::{TexturePhase, TextureCacheKey};
 
 use super::render_plan::{FrameContext, CursorStyle};
 use std::time::Instant;
@@ -238,7 +239,7 @@ impl QQuickItem for SujianEditorItem {
 
             for key in &render_plan.frame_context.keys_to_complete {
                 self.animation_coordinator.finish_by_key(*key);
-                self.texture_cache.remove(key);
+                self.texture_cache.remove_for_transaction(key);
                 editor_animation_debug_log(&format!(
                     "update_paint_node: VT tid={}, gen={} completed (progress >= 1.0)",
                     key.transaction_id, key.generation
@@ -247,7 +248,7 @@ impl QQuickItem for SujianEditorItem {
 
             for key in &render_plan.frame_context.keys_to_cancel {
                 self.animation_coordinator.cancel_by_key(*key, "texture_failed");
-                self.texture_cache.remove(key);
+                self.texture_cache.remove_for_transaction(key);
             }
 
             for key in &txs_to_mark_rendering {
@@ -294,12 +295,17 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
 
-        let runs: Vec<super::shaped_visual_run::ShapedVisualRun> = {
+        let (runs, operation_kind, cache_keys) = {
             let tx = self.animation_coordinator.vt_queue.active_transactions()
                 .iter()
                 .find(|t| t.key == key);
             match tx {
-                Some(t) => t.payload.shaped_runs_for_texture().into_iter().cloned().collect(),
+                Some(t) => {
+                    let runs: Vec<super::shaped_visual_run::ShapedVisualRun> = t.payload.shaped_runs_for_texture().into_iter().cloned().collect();
+                    let op_kind = t.operation_kind;
+                    let keys = t.payload.texture_cache_keys(key, op_kind);
+                    (runs, op_kind, keys)
+                }
                 None => return,
             }
         };
@@ -323,10 +329,8 @@ impl SujianEditorItem {
             self.animation_coordinator.cancel_by_key(key, "texture_failed");
             self.render_dirty = true;
         } else {
-            self.texture_cache.insert(
-                key,
-                textures.into_iter().map(|t| t.unwrap()).collect(),
-            );
+            let ready_textures: Vec<qmetaobject::QImage> = textures.into_iter().map(|t| t.unwrap()).collect();
+            self.texture_cache.insert_batch(cache_keys, ready_textures);
             self.animation_coordinator.vt_queue.mark_texture_prepared(key);
         }
     }
@@ -359,6 +363,8 @@ impl SujianEditorItem {
             0.0,
             run.visual_w,
             run.visual_h,
+            run.texture_translate_x,
+            run.texture_translate_y,
             dpr,
             &self.current_text_color.to_string(),
         )

@@ -1,7 +1,6 @@
 use crate::editor::scene_graph;
 use super::render_plan::RenderPlan;
-use super::texture_cache::TextureCache;
-use super::transaction_key::VisualTransactionKey;
+use super::texture_cache::{TextureCache, TextureCacheKey};
 use qmetaobject::QImage;
 
 pub(crate) fn render_frame(
@@ -34,26 +33,18 @@ fn render_text_animation_layer(
     let mut glyph_images: Vec<QImage> = Vec::new();
     let mut glyph_texture_changed: Vec<bool> = Vec::new();
 
-    let mut current_key: Option<VisualTransactionKey> = None;
-    let mut tex_idx_start: usize = 0;
-
     for glyph in &plan.text_animation.glyphs {
         glyph_data.extend_from_slice(&[
             glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity, glyph.baseline_in_quad,
         ]);
 
-        if current_key != Some(glyph.key) {
-            current_key = Some(glyph.key);
-            tex_idx_start = 0;
-        }
-
-        let cached = texture_cache.get(&glyph.key);
-        match cached {
-            Some(textures) if tex_idx_start < textures.len() => {
-                glyph_images.push(textures[tex_idx_start].clone());
+        let cache_key = TextureCacheKey::new(glyph.key, glyph.texture_phase, glyph.run_identity);
+        match texture_cache.get(&cache_key) {
+            Some(texture) => {
+                glyph_images.push(texture.clone());
                 glyph_texture_changed.push(true);
             }
-            _ => {
+            None => {
                 glyph_images.push(QImage::new(
                     qmetaobject::QSize { width: 1, height: 1 },
                     qmetaobject::ImageFormat::ARGB32_Premultiplied,
@@ -61,7 +52,6 @@ fn render_text_animation_layer(
                 glyph_texture_changed.push(false);
             }
         }
-        tex_idx_start += 1;
     }
 
     let glyph_count = glyph_data.len() / 6;

@@ -5,7 +5,7 @@ use writer_core::editor::{
 };
 
 pub(crate) use super::transaction_key::VisualTransactionKey;
-pub(crate) use super::transaction_queue::{ActiveVisualTransaction, ActiveVisualTransactionQueue, VisualTransactionState};
+pub(crate) use super::transaction_queue::{ActiveVisualTransaction, ActiveVisualTransactionQueue, VisualTransactionState, VisualOperationKind};
 pub(crate) use super::visual_payload::VisualPayload;
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
@@ -15,9 +15,9 @@ pub(crate) use super::render_plan::{
     ImeUpdateKind, ImeUpdatePlan, RenderPlan,
 
 };
-pub(crate) use super::texture_cache::TextureCache;
-pub(crate) use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, ReflowVisualSnapshot, derive_clusters_from_glyphs, RawFontCacheKey, RunFlags};
-use super::visual_payload::ShapedGlyphInfo;
+pub(crate) use super::texture_cache::{TextureCache, TexturePhase, TextureCacheKey};
+pub(crate) use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, ReflowVisualSnapshot, derive_clusters_from_glyphs, RawFontCacheKey, RunFlags, RunMapping};
+use super::visual_payload::{ShapedGlyphInfo, GlyphBounds, TextureRegion};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextAnimationKind {
@@ -321,48 +321,68 @@ impl LinuxEditorAnimationCoordinator {
 
                     let payload = match mode {
                         AnimationMode::GlyphAnimation => {
-                            let run = insert_runs.first().cloned().unwrap_or_else(|| {
-                                make_fallback_run_from_glyph_rects(
-                                    vt.insert_glyph_rects.as_deref().unwrap_or(&[]),
-                                    shaped_glyphs,
-                                    font_family,
-                                    font_size,
-                                )
+                            let run = match insert_runs.first().cloned() {
+                                Some(r) => r,
+                                None => return None,
+                            };
+                            let glyph = run.glyphs.first().cloned().unwrap_or(ShapedGlyph {
+                                glyph_index: 0, glyph_position_x: run.visual_x,
+                                glyph_position_y: run.baseline_y, string_index: run.source_string_start,
+                                advance_width: run.visual_w,
                             });
+                            let glyph_bounds = super::visual_payload::GlyphBounds {
+                                x: run.visual_x, y: run.visual_y, w: run.visual_w, h: run.visual_h,
+                            };
+                            let texture_region = super::visual_payload::TextureRegion {
+                                x: 0.0, y: 0.0, w: run.visual_w, h: run.visual_h,
+                            };
                             VisualPayload::from_glyph_payload(
-                                run,
+                                run.qglyphrun_index,
+                                0,
+                                glyph,
+                                glyph_bounds,
+                                texture_region,
+                                run.clone(),
                                 old_cursor_rect,
                                 new_cursor_rect,
                                 mode,
                             )
                         }
                         AnimationMode::ClusterAnimation => {
-                            let runs: Vec<ShapedVisualRun> = if !insert_runs.is_empty() {
-                                insert_runs.to_vec()
-                            } else {
-                                make_cluster_runs_from_glyph_rects(
-                                    vt.insert_glyph_rects.as_deref().unwrap_or(&[]),
-                                    shaped_glyphs,
-                                    font_family,
-                                    font_size,
-                                )
+                            if insert_runs.is_empty() {
+                                return None;
+                            }
+                            let run = &insert_runs[0];
+                            let cluster = run.clusters.first().cloned().unwrap_or(ShapedCluster {
+                                string_start: run.source_string_start,
+                                string_end: run.source_string_end,
+                                glyph_start: 0,
+                                glyph_end: run.glyphs.len(),
+                            });
+                            let cluster_bounds = super::visual_payload::GlyphBounds {
+                                x: run.visual_x, y: run.visual_y, w: run.visual_w, h: run.visual_h,
+                            };
+                            let texture_region = super::visual_payload::TextureRegion {
+                                x: 0.0, y: 0.0, w: run.visual_w, h: run.visual_h,
                             };
                             VisualPayload::from_cluster_payload(
-                                runs,
+                                run.qglyphrun_index,
+                                cluster,
+                                (0, run.glyphs.len()),
+                                (run.source_string_start, run.source_string_end),
+                                cluster_bounds,
+                                texture_region,
+                                run.clone(),
                                 old_cursor_rect,
                                 new_cursor_rect,
                                 mode,
                             )
                         }
                         AnimationMode::RunAnimation => {
-                            let run = insert_runs.first().cloned().unwrap_or_else(|| {
-                                make_fallback_run_from_glyph_rects(
-                                    vt.insert_glyph_rects.as_deref().unwrap_or(&[]),
-                                    shaped_glyphs,
-                                    font_family,
-                                    font_size,
-                                )
-                            });
+                            let run = match insert_runs.first().cloned() {
+                                Some(r) => r,
+                                None => return None,
+                            };
                             let reflow_snapshot = if has_reflow && !reflow_old_runs.is_empty() && !reflow_new_runs.is_empty() {
                                 Some(ReflowVisualSnapshot::new(
                                     reflow_old_runs.to_vec(),
@@ -380,16 +400,9 @@ impl LinuxEditorAnimationCoordinator {
                             )
                         }
                         AnimationMode::LineReflowAnimation => {
-                            let insert_shaped = if !insert_runs.is_empty() {
-                                insert_runs.to_vec()
-                            } else {
-                                make_cluster_runs_from_glyph_rects(
-                                    vt.insert_glyph_rects.as_deref().unwrap_or(&[]),
-                                    shaped_glyphs,
-                                    font_family,
-                                    font_size,
-                                )
-                            };
+                            if insert_runs.is_empty() {
+                                return None;
+                            }
                             let old_runs = if !reflow_old_runs.is_empty() {
                                 reflow_old_runs.to_vec()
                             } else {
@@ -400,10 +413,12 @@ impl LinuxEditorAnimationCoordinator {
                             } else {
                                 new_layout_runs.to_vec()
                             };
-                            let reflow_snapshot = ReflowVisualSnapshot::new(old_runs, new_runs);
+                            let reflow_snapshot = ReflowVisualSnapshot::new(old_runs.clone(), new_runs.clone());
                             VisualPayload::from_line_reflow_payload(
-                                insert_shaped,
-                                reflow_snapshot,
+                                old_runs,
+                                new_runs,
+                                reflow_snapshot.run_mapping.clone(),
+                                insert_runs.to_vec(),
                                 Some((range_start, range_end)),
                                 old_cursor_rect,
                                 new_cursor_rect,
@@ -421,7 +436,7 @@ impl LinuxEditorAnimationCoordinator {
                         mode,
                         vt.duration_ms,
                     );
-                    self.vt_queue.enqueue(key, payload, mode, vt.duration_ms);
+                    self.vt_queue.enqueue(key, VisualOperationKind::Insert, payload, mode, vt.duration_ms);
                     return Some(key);
                 }
             }
@@ -435,10 +450,13 @@ impl LinuxEditorAnimationCoordinator {
                         self.registry.map_ranges_for_delete(range_start, delete_len);
                     }
                 }
+
+                let mut deleted_ranges: Vec<(usize, usize)> = Vec::new();
                 for change in &changes {
                     if let writer_core::editor::EditorChange::Delete { index, text } = change {
                         let range_start = *index;
                         let range_end = range_start + text.len();
+                        deleted_ranges.push((range_start, range_end));
                         self.registry.start_delete(
                             key,
                             (range_start, range_end),
@@ -448,17 +466,42 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
+                let delete_runs: Vec<ShapedVisualRun> = old_layout_runs.iter()
+                    .filter(|run| {
+                        deleted_ranges.iter().any(|(ds, de)| {
+                            run.source_string_end > *ds && run.source_string_start < *de
+                        })
+                    })
+                    .cloned()
+                    .collect();
+
+                if delete_runs.is_empty() && old_layout_runs.is_empty() {
+                    return None;
+                }
+
                 let payload = match mode {
                     AnimationMode::GlyphAnimation => {
-                        let run = old_layout_runs.first().cloned().unwrap_or_else(|| {
-                            make_fallback_run_from_glyph_rects(
-                                vt.deleted_glyph_rects.as_deref().unwrap_or(&[]),
-                                shaped_glyphs,
-                                font_family,
-                                font_size,
-                            )
+                        let run = match delete_runs.first().cloned() {
+                            Some(r) => r,
+                            None => return None,
+                        };
+                        let glyph = run.glyphs.first().cloned().unwrap_or(ShapedGlyph {
+                            glyph_index: 0, glyph_position_x: run.visual_x,
+                            glyph_position_y: run.baseline_y, string_index: run.source_string_start,
+                            advance_width: run.visual_w,
                         });
+                        let glyph_bounds = super::visual_payload::GlyphBounds {
+                            x: run.visual_x, y: run.visual_y, w: run.visual_w, h: run.visual_h,
+                        };
+                        let texture_region = super::visual_payload::TextureRegion {
+                            x: 0.0, y: 0.0, w: run.visual_w, h: run.visual_h,
+                        };
                         VisualPayload::from_glyph_payload(
+                            run.qglyphrun_index,
+                            0,
+                            glyph,
+                            glyph_bounds,
+                            texture_region,
                             run,
                             old_cursor_rect,
                             new_cursor_rect,
@@ -466,32 +509,40 @@ impl LinuxEditorAnimationCoordinator {
                         )
                     }
                     AnimationMode::ClusterAnimation => {
-                        let runs = if !old_layout_runs.is_empty() {
-                            old_layout_runs.to_vec()
-                        } else {
-                            make_cluster_runs_from_glyph_rects(
-                                vt.deleted_glyph_rects.as_deref().unwrap_or(&[]),
-                                shaped_glyphs,
-                                font_family,
-                                font_size,
-                            )
+                        if delete_runs.is_empty() {
+                            return None;
+                        }
+                        let run = &delete_runs[0];
+                        let cluster = run.clusters.first().cloned().unwrap_or(ShapedCluster {
+                            string_start: run.source_string_start,
+                            string_end: run.source_string_end,
+                            glyph_start: 0,
+                            glyph_end: run.glyphs.len(),
+                        });
+                        let cluster_bounds = super::visual_payload::GlyphBounds {
+                            x: run.visual_x, y: run.visual_y, w: run.visual_w, h: run.visual_h,
+                        };
+                        let texture_region = super::visual_payload::TextureRegion {
+                            x: 0.0, y: 0.0, w: run.visual_w, h: run.visual_h,
                         };
                         VisualPayload::from_cluster_payload(
-                            runs,
+                            run.qglyphrun_index,
+                            cluster,
+                            (0, run.glyphs.len()),
+                            (run.source_string_start, run.source_string_end),
+                            cluster_bounds,
+                            texture_region,
+                            run.clone(),
                             old_cursor_rect,
                             new_cursor_rect,
                             mode,
                         )
                     }
                     AnimationMode::RunAnimation => {
-                        let run = old_layout_runs.first().cloned().unwrap_or_else(|| {
-                            make_fallback_run_from_glyph_rects(
-                                vt.deleted_glyph_rects.as_deref().unwrap_or(&[]),
-                                shaped_glyphs,
-                                font_family,
-                                font_size,
-                            )
-                        });
+                        let run = match delete_runs.first().cloned() {
+                            Some(r) => r,
+                            None => return None,
+                        };
                         VisualPayload::from_run_payload(
                             run,
                             None,
@@ -501,25 +552,24 @@ impl LinuxEditorAnimationCoordinator {
                         )
                     }
                     AnimationMode::LineReflowAnimation => {
-                        let old_runs = if !old_layout_runs.is_empty() {
+                        let old_runs = if !delete_runs.is_empty() {
+                            delete_runs
+                        } else if !old_layout_runs.is_empty() {
                             old_layout_runs.to_vec()
                         } else {
-                            make_cluster_runs_from_glyph_rects(
-                                vt.deleted_glyph_rects.as_deref().unwrap_or(&[]),
-                                shaped_glyphs,
-                                font_family,
-                                font_size,
-                            )
+                            return None;
                         };
                         let new_runs = if !new_layout_runs.is_empty() {
                             new_layout_runs.to_vec()
                         } else {
                             old_runs.clone()
                         };
-                        let reflow_snapshot = ReflowVisualSnapshot::new(old_runs, new_runs);
+                        let reflow_snapshot = ReflowVisualSnapshot::new(old_runs.clone(), new_runs.clone());
                         VisualPayload::from_line_reflow_payload(
+                            old_runs,
+                            new_runs,
+                            reflow_snapshot.run_mapping.clone(),
                             Vec::new(),
-                            reflow_snapshot,
                             None,
                             old_cursor_rect,
                             new_cursor_rect,
@@ -528,7 +578,7 @@ impl LinuxEditorAnimationCoordinator {
                     }
                     AnimationMode::SystemSuppressed => return None,
                 };
-                self.vt_queue.enqueue(key, payload, mode, vt.duration_ms);
+                self.vt_queue.enqueue(key, VisualOperationKind::Delete, payload, mode, vt.duration_ms);
                 return Some(key);
             }
             EditorAnimationKind::Cursor => {}
@@ -827,48 +877,48 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             let mode = tx.animation_mode;
+            let is_delete = tx.is_delete();
 
             match &tx.payload {
                 VisualPayload::CursorTransition { .. } => {}
                 VisualPayload::GlyphPayload { payload, .. } => {
-                    let run = &payload.snapshot;
-                    let eased = 1.0 - (1.0 - progress).powi(3);
-                    let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
-                    let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
-                    let dx = run.visual_x - old_cx;
-                    let dy = run.visual_y - old_cy;
-                    let gx = old_cx + dx * eased;
-                    let gy = old_cy + dy * eased;
+                    let run = &payload.parent_run;
+                    if is_delete {
+                        let fade_out = 1.0 - progress;
+                        let new_cx = payload.new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
+                        let new_cy = payload.new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
+                        let dx = new_cx - run.visual_x;
+                        let dy = new_cy - run.visual_y;
+                        let gx = run.visual_x + dx * progress;
+                        let gy = run.visual_y + dy * progress;
+                        let scale = 1.0 - 0.3 * progress;
 
-                    glyphs.push(TextAnimationGlyphInfo {
-                        key: tx.key,
-                        x: gx,
-                        y: gy,
-                        w: run.visual_w,
-                        h: run.visual_h,
-                        opacity: eased,
-                        baseline_in_quad: run.baseline_y - gy,
-                        byte_start: run.source_string_start,
-                        byte_end: run.source_string_end,
-                        animation_mode: mode,
-                        is_delete: false,
-                        old_paragraph_text: run.para_text.clone(),
-                        font_id: run.font_id(),
-                        shaped_run_index: Some(run.qglyphrun_index),
-                    });
-                }
-                VisualPayload::ClusterPayload { payload, .. } => {
-                    let eased = 1.0 - (1.0 - progress).powi(3);
-                    let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-                    let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
-
-                    for run in &payload.snapshots {
-                        let start_x = if payload.old_cursor_rect.is_some() { old_cx } else { run.visual_x };
-                        let start_y = if payload.old_cursor_rect.is_some() { old_cy } else { run.visual_y };
-                        let dx = run.visual_x - start_x;
-                        let dy = run.visual_y - start_y;
-                        let gx = start_x + dx * eased;
-                        let gy = start_y + dy * eased;
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: gx,
+                            y: gy,
+                            w: run.visual_w * scale,
+                            h: run.visual_h * scale,
+                            opacity: fade_out,
+                            baseline_in_quad: (run.baseline_y - run.visual_y) * scale,
+                            byte_start: run.source_string_start,
+                            byte_end: run.source_string_end,
+                            animation_mode: mode,
+                            is_delete: true,
+                            old_paragraph_text: run.para_text.clone(),
+                            font_id: run.font_id(),
+                            shaped_run_index: Some(run.qglyphrun_index),
+                            texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
+                            run_identity: run.qglyphrun_index,
+                        });
+                    } else {
+                        let eased = 1.0 - (1.0 - progress).powi(3);
+                        let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
+                        let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
+                        let dx = run.visual_x - old_cx;
+                        let dy = run.visual_y - old_cy;
+                        let gx = old_cx + dx * eased;
+                        let gy = old_cy + dy * eased;
 
                         glyphs.push(TextAnimationGlyphInfo {
                             key: tx.key,
@@ -885,35 +935,128 @@ impl LinuxEditorAnimationCoordinator {
                             old_paragraph_text: run.para_text.clone(),
                             font_id: run.font_id(),
                             shaped_run_index: Some(run.qglyphrun_index),
+                            texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
+                            run_identity: run.qglyphrun_index,
+                        });
+                    }
+                }
+                VisualPayload::ClusterPayload { payload, .. } => {
+                    let run = &payload.parent_run;
+                    if is_delete {
+                        let fade_out = 1.0 - progress;
+                        let new_cx = payload.new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
+                        let new_cy = payload.new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
+                        let dx = new_cx - run.visual_x;
+                        let dy = new_cy - run.visual_y;
+                        let gx = run.visual_x + dx * progress;
+                        let gy = run.visual_y + dy * progress;
+                        let scale = 1.0 - 0.3 * progress;
+
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: gx,
+                            y: gy,
+                            w: run.visual_w * scale,
+                            h: run.visual_h * scale,
+                            opacity: fade_out,
+                            baseline_in_quad: (run.baseline_y - run.visual_y) * scale,
+                            byte_start: run.source_string_start,
+                            byte_end: run.source_string_end,
+                            animation_mode: mode,
+                            is_delete: true,
+                            old_paragraph_text: run.para_text.clone(),
+                            font_id: run.font_id(),
+                            shaped_run_index: Some(run.qglyphrun_index),
+                            texture_phase: TexturePhase::DeleteOld,
+                            run_identity: payload.run_identity,
+                        });
+                    } else {
+                        let eased = 1.0 - (1.0 - progress).powi(3);
+                        let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
+                        let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
+                        let dx = run.visual_x - old_cx;
+                        let dy = run.visual_y - old_cy;
+                        let gx = old_cx + dx * eased;
+                        let gy = old_cy + dy * eased;
+
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: gx,
+                            y: gy,
+                            w: run.visual_w,
+                            h: run.visual_h,
+                            opacity: eased,
+                            baseline_in_quad: run.baseline_y - gy,
+                            byte_start: run.source_string_start,
+                            byte_end: run.source_string_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: run.para_text.clone(),
+                            font_id: run.font_id(),
+                            shaped_run_index: Some(run.qglyphrun_index),
+                            texture_phase: TexturePhase::Insert,
+                            run_identity: payload.run_identity,
                         });
                     }
                 }
                 VisualPayload::RunPayload { payload, .. } => {
                     let run = &payload.shaped_run;
-                    let eased = 1.0 - (1.0 - progress).powi(3);
-                    let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
-                    let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
-                    let dx = run.visual_x - old_cx;
-                    let dy = run.visual_y - old_cy;
-                    let gx = old_cx + dx * eased;
-                    let gy = old_cy + dy * eased;
+                    if is_delete {
+                        let fade_out = 1.0 - progress;
+                        let new_cx = payload.new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
+                        let new_cy = payload.new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
+                        let dx = new_cx - run.visual_x;
+                        let dy = new_cy - run.visual_y;
+                        let gx = run.visual_x + dx * progress;
+                        let gy = run.visual_y + dy * progress;
+                        let scale = 1.0 - 0.3 * progress;
 
-                    glyphs.push(TextAnimationGlyphInfo {
-                        key: tx.key,
-                        x: gx,
-                        y: gy,
-                        w: run.visual_w,
-                        h: run.visual_h,
-                        opacity: eased,
-                        baseline_in_quad: run.baseline_y - gy,
-                        byte_start: run.source_string_start,
-                        byte_end: run.source_string_end,
-                        animation_mode: mode,
-                        is_delete: false,
-                        old_paragraph_text: run.para_text.clone(),
-                        font_id: run.font_id(),
-                        shaped_run_index: Some(run.qglyphrun_index),
-                    });
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: gx,
+                            y: gy,
+                            w: run.visual_w * scale,
+                            h: run.visual_h * scale,
+                            opacity: fade_out,
+                            baseline_in_quad: (run.baseline_y - run.visual_y) * scale,
+                            byte_start: run.source_string_start,
+                            byte_end: run.source_string_end,
+                            animation_mode: mode,
+                            is_delete: true,
+                            old_paragraph_text: run.para_text.clone(),
+                            font_id: run.font_id(),
+                            shaped_run_index: Some(run.qglyphrun_index),
+                            texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
+                            run_identity: run.qglyphrun_index,
+                        });
+                    } else {
+                        let eased = 1.0 - (1.0 - progress).powi(3);
+                        let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(run.visual_x);
+                        let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(run.visual_y);
+                        let dx = run.visual_x - old_cx;
+                        let dy = run.visual_y - old_cy;
+                        let gx = old_cx + dx * eased;
+                        let gy = old_cy + dy * eased;
+
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: gx,
+                            y: gy,
+                            w: run.visual_w,
+                            h: run.visual_h,
+                            opacity: eased,
+                            baseline_in_quad: run.baseline_y - gy,
+                            byte_start: run.source_string_start,
+                            byte_end: run.source_string_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: run.para_text.clone(),
+                            font_id: run.font_id(),
+                            shaped_run_index: Some(run.qglyphrun_index),
+                            texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
+                            run_identity: run.qglyphrun_index,
+                        });
+                    }
 
                     if let Some(ref reflow_snapshot) = payload.reflow_snapshot {
                         for (run_idx, new_run) in reflow_snapshot.new_shaped_runs.iter().enumerate() {
@@ -952,30 +1095,58 @@ impl LinuxEditorAnimationCoordinator {
                                 old_paragraph_text: None,
                                 font_id: new_run.font_id(),
                                 shaped_run_index: Some(new_run.qglyphrun_index),
+                                texture_phase: TexturePhase::NewReflow,
+                                run_identity: new_run.qglyphrun_index,
                             });
                         }
                     }
                 }
                 VisualPayload::LineReflowPayload { payload, .. } => {
-                    for (run_idx, new_run) in payload.reflow_snapshot.new_shaped_runs.iter().enumerate() {
-                        let can_reuse = payload.reflow_snapshot.can_reuse_texture_for_run(run_idx);
-                        let needs_crossfade = payload.reflow_snapshot.run_needs_crossfade(run_idx);
+                    for (run_idx, new_run) in payload.new_runs.iter().enumerate() {
+                        let mapping = payload.run_mapping.iter().find(|m| m.new_run_index == run_idx);
+                        let can_reuse = mapping.map(|m| m.same_shaping).unwrap_or(false);
+                        let needs_crossfade = !can_reuse;
 
-                        let (frame_x, frame_y, frame_opacity) = if can_reuse && !needs_crossfade {
-                            let old_pos = payload.reflow_snapshot.old_positions.get(run_idx);
-                            let new_pos = payload.reflow_snapshot.new_positions.get(run_idx);
+                        let old_pos = mapping.and_then(|m| {
+                            payload.old_runs.get(m.old_run_index)
+                                .map(|r| (r.visual_x, r.visual_y, r.baseline_y))
+                        });
+
+                        let (frame_x, frame_y, frame_opacity, phase) = if can_reuse && !needs_crossfade {
+                            let new_pos = (new_run.visual_x, new_run.visual_y, new_run.baseline_y);
                             let eased = 1.0 - (1.0 - progress).powi(2);
-                            match (old_pos, new_pos) {
-                                (Some((ox, oy, _)), Some((nx, ny, _))) => {
-                                    (ox + (nx - ox) * eased, oy + (ny - oy) * eased, 1.0)
-                                }
-                                _ => (new_run.visual_x, new_run.visual_y, 1.0),
+                            if let Some((ox, oy, _)) = old_pos {
+                                (ox + (new_pos.0 - ox) * eased, oy + (new_pos.1 - oy) * eased, 1.0, TexturePhase::NewReflow)
+                            } else {
+                                (new_run.visual_x, new_run.visual_y, 1.0, TexturePhase::NewReflow)
                             }
                         } else if needs_crossfade {
+                            if let Some((ox, oy, _)) = old_pos {
+                                let fade_out = 1.0 - progress;
+                                let old_run = mapping.and_then(|m| payload.old_runs.get(m.old_run_index));
+                                glyphs.push(TextAnimationGlyphInfo {
+                                    key: tx.key,
+                                    x: ox,
+                                    y: oy,
+                                    w: old_run.map(|r| r.visual_w).unwrap_or(new_run.visual_w),
+                                    h: old_run.map(|r| r.visual_h).unwrap_or(new_run.visual_h),
+                                    opacity: fade_out,
+                                    baseline_in_quad: old_run.map(|r| r.baseline_y - oy).unwrap_or(new_run.baseline_y - oy),
+                                    byte_start: old_run.map(|r| r.source_string_start).unwrap_or(new_run.source_string_start),
+                                    byte_end: old_run.map(|r| r.source_string_end).unwrap_or(new_run.source_string_end),
+                                    animation_mode: mode,
+                                    is_delete: false,
+                                    old_paragraph_text: None,
+                                    font_id: old_run.map(|r| r.font_id()).unwrap_or_else(|| new_run.font_id()),
+                                    shaped_run_index: old_run.map(|r| r.qglyphrun_index).or(Some(new_run.qglyphrun_index)),
+                                    texture_phase: TexturePhase::OldReflow,
+                                    run_identity: old_run.map(|r| r.qglyphrun_index + (mapping.unwrap().old_run_index as i32)).unwrap_or(new_run.qglyphrun_index + (run_idx as i32)),
+                                });
+                            }
                             let eased = 1.0 - (1.0 - progress).powi(2);
-                            (new_run.visual_x, new_run.visual_y, eased)
+                            (new_run.visual_x, new_run.visual_y, eased, TexturePhase::NewReflow)
                         } else {
-                            (new_run.visual_x, new_run.visual_y, 1.0)
+                            (new_run.visual_x, new_run.visual_y, 1.0, TexturePhase::NewReflow)
                         };
 
                         glyphs.push(TextAnimationGlyphInfo {
@@ -993,10 +1164,12 @@ impl LinuxEditorAnimationCoordinator {
                             old_paragraph_text: None,
                             font_id: new_run.font_id(),
                             shaped_run_index: Some(new_run.qglyphrun_index),
+                            texture_phase: phase,
+                            run_identity: new_run.qglyphrun_index + (run_idx as i32),
                         });
                     }
 
-                    for insert_run in &payload.insert_shaped_runs {
+                    for insert_run in &payload.insert_runs {
                         let eased = 1.0 - (1.0 - progress).powi(3);
                         let old_cx = payload.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(insert_run.visual_x);
                         let old_cy = payload.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(insert_run.visual_y);
@@ -1020,6 +1193,8 @@ impl LinuxEditorAnimationCoordinator {
                             old_paragraph_text: None,
                             font_id: insert_run.font_id(),
                             shaped_run_index: Some(insert_run.qglyphrun_index),
+                            texture_phase: TexturePhase::Insert,
+                            run_identity: insert_run.qglyphrun_index,
                         });
                     }
                 }
@@ -1028,75 +1203,6 @@ impl LinuxEditorAnimationCoordinator {
 
         (TextAnimationPlan { glyphs }, keys_to_complete)
     }
-}
-
-fn make_fallback_run_from_glyph_rects(
-    glyph_rects: &[writer_core::editor::GlyphRect],
-    shaped_glyphs: &[ShapedGlyphInfo],
-    font_family: &str,
-    font_size: f64,
-) -> ShapedVisualRun {
-    let g = glyph_rects.first();
-    let shaping = g.and_then(|g| {
-        shaped_glyphs.iter().find(|s|
-            s.string_index <= g.byte_end && s.string_index >= g.byte_start
-        )
-    });
-    let rect = g.cloned().unwrap_or(writer_core::editor::GlyphRect {
-        x: 0.0, y: 0.0, w: 10.0, h: font_size, char_: " ".into(), baseline_y: font_size * 0.8, byte_start: 0, byte_end: 1,
-    });
-
-    let font_key = shaping.map(|s| RawFontCacheKey::new(&s.raw_font_family, "", 50, font_size as i32))
-        .unwrap_or_else(|| RawFontCacheKey::new(font_family, "", 50, font_size as i32));
-
-    let glyph_index = shaping.map(|s| s.glyph_index).unwrap_or(0);
-    let string_index = shaping.map(|s| s.string_index).unwrap_or(rect.byte_start);
-
-    ShapedVisualRun {
-        glyphs: vec![ShapedGlyph {
-            glyph_index,
-            glyph_position_x: rect.x,
-            glyph_position_y: rect.baseline_y,
-            string_index,
-            advance_width: rect.w,
-        }],
-        clusters: derive_clusters_from_glyphs(&[ShapedGlyph {
-            glyph_index,
-            glyph_position_x: rect.x,
-            glyph_position_y: rect.baseline_y,
-            string_index,
-            advance_width: rect.w,
-        }]),
-        raw_font_key: font_key,
-        flags: RunFlags::empty(),
-        source_string_start: rect.byte_start,
-        source_string_end: rect.byte_end,
-        baseline_y: rect.baseline_y,
-        visual_x: rect.x,
-        visual_y: rect.y,
-        visual_w: rect.w,
-        visual_h: rect.h,
-        texture_atlas_x: 0.0,
-        texture_atlas_y: 0.0,
-        texture_atlas_w: rect.w,
-        texture_atlas_h: rect.h,
-        qglyphrun_index: 0,
-        para_text: None,
-        qtextline_idx: None,
-        paragraph_wrap_w: None,
-        para_indent: None,
-    }
-}
-
-fn make_cluster_runs_from_glyph_rects(
-    glyph_rects: &[writer_core::editor::GlyphRect],
-    shaped_glyphs: &[ShapedGlyphInfo],
-    font_family: &str,
-    font_size: f64,
-) -> Vec<ShapedVisualRun> {
-    glyph_rects.iter().map(|g| {
-        make_fallback_run_from_glyph_rects(std::slice::from_ref(g), shaped_glyphs, font_family, font_size)
-    }).collect()
 }
 
 #[cfg(test)]
@@ -1291,13 +1397,41 @@ fn make_cluster_runs_from_glyph_rects(
 
     #[test]
     fn test_glyph_payload_creation() {
-        let run = make_fallback_run_from_glyph_rects(
-            &[GlyphRect { x: 10.0, y: 5.0, w: 12.0, h: 20.0, char_: "a".into(), baseline_y: 20.0, byte_start: 0, byte_end: 1 }],
-            &[],
-            "Sans",
-            16.0,
+        let font_key = RawFontCacheKey::new("Sans", "", 50, 16);
+        let run = ShapedVisualRun {
+            glyphs: vec![ShapedGlyph { glyph_index: 0, glyph_position_x: 10.0, glyph_position_y: 20.0, string_index: 0, advance_width: 12.0 }],
+            clusters: vec![ShapedCluster { string_start: 0, string_end: 1, glyph_start: 0, glyph_end: 1 }],
+            raw_font_key: font_key,
+            flags: RunFlags::empty(),
+            source_string_start: 0,
+            source_string_end: 1,
+            baseline_y: 20.0,
+            visual_x: 10.0,
+            visual_y: 5.0,
+            visual_w: 12.0,
+            visual_h: 20.0,
+            texture_atlas_x: 0.0,
+            texture_atlas_y: 0.0,
+            texture_atlas_w: 12.0,
+            texture_atlas_h: 20.0,
+            texture_translate_x: 0.0,
+            texture_translate_y: 0.0,
+            qglyphrun_index: 0,
+            para_text: None,
+            qtextline_idx: None,
+            paragraph_wrap_w: None,
+            para_indent: None,
+        };
+        let glyph = run.glyphs.first().cloned().unwrap();
+        let glyph_bounds = crate::sujian_editor_item::visual_payload::GlyphBounds {
+            x: run.visual_x, y: run.visual_y, w: run.visual_w, h: run.visual_h,
+        };
+        let texture_region = crate::sujian_editor_item::visual_payload::TextureRegion {
+            x: 0.0, y: 0.0, w: run.visual_w, h: run.visual_h,
+        };
+        let payload = VisualPayload::from_glyph_payload(
+            run.qglyphrun_index, 0, glyph, glyph_bounds, texture_region, run, None, None, AnimationMode::GlyphAnimation,
         );
-        let payload = VisualPayload::from_glyph_payload(run, None, None, AnimationMode::GlyphAnimation);
         assert!(matches!(payload, VisualPayload::GlyphPayload { .. }));
         assert!(payload.is_insert());
         assert_eq!(payload.total_glyph_count(), 1);
@@ -1322,6 +1456,8 @@ fn make_cluster_runs_from_glyph_rects(
             texture_atlas_y: 0.0,
             texture_atlas_w: 10.0,
             texture_atlas_h: 16.0,
+            texture_translate_x: 0.0,
+            texture_translate_y: 0.0,
             qglyphrun_index: 0,
             para_text: None,
             qtextline_idx: None,
@@ -1332,8 +1468,10 @@ fn make_cluster_runs_from_glyph_rects(
         new_run.visual_x = 10.0;
         let snapshot = ReflowVisualSnapshot::new(vec![old_run], vec![new_run]);
         let payload = VisualPayload::from_line_reflow_payload(
+            snapshot.old_shaped_runs.clone(),
+            snapshot.new_shaped_runs.clone(),
+            snapshot.run_mapping.clone(),
             vec![],
-            snapshot,
             Some((0, 1)),
             None,
             None,

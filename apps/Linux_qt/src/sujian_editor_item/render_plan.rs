@@ -1,6 +1,7 @@
 use super::transaction_key::VisualTransactionKey;
 use super::cursor_animation::CursorAnimationPlan;
 use super::animation_mode::AnimationMode;
+use super::texture_cache::TexturePhase;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenRangeInfo {
@@ -51,6 +52,8 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub old_paragraph_text: Option<String>,
     pub font_id: String,
     pub shaped_run_index: Option<i32>,
+    pub texture_phase: TexturePhase,
+    pub run_identity: i32,
 }
 
 #[derive(Clone, Debug, Default)]

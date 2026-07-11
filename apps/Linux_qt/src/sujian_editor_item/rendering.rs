@@ -654,6 +654,8 @@ impl SujianEditorItem {
         clip_y: f64,
         clip_w: f64,
         clip_h: f64,
+        tex_trans_x: f64,
+        tex_trans_y: f64,
         dpr: f64,
     ) -> Option<QImage> {
         crate::editor::layout::render_glyph_run_texture(
@@ -668,6 +670,8 @@ impl SujianEditorItem {
             clip_y,
             clip_w,
             clip_h,
+            tex_trans_x,
+            tex_trans_y,
             dpr,
             &self.current_text_color.to_string(),
         )
