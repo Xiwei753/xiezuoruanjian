@@ -2,10 +2,11 @@
     x:Class="Sujian.Windows.Pages.StarmapPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+    Background="{DynamicResource SujianSurfaceBrush}">
     <Grid RowDefinitions="Auto,*" Padding="24">
         <StackPanel Grid.Row="0" Spacing="8" Margin="0,0,0,16">
-            <TextBlock Text="星图" Style="{StaticResource TitleTextBlockStyle}" />
+            <TextBlock Text="星图" Style="{StaticResource TitleTextBlockStyle}"
+                       Foreground="{DynamicResource SujianOnSurfaceBrush}" />
             <StackPanel Orientation="Horizontal" Spacing="8">
                 <Button Content="新建星图" Click="CreateStarmap_Click" />
                 <Button Content="刷新" Click="Refresh_Click" />
@@ -15,8 +16,9 @@
             <ListView.ItemTemplate>
                 <DataTemplate>
                     <Grid Padding="0,8" ColumnDefinitions="*,Auto">
-                        <TextBlock Grid.Column="0" Text="{Binding Name}" Style="{StaticResource BodyTextBlockStyle}" />
-                        <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}">
+                        <TextBlock Grid.Column="0" Text="{Binding Name}" Style="{StaticResource BodyTextBlockStyle}"
+                                   Foreground="{DynamicResource SujianOnSurfaceBrush}" />
+                        <TextBlock Grid.Column="1" Foreground="{DynamicResource SujianOnSurfaceVariantBrush}">
                             <Run Text="{Binding NodeCount}" /><Run Text="节点" />
                             <Run Text="{Binding EdgeCount}" /><Run Text="连线" />
                         </TextBlock>
@@ -25,9 +27,9 @@
             </ListView.ItemTemplate>
         </ListView>
         <TextBlock Grid.Row="1" x:Name="EmptyText" Text="暂无星图，请新建" 
-                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" 
+                   Foreground="{DynamicResource SujianOnSurfaceVariantBrush}" 
                    HorizontalAlignment="Center" VerticalAlignment="Center" 
                    Visibility="Visible" />
-        <TextBlock x:Name="StatusText" Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        <TextBlock x:Name="StatusText" Foreground="{DynamicResource SujianOnSurfaceVariantBrush}" />
     </Grid>
 </Page>

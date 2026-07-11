@@ -216,27 +216,49 @@ impl QQuickItem for SujianEditorItem {
                     let just_prepared = !tx.texture_prepared;
                     if just_prepared {
                         let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::new();
+                        let font_size = self.current_font_pixel_size as f64;
+                        let font_family = self.current_font_family.to_string();
+                        let plain_text = self.plain_text.to_string();
+
                         match tx.kind {
                             OverlayAnimationKind::Insert => {
                                 for glyph in &tx.insert_glyph_rects {
-                                    textures.push(self.render_glyph_texture_from_layout(
+                                    let para_text = Self::extract_paragraph_for_glyph(
+                                        &plain_text, glyph.byte_start, glyph.byte_end,
+                                    );
+                                    textures.push(self.render_snapshot_from_static_layout(
+                                        &para_text, glyph.x, glyph.y, glyph.w, glyph.h,
+                                        glyph.baseline_y, font_size, &font_family, dpr,
+                                    ).or_else(|| self.render_glyph_texture_from_layout(
                                         &glyph.char_, glyph.w, glyph.h,
                                         glyph.baseline_y - glyph.y, dpr,
-                                    ));
+                                    )));
                                 }
                                 for reflow in &tx.reflow_glyph_rects {
-                                    textures.push(self.render_glyph_texture_from_layout(
+                                    let para_text = Self::extract_paragraph_for_glyph(
+                                        &plain_text, reflow.byte_start, reflow.byte_end,
+                                    );
+                                    textures.push(self.render_snapshot_from_static_layout(
+                                        &para_text, reflow.new_x, reflow.new_y, reflow.w, reflow.h,
+                                        reflow.new_baseline_y, font_size, &font_family, dpr,
+                                    ).or_else(|| self.render_glyph_texture_from_layout(
                                         &reflow.char_, reflow.w, reflow.h,
                                         reflow.new_baseline_y - reflow.new_y, dpr,
-                                    ));
+                                    )));
                                 }
                             }
                             OverlayAnimationKind::Delete => {
                                 for glyph in &tx.deleted_glyph_rects {
-                                    textures.push(self.render_glyph_texture_from_layout(
+                                    let para_text = Self::extract_paragraph_for_glyph(
+                                        &plain_text, glyph.byte_start, glyph.byte_end,
+                                    );
+                                    textures.push(self.render_snapshot_from_static_layout(
+                                        &para_text, glyph.x, glyph.y, glyph.w, glyph.h,
+                                        glyph.baseline_y, font_size, &font_family, dpr,
+                                    ).or_else(|| self.render_glyph_texture_from_layout(
                                         &glyph.char_, glyph.w, glyph.h,
                                         glyph.baseline_y - glyph.y, dpr,
-                                    ));
+                                    )));
                                 }
                             }
                             OverlayAnimationKind::Cursor => {}
@@ -409,5 +431,20 @@ impl QQuickItem for SujianEditorItem {
         }
 
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
+    }
+}
+
+impl SujianEditorItem {
+    fn extract_paragraph_for_glyph(plain_text: &str, byte_start: usize, byte_end: usize) -> String {
+        let text_bytes = plain_text.as_bytes();
+        let mut para_start = byte_start;
+        while para_start > 0 && text_bytes[para_start - 1] != b'\n' {
+            para_start -= 1;
+        }
+        let mut para_end = byte_end.min(text_bytes.len());
+        while para_end < text_bytes.len() && text_bytes[para_end] != b'\n' {
+            para_end += 1;
+        }
+        plain_text[para_start..para_end].to_string()
     }
 }

@@ -2,4 +2,44 @@
     x:Class="Sujian.Windows.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Application.Resources>
+        <ResourceDictionary>
+            <SolidColorBrush x:Key="SujianPrimaryBrush" Color="#FF6750A4" />
+            <SolidColorBrush x:Key="SujianOnPrimaryBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="SujianPrimaryContainerBrush" Color="#FFEADDFF" />
+            <SolidColorBrush x:Key="SujianOnPrimaryContainerBrush" Color="#FF21005D" />
+            <SolidColorBrush x:Key="SujianSecondaryBrush" Color="#FF625B71" />
+            <SolidColorBrush x:Key="SujianOnSecondaryBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="SujianSecondaryContainerBrush" Color="#FFE8DEF8" />
+            <SolidColorBrush x:Key="SujianOnSecondaryContainerBrush" Color="#FF1D192B" />
+            <SolidColorBrush x:Key="SujianTertiaryBrush" Color="#FF7D5260" />
+            <SolidColorBrush x:Key="SujianOnTertiaryBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="SujianTertiaryContainerBrush" Color="#FFFFD8E4" />
+            <SolidColorBrush x:Key="SujianOnTertiaryContainerBrush" Color="#FF31111D" />
+            <SolidColorBrush x:Key="SujianErrorBrush" Color="#FFB3261E" />
+            <SolidColorBrush x:Key="SujianOnErrorBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="SujianErrorContainerBrush" Color="#FFF9DEDC" />
+            <SolidColorBrush x:Key="SujianOnErrorContainerBrush" Color="#FF410E0B" />
+            <SolidColorBrush x:Key="SujianBackgroundBrush" Color="#FFFFFBFE" />
+            <SolidColorBrush x:Key="SujianOnBackgroundBrush" Color="#FF1C1B1F" />
+            <SolidColorBrush x:Key="SujianSurfaceBrush" Color="#FFFFFBFE" />
+            <SolidColorBrush x:Key="SujianOnSurfaceBrush" Color="#FF1C1B1F" />
+            <SolidColorBrush x:Key="SujianSurfaceVariantBrush" Color="#FFE7E0EC" />
+            <SolidColorBrush x:Key="SujianOnSurfaceVariantBrush" Color="#FF49454F" />
+            <SolidColorBrush x:Key="SujianSurfaceDimBrush" Color="#FFDED8E1" />
+            <SolidColorBrush x:Key="SujianSurfaceBrightBrush" Color="#FFF7F2FA" />
+            <SolidColorBrush x:Key="SujianSurfaceContainerLowestBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="SujianSurfaceContainerLowBrush" Color="#FFF7F2FA" />
+            <SolidColorBrush x:Key="SujianSurfaceContainerBrush" Color="#FFF3EDF7" />
+            <SolidColorBrush x:Key="SujianSurfaceContainerHighBrush" Color="#FFECE6F0" />
+            <SolidColorBrush x:Key="SujianSurfaceContainerHighestBrush" Color="#FFE6E0E9" />
+            <SolidColorBrush x:Key="SujianInverseSurfaceBrush" Color="#FF313033" />
+            <SolidColorBrush x:Key="SujianInverseOnSurfaceBrush" Color="#FFF4EFF4" />
+            <SolidColorBrush x:Key="SujianInversePrimaryBrush" Color="#FFD0BCFF" />
+            <SolidColorBrush x:Key="SujianOutlineBrush" Color="#FF79747E" />
+            <SolidColorBrush x:Key="SujianOutlineVariantBrush" Color="#FFCAC4D0" />
+            <SolidColorBrush x:Key="SujianScrimBrush" Color="#FF000000" />
+            <SolidColorBrush x:Key="SujianSurfaceTintBrush" Color="#FF6750A4" />
+        </ResourceDictionary>
+    </Application.Resources>
 </Application>

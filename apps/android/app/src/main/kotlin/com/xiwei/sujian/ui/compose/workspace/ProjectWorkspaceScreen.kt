@@ -13,7 +13,6 @@ import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
-import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,6 +27,7 @@ import com.xiwei.sujian.model.AvoidRegion
 import com.xiwei.sujian.model.AvoidRegionKind
 import com.xiwei.sujian.model.WorkspacePaneMode
 import com.xiwei.sujian.ui.compose.SujianAppState
+import com.xiwei.sujian.ui.compose.adaptive.rememberCoreLayoutDirective
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
 import kotlinx.coroutines.launch
 
@@ -64,10 +64,15 @@ fun ProjectWorkspaceScreen(
     val avoidRegions = layoutPlan?.avoidRegions ?: emptyList()
     val paneMode = layoutPlan?.workspacePaneMode ?: WorkspacePaneMode.SinglePane
     val showProjectListInExtra = visiblePaneRoles?.showProjectList == true && paneMode == WorkspacePaneMode.ThreePane
+    val listPaneWidthConstraint = layoutPlan?.listPaneWidth
+
+    val coreDirective = rememberCoreLayoutDirective(layoutPlan)
 
     val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
 
-    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>()
+    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>(
+        scaffoldDirective = coreDirective
+    )
 
     val isDetailExpanded = navigator.scaffoldValue[ThreePaneScaffoldRole.Secondary] == PaneAdaptedValue.Expanded
 
@@ -101,6 +106,20 @@ fun ProjectWorkspaceScreen(
         }
     }
 
+    val listPaneModifier = Modifier
+        .fillMaxSize()
+        .then(
+            if (listPaneWidthConstraint != null && listPaneWidthConstraint.maxDp > 0f)
+                Modifier.width(listPaneWidthConstraint.preferredDp.dp.coerceIn(
+                    if (listPaneWidthConstraint.minDp > 0f) listPaneWidthConstraint.minDp.dp else 0.dp,
+                    listPaneWidthConstraint.maxDp.dp
+                ))
+            else Modifier
+        )
+        .then(windowInsetsPadding)
+
+    val hingePadding = computeHingePadding(avoidRegions)
+
     NavigableListDetailPaneScaffold(
         navigator = navigator,
         listPane = {
@@ -127,9 +146,7 @@ fun ProjectWorkspaceScreen(
                             appState.currentProjectId = null
                             appState.currentProjectTitle = ""
                         },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(windowInsetsPadding)
+                        modifier = listPaneModifier
                     )
                 }
             }
@@ -143,22 +160,25 @@ fun ProjectWorkspaceScreen(
                     val detailChapterTitle = currentContent?.chapterTitle ?: currentChapterTitle
 
                     if (detailVolumeId != null && detailChapterId != null) {
+                        val detailModifier = Modifier
+                            .fillMaxSize()
+                            .then(
+                                if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                                else Modifier
+                            )
+                            .then(
+                                if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                                else Modifier
+                            )
+                            .then(windowInsetsPadding)
+                            .then(hingePadding)
+
                         SujianEditorHost(
                             projectId = currentProjectId,
                             volumeId = detailVolumeId,
                             chapterId = detailChapterId,
                             chapterTitle = detailChapterTitle,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .then(
-                                    if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
-                                    else Modifier
-                                )
-                                .then(
-                                    if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
-                                    else Modifier
-                                )
-                                .then(windowInsetsPadding)
+                            modifier = detailModifier
                         )
                     } else {
                         Box(
@@ -240,4 +260,21 @@ private fun computeWindowInsetPadding(avoidRegions: List<AvoidRegion>): Modifier
         top = topDp.dp,
         bottom = bottomDp.dp
     )
+}
+
+@Composable
+private fun computeHingePadding(avoidRegions: List<AvoidRegion>): Modifier {
+    val horizontalHinges = avoidRegions.filter { it.kind == AvoidRegionKind.HorizontalHinge }
+    if (horizontalHinges.isEmpty()) return Modifier
+    var topDp = 0f
+    var bottomDp = 0f
+    for (hinge in horizontalHinges) {
+        val height = hinge.bottomDp - hinge.topDp
+        if (height > 0f) {
+            topDp = maxOf(topDp, hinge.topDp)
+            bottomDp = maxOf(bottomDp, hinge.bottomDp - hinge.topDp)
+        }
+    }
+    if (topDp == 0f && bottomDp == 0f) return Modifier
+    return Modifier.padding(top = topDp.dp, bottom = bottomDp.dp)
 }

@@ -97,7 +97,7 @@ public sealed class SujianEditor : UserControl
 
         IsTabStop = true;
         UseSystemFocusVisuals = true;
-        Background = new SolidColorBrush(Colors.Transparent);
+        Background = new SolidColorBrush(WindowsEditorThemeAdapter.Instance.BackgroundColor);
         PointerPressed += OnPointerPressed;
         PointerMoved += OnPointerMoved;
         PointerReleased += OnPointerReleased;
@@ -1030,8 +1030,8 @@ public sealed class SujianEditor : UserControl
 
         ds.Transform = System.Numerics.Matrix3x2.CreateTranslation(0, (float)(-_scrollY));
 
-        var textColor = ((SolidColorBrush?)Foreground)?.Color ?? Colors.White;
-        var selectionColor = Color.FromArgb(76, 0, 120, 215);
+        var textColor = WindowsEditorThemeAdapter.Instance.TextColor;
+        var selectionColor = WindowsEditorThemeAdapter.Instance.SelectionColor;
 
         DrawSelection(ds, indent, contentWidth, selectionColor);
 
@@ -1067,7 +1067,7 @@ public sealed class SujianEditor : UserControl
                 var compY = _cursorLine * _lineHeight;
                 using var compLayout = new CanvasTextLayout(
                     sender.Device, _compositionText, _textFormat, contentWidth, _lineHeight);
-                ds.DrawTextLayout(compLayout, indent, compY, Colors.DodgerBlue);
+                    ds.DrawTextLayout(compLayout, indent, compY, WindowsEditorThemeAdapter.Instance.PreeditColor);
             }
             catch { }
         }
@@ -1132,7 +1132,7 @@ public sealed class SujianEditor : UserControl
     {
         if (!_cursorVisible) return;
 
-        var cursorColor = Colors.DodgerBlue;
+        var cursorColor = WindowsEditorThemeAdapter.Instance.CursorColor;
         float cursorX = indent;
         float cursorY = _cursorLine * _lineHeight;
 

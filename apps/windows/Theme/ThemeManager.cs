@@ -134,10 +134,12 @@ public sealed class ThemeManager
         var scheme = isDark ? _currentDarkScheme : _currentLightScheme;
         if (scheme == null) return;
 
+        var appResources = Application.Current.Resources;
+        ApplySchemeToResources(scheme, appResources);
+
         if (App.Current is App app && app.Window?.Content is FrameworkElement root)
         {
-            var resources = root.Resources;
-            ApplySchemeToResources(scheme, resources);
+            ApplySchemeToResources(scheme, root.Resources);
         }
     }
 
@@ -154,50 +156,51 @@ public sealed class ThemeManager
 
     private static void ApplySchemeToResources(ThemeColorSchemeDto scheme, ResourceDictionary resources)
     {
-        SetColor(resources, "SujianPrimary", scheme.Primary);
-        SetColor(resources, "SujianOnPrimary", scheme.OnPrimary);
-        SetColor(resources, "SujianPrimaryContainer", scheme.PrimaryContainer);
-        SetColor(resources, "SujianOnPrimaryContainer", scheme.OnPrimaryContainer);
-        SetColor(resources, "SujianSecondary", scheme.Secondary);
-        SetColor(resources, "SujianOnSecondary", scheme.OnSecondary);
-        SetColor(resources, "SujianSecondaryContainer", scheme.SecondaryContainer);
-        SetColor(resources, "SujianOnSecondaryContainer", scheme.OnSecondaryContainer);
-        SetColor(resources, "SujianTertiary", scheme.Tertiary);
-        SetColor(resources, "SujianOnTertiary", scheme.OnTertiary);
-        SetColor(resources, "SujianTertiaryContainer", scheme.TertiaryContainer);
-        SetColor(resources, "SujianOnTertiaryContainer", scheme.OnTertiaryContainer);
-        SetColor(resources, "SujianError", scheme.Error);
-        SetColor(resources, "SujianOnError", scheme.OnError);
-        SetColor(resources, "SujianErrorContainer", scheme.ErrorContainer);
-        SetColor(resources, "SujianOnErrorContainer", scheme.OnErrorContainer);
-        SetColor(resources, "SujianBackground", scheme.Background);
-        SetColor(resources, "SujianOnBackground", scheme.OnBackground);
-        SetColor(resources, "SujianSurface", scheme.Surface);
-        SetColor(resources, "SujianOnSurface", scheme.OnSurface);
-        SetColor(resources, "SujianSurfaceVariant", scheme.SurfaceVariant);
-        SetColor(resources, "SujianOnSurfaceVariant", scheme.OnSurfaceVariant);
-        SetColor(resources, "SujianSurfaceDim", scheme.SurfaceDim);
-        SetColor(resources, "SujianSurfaceBright", scheme.SurfaceBright);
-        SetColor(resources, "SujianSurfaceContainerLowest", scheme.SurfaceContainerLowest);
-        SetColor(resources, "SujianSurfaceContainerLow", scheme.SurfaceContainerLow);
-        SetColor(resources, "SujianSurfaceContainer", scheme.SurfaceContainer);
-        SetColor(resources, "SujianSurfaceContainerHigh", scheme.SurfaceContainerHigh);
-        SetColor(resources, "SujianSurfaceContainerHighest", scheme.SurfaceContainerHighest);
-        SetColor(resources, "SujianInverseSurface", scheme.InverseSurface);
-        SetColor(resources, "SujianInverseOnSurface", scheme.InverseOnSurface);
-        SetColor(resources, "SujianInversePrimary", scheme.InversePrimary);
-        SetColor(resources, "SujianOutline", scheme.Outline);
-        SetColor(resources, "SujianOutlineVariant", scheme.OutlineVariant);
-        SetColor(resources, "SujianScrim", scheme.Scrim);
+        SetBrush(resources, "SujianPrimaryBrush", scheme.Primary);
+        SetBrush(resources, "SujianOnPrimaryBrush", scheme.OnPrimary);
+        SetBrush(resources, "SujianPrimaryContainerBrush", scheme.PrimaryContainer);
+        SetBrush(resources, "SujianOnPrimaryContainerBrush", scheme.OnPrimaryContainer);
+        SetBrush(resources, "SujianSecondaryBrush", scheme.Secondary);
+        SetBrush(resources, "SujianOnSecondaryBrush", scheme.OnSecondary);
+        SetBrush(resources, "SujianSecondaryContainerBrush", scheme.SecondaryContainer);
+        SetBrush(resources, "SujianOnSecondaryContainerBrush", scheme.OnSecondaryContainer);
+        SetBrush(resources, "SujianTertiaryBrush", scheme.Tertiary);
+        SetBrush(resources, "SujianOnTertiaryBrush", scheme.OnTertiary);
+        SetBrush(resources, "SujianTertiaryContainerBrush", scheme.TertiaryContainer);
+        SetBrush(resources, "SujianOnTertiaryContainerBrush", scheme.OnTertiaryContainer);
+        SetBrush(resources, "SujianErrorBrush", scheme.Error);
+        SetBrush(resources, "SujianOnErrorBrush", scheme.OnError);
+        SetBrush(resources, "SujianErrorContainerBrush", scheme.ErrorContainer);
+        SetBrush(resources, "SujianOnErrorContainerBrush", scheme.OnErrorContainer);
+        SetBrush(resources, "SujianBackgroundBrush", scheme.Background);
+        SetBrush(resources, "SujianOnBackgroundBrush", scheme.OnBackground);
+        SetBrush(resources, "SujianSurfaceBrush", scheme.Surface);
+        SetBrush(resources, "SujianOnSurfaceBrush", scheme.OnSurface);
+        SetBrush(resources, "SujianSurfaceVariantBrush", scheme.SurfaceVariant);
+        SetBrush(resources, "SujianOnSurfaceVariantBrush", scheme.OnSurfaceVariant);
+        SetBrush(resources, "SujianSurfaceDimBrush", scheme.SurfaceDim);
+        SetBrush(resources, "SujianSurfaceBrightBrush", scheme.SurfaceBright);
+        SetBrush(resources, "SujianSurfaceContainerLowestBrush", scheme.SurfaceContainerLowest);
+        SetBrush(resources, "SujianSurfaceContainerLowBrush", scheme.SurfaceContainerLow);
+        SetBrush(resources, "SujianSurfaceContainerBrush", scheme.SurfaceContainer);
+        SetBrush(resources, "SujianSurfaceContainerHighBrush", scheme.SurfaceContainerHigh);
+        SetBrush(resources, "SujianSurfaceContainerHighestBrush", scheme.SurfaceContainerHighest);
+        SetBrush(resources, "SujianInverseSurfaceBrush", scheme.InverseSurface);
+        SetBrush(resources, "SujianInverseOnSurfaceBrush", scheme.InverseOnSurface);
+        SetBrush(resources, "SujianInversePrimaryBrush", scheme.InversePrimary);
+        SetBrush(resources, "SujianOutlineBrush", scheme.Outline);
+        SetBrush(resources, "SujianOutlineVariantBrush", scheme.OutlineVariant);
+        SetBrush(resources, "SujianScrimBrush", scheme.Scrim);
+        SetBrush(resources, "SujianSurfaceTintBrush", scheme.SurfaceTint);
     }
 
-    private static void SetColor(ResourceDictionary resources, string key, string hex)
+    private static void SetBrush(ResourceDictionary resources, string key, string hex)
     {
         if (string.IsNullOrEmpty(hex)) return;
         try
         {
             var color = ParseHexColor(hex);
-            resources[key] = color;
+            resources[key] = new SolidColorBrush(color);
         }
         catch { }
     }

@@ -27,7 +27,7 @@
             </NavigationView.MenuItems>
         </NavigationView>
 
-        <Grid Grid.Row="1" Grid.Column="1" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid Grid.Row="1" Grid.Column="1" Background="{DynamicResource SujianSurfaceBrush}">
             <Frame x:Name="ContentFrame" />
         </Grid>
     </Grid>

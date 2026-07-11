@@ -14,7 +14,7 @@ public sealed class SujianAnimationOverlay : UserControl
     private CanvasControl? _canvas;
     private readonly SujianAnimationController _controller;
     private DispatcherTimer? _tickTimer;
-    private Color _textColor = Colors.White;
+    private Color _textColor = WindowsEditorThemeAdapter.Instance.TextColor;
     private float _fontSize = 16f;
     private string _fontFamily = "";
 

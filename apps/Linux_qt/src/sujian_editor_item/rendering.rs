@@ -649,6 +649,17 @@ impl SujianEditorItem {
         baseline_offset: f64,
         dpr: f64,
     ) -> Option<QImage> {
+        self.render_run_snapshot_texture(ch, glyph_w, glyph_h, baseline_offset, dpr)
+    }
+
+    pub(crate) fn render_run_snapshot_texture(
+        &self,
+        ch: &str,
+        glyph_w: f64,
+        glyph_h: f64,
+        baseline_offset: f64,
+        dpr: f64,
+    ) -> Option<QImage> {
         let phys_w = (glyph_w * dpr).ceil() as u32;
         let phys_h = (glyph_h * dpr).ceil() as u32;
         if phys_w == 0 || phys_h == 0 || phys_w > 4096 || phys_h > 4096 {
@@ -710,6 +721,103 @@ impl SujianEditorItem {
                 painter->setPen(QPen(textColor));
                 QPointF pos(0, baseline_offset - line.ascent());
                 line.draw(painter, pos);
+            }
+            layout.endLayout();
+        });
+
+        renderer::sujian_delete_painter(painter_ptr);
+
+        Some(image)
+    }
+
+    pub(crate) fn render_snapshot_from_static_layout(
+        &self,
+        para_text: &str,
+        glyph_x: f64,
+        glyph_y: f64,
+        glyph_w: f64,
+        glyph_h: f64,
+        baseline_y: f64,
+        font_size: f64,
+        font_family: &str,
+        dpr: f64,
+    ) -> Option<QImage> {
+        let phys_w = (glyph_w * dpr).ceil() as u32;
+        let phys_h = (glyph_h * dpr).ceil() as u32;
+        if phys_w == 0 || phys_h == 0 || phys_w > 4096 || phys_h > 4096 {
+            return None;
+        }
+
+        let mut image = QImage::new(
+            qmetaobject::QSize {
+                width: phys_w,
+                height: phys_h,
+            },
+            qmetaobject::ImageFormat::ARGB32_Premultiplied,
+        );
+        {
+            let img_ptr = &mut image as *mut QImage;
+            cpp!(unsafe [img_ptr as "QImage*"] {
+                img_ptr->setDevicePixelRatio(1.0);
+            });
+        }
+        image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
+
+        let painter_ptr = renderer::sujian_create_painter_scaled(&mut image, dpr);
+        if painter_ptr.is_null() {
+            return None;
+        }
+
+        let painter: &mut QPainter = unsafe { &mut *painter_ptr };
+        painter.set_render_hint(QPainterRenderHint::TextAntialiasing, true);
+
+        let fs = font_size as f32;
+        let ff: QString = font_family.to_string().into();
+        let color_str = self.current_text_color.to_string();
+        let qpara: QString = para_text.to_string().into();
+        let baseline_offset = baseline_y - glyph_y;
+        let clip_x = 0.0_f64;
+        let clip_y = 0.0_f64;
+        let clip_w = glyph_w;
+        let clip_h = glyph_h;
+        let offset_x = -glyph_x;
+        let offset_y = 0.0_f64;
+
+        let color_cstr = color_str.as_ptr();
+        let color_len = color_str.len();
+
+        cpp!(unsafe [
+            painter as "QPainter*",
+            qpara as "QString",
+            fs as "float",
+            ff as "QString",
+            baseline_offset as "double",
+            offset_x as "double",
+            offset_y as "double",
+            clip_x as "double",
+            clip_y as "double",
+            clip_w as "double",
+            clip_h as "double",
+            color_cstr as "const char*",
+            color_len as "size_t"
+        ] {
+            QFont font(ff);
+            font.setPixelSize(static_cast<int>(fs));
+            QTextLayout layout(qpara, font);
+            QTextOption option;
+            option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            layout.setTextOption(option);
+            layout.beginLayout();
+            QTextLine line = layout.createLine();
+            if (line.isValid()) {
+                line.setLineWidth(99999.0);
+                QColor textColor(QString::fromUtf8(color_cstr, static_cast<int>(color_len)));
+                painter->setPen(QPen(textColor));
+                painter->save();
+                painter->setClipRect(QRectF(clip_x, clip_y, clip_w, clip_h), Qt::ReplaceClip);
+                QPointF pos(offset_x, baseline_offset - line.ascent() + offset_y);
+                line.draw(painter, pos);
+                painter->restore();
             }
             layout.endLayout();
         });
