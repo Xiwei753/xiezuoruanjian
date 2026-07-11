@@ -18,7 +18,7 @@ Rust Core EditorTransaction
     → QImage static texture (Layer 0)
     → QSGImageNode 上屏
     → QML Rectangle cursor (绑定 Rust cursor_rect_x/y/width/height)
-    → QML EditorAnimationOverlay (消费 visual_transaction_json 信号，渲染 EditorGlyphGhost)
+    → Rust AnimationCoordinator / RenderPlan / VisualPayload (SujianEditorItem 内部动画管线)
 ```
 
 ### 各层职责
@@ -28,7 +28,7 @@ Rust Core EditorTransaction
 | 排版 | `QTextLayout` / `QTextLine` | Unicode 文字排版、光标定位（xToCursor/cursorToX） |
 | 静态正文 | `QImage` → `QSGImageNode` | 正常完整绘制正文纹理；插入动画期间临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染）；动画结束后恢复完整绘制 |
 | 光标 | QML `Rectangle` | 绑定 Rust 暴露的 cursor rect 属性 |
-| 动画 | QML `EditorAnimationOverlay` + `EditorGlyphGhost` | 逐字/整簇/run/reflow/snapshot ghost 动画（insert 从光标吐出，delete 向光标吞回） |
+| 动画 | Rust `AnimationCoordinator` / `RenderPlan` / `VisualPayload` | 逐字/整簇/run/reflow 动画（insert 从光标吐出，delete 向光标吞回），SujianEditorItem 内部 Scene Graph 渲染 |
 | 事务 | Rust Core `EditorTransaction` / `EditorVisualTransaction` | 统一管理插入、删除、选区、格式化和视觉事务；Linux QML 只消费 `visual_transaction_json` |
 
 ### 关键文件
@@ -39,13 +39,14 @@ Rust Core EditorTransaction
 | `apps/Linux_qt/src/sujian_editor_item/rendering.rs` | 渲染逻辑（QImage → QSGImageNode） |
 | `apps/Linux_qt/src/sujian_editor_item/cursor_controller.rs` | 光标控制 |
 | `apps/Linux_qt/src/sujian_editor_item/buffer.rs` | 渲染缓冲 |
-| `apps/Linux_qt/src/sujian_editor_item/text_animation_state.rs` | 文字动画状态管理 |
+| `apps/Linux_qt/src/sujian_editor_item/animation_coordinator.rs` | 动画协调器，生成 RenderPlan |
+| `apps/Linux_qt/src/sujian_editor_item/visual_payload.rs` | 四种 payload 数据模型（Glyph/Cluster/Run/LineReflow） |
+| `apps/Linux_qt/src/sujian_editor_item/render_plan.rs` | 渲染计划，驱动 Scene Graph 更新 |
 | `apps/Linux_qt/src/editor/layout.rs` | QTextLayout 排版封装 |
 | `apps/Linux_qt/src/editor/renderer.rs` | 渲染器 |
 | `apps/Linux_qt/src/editor/scene_graph.rs` | QSG 节点管理 |
 | `apps/Linux_qt/src/editor/input/` | 输入事件处理（三层结构入口：`qt_surface.rs` / `platform_ime.rs` / `controller.rs`） |
 | `apps/Linux_qt/qml/WritingWorkspace.qml` | 写作工作区，直接使用 SujianEditorItem |
-| `apps/Linux_qt/qml/EditorAnimationOverlay.qml` | 动画 overlay，唯一动画主路径 |
 
 ### text_revision 机制
 
@@ -61,18 +62,18 @@ Rust Core EditorTransaction
 ## Linux_qt 动画唯一主路径
 
 1. Rust Core 生成 `EditorTransaction` / `EditorVisualTransaction`，平台层填充 glyph / cursor / reflow rects
-2. `SujianEditorItem` 通过 `visual_transaction_json` 属性暴露给 QML
-3. QML `EditorAnimationOverlay` 监听 `visual_transaction_json` 变化，解析 JSON 视觉事务
-4. `EditorGlyphGhost` 组件渲染逐字 ghost 动画
+2. `SujianEditorItem` 通过 `visual_transaction_json` 属性接收视觉事务
+3. Rust `AnimationCoordinator` 解析 payload，生成 `RenderPlan`
+4. `SujianEditorItem::updatePaintNode` 按 RenderPlan 更新 Scene Graph 节点
 
-Rust 侧只负责：排版、命中、选区、光标、事务、glyph rects。
-QML 侧负责：把 ghost 动画画出来。
+Rust 侧负责：排版、命中、选区、光标、事务、glyph rects、动画协调、RenderPlan 生成。
+QML 侧负责：光标 Rectangle 绑定、滚动容器。
 
 动画期间静态正文层行为：
-- **Insert 动画**：静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），动画 overlay 渲染 ghost glyph
-- **Reflow 动画**：静态正文层临时跳过受插入影响的 reflow hidden ranges，由 overlay 渲染位移 ghost；insert / reflow 完成或跳过时优先按 transactionId / rangeId 清理，byte range 只作兜底
-- **Delete 动画**：使用旧 glyph snapshot（删除前的字形位置），overlay 渲染吞回动画
-- 动画 overlay 是动画层，不是完整正文 overlay 冒充
+- **Insert 动画**：静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），AnimationCoordinator 驱动纹理动画
+- **Reflow 动画**：静态正文层临时跳过受插入影响的 reflow hidden ranges，由 AnimationCoordinator 驱动位移动画；insert / reflow 完成或跳过时优先按 transactionId / rangeId 清理，byte range 只作兜底
+- **Delete 动画**：使用旧 glyph snapshot（删除前的字形位置），AnimationCoordinator 驱动吞回动画
+- 动画由 SujianEditorItem 内部 Scene Graph 渲染，不是 QML overlay
 
 滚动打断、字号/行距变化、章节切换、关闭动画、加载正文时，必须立即清掉 hidden range 并重绘静态层，不能依赖 timeout，不能出现文字消失或重影。
 

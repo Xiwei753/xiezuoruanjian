@@ -93,6 +93,12 @@ char*  writer_core_perform_sync(void);
 char*  writer_core_get_writing_stats(void);
 char*  writer_core_process_writing_event(const char* event_json);
 
+// ── Palette / Theme ──
+char*  writer_core_list_palette_records(void);
+char*  writer_core_load_palette_record(const char* device_id, const char* fingerprint);
+char*  writer_core_delete_palette_record(const char* device_id, const char* fingerprint);
+char*  writer_core_list_builtin_themes(void);
+
 // ── Misc ──
 int32_t writer_core_is_ai_available(void);
 

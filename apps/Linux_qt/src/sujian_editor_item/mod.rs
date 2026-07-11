@@ -587,8 +587,8 @@ impl SujianEditorItem {
         if self.buffer.has_selection() {
             plan.has_selection = true;
             let width = self.bounding_width();
-            let font_size = self.current_font_pixel_size as f64;
-            let font_family = &self.current_font_family.to_string();
+            let _font_size = self.current_font_pixel_size as f64;
+            let _font_family = &self.current_font_family.to_string();
             let scroll_y = self.current_scroll_y as f64;
             let viewport_h = self.current_viewport_height.max(1.0) as f64;
             let snapshot = self.layout_snapshot(width);
@@ -637,7 +637,7 @@ impl SujianEditorItem {
 
         if !self.preedit_text.is_empty() {
             plan.has_preedit = true;
-            if let Some(ref preedit_rect) = self.preedit_cursor_rect {
+            if let Some(ref _preedit_rect) = self.preedit_cursor_rect {
                 let width = self.bounding_width();
                 let font_size = self.current_font_pixel_size as f64;
                 let font_family = &self.current_font_family.to_string();

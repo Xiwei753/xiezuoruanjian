@@ -54,12 +54,12 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 - 编辑器路线是：Core 统一编辑事务 + 平台原生文本能力 + 必要时自绘渲染层。
 - Core `editor` 模块统一产出 `EditorTransaction` 与 `EditorVisualTransaction` 等平台无关语义；新路线统一称 `visual_transaction_json` / typed visual transaction。
 - Android SujianEditorView 是 Android 正文写作区唯一主路径，分层绘制，接管选区、光标与动画；不得回退 EditText/Span 正文方案。
-- Linux `apps/Linux_qt` 正文写作区唯一主路径是 `SujianEditorItem` + `EditorAnimationOverlay`。
-- Linux 动画只能走 Core visual transaction → Rust 自研编辑器 hidden range/static texture → QML overlay ghost → 动画完成后清 hidden range：
-  Core `EditorVisualTransaction` → `SujianEditorItem.visual_transaction_json` → QML `EditorAnimationOverlay` / `EditorGlyphGhost`。
-  Insert 动画期间，静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），动画 overlay 渲染 ghost glyph。
-  Delete 动画使用旧 glyph snapshot（删除前的字形位置），overlay 渲染吞回动画。
-  overlay 是动画层，不是完整正文 overlay 冒充真吐字。
+- Linux `apps/Linux_qt` 正文写作区唯一主路径是 `SujianEditorItem` + `AnimationCoordinator` / `RenderPlan` / `VisualPayload`。
+- Linux 动画只能走 Core visual transaction → Rust AnimationCoordinator → RenderPlan → SujianEditorItem Scene Graph：
+  Core `EditorVisualTransaction` → `SujianEditorItem.visual_transaction_json` → Rust `AnimationCoordinator` / `RenderPlan` → Scene Graph 节点更新。
+  Insert 动画期间，静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），AnimationCoordinator 驱动纹理动画。
+  Delete 动画使用旧 glyph snapshot（删除前的字形位置），AnimationCoordinator 驱动吞回动画。
+  动画由 SujianEditorItem 内部 Scene Graph 渲染，不是 QML overlay。
   禁止恢复：TextArea fallback、QTextDocument 字符格式隐藏、正文透明 span/透明颜色污染正文数据、正文完整绘制+overlay冒充真吐字。
   自研渲染层自己的 hidden range 是允许的内部渲染状态，不是正文数据污染。
   Insert 与 reflow 动画完成/跳过必须优先按 transactionId / rangeId 清 hidden range，byte range 只能作为旧数据兜底；滚动、加载正文、格式化、字号变化、章节切换、关闭动画时必须立即清空或落最终状态。
@@ -69,7 +69,7 @@ Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
 
 ## 三端边界
 - Windows：`apps/windows` 原生 WinUI 3 / Windows App SDK + 自研 SujianEditor + DirectWrite/Direct2D。
-- Linux：`apps/Linux_qt` Qt/QML + SujianEditorItem + EditorAnimationOverlay。
+- Linux：`apps/Linux_qt` Qt/QML + SujianEditorItem + AnimationCoordinator/RenderPlan。
 - Android：`apps/android` Kotlin View + 自研 SujianEditorView。
 - 三端共享 `writer_core`、typed DTO、设置 key、同步协议、统计格式和动画事务语义；不共享 UI、输入法、光标、打包、标题栏、平台渲染实现。
 

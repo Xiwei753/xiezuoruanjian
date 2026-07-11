@@ -3,9 +3,7 @@ use super::*;
 use super::transaction_key::VisualTransactionKey;
 use super::transaction_queue::VisualTransactionState;
 use super::visual_payload::VisualPayload;
-use super::animation_mode::AnimationMode;
-use super::cursor_animation::CursorBlinkMode;
-use super::texture_cache::TextureCache;
+
 use super::render_plan::{FrameContext, CursorStyle};
 use std::time::Instant;
 

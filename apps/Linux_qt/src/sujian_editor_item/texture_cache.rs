@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
 use super::transaction_key::VisualTransactionKey;
-use super::insert_animation::GlyphFrameData;
-use crate::sujian_editor_item::editor_animation_debug_log;
 use qmetaobject::QImage;
 
 pub(crate) struct TextureCache {

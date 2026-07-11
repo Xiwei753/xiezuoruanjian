@@ -1529,6 +1529,7 @@ pub fn qtextlayout_glyph_positions_on_line(
     result
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ShapedRunData {
     pub run_index: i32,
@@ -1549,6 +1550,7 @@ pub struct ShapedRunData {
     pub glyphs: Vec<RunGlyphData>,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct RunGlyphData {
     pub glyph_index: u32,
@@ -1558,6 +1560,7 @@ pub struct RunGlyphData {
     pub advance_width: f64,
 }
 
+#[allow(dead_code)]
 pub fn extract_shaped_runs_on_line(
     para_text: &str,
     range_start: usize,
@@ -1709,6 +1712,7 @@ pub fn extract_shaped_runs_on_line(
     result
 }
 
+#[allow(dead_code)]
 pub fn render_glyph_run_texture(
     para_text: &str,
     font_size: f64,

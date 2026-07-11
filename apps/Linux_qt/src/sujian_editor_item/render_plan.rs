@@ -1,8 +1,6 @@
 use super::transaction_key::VisualTransactionKey;
-use super::visual_payload::{VisualRunSnapshot, ReflowRunSnapshot};
-use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
+use super::cursor_animation::CursorAnimationPlan;
 use super::animation_mode::AnimationMode;
-use writer_core::editor::CursorRect;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenRangeInfo {

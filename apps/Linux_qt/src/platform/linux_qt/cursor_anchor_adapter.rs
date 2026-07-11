@@ -11,7 +11,6 @@
 //!   Rust FFI 数据源（sujian_get_ime_query_data 等），等价于从此适配器读取
 
 use cpp::cpp;
-use std::cell::UnsafeCell;
 use std::sync::Mutex;
 use writer_core::platform_interaction::cursor_anchor::{
     CursorAnchorAdapter, CursorAnchorRequest, CursorAnchorUpdateReason,

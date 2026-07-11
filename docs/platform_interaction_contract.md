@@ -62,10 +62,10 @@ pub struct PlatformCapabilities {
 
 | 层 | 职责 | 文件 |
 |----|------|------|
-| Core | `NormalizedTextInputEvent` 定义、`TextInputAdapter` trait | `core/.../text_input.rs` |
+| Core | `NormalizedTextInputEvent` 定义、`TextInputAdapter` trait | `core/writer_core/src/platform_interaction/text_input.rs` |
 | Linux Qt | Qt → NormalizedTextInputEvent 转换、QInputMethodEvent 协议翻译 | `apps/Linux_qt/src/platform/linux_qt/text_input_adapter.rs` |
 | Windows | CoreTextEditContext → NormalizedTextInputEvent 转换 | `apps/windows/Platform/IPlatformAdapters.cs` |
-| Android | InputConnection → NormalizedTextInputEvent 转换 | `apps/android/.../platform/TextInputAdapter.kt` |
+| Android | InputConnection → NormalizedTextInputEvent 转换 | `apps/android/app/src/main/kotlin/com/xiwei/sujian/platform/TextInputAdapter.kt` |
 
 ### Linux Qt 三层架构
 
@@ -97,10 +97,10 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 
 | 层 | 职责 | 文件 |
 |----|------|------|
-| Core | `CursorAnchorRequest` / `CursorAnchorAdapter` trait 定义 | `core/.../cursor_anchor.rs` |
+| Core | `CursorAnchorRequest` / `CursorAnchorAdapter` trait 定义 | `core/writer_core/src/platform_interaction/cursor_anchor.rs` |
 | Linux Qt | QInputMethod::update 触发、IME query 响应 | `apps/Linux_qt/src/platform/linux_qt/cursor_anchor_adapter.rs` |
 | Windows | CoreTextEditContext candidate window anchoring | `apps/windows/Platform/IPlatformAdapters.cs` |
-| Android | CursorAnchorInfo → EditorView | `apps/android/.../platform/CursorAnchorAdapter.kt` |
+| Android | CursorAnchorInfo → EditorView | `apps/android/app/src/main/kotlin/com/xiwei/sujian/platform/CursorAnchorAdapter.kt` |
 
 ### Linux Qt 当前状态
 
@@ -115,10 +115,10 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 
 | 层 | 职责 | 文件 |
 |----|------|------|
-| Core | `ClipboardRequest` / `ClipboardResult` / `FocusRequest` / `FocusState` 定义 | `core/.../clipboard_focus.rs` |
+| Core | `ClipboardRequest` / `ClipboardResult` / `FocusRequest` / `FocusState` 定义 | `core/writer_core/src/platform_interaction/clipboard_focus.rs` |
 | Linux Qt | QClipboard / forceActiveFocus / QMenu | `apps/Linux_qt/src/platform/linux_qt/clipboard_focus_adapter.rs` |
 | Windows | WinRT Clipboard / Focus | `apps/windows/Platform/IPlatformAdapters.cs` |
-| Android | ClipboardManager / InputMethodManager | `apps/android/.../platform/ClipboardFocusAdapter.kt` |
+| Android | ClipboardManager / InputMethodManager | `apps/android/app/src/main/kotlin/com/xiwei/sujian/platform/ClipboardFocusAdapter.kt` |
 
 ### Linux Qt 当前状态
 
@@ -133,17 +133,17 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 
 | 层 | 职责 | 文件 |
 |----|------|------|
-| Core | `AnimationDriveRequest` / `AnimationDriver` trait / `AnimationSuppressReason` 定义 | `core/.../animation_driver.rs` |
-| Core | `EditorVisualTransaction` / `AnimationMode` / `EditorEngine` | `core/.../transaction.rs` |
-| Linux Qt | AnimationDriverAdapter → QML EditorAnimationOverlay | `apps/Linux_qt/src/platform/linux_qt/animation_driver_adapter.rs` |
+| Core | `AnimationDriveRequest` / `AnimationDriver` trait / `AnimationSuppressReason` 定义 | `core/writer_core/src/platform_interaction/animation_driver.rs` |
+| Core | `EditorVisualTransaction` / `AnimationMode` / `EditorEngine` | `core/writer_core/src/editor/transaction.rs` |
+| Linux Qt | AnimationDriverAdapter → AnimationCoordinator / RenderPlan | `apps/Linux_qt/src/platform/linux_qt/animation_driver_adapter.rs` |
 | Windows | SujianAnimationController + SujianAnimationOverlay | `apps/windows/Editor/Animation/` |
-| Android | SujianEditorView animation layer | `apps/android/.../platform/AnimationDriver.kt` |
+| Android | SujianEditorView animation layer | `apps/android/app/src/main/kotlin/com/xiwei/sujian/platform/AnimationDriver.kt` |
 
 ### Linux Qt 当前状态
 
 - 抑制/恢复状态管理已真实接入
-- drive_animation 通过 QML visual_transaction_changed 信号驱动 EditorAnimationOverlay
-- cancel / finish 通过 QML explicit_clear_requested 信号驱动
+- drive_animation 通过 AnimationCoordinator / RenderPlan 驱动 SujianEditorItem 内部 Scene Graph 动画
+- cancel / finish 通过 AnimationCoordinator 清理动画状态
 - 动画模式由 Core EditorVisualTransaction.animationMode 唯一决定
 - snapshotAnimation 模式 QML 侧降级为 systemSuppressed
 
@@ -153,11 +153,11 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 
 | 层 | 职责 | 文件 |
 |----|------|------|
-| Core | `SyncCapabilityDto` / `get_sync_capability()` | `core/.../api/sync_api.rs` |
-| Core | `SyncStatus` / `SyncService` / `SyncBackend` | `core/.../sync/` |
+| Core | `SyncCapabilityDto` / `get_sync_capability()` | `core/writer_core/src/api/sync_api.rs` |
+| Core | `SyncStatus` / `SyncService` / `SyncBackend` | `core/writer_core/src/sync/` |
 | Linux Qt | QML sync button 灰态由 Core capability 决定 | `apps/Linux_qt/src/backend/sync_backend.rs` |
 | Windows | 同步页 UI | `apps/windows/Pages/SyncPage.xaml.cs` |
-| Android | 同步页 UI | `apps/android/.../` |
+| Android | 同步页 UI | `apps/android/app/src/main/kotlin/com/xiwei/sujian/` |
 
 ### 同步按钮灰态单一来源
 
@@ -178,11 +178,11 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 
 | 层 | 职责 | 文件 |
 |----|------|------|
-| Core | `WriterError` → `message_key` + `params` | `core/.../api/error.rs` |
-| Core | `ResultEnvelope<T>` → `messageKey` + `messageArgs` | `core/.../api/envelope.rs` |
+| Core | `WriterError` → `message_key` + `params` | `core/writer_core/src/api/error.rs` |
+| Core | `ResultEnvelope<T>` → `messageKey` + `messageArgs` | `core/writer_core/src/api/envelope.rs` |
 | Linux Qt | `MessageKeyMapper` 白名单验证 + QML qsTr | `apps/Linux_qt/src/backend/message_key_mapper.rs` |
 | Windows | `EnvelopeResult` (简化版，缺少 messageKey) | `apps/windows/Bridge/WriterCoreBridge.cs` |
-| Android | UniFFI typed error | `apps/android/.../` |
+| Android | UniFFI typed error | `apps/android/app/src/main/kotlin/com/xiwei/sujian/` |
 
 ### Windows 待收口
 
@@ -203,7 +203,7 @@ Qt Event → SujianEventFilter (C++) → FFI extern "C" → EditorInputControlle
 
 - [x] Linux Qt IME query 从 QML property 迁移到 Rust FFI 数据源（sujian_get_ime_query_data）
 - [x] Linux Qt context menu 从空桩迁移到适配器真实接入（context_menu_requested 信号）
-- [x] Linux Qt AnimationDriver 收敛：drive_animation/cancel/finish 已真实接入 QML overlay
+- [x] Linux Qt AnimationDriver 收敛：drive_animation/cancel/finish 已真实接入 AnimationCoordinator / RenderPlan
 - [x] Windows IEditorTransactionBoundary 诚实化：重命名为 LocalStandaloneTransactionBoundary，UsesCoreEngine == false
 - [x] Windows PlatformCapabilities 诚实化：动画/context_menu 标记为 false
 - [x] Linux Qt 剪贴板从 cpp! 宏迁移到 ClipboardAndFocusAdapter

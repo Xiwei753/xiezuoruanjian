@@ -9,7 +9,7 @@ use qmetaobject::{
 use std::time::Instant;
 
 use super::SujianEditorItem;
-use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition, StaticTextPlan};
+use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::cursor_controller::CursorUpdateResult;
 
 pub struct ScrollBuffer {
@@ -990,8 +990,8 @@ impl SujianEditorItem {
         let visual_line_id = layout_res.visual_line_id;
 
         let vp_h = self.current_viewport_height.max(1.0) as f64;
-        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
-        let is_preediting = !self.preedit_text.is_empty();
+        let _is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
+        let _is_preediting = !self.preedit_text.is_empty();
 
         let cursor_plan = CursorAnimationPlan {
             should_be_visible: self.current_editor_enabled

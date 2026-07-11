@@ -1,7 +1,4 @@
 use super::visual_payload::{VisualRunSnapshot, ReflowRunSnapshot};
-use super::transaction_key::VisualTransactionKey;
-use super::animation_mode::AnimationMode;
-use std::time::Instant;
 
 pub(crate) struct GlyphFrameData {
     pub x: f64,

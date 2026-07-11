@@ -9,7 +9,7 @@ pub(crate) fn compute_glyph_delete_animation_frame(
     let mut frames = Vec::with_capacity(delete_runs.len());
 
     for run in delete_runs {
-        let baseline_in_quad = run.baseline_y - run.y;
+        let _baseline_in_quad = run.baseline_y - run.y;
         let scale = 1.0 - progress * 0.15;
         let dw = run.w * scale;
         let dh = run.h * scale;

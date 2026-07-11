@@ -1,7 +1,5 @@
 use serde::Serialize;
-use writer_core::editor::{
-    AnimationMode as CoreAnimationMode, CursorRect, GlyphRect, ReflowGlyphRect,
-};
+use writer_core::editor::AnimationMode as CoreAnimationMode;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]

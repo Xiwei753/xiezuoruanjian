@@ -10,7 +10,7 @@
 use crate::api::service::{ApiResult, WriterCoreApi};
 use crate::api::types::*;
 use crate::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
-use crate::platform_interaction::{PlatformCapabilities, PlatformKind};
+use crate::platform_interaction::PlatformKind;
 
 impl WriterCoreApi {
     /// Compute a visual transaction for a text change.

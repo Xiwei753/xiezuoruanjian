@@ -1,8 +1,7 @@
 use std::time::Instant;
 
 use writer_core::editor::{
-    AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorVisualTransaction,
-    GlyphRect, ReflowGlyphRect,
+    CursorRect, EditorAnimationKind, EditorVisualTransaction,
 };
 
 pub(crate) use super::transaction_key::VisualTransactionKey;
@@ -14,7 +13,7 @@ pub(crate) use super::render_plan::{
     HiddenRangeInfo, StaticTextPlan, TextAnimationPlan, TextAnimationGlyphInfo,
     SelectionPreeditPlan, SelectionRange, PreeditRange,
     ImeUpdateKind, ImeUpdatePlan, RenderPlan,
-    FrameContext, CursorStyle,
+
 };
 pub(crate) use super::texture_cache::TextureCache;
 pub(crate) use super::{insert_animation, delete_animation, reflow_animation};
@@ -262,27 +261,27 @@ impl LinuxEditorAnimationCoordinator {
         is_loading: bool,
         is_applying_format: bool,
         is_applying_settings: bool,
-        old_cursor_rect: Option<CursorRect>,
-        new_cursor_rect: Option<CursorRect>,
-        cursor_x: f64,
-        cursor_y: f64,
-        cursor_h: f64,
-        editor_enabled: bool,
-        has_selection: bool,
-        viewport_height: f64,
-        is_selecting: bool,
-        is_preediting: bool,
-        smooth_cursor_enabled: bool,
-        smooth_cursor_duration_ms: u32,
-        coordinated_enabled: bool,
-        scroll_y: f64,
-        old_scroll_y: f64,
-        old_visible: bool,
-        old_blink_visible: bool,
-        old_visual_x: f64,
-        old_visual_y: f64,
-        force_snap_next: bool,
-        cursor_animation: Option<&super::rendering::CursorAnimationState>,
+        _old_cursor_rect: Option<CursorRect>,
+        _new_cursor_rect: Option<CursorRect>,
+        _cursor_x: f64,
+        _cursor_y: f64,
+        _cursor_h: f64,
+        _editor_enabled: bool,
+        _has_selection: bool,
+        _viewport_height: f64,
+        _is_selecting: bool,
+        _is_preediting: bool,
+        _smooth_cursor_enabled: bool,
+        _smooth_cursor_duration_ms: u32,
+        _coordinated_enabled: bool,
+        _scroll_y: f64,
+        _old_scroll_y: f64,
+        _old_visible: bool,
+        _old_blink_visible: bool,
+        _old_visual_x: f64,
+        _old_visual_y: f64,
+        _force_snap_next: bool,
+        _cursor_animation: Option<&super::rendering::CursorAnimationState>,
         font_family: &str,
         shaped_glyphs: &[super::visual_payload::ShapedGlyphInfo],
     ) {
@@ -662,7 +661,7 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             let mode = tx.animation_mode;
-            let is_delete = matches!(tx.payload, VisualPayload::DeleteRuns { .. });
+            let _is_delete = matches!(tx.payload, VisualPayload::DeleteRuns { .. });
 
             match &tx.payload {
                 VisualPayload::InsertRuns { insert_runs, reflow_runs, old_cursor_rect, .. } => {
@@ -958,10 +957,11 @@ fn dispatch_animation_frames(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-    use writer_core::editor::AnimationMode as CoreAnimationMode;
+ mod tests {
+     use super::*;
+     use std::time::Duration;
+     use writer_core::editor::AnimationMode as CoreAnimationMode;
+     use writer_core::editor::{GlyphRect, ReflowGlyphRect};
 
     fn make_key(id: u64) -> VisualTransactionKey {
         VisualTransactionKey::new(id, id)
