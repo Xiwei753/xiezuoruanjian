@@ -70,38 +70,47 @@ fn windows_route_is_native_winui_app_sdk() {
 #[test]
 fn linux_insert_animation_id_route_is_wired_end_to_end() {
     let root = repo_root();
-    let writing_workspace = fs::read_to_string(root.join("apps/Linux_qt/qml/WritingWorkspace.qml"))
-        .expect("WritingWorkspace.qml should be readable");
-    assert!(
-        writing_workspace.contains(
-            "onInsertAnimationFinished: function(transactionId, rangeId, byteStart, byteEnd)"
-        ) && writing_workspace.contains(
-            "sujianEditor.on_insert_animation_finished_by_id(transactionId, rangeId, byteStart, byteEnd)"
-        ),
-        "WritingWorkspace.qml must forward insertAnimationFinished transactionId/rangeId/byteStart/byteEnd to SujianEditorItem"
-    );
-    assert!(
-        writing_workspace.contains(
-            "onInsertAnimationSkipped: function(transactionId, rangeId, byteStart, byteEnd)"
-        ) && writing_workspace.contains(
-            "sujianEditor.on_insert_animation_skipped_by_id(transactionId, rangeId, byteStart, byteEnd)"
-        ),
-        "WritingWorkspace.qml must forward insertAnimationSkipped transactionId/rangeId/byteStart/byteEnd to SujianEditorItem"
-    );
-
     let sujian_mod = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/mod.rs"))
         .expect("SujianEditorItem mod.rs should be readable");
     let sujian_transaction = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/transaction.rs"))
         .unwrap_or_default();
     let sujian_coordinator = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/animation_coordinator.rs"))
         .unwrap_or_default();
-    let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_coordinator}");
+    let sujian_qquickitem = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/qquickitem_impl.rs"))
+        .unwrap_or_default();
+    let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_coordinator}\n{sujian_qquickitem}");
+
+    // Scene Graph animation layer (child[1]) reads ActiveVisualTransactionQueue
+    // every frame in update_paint_node, computes progress, and drives
+    // update_animation_layer / clear_animation_layer directly.
+    // Completion is atomic: vt_queue.complete(tid, gen) + finish_overlay_plan
+    // remove hidden ranges and trigger static text re-render.
+    // No QML overlay callback is needed for the normal completion path.
     assert!(
-        combined.contains(
-            "on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"
-        ) && combined.contains(
-            "on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"
-        ),
+        combined.contains("update_animation_layer"),
+        "update_paint_node must call update_animation_layer to render animated glyphs in Scene Graph child[1]"
+    );
+    assert!(
+        combined.contains("clear_animation_layer"),
+        "update_paint_node must call clear_animation_layer when no active transactions remain"
+    );
+    assert!(
+        combined.contains("vt_queue.complete"),
+        "update_paint_node must complete transactions via vt_queue.complete when progress >= 1.0"
+    );
+    assert!(
+        combined.contains("finish_overlay_plan"),
+        "update_paint_node must call finish_overlay_plan to remove hidden ranges when transaction completes"
+    );
+    assert!(
+        combined.contains("mark_rendering"),
+        "update_paint_node must mark Prepared transactions as Rendering on first frame"
+    );
+
+    // Legacy QML callback methods are still declared for backward compat
+    assert!(
+        combined.contains("on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))")
+            && combined.contains("on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32))"),
         "SujianEditorItem qt_method signatures must carry transaction/range ids as strings to avoid u64 truncation"
     );
     assert!(

@@ -15,9 +15,11 @@ Item {
     id: root
 
     property var editorItem: null
-    property var dt: null
+    property var dt: root.dtFallback
     property bool animationEnabled: true
     property bool suppressed: false
+
+    readonly property var dtFallback: dt || Qt.createComponent("DesignTokens.qml").createObject(root)
 
     signal insertAnimationFinished(string transactionId, string rangeId, int byteStart, int byteEnd)
     signal insertAnimationSkipped(string transactionId, string rangeId, int byteStart, int byteEnd)

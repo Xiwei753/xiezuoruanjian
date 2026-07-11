@@ -12,10 +12,12 @@ data class EditorThemeColors(
     val text: Int,
     val cursor: Int,
     val selection: Int,
+    val selectedText: Int,
     val composing: Int,
     val background: Int,
     val border: Int,
     val helperText: Int,
+    val preeditText: Int,
 )
 
 object EditorThemeAdapter {
@@ -29,15 +31,19 @@ object EditorThemeAdapter {
             val backgroundColor = colorScheme.surfaceContainerLowest
             val borderColor = colorScheme.outline
             val helperTextColor = colorScheme.onSurfaceVariant
+            val selectedTextColor = colorScheme.onPrimaryContainer
+            val preeditTextColor = colorScheme.onSurface
 
             EditorThemeColors(
                 text = textColor.toArgb(),
                 cursor = cursorColor.toArgb(),
                 selection = (cursorColor.copy(alpha = 0.24f)).toArgb(),
+                selectedText = selectedTextColor.toArgb(),
                 composing = (cursorColor.copy(alpha = 0.70f)).toArgb(),
                 background = backgroundColor.toArgb(),
                 border = borderColor.toArgb(),
                 helperText = helperTextColor.toArgb(),
+                preeditText = preeditTextColor.toArgb(),
             )
         }
     }

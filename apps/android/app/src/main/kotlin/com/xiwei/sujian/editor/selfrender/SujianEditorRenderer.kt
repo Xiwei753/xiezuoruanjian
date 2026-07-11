@@ -97,6 +97,8 @@ class SujianEditorRenderer(
      */
     private var borderColor: Int = 0
     private var helperTextColor: Int = 0
+    private var selectedTextColor: Int = 0
+    private var preeditTextColor: Int = 0
 
     fun setThemeColors(textColor: Int, cursorColor: Int, composingColor: Int, selectionColor: Int) {
         cursorPaint.color = cursorColor
@@ -111,6 +113,8 @@ class SujianEditorRenderer(
         cursorColor: Int,
         composingColor: Int,
         selectionColor: Int,
+        selectedTextColor: Int,
+        preeditTextColor: Int,
         borderColor: Int,
         helperTextColor: Int
     ) {
@@ -119,12 +123,16 @@ class SujianEditorRenderer(
         selectionPaint.color = selectionColor
         animTextPaint.color = textColor
         searchHighlightPaint.color = selectionColor
+        this.selectedTextColor = selectedTextColor
+        this.preeditTextColor = preeditTextColor
         this.borderColor = borderColor
         this.helperTextColor = helperTextColor
     }
 
     fun getBorderColor(): Int = borderColor
     fun getHelperTextColor(): Int = helperTextColor
+    fun getSelectedTextColor(): Int = selectedTextColor
+    fun getPreeditTextColor(): Int = preeditTextColor
 
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
         searchHighlights = highlights

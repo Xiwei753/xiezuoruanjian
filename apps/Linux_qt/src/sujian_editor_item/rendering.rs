@@ -642,6 +642,65 @@ impl SujianEditorItem {
         None
     }
 
+    pub(crate) fn render_char_texture(
+        &self,
+        ch: &str,
+        glyph_w: f64,
+        glyph_h: f64,
+        baseline_offset: f64,
+        dpr: f64,
+    ) -> Option<QImage> {
+        let phys_w = (glyph_w * dpr).ceil() as u32;
+        let phys_h = (glyph_h * dpr).ceil() as u32;
+        if phys_w == 0 || phys_h == 0 || phys_w > 4096 || phys_h > 4096 {
+            return None;
+        }
+
+        let mut image = QImage::new(
+            qmetaobject::QSize {
+                width: phys_w,
+                height: phys_h,
+            },
+            qmetaobject::ImageFormat::ARGB32_Premultiplied,
+        );
+        {
+            let img_ptr = &mut image as *mut QImage;
+            cpp!(unsafe [img_ptr as "QImage*"] {
+                img_ptr->setDevicePixelRatio(1.0);
+            });
+        }
+        image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
+
+        let painter_ptr = renderer::sujian_create_painter_scaled(&mut image, dpr);
+        if painter_ptr.is_null() {
+            return None;
+        }
+
+        let painter: &mut QPainter = unsafe { &mut *painter_ptr };
+        painter.set_render_hint(QPainterRenderHint::TextAntialiasing, true);
+
+        let font_size = self.current_font_pixel_size as f64;
+        let fs = font_size as f32;
+        let ff: QString = self.current_font_family.to_string().into();
+        cpp!(unsafe [painter as "QPainter*", fs as "float", ff as "QString"] {
+            QFont f(ff);
+            f.setPixelSize(static_cast<int>(fs));
+            painter->setFont(f);
+        });
+
+        let color = qmetaobject::QColor::from_name(&self.current_text_color.to_string());
+        painter.set_pen(qmetaobject::QPen::from_color(color));
+
+        let qch: QString = ch.to_string().into();
+        cpp!(unsafe [painter as "QPainter*", qch as "QString", baseline_offset as "double"] {
+            painter->drawText(QPointF(0, baseline_offset), qch);
+        });
+
+        renderer::sujian_delete_painter(painter_ptr);
+
+        Some(image)
+    }
+
     pub(crate) fn render_to_image(&mut self) -> Option<(QImage, f64, f64)> {
         // Tick text animations for timeout safety
         self.tick_text_animations();

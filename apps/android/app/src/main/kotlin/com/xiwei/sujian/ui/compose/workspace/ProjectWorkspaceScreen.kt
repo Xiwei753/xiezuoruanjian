@@ -1,20 +1,28 @@
 package com.xiwei.sujian.ui.compose.workspace
 
+import android.os.Parcel
+import android.os.Parcelable
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
+import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
+import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
+import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,6 +33,7 @@ import com.xiwei.sujian.model.AvoidRegion
 import com.xiwei.sujian.model.WorkspacePaneMode
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -34,6 +43,7 @@ fun ProjectWorkspaceScreen(
 ) {
     val context = LocalContext.current
     val workspaceRepository = remember { WorkspaceRepository(context) }
+    val coroutineScope = rememberCoroutineScope()
 
     val currentProjectId = appState.currentProjectId
     val currentVolumeId = appState.currentVolumeId
@@ -63,11 +73,21 @@ fun ProjectWorkspaceScreen(
 
     val isDetailExpanded = navigator.scaffoldValue[ThreePaneScaffoldRole.Secondary] == PaneAdaptedValue.Expanded
 
+    // Outer BackHandler: editor → chapter tree → project list
     BackHandler(enabled = navigator.canNavigateBack()) {
-        navigator.navigateBack()
+        coroutineScope.launch {
+            navigator.navigateBack()
+        }
         if (appState.currentChapterId != null) {
             appState.clearChapterSelection()
         }
+    }
+
+    // Back to project list when in chapter tree with no detail expanded
+    BackHandler(enabled = !navigator.canNavigateBack() && currentProjectId != null) {
+        appState.clearChapterSelection()
+        appState.currentProjectId = null
+        appState.currentProjectTitle = ""
     }
 
     LaunchedEffect(currentChapterId) {
@@ -87,94 +107,147 @@ fun ProjectWorkspaceScreen(
 
     val avoidPadding = computeAvoidRegionPadding(avoidRegions)
 
-    ListDetailPaneScaffold(
-        directive = navigator.scaffoldDirective,
-        value = navigator.scaffoldValue,
+    // Build PaneScaffoldDirective from Core LayoutPlan
+    val scaffoldDirective = remember(layoutPlan) {
+        navigator.scaffoldDirective
+    }
+
+    NavigableListDetailPaneScaffold(
+        navigator = navigator,
         listPane = {
-            if (visiblePaneRoles?.showChapterTree != false) {
-                VolumeChapterTree(
-                    projectId = currentProjectId,
-                    workspaceRepository = workspaceRepository,
-                    onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                        appState.selectChapter(volumeId, chapterId, chapterTitle)
-                        navigator.navigateTo(
-                            ThreePaneScaffoldRole.Secondary,
-                            WorkspaceDetailConfig(
-                                volumeId = volumeId,
-                                chapterId = chapterId,
-                                chapterTitle = chapterTitle
-                            )
-                        )
-                    },
-                    onBackToProjects = {
-                        appState.clearChapterSelection()
-                        appState.currentProjectId = null
-                        appState.currentProjectTitle = ""
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(avoidPadding)
-                )
+            AnimatedPane {
+                if (visiblePaneRoles?.showChapterTree != false) {
+                    VolumeChapterTree(
+                        projectId = currentProjectId,
+                        workspaceRepository = workspaceRepository,
+                        onSelectChapter = { volumeId, chapterId, chapterTitle ->
+                            appState.selectChapter(volumeId, chapterId, chapterTitle)
+                            coroutineScope.launch {
+                                navigator.navigateTo(
+                                    ThreePaneScaffoldRole.Secondary,
+                                    WorkspaceDetailConfig(
+                                        volumeId = volumeId,
+                                        chapterId = chapterId,
+                                        chapterTitle = chapterTitle
+                                    )
+                                )
+                            }
+                        },
+                        onBackToProjects = {
+                            appState.clearChapterSelection()
+                            appState.currentProjectId = null
+                            appState.currentProjectTitle = ""
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(avoidPadding)
+                    )
+                }
             }
         },
         detailPane = {
-            if (visiblePaneRoles?.showEditor != false) {
-                val currentContent = navigator.currentDestination?.content
-                val detailVolumeId = currentContent?.volumeId ?: currentVolumeId
-                val detailChapterId = currentContent?.chapterId ?: currentChapterId
-                val detailChapterTitle = currentContent?.chapterTitle ?: currentChapterTitle
+            AnimatedPane {
+                if (visiblePaneRoles?.showEditor != false) {
+                    val currentContent = navigator.currentDestination?.content
+                    val detailVolumeId = currentContent?.volumeId ?: currentVolumeId
+                    val detailChapterId = currentContent?.chapterId ?: currentChapterId
+                    val detailChapterTitle = currentContent?.chapterTitle ?: currentChapterTitle
 
-                if (detailVolumeId != null && detailChapterId != null) {
-                    SujianEditorHost(
-                        projectId = currentProjectId,
-                        volumeId = detailVolumeId,
-                        chapterId = detailChapterId,
-                        chapterTitle = detailChapterTitle,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .then(
-                                if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
-                                else Modifier
-                            )
-                            .then(
-                                if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
-                                else Modifier
-                            )
-                            .then(avoidPadding)
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier.fillMaxSize().then(avoidPadding),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("选择章节开始写作", modifier = Modifier.padding(16.dp))
+                    if (detailVolumeId != null && detailChapterId != null) {
+                        SujianEditorHost(
+                            projectId = currentProjectId,
+                            volumeId = detailVolumeId,
+                            chapterId = detailChapterId,
+                            chapterTitle = detailChapterTitle,
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(
+                                    if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                                    else Modifier
+                                )
+                                .then(
+                                    if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                                    else Modifier
+                                )
+                                .then(avoidPadding)
+                        )
+                    } else {
+                        Box(
+                            modifier = Modifier.fillMaxSize().then(avoidPadding),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("选择章节开始写作", modifier = Modifier.padding(16.dp))
+                        }
                     }
                 }
             }
         },
         extraPane = {
-            if (showProjectListInExtra) {
-                ProjectListScreen(
-                    appState = appState,
-                    onSelectProject = { projectId, projectTitle ->
-                        appState.selectProject(projectId, projectTitle)
-                        appState.clearChapterSelection()
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(avoidPadding)
-                )
+            AnimatedPane {
+                if (showProjectListInExtra) {
+                    ProjectListScreen(
+                        appState = appState,
+                        onSelectProject = { projectId, projectTitle ->
+                            appState.selectProject(projectId, projectTitle)
+                            appState.clearChapterSelection()
+                        },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(avoidPadding)
+                    )
+                }
             }
         },
         modifier = modifier.fillMaxSize()
     )
 }
 
-private data class WorkspaceDetailConfig(
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+@Composable
+private fun NavigableListDetailPaneScaffold(
+    navigator: ThreePaneScaffoldNavigator<WorkspaceDetailConfig>,
+    listPane: @Composable () -> Unit,
+    detailPane: @Composable () -> Unit,
+    extraPane: @Composable () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ListDetailPaneScaffold(
+        directive = navigator.scaffoldDirective,
+        value = navigator.scaffoldValue,
+        listPane = listPane,
+        detailPane = detailPane,
+        extraPane = extraPane,
+        modifier = modifier
+    )
+}
+
+@Suppress("DEPRECATION")
+private class WorkspaceDetailConfig(
     val volumeId: String,
     val chapterId: String,
     val chapterTitle: String
-)
+) : Parcelable {
+    constructor(parcel: Parcel) : this(
+        parcel.readString() ?: "",
+        parcel.readString() ?: "",
+        parcel.readString() ?: ""
+    )
+
+    override fun writeToParcel(parcel: Parcel, flags: Int) {
+        parcel.writeString(volumeId)
+        parcel.writeString(chapterId)
+        parcel.writeString(chapterTitle)
+    }
+
+    override fun describeContents(): Int = 0
+
+    companion object CREATOR : Parcelable.Creator<WorkspaceDetailConfig> {
+        override fun createFromParcel(parcel: Parcel): WorkspaceDetailConfig =
+            WorkspaceDetailConfig(parcel)
+        override fun newArray(size: Int): Array<WorkspaceDetailConfig?> =
+            arrayOfNulls(size)
+    }
+}
 
 @Composable
 private fun computeAvoidRegionPadding(avoidRegions: List<AvoidRegion>): Modifier {

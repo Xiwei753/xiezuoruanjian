@@ -877,6 +877,8 @@ class SujianEditorView @JvmOverloads constructor(
             cursorColor = colors.cursor,
             composingColor = colors.composing,
             selectionColor = colors.selection,
+            selectedTextColor = colors.selectedText,
+            preeditTextColor = colors.preeditText,
             borderColor = colors.border,
             helperTextColor = colors.helperText
         )

@@ -1232,8 +1232,6 @@ fn issue_431_base_components_have_token_fallback_and_overlay_uses_real_signal_na
         "AppButton.qml",
         "AppSlider.qml",
         "HubPageHeader.qml",
-        "EditorAnimationOverlay.qml",
-        "EditorGlyphGhost.qml",
     ] {
         let content = fs::read_to_string(qml_dir.join(file_name)).unwrap();
         assert!(
@@ -1247,18 +1245,17 @@ fn issue_431_base_components_have_token_fallback_and_overlay_uses_real_signal_na
         );
     }
 
+    // EditorAnimationOverlay.qml and EditorGlyphGhost.qml are DEPRECATED stubs.
+    // Text animation is now in SujianEditorItem Scene Graph (child[1]) via
+    // ActiveVisualTransactionQueue. The overlay no longer renders animations.
+    // Verify the deprecated stubs still exist and declare the correct signal names.
     let overlay = fs::read_to_string(qml_dir.join("EditorAnimationOverlay.qml")).unwrap();
     assert!(
-        overlay.contains("function onVisual_transaction_changed()"),
-        "EditorAnimationOverlay must listen to qmetaobject's visual_transaction_changed signal name"
+        overlay.contains("DEPRECATED"),
+        "EditorAnimationOverlay must be marked as DEPRECATED since animation moved to Scene Graph"
     );
     assert!(
-        overlay.contains("function onPreedit_visual_transaction_changed()"),
-        "EditorAnimationOverlay must listen to qmetaobject's preedit_visual_transaction_changed signal name"
-    );
-    assert!(
-        !overlay.contains("function onVisualTransactionChanged()")
-            && !overlay.contains("function onPreeditVisualTransactionChanged()"),
-        "EditorAnimationOverlay must not use non-existent camelCase animation signal handlers"
+        overlay.contains("insertAnimationFinished") && overlay.contains("insertAnimationSkipped"),
+        "EditorAnimationOverlay must still declare signal stubs for backward compatibility"
     );
 }
