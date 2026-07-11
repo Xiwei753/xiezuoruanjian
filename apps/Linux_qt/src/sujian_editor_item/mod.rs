@@ -279,6 +279,7 @@ pub struct SujianEditorItem {
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
     animation_coordinator: LinuxEditorAnimationCoordinator,
+    cached_animation_textures: std::collections::HashMap<animation_coordinator::VisualTransactionKey, Vec<qmetaobject::QImage>>,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
 }
 
@@ -420,6 +421,7 @@ impl Default for SujianEditorItem {
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
             animation_coordinator: LinuxEditorAnimationCoordinator::new(),
+            cached_animation_textures: std::collections::HashMap::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
         }
     }
@@ -504,23 +506,24 @@ impl SujianEditorItem {
         byte_end: i32,
         skipped: bool,
     ) {
-        let bs = byte_start.max(0) as usize;
-        let be = byte_end.max(0) as usize;
-        let removed = self
-            .animation_coordinator
-            .finish_overlay_plan(transaction_id, range_id, bs, be);
-        if removed {
-            editor_animation_debug_log(&format!(
-                "on_insert_animation_{}: transaction_id={:?}, range_id={:?}, byte_range=({},{}), cleared hidden range, has_active_insert={}",
-                if skipped { "skipped" } else { "finished" },
-                transaction_id,
-                range_id,
-                bs,
-                be,
-                self.animation_coordinator.has_active_insert()
-            ));
-            self.request_static_repaint();
-            self.cursor_rect_changed();
+        let _ = (range_id, byte_start, byte_end);
+        if let Some(tid) = transaction_id {
+            let key = animation_coordinator::VisualTransactionKey {
+                transaction_id: tid,
+                generation: tid,
+            };
+            let removed = self.animation_coordinator.finish_by_key(key);
+            if removed {
+                editor_animation_debug_log(&format!(
+                    "on_insert_animation_{}: tid={}, cleared hidden range, has_active_insert={}",
+                    if skipped { "skipped" } else { "finished" },
+                    tid,
+                    self.animation_coordinator.has_active_insert()
+                ));
+                self.cached_animation_textures.remove(&key);
+                self.request_static_repaint();
+                self.cursor_rect_changed();
+            }
         }
     }
 

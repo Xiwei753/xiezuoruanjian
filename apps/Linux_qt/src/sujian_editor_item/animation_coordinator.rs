@@ -6,6 +6,13 @@ use writer_core::editor::{
     GlyphRect, ReflowGlyphRect,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VisualTransactionKey {
+    pub transaction_id: u64,
+    pub generation: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum AnimationMode {
@@ -55,27 +62,20 @@ pub(crate) enum TextAnimationKind {
     Delete,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AnimationRangeId {
-    pub transaction_id: Option<u64>,
-    pub range_id: Option<u64>,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct AnimationRangeEntry {
-    pub id: AnimationRangeId,
+    pub key: VisualTransactionKey,
+    pub core_range_id: Option<u64>,
     pub kind: TextAnimationKind,
     pub byte_range: (usize, usize),
     pub reflow_hidden_ranges: Vec<ReflowHiddenRangeEntry>,
     pub animation_mode: AnimationMode,
     pub start_time: Instant,
     pub duration_ms: u64,
-    pub generation: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReflowHiddenRangeEntry {
-    pub range_id: u64,
     pub byte_range: (usize, usize),
 }
 
@@ -94,8 +94,7 @@ pub(crate) enum VisualTransactionState {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ActiveVisualTransaction {
-    pub transaction_id: u64,
-    pub generation: u64,
+    pub key: VisualTransactionKey,
     pub state: VisualTransactionState,
     pub kind: OverlayAnimationKind,
     pub animation_mode: AnimationMode,
@@ -108,33 +107,39 @@ pub(crate) struct ActiveVisualTransaction {
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
     pub cancel_reason: Option<String>,
+    pub texture_prepared: bool,
+}
+
+impl ActiveVisualTransaction {
+    pub fn transaction_id(&self) -> u64 {
+        self.key.transaction_id
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.key.generation
+    }
 }
 
 pub(crate) struct ActiveVisualTransactionQueue {
     transactions: Vec<ActiveVisualTransaction>,
-    next_transaction_id: u64,
 }
 
 impl ActiveVisualTransactionQueue {
     pub fn new() -> Self {
         Self {
             transactions: Vec::new(),
-            next_transaction_id: 1,
         }
     }
 
     pub fn enqueue(
         &mut self,
+        key: VisualTransactionKey,
         vt: &EditorVisualTransaction,
         animation_mode: AnimationMode,
-    ) -> u64 {
-        let tid = self.next_transaction_id;
-        self.next_transaction_id += 1;
-
+    ) {
         let kind = vt.kind.into();
         self.transactions.push(ActiveVisualTransaction {
-            transaction_id: tid,
-            generation: vt.id,
+            key,
             state: VisualTransactionState::Prepared,
             kind,
             animation_mode,
@@ -147,60 +152,48 @@ impl ActiveVisualTransactionQueue {
             old_cursor_rect: vt.old_cursor_rect.clone(),
             new_cursor_rect: vt.new_cursor_rect.clone(),
             cancel_reason: None,
+            texture_prepared: false,
         });
 
-        let log_msg = format!(
+        super::editor_animation_debug_log(&format!(
             "VTQueue::enqueue: tid={}, gen={}, kind={:?}, mode={:?}, duration_ms={}",
-            tid, vt.id, kind, animation_mode, vt.duration_ms
-        );
-        let log_msg = format!(
-            "VTQueue::enqueue: tid={}, gen={}, kind={:?}, mode={:?}, duration_ms={}",
-            tid, vt.id, kind, animation_mode, vt.duration_ms
-        );
-        super::editor_animation_debug_log(&log_msg);
-
-        tid
+            key.transaction_id, key.generation, kind, animation_mode, vt.duration_ms
+        ));
     }
 
-    pub fn mark_rendering(&mut self, transaction_id: u64) {
-        if let Some(tx) = self.transactions.iter_mut().find(|t| t.transaction_id == transaction_id) {
+    pub fn mark_rendering(&mut self, key: VisualTransactionKey) {
+        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
             tx.state = VisualTransactionState::Rendering;
         }
     }
 
-    pub fn complete(&mut self, transaction_id: u64, generation: u64) -> bool {
+    pub fn mark_texture_prepared(&mut self, key: VisualTransactionKey) {
+        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
+            tx.texture_prepared = true;
+        }
+    }
+
+    pub fn complete(&mut self, key: VisualTransactionKey) -> bool {
         let before = self.transactions.len();
-        self.transactions.retain(|t| {
-            if t.transaction_id == transaction_id && t.generation == generation {
-                false
-            } else {
-                true
-            }
-        });
+        self.transactions.retain(|t| t.key != key);
         let removed = self.transactions.len() < before;
         if removed {
             super::editor_animation_debug_log(&format!(
                 "VTQueue::complete: tid={}, gen={}",
-                transaction_id, generation
+                key.transaction_id, key.generation
             ));
         }
         removed
     }
 
-    pub fn cancel(&mut self, transaction_id: u64, generation: u64, reason: &str) -> bool {
+    pub fn cancel(&mut self, key: VisualTransactionKey, reason: &str) -> bool {
         let before = self.transactions.len();
-        self.transactions.retain(|t| {
-            if t.transaction_id == transaction_id && t.generation == generation {
-                false
-            } else {
-                true
-            }
-        });
+        self.transactions.retain(|t| t.key != key);
         let removed = self.transactions.len() < before;
         if removed {
             super::editor_animation_debug_log(&format!(
                 "VTQueue::cancel: tid={}, gen={}, reason={}",
-                transaction_id, generation, reason
+                key.transaction_id, key.generation, reason
             ));
         }
         removed
@@ -221,13 +214,6 @@ impl ActiveVisualTransactionQueue {
         &self.transactions
     }
 
-    pub fn rendering_transactions(&self) -> Vec<&ActiveVisualTransaction> {
-        self.transactions
-            .iter()
-            .filter(|t| t.state == VisualTransactionState::Rendering)
-            .collect()
-    }
-
     pub fn has_active(&self) -> bool {
         !self.transactions.is_empty()
     }
@@ -243,7 +229,7 @@ impl ActiveVisualTransactionQueue {
             if elapsed > timeout {
                 super::editor_animation_debug_log(&format!(
                     "VTQueue::tick: expired tid={}, gen={}, elapsed={}ms, timeout={}ms",
-                    t.transaction_id, t.generation, elapsed, timeout
+                    t.key.transaction_id, t.key.generation, elapsed, timeout
                 ));
                 false
             } else {
@@ -260,105 +246,64 @@ impl ActiveVisualTransactionQueue {
 
 pub(crate) struct AnimationRangeRegistry {
     entries: Vec<AnimationRangeEntry>,
-    next_generation: u64,
 }
 
 impl AnimationRangeRegistry {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            next_generation: 1,
         }
-    }
-
-    fn alloc_generation(&mut self) -> u64 {
-        let g = self.next_generation;
-        self.next_generation += 1;
-        g
     }
 
     pub fn start_insert(
         &mut self,
-        transaction_id: Option<u64>,
-        range_id: Option<u64>,
+        key: VisualTransactionKey,
+        core_range_id: Option<u64>,
         byte_range: (usize, usize),
         reflow_byte_ranges: Vec<(usize, usize)>,
         animation_mode: AnimationMode,
         duration_ms: u64,
     ) {
-        let generation = self.alloc_generation();
         let reflow_hidden_ranges = reflow_byte_ranges
             .into_iter()
-            .enumerate()
-            .map(|(idx, br)| ReflowHiddenRangeEntry {
-                range_id: Self::derive_reflow_range_id(transaction_id, range_id, idx),
+            .map(|br| ReflowHiddenRangeEntry {
                 byte_range: br,
             })
             .collect();
         self.entries.push(AnimationRangeEntry {
-            id: AnimationRangeId {
-                transaction_id,
-                range_id,
-            },
+            key,
+            core_range_id,
             kind: TextAnimationKind::Insert,
             byte_range,
             reflow_hidden_ranges,
             animation_mode,
             start_time: Instant::now(),
             duration_ms,
-            generation,
         });
     }
 
     pub fn start_delete(
         &mut self,
+        key: VisualTransactionKey,
         byte_range: (usize, usize),
         animation_mode: AnimationMode,
         duration_ms: u64,
     ) {
-        let generation = self.alloc_generation();
         self.entries.push(AnimationRangeEntry {
-            id: AnimationRangeId {
-                transaction_id: None,
-                range_id: None,
-            },
+            key,
+            core_range_id: None,
             kind: TextAnimationKind::Delete,
             byte_range,
             reflow_hidden_ranges: Vec::new(),
             animation_mode,
             start_time: Instant::now(),
             duration_ms,
-            generation,
         });
     }
 
-    pub fn finish_by_id(
-        &mut self,
-        transaction_id: Option<u64>,
-        range_id: Option<u64>,
-        byte_start: usize,
-        byte_end: usize,
-    ) -> bool {
+    pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> bool {
         let before = self.entries.len();
-        self.entries.retain(|e| {
-            if e.kind != TextAnimationKind::Insert {
-                return true;
-            }
-            if let Some(rid) = range_id {
-                if e.id.range_id == Some(rid) {
-                    return false;
-                }
-            }
-            if let Some(tid) = transaction_id {
-                if e.id.transaction_id == Some(tid) {
-                    return false;
-                }
-            }
-            if e.id.transaction_id.is_none() && e.id.range_id.is_none() {
-                return !(e.byte_range == (byte_start, byte_end));
-            }
-            true
-        });
+        self.entries.retain(|e| e.key != key);
         self.entries.len() < before
     }
 
@@ -429,7 +374,6 @@ impl AnimationRangeRegistry {
                 .iter()
                 .filter_map(|r| {
                     map_range_for_insert(r.byte_range, pos, len).map(|br| ReflowHiddenRangeEntry {
-                        range_id: r.range_id,
                         byte_range: br,
                     })
                 })
@@ -462,7 +406,6 @@ impl AnimationRangeRegistry {
                 .iter()
                 .filter_map(|r| {
                     map_range_for_delete(r.byte_range, pos, len).map(|br| ReflowHiddenRangeEntry {
-                        range_id: r.range_id,
                         byte_range: br,
                     })
                 })
@@ -470,49 +413,11 @@ impl AnimationRangeRegistry {
         }
     }
 
-    fn derive_reflow_range_id(
-        transaction_id: Option<u64>,
-        insert_range_id: Option<u64>,
-        idx: usize,
-    ) -> u64 {
-        let base = insert_range_id.or(transaction_id).unwrap_or(0);
-        if base == 0 {
-            0x7fff_0000_u64 + idx as u64 + 1
-        } else {
-            base.saturating_mul(1_000_000).saturating_add(idx as u64 + 1)
-        }
-    }
-
-    pub fn active_overlay_entries(&self) -> Vec<&AnimationRangeEntry> {
+    pub fn entries_with_texture_prepared(&self) -> Vec<&AnimationRangeEntry> {
         self.entries
             .iter()
             .filter(|e| e.kind == TextAnimationKind::Insert)
             .collect()
-    }
-
-    pub fn find_entry_by_id(
-        &self,
-        transaction_id: Option<u64>,
-        range_id: Option<u64>,
-    ) -> Option<&AnimationRangeEntry> {
-        self.entries.iter().find(|e| {
-            if let Some(rid) = range_id {
-                e.id.range_id == Some(rid)
-            } else if let Some(tid) = transaction_id {
-                e.id.transaction_id == Some(tid)
-            } else {
-                false
-            }
-        })
-    }
-
-    pub fn generation_for(
-        &self,
-        transaction_id: Option<u64>,
-        range_id: Option<u64>,
-    ) -> Option<u64> {
-        self.find_entry_by_id(transaction_id, range_id)
-            .map(|e| e.generation)
     }
 }
 
@@ -543,9 +448,7 @@ fn map_range_for_delete(range: (usize, usize), pos: usize, len: usize) -> Option
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenRangeInfo {
-    pub transaction_id: Option<u64>,
-    pub range_id: Option<u64>,
-    pub generation: u64,
+    pub key: VisualTransactionKey,
     pub byte_range: (usize, usize),
 }
 
@@ -579,9 +482,7 @@ impl StaticTextRenderPlan {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct OverlayGlyphInfo {
-    pub transaction_id: Option<u64>,
-    pub range_id: Option<u64>,
-    pub generation: u64,
+    pub key: VisualTransactionKey,
     pub duration_ms: u64,
     pub glyph_rects: Vec<GlyphRect>,
     pub deleted_glyph_rects: Vec<GlyphRect>,
@@ -591,7 +492,6 @@ pub(crate) struct OverlayGlyphInfo {
     pub animation_mode: AnimationMode,
     pub inserted_range: Option<(usize, usize)>,
     pub kind: OverlayAnimationKind,
-    pub hidden_visual_range_ids: Vec<u64>,
     pub cluster_rects: Option<Vec<writer_core::editor::ClusterRect>>,
     pub cluster_runs: Option<Vec<writer_core::editor::ClusterRun>>,
 }
@@ -659,7 +559,7 @@ pub(crate) struct CoordinatorOutput {
 
 pub(crate) struct LinuxEditorAnimationCoordinator {
     registry: AnimationRangeRegistry,
-    last_overlay_plan_id: u64,
+    next_key_id: u64,
     pub(crate) vt_queue: ActiveVisualTransactionQueue,
 }
 
@@ -667,8 +567,17 @@ impl LinuxEditorAnimationCoordinator {
     pub fn new() -> Self {
         Self {
             registry: AnimationRangeRegistry::new(),
-            last_overlay_plan_id: 0,
+            next_key_id: 1,
             vt_queue: ActiveVisualTransactionQueue::new(),
+        }
+    }
+
+    fn alloc_key(&mut self) -> VisualTransactionKey {
+        let id = self.next_key_id;
+        self.next_key_id += 1;
+        VisualTransactionKey {
+            transaction_id: id,
+            generation: id,
         }
     }
 
@@ -710,7 +619,6 @@ impl LinuxEditorAnimationCoordinator {
                         let had_active_before = self.registry.has_active_insert();
                         self.registry.map_ranges_for_insert(range_start, insert_len);
                         if had_active_before && !self.registry.has_active_insert() {
-                            // a previous insert was cancelled by mapping
                         }
                         let mut mode = AnimationMode::from_core(vt.animation_mode);
                         if is_scrolling
@@ -722,6 +630,7 @@ impl LinuxEditorAnimationCoordinator {
                             mode = AnimationMode::SystemSuppressed;
                         }
                         if mode != AnimationMode::SystemSuppressed {
+                            let key = self.alloc_key();
                             let reflow_ranges: Vec<(usize, usize)> = vt
                                 .reflow_glyph_rects
                                 .as_ref()
@@ -729,17 +638,17 @@ impl LinuxEditorAnimationCoordinator {
                                     rects.iter().map(|r| (r.byte_start, r.byte_end)).collect()
                                 })
                                 .unwrap_or_default();
-                            let hidden_range_id =
+                            let core_range_id =
                                 vt.hidden_visual_ranges.first().map(|r| r.id);
                             self.registry.start_insert(
-                                Some(vt.id),
-                                hidden_range_id,
+                                key,
+                                core_range_id,
                                 (range_start, range_end),
                                 reflow_ranges,
                                 mode,
                                 vt.duration_ms,
                             );
-                            self.vt_queue.enqueue(vt, mode);
+                            self.vt_queue.enqueue(key, vt, mode);
                         }
                     }
                 }
@@ -754,6 +663,7 @@ impl LinuxEditorAnimationCoordinator {
                         mode = AnimationMode::SystemSuppressed;
                     }
                     if mode != AnimationMode::SystemSuppressed {
+                        let key = self.alloc_key();
                         let changes =
                             writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
                         for change in &changes {
@@ -771,11 +681,15 @@ impl LinuxEditorAnimationCoordinator {
                             {
                                 let range_start = *index;
                                 let range_end = range_start + text.len();
-                                self.registry
-                                    .start_delete((range_start, range_end), mode, vt.duration_ms);
+                                self.registry.start_delete(
+                                    key,
+                                    (range_start, range_end),
+                                    mode,
+                                    vt.duration_ms,
+                                );
                             }
                         }
-                        self.vt_queue.enqueue(vt, mode);
+                        self.vt_queue.enqueue(key, vt, mode);
                     }
                 }
                 EditorAnimationKind::Cursor => {}
@@ -808,21 +722,10 @@ impl LinuxEditorAnimationCoordinator {
         )
     }
 
-    pub fn finish_overlay_plan(
-        &mut self,
-        transaction_id: Option<u64>,
-        range_id: Option<u64>,
-        byte_start: usize,
-        byte_end: usize,
-    ) -> bool {
-        let registry_result = self
-            .registry
-            .finish_by_id(transaction_id, range_id, byte_start, byte_end);
+    pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> bool {
+        let registry_result = self.registry.finish_by_key(key);
         if registry_result {
-            if let Some(tid) = transaction_id {
-                let gen = self.registry.generation_for(transaction_id, range_id).unwrap_or(0);
-                self.vt_queue.complete(tid, gen);
-            }
+            self.vt_queue.complete(key);
         }
         registry_result
     }
@@ -867,17 +770,18 @@ impl LinuxEditorAnimationCoordinator {
 
         for e in self.registry.entries.iter() {
             if e.kind == TextAnimationKind::Insert {
+                let tx = self.vt_queue.active_transactions().iter().find(|t| t.key == e.key);
+                let texture_prepared = tx.map(|t| t.texture_prepared).unwrap_or(false);
+                if !texture_prepared {
+                    continue;
+                }
                 hidden_ranges.push(HiddenRangeInfo {
-                    transaction_id: e.id.transaction_id,
-                    range_id: e.id.range_id,
-                    generation: e.generation,
+                    key: e.key,
                     byte_range: e.byte_range,
                 });
                 for r in &e.reflow_hidden_ranges {
                     hidden_ranges.push(HiddenRangeInfo {
-                        transaction_id: e.id.transaction_id,
-                        range_id: Some(r.range_id),
-                        generation: e.generation,
+                        key: e.key,
                         byte_range: r.byte_range,
                     });
                 }
@@ -888,25 +792,20 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     fn build_overlay_plan(&self, vt: &EditorVisualTransaction) -> OverlayAnimationPlan {
-
         let mut entries = Vec::new();
 
         if vt.kind == EditorAnimationKind::Insert || vt.kind == EditorAnimationKind::Delete {
             let mode = AnimationMode::from_core(vt.animation_mode);
             if mode != AnimationMode::SystemSuppressed {
-                let hidden_visual_range_ids: Vec<u64> = vt
-                    .hidden_visual_ranges
-                    .iter()
-                    .map(|r| r.id)
-                    .collect();
+                let key = self.vt_queue.active_transactions().iter()
+                    .find(|t| t.kind == vt.kind.into()
+                        && t.inserted_range == vt.inserted_range
+                        && t.duration_ms == vt.duration_ms)
+                    .map(|t| t.key)
+                    .unwrap_or(VisualTransactionKey { transaction_id: 0, generation: 0 });
 
                 entries.push(OverlayGlyphInfo {
-                    transaction_id: Some(vt.id),
-                    range_id: vt.hidden_visual_ranges.first().map(|r| r.id),
-                    generation: self
-                        .registry
-                        .generation_for(Some(vt.id), vt.hidden_visual_ranges.first().map(|r| r.id))
-                        .unwrap_or(0),
+                    key,
                     duration_ms: vt.duration_ms,
                     glyph_rects: vt.insert_glyph_rects.clone().unwrap_or_default(),
                     deleted_glyph_rects: vt.deleted_glyph_rects.clone().unwrap_or_default(),
@@ -916,7 +815,6 @@ impl LinuxEditorAnimationCoordinator {
                     animation_mode: mode,
                     inserted_range: vt.inserted_range,
                     kind: vt.kind.into(),
-                    hidden_visual_range_ids,
                     cluster_rects: vt.cluster_rects.clone(),
                     cluster_runs: vt.cluster_runs.clone(),
                 });
@@ -1160,10 +1058,14 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    fn make_key(id: u64) -> VisualTransactionKey {
+        VisualTransactionKey { transaction_id: id, generation: id }
+    }
+
     #[test]
     fn test_registry_insert_creates_hidden_range() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert_eq!(reg.insert_byte_ranges(), vec![(10, 20)]);
         assert!(reg.has_active_insert());
         assert!(!reg.is_empty());
@@ -1172,7 +1074,7 @@ mod tests {
     #[test]
     fn test_registry_delete_no_hidden_range() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_delete((5, 15), AnimationMode::GlyphAnimation, 100);
+        reg.start_delete(make_key(1), (5, 15), AnimationMode::GlyphAnimation, 100);
         assert!(reg.insert_byte_ranges().is_empty());
         assert!(!reg.has_active_insert());
         assert!(!reg.is_empty());
@@ -1181,37 +1083,37 @@ mod tests {
     #[test]
     fn test_registry_clear() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
-        reg.start_delete((30, 40), AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_delete(make_key(2), (30, 40), AnimationMode::GlyphAnimation, 100);
         assert!(!reg.is_empty());
         reg.clear();
         assert!(reg.is_empty());
     }
 
     #[test]
-    fn test_registry_finish_by_range_id() {
+    fn test_registry_finish_by_key() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(Some(11), Some(22), (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        let key = make_key(1);
+        reg.start_insert(key, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(reg.has_active_insert());
-        let removed = reg.finish_by_id(Some(11), Some(22), 10, 20);
+        let removed = reg.finish_by_key(key);
         assert!(removed);
         assert!(reg.is_empty());
     }
 
     #[test]
-    fn test_registry_byte_fallback_cannot_clear_id_owned() {
+    fn test_registry_finish_wrong_key_no_effect() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(Some(101), Some(202), (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
-        assert!(!reg.finish_by_id(None, None, 10, 20));
-        assert_eq!(reg.insert_byte_ranges(), vec![(10, 20)]);
-        assert!(reg.finish_by_id(Some(101), Some(202), 10, 20));
-        assert!(reg.is_empty());
+        reg.start_insert(make_key(1), None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        let removed = reg.finish_by_key(make_key(999));
+        assert!(!removed);
+        assert!(reg.has_active_insert());
     }
 
     #[test]
     fn test_registry_timeout() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         let now = Instant::now() + Duration::from_millis(401);
         assert!(reg.tick(now));
         assert!(reg.is_empty());
@@ -1220,7 +1122,7 @@ mod tests {
     #[test]
     fn test_registry_map_ranges_for_insert() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         reg.map_ranges_for_insert(5, 3);
         assert_eq!(reg.insert_byte_ranges(), vec![(13, 23)]);
     }
@@ -1228,7 +1130,7 @@ mod tests {
     #[test]
     fn test_registry_map_ranges_insert_inside_cancels() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         reg.map_ranges_for_insert(15, 3);
         assert!(reg.is_empty());
     }
@@ -1236,7 +1138,7 @@ mod tests {
     #[test]
     fn test_registry_map_ranges_for_delete() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         reg.map_ranges_for_delete(5, 3);
         assert_eq!(reg.insert_byte_ranges(), vec![(7, 17)]);
     }
@@ -1244,58 +1146,29 @@ mod tests {
     #[test]
     fn test_registry_reflow_ranges() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         assert_eq!(reg.reflow_byte_ranges(), vec![(20, 25), (25, 30)]);
     }
 
     #[test]
-    fn test_registry_reflow_ids_survive_mapping() {
+    fn test_concurrent_inserts_different_keys() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(Some(11), Some(22), (10, 20), vec![(20, 25)], AnimationMode::GlyphAnimation, 100);
-        let ids_before: Vec<u64> = reg.entries[0].reflow_hidden_ranges.iter().map(|r| r.range_id).collect();
-        reg.map_ranges_for_insert(0, 3);
-        let mapped = &reg.entries[0].reflow_hidden_ranges;
-        assert_eq!(mapped.iter().map(|r| r.range_id).collect::<Vec<_>>(), ids_before);
-        assert_eq!(mapped[0].byte_range, (23, 28));
-    }
-
-    #[test]
-    fn test_concurrent_inserts_different_ids() {
-        let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(Some(1), Some(100), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        reg.start_insert(Some(2), Some(200), (15, 16), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(2), None, (15, 16), vec![], AnimationMode::GlyphAnimation, 100);
         assert_eq!(reg.insert_byte_ranges().len(), 2);
-        let removed = reg.finish_by_id(Some(2), Some(200), 15, 16);
+        let removed = reg.finish_by_key(make_key(2));
         assert!(removed);
         assert!(reg.has_active_insert());
         assert_eq!(reg.insert_byte_ranges(), vec![(5, 6)]);
     }
 
     #[test]
-    fn test_generation_increases_per_insert() {
-        let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        reg.start_insert(Some(2), Some(20), (15, 16), vec![], AnimationMode::GlyphAnimation, 100);
-        let g1 = reg.entries[0].generation;
-        let g2 = reg.entries[1].generation;
-        assert!(g2 > g1);
-        assert!(g1 > 0);
-    }
-
-    #[test]
-    fn test_stale_callback_blocked_by_generation() {
-        let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        let gen1 = reg.entries[0].generation;
-
-        reg.finish_by_id(Some(1), Some(10), 5, 6);
-        assert!(reg.is_empty());
-
-        reg.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        let gen2 = reg.entries[0].generation;
-        assert!(gen2 > gen1);
-
-        assert!(reg.has_active_insert());
+    fn test_visual_transaction_key_uniqueness() {
+        let key1 = make_key(1);
+        let key2 = make_key(2);
+        assert_ne!(key1, key2);
+        let key1_dup = make_key(1);
+        assert_eq!(key1, key1_dup);
     }
 
     #[test]
@@ -1303,21 +1176,15 @@ mod tests {
         let plan = StaticTextRenderPlan {
             hidden_ranges: vec![
                 HiddenRangeInfo {
-                    transaction_id: None,
-                    range_id: None,
-                    generation: 1,
+                    key: make_key(1),
                     byte_range: (10, 20),
                 },
                 HiddenRangeInfo {
-                    transaction_id: None,
-                    range_id: None,
-                    generation: 1,
+                    key: make_key(1),
                     byte_range: (18, 25),
                 },
                 HiddenRangeInfo {
-                    transaction_id: None,
-                    range_id: None,
-                    generation: 2,
+                    key: make_key(2),
                     byte_range: (30, 40),
                 },
             ],
@@ -1349,7 +1216,7 @@ mod tests {
     #[test]
     fn test_cursor_plan_coordinated_suppressed_blink() {
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
 
         let plan = coord.build_cursor_plan(
             Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
@@ -1389,7 +1256,7 @@ mod tests {
     #[test]
     fn test_coordinator_suppress_all() {
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(coord.has_active_insert());
         let suppressed = coord.suppress_all();
         assert!(suppressed);
@@ -1398,10 +1265,11 @@ mod tests {
     }
 
     #[test]
-    fn test_coordinator_finish_overlay_plan() {
+    fn test_coordinator_finish_by_key() {
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        let removed = coord.finish_overlay_plan(Some(1), Some(10), 5, 6);
+        let key = make_key(1);
+        coord.registry.start_insert(key, None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        let removed = coord.finish_by_key(key);
         assert!(removed);
         assert!(coord.is_empty());
     }
@@ -1422,57 +1290,19 @@ mod tests {
     }
 
     #[test]
-    fn test_overlay_plan_for_vt() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        let vt = EditorVisualTransaction {
-            id: 42,
-            kind: EditorAnimationKind::Insert,
-            cause: writer_core::editor::EditorTransactionCause::Typing,
-            old_text: "ab".into(),
-            new_text: "aXb".into(),
-            old_selection: writer_core::editor::EditorSelection::collapsed("ab", 1),
-            new_selection: writer_core::editor::EditorSelection::collapsed("aXb", 2),
-            inserted_range: Some((1, 2)),
-            deleted_glyph_rects: None,
-            insert_glyph_rects: Some(vec![]),
-            reflow_glyph_rects: None,
-            animation_mode: CoreAnimationMode::GlyphAnimation,
-            cluster_rects: None,
-            cluster_runs: None,
-            hidden_visual_ranges: vec![writer_core::editor::HiddenVisualRange {
-                id: 100,
-                kind: CoreAnimationMode::GlyphAnimation,
-                range_start: 1,
-                range_end: 2,
-                old_rect: None,
-                new_rect: None,
-                line_index: 0,
-                payload_ref: None,
-            }],
-            old_cursor_rect: None,
-            new_cursor_rect: None,
-            duration_ms: 160,
-            coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
-        };
-        let plan = coord.build_overlay_plan_for_vt(&vt);
-        assert_eq!(plan.entries.len(), 1);
-        assert_eq!(plan.entries[0].transaction_id, Some(42));
-        assert_eq!(plan.entries[0].range_id, Some(100));
-    }
-
-    #[test]
     fn test_multiple_reflow_ranges_independent_lifecycle() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(Some(1), Some(10), (5, 10), vec![(10, 15), (15, 20)], AnimationMode::GlyphAnimation, 100);
+        let key = make_key(1);
+        reg.start_insert(key, None, (5, 10), vec![(10, 15), (15, 20)], AnimationMode::GlyphAnimation, 100);
         assert_eq!(reg.reflow_byte_ranges(), vec![(10, 15), (15, 20)]);
-        reg.finish_by_id(Some(1), Some(10), 5, 10);
+        reg.finish_by_key(key);
         assert!(reg.reflow_byte_ranges().is_empty());
     }
 
     #[test]
     fn test_map_ranges_insert_before_reflow() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         reg.map_ranges_for_insert(5, 3);
         assert_eq!(reg.insert_byte_ranges(), vec![(13, 23)]);
         assert_eq!(reg.reflow_byte_ranges(), vec![(23, 28), (28, 33)]);
@@ -1481,7 +1311,7 @@ mod tests {
     #[test]
     fn test_map_ranges_delete_before_reflow() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         reg.map_ranges_for_delete(5, 3);
         assert_eq!(reg.insert_byte_ranges(), vec![(7, 17)]);
         assert_eq!(reg.reflow_byte_ranges(), vec![(17, 22), (22, 27)]);
@@ -1490,7 +1320,7 @@ mod tests {
     #[test]
     fn test_map_ranges_insert_inside_reflow_removes_that_reflow() {
         let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(None, None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
+        reg.start_insert(make_key(1), None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
         reg.map_ranges_for_insert(22, 3);
         assert_eq!(reg.insert_byte_ranges(), vec![(10, 20)]);
         assert_eq!(reg.reflow_byte_ranges(), vec![(28, 33)]);
@@ -1499,7 +1329,7 @@ mod tests {
     #[test]
     fn test_coordinated_tween_uses_visual_transaction_cursor_rects() {
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
 
         let plan = coord.build_cursor_plan(
             Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
@@ -1529,7 +1359,7 @@ mod tests {
     #[test]
     fn test_coordinated_false_snaps_even_with_active_insert() {
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
 
         let plan = coord.build_cursor_plan(
             Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
@@ -1641,7 +1471,7 @@ mod tests {
     #[test]
     fn test_ime_plan_independent_of_cursor_blink() {
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(Some(1), Some(10), (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
 
         let cursor_plan = coord.build_cursor_plan(
             Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
@@ -1669,5 +1499,42 @@ mod tests {
         let ime_plan = coord.build_ime_plan(false, false);
         assert_eq!(ime_plan.kind, ImeUpdateKind::None);
         assert!(!ime_plan.cursor_changed);
+    }
+
+    #[test]
+    fn test_key_atomic_cleanup_finish_by_key() {
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = coord.alloc_key();
+        coord.registry.start_insert(key, None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        let vt = EditorVisualTransaction {
+            id: 1,
+            kind: EditorAnimationKind::Insert,
+            cause: writer_core::editor::EditorTransactionCause::Typing,
+            old_text: "a".into(),
+            new_text: "ab".into(),
+            old_selection: writer_core::editor::EditorSelection::collapsed("a", 1),
+            new_selection: writer_core::editor::EditorSelection::collapsed("ab", 2),
+            inserted_range: Some((1, 2)),
+            deleted_glyph_rects: None,
+            insert_glyph_rects: Some(vec![]),
+            reflow_glyph_rects: None,
+            animation_mode: CoreAnimationMode::GlyphAnimation,
+            cluster_rects: None,
+            cluster_runs: None,
+            hidden_visual_ranges: vec![],
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            duration_ms: 160,
+            coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
+        };
+        coord.vt_queue.enqueue(key, &vt, AnimationMode::GlyphAnimation);
+
+        assert!(coord.has_active_insert());
+        assert!(coord.vt_queue.has_active());
+
+        let removed = coord.finish_by_key(key);
+        assert!(removed);
+        assert!(coord.is_empty());
+        assert!(coord.vt_queue.is_empty());
     }
 }

@@ -4,7 +4,7 @@ mod tests {
     use crate::sujian_editor_item::is_complex_grapheme;
     use crate::sujian_editor_item::SujianEditorItem;
     use crate::sujian_editor_item::PreeditAttributeKind;
-    use crate::sujian_editor_item::animation_coordinator::{AnimationMode, AnimationRangeRegistry};
+    use crate::sujian_editor_item::animation_coordinator::{AnimationMode, AnimationRangeRegistry, VisualTransactionKey};
     use qmetaobject::prelude::*;
     use writer_core::editor::CursorRect;
 
@@ -202,7 +202,7 @@ mod tests {
         let mut state = AnimationRangeRegistry::new();
         let inserted_range = Some((5, 10));
         if let Some((range_start, range_end)) = inserted_range {
-            state.start_insert(None, None, (range_start, range_end), vec![], AnimationMode::GlyphAnimation, 100);
+            state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (range_start, range_end), vec![], AnimationMode::GlyphAnimation, 100);
         }
         assert_eq!(state.insert_byte_ranges(), vec![(5, 10)]);
         assert!(state.has_active_insert());
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn typing_animation_disabled_clears_hidden_range_immediately() {
         let mut state = AnimationRangeRegistry::new();
-        state.start_insert(None, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
+        state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
         assert!(state.has_active_insert());
         assert_eq!(state.insert_byte_ranges(), vec![(10, 20)]);
         state.clear();
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn delete_single_char_animation_lifecycle() {
         let mut state = AnimationRangeRegistry::new();
-        state.start_delete((5, 8), AnimationMode::GlyphAnimation, 100);
+        state.start_delete(VisualTransactionKey { transaction_id: 2, generation: 2 }, (5, 8), AnimationMode::GlyphAnimation, 100);
         assert!(state.insert_byte_ranges().is_empty());
         assert!(!state.has_active_insert());
         assert!(!state.is_empty());
@@ -333,7 +333,7 @@ mod tests {
         let mut state = AnimationRangeRegistry::new();
         if let Some((range_start, range_end)) = vt.inserted_range {
             if mode != AnimationMode::SystemSuppressed {
-                state.start_insert(None, None, (range_start, range_end), vec![], mode, vt.duration_ms);
+                state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (range_start, range_end), vec![], mode, vt.duration_ms);
             }
         }
         assert!(
@@ -388,7 +388,7 @@ mod tests {
 
         let mut state = AnimationRangeRegistry::new();
         if mode != AnimationMode::SystemSuppressed {
-            state.start_insert(None, None, (0, long_candidate.len()), vec![], mode, 160);
+            state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (0, long_candidate.len()), vec![], mode, 160);
         }
         assert!(
             state.has_active_insert(),
@@ -505,7 +505,7 @@ mod tests {
         let mut state = AnimationRangeRegistry::new();
         if let Some((rs, re)) = vt.inserted_range {
             if mode != AnimationMode::SystemSuppressed {
-                state.start_insert(None, None, (rs, re), vec![], mode, vt.duration_ms);
+                state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (rs, re), vec![], mode, vt.duration_ms);
             }
         }
         assert!(state.has_active_insert());
@@ -544,7 +544,7 @@ mod tests {
 
         let mut state = AnimationRangeRegistry::new();
         if mode != AnimationMode::SystemSuppressed {
-            state.start_insert(None, None, (old_text.len(), new_text.len()), vec![], mode, 160);
+            state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (old_text.len(), new_text.len()), vec![], mode, 160);
         }
         assert!(
             state.has_active_insert(),
@@ -667,7 +667,7 @@ mod tests {
     fn qml_overlay_skip_must_clear_hidden_range() {
         let mut state = AnimationRangeRegistry::new();
         let byte_range = (10, 22);
-        state.start_insert(None, None, byte_range, vec![], AnimationMode::GlyphAnimation, 160);
+        state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, byte_range, vec![], AnimationMode::GlyphAnimation, 160);
         assert!(
             state.has_active_insert(),
             "Should have active insert before skip"
@@ -678,7 +678,7 @@ mod tests {
             "Hidden range should be (10, 22) before skip"
         );
 
-        let removed = state.finish_by_id(None, None, 10, 22);
+        let removed = state.finish_by_key(VisualTransactionKey { transaction_id: 1, generation: 1 });
         assert!(
             removed,
             "on_insert_animation_skipped_by_id should return true (removed matching animation)"
@@ -692,11 +692,11 @@ mod tests {
             "No active insert byte range should remain after skip"
         );
 
-        state.start_insert(None, None, (30, 42), vec![], AnimationMode::GlyphAnimation, 160);
-        let removed_wrong = state.finish_by_id(None, None, 50, 60);
+        state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (30, 42), vec![], AnimationMode::GlyphAnimation, 160);
+        let removed_wrong = state.finish_by_key(VisualTransactionKey { transaction_id: 999, generation: 1 });
         assert!(
             !removed_wrong,
-            "Skipping non-matching range should return false"
+            "Skipping non-matching key should return false"
         );
         assert!(
             state.has_active_insert(),

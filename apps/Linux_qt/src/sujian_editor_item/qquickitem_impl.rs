@@ -1,6 +1,7 @@
 use super::input_host::is_left_button_pressed;
 use super::*;
-use animation_coordinator::{OverlayAnimationKind, VisualTransactionState};
+use animation_coordinator::{OverlayAnimationKind, VisualTransactionKey, VisualTransactionState};
+use std::collections::HashMap;
 
 impl QQuickItem for SujianEditorItem {
     fn component_complete(&mut self) {
@@ -189,41 +190,90 @@ impl QQuickItem for SujianEditorItem {
         }
 
         // ── Update animation layer in Scene Graph (child[1]) ──
-        // Read ActiveVisualTransactionQueue every frame, compute progress,
-        // and drive the animation layer via update_animation_layer().
+        // Uses VisualTransactionKey for unified ID, caches textures per transaction,
+        // and renders from QTextLayout for consistent shaping.
         if !final_root.is_null() && !item_ptr.is_null() {
             let now = Instant::now();
             let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
                 self.animation_coordinator.vt_queue.active_transactions().to_vec();
 
             if active_txs.is_empty() {
+                self.cached_animation_textures.clear();
                 scene_graph::clear_animation_layer(final_root, item_ptr);
             } else {
                 let mut glyph_data: Vec<f64> = Vec::new();
                 let mut glyph_images: Vec<qmetaobject::QImage> = Vec::new();
-                let mut txs_to_mark_rendering: Vec<u64> = Vec::new();
-                let mut txs_to_complete: Vec<(u64, u64)> = Vec::new();
+                let mut glyph_texture_changed: Vec<bool> = Vec::new();
+                let mut txs_to_mark_rendering: Vec<VisualTransactionKey> = Vec::new();
+                let mut txs_to_complete: Vec<VisualTransactionKey> = Vec::new();
                 let mut any_texture_failed = false;
 
                 for tx in &active_txs {
                     if tx.state == VisualTransactionState::Prepared {
-                        txs_to_mark_rendering.push(tx.transaction_id);
+                        txs_to_mark_rendering.push(tx.key);
+                    }
+
+                    let just_prepared = !tx.texture_prepared;
+                    if just_prepared {
+                        let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::new();
+                        match tx.kind {
+                            OverlayAnimationKind::Insert => {
+                                for glyph in &tx.insert_glyph_rects {
+                                    textures.push(self.render_glyph_texture_from_layout(
+                                        &glyph.char_, glyph.w, glyph.h,
+                                        glyph.baseline_y - glyph.y, dpr,
+                                    ));
+                                }
+                                for reflow in &tx.reflow_glyph_rects {
+                                    textures.push(self.render_glyph_texture_from_layout(
+                                        &reflow.char_, reflow.w, reflow.h,
+                                        reflow.new_baseline_y - reflow.new_y, dpr,
+                                    ));
+                                }
+                            }
+                            OverlayAnimationKind::Delete => {
+                                for glyph in &tx.deleted_glyph_rects {
+                                    textures.push(self.render_glyph_texture_from_layout(
+                                        &glyph.char_, glyph.w, glyph.h,
+                                        glyph.baseline_y - glyph.y, dpr,
+                                    ));
+                                }
+                            }
+                            OverlayAnimationKind::Cursor => {}
+                        }
+                        let any_failed = textures.iter().any(|t| t.is_none());
+                        if any_failed {
+                            any_texture_failed = true;
+                        } else {
+                            self.cached_animation_textures.insert(
+                                tx.key,
+                                textures.into_iter().map(|t| t.unwrap()).collect(),
+                            );
+                            self.animation_coordinator.vt_queue.mark_texture_prepared(tx.key);
+                        }
                     }
 
                     let elapsed_ms = now.duration_since(tx.start_time).as_millis() as f64;
                     let progress = (elapsed_ms / tx.duration_ms as f64).min(1.0);
 
                     if progress >= 1.0 {
-                        txs_to_complete.push((tx.transaction_id, tx.generation));
+                        txs_to_complete.push(tx.key);
                     }
 
                     let eased = 1.0 - (1.0 - progress).powi(3);
+
+                    let cached = self.cached_animation_textures.get(&tx.key);
+                    if cached.is_none() && !any_texture_failed {
+                        continue;
+                    }
+                    let cached_textures = cached.cloned().unwrap_or_default();
 
                     match tx.kind {
                         OverlayAnimationKind::Insert => {
                             let old_cx = tx.old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
                             let old_cy = tx.old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
+                            let mut tex_idx = 0usize;
                             for glyph in &tx.insert_glyph_rects {
                                 let dx = glyph.x - old_cx;
                                 let dy = glyph.y - old_cy;
@@ -234,19 +284,17 @@ impl QQuickItem for SujianEditorItem {
 
                                 glyph_data.extend_from_slice(&[gx, gy, glyph.w, glyph.h, opacity, baseline_in_quad]);
 
-                                match self.render_char_texture(
-                                    &glyph.char_, glyph.w, glyph.h,
-                                    glyph.baseline_y - glyph.y, dpr,
-                                ) {
-                                    Some(img) => glyph_images.push(img),
-                                    None => {
-                                        any_texture_failed = true;
-                                        glyph_images.push(qmetaobject::QImage::new(
-                                            qmetaobject::QSize { width: 1, height: 1 },
-                                            qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                                        ));
-                                    }
+                                if just_prepared && tex_idx < cached_textures.len() {
+                                    glyph_images.push(cached_textures[tex_idx].clone());
+                                    glyph_texture_changed.push(true);
+                                } else {
+                                    glyph_images.push(qmetaobject::QImage::new(
+                                        qmetaobject::QSize { width: 1, height: 1 },
+                                        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+                                    ));
+                                    glyph_texture_changed.push(false);
                                 }
+                                tex_idx += 1;
                             }
 
                             for reflow in &tx.reflow_glyph_rects {
@@ -258,51 +306,48 @@ impl QQuickItem for SujianEditorItem {
 
                                 glyph_data.extend_from_slice(&[gx, gy, reflow.w, reflow.h, opacity, baseline_in_quad]);
 
-                                match self.render_char_texture(
-                                    &reflow.char_, reflow.w, reflow.h,
-                                    reflow.new_baseline_y - reflow.new_y, dpr,
-                                ) {
-                                    Some(img) => glyph_images.push(img),
-                                    None => {
-                                        any_texture_failed = true;
-                                        glyph_images.push(qmetaobject::QImage::new(
-                                            qmetaobject::QSize { width: 1, height: 1 },
-                                            qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                                        ));
-                                    }
+                                if just_prepared && tex_idx < cached_textures.len() {
+                                    glyph_images.push(cached_textures[tex_idx].clone());
+                                    glyph_texture_changed.push(true);
+                                } else {
+                                    glyph_images.push(qmetaobject::QImage::new(
+                                        qmetaobject::QSize { width: 1, height: 1 },
+                                        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+                                    ));
+                                    glyph_texture_changed.push(false);
                                 }
+                                tex_idx += 1;
                             }
                         }
                         OverlayAnimationKind::Delete => {
                             let opacity = 1.0 - eased;
 
+                            let mut tex_idx = 0usize;
                             for glyph in &tx.deleted_glyph_rects {
                                 let baseline_in_quad = glyph.baseline_y - glyph.y;
                                 glyph_data.extend_from_slice(&[glyph.x, glyph.y, glyph.w, glyph.h, opacity, baseline_in_quad]);
 
-                                match self.render_char_texture(
-                                    &glyph.char_, glyph.w, glyph.h,
-                                    glyph.baseline_y - glyph.y, dpr,
-                                ) {
-                                    Some(img) => glyph_images.push(img),
-                                    None => {
-                                        any_texture_failed = true;
-                                        glyph_images.push(qmetaobject::QImage::new(
-                                            qmetaobject::QSize { width: 1, height: 1 },
-                                            qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                                        ));
-                                    }
+                                if just_prepared && tex_idx < cached_textures.len() {
+                                    glyph_images.push(cached_textures[tex_idx].clone());
+                                    glyph_texture_changed.push(true);
+                                } else {
+                                    glyph_images.push(qmetaobject::QImage::new(
+                                        qmetaobject::QSize { width: 1, height: 1 },
+                                        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+                                    ));
+                                    glyph_texture_changed.push(false);
                                 }
+                                tex_idx += 1;
                             }
                         }
                         OverlayAnimationKind::Cursor => {}
                     }
                 }
 
-                for tid in txs_to_mark_rendering {
-                    self.animation_coordinator.vt_queue.mark_rendering(tid);
+                for key in &txs_to_mark_rendering {
+                    self.animation_coordinator.vt_queue.mark_rendering(*key);
                     editor_animation_debug_log(&format!(
-                        "update_paint_node: VT tid={} → Rendering", tid
+                        "update_paint_node: VT tid={} → Rendering", key.transaction_id
                     ));
                 }
 
@@ -311,6 +356,7 @@ impl QQuickItem for SujianEditorItem {
                         "update_paint_node: texture render failed, cancelling all active VTs"
                     );
                     self.animation_coordinator.suppress_all();
+                    self.cached_animation_textures.clear();
                     self.render_dirty = true;
                     scene_graph::clear_animation_layer(final_root, item_ptr);
                 } else {
@@ -320,6 +366,7 @@ impl QQuickItem for SujianEditorItem {
                         let image_ptrs: Vec<*const qmetaobject::QImage> =
                             glyph_images.iter().map(|img| img as *const qmetaobject::QImage).collect();
                         let image_ptrs_ptr = image_ptrs.as_ptr();
+                        let texture_changed_ptr = glyph_texture_changed.as_ptr();
 
                         scene_graph::update_animation_layer(
                             final_root,
@@ -327,20 +374,19 @@ impl QQuickItem for SujianEditorItem {
                             glyph_count as i32,
                             glyph_data_ptr,
                             image_ptrs_ptr,
+                            texture_changed_ptr,
                         );
                     } else {
                         scene_graph::clear_animation_layer(final_root, item_ptr);
                     }
                 }
 
-                for (tid, gen) in &txs_to_complete {
-                    self.animation_coordinator.finish_overlay_plan(
-                        Some(*tid), None, 0, 0,
-                    );
-                    self.animation_coordinator.vt_queue.complete(*tid, *gen);
+                for key in &txs_to_complete {
+                    self.animation_coordinator.finish_by_key(*key);
+                    self.cached_animation_textures.remove(key);
                     editor_animation_debug_log(&format!(
                         "update_paint_node: VT tid={}, gen={} completed (progress >= 1.0)",
-                        tid, gen
+                        key.transaction_id, key.generation
                     ));
                 }
 

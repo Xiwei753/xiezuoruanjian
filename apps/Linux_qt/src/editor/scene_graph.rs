@@ -304,20 +304,24 @@ pub fn update_cursor_node(
 }
 
 /// Update the animation layer (child[1]) with a list of animated glyph quads.
-/// Each quad is a small texture image rendered at a specific position with opacity.
+/// Incremental update: reuses existing nodes, only updates rect/opacity/texture.
+/// If glyph_count > existing child count, new nodes are appended.
+/// If glyph_count < existing child count, excess nodes are removed.
 pub fn update_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     glyph_count: i32,
     glyph_data: *const f64,
     images: *const *const qmetaobject::QImage,
+    texture_changed: *const bool,
 ) {
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
         glyph_count as "int",
         glyph_data as "const double*",
-        images as "QImage**"
+        images as "QImage**",
+        texture_changed as "const bool*"
     ] {
         auto *root = static_cast<QSGTransformNode*>(root_raw);
         if (!root) return;
@@ -327,9 +331,9 @@ pub fn update_animation_layer(
         QSGTransformNode *animLayer = dynamic_cast<QSGTransformNode*>(child_at(root, 1));
         if (!animLayer) return;
 
-        // Remove old children
-        while (animLayer->childCount() > 0) {
-            QSGNode *child = animLayer->firstChild();
+        // Remove excess children if glyph count decreased
+        while (animLayer->childCount() > glyph_count) {
+            QSGNode *child = child_at(animLayer, animLayer->childCount() - 1);
             animLayer->removeChildNode(child);
             delete child;
         }
@@ -339,24 +343,42 @@ pub fn update_animation_layer(
             const double *d = glyph_data + i * 6;
             double gx = d[0], gy = d[1], gw = d[2], gh = d[3], gopacity = d[4];
 
-            QSGOpacityNode *opNode = new QSGOpacityNode;
-            opNode->setOpacity(static_cast<float>(gopacity));
-            animLayer->appendChildNode(opNode);
+            QSGOpacityNode *opNode = nullptr;
+            QSGImageNode *imgNode = nullptr;
 
-            QSGImageNode *imgNode = item_ptr->window()->createImageNode();
-            imgNode->setFiltering(QSGTexture::Nearest);
-            imgNode->setOwnsTexture(true);
+            if (i < animLayer->childCount()) {
+                // Reuse existing node — only update opacity, rect, texture
+                opNode = dynamic_cast<QSGOpacityNode*>(child_at(animLayer, i));
+                if (opNode && opNode->childCount() > 0) {
+                    imgNode = static_cast<QSGImageNode*>(opNode->firstChild());
+                }
+            } else {
+                // Create new node
+                opNode = new QSGOpacityNode;
+                animLayer->appendChildNode(opNode);
+
+                imgNode = item_ptr->window()->createImageNode();
+                imgNode->setFiltering(QSGTexture::Nearest);
+                imgNode->setOwnsTexture(true);
+                opNode->appendChildNode(imgNode);
+            }
+
+            if (!opNode || !imgNode) continue;
+
+            opNode->setOpacity(static_cast<float>(gopacity));
+
             imgNode->setRect(static_cast<qreal>(gx), static_cast<qreal>(gy),
                             static_cast<qreal>(gw), static_cast<qreal>(gh));
 
-            if (images && images[i]) {
+            // Only update texture when it has changed (first frame or re-prepared)
+            bool needTextureUpdate = (texture_changed && texture_changed[i]);
+            if (needTextureUpdate && images && images[i]) {
                 QSGTexture *tex = item_ptr->window()->createTextureFromImage(*images[i]);
                 tex->setFiltering(QSGTexture::Nearest);
                 imgNode->setTexture(tex);
             }
 
             imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-            opNode->appendChildNode(imgNode);
         }
 
         if (glyph_count > 0) {

@@ -641,7 +641,7 @@ impl SujianEditorItem {
         None
     }
 
-    pub(crate) fn render_char_texture(
+    pub(crate) fn render_glyph_texture_from_layout(
         &self,
         ch: &str,
         glyph_w: f64,
@@ -681,18 +681,37 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let fs = font_size as f32;
         let ff: QString = self.current_font_family.to_string().into();
-        cpp!(unsafe [painter as "QPainter*", fs as "float", ff as "QString"] {
-            QFont f(ff);
-            f.setPixelSize(static_cast<int>(fs));
-            painter->setFont(f);
-        });
-
-        let color = qmetaobject::QColor::from_name(&self.current_text_color.to_string());
-        painter.set_pen(qmetaobject::QPen::from_color(color));
+        let color_str = self.current_text_color.to_string();
 
         let qch: QString = ch.to_string().into();
-        cpp!(unsafe [painter as "QPainter*", qch as "QString", baseline_offset as "double"] {
-            painter->drawText(QPointF(0, baseline_offset), qch);
+        let color_cstr = color_str.as_ptr();
+        let color_len = color_str.len();
+
+        cpp!(unsafe [
+            painter as "QPainter*",
+            qch as "QString",
+            fs as "float",
+            ff as "QString",
+            baseline_offset as "double",
+            color_cstr as "const char*",
+            color_len as "size_t"
+        ] {
+            QFont font(ff);
+            font.setPixelSize(static_cast<int>(fs));
+            QTextLayout layout(qch, font);
+            QTextOption option;
+            option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            layout.setTextOption(option);
+            layout.beginLayout();
+            QTextLine line = layout.createLine();
+            if (line.isValid()) {
+                line.setLineWidth(99999.0);
+                QColor textColor(QString::fromUtf8(color_cstr, static_cast<int>(color_len)));
+                painter->setPen(QPen(textColor));
+                QPointF pos(0, baseline_offset - line.ascent());
+                line.draw(painter, pos);
+            }
+            layout.endLayout();
         });
 
         renderer::sujian_delete_painter(painter_ptr);

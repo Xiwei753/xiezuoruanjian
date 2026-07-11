@@ -99,8 +99,8 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         "update_paint_node must complete transactions via vt_queue.complete when progress >= 1.0"
     );
     assert!(
-        combined.contains("finish_overlay_plan"),
-        "update_paint_node must call finish_overlay_plan to remove hidden ranges when transaction completes"
+        combined.contains("finish_by_key"),
+        "update_paint_node must call finish_by_key to atomically remove hidden ranges and complete transaction when progress >= 1.0"
     );
     assert!(
         combined.contains("mark_rendering"),
@@ -115,9 +115,9 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
     );
     assert!(
         combined.contains("start_insert(")
-            && combined.contains("Some(vt.id)")
-            && combined.contains("hidden_range_id"),
-        "record_transaction Insert path must start AnimationRangeRegistry with transactionId/rangeId via coordinator"
+            && combined.contains("alloc_key()")
+            && combined.contains("core_range_id"),
+        "record_transaction Insert path must start AnimationRangeRegistry with VisualTransactionKey via coordinator"
     );
 }
 
