@@ -8,7 +8,6 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import com.xiwei.sujian.data.BridgeProvider
-import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.model.FoldFeatureInfo
@@ -72,18 +71,19 @@ class SujianAppViewModel(
     var isLoading by mutableStateOf(false)
         private set
 
-    private var workspaceRepository: WorkspaceRepository? = null
     private var workspaceUseCase: WorkspaceUseCase? = null
     private var settingsRepository: SettingsRepository? = null
+    private var appContext: android.content.Context? = null
 
     fun initialize(
-        workspaceRepo: WorkspaceRepository,
+        workspaceRepo: com.xiwei.sujian.data.WorkspaceRepository,
         workspaceUC: WorkspaceUseCase,
         settingsRepo: SettingsRepository,
+        context: android.content.Context
     ) {
-        workspaceRepository = workspaceRepo
         workspaceUseCase = workspaceUC
         settingsRepository = settingsRepo
+        appContext = context.applicationContext
         refreshProjects()
         refreshRecentEdits()
     }
@@ -160,7 +160,8 @@ class SujianAppViewModel(
     }
 
     fun resolveLayout(metrics: WindowMetrics): LayoutPlan? {
-        val bridge = workspaceRepository?.let { BridgeProvider.getLayoutPolicyBridge(it) } ?: return null
+        val ctx = appContext ?: return null
+        val bridge = BridgeProvider.getLayoutPolicyBridge(ctx)
         val plan = bridge.resolveLayout(metrics)
         currentLayoutPlan = plan
         return plan

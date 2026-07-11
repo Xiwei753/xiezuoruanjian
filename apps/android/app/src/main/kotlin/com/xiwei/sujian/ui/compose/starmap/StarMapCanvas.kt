@@ -1,9 +1,9 @@
 package com.xiwei.sujian.ui.compose.starmap
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.gesture.detectDragGestures
-import androidx.compose.foundation.gesture.detectTapGestures
-import androidx.compose.foundation.gesture.detectTransformGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -294,4 +294,4 @@ private fun DrawScope.drawNode(
 private fun Color.toArgb(): Int = ((alpha * 255).toInt() shl 24) or
         ((red * 255).toInt() shl 16) or
         ((green * 255).toInt() shl 8) or
-        (blue * 255).toInt())
+        (blue * 255).toInt()

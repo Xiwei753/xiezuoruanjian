@@ -44,6 +44,7 @@ object AndroidStyleAdapter {
             ActionRole.Settings -> MaterialControlType.TopAppBarAction
             ActionRole.Sync -> MaterialControlType.FloatingActionButton
             ActionRole.Search -> MaterialControlType.TopAppBarAction
+            ActionRole.Sort -> MaterialControlType.TopAppBarAction
         }
         return MaterialControl(
             type = type,
@@ -71,6 +72,10 @@ object AndroidStyleAdapter {
             ActionPlacement.BottomBar -> LayoutPosition.BottomNavigation
             ActionPlacement.ContextMenu -> LayoutPosition.ContextualMenu
             ActionPlacement.SidePanel -> LayoutPosition.SideDrawer
+            ActionPlacement.Navigation -> LayoutPosition.BottomNavigation
+            ActionPlacement.ListHeader -> LayoutPosition.TopBarLeading
+            ActionPlacement.ItemTrailing -> LayoutPosition.ContextualMenu
+            ActionPlacement.EmptyState -> LayoutPosition.FloatingBottom
         }
     }
 
@@ -91,6 +96,7 @@ object AndroidStyleAdapter {
             PaneRole.Editor -> PaneContainer.EditorFragment
             PaneRole.Inspector -> PaneContainer.BottomSheet
             PaneRole.Drawer -> PaneContainer.NavigationDrawer
+            PaneRole.Supporting -> PaneContainer.BottomSheet
         }
     }
 }

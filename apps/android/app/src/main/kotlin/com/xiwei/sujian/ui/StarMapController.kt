@@ -83,7 +83,6 @@ class StarMapController(
                 }
                 if (starmaps is BridgeResult.Success && starmaps.data.isNotEmpty()) {
                     starmapId = starmaps.data[0].starmapId
-                    activity.onStarmapIdInitialized(starmapId)
                     loadGraph()
                 }
             }

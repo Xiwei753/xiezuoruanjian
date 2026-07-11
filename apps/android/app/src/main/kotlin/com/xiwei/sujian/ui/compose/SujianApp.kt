@@ -36,7 +36,7 @@ fun SujianApp() {
         val workspaceRepo = WorkspaceRepository(context)
         val settingsRepo = SettingsRepository(context)
         val workspaceUC = WorkspaceUseCase(workspaceRepo)
-        vm.initialize(workspaceRepo, workspaceUC, settingsRepo)
+        vm.initialize(workspaceRepo, workspaceUC, settingsRepo, context)
     }
 
     val windowState = rememberAdaptiveWindowState()

@@ -56,7 +56,7 @@ fun StatsScreen(
                     else -> {}
                 }
                 when (val result = bridge.getWritingStatsByProject(startDate, endDate)) {
-                    is com.xiwei.sujian.data.BridgeResult.Success -> projectItems = result.data.items
+                    is com.xiwei.sujian.data.BridgeResult.Success -> projectItems = result.data.projects ?: emptyList()
                     else -> {}
                 }
             } catch (_: Exception) { }
@@ -100,9 +100,9 @@ fun StatsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            StatItem("手动输入", "${s.totalHumanTypedChars}")
-                            StatItem("活跃时长", formatDuration(s.totalActiveSeconds))
-                            StatItem("会话数", "${s.totalSessions}")
+                            StatItem("手动输入", "${s.totalHumanTypedChars ?: 0}")
+                            StatItem("活跃时长", formatDuration(s.totalActiveSeconds ?: 0L))
+                            StatItem("会话数", "${s.totalSessions ?: 0}")
                         }
                     }
                 }
@@ -114,14 +114,14 @@ fun StatsScreen(
                 Text("按作品统计", style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(8.dp))
             }
-            items(projectItems, key = { it.projectId }) { item ->
+            items(projectItems, key = { it.projectId ?: "" }) { item ->
                 Card(
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text(item.projectTitle, style = MaterialTheme.typography.titleSmall)
-                        Text("${item.wordCount} 字 · ${formatDuration(item.timeSeconds)}", style = MaterialTheme.typography.bodySmall)
+                        Text(item.projectTitle ?: "", style = MaterialTheme.typography.titleSmall)
+                        Text("${item.netDeltaChars ?: 0} 字 · ${formatDuration(item.activeSeconds ?: 0)}", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }

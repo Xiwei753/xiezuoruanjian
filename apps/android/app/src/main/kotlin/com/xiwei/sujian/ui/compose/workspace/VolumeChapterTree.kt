@@ -13,7 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -472,7 +472,7 @@ fun VolumeRow(
         leadingContent = {
             IconButton(onClick = onToggleExpand) {
                 Icon(
-                    Icons.Default.ChevronRight,
+                    Icons.Default.KeyboardArrowRight,
                     contentDescription = if (volume.isExpanded) "折叠" else "展开",
                     modifier = Modifier.size(24.dp)
                 )

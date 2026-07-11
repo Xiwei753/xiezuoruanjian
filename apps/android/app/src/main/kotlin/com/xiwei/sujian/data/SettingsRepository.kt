@@ -315,17 +315,17 @@ class SettingsRepository(context: Context) {
             val paletteId = "$deviceId:$fingerprint"
 
             val record = uniffi.writer_core.ThemePaletteRecordDto(
-                schema_version = 1u,
-                palette_id = paletteId,
-                palette_fingerprint = fingerprint,
+                schemaVersion = 1u,
+                paletteId = paletteId,
+                paletteFingerprint = fingerprint,
                 source = "android_dynamic_color",
-                source_platform = "android",
-                source_device_id = deviceId,
-                source_device_class = effectiveDeviceClass,
-                captured_at_ms = System.currentTimeMillis(),
+                sourcePlatform = "android",
+                sourceDeviceId = deviceId,
+                sourceDeviceClass = effectiveDeviceClass,
+                capturedAtMs = System.currentTimeMillis(),
                 variant = "system_selected",
-                light_scheme = lightScheme,
-                dark_scheme = darkScheme
+                lightScheme = lightScheme,
+                darkScheme = darkScheme
             )
 
             settingsBridge.savePaletteRecord(record)

@@ -150,7 +150,7 @@ fun ProjectWorkspaceScreen(
         detailPane = {
             AnimatedPane {
                 if (visiblePaneRoles?.showEditor != false) {
-                    val currentContent = navigator.currentDestination?.content
+                    val currentContent = navigator.currentDestination?.contentKey
                     val detailVolumeId = currentContent?.volumeId ?: currentVolumeId
                     val detailChapterId = currentContent?.chapterId ?: currentChapterId
                     val detailChapterTitle = currentContent?.chapterTitle ?: currentChapterTitle

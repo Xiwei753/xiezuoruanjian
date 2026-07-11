@@ -81,9 +81,9 @@ fun rememberThemeController(context: Context): ThemeController {
                     ThemeStore.onSyncCompleted()
                 }
                 controller.reload()
-                val uiState = store.uiState.value
+                val uiState = ThemeStore.uiState.value
                 if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {
-                    store.captureDynamicColorAndSave(context)
+                    ThemeStore.captureDynamicColorAndSave(context)
                 }
             }
         }
@@ -102,10 +102,10 @@ fun rememberThemeController(context: Context): ThemeController {
     DisposableEffect(configuration) {
         val isDark = (configuration?.uiMode?.and(Configuration.UI_MODE_NIGHT_MASK)
             == Configuration.UI_MODE_NIGHT_YES)
-        store.onSystemDarkModeChanged(isDark)
-        val uiState = store.uiState.value
+        ThemeStore.onSystemDarkModeChanged(isDark)
+        val uiState = ThemeStore.uiState.value
         if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {
-            store.captureDynamicColorAndSave(context)
+            ThemeStore.captureDynamicColorAndSave(context)
         }
         onDispose { }
     }

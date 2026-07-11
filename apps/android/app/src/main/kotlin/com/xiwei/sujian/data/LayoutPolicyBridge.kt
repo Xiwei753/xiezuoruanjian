@@ -137,18 +137,11 @@ class LayoutPolicyBridge internal constructor(private val holder: WriterAppServi
         maxDp = maxDp
     )
 
-    private fun AvoidRegionKindDto.toModel(): AvoidRegionKind = when (this) {
-        AvoidRegionKindDto.WINDOW_INSET -> AvoidRegionKind.WindowInset
-        AvoidRegionKindDto.VERTICAL_HINGE -> AvoidRegionKind.VerticalHinge
-        AvoidRegionKindDto.HORIZONTAL_HINGE -> AvoidRegionKind.HorizontalHinge
-    }
-
     private fun AvoidRegionDto.toModel(): AvoidRegion = AvoidRegion(
         leftDp = leftDp,
         topDp = topDp,
         rightDp = rightDp,
-        bottomDp = bottomDp,
-        kind = kind.toModel()
+        bottomDp = bottomDp
     )
 
     private fun LayoutPlanDto.toModel(): LayoutPlan = LayoutPlan(

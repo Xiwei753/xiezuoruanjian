@@ -354,4 +354,11 @@
     <string name="stats_week_data">本周数据</string>
     <string name="stats_project_ranking_week">作品排行 (本周)</string>
     <string name="loading">加载中...</string>
+
+    <!-- Theme & Palette -->
+    <string name="pref_hint_color_theme">颜色主题</string>
+    <string name="pref_use_dynamic_color">使用本机动态配色</string>
+    <string name="pref_hint_builtin_theme">内置主题</string>
+    <string name="pref_hint_saved_palette">已保存的设备配色</string>
+    <string name="pref_delete_palette">删除选中配色</string>
 </resources>

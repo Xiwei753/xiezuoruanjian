@@ -73,7 +73,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginBottom="8dp"
-                        android:hint="颜色主题">
+                        android:hint="@string/pref_hint_color_theme">
                         <com.google.android.material.textfield.MaterialAutoCompleteTextView
                             android:id="@+id/actvColorSource"
                             android:layout_width="match_parent"
@@ -92,7 +92,7 @@
                             android:layout_width="0dp"
                             android:layout_weight="1"
                             android:layout_height="wrap_content"
-                            android:text="使用本机动态配色"
+                            android:text="@string/pref_use_dynamic_color"
                             android:textSize="16sp"/>
                         <com.google.android.material.materialswitch.MaterialSwitch
                             android:id="@+id/switchDynamicColor"
@@ -106,7 +106,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginBottom="8dp"
-                        android:hint="内置主题">
+                        android:hint="@string/pref_hint_builtin_theme">
                         <com.google.android.material.textfield.MaterialAutoCompleteTextView
                             android:id="@+id/actvBuiltinTheme"
                             android:layout_width="match_parent"
@@ -120,7 +120,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginBottom="8dp"
-                        android:hint="已保存的设备配色">
+                        android:hint="@string/pref_hint_saved_palette">
                         <com.google.android.material.textfield.MaterialAutoCompleteTextView
                             android:id="@+id/actvPaletteRecord"
                             android:layout_width="match_parent"
@@ -133,7 +133,7 @@
                         android:id="@+id/btnDeletePalette"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="删除选中配色"
+                        android:text="@string/pref_delete_palette"
                         style="@style/Widget.Material3.Button.TextButton"
                         android:layout_marginBottom="16dp" />
 

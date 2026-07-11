@@ -3,6 +3,7 @@ package com.xiwei.sujian.ui
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.activity.compose.setContent
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.ui.compose.SujianApp
@@ -27,9 +28,5 @@ class MainActivity : AppCompatActivity() {
         setContent {
             SujianApp()
         }
-    }
-
-    private fun setContent(content: @androidx.compose.runtime.Composable () -> Unit) {
-        androidx.activity.compose.setContent(content)
     }
 }
