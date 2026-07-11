@@ -7,7 +7,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -29,7 +29,6 @@ import com.xiwei.sujian.ui.compose.theme.rememberThemeController
 fun SujianApp() {
     val context = LocalContext.current
     val vm: SujianAppViewModel = viewModel()
-    val coroutineScope = rememberCoroutineScope()
     val appState = remember { SujianAppState(vm) }
     val themeController = rememberThemeController(context)
 
@@ -37,7 +36,7 @@ fun SujianApp() {
         val workspaceRepo = WorkspaceRepository(context)
         val settingsRepo = SettingsRepository(context)
         val workspaceUC = WorkspaceUseCase(workspaceRepo)
-        vm.initialize(workspaceRepo, workspaceUC, settingsRepo, coroutineScope)
+        vm.initialize(workspaceRepo, workspaceUC, settingsRepo)
     }
 
     val windowState = rememberAdaptiveWindowState()

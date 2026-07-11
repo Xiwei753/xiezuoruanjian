@@ -283,6 +283,7 @@ impl LinuxEditorAnimationCoordinator {
         force_snap_next: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         font_family: &str,
+        shaped_glyphs: &[super::visual_payload::ShapedGlyphInfo],
     ) {
         if !typing_animation_enabled || is_scrolling {
             return;
@@ -323,6 +324,7 @@ impl LinuxEditorAnimationCoordinator {
                         mode,
                         &vt.old_text,
                         font_family,
+                        shaped_glyphs,
                     );
 
                     self.registry.start_insert(
@@ -366,6 +368,7 @@ impl LinuxEditorAnimationCoordinator {
                     mode,
                     &vt.old_text,
                     font_family,
+                    shaped_glyphs,
                 );
                 self.vt_queue.enqueue(key, payload, mode, vt.duration_ms);
             }
@@ -606,6 +609,23 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
+    pub(crate) fn build_render_plan_full(
+        &self,
+        cursor_plan: CursorAnimationPlan,
+        ime_plan: ImeUpdatePlan,
+        selection_preedit: SelectionPreeditPlan,
+    ) -> RenderPlan {
+        let static_text = self.build_static_render_plan();
+        let text_animation = self.build_text_animation_plan();
+        RenderPlan {
+            static_text,
+            text_animation,
+            selection_preedit,
+            cursor: cursor_plan,
+            ime: ime_plan,
+        }
+    }
+
     pub(crate) fn build_render_plan(&self) -> RenderPlan {
         let static_text = self.build_static_render_plan();
         let text_animation = self.build_text_animation_plan();
@@ -734,36 +754,36 @@ fn dispatch_animation_frames(
     match mode {
         AnimationMode::GlyphAnimation => {
             if is_delete {
-                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+                delete_animation::compute_glyph_delete_animation_frame(insert_or_delete_runs, progress)
             } else {
-                insert_animation::compute_insert_animation_frame(
+                insert_animation::compute_glyph_insert_animation_frame(
                     insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
                 )
             }
         }
         AnimationMode::ClusterAnimation => {
             if is_delete {
-                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+                delete_animation::compute_cluster_delete_animation_frame(insert_or_delete_runs, progress)
             } else {
-                insert_animation::compute_insert_animation_frame(
+                insert_animation::compute_cluster_insert_animation_frame(
                     insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
                 )
             }
         }
         AnimationMode::RunAnimation => {
             if is_delete {
-                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+                delete_animation::compute_run_delete_animation_frame(insert_or_delete_runs, progress)
             } else {
-                reflow_animation::compute_reflow_animation_frame(
+                reflow_animation::compute_run_reflow_animation_frame(
                     insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
                 )
             }
         }
         AnimationMode::LineReflowAnimation => {
             if is_delete {
-                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+                delete_animation::compute_line_reflow_delete_animation_frame(insert_or_delete_runs, progress)
             } else {
-                reflow_animation::compute_reflow_animation_frame(
+                reflow_animation::compute_line_reflow_animation_frame(
                     insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
                 )
             }
@@ -961,6 +981,7 @@ mod tests {
             AnimationMode::GlyphAnimation,
             "a",
             "",
+            &[],
         );
         assert!(matches!(payload, VisualPayload::InsertRuns { .. }));
     }
@@ -977,6 +998,7 @@ mod tests {
             AnimationMode::GlyphAnimation,
             "ab",
             "",
+            &[],
         );
         assert!(matches!(payload, VisualPayload::ReflowRuns { .. }));
     }
@@ -990,6 +1012,7 @@ mod tests {
             AnimationMode::GlyphAnimation,
             "a",
             "",
+            &[],
         );
         assert!(matches!(payload, VisualPayload::DeleteRuns { .. }));
     }
@@ -1011,7 +1034,7 @@ mod tests {
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = make_key(1);
         coord.registry.start_insert(key, None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        let payload = VisualPayload::from_insert_transaction(&[], &[], Some((5, 6)), None, None, false, AnimationMode::GlyphAnimation, "", "");
+        let payload = VisualPayload::from_insert_transaction(&[], &[], Some((5, 6)), None, None, false, AnimationMode::GlyphAnimation, "", "", &[]);
         coord.vt_queue.enqueue(key, payload, AnimationMode::GlyphAnimation, 100);
         let cancelled = coord.cancel_by_key(key, "test_cancel");
         assert!(cancelled);
@@ -1058,6 +1081,7 @@ mod tests {
             50.0, 5.0,
             false, None,
             "",
+            &[],
         );
         assert!(coord.is_empty());
     }
@@ -1102,6 +1126,7 @@ mod tests {
             50.0, 5.0,
             false, None,
             "",
+            &[],
         );
         assert!(coord.is_empty());
     }

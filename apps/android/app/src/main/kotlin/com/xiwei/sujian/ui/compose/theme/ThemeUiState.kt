@@ -12,9 +12,14 @@ data class ThemeUiState(
     val selectedBuiltinTheme: BuiltinThemeDto? = null,
     val selectedPaletteRecord: ThemePaletteRecordDto? = null,
     val paletteRecords: List<ThemePaletteRecordDto> = emptyList(),
+    val systemIsDark: Boolean = false,
 ) {
     val isDark: Boolean
-        get() = appearanceMode == "dark"
+        get() = when (appearanceMode) {
+            "dark" -> true
+            "light" -> false
+            else -> systemIsDark
+        }
 
     val isLight: Boolean
         get() = appearanceMode == "light"

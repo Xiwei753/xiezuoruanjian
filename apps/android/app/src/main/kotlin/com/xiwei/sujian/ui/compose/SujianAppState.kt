@@ -28,7 +28,7 @@ import com.xiwei.sujian.ui.compose.adaptive.FoldOrientation as AdaptiveFoldOrien
 import com.xiwei.sujian.ui.compose.adaptive.FoldOcclusionType
 import com.xiwei.sujian.ui.compose.navigation.SujianDestination
 import androidx.window.layout.FoldingFeature
-import kotlinx.coroutines.CoroutineScope
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -75,18 +75,15 @@ class SujianAppViewModel(
     private var workspaceRepository: WorkspaceRepository? = null
     private var workspaceUseCase: WorkspaceUseCase? = null
     private var settingsRepository: SettingsRepository? = null
-    var coroutineScope: CoroutineScope? = null
 
     fun initialize(
         workspaceRepo: WorkspaceRepository,
         workspaceUC: WorkspaceUseCase,
         settingsRepo: SettingsRepository,
-        scope: CoroutineScope
     ) {
         workspaceRepository = workspaceRepo
         workspaceUseCase = workspaceUC
         settingsRepository = settingsRepo
-        coroutineScope = scope
         refreshProjects()
         refreshRecentEdits()
     }
@@ -157,7 +154,7 @@ class SujianAppViewModel(
     }
 
     fun refreshProjects() {
-        coroutineScope?.launch {
+        viewModelScope.launch {
             projects = withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.getProjects() ?: emptyList()
@@ -169,7 +166,7 @@ class SujianAppViewModel(
     }
 
     fun refreshRecentEdits() {
-        coroutineScope?.launch {
+        viewModelScope.launch {
             recentEdits = withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.getRecentEdits(5) ?: emptyList()
@@ -181,7 +178,7 @@ class SujianAppViewModel(
     }
 
     fun createProject(title: String) {
-        coroutineScope?.launch {
+        viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.createProject(title)
@@ -192,7 +189,7 @@ class SujianAppViewModel(
     }
 
     fun deleteProject(projectId: String) {
-        coroutineScope?.launch {
+        viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.deleteProject(projectId)
@@ -203,7 +200,7 @@ class SujianAppViewModel(
     }
 
     fun renameProject(projectId: String, newTitle: String) {
-        coroutineScope?.launch {
+        viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.renameProject(projectId, newTitle)

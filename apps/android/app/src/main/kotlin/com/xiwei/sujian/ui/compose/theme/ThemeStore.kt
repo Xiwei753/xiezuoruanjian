@@ -20,6 +20,7 @@ object ThemeStore {
     val paletteRecords: StateFlow<List<ThemePaletteRecordDto>> = _paletteRecords.asStateFlow()
 
     private var _foldDeviceClass: String? = null
+    private var _systemIsDark: Boolean = false
 
     private var _settingsRepository: SettingsRepository? = null
 
@@ -36,6 +37,7 @@ object ThemeStore {
         val settings = repo.getLocalSettings()
         val builtinTheme = resolveBuiltinTheme(repo, settings)
         val paletteRecord = resolvePaletteRecord(repo, settings)
+        val sysDark = _systemIsDark
         _uiState.value = ThemeUiState(
             appearanceMode = settings.appearanceMode,
             colorSource = settings.colorSource,
@@ -44,6 +46,7 @@ object ThemeStore {
             selectedPaletteId = settings.selectedPaletteId,
             selectedBuiltinTheme = builtinTheme,
             selectedPaletteRecord = paletteRecord,
+            systemIsDark = sysDark,
         )
         refreshPaletteRecords()
     }
@@ -143,10 +146,11 @@ object ThemeStore {
         reload()
     }
 
-    fun onSystemDarkModeChanged() {
+    fun onSystemDarkModeChanged(isDark: Boolean) {
+        _systemIsDark = isDark
         val current = _uiState.value
         if (current.isSystem) {
-            _uiState.value = current
+            _uiState.value = current.copy(systemIsDark = isDark)
         }
     }
 

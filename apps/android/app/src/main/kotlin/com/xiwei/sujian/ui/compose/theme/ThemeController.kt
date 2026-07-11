@@ -57,6 +57,10 @@ class ThemeController(private val settingsRepository: SettingsRepository) {
     fun onSyncCompleted() {
         store.onSyncCompleted()
     }
+
+    fun onSystemDarkModeChanged(isDark: Boolean) {
+        store.onSystemDarkModeChanged(isDark)
+    }
 }
 
 @Composable
@@ -96,6 +100,9 @@ fun rememberThemeController(context: Context): ThemeController {
 
     val configuration = context.resources?.configuration
     DisposableEffect(configuration) {
+        val isDark = (configuration?.uiMode?.and(Configuration.UI_MODE_NIGHT_MASK)
+            == Configuration.UI_MODE_NIGHT_YES)
+        store.onSystemDarkModeChanged(isDark)
         val uiState = store.uiState.value
         if (uiState.colorSource == "android_dynamic" && uiState.dynamicColorEnabled) {
             store.captureDynamicColorAndSave(context)

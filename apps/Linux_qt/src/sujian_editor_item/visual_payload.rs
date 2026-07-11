@@ -23,8 +23,17 @@ pub(crate) struct VisualRunSnapshot {
     pub texture_atlas_h: f64,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct ShapedGlyphInfo {
+    pub font_id: String,
+    pub glyph_index: u32,
+    pub glyph_position_x: f64,
+    pub glyph_position_y: f64,
+    pub string_index: usize,
+}
+
 impl VisualRunSnapshot {
-    pub fn from_glyph_rect(g: &GlyphRect) -> Self {
+    pub fn from_glyph_rect_with_shaping(g: &GlyphRect, shaping: Option<&ShapedGlyphInfo>) -> Self {
         Self {
             char_: g.char_.clone(),
             byte_start: g.byte_start,
@@ -34,11 +43,11 @@ impl VisualRunSnapshot {
             w: g.w,
             h: g.h,
             baseline_y: g.baseline_y,
-            font_id: String::new(),
-            glyph_index: 0,
-            glyph_position_x: g.x,
-            glyph_position_y: g.baseline_y,
-            string_index: 0,
+            font_id: shaping.map(|s| s.font_id.clone()).unwrap_or_default(),
+            glyph_index: shaping.map(|s| s.glyph_index).unwrap_or(0),
+            glyph_position_x: shaping.map(|s| s.glyph_position_x).unwrap_or(g.x),
+            glyph_position_y: shaping.map(|s| s.glyph_position_y).unwrap_or(g.baseline_y),
+            string_index: shaping.map(|s| s.string_index).unwrap_or(0),
             old_paragraph_text: None,
             texture_atlas_x: 0.0,
             texture_atlas_y: 0.0,
@@ -87,7 +96,7 @@ pub(crate) struct ReflowRunSnapshot {
 }
 
 impl ReflowRunSnapshot {
-    pub fn from_reflow_glyph_rect(r: &ReflowGlyphRect) -> Self {
+    pub fn from_reflow_glyph_rect_with_shaping(r: &ReflowGlyphRect, shaping: Option<&ShapedGlyphInfo>) -> Self {
         Self {
             char_: r.char_.clone(),
             byte_start: r.byte_start,
@@ -100,9 +109,9 @@ impl ReflowRunSnapshot {
             new_baseline_y: r.new_baseline_y,
             w: r.w,
             h: r.h,
-            font_id: String::new(),
-            glyph_index: 0,
-            string_index: 0,
+            font_id: shaping.map(|s| s.font_id.clone()).unwrap_or_default(),
+            glyph_index: shaping.map(|s| s.glyph_index).unwrap_or(0),
+            string_index: shaping.map(|s| s.string_index).unwrap_or(0),
         }
     }
 
@@ -153,15 +162,22 @@ impl VisualPayload {
         animation_mode: AnimationMode,
         old_text: &str,
         font_family: &str,
+        shaped_glyphs: &[ShapedGlyphInfo],
     ) -> Self {
         let insert_runs: Vec<VisualRunSnapshot> = insert_glyph_rects.iter().map(|g| {
             let para_text = extract_paragraph_for_glyph(old_text, g.byte_start, g.byte_end);
-            VisualRunSnapshot::from_glyph_rect(g)
+            let shaping = shaped_glyphs.iter().find(|s|
+                s.string_index <= g.byte_end && s.string_index >= g.byte_start
+            );
+            VisualRunSnapshot::from_glyph_rect_with_shaping(g, shaping)
                 .with_old_paragraph(para_text)
                 .with_font_id(font_family)
         }).collect();
         let reflow_runs: Vec<ReflowRunSnapshot> = reflow_glyph_rects.iter().map(|r| {
-            ReflowRunSnapshot::from_reflow_glyph_rect(r)
+            let shaping = shaped_glyphs.iter().find(|s|
+                s.string_index <= r.byte_end && s.string_index >= r.byte_start
+            );
+            ReflowRunSnapshot::from_reflow_glyph_rect_with_shaping(r, shaping)
                 .with_font_id(font_family)
         }).collect();
 
@@ -193,10 +209,14 @@ impl VisualPayload {
         animation_mode: AnimationMode,
         old_text: &str,
         font_family: &str,
+        shaped_glyphs: &[ShapedGlyphInfo],
     ) -> Self {
         let delete_runs: Vec<VisualRunSnapshot> = deleted_glyph_rects.iter().map(|g| {
             let para_text = extract_paragraph_for_glyph(old_text, g.byte_start, g.byte_end);
-            VisualRunSnapshot::from_glyph_rect(g)
+            let shaping = shaped_glyphs.iter().find(|s|
+                s.string_index <= g.byte_end && s.string_index >= g.byte_start
+            );
+            VisualRunSnapshot::from_glyph_rect_with_shaping(g, shaping)
                 .with_old_paragraph(para_text)
                 .with_font_id(font_family)
         }).collect();

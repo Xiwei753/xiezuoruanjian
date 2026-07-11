@@ -36,14 +36,23 @@ class WorkspaceViewModel(
 
     private var currentProjectId: String? = savedStateHandle["currentProjectId"]
     private var workspaceRepository: WorkspaceRepository? = null
+    private var isInitialized: Boolean = false
 
     fun initialize(projectId: String, workspaceRepo: WorkspaceRepository) {
-        if (currentProjectId == projectId) return
+        val projectChanged = currentProjectId != projectId
+        val repoChanged = workspaceRepository !== workspaceRepo
+        val needsReload = !isInitialized || projectChanged || repoChanged
+            || _uiState.value.volumes.isEmpty()
+
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
         workspaceRepository = workspaceRepo
-        loadVolumes()
-        loadProjectStats(projectId)
+
+        if (needsReload) {
+            isInitialized = true
+            loadVolumes()
+            loadProjectStats(projectId)
+        }
     }
 
     fun loadVolumes() {

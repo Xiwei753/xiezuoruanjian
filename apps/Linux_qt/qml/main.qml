@@ -228,6 +228,9 @@ ApplicationWindow {
             if (appBackend) {
                 appBackend.apply_window_dark_mode(designTokens.isDark);
             }
+            if (themeController) {
+                themeController.set_system_is_dark(designTokens.isDark);
+            }
         }
         function onEditorTextChanged() {
             window.logThemeDiagnostics("editor_text_changed");
@@ -238,6 +241,7 @@ ApplicationWindow {
         target: syncBackend
         function onSync_action_completed() {
             if (settingsBackend) settingsBackend.refresh_theme_data()
+            if (themeController) themeController.reload()
         }
     }
 
@@ -704,6 +708,7 @@ ApplicationWindow {
             beforeSyncHook: function() { return window.preSyncBarrier() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
+                if (themeController) themeController.reload();
             }
         }
     }

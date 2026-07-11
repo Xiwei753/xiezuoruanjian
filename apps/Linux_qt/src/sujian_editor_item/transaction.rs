@@ -29,6 +29,7 @@ impl SujianEditorItem {
 
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
+                let shaped_glyphs = self.extract_shaped_glyphs_for_transaction(vt);
                 self.animation_coordinator.process_transaction(
                     vt,
                     self.current_typing_animation_enabled,
@@ -58,6 +59,7 @@ impl SujianEditorItem {
                     self.cursor_ctrl.force_snap_next,
                     self.cursor_ctrl.animation.as_ref(),
                     &self.current_font_family.to_string(),
+                    &shaped_glyphs,
                 );
                 editor_animation_debug_log(&format!(
                     "record_transaction: processed via coordinator, kind={:?}, has_active_insert={}",
@@ -98,6 +100,46 @@ impl SujianEditorItem {
             }
         }
         vt
+    }
+
+    pub(crate) fn extract_shaped_glyphs_for_transaction(
+        &self,
+        vt: &EditorVisualTransaction,
+    ) -> Vec<super::visual_payload::ShapedGlyphInfo> {
+        let font_family = self.current_font_family.to_string();
+        let mut result = Vec::new();
+
+        match vt.kind {
+            EditorAnimationKind::Insert => {
+                if let Some(ref rects) = vt.insert_glyph_rects {
+                    for (i, g) in rects.iter().enumerate() {
+                        result.push(super::visual_payload::ShapedGlyphInfo {
+                            font_id: font_family.clone(),
+                            glyph_index: i as u32,
+                            glyph_position_x: g.x,
+                            glyph_position_y: g.baseline_y,
+                            string_index: g.byte_start,
+                        });
+                    }
+                }
+            }
+            EditorAnimationKind::Delete => {
+                if let Some(ref rects) = vt.deleted_glyph_rects {
+                    for (i, g) in rects.iter().enumerate() {
+                        result.push(super::visual_payload::ShapedGlyphInfo {
+                            font_id: font_family.clone(),
+                            glyph_index: i as u32,
+                            glyph_position_x: g.x,
+                            glyph_position_y: g.baseline_y,
+                            string_index: g.byte_start,
+                        });
+                    }
+                }
+            }
+            EditorAnimationKind::Cursor => {}
+        }
+
+        result
     }
 
     pub(crate) fn fill_visual_transaction_coords(

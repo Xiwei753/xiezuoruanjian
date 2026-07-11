@@ -273,19 +273,15 @@ class SettingsActivity : AppCompatActivity() {
                 2 -> "saved_palette"
                 else -> "built_in"
             }
-            val dynamicEnabled = colorSource == "android_dynamic"
-            updateLocalSettings { it.copy(colorSource = colorSource, dynamicColorEnabled = dynamicEnabled) }
-            switchDynamicColor.isChecked = dynamicEnabled
-            if (dynamicEnabled) {
+            updateLocalSettings { it.copy(colorSource = colorSource) }
+            if (colorSource == "android_dynamic") {
                 captureDynamicColor()
             }
         }
 
         switchDynamicColor.setOnCheckedChangeListener { _, isChecked ->
             if (isRendering) return@setOnCheckedChangeListener
-            val newColorSource = if (isChecked) "android_dynamic" else "built_in"
-            updateLocalSettings { it.copy(dynamicColorEnabled = isChecked, colorSource = newColorSource) }
-            actvColorSource.setText(if (isChecked) "使用本机动态配色" else "素笺默认", false)
+            updateLocalSettings { it.copy(dynamicColorEnabled = isChecked) }
             if (isChecked) {
                 captureDynamicColor()
             }

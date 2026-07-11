@@ -163,16 +163,16 @@ impl QQuickItem for SujianEditorItem {
             final_root = root_raw;
         }
 
-        // ── Build RenderPlan from coordinator ──
-        if !final_root.is_null() && !item_ptr.is_null() {
-            let now = Instant::now();
-            let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
-                self.animation_coordinator.vt_queue.active_transactions().to_vec();
+            // ── Build full RenderPlan (including cursor) from coordinator ──
+            if !final_root.is_null() && !item_ptr.is_null() {
+                let now = Instant::now();
+                let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
+                    self.animation_coordinator.vt_queue.active_transactions().to_vec();
 
-            if active_txs.is_empty() {
-                self.texture_cache.clear();
-                scene_graph::clear_animation_layer(final_root, item_ptr);
-            } else {
+                if active_txs.is_empty() {
+                    self.texture_cache.clear();
+                    scene_graph::clear_animation_layer(final_root, item_ptr);
+                } else {
                 let mut txs_to_mark_rendering: Vec<VisualTransactionKey> = Vec::new();
                 let mut txs_to_complete: Vec<VisualTransactionKey> = Vec::new();
                 let mut keys_with_texture_failure: Vec<VisualTransactionKey> = Vec::new();
@@ -307,8 +307,39 @@ impl QQuickItem for SujianEditorItem {
                     }
                 }
 
-                // ── Build RenderPlan and delegate to scene_graph_renderer ──
-                let render_plan = self.animation_coordinator.build_render_plan();
+                // ── Build full RenderPlan and delegate to scene_graph_renderer ──
+                let cursor_plan = self.animation_coordinator.build_cursor_plan(
+                    self.animation_coordinator.vt_queue.active_transactions().first()
+                        .and_then(|tx| tx.payload.cursor_rects().0.cloned()),
+                    self.animation_coordinator.vt_queue.active_transactions().first()
+                        .and_then(|tx| tx.payload.cursor_rects().1.cloned()),
+                    self.cursor_ctrl.visual_x,
+                    self.cursor_ctrl.visual_y,
+                    self.cursor_ctrl.visual_h,
+                    self.current_editor_enabled,
+                    self.buffer.has_selection(),
+                    self.current_viewport_height as f64,
+                    false,
+                    false,
+                    false,
+                    self.current_smooth_cursor_enabled,
+                    self.current_cursor_animation_duration_ms,
+                    self.current_coordinated_text_cursor_animation_enabled,
+                    self.current_scroll_y as f64,
+                    self.cursor_ctrl.last_scroll_y,
+                    self.cursor_ctrl.visible,
+                    self.cursor_ctrl.blink_visible,
+                    self.cursor_ctrl.visual_x,
+                    self.cursor_ctrl.visual_y,
+                    self.cursor_ctrl.force_snap_next,
+                    self.cursor_ctrl.animation.as_ref(),
+                );
+                let ime_plan = self.animation_coordinator.build_ime_plan(false, false);
+                let selection_preedit = animation_coordinator::SelectionPreeditPlan::default();
+
+                let render_plan = self.animation_coordinator.build_render_plan_full(
+                    cursor_plan, ime_plan, selection_preedit,
+                );
 
                 scene_graph_renderer::render_frame(
                     final_root,
@@ -349,36 +380,8 @@ impl QQuickItem for SujianEditorItem {
                 }
             }
 
-            // ── Update cursor node from RenderPlan ──
-            if self.current_editor_enabled {
-                let cursor_visible = self.cursor_ctrl.visible
-                    && !self.buffer.has_selection();
-                let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-                    && self.animation_coordinator.has_active_insert()
-                {
-                    animation_coordinator::CursorBlinkMode::Suppressed
-                } else {
-                    animation_coordinator::CursorBlinkMode::Normal
-                };
-                let cursor_opacity = if cursor_visible {
-                    self.cursor_ctrl.cursor_blink_opacity(blink_mode)
-                } else {
-                    0.0
-                };
-                let color_bytes = self.current_cursor_color.to_string();
-                let color_cstr = color_bytes.as_bytes();
-                scene_graph::update_cursor_node(
-                    final_root,
-                    item_ptr,
-                    self.cursor_ctrl.visual_x,
-                    self.cursor_ctrl.visual_y,
-                    2.0,
-                    self.cursor_ctrl.visual_h,
-                    cursor_opacity,
-                    color_cstr.as_ptr(),
-                    color_cstr.len(),
-                );
-            }
+            // ── Cursor is now handled inside RenderPlan via scene_graph_renderer ──
+            // No separate cursor update outside RenderPlan
         }
 
         let total_elapsed = frame_start.elapsed();
