@@ -36,15 +36,15 @@ impl ActiveVisualTransaction {
     }
 
     pub fn is_insert(&self) -> bool {
-        matches!(self.payload, VisualPayload::InsertRuns { .. } | VisualPayload::GlyphPayload { .. } | VisualPayload::ClusterPayload { .. } | VisualPayload::RunPayload { .. } | VisualPayload::LineReflowPayload { .. })
+        matches!(self.payload, VisualPayload::GlyphPayload { .. } | VisualPayload::ClusterPayload { .. } | VisualPayload::RunPayload { .. } | VisualPayload::LineReflowPayload { .. })
     }
 
     pub fn is_delete(&self) -> bool {
-        matches!(self.payload, VisualPayload::DeleteRuns { .. })
+        false
     }
 
     pub fn is_reflow(&self) -> bool {
-        matches!(self.payload, VisualPayload::ReflowRuns { .. } | VisualPayload::LineReflowPayload { .. })
+        matches!(self.payload, VisualPayload::LineReflowPayload { .. } | VisualPayload::RunPayload { .. })
     }
 
     pub fn is_cursor(&self) -> bool {
@@ -73,9 +73,6 @@ impl ActiveVisualTransactionQueue {
 
     pub fn enqueue(&mut self, key: VisualTransactionKey, payload: VisualPayload, animation_mode: AnimationMode, duration_ms: u64) {
         let kind_str = match &payload {
-            VisualPayload::InsertRuns { .. } => "Insert",
-            VisualPayload::DeleteRuns { .. } => "Delete",
-            VisualPayload::ReflowRuns { .. } => "Reflow",
             VisualPayload::CursorTransition { .. } => "Cursor",
             VisualPayload::GlyphPayload { .. } => "Glyph",
             VisualPayload::ClusterPayload { .. } => "Cluster",
