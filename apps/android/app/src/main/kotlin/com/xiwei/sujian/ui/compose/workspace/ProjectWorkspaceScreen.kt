@@ -21,7 +21,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.model.AvoidRegion
 import com.xiwei.sujian.model.AvoidRegionKind
@@ -181,7 +183,7 @@ fun ProjectWorkspaceScreen(
                             modifier = Modifier.fillMaxSize().then(windowInsetsPadding),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("选择章节开始写作", modifier = Modifier.padding(16.dp))
+                            Text(stringResource(id = R.string.select_chapter_to_write), modifier = Modifier.padding(16.dp))
                         }
                     }
                 }

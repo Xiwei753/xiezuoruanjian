@@ -25,7 +25,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.model.ProjectWritingStatsItem
 import com.xiwei.sujian.model.WritingStatsSummary
@@ -66,7 +68,7 @@ fun StatsScreen(
 
     if (isLoading) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
         }
         return
     }
@@ -76,7 +78,7 @@ fun StatsScreen(
         modifier = modifier.fillMaxSize()
     ) {
         item {
-            Text("近 30 天写作统计", style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(id = R.string.stats_recent_30_days), style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.height(16.dp))
         }
 
@@ -91,18 +93,18 @@ fun StatsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            StatItem("总字数", "${s.totalWordCount}")
-                            StatItem("活跃天数", "${s.activeDays}")
-                            StatItem("总时长", formatDuration(s.totalTimeSeconds))
+                            StatItem(stringResource(id = R.string.stats_total_words_label), "${s.totalWordCount}")
+                            StatItem(stringResource(id = R.string.stats_active_days), "${s.activeDays}")
+                            StatItem(stringResource(id = R.string.stats_total_duration), formatDuration(s.totalTimeSeconds, context))
                         }
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            StatItem("手动输入", "${s.totalHumanTypedChars ?: 0}")
-                            StatItem("活跃时长", formatDuration(s.totalActiveSeconds ?: 0L))
-                            StatItem("会话数", "${s.totalSessions ?: 0}")
+                            StatItem(stringResource(id = R.string.stats_manual_input), "${s.totalHumanTypedChars ?: 0}")
+                            StatItem(stringResource(id = R.string.stats_active_duration), formatDuration(s.totalActiveSeconds ?: 0L, context))
+                            StatItem(stringResource(id = R.string.stats_session_count), "${s.totalSessions ?: 0}")
                         }
                     }
                 }
@@ -111,7 +113,7 @@ fun StatsScreen(
 
         if (projectItems.isNotEmpty()) {
             item {
-                Text("按作品统计", style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(id = R.string.stats_by_project), style = MaterialTheme.typography.titleSmall)
                 Spacer(modifier = Modifier.height(8.dp))
             }
             items(projectItems, key = { it.projectId ?: "" }) { item ->
@@ -121,7 +123,7 @@ fun StatsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(item.projectTitle ?: "", style = MaterialTheme.typography.titleSmall)
-                        Text("${item.netDeltaChars ?: 0} 字 · ${formatDuration(item.activeSeconds ?: 0)}", style = MaterialTheme.typography.bodySmall)
+                        Text(stringResource(R.string.stats_project_item, item.netDeltaChars ?: 0, formatDuration(item.activeSeconds ?: 0, context)), style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -130,7 +132,7 @@ fun StatsScreen(
         if (summary == null && projectItems.isEmpty()) {
             item {
                 Box(modifier = Modifier.fillMaxSize().padding(32.dp), contentAlignment = Alignment.Center) {
-                    Text("暂无统计数据", style = MaterialTheme.typography.bodyLarge)
+                    Text(stringResource(id = R.string.stats_no_data), style = MaterialTheme.typography.bodyLarge)
                 }
             }
         }
@@ -145,11 +147,11 @@ private fun StatItem(label: String, value: String) {
     }
 }
 
-private fun formatDuration(seconds: Long): String {
-    if (seconds < 60) return "${seconds}秒"
+private fun formatDuration(seconds: Long, context: android.content.Context): String {
+    if (seconds < 60) return context.getString(R.string.duration_seconds, seconds)
     val minutes = seconds / 60
-    if (minutes < 60) return "${minutes}分钟"
+    if (minutes < 60) return context.getString(R.string.duration_minutes, minutes)
     val hours = minutes / 60
     val remainMinutes = minutes % 60
-    return if (remainMinutes > 0) "${hours}小时${remainMinutes}分钟" else "${hours}小时"
+    return if (remainMinutes > 0) context.getString(R.string.duration_hours_minutes, hours, remainMinutes) else context.getString(R.string.duration_hours, hours)
 }

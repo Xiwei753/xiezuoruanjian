@@ -31,8 +31,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xiwei.sujian.R
 
 sealed class WorkspaceDialogState {
     data object None : WorkspaceDialogState()
@@ -93,20 +95,20 @@ fun VolumeChapterTree(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBackToProjects) {
-                    Icon(Icons.Default.ArrowBack, contentDescription = "返回作品列表")
-                }
-                Text("卷章", style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Default.ArrowBack, contentDescription = stringResource(id = R.string.back_to_project_list))
+            }
+            Text(stringResource(id = R.string.volume_chapter_title), style = MaterialTheme.typography.titleMedium)
             }
             IconButton(onClick = {
                 dialogState = WorkspaceDialogState.CreateVolume()
             }) {
-                Icon(Icons.Default.Add, contentDescription = "新建卷")
+                Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.action_new_volume_short))
             }
         }
 
         uiState.projectStats?.let { stats ->
             Text(
-                "共 ${stats.volumeCount} 卷 · ${stats.chapterCount} 章 · ${stats.totalWordCount} 字",
+                stringResource(R.string.volume_chapter_stats, stats.volumeCount, stats.chapterCount, stats.totalWordCount),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
             )
@@ -114,7 +116,7 @@ fun VolumeChapterTree(
 
         if (flatItems.isEmpty() && !uiState.isLoading) {
             Text(
-                "暂无卷章数据",
+                stringResource(id = R.string.volume_chapter_empty),
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(16.dp)
             )
@@ -157,7 +159,7 @@ fun VolumeChapterTree(
                         }
                         is VolumeChapterListItem.EmptyChapterHint -> {
                             Text(
-                                "暂无章节",
+                                stringResource(id = R.string.chapter_list_empty),
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(start = 48.dp, top = 4.dp, bottom = 4.dp)
                             )
@@ -210,7 +212,7 @@ fun VolumeChapterTree(
         }
         is WorkspaceDialogState.RenameVolume -> {
             RenameDialog(
-                title = "重命名卷",
+                title = stringResource(id = R.string.rename_volume),
                 initialValue = state.volume.title,
                 onConfirm = { newTitle ->
                     viewModel.renameVolume(state.volume.id, newTitle)
@@ -240,7 +242,7 @@ fun VolumeChapterTree(
         }
         is WorkspaceDialogState.RenameChapter -> {
             RenameDialog(
-                title = "重命名章节",
+                title = stringResource(id = R.string.rename_chapter),
                 initialValue = state.chapter.title,
                 onConfirm = { newTitle ->
                     viewModel.renameChapter(state.volumeId, state.chapter.id, newTitle)
@@ -280,12 +282,12 @@ private fun CreateVolumeDialog(
     var title by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新建卷") },
+        title = { Text(stringResource(id = R.string.action_new_volume_short)) },
         text = {
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                label = { Text("卷标题") },
+                label = { Text(stringResource(id = R.string.hint_volume_title_short)) },
                 singleLine = true
             )
         },
@@ -293,10 +295,10 @@ private fun CreateVolumeDialog(
             TextButton(onClick = {
                 if (title.isNotBlank()) onConfirm(title.trim())
                 else onDismiss()
-            }) { Text("创建") }
+            }) { Text(stringResource(id = R.string.action_create)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -310,12 +312,12 @@ private fun CreateChapterDialog(
     var title by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("在「$volumeTitle」中新建章节") },
+        title = { Text(stringResource(R.string.create_chapter_in_volume, volumeTitle)) },
         text = {
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                label = { Text("章节标题") },
+                label = { Text(stringResource(id = R.string.hint_chapter_title_short)) },
                 singleLine = true
             )
         },
@@ -323,10 +325,10 @@ private fun CreateChapterDialog(
             TextButton(onClick = {
                 if (title.isNotBlank()) onConfirm(title.trim())
                 else onDismiss()
-            }) { Text("创建") }
+            }) { Text(stringResource(id = R.string.action_create)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -346,26 +348,26 @@ private fun VolumeActionsDialog(
         text = {
             Column {
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("重命名") },
+                    text = { Text(stringResource(id = R.string.action_rename)) },
                     onClick = onRename
                 )
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("上移") },
+                    text = { Text(stringResource(id = R.string.action_move_up)) },
                     onClick = onMoveUp
                 )
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("下移") },
+                    text = { Text(stringResource(id = R.string.action_move_down)) },
                     onClick = onMoveDown
                 )
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("删除") },
+                    text = { Text(stringResource(id = R.string.action_delete)) },
                     onClick = onDelete
                 )
             }
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -385,26 +387,26 @@ private fun ChapterActionsDialog(
         text = {
             Column {
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("重命名") },
+                    text = { Text(stringResource(id = R.string.action_rename)) },
                     onClick = onRename
                 )
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("上移") },
+                    text = { Text(stringResource(id = R.string.action_move_up)) },
                     onClick = onMoveUp
                 )
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("下移") },
+                    text = { Text(stringResource(id = R.string.action_move_down)) },
                     onClick = onMoveDown
                 )
                 androidx.compose.material3.DropdownMenuItem(
-                    text = { Text("删除") },
+                    text = { Text(stringResource(id = R.string.action_delete)) },
                     onClick = onDelete
                 )
             }
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -424,7 +426,7 @@ private fun RenameDialog(
             OutlinedTextField(
                 value = newTitle,
                 onValueChange = { newTitle = it },
-                label = { Text("新标题") },
+                label = { Text(stringResource(id = R.string.hint_new_title)) },
                 singleLine = true
             )
         },
@@ -432,10 +434,10 @@ private fun RenameDialog(
             TextButton(onClick = {
                 if (newTitle.isNotBlank()) onConfirm(newTitle.trim())
                 onDismiss()
-            }) { Text("确定") }
+            }) { Text(stringResource(id = R.string.action_ok)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -448,13 +450,13 @@ private fun ConfirmDeleteDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("确认删除") },
-        text = { Text("确定要删除「$name」吗？此操作不可撤销。") },
+        title = { Text(stringResource(id = R.string.confirm_delete)) },
+        text = { Text(stringResource(R.string.confirm_delete_message, name)) },
         confirmButton = {
-            TextButton(onClick = onConfirm) { Text("删除") }
+            TextButton(onClick = onConfirm) { Text(stringResource(id = R.string.action_delete)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }
@@ -473,7 +475,7 @@ fun VolumeRow(
             IconButton(onClick = onToggleExpand) {
                 Icon(
                     Icons.Default.KeyboardArrowRight,
-                    contentDescription = if (volume.isExpanded) "折叠" else "展开",
+                    contentDescription = if (volume.isExpanded) stringResource(id = R.string.action_collapse) else stringResource(id = R.string.action_expand),
                     modifier = Modifier.size(24.dp)
                 )
             }
@@ -483,14 +485,14 @@ fun VolumeRow(
                 IconButton(onClick = onCreateChapter) {
                     Icon(
                         Icons.Default.Add,
-                        contentDescription = "新建章节",
+                        contentDescription = stringResource(id = R.string.action_new_chapter),
                         modifier = Modifier.size(24.dp)
                     )
                 }
                 IconButton(onClick = onMoreActions) {
                     Icon(
                         Icons.Default.MoreVert,
-                        contentDescription = "更多",
+                        contentDescription = stringResource(id = R.string.action_more),
                         modifier = Modifier.size(24.dp)
                     )
                 }
@@ -516,13 +518,13 @@ fun ChapterRow(
             )
         },
         supportingContent = if (chapter.wordCount > 0) {
-            { Text("${chapter.wordCount}字") }
+            { Text(stringResource(R.string.word_count_format, chapter.wordCount)) }
         } else null,
         trailingContent = {
             IconButton(onClick = onMoreActions) {
                 Icon(
                     Icons.Default.MoreVert,
-                    contentDescription = "更多",
+                    contentDescription = stringResource(id = R.string.action_more),
                     modifier = Modifier.size(24.dp)
                 )
             }

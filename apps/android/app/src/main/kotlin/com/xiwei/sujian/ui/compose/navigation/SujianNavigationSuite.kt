@@ -5,17 +5,19 @@ import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffo
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import com.xiwei.sujian.R
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.starmap.StarMapScreen
 import com.xiwei.sujian.ui.compose.stats.StatsScreen
 import com.xiwei.sujian.ui.compose.settings.SettingsScreen
 import com.xiwei.sujian.ui.compose.workspace.ProjectWorkspaceScreen
 
-enum class SujianDestination(val label: String) {
-    Works("作品"),
-    StarMap("星图"),
-    Stats("统计"),
-    Settings("设置")
+enum class SujianDestination {
+    Works,
+    StarMap,
+    Stats,
+    Settings
 }
 
 @Composable
@@ -30,7 +32,16 @@ fun SujianNavigationSuite(
                     selected = appState.currentDestination == destination,
                     onClick = { appState.navigateTo(destination) },
                     icon = {},
-                    label = { Text(destination.label) }
+                    label = {
+                        Text(
+                            when (destination) {
+                                SujianDestination.Works -> stringResource(id = R.string.title_projects)
+                                SujianDestination.StarMap -> stringResource(id = R.string.title_starmap)
+                                SujianDestination.Stats -> stringResource(id = R.string.title_stats)
+                                SujianDestination.Settings -> stringResource(id = R.string.action_settings)
+                            }
+                        )
+                    }
                 )
             }
         },

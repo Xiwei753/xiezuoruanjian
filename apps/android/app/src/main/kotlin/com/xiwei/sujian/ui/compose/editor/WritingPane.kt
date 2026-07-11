@@ -19,9 +19,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.editor.selfrender.SujianEditorView
 import com.xiwei.sujian.ui.EditorViewModel
@@ -102,10 +104,10 @@ fun WritingPane(
             )
             val statusText = when (uiState.saveStatus) {
                 SaveStatus.Idle -> ""
-                SaveStatus.Unsaved -> "未保存"
-                SaveStatus.Saving -> "保存中..."
-                SaveStatus.Saved -> "已保存"
-                SaveStatus.SaveFailed -> "保存失败"
+                SaveStatus.Unsaved -> stringResource(id = R.string.status_unsaved)
+                SaveStatus.Saving -> stringResource(id = R.string.status_saving)
+                SaveStatus.Saved -> stringResource(id = R.string.status_saved)
+                SaveStatus.SaveFailed -> stringResource(id = R.string.status_save_failed)
             }
             if (statusText.isNotEmpty()) {
                 Text(statusText, style = MaterialTheme.typography.bodySmall)
@@ -114,7 +116,7 @@ fun WritingPane(
 
         if (uiState.wordCount > 0) {
             Text(
-                "${uiState.wordCount}字",
+                stringResource(R.string.word_count_format, uiState.wordCount),
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp)
             )

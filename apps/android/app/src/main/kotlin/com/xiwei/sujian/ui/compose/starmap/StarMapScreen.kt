@@ -37,7 +37,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapGraphEdge
@@ -109,7 +111,7 @@ private fun StarMapListScreen(
     Box(modifier = modifier.fillMaxSize()) {
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
             }
         } else if (starMaps.isEmpty()) {
             Column(
@@ -117,9 +119,9 @@ private fun StarMapListScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("暂无星图", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(id = R.string.starmap_empty), style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("点击右下角按钮创建新星图", style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(id = R.string.starmap_empty_hint), style = MaterialTheme.typography.bodyMedium)
             }
         } else {
             LazyColumn(
@@ -137,7 +139,7 @@ private fun StarMapListScreen(
                             if (meta.description.isNotBlank()) {
                                 Text(meta.description, style = MaterialTheme.typography.bodySmall)
                             }
-                            Text("${meta.nodeCount} 节点 · ${meta.edgeCount} 连线", style = MaterialTheme.typography.bodySmall)
+                            Text(stringResource(R.string.starmap_node_edge_count, meta.nodeCount, meta.edgeCount), style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 }
@@ -148,7 +150,7 @@ private fun StarMapListScreen(
             onClick = { showCreateDialog = true },
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
         ) {
-            Icon(Icons.Default.Add, contentDescription = "新建星图")
+            Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.starmap_create_new))
         }
     }
 
@@ -157,20 +159,20 @@ private fun StarMapListScreen(
         var description by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("新建星图") },
+            title = { Text(stringResource(id = R.string.starmap_create_new)) },
             text = {
                 Column {
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
-                        label = { Text("标题") },
+                        label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                         singleLine = true
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = description,
                         onValueChange = { description = it },
-                        label = { Text("描述（可选）") },
+                        label = { Text(stringResource(id = R.string.starmap_hint_description)) },
                         maxLines = 3
                     )
                 }
@@ -191,10 +193,10 @@ private fun StarMapListScreen(
                         }
                     }
                     showCreateDialog = false
-                }) { Text("创建") }
+                }) { Text(stringResource(id = R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) { Text("取消") }
+                TextButton(onClick = { showCreateDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -250,26 +252,26 @@ private fun StarMapEditorScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                Icon(Icons.Default.ArrowBack, contentDescription = stringResource(id = R.string.starmap_back))
             }
-            Text(starMapData?.graph?.title ?: "星图", style = MaterialTheme.typography.titleMedium)
+            Text(starMapData?.graph?.title ?: stringResource(id = R.string.title_starmap), style = MaterialTheme.typography.titleMedium)
             Spacer(modifier = Modifier.weight(1f))
             Text(
-                "${starMapData?.graph?.nodes?.size ?: 0} 节点 · ${starMapData?.graph?.edges?.size ?: 0} 连线",
+                stringResource(R.string.starmap_node_edge_count, starMapData?.graph?.nodes?.size ?: 0, starMapData?.graph?.edges?.size ?: 0),
                 style = MaterialTheme.typography.bodySmall
             )
             Spacer(modifier = Modifier.width(8.dp))
             IconButton(onClick = { showAddEdgeDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "添加连线")
+                Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.starmap_add_edge))
             }
             IconButton(onClick = { showAddNodeDialog = true }) {
-                Icon(Icons.Default.Add, contentDescription = "添加节点")
+                Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.starmap_add_node))
             }
         }
 
         if (isLoading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("加载中...", style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(id = R.string.loading), style = MaterialTheme.typography.bodyLarge)
             }
         } else if (starMapData != null) {
             StarMapCanvas(
@@ -309,7 +311,7 @@ private fun StarMapEditorScreen(
             )
         } else {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("加载失败", style = MaterialTheme.typography.bodyLarge)
+                Text(stringResource(id = R.string.starmap_load_failed), style = MaterialTheme.typography.bodyLarge)
             }
         }
     }
@@ -353,13 +355,13 @@ private fun StarMapEditorScreen(
         var nodeKind by remember { mutableStateOf(StarMapNodeKind.Note) }
         AlertDialog(
             onDismissRequest = { showAddNodeDialog = false },
-            title = { Text("添加节点") },
+            title = { Text(stringResource(id = R.string.starmap_add_node)) },
             text = {
                 Column {
                     OutlinedTextField(
                         value = nodeTitle,
                         onValueChange = { nodeTitle = it },
-                        label = { Text("标题") },
+                        label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                         singleLine = true
                     )
                     Spacer(modifier = Modifier.height(8.dp))
@@ -399,10 +401,10 @@ private fun StarMapEditorScreen(
                         }
                     }
                     showAddNodeDialog = false
-                }) { Text("添加") }
+                }) { Text(stringResource(id = R.string.starmap_action_add)) }
             },
             dismissButton = {
-                TextButton(onClick = { showAddNodeDialog = false }) { Text("取消") }
+                TextButton(onClick = { showAddNodeDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -414,10 +416,10 @@ private fun StarMapEditorScreen(
 
         AlertDialog(
             onDismissRequest = { showAddEdgeDialog = false },
-            title = { Text("添加连线") },
+            title = { Text(stringResource(id = R.string.starmap_add_edge)) },
             text = {
                 Column {
-                    Text("起始节点", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(id = R.string.starmap_from_node), style = MaterialTheme.typography.bodySmall)
                     LazyColumn(modifier = Modifier.height(120.dp)) {
                         items(nodes) { node ->
                             TextButton(
@@ -432,7 +434,7 @@ private fun StarMapEditorScreen(
                         }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("目标节点", style = MaterialTheme.typography.bodySmall)
+                    Text(stringResource(id = R.string.starmap_to_node), style = MaterialTheme.typography.bodySmall)
                     LazyColumn(modifier = Modifier.height(120.dp)) {
                         items(nodes) { node ->
                             TextButton(
@@ -465,10 +467,10 @@ private fun StarMapEditorScreen(
                         showAddEdgeDialog = false
                     },
                     enabled = fromNodeId.isNotBlank() && toNodeId.isNotBlank() && fromNodeId != toNodeId
-                ) { Text("添加") }
+                ) { Text(stringResource(id = R.string.starmap_action_add)) }
             },
             dismissButton = {
-                TextButton(onClick = { showAddEdgeDialog = false }) { Text("取消") }
+                TextButton(onClick = { showAddEdgeDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -486,13 +488,13 @@ private fun NodeEditPanel(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("编辑节点") },
+        title = { Text(stringResource(id = R.string.starmap_edit_node)) },
         text = {
             Column {
                 OutlinedTextField(
                     value = editTitle,
                     onValueChange = { editTitle = it },
-                    label = { Text("标题") },
+                    label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                     singleLine = true
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -514,7 +516,7 @@ private fun NodeEditPanel(
                     IconButton(onClick = onDelete) {
                         Icon(
                             Icons.Default.Delete,
-                            contentDescription = "删除节点",
+                            contentDescription = stringResource(id = R.string.starmap_delete_node),
                             tint = MaterialTheme.colorScheme.error
                         )
                     }
@@ -526,10 +528,10 @@ private fun NodeEditPanel(
                 if (editTitle.isNotBlank()) {
                     onUpdate(editTitle.trim(), editKind)
                 }
-            }) { Text("保存") }
+            }) { Text(stringResource(id = R.string.action_save)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }

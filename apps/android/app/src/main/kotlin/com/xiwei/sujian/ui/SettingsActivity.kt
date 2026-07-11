@@ -225,14 +225,14 @@ class SettingsActivity : AppCompatActivity() {
         } catch (_: Exception) {
             emptyList<uniffi.writer_core.BuiltinThemeDto>()
         }
-        val builtinThemeNames = builtinThemes.map { "${it.name} (亮色: ${it.lightScheme.primary} / 暗色: ${it.darkScheme.primary})" }.toTypedArray()
+        val builtinThemeNames = builtinThemes.map { getString(R.string.pref_builtin_theme_info, it.name, it.lightScheme.primary, it.darkScheme.primary) }.toTypedArray()
         val builtinThemeAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, builtinThemeNames)
         actvBuiltinTheme.setAdapter(builtinThemeAdapter)
         actvBuiltinTheme.setOnItemClickListener { _, _, position, _ ->
             if (isRendering) return@setOnItemClickListener
             val themeId = builtinThemes[position].themeId
             updateLocalSettings { it.copy(selectedBuiltinThemeId = themeId, colorSource = "built_in") }
-            actvColorSource.setText("素笺默认", false)
+            actvColorSource.setText(getString(R.string.pref_color_source_builtin), false)
         }
 
         var paletteRecords = try {
@@ -247,7 +247,7 @@ class SettingsActivity : AppCompatActivity() {
             if (position < 0 || position >= currentRecords.size) return@setOnItemClickListener
             val paletteId = currentRecords[position].paletteId
             updateLocalSettings { it.copy(selectedPaletteId = paletteId, colorSource = "saved_palette") }
-            actvColorSource.setText("已保存的设备配色", false)
+            actvColorSource.setText(getString(R.string.pref_hint_saved_palette), false)
         }
 
         btnDeletePalette.setOnClickListener {
@@ -256,14 +256,14 @@ class SettingsActivity : AppCompatActivity() {
                 if (parts.size == 2) {
                     settingsRepository.deletePaletteRecord(parts[0], parts[1])
                     updateLocalSettings { it.copy(selectedPaletteId = "", colorSource = "built_in") }
-                    actvColorSource.setText("素笺默认", false)
+                    actvColorSource.setText(getString(R.string.pref_color_source_builtin), false)
                     actvPaletteRecord.setText("", false)
                     refreshPaletteRecords()
                 }
             }
         }
 
-        val colorSourceOptions = arrayOf("素笺默认", "使用本机动态配色", "已保存的设备配色")
+        val colorSourceOptions = arrayOf(getString(R.string.pref_color_source_builtin), getString(R.string.pref_use_dynamic_color), getString(R.string.pref_hint_saved_palette))
         val colorSourceAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, colorSourceOptions)
         actvColorSource.setAdapter(colorSourceAdapter)
         actvColorSource.setOnItemClickListener { _, _, position, _ ->
@@ -473,9 +473,9 @@ class SettingsActivity : AppCompatActivity() {
             }, false)
 
             actvColorSource.setText(when (settings.colorSource) {
-                "android_dynamic" -> "使用本机动态配色"
-                "saved_palette" -> "已保存的设备配色"
-                else -> "素笺默认"
+                "android_dynamic" -> getString(R.string.pref_use_dynamic_color)
+                "saved_palette" -> getString(R.string.pref_hint_saved_palette)
+                else -> getString(R.string.pref_color_source_builtin)
             }, false)
             switchDynamicColor.isChecked = settings.dynamicColorEnabled
 

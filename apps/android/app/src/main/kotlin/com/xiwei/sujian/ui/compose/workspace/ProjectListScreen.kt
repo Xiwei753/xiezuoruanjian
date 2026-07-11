@@ -39,6 +39,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.xiwei.sujian.R
 import com.xiwei.sujian.model.Project
 import com.xiwei.sujian.model.RecentEdit
 import com.xiwei.sujian.ui.compose.SujianAppState
@@ -59,9 +61,9 @@ fun ProjectListScreen(
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Text("暂无作品", style = MaterialTheme.typography.titleMedium)
+                Text(stringResource(id = R.string.project_list_empty), style = MaterialTheme.typography.titleMedium)
                 Spacer(modifier = Modifier.height(8.dp))
-                Text("点击右下角按钮创建新作品", style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(id = R.string.project_list_empty_hint), style = MaterialTheme.typography.bodyMedium)
             }
         } else {
             LazyColumn(
@@ -70,7 +72,7 @@ fun ProjectListScreen(
             ) {
                 if (appState.recentEdits.isNotEmpty()) {
                     item {
-                        Text("最近编辑", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
+                        Text(stringResource(id = R.string.recent_edits), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
                     }
                     items(appState.recentEdits) { edit ->
                         val project = appState.projects.find { it.id == edit.projectId }
@@ -80,14 +82,14 @@ fun ProjectListScreen(
                             }
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                Text(project?.title ?: "未知作品", style = MaterialTheme.typography.titleMedium)
-                                Text("继续写作", style = MaterialTheme.typography.bodySmall)
+                                Text(project?.title ?: stringResource(id = R.string.unknown_project), style = MaterialTheme.typography.titleMedium)
+                                Text(stringResource(id = R.string.continue_writing_action), style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
                     item {
                         Spacer(modifier = Modifier.height(16.dp))
-                        Text("全部作品", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
+                        Text(stringResource(id = R.string.all_projects), style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 8.dp))
                     }
                 }
                 items(appState.projects) { project ->
@@ -104,7 +106,7 @@ fun ProjectListScreen(
             onClick = { showCreateDialog = true },
             modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
         ) {
-            Icon(Icons.Default.Add, contentDescription = "新建作品")
+            Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.action_new_project))
         }
     }
 
@@ -112,12 +114,12 @@ fun ProjectListScreen(
         var title by remember { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = { showCreateDialog = false },
-            title = { Text("新建作品") },
+            title = { Text(stringResource(id = R.string.dialog_new_project_title)) },
             text = {
                 OutlinedTextField(
                     value = title,
                     onValueChange = { title = it },
-                    label = { Text("作品标题") },
+                    label = { Text(stringResource(id = R.string.hint_project_title_new)) },
                     singleLine = true
                 )
             },
@@ -127,10 +129,10 @@ fun ProjectListScreen(
                         appState.createProject(title.trim())
                         showCreateDialog = false
                     }
-                }) { Text("创建") }
+                }) { Text(stringResource(id = R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) { Text("取消") }
+                TextButton(onClick = { showCreateDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -171,7 +173,7 @@ private fun ProjectCard(
                 Text(project.updatedAt.substringBefore("T"), style = MaterialTheme.typography.bodySmall)
             }
             IconButton(onClick = onMoreActions) {
-                Icon(Icons.Default.MoreVert, contentDescription = "更多")
+                Icon(Icons.Default.MoreVert, contentDescription = stringResource(id = R.string.action_more))
             }
         }
     }
@@ -190,12 +192,12 @@ private fun ProjectMenuDialog(
         var newTitle by remember { mutableStateOf(project.title) }
         AlertDialog(
             onDismissRequest = { showRename = false },
-            title = { Text("重命名") },
+            title = { Text(stringResource(id = R.string.action_rename)) },
             text = {
                 OutlinedTextField(
                     value = newTitle,
                     onValueChange = { newTitle = it },
-                    label = { Text("新标题") },
+                    label = { Text(stringResource(id = R.string.hint_new_title)) },
                     singleLine = true
                 )
             },
@@ -205,10 +207,10 @@ private fun ProjectMenuDialog(
                         onRename(newTitle.trim())
                     }
                     showRename = false
-                }) { Text("确定") }
+                }) { Text(stringResource(id = R.string.action_ok)) }
             },
             dismissButton = {
-                TextButton(onClick = { showRename = false }) { Text("取消") }
+                TextButton(onClick = { showRename = false }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     } else {
@@ -218,18 +220,18 @@ private fun ProjectMenuDialog(
             text = {
                 Column {
                     DropdownMenuItem(
-                        text = { Text("重命名") },
+                        text = { Text(stringResource(id = R.string.action_rename)) },
                         onClick = { showRename = true }
                     )
                     DropdownMenuItem(
-                        text = { Text("删除") },
+                        text = { Text(stringResource(id = R.string.action_delete)) },
                         onClick = onDelete
                     )
                 }
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
