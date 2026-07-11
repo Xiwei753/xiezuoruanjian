@@ -3,7 +3,6 @@ package com.xiwei.sujian.ui.compose.workspace
 import android.os.Parcel
 import android.os.Parcelable
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -12,7 +11,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.AnimatedPane
 import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
 import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
@@ -26,10 +24,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.model.AvoidRegion
+import com.xiwei.sujian.model.AvoidRegionKind
 import com.xiwei.sujian.model.WorkspacePaneMode
 import com.xiwei.sujian.ui.compose.SujianAppState
 import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
@@ -69,11 +67,18 @@ fun ProjectWorkspaceScreen(
     val paneMode = layoutPlan?.workspacePaneMode ?: WorkspacePaneMode.SinglePane
     val showProjectListInExtra = visiblePaneRoles?.showProjectList == true && paneMode == WorkspacePaneMode.ThreePane
 
-    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>()
+    val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
+
+    val scaffoldDirective = remember(layoutPlan) {
+        buildScaffoldDirectiveFromLayoutPlan(paneMode, avoidRegions)
+    }
+
+    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>(
+        scaffoldDirective = scaffoldDirective
+    )
 
     val isDetailExpanded = navigator.scaffoldValue[ThreePaneScaffoldRole.Secondary] == PaneAdaptedValue.Expanded
 
-    // Outer BackHandler: editor → chapter tree → project list
     BackHandler(enabled = navigator.canNavigateBack()) {
         coroutineScope.launch {
             navigator.navigateBack()
@@ -83,7 +88,6 @@ fun ProjectWorkspaceScreen(
         }
     }
 
-    // Back to project list when in chapter tree with no detail expanded
     BackHandler(enabled = !navigator.canNavigateBack() && currentProjectId != null) {
         appState.clearChapterSelection()
         appState.currentProjectId = null
@@ -103,13 +107,6 @@ fun ProjectWorkspaceScreen(
                 )
             }
         }
-    }
-
-    val avoidPadding = computeAvoidRegionPadding(avoidRegions)
-
-    // Build PaneScaffoldDirective from Core LayoutPlan
-    val scaffoldDirective = remember(layoutPlan) {
-        navigator.scaffoldDirective
     }
 
     NavigableListDetailPaneScaffold(
@@ -140,7 +137,7 @@ fun ProjectWorkspaceScreen(
                         },
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(avoidPadding)
+                            .then(windowInsetsPadding)
                     )
                 }
             }
@@ -169,11 +166,11 @@ fun ProjectWorkspaceScreen(
                                     if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
                                     else Modifier
                                 )
-                                .then(avoidPadding)
+                                .then(windowInsetsPadding)
                         )
                     } else {
                         Box(
-                            modifier = Modifier.fillMaxSize().then(avoidPadding),
+                            modifier = Modifier.fillMaxSize().then(windowInsetsPadding),
                             contentAlignment = Alignment.Center
                         ) {
                             Text("选择章节开始写作", modifier = Modifier.padding(16.dp))
@@ -193,7 +190,7 @@ fun ProjectWorkspaceScreen(
                         },
                         modifier = Modifier
                             .fillMaxSize()
-                            .then(avoidPadding)
+                            .then(windowInsetsPadding)
                     )
                 }
             }
@@ -250,14 +247,14 @@ private class WorkspaceDetailConfig(
 }
 
 @Composable
-private fun computeAvoidRegionPadding(avoidRegions: List<AvoidRegion>): Modifier {
-    if (avoidRegions.isEmpty()) return Modifier
-    val density = LocalDensity.current.density
+private fun computeWindowInsetPadding(avoidRegions: List<AvoidRegion>): Modifier {
+    val insets = avoidRegions.filter { it.kind == AvoidRegionKind.WindowInset }
+    if (insets.isEmpty()) return Modifier
     var startDp = 0f
     var endDp = 0f
     var topDp = 0f
     var bottomDp = 0f
-    for (region in avoidRegions) {
+    for (region in insets) {
         if (region.leftDp > 0f) startDp = maxOf(startDp, region.leftDp)
         if (region.rightDp > 0f) endDp = maxOf(endDp, region.rightDp)
         if (region.topDp > 0f) topDp = maxOf(topDp, region.topDp)
@@ -269,5 +266,35 @@ private fun computeAvoidRegionPadding(avoidRegions: List<AvoidRegion>): Modifier
         end = endDp.dp,
         top = topDp.dp,
         bottom = bottomDp.dp
+    )
+}
+
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+private fun buildScaffoldDirectiveFromLayoutPlan(
+    paneMode: WorkspacePaneMode,
+    avoidRegions: List<AvoidRegion>
+): PaneScaffoldDirective {
+    val verticalHingeWidths = avoidRegions
+        .filter { it.kind == AvoidRegionKind.VerticalHinge }
+        .map { it.rightDp - it.leftDp }
+        .filter { it > 0f }
+
+    val hingeSpacingDp = verticalHingeWidths.maxOrNull() ?: 0f
+
+    return PaneScaffoldDirective(
+        maxHorizontalPartitions = when (paneMode) {
+            WorkspacePaneMode.ThreePane -> 3
+            WorkspacePaneMode.ListDetail -> 2
+            WorkspacePaneMode.SinglePane -> 1
+        },
+        horizontalPartitionSpacerSize = hingeSpacingDp.dp,
+        maxVerticalPartitions = 1,
+        verticalPartitionSpacerSize = 0.dp,
+        defaultPanePreferredWidth = when (paneMode) {
+            WorkspacePaneMode.ThreePane -> 500.dp
+            WorkspacePaneMode.ListDetail -> 400.dp
+            WorkspacePaneMode.SinglePane -> 0.dp
+        },
+        excludedBounds = emptyList(),
     )
 }

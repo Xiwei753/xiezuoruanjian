@@ -95,12 +95,11 @@ impl CursorAnimationState {
 }
 
 impl SujianEditorItem {
-    // has_active_animation() removed: Rust no longer manages animation display
-    // lifecycle.  QML EditorAnimationOverlay owns animation state.
+    // has_active_animation() removed: animation display lifecycle is now managed
+    // by ActiveVisualTransactionQueue in Scene Graph (child[1]).
 
-    // cleanup_finished_animations() removed: Rust no longer tracks animation
-    // start_time/duration/progress/is_finished.  QML ghosts self-destroy on
-    // completion.
+    // cleanup_finished_animations() removed: transaction completion is handled
+    // atomically via transactionId + generation in updatePaintNode.
 
     /// 渲染静态正文到 painter。不包含任何动画内容。
     /// buffer_scroll_y 和 buffer_h 定义缓冲区可见范围。

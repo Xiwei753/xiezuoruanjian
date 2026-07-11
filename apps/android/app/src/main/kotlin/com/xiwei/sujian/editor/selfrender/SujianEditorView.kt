@@ -105,6 +105,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     internal var suppressOnContentChanged: Boolean = false
 
+    internal var themeColorsFromAdapter: Boolean = false
+
     // ── 初始化 ──
     init {
         // Buffer 变更监听
@@ -811,7 +813,9 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        applyThemeColors()
+        if (!themeColorsFromAdapter) {
+            applyThemeColors()
+        }
         if (isFocused) {
             cursorController.onFocusChanged(true)
         }
@@ -819,7 +823,9 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onConfigurationChanged(newConfig: Configuration?) {
         super.onConfigurationChanged(newConfig)
-        applyThemeColors()
+        if (!themeColorsFromAdapter) {
+            applyThemeColors()
+        }
     }
 
     /**
@@ -870,6 +876,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
+        themeColorsFromAdapter = true
         setBackgroundColor(colors.background)
         textPaint.color = colors.text
         renderer.setThemeColorsExtended(

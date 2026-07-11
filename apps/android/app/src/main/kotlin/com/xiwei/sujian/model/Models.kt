@@ -561,11 +561,16 @@ data class PaneWidthConstraint(
     val maxDp: Float = 0f
 )
 
+enum class AvoidRegionKind {
+    WindowInset, VerticalHinge, HorizontalHinge
+}
+
 data class AvoidRegion(
     val leftDp: Float = 0f,
     val topDp: Float = 0f,
     val rightDp: Float = 0f,
-    val bottomDp: Float = 0f
+    val bottomDp: Float = 0f,
+    val kind: AvoidRegionKind = AvoidRegionKind.WindowInset
 )
 
 data class WindowMetrics(
