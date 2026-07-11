@@ -23,3 +23,5 @@ pub use stats::*;
 pub use sync::*;
 pub use volume::*;
 pub use workspace::*;
+#[cfg(test)]
+mod stats_tests;
