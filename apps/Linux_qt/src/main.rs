@@ -101,8 +101,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/EditorController.qml" as "EditorController.qml",
     "qml/EditorWheelScroller.qml" as "EditorWheelScroller.qml",
     "qml/SmoothWheelScroller.qml" as "SmoothWheelScroller.qml",
-    "qml/EditorAnimationOverlay.qml" as "EditorAnimationOverlay.qml",
-    "qml/EditorGlyphGhost.qml" as "EditorGlyphGhost.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/ScreenPolicyAdapter.qml" as "ScreenPolicyAdapter.qml",

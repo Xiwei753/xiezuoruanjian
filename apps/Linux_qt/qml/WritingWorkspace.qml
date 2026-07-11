@@ -21,7 +21,7 @@
 //   - 自研 SujianEditorItem 的 QSG 渲染
 //   - 光标和选区的 IME 交互逻辑
 //   - QTextLayout 的排版细节
-//   - EditorAnimationOverlay 的动画参数
+//   - Rust Coordinator → Scene Graph 动画渲染参数
 //
 // 编辑器交互（包括IME处理）由 EditorController 和 SujianEditorItem
 // 直接管理，不走 Qt QSG 渲染管线，不受 LayoutPlan 约束
@@ -919,8 +919,8 @@ Rectangle {
                         editorItem: sujianEditor
                     }
 
-                    // EditorTypingAnimator removed — animation唯一主路径是 EditorAnimationOverlay
-                    // (见 EditorAnimationOverlay.qml，消费 visual_transaction_json 信号)
+                    // 文字动画唯一主路径：Rust Coordinator → Scene Graph (child[1])
+                    // 不再使用 QML overlay 路线
 
 
                 }

@@ -1,25 +1,37 @@
 //! Linux_qt 自研写作区 — 唯一主路径
 //!
 //! 路线：SujianEditorItem(QQuickItem) + QTextLayout/QTextLine + QImage static texture
-//!       + QSGImageNode + QML Rectangle cursor + QML EditorAnimationOverlay
+//!       + QSGImageNode + Rust Coordinator → immutable RenderPlan → Scene Graph renderer
 //!
 //! 禁止旧路线：DocumentHandler / TextArea / QTextDocument / QQuickPaintedItem / QSG 三层 overlay
+//!             EditorAnimationOverlay / EditorGlyphGhost / visual_transaction_json QML overlay
 
 // =============================================================================
 // sujian_editor_item - Linux_qt self-rendered editor item
 // =============================================================================
 
 pub(crate) mod animation_coordinator;
+pub(crate) mod animation_mode;
 pub(crate) mod buffer;
+pub(crate) mod cursor_animation;
 pub(crate) mod cursor_controller;
+pub(crate) mod delete_animation;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;
+pub(crate) mod insert_animation;
 pub(crate) mod input_host;
 pub(crate) mod layout_ops;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
+pub(crate) mod reflow_animation;
+pub(crate) mod render_plan;
 pub(crate) mod rendering;
+pub(crate) mod scene_graph_renderer;
+pub(crate) mod texture_cache;
 pub(crate) mod transaction;
+pub(crate) mod transaction_key;
+pub(crate) mod transaction_queue;
+pub(crate) mod visual_payload;
 #[cfg(test)]
 mod tests;
 
@@ -167,7 +179,7 @@ pub struct SujianEditorItem {
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
     visual_transaction_json: qt_property!(QString; READ visual_transaction_json NOTIFY visual_transaction_changed),
-    preedit_visual_transaction_json: qt_property!(QString; READ preedit_visual_transaction_json NOTIFY preedit_visual_transaction_changed),
+    preedit_visual_transaction_json: qt_property!(QString; READ preedit_visual_transaction_json NOTIFY preedit_visual_transaction_changed), // legacy compat
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
@@ -279,7 +291,7 @@ pub struct SujianEditorItem {
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
     animation_coordinator: LinuxEditorAnimationCoordinator,
-    cached_animation_textures: std::collections::HashMap<animation_coordinator::VisualTransactionKey, Vec<qmetaobject::QImage>>,
+    texture_cache: animation_coordinator::TextureCache,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
 }
 
@@ -421,7 +433,7 @@ impl Default for SujianEditorItem {
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
             animation_coordinator: LinuxEditorAnimationCoordinator::new(),
-            cached_animation_textures: std::collections::HashMap::new(),
+            texture_cache: animation_coordinator::TextureCache::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
         }
     }
@@ -520,7 +532,7 @@ impl SujianEditorItem {
                     tid,
                     self.animation_coordinator.has_active_insert()
                 ));
-                self.cached_animation_textures.remove(&key);
+                self.texture_cache.remove(&key);
                 self.request_static_repaint();
                 self.cursor_rect_changed();
             }

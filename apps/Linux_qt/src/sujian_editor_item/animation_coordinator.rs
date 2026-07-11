@@ -1,60 +1,22 @@
 use std::time::Instant;
 
-use serde::Serialize;
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorVisualTransaction,
     GlyphRect, ReflowGlyphRect,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct VisualTransactionKey {
-    pub transaction_id: u64,
-    pub generation: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum AnimationMode {
-    GlyphAnimation,
-    ClusterAnimation,
-    RunAnimation,
-    LineReflowAnimation,
-    SnapshotAnimation,
-    SystemSuppressed,
-}
-
-impl AnimationMode {
-    pub(crate) fn from_core(mode: CoreAnimationMode) -> Self {
-        match mode {
-            CoreAnimationMode::GlyphAnimation => AnimationMode::GlyphAnimation,
-            CoreAnimationMode::ClusterAnimation => AnimationMode::ClusterAnimation,
-            CoreAnimationMode::RunAnimation => AnimationMode::RunAnimation,
-            CoreAnimationMode::LineReflowAnimation => AnimationMode::LineReflowAnimation,
-            CoreAnimationMode::SnapshotAnimation | CoreAnimationMode::SystemSuppressed => {
-                AnimationMode::SystemSuppressed
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) enum OverlayAnimationKind {
-    Insert,
-    Delete,
-    Cursor,
-}
-
-impl From<EditorAnimationKind> for OverlayAnimationKind {
-    fn from(k: EditorAnimationKind) -> Self {
-        match k {
-            EditorAnimationKind::Insert => OverlayAnimationKind::Insert,
-            EditorAnimationKind::Delete => OverlayAnimationKind::Delete,
-            EditorAnimationKind::Cursor => OverlayAnimationKind::Cursor,
-        }
-    }
-}
+pub(crate) use super::transaction_key::VisualTransactionKey;
+pub(crate) use super::transaction_queue::{ActiveVisualTransaction, ActiveVisualTransactionQueue, VisualTransactionState};
+pub(crate) use super::visual_payload::{VisualPayload, VisualRunSnapshot, ReflowRunSnapshot};
+pub(crate) use super::animation_mode::AnimationMode;
+pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
+pub(crate) use super::render_plan::{
+    HiddenRangeInfo, StaticTextPlan, TextAnimationPlan, TextAnimationGlyphInfo,
+    SelectionPreeditPlan, SelectionRange, PreeditRange,
+    ImeUpdateKind, ImeUpdatePlan, RenderPlan,
+};
+pub(crate) use super::texture_cache::TextureCache;
+pub(crate) use super::{insert_animation, delete_animation, reflow_animation};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextAnimationKind {
@@ -77,171 +39,6 @@ pub(crate) struct AnimationRangeEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ReflowHiddenRangeEntry {
     pub byte_range: (usize, usize),
-}
-
-// =============================================================================
-// ActiveVisualTransactionQueue — Rust-owned animation transaction queue
-// =============================================================================
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum VisualTransactionState {
-    Pending,
-    Prepared,
-    Rendering,
-    Completed,
-    Cancelled,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ActiveVisualTransaction {
-    pub key: VisualTransactionKey,
-    pub state: VisualTransactionState,
-    pub kind: OverlayAnimationKind,
-    pub animation_mode: AnimationMode,
-    pub duration_ms: u64,
-    pub start_time: Instant,
-    pub insert_glyph_rects: Vec<GlyphRect>,
-    pub deleted_glyph_rects: Vec<GlyphRect>,
-    pub reflow_glyph_rects: Vec<ReflowGlyphRect>,
-    pub inserted_range: Option<(usize, usize)>,
-    pub old_cursor_rect: Option<CursorRect>,
-    pub new_cursor_rect: Option<CursorRect>,
-    pub cancel_reason: Option<String>,
-    pub texture_prepared: bool,
-}
-
-impl ActiveVisualTransaction {
-    pub fn transaction_id(&self) -> u64 {
-        self.key.transaction_id
-    }
-
-    pub fn generation(&self) -> u64 {
-        self.key.generation
-    }
-}
-
-pub(crate) struct ActiveVisualTransactionQueue {
-    transactions: Vec<ActiveVisualTransaction>,
-}
-
-impl ActiveVisualTransactionQueue {
-    pub fn new() -> Self {
-        Self {
-            transactions: Vec::new(),
-        }
-    }
-
-    pub fn enqueue(
-        &mut self,
-        key: VisualTransactionKey,
-        vt: &EditorVisualTransaction,
-        animation_mode: AnimationMode,
-    ) {
-        let kind = vt.kind.into();
-        self.transactions.push(ActiveVisualTransaction {
-            key,
-            state: VisualTransactionState::Prepared,
-            kind,
-            animation_mode,
-            duration_ms: vt.duration_ms,
-            start_time: Instant::now(),
-            insert_glyph_rects: vt.insert_glyph_rects.clone().unwrap_or_default(),
-            deleted_glyph_rects: vt.deleted_glyph_rects.clone().unwrap_or_default(),
-            reflow_glyph_rects: vt.reflow_glyph_rects.clone().unwrap_or_default(),
-            inserted_range: vt.inserted_range,
-            old_cursor_rect: vt.old_cursor_rect.clone(),
-            new_cursor_rect: vt.new_cursor_rect.clone(),
-            cancel_reason: None,
-            texture_prepared: false,
-        });
-
-        super::editor_animation_debug_log(&format!(
-            "VTQueue::enqueue: tid={}, gen={}, kind={:?}, mode={:?}, duration_ms={}",
-            key.transaction_id, key.generation, kind, animation_mode, vt.duration_ms
-        ));
-    }
-
-    pub fn mark_rendering(&mut self, key: VisualTransactionKey) {
-        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
-            tx.state = VisualTransactionState::Rendering;
-        }
-    }
-
-    pub fn mark_texture_prepared(&mut self, key: VisualTransactionKey) {
-        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
-            tx.texture_prepared = true;
-        }
-    }
-
-    pub fn complete(&mut self, key: VisualTransactionKey) -> bool {
-        let before = self.transactions.len();
-        self.transactions.retain(|t| t.key != key);
-        let removed = self.transactions.len() < before;
-        if removed {
-            super::editor_animation_debug_log(&format!(
-                "VTQueue::complete: tid={}, gen={}",
-                key.transaction_id, key.generation
-            ));
-        }
-        removed
-    }
-
-    pub fn cancel(&mut self, key: VisualTransactionKey, reason: &str) -> bool {
-        let before = self.transactions.len();
-        self.transactions.retain(|t| t.key != key);
-        let removed = self.transactions.len() < before;
-        if removed {
-            super::editor_animation_debug_log(&format!(
-                "VTQueue::cancel: tid={}, gen={}, reason={}",
-                key.transaction_id, key.generation, reason
-            ));
-        }
-        removed
-    }
-
-    pub fn cancel_all(&mut self, reason: &str) {
-        if !self.transactions.is_empty() {
-            super::editor_animation_debug_log(&format!(
-                "VTQueue::cancel_all: count={}, reason={}",
-                self.transactions.len(),
-                reason
-            ));
-        }
-        self.transactions.clear();
-    }
-
-    pub fn active_transactions(&self) -> &[ActiveVisualTransaction] {
-        &self.transactions
-    }
-
-    pub fn has_active(&self) -> bool {
-        !self.transactions.is_empty()
-    }
-
-    pub fn tick(&mut self, now: Instant) -> bool {
-        if self.transactions.is_empty() {
-            return false;
-        }
-        let before = self.transactions.len();
-        self.transactions.retain(|t| {
-            let elapsed = now.duration_since(t.start_time).as_millis() as u64;
-            let timeout = t.duration_ms * 3 + 500;
-            if elapsed > timeout {
-                super::editor_animation_debug_log(&format!(
-                    "VTQueue::tick: expired tid={}, gen={}, elapsed={}ms, timeout={}ms",
-                    t.key.transaction_id, t.key.generation, elapsed, timeout
-                ));
-                false
-            } else {
-                true
-            }
-        });
-        self.transactions.len() != before
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.transactions.is_empty()
-    }
 }
 
 pub(crate) struct AnimationRangeRegistry {
@@ -412,13 +209,6 @@ impl AnimationRangeRegistry {
                 .collect();
         }
     }
-
-    pub fn entries_with_texture_prepared(&self) -> Vec<&AnimationRangeEntry> {
-        self.entries
-            .iter()
-            .filter(|e| e.kind == TextAnimationKind::Insert)
-            .collect()
-    }
 }
 
 fn map_range_for_insert(range: (usize, usize), pos: usize, len: usize) -> Option<(usize, usize)> {
@@ -442,121 +232,6 @@ fn map_range_for_delete(range: (usize, usize), pos: usize, len: usize) -> Option
     }
 }
 
-// =============================================================================
-// Plans — read-only outputs from the coordinator
-// =============================================================================
-
-#[derive(Clone, Debug)]
-pub(crate) struct HiddenRangeInfo {
-    pub key: VisualTransactionKey,
-    pub byte_range: (usize, usize),
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct StaticTextRenderPlan {
-    pub hidden_ranges: Vec<HiddenRangeInfo>,
-}
-
-impl StaticTextRenderPlan {
-    pub fn merged_byte_ranges(&self) -> Vec<(usize, usize)> {
-        let mut all: Vec<(usize, usize)> = self
-            .hidden_ranges
-            .iter()
-            .map(|r| r.byte_range)
-            .collect();
-        all.sort_by_key(|r| r.0);
-        let mut merged: Vec<(usize, usize)> = Vec::new();
-        for (rs, re) in all {
-            if let Some(last) = merged.last_mut() {
-                if rs <= last.1 {
-                    last.1 = last.1.max(re);
-                    continue;
-                }
-            }
-            merged.push((rs, re));
-        }
-        merged
-    }
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct OverlayGlyphInfo {
-    pub key: VisualTransactionKey,
-    pub duration_ms: u64,
-    pub glyph_rects: Vec<GlyphRect>,
-    pub deleted_glyph_rects: Vec<GlyphRect>,
-    pub reflow_glyph_rects: Vec<ReflowGlyphRect>,
-    pub old_cursor_rect: Option<CursorRect>,
-    pub new_cursor_rect: Option<CursorRect>,
-    pub animation_mode: AnimationMode,
-    pub inserted_range: Option<(usize, usize)>,
-    pub kind: OverlayAnimationKind,
-    pub cluster_rects: Option<Vec<writer_core::editor::ClusterRect>>,
-    pub cluster_runs: Option<Vec<writer_core::editor::ClusterRun>>,
-}
-
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct OverlayAnimationPlan {
-    pub entries: Vec<OverlayGlyphInfo>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CursorBlinkMode {
-    Normal,
-    Suppressed,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum CursorTransition {
-    Snap,
-    Tween {
-        old_rect: CursorRect,
-        new_rect: CursorRect,
-        duration_ms: u64,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct CursorAnimationPlan {
-    pub should_be_visible: bool,
-    pub blink_mode: CursorBlinkMode,
-    pub transition: CursorTransition,
-    pub cursor_x: f64,
-    pub cursor_y: f64,
-    pub cursor_h: f64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ImeUpdateKind {
-    None,
-    QueryInput,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ImeUpdatePlan {
-    pub kind: ImeUpdateKind,
-    pub cursor_changed: bool,
-    pub anchor_changed: bool,
-}
-
-// =============================================================================
-// CoordinatorOutput — all four plans produced atomically
-// =============================================================================
-
-#[derive(Clone, Debug)]
-pub(crate) struct CoordinatorOutput {
-    pub static_render_plan: StaticTextRenderPlan,
-    pub overlay_plan: OverlayAnimationPlan,
-    pub cursor_plan: CursorAnimationPlan,
-    pub ime_plan: ImeUpdatePlan,
-}
-
-// =============================================================================
-// LinuxEditorAnimationCoordinator
-// =============================================================================
-
 pub(crate) struct LinuxEditorAnimationCoordinator {
     registry: AnimationRangeRegistry,
     next_key_id: u64,
@@ -575,10 +250,7 @@ impl LinuxEditorAnimationCoordinator {
     fn alloc_key(&mut self) -> VisualTransactionKey {
         let id = self.next_key_id;
         self.next_key_id += 1;
-        VisualTransactionKey {
-            transaction_id: id,
-            generation: id,
-        }
+        VisualTransactionKey::new(id, id)
     }
 
     pub fn process_transaction(
@@ -610,122 +282,102 @@ impl LinuxEditorAnimationCoordinator {
         old_visual_y: f64,
         force_snap_next: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
-    ) -> CoordinatorOutput {
-        if typing_animation_enabled && !is_scrolling {
-            match vt.kind {
-                EditorAnimationKind::Insert => {
-                    if let Some((range_start, range_end)) = vt.inserted_range {
-                        let insert_len = range_end - range_start;
-                        let had_active_before = self.registry.has_active_insert();
-                        self.registry.map_ranges_for_insert(range_start, insert_len);
-                        if had_active_before && !self.registry.has_active_insert() {
-                        }
-                        let mut mode = AnimationMode::from_core(vt.animation_mode);
-                        if is_scrolling
-                            || is_loading
-                            || is_applying_format
-                            || is_applying_settings
-                            || !typing_animation_enabled
-                        {
-                            mode = AnimationMode::SystemSuppressed;
-                        }
-                        if mode != AnimationMode::SystemSuppressed {
-                            let key = self.alloc_key();
-                            let reflow_ranges: Vec<(usize, usize)> = vt
-                                .reflow_glyph_rects
-                                .as_ref()
-                                .map(|rects| {
-                                    rects.iter().map(|r| (r.byte_start, r.byte_end)).collect()
-                                })
-                                .unwrap_or_default();
-                            let core_range_id =
-                                vt.hidden_visual_ranges.first().map(|r| r.id);
-                            self.registry.start_insert(
-                                key,
-                                core_range_id,
-                                (range_start, range_end),
-                                reflow_ranges,
-                                mode,
-                                vt.duration_ms,
-                            );
-                            self.vt_queue.enqueue(key, vt, mode);
-                        }
-                    }
-                }
-                EditorAnimationKind::Delete => {
-                    let mut mode = AnimationMode::from_core(vt.animation_mode);
-                    if is_scrolling
-                        || is_loading
-                        || is_applying_format
-                        || is_applying_settings
-                        || !typing_animation_enabled
-                    {
-                        mode = AnimationMode::SystemSuppressed;
-                    }
-                    if mode != AnimationMode::SystemSuppressed {
-                        let key = self.alloc_key();
-                        let changes =
-                            writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
-                        for change in &changes {
-                            if let writer_core::editor::EditorChange::Delete { index, text } =
-                                change
-                            {
-                                let range_start = *index;
-                                let delete_len = text.len();
-                                self.registry.map_ranges_for_delete(range_start, delete_len);
-                            }
-                        }
-                        for change in &changes {
-                            if let writer_core::editor::EditorChange::Delete { index, text } =
-                                change
-                            {
-                                let range_start = *index;
-                                let range_end = range_start + text.len();
-                                self.registry.start_delete(
-                                    key,
-                                    (range_start, range_end),
-                                    mode,
-                                    vt.duration_ms,
-                                );
-                            }
-                        }
-                        self.vt_queue.enqueue(key, vt, mode);
-                    }
-                }
-                EditorAnimationKind::Cursor => {}
-            }
+    ) {
+        if !typing_animation_enabled || is_scrolling {
+            return;
         }
 
-        self.build_output(
-            old_cursor_rect,
-            new_cursor_rect,
-            cursor_x,
-            cursor_y,
-            cursor_h,
-            editor_enabled,
-            has_selection,
-            viewport_height,
-            is_scrolling,
-            is_selecting,
-            is_preediting,
-            smooth_cursor_enabled,
-            smooth_cursor_duration_ms,
-            coordinated_enabled,
-            scroll_y,
-            old_scroll_y,
-            old_visible,
-            old_blink_visible,
-            old_visual_x,
-            old_visual_y,
-            force_snap_next,
-            cursor_animation,
-        )
+        let mode = AnimationMode::from_core(vt.animation_mode);
+        if is_scrolling || is_loading || is_applying_format || is_applying_settings || !typing_animation_enabled {
+            return;
+        }
+        if !mode.should_create_transaction() {
+            return;
+        }
+
+        match vt.kind {
+            EditorAnimationKind::Insert => {
+                if let Some((range_start, range_end)) = vt.inserted_range {
+                    let insert_len = range_end - range_start;
+                    self.registry.map_ranges_for_insert(range_start, insert_len);
+
+                    let key = self.alloc_key();
+                    let reflow_ranges: Vec<(usize, usize)> = vt
+                        .reflow_glyph_rects
+                        .as_ref()
+                        .map(|rects| {
+                            rects.iter().map(|r| (r.byte_start, r.byte_end)).collect()
+                        })
+                        .unwrap_or_default();
+                    let core_range_id = vt.hidden_visual_ranges.first().map(|r| r.id);
+
+                    let has_reflow = !reflow_ranges.is_empty();
+                    let payload = VisualPayload::from_insert_transaction(
+                        vt.insert_glyph_rects.as_deref().unwrap_or(&[]),
+                        vt.reflow_glyph_rects.as_deref().unwrap_or(&[]),
+                        vt.inserted_range,
+                        vt.old_cursor_rect.clone(),
+                        vt.new_cursor_rect.clone(),
+                        has_reflow,
+                    );
+
+                    self.registry.start_insert(
+                        key,
+                        core_range_id,
+                        (range_start, range_end),
+                        reflow_ranges,
+                        mode,
+                        vt.duration_ms,
+                    );
+                    self.vt_queue.enqueue(key, payload, mode, vt.duration_ms);
+                }
+            }
+            EditorAnimationKind::Delete => {
+                let key = self.alloc_key();
+                let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                for change in &changes {
+                    if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                        let range_start = *index;
+                        let delete_len = text.len();
+                        self.registry.map_ranges_for_delete(range_start, delete_len);
+                    }
+                }
+                for change in &changes {
+                    if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                        let range_start = *index;
+                        let range_end = range_start + text.len();
+                        self.registry.start_delete(
+                            key,
+                            (range_start, range_end),
+                            mode,
+                            vt.duration_ms,
+                        );
+                    }
+                }
+
+                let payload = VisualPayload::from_delete_transaction(
+                    vt.deleted_glyph_rects.as_deref().unwrap_or(&[]),
+                    vt.old_cursor_rect.clone(),
+                    vt.new_cursor_rect.clone(),
+                );
+                self.vt_queue.enqueue(key, payload, mode, vt.duration_ms);
+            }
+            EditorAnimationKind::Cursor => {}
+        }
     }
 
     pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> bool {
         let registry_result = self.registry.finish_by_key(key);
         if registry_result {
             self.vt_queue.complete(key);
+        }
+        registry_result
+    }
+
+    pub fn cancel_by_key(&mut self, key: VisualTransactionKey, reason: &str) -> bool {
+        let registry_result = self.registry.finish_by_key(key);
+        if registry_result {
+            self.vt_queue.cancel(key, reason);
         }
         registry_result
     }
@@ -746,14 +398,14 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     pub fn has_active_insert(&self) -> bool {
-        self.registry.has_active_insert()
+        self.registry.has_active_insert() || self.vt_queue.has_active_insert()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.registry.is_empty()
+        self.registry.is_empty() && self.vt_queue.is_empty()
     }
 
-    pub fn current_static_render_plan(&self) -> StaticTextRenderPlan {
+    pub fn current_static_render_plan(&self) -> StaticTextPlan {
         self.build_static_render_plan()
     }
 
@@ -765,7 +417,7 @@ impl LinuxEditorAnimationCoordinator {
         self.registry.reflow_byte_ranges()
     }
 
-    fn build_static_render_plan(&self) -> StaticTextRenderPlan {
+    fn build_static_render_plan(&self) -> StaticTextPlan {
         let mut hidden_ranges = Vec::new();
 
         for e in self.registry.entries.iter() {
@@ -788,40 +440,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        StaticTextRenderPlan { hidden_ranges }
-    }
-
-    fn build_overlay_plan(&self, vt: &EditorVisualTransaction) -> OverlayAnimationPlan {
-        let mut entries = Vec::new();
-
-        if vt.kind == EditorAnimationKind::Insert || vt.kind == EditorAnimationKind::Delete {
-            let mode = AnimationMode::from_core(vt.animation_mode);
-            if mode != AnimationMode::SystemSuppressed {
-                let key = self.vt_queue.active_transactions().iter()
-                    .find(|t| t.kind == vt.kind.into()
-                        && t.inserted_range == vt.inserted_range
-                        && t.duration_ms == vt.duration_ms)
-                    .map(|t| t.key)
-                    .unwrap_or(VisualTransactionKey { transaction_id: 0, generation: 0 });
-
-                entries.push(OverlayGlyphInfo {
-                    key,
-                    duration_ms: vt.duration_ms,
-                    glyph_rects: vt.insert_glyph_rects.clone().unwrap_or_default(),
-                    deleted_glyph_rects: vt.deleted_glyph_rects.clone().unwrap_or_default(),
-                    reflow_glyph_rects: vt.reflow_glyph_rects.clone().unwrap_or_default(),
-                    old_cursor_rect: vt.old_cursor_rect.clone(),
-                    new_cursor_rect: vt.new_cursor_rect.clone(),
-                    animation_mode: mode,
-                    inserted_range: vt.inserted_range,
-                    kind: vt.kind.into(),
-                    cluster_rects: vt.cluster_rects.clone(),
-                    cluster_runs: vt.cluster_runs.clone(),
-                });
-            }
-        }
-
-        OverlayAnimationPlan { entries }
+        StaticTextPlan { hidden_ranges }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -853,7 +472,7 @@ impl LinuxEditorAnimationCoordinator {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
 
-        let has_active = self.registry.has_active_insert();
+        let has_active = self.has_active_insert();
         let blink_mode = if coordinated_enabled && has_active {
             CursorBlinkMode::Suppressed
         } else {
@@ -979,87 +598,16 @@ impl LinuxEditorAnimationCoordinator {
             anchor_changed: false,
         }
     }
-
-    #[allow(clippy::too_many_arguments)]
-    fn build_output(
-        &self,
-        old_cursor_rect: Option<CursorRect>,
-        new_cursor_rect: Option<CursorRect>,
-        cursor_x: f64,
-        cursor_y: f64,
-        cursor_h: f64,
-        editor_enabled: bool,
-        has_selection: bool,
-        viewport_height: f64,
-        is_scrolling: bool,
-        is_selecting: bool,
-        is_preediting: bool,
-        smooth_cursor_enabled: bool,
-        smooth_cursor_duration_ms: u32,
-        coordinated_enabled: bool,
-        scroll_y: f64,
-        old_scroll_y: f64,
-        old_visible: bool,
-        old_blink_visible: bool,
-        old_visual_x: f64,
-        old_visual_y: f64,
-        force_snap_next: bool,
-        cursor_animation: Option<&super::rendering::CursorAnimationState>,
-    ) -> CoordinatorOutput {
-        let static_render_plan = self.build_static_render_plan();
-        let cursor_plan = self.build_cursor_plan(
-            old_cursor_rect,
-            new_cursor_rect,
-            cursor_x,
-            cursor_y,
-            cursor_h,
-            editor_enabled,
-            has_selection,
-            viewport_height,
-            is_scrolling,
-            is_selecting,
-            is_preediting,
-            smooth_cursor_enabled,
-            smooth_cursor_duration_ms,
-            coordinated_enabled,
-            scroll_y,
-            old_scroll_y,
-            old_visible,
-            old_blink_visible,
-            old_visual_x,
-            old_visual_y,
-            force_snap_next,
-            cursor_animation,
-        );
-
-        let position_changed = (old_visual_x - cursor_x).abs() > 0.01
-            || (old_visual_y - cursor_y).abs() > 0.01;
-        let scroll_changed = (old_scroll_y - scroll_y).abs() > 0.01;
-        let ime_plan = self.build_ime_plan(position_changed, scroll_changed);
-
-        CoordinatorOutput {
-            static_render_plan,
-            overlay_plan: OverlayAnimationPlan::default(),
-            cursor_plan,
-            ime_plan,
-        }
-    }
-
-    pub fn build_overlay_plan_for_vt(
-        &mut self,
-        vt: &EditorVisualTransaction,
-    ) -> OverlayAnimationPlan {
-        self.build_overlay_plan(vt)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::Duration;
+    use writer_core::editor::AnimationMode as CoreAnimationMode;
 
     fn make_key(id: u64) -> VisualTransactionKey {
-        VisualTransactionKey { transaction_id: id, generation: id }
+        VisualTransactionKey::new(id, id)
     }
 
     #[test]
@@ -1173,7 +721,7 @@ mod tests {
 
     #[test]
     fn test_static_render_plan_merged_byte_ranges() {
-        let plan = StaticTextRenderPlan {
+        let plan = StaticTextPlan {
             hidden_ranges: vec![
                 HiddenRangeInfo {
                     key: make_key(1),
@@ -1191,66 +739,6 @@ mod tests {
         };
         let merged = plan.merged_byte_ranges();
         assert_eq!(merged, vec![(10, 25), (30, 40)]);
-    }
-
-    #[test]
-    fn test_cursor_plan_coordinated_tween() {
-        let coord = LinuxEditorAnimationCoordinator::new();
-        let plan = coord.build_cursor_plan(
-            Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            Some(CursorRect { x: 50.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            50.0, 5.0, 20.0,
-            true, false, 1000.0,
-            false, false, false,
-            true, 120,
-            true,
-            0.0, 0.0,
-            true, true,
-            10.0, 5.0,
-            false, None,
-        );
-        assert!(plan.should_be_visible);
-        assert_eq!(plan.blink_mode, CursorBlinkMode::Normal);
-    }
-
-    #[test]
-    fn test_cursor_plan_coordinated_suppressed_blink() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-
-        let plan = coord.build_cursor_plan(
-            Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            Some(CursorRect { x: 50.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            50.0, 5.0, 20.0,
-            true, false, 1000.0,
-            false, false, false,
-            true, 120,
-            true,
-            0.0, 0.0,
-            true, true,
-            10.0, 5.0,
-            false, None,
-        );
-        assert!(plan.should_be_visible);
-        assert_eq!(plan.blink_mode, CursorBlinkMode::Suppressed);
-    }
-
-    #[test]
-    fn test_cursor_plan_not_visible_when_disabled() {
-        let coord = LinuxEditorAnimationCoordinator::new();
-        let plan = coord.build_cursor_plan(
-            None, None,
-            50.0, 5.0, 20.0,
-            false, false, 1000.0,
-            false, false, false,
-            true, 120,
-            true,
-            0.0, 0.0,
-            false, true,
-            50.0, 5.0,
-            false, None,
-        );
-        assert!(!plan.should_be_visible);
     }
 
     #[test]
@@ -1290,93 +778,63 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_reflow_ranges_independent_lifecycle() {
-        let mut reg = AnimationRangeRegistry::new();
-        let key = make_key(1);
-        reg.start_insert(key, None, (5, 10), vec![(10, 15), (15, 20)], AnimationMode::GlyphAnimation, 100);
-        assert_eq!(reg.reflow_byte_ranges(), vec![(10, 15), (15, 20)]);
-        reg.finish_by_key(key);
-        assert!(reg.reflow_byte_ranges().is_empty());
-    }
-
-    #[test]
-    fn test_map_ranges_insert_before_reflow() {
-        let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(make_key(1), None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
-        reg.map_ranges_for_insert(5, 3);
-        assert_eq!(reg.insert_byte_ranges(), vec![(13, 23)]);
-        assert_eq!(reg.reflow_byte_ranges(), vec![(23, 28), (28, 33)]);
-    }
-
-    #[test]
-    fn test_map_ranges_delete_before_reflow() {
-        let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(make_key(1), None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
-        reg.map_ranges_for_delete(5, 3);
-        assert_eq!(reg.insert_byte_ranges(), vec![(7, 17)]);
-        assert_eq!(reg.reflow_byte_ranges(), vec![(17, 22), (22, 27)]);
-    }
-
-    #[test]
-    fn test_map_ranges_insert_inside_reflow_removes_that_reflow() {
-        let mut reg = AnimationRangeRegistry::new();
-        reg.start_insert(make_key(1), None, (10, 20), vec![(20, 25), (25, 30)], AnimationMode::GlyphAnimation, 100);
-        reg.map_ranges_for_insert(22, 3);
-        assert_eq!(reg.insert_byte_ranges(), vec![(10, 20)]);
-        assert_eq!(reg.reflow_byte_ranges(), vec![(28, 33)]);
-    }
-
-    #[test]
-    fn test_coordinated_tween_uses_visual_transaction_cursor_rects() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-
-        let plan = coord.build_cursor_plan(
-            Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            Some(CursorRect { x: 50.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            50.0, 5.0, 20.0,
-            true, false, 1000.0,
-            false, false, false,
-            true, 120,
-            true,
-            0.0, 0.0,
-            true, true,
-            10.0, 5.0,
-            false, None,
-        );
-        assert!(plan.should_be_visible);
-        assert_eq!(plan.blink_mode, CursorBlinkMode::Suppressed);
-        match plan.transition {
-            CursorTransition::Tween { old_rect, new_rect, duration_ms } => {
-                assert_eq!(old_rect.x, 10.0);
-                assert_eq!(new_rect.x, 50.0);
-                assert_eq!(duration_ms, 120);
-            }
-            CursorTransition::Snap => panic!("expected Tween, got Snap"),
-        }
-    }
-
-    #[test]
-    fn test_coordinated_false_snaps_even_with_active_insert() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-
-        let plan = coord.build_cursor_plan(
-            Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            Some(CursorRect { x: 50.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            50.0, 5.0, 20.0,
-            true, false, 1000.0,
-            false, false, false,
-            false, 0,
+    fn test_visual_payload_insert_dispatch() {
+        let payload = VisualPayload::from_insert_transaction(
+            &[GlyphRect { x: 10.0, y: 5.0, w: 12.0, h: 20.0, char_: "a".into(), baseline_y: 20.0, byte_start: 0, byte_end: 1 }],
+            &[],
+            Some((0, 1)),
+            None,
+            None,
             false,
-            0.0, 0.0,
-            true, true,
-            50.0, 5.0,
-            false, None,
         );
-        assert!(plan.should_be_visible);
-        assert_eq!(plan.blink_mode, CursorBlinkMode::Normal);
-        assert!(matches!(plan.transition, CursorTransition::Snap));
+        assert!(matches!(payload, VisualPayload::InsertRuns { .. }));
+    }
+
+    #[test]
+    fn test_visual_payload_reflow_dispatch() {
+        let payload = VisualPayload::from_insert_transaction(
+            &[GlyphRect { x: 10.0, y: 5.0, w: 12.0, h: 20.0, char_: "a".into(), baseline_y: 20.0, byte_start: 0, byte_end: 1 }],
+            &[ReflowGlyphRect { char_: "b".into(), byte_start: 1, byte_end: 2, old_x: 10.0, old_y: 5.0, old_baseline_y: 20.0, new_x: 22.0, new_y: 5.0, new_baseline_y: 20.0, w: 12.0, h: 20.0, line_index: 0 }],
+            Some((0, 1)),
+            None,
+            None,
+            true,
+        );
+        assert!(matches!(payload, VisualPayload::ReflowRuns { .. }));
+    }
+
+    #[test]
+    fn test_visual_payload_delete_dispatch() {
+        let payload = VisualPayload::from_delete_transaction(
+            &[GlyphRect { x: 10.0, y: 5.0, w: 12.0, h: 20.0, char_: "a".into(), baseline_y: 20.0, byte_start: 0, byte_end: 1 }],
+            None,
+            None,
+        );
+        assert!(matches!(payload, VisualPayload::DeleteRuns { .. }));
+    }
+
+    #[test]
+    fn test_animation_mode_system_suppressed_no_transaction() {
+        let mode = AnimationMode::SystemSuppressed;
+        assert!(!mode.should_create_transaction());
+    }
+
+    #[test]
+    fn test_animation_mode_glyph_creates_transaction() {
+        let mode = AnimationMode::GlyphAnimation;
+        assert!(mode.should_create_transaction());
+    }
+
+    #[test]
+    fn test_cancel_by_key() {
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = make_key(1);
+        coord.registry.start_insert(key, None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
+        let payload = VisualPayload::from_insert_transaction(&[], &[], Some((5, 6)), None, None, false);
+        coord.vt_queue.enqueue(key, payload, AnimationMode::GlyphAnimation, 100);
+        let cancelled = coord.cancel_by_key(key, "test_cancel");
+        assert!(cancelled);
+        assert!(coord.is_empty());
     }
 
     #[test]
@@ -1403,7 +861,7 @@ mod tests {
             duration_ms: 160,
             coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
         };
-        let output = coord.process_transaction(
+        coord.process_transaction(
             &vt,
             true,
             true,
@@ -1420,8 +878,6 @@ mod tests {
             false, None,
         );
         assert!(coord.is_empty());
-        assert!(output.static_render_plan.hidden_ranges.is_empty());
-        assert!(output.overlay_plan.entries.is_empty());
     }
 
     #[test]
@@ -1448,7 +904,7 @@ mod tests {
             duration_ms: 160,
             coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
         };
-        let output = coord.process_transaction(
+        coord.process_transaction(
             &vt,
             true,
             false,
@@ -1465,76 +921,6 @@ mod tests {
             false, None,
         );
         assert!(coord.is_empty());
-        assert!(output.overlay_plan.entries.is_empty());
-    }
-
-    #[test]
-    fn test_ime_plan_independent_of_cursor_blink() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.registry.start_insert(make_key(1), None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-
-        let cursor_plan = coord.build_cursor_plan(
-            Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            Some(CursorRect { x: 50.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
-            50.0, 5.0, 20.0,
-            true, false, 1000.0,
-            true, false, false,
-            true, 120,
-            true,
-            0.0, 0.0,
-            true, true,
-            10.0, 5.0,
-            false, None,
-        );
-        assert_eq!(cursor_plan.blink_mode, CursorBlinkMode::Suppressed);
-
-        let ime_plan = coord.build_ime_plan(true, false);
-        assert_eq!(ime_plan.kind, ImeUpdateKind::QueryInput);
-        assert!(ime_plan.cursor_changed);
-    }
-
-    #[test]
-    fn test_ime_plan_no_update_when_position_unchanged() {
-        let coord = LinuxEditorAnimationCoordinator::new();
-        let ime_plan = coord.build_ime_plan(false, false);
-        assert_eq!(ime_plan.kind, ImeUpdateKind::None);
-        assert!(!ime_plan.cursor_changed);
-    }
-
-    #[test]
-    fn test_key_atomic_cleanup_finish_by_key() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        let key = coord.alloc_key();
-        coord.registry.start_insert(key, None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        let vt = EditorVisualTransaction {
-            id: 1,
-            kind: EditorAnimationKind::Insert,
-            cause: writer_core::editor::EditorTransactionCause::Typing,
-            old_text: "a".into(),
-            new_text: "ab".into(),
-            old_selection: writer_core::editor::EditorSelection::collapsed("a", 1),
-            new_selection: writer_core::editor::EditorSelection::collapsed("ab", 2),
-            inserted_range: Some((1, 2)),
-            deleted_glyph_rects: None,
-            insert_glyph_rects: Some(vec![]),
-            reflow_glyph_rects: None,
-            animation_mode: CoreAnimationMode::GlyphAnimation,
-            cluster_rects: None,
-            cluster_runs: None,
-            hidden_visual_ranges: vec![],
-            old_cursor_rect: None,
-            new_cursor_rect: None,
-            duration_ms: 160,
-            coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
-        };
-        coord.vt_queue.enqueue(key, &vt, AnimationMode::GlyphAnimation);
-
-        assert!(coord.has_active_insert());
-        assert!(coord.vt_queue.has_active());
-
-        let removed = coord.finish_by_key(key);
-        assert!(removed);
-        assert!(coord.is_empty());
-        assert!(coord.vt_queue.is_empty());
     }
 }
+

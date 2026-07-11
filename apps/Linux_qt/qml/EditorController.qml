@@ -7,7 +7,7 @@
 // 约束：
 //   - 不包含 UI 渲染，只管理编辑器状态
 //   - 通过 backendRef 调用 AppBackend (Rust QObject)
-//   - 唯一编辑器路径：SujianEditorItem + QTextLayout + EditorAnimationOverlay
+//   - 唯一编辑器路径：SujianEditorItem + QTextLayout + Rust Coordinator → Scene Graph
 //
 // 关键流程：
 //   openChapter() → read_chapter → SujianEditorItem setText

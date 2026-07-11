@@ -9,7 +9,7 @@ use qmetaobject::{
 use std::time::Instant;
 
 use super::SujianEditorItem;
-use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition, StaticTextRenderPlan};
+use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition, StaticTextPlan};
 use super::cursor_controller::CursorUpdateResult;
 
 pub struct ScrollBuffer {

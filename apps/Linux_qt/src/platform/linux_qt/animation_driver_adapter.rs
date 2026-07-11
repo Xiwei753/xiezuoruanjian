@@ -1,19 +1,19 @@
 //! Linux Qt AnimationDriver 实现
 //!
-//! 坐标填充、帧驱动、QML overlay 绘制、暂停策略收敛到此。
+//! 坐标填充、帧驱动、Scene Graph 绘制、暂停策略收敛到此。
 //! SujianEditorItem 不直接管理动画状态，只通过此适配器。
 //!
 //! 已完成迁移：
 //! - should_suppress_animation / notify_animation_suppressed / resumed 已真实接入
-//! - drive_animation() 通过 item_ptr 触发 QML visual_transaction_changed signal
+//! - drive_animation() 通过 item_ptr 触发 update() 请求 Scene Graph 重绘
 //! - cancel_all_animations / finish_all_animations 通过 item_ptr 触发 explicit_clear_requested
-//! - QML EditorAnimationOverlay 消费 visual_transaction_changed 信号渲染动画，
+//! - 动画由 Rust Coordinator → Scene Graph (child[1]) 渲染，
 //!   动画模式由 Core EditorVisualTransaction.animationMode 唯一决定
 //!
 //! 当前架构：
-//! - drive_animation() → QML visual_transaction_changed → EditorAnimationOverlay 渲染
+//! - drive_animation() → QQuickItem::update() → updatePaintNode → Scene Graph 渲染
 //! - 这是已收敛的动画主路径，无独立 AnimationTimer 或 requestAnimationFrame 旁路
-//! - snapshotAnimation 模式 QML 侧降级为 systemSuppressed（无渲染器）
+//! - snapshotAnimation 模式降级为 systemSuppressed（无渲染器）
 
 use cpp::cpp;
 use std::sync::Mutex;
@@ -66,7 +66,7 @@ impl AnimationDriver for LinuxQtAnimationDriver {
             if !item_ptr.is_null() {
                 let _ = request;
                 cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                    QMetaObject::invokeMethod(item_ptr, "visual_transaction_changed");
+                    item_ptr->update();
                 });
             }
         }

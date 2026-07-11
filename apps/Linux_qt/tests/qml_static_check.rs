@@ -1245,17 +1245,16 @@ fn issue_431_base_components_have_token_fallback_and_overlay_uses_real_signal_na
         );
     }
 
-    // EditorAnimationOverlay.qml and EditorGlyphGhost.qml are DEPRECATED stubs.
-    // Text animation is now in SujianEditorItem Scene Graph (child[1]) via
-    // ActiveVisualTransactionQueue. The overlay no longer renders animations.
-    // Verify the deprecated stubs still exist and declare the correct signal names.
-    let overlay = fs::read_to_string(qml_dir.join("EditorAnimationOverlay.qml")).unwrap();
+    // EditorAnimationOverlay.qml and EditorGlyphGhost.qml have been DELETED.
+    // Text animation is now entirely in SujianEditorItem Scene Graph (child[1]) via
+    // Rust Coordinator → VisualPayload → Scene Graph renderer.
+    // The old QML overlay route no longer exists.
     assert!(
-        overlay.contains("DEPRECATED"),
-        "EditorAnimationOverlay must be marked as DEPRECATED since animation moved to Scene Graph"
+        !qml_dir.join("EditorAnimationOverlay.qml").exists(),
+        "EditorAnimationOverlay.qml must be deleted — animation is now in Scene Graph"
     );
     assert!(
-        overlay.contains("insertAnimationFinished") && overlay.contains("insertAnimationSkipped"),
-        "EditorAnimationOverlay must still declare signal stubs for backward compatibility"
+        !qml_dir.join("EditorGlyphGhost.qml").exists(),
+        "EditorGlyphGhost.qml must be deleted — animation is now in Scene Graph"
     );
 }

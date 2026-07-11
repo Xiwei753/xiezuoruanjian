@@ -85,19 +85,8 @@ impl SujianEditorItem {
             self.current_is_scrolling,
         ));
         if let Some(ref vt) = vt {
-            let overlay_plan = self.animation_coordinator.build_overlay_plan_for_vt(vt);
-            match serde_json::to_string(&overlay_plan) {
-                Ok(json) => {
-                    self.last_visual_transaction_json = json.into();
-                }
-                Err(e) => {
-                    editor_animation_debug_log(&format!(
-                        "record_transaction: failed to serialize overlay plan: {}",
-                        e
-                    ));
-                    self.last_visual_transaction_json = "{}".into();
-                }
-            }
+            let _ = vt;
+            self.last_visual_transaction_json = "{}".into();
         } else {
             self.last_visual_transaction_json = "{}".into();
         }
