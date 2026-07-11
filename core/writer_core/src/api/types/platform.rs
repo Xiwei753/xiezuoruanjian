@@ -501,16 +501,45 @@ impl From<PaneWidthConstraintDto> for crate::layout_policy::PaneWidthConstraint 
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub enum AvoidRegionKindDto {
+    WindowInset,
+    VerticalHinge,
+    HorizontalHinge,
+}
+
+impl From<crate::layout_policy::AvoidRegionKind> for AvoidRegionKindDto {
+    fn from(k: crate::layout_policy::AvoidRegionKind) -> Self {
+        match k {
+            crate::layout_policy::AvoidRegionKind::WindowInset => Self::WindowInset,
+            crate::layout_policy::AvoidRegionKind::VerticalHinge => Self::VerticalHinge,
+            crate::layout_policy::AvoidRegionKind::HorizontalHinge => Self::HorizontalHinge,
+        }
+    }
+}
+
+impl From<AvoidRegionKindDto> for crate::layout_policy::AvoidRegionKind {
+    fn from(dto: AvoidRegionKindDto) -> Self {
+        match dto {
+            AvoidRegionKindDto::WindowInset => Self::WindowInset,
+            AvoidRegionKindDto::VerticalHinge => Self::VerticalHinge,
+            AvoidRegionKindDto::HorizontalHinge => Self::HorizontalHinge,
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AvoidRegionDto {
     pub left_dp: f32,
     pub top_dp: f32,
     pub right_dp: f32,
     pub bottom_dp: f32,
+    pub kind: AvoidRegionKindDto,
 }
 
 impl Default for AvoidRegionDto {
     fn default() -> Self {
-        Self { left_dp: 0.0, top_dp: 0.0, right_dp: 0.0, bottom_dp: 0.0 }
+        Self { left_dp: 0.0, top_dp: 0.0, right_dp: 0.0, bottom_dp: 0.0, kind: AvoidRegionKindDto::WindowInset }
     }
 }
 
@@ -521,6 +550,7 @@ impl From<crate::layout_policy::AvoidRegion> for AvoidRegionDto {
             top_dp: a.top_dp,
             right_dp: a.right_dp,
             bottom_dp: a.bottom_dp,
+            kind: a.kind.into(),
         }
     }
 }
@@ -532,6 +562,7 @@ impl From<AvoidRegionDto> for crate::layout_policy::AvoidRegion {
             top_dp: dto.top_dp,
             right_dp: dto.right_dp,
             bottom_dp: dto.bottom_dp,
+            kind: dto.kind.into(),
         }
     }
 }

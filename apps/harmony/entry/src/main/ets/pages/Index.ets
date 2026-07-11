@@ -1,7 +1,7 @@
 import router from '@ohos.router'
 import { IWriterCoreBridge } from '../bridge/IWriterCoreBridge'
-import { Project, RecentEdit, WritingStats, WorkspaceSummary } from '../model/CoreDtos'
-import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl } from '../system/HarmonyThemeAdapter'
+import { Project, RecentEdit, WritingStats, WorkspaceSummary, ThemePaletteRecordDto, BuiltinThemeDto } from '../model/CoreDtos'
+import { HarmonyThemeAdapter, ThemeConfig, ThemeObserver, ThemeObserverImpl, ThemeMode } from '../system/HarmonyThemeAdapter'
 import { DesignTokens } from '../system/DesignTokens'
 import { getBridge, getWorkspacePath, getAppContext } from '../common/AppContext'
 import { NativeWriterCoreBridge } from '../bridge/NativeWriterCoreBridge'
@@ -80,6 +80,7 @@ struct Index {
       }
 
       await this.loadWorkspace()
+      this.initializeTheme()
     } catch (err) {
       this.errorMessage = `Init error: ${err}`
       this.isLoading = false
@@ -111,6 +112,35 @@ struct Index {
     } finally {
       this.isLoading = false
     }
+  }
+
+  async initializeTheme() {
+    try {
+      const paletteResult = await this.bridge.listPaletteRecords()
+      if (paletteResult.success && paletteResult.data) {
+        this.themeAdapter.setPaletteRecords(paletteResult.data)
+      }
+    } catch (_e) { }
+
+    try {
+      const builtinResult = await this.bridge.listBuiltinThemes()
+      if (builtinResult.success && builtinResult.data) {
+        this.themeAdapter.setBuiltinThemes(builtinResult.data)
+      }
+    } catch (_e) { }
+
+    try {
+      const settingsResult = await this.bridge.getLocalSettings()
+      if (settingsResult.success && settingsResult.data) {
+        const appearanceMode = settingsResult.data.appearanceMode || settingsResult.data.themeMode || 'system'
+        this.themeAdapter.updateFromLocalSettings(
+          appearanceMode,
+          settingsResult.data.colorSource || 'built_in',
+          settingsResult.data.selectedPaletteId || '',
+          settingsResult.data.selectedBuiltinThemeId || ''
+        )
+      }
+    } catch (_e) { }
   }
 
   build() {

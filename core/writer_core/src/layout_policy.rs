@@ -174,12 +174,20 @@ pub struct PaneWidthConstraint {
     pub max_dp: f32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AvoidRegionKind {
+    WindowInset,
+    VerticalHinge,
+    HorizontalHinge,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AvoidRegion {
     pub left_dp: f32,
     pub top_dp: f32,
     pub right_dp: f32,
     pub bottom_dp: f32,
+    pub kind: AvoidRegionKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,21 +303,39 @@ pub fn resolve_layout(metrics: &WindowMetrics) -> LayoutPlan {
         ),
     };
 
-    let shell_mode = if metrics.fold_feature.state == FoldState::HalfOpened {
-        ShellMode::SupportingPane
+    let (shell_mode, workspace_pane_mode) = if metrics.fold_feature.state == FoldState::HalfOpened
+        && metrics.fold_feature.orientation == FoldOrientation::Horizontal
+        && metrics.fold_feature.is_separating
+    {
+        (ShellMode::SupportingPane, WorkspacePaneMode::SinglePane)
+    } else if metrics.fold_feature.state == FoldState::HalfOpened {
+        (ShellMode::SupportingPane, workspace_pane_mode)
     } else {
-        shell_mode
+        (shell_mode, workspace_pane_mode)
     };
 
     let show_bottom_bar = if metrics.keyboard_visible { false } else { show_bottom_bar };
 
     let mut avoid_regions = Vec::new();
-    if metrics.fold_feature.occlusion == FoldOcclusion::Full {
+    if metrics.fold_feature.is_separating {
+        let kind = match metrics.fold_feature.orientation {
+            FoldOrientation::Vertical => AvoidRegionKind::VerticalHinge,
+            FoldOrientation::Horizontal => AvoidRegionKind::HorizontalHinge,
+        };
         avoid_regions.push(AvoidRegion {
             left_dp: metrics.fold_feature.bounds_left_vp,
             top_dp: metrics.fold_feature.bounds_top_vp,
             right_dp: metrics.fold_feature.bounds_right_vp,
             bottom_dp: metrics.fold_feature.bounds_bottom_vp,
+            kind,
+        });
+    } else if metrics.fold_feature.occlusion == FoldOcclusion::Full {
+        avoid_regions.push(AvoidRegion {
+            left_dp: metrics.fold_feature.bounds_left_vp,
+            top_dp: metrics.fold_feature.bounds_top_vp,
+            right_dp: metrics.fold_feature.bounds_right_vp,
+            bottom_dp: metrics.fold_feature.bounds_bottom_vp,
+            kind: AvoidRegionKind::WindowInset,
         });
     }
 
@@ -428,6 +454,59 @@ mod tests {
         };
         let plan = resolve_layout(&m);
         assert_eq!(plan.avoid_regions.len(), 1);
+        assert_eq!(plan.avoid_regions[0].kind, AvoidRegionKind::VerticalHinge);
+    }
+
+    #[test]
+    fn test_fold_separating_vertical_hinge() {
+        let mut m = default_metrics(); m.width_dp = 1200.0;
+        m.fold_feature = FoldFeatureInfo {
+            state: FoldState::Flat, orientation: FoldOrientation::Vertical,
+            is_separating: true, occlusion: FoldOcclusion::None,
+            bounds_left_vp: 500.0, bounds_top_vp: 0.0, bounds_right_vp: 520.0, bounds_bottom_vp: 800.0,
+        };
+        let plan = resolve_layout(&m);
+        assert_eq!(plan.avoid_regions.len(), 1);
+        assert_eq!(plan.avoid_regions[0].kind, AvoidRegionKind::VerticalHinge);
+    }
+
+    #[test]
+    fn test_fold_separating_horizontal_hinge() {
+        let mut m = default_metrics(); m.width_dp = 1200.0;
+        m.fold_feature = FoldFeatureInfo {
+            state: FoldState::Flat, orientation: FoldOrientation::Horizontal,
+            is_separating: true, occlusion: FoldOcclusion::None,
+            bounds_left_vp: 0.0, bounds_top_vp: 500.0, bounds_right_vp: 1000.0, bounds_bottom_vp: 520.0,
+        };
+        let plan = resolve_layout(&m);
+        assert_eq!(plan.avoid_regions.len(), 1);
+        assert_eq!(plan.avoid_regions[0].kind, AvoidRegionKind::HorizontalHinge);
+    }
+
+    #[test]
+    fn test_fold_non_separating_full_occlusion() {
+        let mut m = default_metrics(); m.width_dp = 1200.0;
+        m.fold_feature = FoldFeatureInfo {
+            state: FoldState::Flat, orientation: FoldOrientation::Vertical,
+            is_separating: false, occlusion: FoldOcclusion::Full,
+            bounds_left_vp: 500.0, bounds_top_vp: 0.0, bounds_right_vp: 520.0, bounds_bottom_vp: 800.0,
+        };
+        let plan = resolve_layout(&m);
+        assert_eq!(plan.avoid_regions.len(), 1);
+        assert_eq!(plan.avoid_regions[0].kind, AvoidRegionKind::WindowInset);
+    }
+
+    #[test]
+    fn test_fold_half_opened_horizontal_single_pane() {
+        let mut m = default_metrics(); m.width_dp = 1200.0;
+        m.fold_feature = FoldFeatureInfo {
+            state: FoldState::HalfOpened, orientation: FoldOrientation::Horizontal,
+            is_separating: true, occlusion: FoldOcclusion::None,
+            bounds_left_vp: 0.0, bounds_top_vp: 500.0, bounds_right_vp: 1000.0, bounds_bottom_vp: 520.0,
+        };
+        let plan = resolve_layout(&m);
+        assert_eq!(plan.shell_mode, ShellMode::SupportingPane);
+        assert_eq!(plan.workspace_pane_mode, WorkspacePaneMode::SinglePane);
     }
 
     #[test]

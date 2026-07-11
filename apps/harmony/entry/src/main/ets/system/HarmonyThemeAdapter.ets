@@ -278,10 +278,14 @@ export class HarmonyThemeAdapter {
 
   setPaletteRecords(records: ThemePaletteRecordDto[]): void {
     this.paletteRecords = records
+    this.updateColors()
+    this.notifyObservers()
   }
 
   setBuiltinThemes(themes: BuiltinThemeDto[]): void {
     this.builtinThemes = themes
+    this.updateColors()
+    this.notifyObservers()
   }
 
   setFontSize(fontSize: number): void {

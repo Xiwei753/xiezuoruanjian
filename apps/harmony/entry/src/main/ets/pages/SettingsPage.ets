@@ -101,6 +101,22 @@ struct SettingsPage {
       const settingsResult = await this.bridge.getLocalSettings()
       const syncConfigResult = await this.bridge.loadSyncConfig()
 
+      try {
+        const paletteResult = await this.bridge.listPaletteRecords()
+        if (paletteResult.success && paletteResult.data) {
+          this.paletteRecords = paletteResult.data
+          this.themeAdapter.setPaletteRecords(paletteResult.data)
+        }
+      } catch (_e) { }
+
+      try {
+        const builtinResult = await this.bridge.listBuiltinThemes()
+        if (builtinResult.success && builtinResult.data) {
+          this.builtinThemes = builtinResult.data
+          this.themeAdapter.setBuiltinThemes(builtinResult.data)
+        }
+      } catch (_e) { }
+
       if (settingsResult.success && settingsResult.data) {
         this.settings = settingsResult.data
         const appearanceMode = settingsResult.data.appearanceMode || settingsResult.data.themeMode || 'system'
@@ -121,22 +137,6 @@ struct SettingsPage {
       if (syncConfigResult.success && syncConfigResult.data) {
         this.syncConfig = syncConfigResult.data
       }
-
-      try {
-        const paletteResult = await this.bridge.listPaletteRecords()
-        if (paletteResult.success && paletteResult.data) {
-          this.paletteRecords = paletteResult.data
-          this.themeAdapter.setPaletteRecords(paletteResult.data)
-        }
-      } catch (_e) { }
-
-      try {
-        const builtinResult = await this.bridge.listBuiltinThemes()
-        if (builtinResult.success && builtinResult.data) {
-          this.builtinThemes = builtinResult.data
-          this.themeAdapter.setBuiltinThemes(builtinResult.data)
-        }
-      } catch (_e) { }
     } catch (err) {
       console.error('Failed to load settings:', err)
     } finally {

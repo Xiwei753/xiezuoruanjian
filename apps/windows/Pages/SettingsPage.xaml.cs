@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Sujian.Windows.Bridge;
+using Sujian.Windows.Theme;
 using System.Collections.Generic;
 
 namespace Sujian.Windows.Pages;
@@ -140,6 +141,7 @@ public sealed partial class SettingsPage : Page
                 SmoothCursorDurationMs = typingAnimDuration,
             };
             await _core.SaveSettingsAsync(settings);
+            ThemeManager.Instance.UpdateFromSettings(settings);
             StatusText.Text = "设置已保存";
         }
         catch (WriterCoreException ex)

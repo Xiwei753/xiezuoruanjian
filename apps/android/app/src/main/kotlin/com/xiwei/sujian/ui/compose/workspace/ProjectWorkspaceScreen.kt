@@ -10,9 +10,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.layout.AnimatedPane
-import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
-import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator
@@ -69,13 +67,7 @@ fun ProjectWorkspaceScreen(
 
     val windowInsetsPadding = computeWindowInsetPadding(avoidRegions)
 
-    val scaffoldDirective = remember(layoutPlan) {
-        buildScaffoldDirectiveFromLayoutPlan(paneMode, avoidRegions)
-    }
-
-    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>(
-        scaffoldDirective = scaffoldDirective
-    )
+    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>()
 
     val isDetailExpanded = navigator.scaffoldValue[ThreePaneScaffoldRole.Secondary] == PaneAdaptedValue.Expanded
 
@@ -199,25 +191,6 @@ fun ProjectWorkspaceScreen(
     )
 }
 
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
-@Composable
-private fun NavigableListDetailPaneScaffold(
-    navigator: ThreePaneScaffoldNavigator<WorkspaceDetailConfig>,
-    listPane: @Composable () -> Unit,
-    detailPane: @Composable () -> Unit,
-    extraPane: @Composable () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    ListDetailPaneScaffold(
-        directive = navigator.scaffoldDirective,
-        value = navigator.scaffoldValue,
-        listPane = listPane,
-        detailPane = detailPane,
-        extraPane = extraPane,
-        modifier = modifier
-    )
-}
-
 @Suppress("DEPRECATION")
 private class WorkspaceDetailConfig(
     val volumeId: String,
@@ -266,35 +239,5 @@ private fun computeWindowInsetPadding(avoidRegions: List<AvoidRegion>): Modifier
         end = endDp.dp,
         top = topDp.dp,
         bottom = bottomDp.dp
-    )
-}
-
-@OptIn(ExperimentalMaterial3AdaptiveApi::class)
-private fun buildScaffoldDirectiveFromLayoutPlan(
-    paneMode: WorkspacePaneMode,
-    avoidRegions: List<AvoidRegion>
-): PaneScaffoldDirective {
-    val verticalHingeWidths = avoidRegions
-        .filter { it.kind == AvoidRegionKind.VerticalHinge }
-        .map { it.rightDp - it.leftDp }
-        .filter { it > 0f }
-
-    val hingeSpacingDp = verticalHingeWidths.maxOrNull() ?: 0f
-
-    return PaneScaffoldDirective(
-        maxHorizontalPartitions = when (paneMode) {
-            WorkspacePaneMode.ThreePane -> 3
-            WorkspacePaneMode.ListDetail -> 2
-            WorkspacePaneMode.SinglePane -> 1
-        },
-        horizontalPartitionSpacerSize = hingeSpacingDp.dp,
-        maxVerticalPartitions = 1,
-        verticalPartitionSpacerSize = 0.dp,
-        defaultPanePreferredWidth = when (paneMode) {
-            WorkspacePaneMode.ThreePane -> 500.dp
-            WorkspacePaneMode.ListDetail -> 400.dp
-            WorkspacePaneMode.SinglePane -> 0.dp
-        },
-        excludedBounds = emptyList(),
     )
 }

@@ -1230,11 +1230,18 @@ dictionary PaneWidthConstraintDto {
     float max_dp;
 };
 
+enum AvoidRegionKindDto {
+    "WindowInset",
+    "VerticalHinge",
+    "HorizontalHinge"
+};
+
 dictionary AvoidRegionDto {
     float left_dp;
     float top_dp;
     float right_dp;
     float bottom_dp;
+    AvoidRegionKindDto kind;
 };
 
 dictionary WindowMetricsDto {
