@@ -1,8 +1,10 @@
 package com.xiwei.sujian.ui.compose.adaptive
 
 import androidx.activity.ComponentActivity
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
-import androidx.compose.material3.adaptive.calculateListDetailPaneScaffoldDirective
+import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
+import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -13,15 +15,16 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.window.layout.FoldingFeature
 
 data class AdaptiveWindowState(
-    val scaffoldDirective: androidx.compose.material3.adaptive.PaneScaffoldDirective,
+    val scaffoldDirective: PaneScaffoldDirective,
     val foldingFeatures: List<FoldingFeature> = emptyList()
 )
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun rememberAdaptiveWindowState(): AdaptiveWindowState {
     val windowAdaptiveInfo = currentWindowAdaptiveInfo()
     val directive = remember(windowAdaptiveInfo) {
-        calculateListDetailPaneScaffoldDirective(windowAdaptiveInfo)
+        calculatePaneScaffoldDirective(windowAdaptiveInfo)
     }
 
     val activity = LocalContext.current as? ComponentActivity

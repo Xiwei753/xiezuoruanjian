@@ -1,33 +1,32 @@
 package com.xiwei.sujian.ui.compose.workspace
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffold
+import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
+import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
+import androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole
+import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.model.AvoidRegion
-import com.xiwei.sujian.model.WidthClass
 import com.xiwei.sujian.model.WorkspacePaneMode
-import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
 import com.xiwei.sujian.ui.compose.SujianAppState
+import com.xiwei.sujian.ui.compose.editor.SujianEditorHost
 
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
 fun ProjectWorkspaceScreen(
     appState: SujianAppState,
@@ -53,302 +52,149 @@ fun ProjectWorkspaceScreen(
         return
     }
 
-    val paneMode = layoutPlan?.workspacePaneMode ?: WorkspacePaneMode.SinglePane
-    val listPaneWidth = layoutPlan?.listPaneWidth
+    val visiblePaneRoles = layoutPlan?.visiblePaneRoles
     val editorContentMaxWidthDp = layoutPlan?.editorContentMaxWidthDp ?: 0f
     val pagePaddingDp = layoutPlan?.pagePaddingDp ?: 0f
     val avoidRegions = layoutPlan?.avoidRegions ?: emptyList()
-    val visiblePaneRoles = layoutPlan?.visiblePaneRoles
+    val paneMode = layoutPlan?.workspacePaneMode ?: WorkspacePaneMode.SinglePane
+    val showProjectListInExtra = visiblePaneRoles?.showProjectList == true && paneMode == WorkspacePaneMode.ThreePane
 
-    val listWidth = if (listPaneWidth != null && listPaneWidth.preferredDp > 0f) {
-        listPaneWidth.preferredDp.dp
-    } else {
-        280.dp
-    }
+    val navigator = rememberListDetailPaneScaffoldNavigator<WorkspaceDetailConfig>()
 
-    when (paneMode) {
-        WorkspacePaneMode.ThreePane -> {
-            ThreePaneLayout(
-                appState = appState,
-                currentProjectId = currentProjectId,
-                currentVolumeId = currentVolumeId,
-                currentChapterId = currentChapterId,
-                currentChapterTitle = currentChapterTitle,
-                workspaceRepository = workspaceRepository,
-                listWidth = listWidth,
-                editorContentMaxWidthDp = editorContentMaxWidthDp,
-                pagePaddingDp = pagePaddingDp,
-                avoidRegions = avoidRegions,
-                modifier = modifier
-            )
-        }
-        WorkspacePaneMode.ListDetail -> {
-            ListDetailLayout(
-                appState = appState,
-                currentProjectId = currentProjectId,
-                currentVolumeId = currentVolumeId,
-                currentChapterId = currentChapterId,
-                currentChapterTitle = currentChapterTitle,
-                workspaceRepository = workspaceRepository,
-                listWidth = listWidth,
-                editorContentMaxWidthDp = editorContentMaxWidthDp,
-                pagePaddingDp = pagePaddingDp,
-                avoidRegions = avoidRegions,
-                modifier = modifier
-            )
-        }
-        else -> {
-            SinglePaneLayout(
-                appState = appState,
-                currentProjectId = currentProjectId,
-                currentVolumeId = currentVolumeId,
-                currentChapterId = currentChapterId,
-                currentChapterTitle = currentChapterTitle,
-                workspaceRepository = workspaceRepository,
-                modifier = modifier
-            )
+    val isDetailExpanded = navigator.scaffoldValue[ThreePaneScaffoldRole.Secondary] == PaneAdaptedValue.Expanded
+
+    BackHandler(enabled = navigator.canNavigateBack()) {
+        navigator.navigateBack()
+        if (appState.currentChapterId != null) {
+            appState.clearChapterSelection()
         }
     }
-}
 
-@Composable
-private fun ThreePaneLayout(
-    appState: SujianAppState,
-    currentProjectId: String,
-    currentVolumeId: String?,
-    currentChapterId: String?,
-    currentChapterTitle: String,
-    workspaceRepository: WorkspaceRepository,
-    listWidth: androidx.compose.ui.unit.Dp,
-    editorContentMaxWidthDp: Float,
-    pagePaddingDp: Float,
-    avoidRegions: List<AvoidRegion>,
-    modifier: Modifier = Modifier
-) {
-    val projectListWidth = (listWidth.value * 0.7f).dp
-
-    Row(modifier = modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .width(projectListWidth)
-                .fillMaxHeight()
-        ) {
-            ProjectListScreen(
-                appState = appState,
-                onSelectProject = { projectId, projectTitle ->
-                    appState.selectProject(projectId, projectTitle)
-                    appState.clearChapterSelection()
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-        Box(
-            modifier = Modifier
-                .width(listWidth)
-                .fillMaxHeight()
-        ) {
-            VolumeChapterTree(
-                projectId = currentProjectId,
-                workspaceRepository = workspaceRepository,
-                onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                    appState.selectChapter(volumeId, chapterId, chapterTitle)
-                },
-                onBackToProjects = {},
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-            if (currentVolumeId != null && currentChapterId != null) {
-                SujianEditorHost(
-                    projectId = currentProjectId,
-                    volumeId = currentVolumeId,
-                    chapterId = currentChapterId,
-                    chapterTitle = currentChapterTitle,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(
-                            if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
-                            else Modifier
-                        )
-                        .then(
-                            if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
-                            else Modifier
-                        )
-                )
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Text("选择章节开始写作", modifier = Modifier.padding(16.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ListDetailLayout(
-    appState: SujianAppState,
-    currentProjectId: String,
-    currentVolumeId: String?,
-    currentChapterId: String?,
-    currentChapterTitle: String,
-    workspaceRepository: WorkspaceRepository,
-    listWidth: androidx.compose.ui.unit.Dp,
-    editorContentMaxWidthDp: Float,
-    pagePaddingDp: Float,
-    avoidRegions: List<AvoidRegion>,
-    modifier: Modifier = Modifier
-) {
-    Row(modifier = modifier.fillMaxSize()) {
-        Box(
-            modifier = Modifier
-                .width(listWidth)
-                .fillMaxHeight()
-        ) {
-            VolumeChapterTree(
-                projectId = currentProjectId,
-                workspaceRepository = workspaceRepository,
-                onSelectChapter = { volumeId, chapterId, chapterTitle ->
-                    appState.selectChapter(volumeId, chapterId, chapterTitle)
-                },
-                onBackToProjects = {
-                    appState.clearChapterSelection()
-                    appState.currentProjectId = null
-                    appState.currentProjectTitle = ""
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-        }
-        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-            if (currentVolumeId != null && currentChapterId != null) {
-                SujianEditorHost(
-                    projectId = currentProjectId,
-                    volumeId = currentVolumeId,
-                    chapterId = currentChapterId,
-                    chapterTitle = currentChapterTitle,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .then(
-                            if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
-                            else Modifier
-                        )
-                        .then(
-                            if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
-                            else Modifier
-                        )
-                )
-            } else {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    Text("选择章节开始写作", modifier = Modifier.padding(16.dp))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SinglePaneLayout(
-    appState: SujianAppState,
-    currentProjectId: String,
-    currentVolumeId: String?,
-    currentChapterId: String?,
-    currentChapterTitle: String,
-    workspaceRepository: WorkspaceRepository,
-    modifier: Modifier = Modifier
-) {
-    var navigationStack by remember { mutableStateOf<List<SinglePanePage>>(listOf(SinglePanePage.ProjectList)) }
-
-    val currentPage = navigationStack.lastOrNull() ?: SinglePanePage.ProjectList
-
-    LaunchedEffect(currentProjectId, currentVolumeId, currentChapterId) {
+    LaunchedEffect(currentChapterId) {
         if (currentChapterId != null && currentVolumeId != null) {
-            if (currentPage != SinglePanePage.Editor) {
-                navigationStack = navigationStack + SinglePanePage.Editor
-            }
-        } else if (currentProjectId != null) {
-            if (currentPage == SinglePanePage.ProjectList) {
-                navigationStack = listOf(SinglePanePage.ProjectList, SinglePanePage.ChapterTree)
-            }
-        }
-    }
-
-    fun navigateBack(): Boolean {
-        if (navigationStack.size > 1) {
-            navigationStack = navigationStack.dropLast(1)
-            val targetPage = navigationStack.last()
-            when (targetPage) {
-                SinglePanePage.ProjectList -> {
-                    appState.clearChapterSelection()
-                    appState.currentProjectId = null
-                    appState.currentProjectTitle = ""
-                }
-                SinglePanePage.ChapterTree -> {
-                    appState.clearChapterSelection()
-                }
-                SinglePanePage.Editor -> {}
-            }
-            return true
-        }
-        return false
-    }
-
-    AnimatedContent(
-        targetState = currentPage,
-        transitionSpec = {
-            if (targetState.ordinal > initialState.ordinal) {
-                slideInHorizontally { it } togetherWith slideOutHorizontally { -it }
-            } else {
-                slideInHorizontally { -it } togetherWith slideOutHorizontally { it }
-            }
-        },
-        modifier = modifier.fillMaxSize(),
-        label = "workspace_single_pane"
-    ) { page ->
-        when (page) {
-            SinglePanePage.ProjectList -> {
-                ProjectListScreen(
-                    appState = appState,
-                    onSelectProject = { projectId, projectTitle ->
-                        appState.selectProject(projectId, projectTitle)
-                        navigationStack = listOf(SinglePanePage.ProjectList, SinglePanePage.ChapterTree)
-                    },
-                    modifier = Modifier.fillMaxSize()
+            if (!isDetailExpanded) {
+                navigator.navigateTo(
+                    ThreePaneScaffoldRole.Secondary,
+                    WorkspaceDetailConfig(
+                        volumeId = currentVolumeId,
+                        chapterId = currentChapterId,
+                        chapterTitle = currentChapterTitle
+                    )
                 )
             }
-            SinglePanePage.ChapterTree -> {
+        }
+    }
+
+    val avoidPadding = computeAvoidRegionPadding(avoidRegions)
+
+    ListDetailPaneScaffold(
+        directive = navigator.scaffoldDirective,
+        value = navigator.scaffoldValue,
+        listPane = {
+            if (visiblePaneRoles?.showChapterTree != false) {
                 VolumeChapterTree(
                     projectId = currentProjectId,
                     workspaceRepository = workspaceRepository,
                     onSelectChapter = { volumeId, chapterId, chapterTitle ->
                         appState.selectChapter(volumeId, chapterId, chapterTitle)
-                        navigationStack = listOf(SinglePanePage.ProjectList, SinglePanePage.ChapterTree, SinglePanePage.Editor)
+                        navigator.navigateTo(
+                            ThreePaneScaffoldRole.Secondary,
+                            WorkspaceDetailConfig(
+                                volumeId = volumeId,
+                                chapterId = chapterId,
+                                chapterTitle = chapterTitle
+                            )
+                        )
                     },
                     onBackToProjects = {
-                        navigationStack = listOf(SinglePanePage.ProjectList)
                         appState.clearChapterSelection()
                         appState.currentProjectId = null
                         appState.currentProjectTitle = ""
                     },
-                    modifier = Modifier.fillMaxSize()
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(avoidPadding)
                 )
             }
-            SinglePanePage.Editor -> {
-                if (currentVolumeId != null && currentChapterId != null) {
+        },
+        detailPane = {
+            if (visiblePaneRoles?.showEditor != false) {
+                val currentContent = navigator.currentDestination?.content
+                val detailVolumeId = currentContent?.volumeId ?: currentVolumeId
+                val detailChapterId = currentContent?.chapterId ?: currentChapterId
+                val detailChapterTitle = currentContent?.chapterTitle ?: currentChapterTitle
+
+                if (detailVolumeId != null && detailChapterId != null) {
                     SujianEditorHost(
                         projectId = currentProjectId,
-                        volumeId = currentVolumeId,
-                        chapterId = currentChapterId,
-                        chapterTitle = currentChapterTitle,
-                        modifier = Modifier.fillMaxSize()
+                        volumeId = detailVolumeId,
+                        chapterId = detailChapterId,
+                        chapterTitle = detailChapterTitle,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .then(
+                                if (editorContentMaxWidthDp > 0f) Modifier.width(editorContentMaxWidthDp.dp)
+                                else Modifier
+                            )
+                            .then(
+                                if (pagePaddingDp > 0f) Modifier.padding(horizontal = pagePaddingDp.dp)
+                                else Modifier
+                            )
+                            .then(avoidPadding)
                     )
                 } else {
-                    navigateBack()
-                    Box(modifier = Modifier.fillMaxSize())
+                    Box(
+                        modifier = Modifier.fillMaxSize().then(avoidPadding),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("选择章节开始写作", modifier = Modifier.padding(16.dp))
+                    }
                 }
             }
-        }
-    }
+        },
+        extraPane = {
+            if (showProjectListInExtra) {
+                ProjectListScreen(
+                    appState = appState,
+                    onSelectProject = { projectId, projectTitle ->
+                        appState.selectProject(projectId, projectTitle)
+                        appState.clearChapterSelection()
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(avoidPadding)
+                )
+            }
+        },
+        modifier = modifier.fillMaxSize()
+    )
 }
 
-private enum class SinglePanePage {
-    ProjectList, ChapterTree, Editor
+private data class WorkspaceDetailConfig(
+    val volumeId: String,
+    val chapterId: String,
+    val chapterTitle: String
+)
+
+@Composable
+private fun computeAvoidRegionPadding(avoidRegions: List<AvoidRegion>): Modifier {
+    if (avoidRegions.isEmpty()) return Modifier
+    val density = LocalDensity.current.density
+    var startDp = 0f
+    var endDp = 0f
+    var topDp = 0f
+    var bottomDp = 0f
+    for (region in avoidRegions) {
+        if (region.leftDp > 0f) startDp = maxOf(startDp, region.leftDp)
+        if (region.rightDp > 0f) endDp = maxOf(endDp, region.rightDp)
+        if (region.topDp > 0f) topDp = maxOf(topDp, region.topDp)
+        if (region.bottomDp > 0f) bottomDp = maxOf(bottomDp, region.bottomDp)
+    }
+    if (startDp == 0f && endDp == 0f && topDp == 0f && bottomDp == 0f) return Modifier
+    return Modifier.padding(
+        start = startDp.dp,
+        end = endDp.dp,
+        top = topDp.dp,
+        bottom = bottomDp.dp
+    )
 }
