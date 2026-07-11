@@ -6,9 +6,6 @@ use super::visual_payload::VisualPayload;
 use super::animation_mode::AnimationMode;
 use super::cursor_animation::CursorBlinkMode;
 use super::texture_cache::TextureCache;
-use super::insert_animation;
-use super::delete_animation;
-use super::reflow_animation;
 use std::time::Instant;
 
 impl QQuickItem for SujianEditorItem {
@@ -176,9 +173,6 @@ impl QQuickItem for SujianEditorItem {
                 self.texture_cache.clear();
                 scene_graph::clear_animation_layer(final_root, item_ptr);
             } else {
-                let mut glyph_data: Vec<f64> = Vec::new();
-                let mut glyph_images: Vec<qmetaobject::QImage> = Vec::new();
-                let mut glyph_texture_changed: Vec<bool> = Vec::new();
                 let mut txs_to_mark_rendering: Vec<VisualTransactionKey> = Vec::new();
                 let mut txs_to_complete: Vec<VisualTransactionKey> = Vec::new();
                 let mut keys_with_texture_failure: Vec<VisualTransactionKey> = Vec::new();
@@ -193,16 +187,21 @@ impl QQuickItem for SujianEditorItem {
                         let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::new();
                         let font_size = self.current_font_pixel_size as f64;
                         let font_family = self.current_font_family.to_string();
-                        let plain_text = self.plain_text.to_string();
 
                         match &tx.payload {
                             VisualPayload::InsertRuns { insert_runs, reflow_runs, .. } => {
                                 for run in insert_runs {
-                                    let para_text = Self::extract_paragraph_for_glyph(
-                                        &plain_text, run.byte_start, run.byte_end,
-                                    );
+                                    let para_text;
+                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
+                                        t.as_str()
+                                    } else {
+                                        para_text = Self::extract_paragraph_for_glyph(
+                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
+                                        );
+                                        para_text.as_str()
+                                    };
                                     textures.push(self.render_snapshot_from_static_layout(
-                                        &para_text, run.x, run.y, run.w, run.h,
+                                        para_text_ref, run.x, run.y, run.w, run.h,
                                         run.baseline_y, font_size, &font_family, dpr,
                                     ).or_else(|| self.render_glyph_texture_from_layout(
                                         &run.char_, run.w, run.h,
@@ -210,6 +209,7 @@ impl QQuickItem for SujianEditorItem {
                                     )));
                                 }
                                 for run in reflow_runs {
+                                    let plain_text = self.plain_text.to_string();
                                     let para_text = Self::extract_paragraph_for_glyph(
                                         &plain_text, run.byte_start, run.byte_end,
                                     );
@@ -224,11 +224,17 @@ impl QQuickItem for SujianEditorItem {
                             }
                             VisualPayload::DeleteRuns { delete_runs, .. } => {
                                 for run in delete_runs {
-                                    let para_text = Self::extract_paragraph_for_glyph(
-                                        &plain_text, run.byte_start, run.byte_end,
-                                    );
+                                    let para_text;
+                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
+                                        t.as_str()
+                                    } else {
+                                        para_text = Self::extract_paragraph_for_glyph(
+                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
+                                        );
+                                        para_text.as_str()
+                                    };
                                     textures.push(self.render_snapshot_from_static_layout(
-                                        &para_text, run.x, run.y, run.w, run.h,
+                                        para_text_ref, run.x, run.y, run.w, run.h,
                                         run.baseline_y, font_size, &font_family, dpr,
                                     ).or_else(|| self.render_glyph_texture_from_layout(
                                         &run.char_, run.w, run.h,
@@ -238,11 +244,17 @@ impl QQuickItem for SujianEditorItem {
                             }
                             VisualPayload::ReflowRuns { insert_runs, reflow_runs, .. } => {
                                 for run in insert_runs {
-                                    let para_text = Self::extract_paragraph_for_glyph(
-                                        &plain_text, run.byte_start, run.byte_end,
-                                    );
+                                    let para_text;
+                                    let para_text_ref = if let Some(ref t) = run.old_paragraph_text {
+                                        t.as_str()
+                                    } else {
+                                        para_text = Self::extract_paragraph_for_glyph(
+                                            &self.plain_text.to_string(), run.byte_start, run.byte_end,
+                                        );
+                                        para_text.as_str()
+                                    };
                                     textures.push(self.render_snapshot_from_static_layout(
-                                        &para_text, run.x, run.y, run.w, run.h,
+                                        para_text_ref, run.x, run.y, run.w, run.h,
                                         run.baseline_y, font_size, &font_family, dpr,
                                     ).or_else(|| self.render_glyph_texture_from_layout(
                                         &run.char_, run.w, run.h,
@@ -250,6 +262,7 @@ impl QQuickItem for SujianEditorItem {
                                     )));
                                 }
                                 for run in reflow_runs {
+                                    let plain_text = self.plain_text.to_string();
                                     let para_text = Self::extract_paragraph_for_glyph(
                                         &plain_text, run.byte_start, run.byte_end,
                                     );
@@ -289,81 +302,21 @@ impl QQuickItem for SujianEditorItem {
                         continue;
                     }
 
-                    // Skip rendering for transactions whose texture failed
                     if keys_with_texture_failure.contains(&tx.key) {
                         continue;
                     }
-
-                    let cached = self.texture_cache.get(&tx.key);
-                    if cached.is_none() {
-                        continue;
-                    }
-                    let cached_textures = cached.cloned().unwrap_or_default();
-
-                    match &tx.payload {
-                        VisualPayload::InsertRuns { insert_runs, reflow_runs, old_cursor_rect, .. } => {
-                            let frames = animation_coordinator::insert_animation::compute_insert_animation_frame(
-                                insert_runs, reflow_runs, old_cursor_rect.as_ref(), progress,
-                            );
-                            let mut tex_idx = 0usize;
-                            for frame in &frames {
-                                glyph_data.extend_from_slice(&[frame.x, frame.y, frame.w, frame.h, frame.opacity, frame.baseline_in_quad]);
-                                if just_prepared && tex_idx < cached_textures.len() {
-                                    glyph_images.push(cached_textures[tex_idx].clone());
-                                    glyph_texture_changed.push(true);
-                                } else {
-                                    glyph_images.push(qmetaobject::QImage::new(
-                                        qmetaobject::QSize { width: 1, height: 1 },
-                                        qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                                    ));
-                                    glyph_texture_changed.push(false);
-                                }
-                                tex_idx += 1;
-                            }
-                        }
-                        VisualPayload::DeleteRuns { delete_runs, .. } => {
-                            let frames = animation_coordinator::delete_animation::compute_delete_animation_frame(
-                                delete_runs, progress,
-                            );
-                            let mut tex_idx = 0usize;
-                            for frame in &frames {
-                                glyph_data.extend_from_slice(&[frame.x, frame.y, frame.w, frame.h, frame.opacity, frame.baseline_in_quad]);
-                                if just_prepared && tex_idx < cached_textures.len() {
-                                    glyph_images.push(cached_textures[tex_idx].clone());
-                                    glyph_texture_changed.push(true);
-                                } else {
-                                    glyph_images.push(qmetaobject::QImage::new(
-                                        qmetaobject::QSize { width: 1, height: 1 },
-                                        qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                                    ));
-                                    glyph_texture_changed.push(false);
-                                }
-                                tex_idx += 1;
-                            }
-                        }
-                        VisualPayload::ReflowRuns { insert_runs, reflow_runs, old_cursor_rect, .. } => {
-                            let frames = animation_coordinator::reflow_animation::compute_reflow_animation_frame(
-                                insert_runs, reflow_runs, old_cursor_rect.as_ref(), progress,
-                            );
-                            let mut tex_idx = 0usize;
-                            for frame in &frames {
-                                glyph_data.extend_from_slice(&[frame.x, frame.y, frame.w, frame.h, frame.opacity, frame.baseline_in_quad]);
-                                if just_prepared && tex_idx < cached_textures.len() {
-                                    glyph_images.push(cached_textures[tex_idx].clone());
-                                    glyph_texture_changed.push(true);
-                                } else {
-                                    glyph_images.push(qmetaobject::QImage::new(
-                                        qmetaobject::QSize { width: 1, height: 1 },
-                                        qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                                    ));
-                                    glyph_texture_changed.push(false);
-                                }
-                                tex_idx += 1;
-                            }
-                        }
-                        VisualPayload::CursorTransition { .. } => {}
-                    }
                 }
+
+                // ── Build RenderPlan and delegate to scene_graph_renderer ──
+                let render_plan = self.animation_coordinator.build_render_plan();
+
+                scene_graph_renderer::render_frame(
+                    final_root,
+                    item_ptr,
+                    &render_plan,
+                    &self.texture_cache,
+                    dpr,
+                );
 
                 for key in &txs_to_mark_rendering {
                     self.animation_coordinator.vt_queue.mark_rendering(*key);
@@ -372,31 +325,10 @@ impl QQuickItem for SujianEditorItem {
                     ));
                 }
 
-                // Per-key texture failure: cancel only the failed transaction
                 for key in &keys_with_texture_failure {
                     self.animation_coordinator.cancel_by_key(*key, "texture_failed");
                     self.texture_cache.remove(key);
                     self.render_dirty = true;
-                }
-
-                let glyph_count = glyph_data.len() / 6;
-                if glyph_count > 0 && glyph_count == glyph_images.len() {
-                    let glyph_data_ptr = glyph_data.as_ptr();
-                    let image_ptrs: Vec<*const qmetaobject::QImage> =
-                        glyph_images.iter().map(|img| img as *const qmetaobject::QImage).collect();
-                    let image_ptrs_ptr = image_ptrs.as_ptr();
-                    let texture_changed_ptr = glyph_texture_changed.as_ptr();
-
-                    scene_graph::update_animation_layer(
-                        final_root,
-                        item_ptr,
-                        glyph_count as i32,
-                        glyph_data_ptr,
-                        image_ptrs_ptr,
-                        texture_changed_ptr,
-                    );
-                } else if keys_with_texture_failure.is_empty() {
-                    scene_graph::clear_animation_layer(final_root, item_ptr);
                 }
 
                 for key in &txs_to_complete {

@@ -2,6 +2,7 @@ package com.xiwei.sujian.ui.compose.workspace
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.WorkspaceRepository
@@ -23,17 +24,23 @@ data class VolumeChapterUiState(
     val isLoading: Boolean = false
 )
 
-class WorkspaceViewModel(application: Application) : AndroidViewModel(application) {
+class WorkspaceViewModel(
+    application: Application,
+    private val savedStateHandle: SavedStateHandle
+) : AndroidViewModel(application) {
 
-    private val _uiState = MutableStateFlow(VolumeChapterUiState())
+    private val _uiState = MutableStateFlow(VolumeChapterUiState(
+        expandedVolumeIds = savedStateHandle.get<Set<String>>("expandedVolumeIds") ?: emptySet()
+    ))
     val uiState: StateFlow<VolumeChapterUiState> = _uiState.asStateFlow()
 
-    private var currentProjectId: String? = null
+    private var currentProjectId: String? = savedStateHandle["currentProjectId"]
     private var workspaceRepository: WorkspaceRepository? = null
 
     fun initialize(projectId: String, workspaceRepo: WorkspaceRepository) {
         if (currentProjectId == projectId) return
         currentProjectId = projectId
+        savedStateHandle["currentProjectId"] = projectId
         workspaceRepository = workspaceRepo
         loadVolumes()
         loadProjectStats(projectId)
@@ -83,6 +90,7 @@ class WorkspaceViewModel(application: Application) : AndroidViewModel(applicatio
         } else {
             current + volumeId
         }
+        savedStateHandle["expandedVolumeIds"] = newExpanded
         _uiState.value = _uiState.value.copy(
             expandedVolumeIds = newExpanded,
             volumes = _uiState.value.volumes.map { v ->

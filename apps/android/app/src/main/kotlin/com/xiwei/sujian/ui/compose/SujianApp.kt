@@ -7,10 +7,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.data.SettingsRepository
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
@@ -26,14 +28,16 @@ import com.xiwei.sujian.ui.compose.theme.rememberThemeController
 @Composable
 fun SujianApp() {
     val context = LocalContext.current
-    val appState = rememberSujianAppState()
+    val vm: SujianAppViewModel = viewModel()
+    val coroutineScope = rememberCoroutineScope()
+    val appState = remember { SujianAppState(vm) }
     val themeController = rememberThemeController(context)
 
     LaunchedEffect(Unit) {
         val workspaceRepo = WorkspaceRepository(context)
         val settingsRepo = SettingsRepository(context)
         val workspaceUC = WorkspaceUseCase(workspaceRepo)
-        appState.initialize(workspaceRepo, workspaceUC, settingsRepo)
+        vm.initialize(workspaceRepo, workspaceUC, settingsRepo, coroutineScope)
     }
 
     val windowState = rememberAdaptiveWindowState()
@@ -41,7 +45,7 @@ fun SujianApp() {
     val density = LocalDensity.current.density
 
     LaunchedEffect(windowState.foldingFeatures, configuration.screenWidthDp, configuration.screenHeightDp) {
-        appState.updateFoldFeaturesFromAdaptive(windowState.foldingFeatures, density)
+        vm.updateFoldFeaturesFromAdaptive(windowState.foldingFeatures, density)
         val hasFoldFeature = windowState.foldingFeatures.isNotEmpty()
         val settingsRepo = SettingsRepository(context)
         val deviceClass = settingsRepo.detectDeviceClassFromFoldFeature(
@@ -51,11 +55,11 @@ fun SujianApp() {
         val metrics = WindowMetrics(
             widthDp = configuration.screenWidthDp.toFloat(),
             heightDp = configuration.screenHeightDp.toFloat(),
-            foldFeature = appState.foldFeatureInfo,
+            foldFeature = vm.foldFeatureInfo,
             orientation = if (configuration.screenWidthDp > configuration.screenHeightDp) Orientation.Landscape else Orientation.Portrait,
             pointer = PointerKind.Touch
         )
-        appState.resolveLayout(metrics)
+        vm.resolveLayout(metrics)
     }
 
     val uiState by themeController.uiState.collectAsState()

@@ -12,6 +12,7 @@ QtObject {
     property string colorSource: "built_in"
     property string selectedBuiltinThemeId: ""
     property string builtinThemesJson: "[]"
+    property string resolvedSchemeJson: ""
     property var _themePalette: {
         if (themePaletteJson.length === 0) return null
         try { return JSON.parse(themePaletteJson) } catch(e) { return null }
@@ -34,7 +35,25 @@ QtObject {
     }
     property bool useThemePalette: colorSource === "saved_palette" && hasThemePalette
 
+    property var _resolvedScheme: {
+        if (resolvedSchemeJson.length === 0) return null
+        try { return JSON.parse(resolvedSchemeJson) } catch(e) { return null }
+    }
+    property bool _hasResolvedScheme: _resolvedScheme !== null && _resolvedScheme.primary !== undefined
+
     function _schemeColor(key) {
+        if (_hasResolvedScheme) {
+            var val = _resolvedScheme[key]
+            if (val && val.length > 0 && val.charAt(0) === '#') {
+                return Qt.rgba(
+                    parseInt(val.substring(1,3), 16) / 255,
+                    parseInt(val.substring(3,5), 16) / 255,
+                    parseInt(val.substring(5,7), 16) / 255,
+                    1
+                )
+            }
+        }
+
         var schemeKey = isDark ? "darkScheme" : "lightScheme"
         var scheme = null
 
@@ -109,17 +128,17 @@ QtObject {
     property color onInfoContainer: onPrimaryContainer
 
     property color bg: background
-    property color paper: isDark ? Qt.rgba(0.125, 0.137, 0.149, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
+    property color paper: surfaceContainerLow
     property color border: isDark ? Qt.rgba(outline.r, outline.g, outline.b, 0.42) : Qt.rgba(outline.r, outline.g, outline.b, 0.34)
     property color borderStrong: outline
-    property color sidebar: isDark ? Qt.rgba(0.082, 0.094, 0.106, 1) : Qt.rgba(0.953, 0.969, 0.988, 1)
+    property color sidebar: surfaceContainer
     property color card: surfaceContainerLow
     property color cardHover: surfaceContainer
     property color selected: primaryContainer
     property color selectedText: onPrimaryContainer
     property color textPrimary: onSurface
     property color textSecondary: onSurfaceVariant
-    property color textMuted: isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.455, 0.471, 0.498, 1)
+    property color textMuted: outline
     property color textDisabled: isDark ? Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38) : Qt.rgba(onSurface.r, onSurface.g, onSurface.b, 0.38)
     property color defaultAccent: primary
     property color defaultAccentHover: isDark ? Qt.lighter(primary, 1.08) : Qt.darker(primary, 1.08)
@@ -132,7 +151,7 @@ QtObject {
     property color dangerContainer: errorContainer
     property color onDangerContainer: onErrorContainer
 
-    property color editorBackground: isDark ? Qt.rgba(0.125, 0.137, 0.149, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
+    property color editorBackground: surfaceContainerLow
     property color editorText: textPrimary
 
     property color surfaceFallback: isDark ? "#1A1D23" : "#FCFCFF"

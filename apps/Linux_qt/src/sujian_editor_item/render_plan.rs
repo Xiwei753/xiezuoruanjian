@@ -48,6 +48,10 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub baseline_in_quad: f64,
     pub byte_start: usize,
     pub byte_end: usize,
+    pub animation_mode: AnimationMode,
+    pub is_delete: bool,
+    pub old_paragraph_text: Option<String>,
+    pub font_id: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -88,7 +92,13 @@ pub(crate) enum ImeUpdateKind {
     QueryInput,
 }
 
-#[derive(Clone, Debug)]
+impl Default for ImeUpdateKind {
+    fn default() -> Self {
+        ImeUpdateKind::None
+    }
+}
+
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ImeUpdatePlan {
     pub kind: ImeUpdateKind,
     pub cursor_changed: bool,

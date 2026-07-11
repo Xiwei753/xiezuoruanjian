@@ -85,11 +85,9 @@ object ThemeStore {
 
     fun updateColorSource(colorSource: String) {
         val repo = _settingsRepository ?: return
-        val dynamicEnabled = colorSource == "android_dynamic"
         val settings = repo.getLocalSettings()
         val newSettings = settings.copy(
             colorSource = colorSource,
-            dynamicColorEnabled = dynamicEnabled,
         )
         repo.saveLocalSettings(newSettings)
         reload()

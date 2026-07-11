@@ -11,6 +11,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.window.layout.FoldingFeature
@@ -25,10 +26,11 @@ fun rememberCoreLayoutDirective(layoutPlan: LayoutPlan?): PaneScaffoldDirective 
     val defaultDirective = remember(windowAdaptiveInfo) {
         calculatePaneScaffoldDirective(windowAdaptiveInfo)
     }
+    val density = LocalDensity.current.density
 
     if (layoutPlan == null) return defaultDirective
 
-    return remember(layoutPlan) {
+    return remember(layoutPlan, density) {
         val maxHorizontalPartitions = when (layoutPlan.workspacePaneMode) {
             WorkspacePaneMode.SinglePane -> 1
             WorkspacePaneMode.ListDetail -> 2
@@ -39,12 +41,31 @@ fun rememberCoreLayoutDirective(layoutPlan: LayoutPlan?): PaneScaffoldDirective 
             .filter { it.kind == AvoidRegionKind.VerticalHinge || it.kind == AvoidRegionKind.HorizontalHinge }
             .map { region ->
                 Rect(
-                    left = region.leftDp,
-                    top = region.topDp,
-                    right = region.rightDp,
-                    bottom = region.bottomDp
+                    left = region.leftDp * density,
+                    top = region.topDp * density,
+                    right = region.rightDp * density,
+                    bottom = region.bottomDp * density
                 )
             }
+
+        val verticalHingeBounds = layoutPlan.avoidRegions
+            .filter { it.kind == AvoidRegionKind.VerticalHinge }
+            .map { region ->
+                Rect(
+                    left = region.leftDp * density,
+                    top = region.topDp * density,
+                    right = region.rightDp * density,
+                    bottom = region.bottomDp * density
+                )
+            }
+
+        val hasHorizontalHinge = layoutPlan.avoidRegions.any { it.kind == AvoidRegionKind.HorizontalHinge }
+
+        val excludedBounds = if (hasHorizontalHinge) {
+            verticalHingeBounds
+        } else {
+            hingeBounds
+        }
 
         val preferredWidth = if (layoutPlan.listPaneWidth.preferredDp > 0f)
             layoutPlan.listPaneWidth.preferredDp.dp else defaultDirective.defaultPanePreferredWidth
@@ -52,7 +73,7 @@ fun rememberCoreLayoutDirective(layoutPlan: LayoutPlan?): PaneScaffoldDirective 
         defaultDirective.copy(
             maxHorizontalPartitions = maxHorizontalPartitions,
             defaultPanePreferredWidth = preferredWidth,
-            excludedBounds = hingeBounds
+            excludedBounds = excludedBounds
         )
     }
 }

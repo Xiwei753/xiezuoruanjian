@@ -78,7 +78,9 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         .unwrap_or_default();
     let sujian_qquickitem = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/qquickitem_impl.rs"))
         .unwrap_or_default();
-    let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_coordinator}\n{sujian_qquickitem}");
+    let sujian_sg_renderer = fs::read_to_string(root.join("apps/Linux_qt/src/sujian_editor_item/scene_graph_renderer.rs"))
+        .unwrap_or_default();
+    let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_coordinator}\n{sujian_qquickitem}\n{sujian_sg_renderer}");
 
     // Scene Graph animation layer (child[1]) reads ActiveVisualTransactionQueue
     // every frame in update_paint_node, computes progress, and drives

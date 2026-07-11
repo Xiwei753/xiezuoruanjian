@@ -291,7 +291,7 @@ pub struct AppBackend {
 }
 
 impl AppBackend {
-    fn core_api(&self) -> Option<WriterCoreApi> {
+    pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_workspace && !self.current_workspace.is_empty() {
             Some(WriterCoreApi::new(&self.current_workspace))
         } else {

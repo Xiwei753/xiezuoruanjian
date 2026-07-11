@@ -218,6 +218,7 @@ ApplicationWindow {
         colorSource: settingsBackend !== null ? settingsBackend.resolved_color_source : "built_in"
         selectedBuiltinThemeId: settingsBackend !== null ? settingsBackend.setting_selected_builtin_theme_id : ""
         builtinThemesJson: settingsBackend !== null ? settingsBackend.resolved_builtin_themes_json : "[]"
+        resolvedSchemeJson: themeController !== null ? themeController.resolved_scheme_json : ""
     }
 
     Connections {

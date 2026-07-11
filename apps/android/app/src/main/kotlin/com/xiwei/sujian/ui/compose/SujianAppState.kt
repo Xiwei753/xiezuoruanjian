@@ -4,9 +4,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.WorkspaceRepository
 import com.xiwei.sujian.data.WorkspaceUseCase
@@ -33,11 +33,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@Stable
-class SujianAppState(
-    val coroutineScope: CoroutineScope
-) {
-    var currentDestination by mutableStateOf(SujianDestination.Works)
+class SujianAppViewModel(
+    private val savedStateHandle: SavedStateHandle
+) : ViewModel() {
+
+    var currentDestination by mutableStateOf(
+        savedStateHandle["currentDestination"] ?: SujianDestination.Works.name
+    )
         private set
 
     var projects by mutableStateOf<List<Project>>(emptyList())
@@ -46,19 +48,19 @@ class SujianAppState(
     var recentEdits by mutableStateOf<List<RecentEdit>>(emptyList())
         private set
 
-    var currentProjectId by mutableStateOf<String?>(null)
+    var currentProjectId by mutableStateOf<String?>(savedStateHandle["currentProjectId"])
         internal set
 
-    var currentProjectTitle by mutableStateOf("")
+    var currentProjectTitle by mutableStateOf(savedStateHandle["currentProjectTitle"] ?: "")
         internal set
 
-    var currentVolumeId by mutableStateOf<String?>(null)
+    var currentVolumeId by mutableStateOf<String?>(savedStateHandle["currentVolumeId"])
         private set
 
-    var currentChapterId by mutableStateOf<String?>(null)
+    var currentChapterId by mutableStateOf<String?>(savedStateHandle["currentChapterId"])
         private set
 
-    var currentChapterTitle by mutableStateOf("")
+    var currentChapterTitle by mutableStateOf(savedStateHandle["currentChapterTitle"] ?: "")
         private set
 
     var currentLayoutPlan by mutableStateOf<LayoutPlan?>(null)
@@ -73,38 +75,50 @@ class SujianAppState(
     private var workspaceRepository: WorkspaceRepository? = null
     private var workspaceUseCase: WorkspaceUseCase? = null
     private var settingsRepository: SettingsRepository? = null
+    var coroutineScope: CoroutineScope? = null
 
     fun initialize(
         workspaceRepo: WorkspaceRepository,
         workspaceUC: WorkspaceUseCase,
-        settingsRepo: SettingsRepository
+        settingsRepo: SettingsRepository,
+        scope: CoroutineScope
     ) {
         workspaceRepository = workspaceRepo
         workspaceUseCase = workspaceUC
         settingsRepository = settingsRepo
+        coroutineScope = scope
         refreshProjects()
         refreshRecentEdits()
     }
 
     fun navigateTo(destination: SujianDestination) {
-        currentDestination = destination
+        currentDestination = destination.name
+        savedStateHandle["currentDestination"] = destination.name
     }
 
     fun selectProject(projectId: String, projectTitle: String) {
         currentProjectId = projectId
         currentProjectTitle = projectTitle
+        savedStateHandle["currentProjectId"] = projectId
+        savedStateHandle["currentProjectTitle"] = projectTitle
     }
 
     fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) {
         currentVolumeId = volumeId
         currentChapterId = chapterId
         currentChapterTitle = chapterTitle
+        savedStateHandle["currentVolumeId"] = volumeId
+        savedStateHandle["currentChapterId"] = chapterId
+        savedStateHandle["currentChapterTitle"] = chapterTitle
     }
 
     fun clearChapterSelection() {
         currentVolumeId = null
         currentChapterId = null
         currentChapterTitle = ""
+        savedStateHandle.remove<String>("currentVolumeId")
+        savedStateHandle.remove<String>("currentChapterId")
+        savedStateHandle["currentChapterTitle"] = ""
     }
 
     fun updateFoldFeature(info: FoldFeatureInfo) {
@@ -143,7 +157,7 @@ class SujianAppState(
     }
 
     fun refreshProjects() {
-        coroutineScope.launch {
+        coroutineScope?.launch {
             projects = withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.getProjects() ?: emptyList()
@@ -155,7 +169,7 @@ class SujianAppState(
     }
 
     fun refreshRecentEdits() {
-        coroutineScope.launch {
+        coroutineScope?.launch {
             recentEdits = withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.getRecentEdits(5) ?: emptyList()
@@ -167,7 +181,7 @@ class SujianAppState(
     }
 
     fun createProject(title: String) {
-        coroutineScope.launch {
+        coroutineScope?.launch {
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.createProject(title)
@@ -178,7 +192,7 @@ class SujianAppState(
     }
 
     fun deleteProject(projectId: String) {
-        coroutineScope.launch {
+        coroutineScope?.launch {
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.deleteProject(projectId)
@@ -189,7 +203,7 @@ class SujianAppState(
     }
 
     fun renameProject(projectId: String, newTitle: String) {
-        coroutineScope.launch {
+        coroutineScope?.launch {
             withContext(Dispatchers.IO) {
                 try {
                     workspaceUseCase?.renameProject(projectId, newTitle)
@@ -198,10 +212,41 @@ class SujianAppState(
             refreshProjects()
         }
     }
+
+    fun getCurrentDestination(): SujianDestination {
+        return try {
+            SujianDestination.valueOf(currentDestination)
+        } catch (_: Exception) {
+            SujianDestination.Works
+        }
+    }
 }
 
-@Composable
-fun rememberSujianAppState(): SujianAppState {
-    val coroutineScope = rememberCoroutineScope()
-    return remember { SujianAppState(coroutineScope) }
+@Stable
+class SujianAppState(
+    val viewModel: SujianAppViewModel
+) {
+    val currentDestination: SujianDestination get() = viewModel.getCurrentDestination()
+    val projects: List<Project> get() = viewModel.projects
+    val recentEdits: List<RecentEdit> get() = viewModel.recentEdits
+    val currentProjectId: String? get() = viewModel.currentProjectId
+    val currentProjectTitle: String get() = viewModel.currentProjectTitle
+    val currentVolumeId: String? get() = viewModel.currentVolumeId
+    val currentChapterId: String? get() = viewModel.currentChapterId
+    val currentChapterTitle: String get() = viewModel.currentChapterTitle
+    val currentLayoutPlan: LayoutPlan? get() = viewModel.currentLayoutPlan
+    val foldFeatureInfo: FoldFeatureInfo get() = viewModel.foldFeatureInfo
+    val isLoading: Boolean get() = viewModel.isLoading
+
+    fun navigateTo(destination: SujianDestination) = viewModel.navigateTo(destination)
+    fun selectProject(projectId: String, projectTitle: String) = viewModel.selectProject(projectId, projectTitle)
+    fun selectChapter(volumeId: String, chapterId: String, chapterTitle: String) = viewModel.selectChapter(volumeId, chapterId, chapterTitle)
+    fun clearChapterSelection() = viewModel.clearChapterSelection()
+    fun updateFoldFeaturesFromAdaptive(features: List<FoldingFeature>, density: Float = 1f) = viewModel.updateFoldFeaturesFromAdaptive(features, density)
+    fun resolveLayout(metrics: WindowMetrics): LayoutPlan? = viewModel.resolveLayout(metrics)
+    fun refreshProjects() = viewModel.refreshProjects()
+    fun refreshRecentEdits() = viewModel.refreshRecentEdits()
+    fun createProject(title: String) = viewModel.createProject(title)
+    fun deleteProject(projectId: String) = viewModel.deleteProject(projectId)
+    fun renameProject(projectId: String, newTitle: String) = viewModel.renameProject(projectId, newTitle)
 }

@@ -282,6 +282,7 @@ impl LinuxEditorAnimationCoordinator {
         old_visual_y: f64,
         force_snap_next: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
+        font_family: &str,
     ) {
         if !typing_animation_enabled || is_scrolling {
             return;
@@ -319,6 +320,9 @@ impl LinuxEditorAnimationCoordinator {
                         vt.old_cursor_rect.clone(),
                         vt.new_cursor_rect.clone(),
                         has_reflow,
+                        mode,
+                        &vt.old_text,
+                        font_family,
                     );
 
                     self.registry.start_insert(
@@ -359,6 +363,9 @@ impl LinuxEditorAnimationCoordinator {
                     vt.deleted_glyph_rects.as_deref().unwrap_or(&[]),
                     vt.old_cursor_rect.clone(),
                     vt.new_cursor_rect.clone(),
+                    mode,
+                    &vt.old_text,
+                    font_family,
                 );
                 self.vt_queue.enqueue(key, payload, mode, vt.duration_ms);
             }
@@ -598,6 +605,171 @@ impl LinuxEditorAnimationCoordinator {
             anchor_changed: false,
         }
     }
+
+    pub(crate) fn build_render_plan(&self) -> RenderPlan {
+        let static_text = self.build_static_render_plan();
+        let text_animation = self.build_text_animation_plan();
+        RenderPlan {
+            static_text,
+            text_animation,
+            selection_preedit: SelectionPreeditPlan::default(),
+            cursor: CursorAnimationPlan::default(),
+            ime: ImeUpdatePlan::default(),
+        }
+    }
+
+    fn build_text_animation_plan(&self) -> TextAnimationPlan {
+        let mut glyphs = Vec::new();
+        let now = Instant::now();
+
+        for tx in self.vt_queue.active_transactions() {
+            if tx.state == VisualTransactionState::Cancelled {
+                continue;
+            }
+
+            let elapsed_ms = now.duration_since(tx.start_time).as_millis() as f64;
+            let progress = (elapsed_ms / tx.duration_ms as f64).min(1.0);
+
+            if progress >= 1.0 {
+                continue;
+            }
+
+            let mode = tx.animation_mode;
+            let is_delete = matches!(tx.payload, VisualPayload::DeleteRuns { .. });
+
+            match &tx.payload {
+                VisualPayload::InsertRuns { insert_runs, reflow_runs, old_cursor_rect, .. } => {
+                    let frames = dispatch_animation_frames(
+                        mode, insert_runs, reflow_runs, old_cursor_rect.as_ref(), progress, false,
+                    );
+                    for frame in &frames {
+                        let run = if (frame.byte_start, frame.byte_end) == (0, 0) {
+                            insert_runs.first()
+                        } else {
+                            insert_runs.iter().find(|r| r.byte_start == frame.byte_start && r.byte_end == frame.byte_end)
+                        };
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: frame.x,
+                            y: frame.y,
+                            w: frame.w,
+                            h: frame.h,
+                            opacity: frame.opacity,
+                            baseline_in_quad: frame.baseline_in_quad,
+                            byte_start: frame.byte_start,
+                            byte_end: frame.byte_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: run.and_then(|r| r.old_paragraph_text.clone()),
+                            font_id: run.map(|r| r.font_id.clone()).unwrap_or_default(),
+                        });
+                    }
+                }
+                VisualPayload::DeleteRuns { delete_runs, .. } => {
+                    let frames = dispatch_animation_frames(
+                        mode, delete_runs, &[], None, progress, true,
+                    );
+                    for frame in &frames {
+                        let run = delete_runs.iter().find(|r| r.byte_start == frame.byte_start && r.byte_end == frame.byte_end);
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: frame.x,
+                            y: frame.y,
+                            w: frame.w,
+                            h: frame.h,
+                            opacity: frame.opacity,
+                            baseline_in_quad: frame.baseline_in_quad,
+                            byte_start: frame.byte_start,
+                            byte_end: frame.byte_end,
+                            animation_mode: mode,
+                            is_delete: true,
+                            old_paragraph_text: run.and_then(|r| r.old_paragraph_text.clone()),
+                            font_id: run.map(|r| r.font_id.clone()).unwrap_or_default(),
+                        });
+                    }
+                }
+                VisualPayload::ReflowRuns { insert_runs, reflow_runs, old_cursor_rect, .. } => {
+                    let frames = dispatch_animation_frames(
+                        mode, insert_runs, reflow_runs, old_cursor_rect.as_ref(), progress, false,
+                    );
+                    for frame in &frames {
+                        let run = if (frame.byte_start, frame.byte_end) == (0, 0) {
+                            reflow_runs.first().map(|_| insert_runs.first()).flatten()
+                        } else {
+                            insert_runs.iter().find(|r| r.byte_start == frame.byte_start && r.byte_end == frame.byte_end)
+                        };
+                        glyphs.push(TextAnimationGlyphInfo {
+                            key: tx.key,
+                            x: frame.x,
+                            y: frame.y,
+                            w: frame.w,
+                            h: frame.h,
+                            opacity: frame.opacity,
+                            baseline_in_quad: frame.baseline_in_quad,
+                            byte_start: frame.byte_start,
+                            byte_end: frame.byte_end,
+                            animation_mode: mode,
+                            is_delete: false,
+                            old_paragraph_text: run.and_then(|r| r.old_paragraph_text.clone()),
+                            font_id: run.map(|r| r.font_id.clone()).unwrap_or_default(),
+                        });
+                    }
+                }
+                VisualPayload::CursorTransition { .. } => {}
+            }
+        }
+
+        TextAnimationPlan { glyphs }
+    }
+}
+
+fn dispatch_animation_frames(
+    mode: AnimationMode,
+    insert_or_delete_runs: &[VisualRunSnapshot],
+    reflow_runs: &[ReflowRunSnapshot],
+    old_cursor_rect: Option<&CursorRect>,
+    progress: f64,
+    is_delete: bool,
+) -> Vec<super::insert_animation::GlyphFrameData> {
+    match mode {
+        AnimationMode::GlyphAnimation => {
+            if is_delete {
+                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+            } else {
+                insert_animation::compute_insert_animation_frame(
+                    insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
+                )
+            }
+        }
+        AnimationMode::ClusterAnimation => {
+            if is_delete {
+                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+            } else {
+                insert_animation::compute_insert_animation_frame(
+                    insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
+                )
+            }
+        }
+        AnimationMode::RunAnimation => {
+            if is_delete {
+                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+            } else {
+                reflow_animation::compute_reflow_animation_frame(
+                    insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
+                )
+            }
+        }
+        AnimationMode::LineReflowAnimation => {
+            if is_delete {
+                delete_animation::compute_delete_animation_frame(insert_or_delete_runs, progress)
+            } else {
+                reflow_animation::compute_reflow_animation_frame(
+                    insert_or_delete_runs, reflow_runs, old_cursor_rect, progress,
+                )
+            }
+        }
+        AnimationMode::SystemSuppressed => Vec::new(),
+    }
 }
 
 #[cfg(test)]
@@ -786,6 +958,9 @@ mod tests {
             None,
             None,
             false,
+            AnimationMode::GlyphAnimation,
+            "a",
+            "",
         );
         assert!(matches!(payload, VisualPayload::InsertRuns { .. }));
     }
@@ -799,6 +974,9 @@ mod tests {
             None,
             None,
             true,
+            AnimationMode::GlyphAnimation,
+            "ab",
+            "",
         );
         assert!(matches!(payload, VisualPayload::ReflowRuns { .. }));
     }
@@ -809,6 +987,9 @@ mod tests {
             &[GlyphRect { x: 10.0, y: 5.0, w: 12.0, h: 20.0, char_: "a".into(), baseline_y: 20.0, byte_start: 0, byte_end: 1 }],
             None,
             None,
+            AnimationMode::GlyphAnimation,
+            "a",
+            "",
         );
         assert!(matches!(payload, VisualPayload::DeleteRuns { .. }));
     }
@@ -830,7 +1011,7 @@ mod tests {
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = make_key(1);
         coord.registry.start_insert(key, None, (5, 6), vec![], AnimationMode::GlyphAnimation, 100);
-        let payload = VisualPayload::from_insert_transaction(&[], &[], Some((5, 6)), None, None, false);
+        let payload = VisualPayload::from_insert_transaction(&[], &[], Some((5, 6)), None, None, false, AnimationMode::GlyphAnimation, "", "");
         coord.vt_queue.enqueue(key, payload, AnimationMode::GlyphAnimation, 100);
         let cancelled = coord.cancel_by_key(key, "test_cancel");
         assert!(cancelled);
@@ -876,6 +1057,7 @@ mod tests {
             true, true,
             50.0, 5.0,
             false, None,
+            "",
         );
         assert!(coord.is_empty());
     }
@@ -919,6 +1101,7 @@ mod tests {
             true, true,
             50.0, 5.0,
             false, None,
+            "",
         );
         assert!(coord.is_empty());
     }

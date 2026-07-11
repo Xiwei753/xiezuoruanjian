@@ -18,6 +18,7 @@
 
 pub mod app_backend;
 pub mod linux_qt_layout_plan_dto;
+pub mod linux_theme_controller;
 pub mod diagnostics;
 pub mod json_utils;
 pub(crate) mod message_key_mapper;
@@ -28,6 +29,7 @@ pub use app_backend::{
     AppBackend, EditorBackend, ProjectBackend, SettingsBackend, StarMapBackend, SyncBackend,
     WorkspaceBackend,
 };
+pub use linux_theme_controller::LinuxThemeController;
 
 /// Safely shares the heap-allocated AppBackend pointer with other domain backends.
 /// Guaranteed to be valid as long as BackendRuntime is alive.
@@ -73,6 +75,7 @@ pub struct BackendRuntime {
     settings_backend: QObjectBox<SettingsBackend>,
     sync_backend: QObjectBox<SyncBackend>,
     starmap_backend: QObjectBox<StarMapBackend>,
+    theme_controller: QObjectBox<LinuxThemeController>,
 }
 
 impl BackendRuntime {
@@ -106,7 +109,8 @@ impl BackendRuntime {
             editor_backend: QObjectBox::new(EditorBackend::new(app_ptr.clone())),
             settings_backend: QObjectBox::new(SettingsBackend::new(app_ptr.clone())),
             sync_backend: QObjectBox::new(SyncBackend::new(app_ptr.clone())),
-            starmap_backend: QObjectBox::new(StarMapBackend::new(app_ptr)),
+            starmap_backend: QObjectBox::new(StarMapBackend::new(app_ptr.clone())),
+            theme_controller: QObjectBox::new(LinuxThemeController::new(app_ptr)),
             app_backend,
         }
     }
@@ -120,5 +124,6 @@ impl BackendRuntime {
         engine.set_object_property("settingsBackend".into(), self.settings_backend.pinned());
         engine.set_object_property("syncBackend".into(), self.sync_backend.pinned());
         engine.set_object_property("starmapBackend".into(), self.starmap_backend.pinned());
+        engine.set_object_property("themeController".into(), self.theme_controller.pinned());
     }
 }

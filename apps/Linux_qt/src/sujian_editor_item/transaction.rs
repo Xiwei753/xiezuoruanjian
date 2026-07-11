@@ -57,6 +57,7 @@ impl SujianEditorItem {
                     self.cursor_ctrl.visual_y,
                     self.cursor_ctrl.force_snap_next,
                     self.cursor_ctrl.animation.as_ref(),
+                    &self.current_font_family.to_string(),
                 );
                 editor_animation_debug_log(&format!(
                     "record_transaction: processed via coordinator, kind={:?}, has_active_insert={}",
