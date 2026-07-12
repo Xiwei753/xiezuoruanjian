@@ -802,6 +802,15 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility == android.view.View.VISIBLE) {
+            renderer.resumeAll()
+        } else {
+            renderer.pauseAll()
+        }
+    }
+
     // ── 生命周期 ──
 
     override fun onDetachedFromWindow() {

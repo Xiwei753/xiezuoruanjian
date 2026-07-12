@@ -7,18 +7,6 @@ import android.text.TextPaint
 import android.os.Build
 
 /**
- * Glyph 矩形信息，用于动画坐标
- */
-data class SujianGlyphRect(
-    val x: Float,
-    val y: Float,        // top 坐标（baseline + ascent）
-    val w: Float,
-    val h: Float,
-    val char: String,
-    val baselineY: Float  // 文字基线 Y 坐标
-)
-
-/**
  * 光标矩形信息，包含 baselineY
  */
 data class SujianCursorRect(
@@ -232,53 +220,6 @@ class SujianEditorLayout(
         val ascent = layout.getLineAscent(line).toFloat()
         val descent = layout.getLineDescent(line).toFloat()
         return SujianCursorRect(x, baseline + ascent, baseline + descent, baseline)
-    }
-
-    /**
-     * 获取指定文本范围的 glyph 矩形列表
-     * 用于动画坐标计算
-     */
-    fun getGlyphRects(text: String, startOffset: Int, endOffset: Int): List<SujianGlyphRect> {
-        val layout = getLayout(text)
-        val result = mutableListOf<SujianGlyphRect>()
-        if (text.isEmpty() || startOffset >= endOffset || startOffset >= text.length) return result
-
-        val safeStart = startOffset.coerceIn(0, text.length)
-        val safeEnd = endOffset.coerceIn(0, text.length)
-
-        var currentOffset = safeStart
-        while (currentOffset < safeEnd) {
-            val codePoint = text.codePointAt(currentOffset)
-            val charCount = Character.charCount(codePoint)
-            val charStr = text.substring(currentOffset, (currentOffset + charCount).coerceAtMost(safeEnd))
-
-            val line = layout.getLineForOffset(currentOffset)
-            val x = layout.getPrimaryHorizontal(currentOffset)
-            val baseline = layout.getLineBaseline(line).toFloat()
-            val ascent = layout.getLineAscent(line).toFloat()
-            val descent = layout.getLineDescent(line).toFloat()
-
-            // 计算 glyph 宽度
-            val nextX = if (currentOffset + charCount < text.length) {
-                layout.getPrimaryHorizontal(currentOffset + charCount)
-            } else {
-                x + textPaint.measureText(charStr)
-            }
-            val width = nextX - x
-
-            result.add(SujianGlyphRect(
-                x = x,
-                y = baseline + ascent,
-                w = width.coerceAtLeast(0f),
-                h = descent - ascent,
-                char = charStr,
-                baselineY = baseline  // 新增
-            ))
-
-            currentOffset += charCount
-        }
-
-        return result
     }
 
     // ── 内部方法 ──

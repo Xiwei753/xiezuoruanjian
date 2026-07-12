@@ -5,6 +5,7 @@ import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import java.util.Objects
 
 class AndroidLayoutSnapshotBuilder(
     private val layout: SujianEditorLayout,
@@ -154,13 +155,28 @@ class AndroidLayoutSnapshotBuilder(
                 sourceRectInLineSnapshot = sourceRect,
                 visualRectInDocument = visualRect,
                 textDirection = if (staticLayout.getParagraphDirection(lineIdx) == Layout.DIR_RIGHT_TO_LEFT) 1 else 0,
-                shapingIdentity = null
+                shapingIdentity = buildShapingIdentity(clusterText, textPaint, staticLayout.getParagraphDirection(lineIdx))
             ))
 
             currentOffset = clusterEnd
         }
         return clusters
     }
+
+    private fun buildShapingIdentity(
+        clusterText: String,
+        paint: TextPaint,
+        paragraphDirection: Int
+    ): String {
+        val textHash = Objects.hash(clusterText)
+        val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
+        val width = paint.measureText(clusterText).toRawBits()
+        val glyphCount = clusterText.codePointCount(0, clusterText.length)
+        val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
+        return "$textHash:$fontFingerprint:$width:$glyphCount:$isRtl"
+    }
+
+    private fun Float.format(digits: Int): String = String.format("%.${digits}f", this)
 
     private fun findClusterBoundary(text: String, start: Int, lineEnd: Int): Int {
         if (start >= text.length) return start

@@ -95,7 +95,7 @@ class SujianAnimationController(
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 
         if (renderer.isScrolling()) {
-            renderer.clearAnimations()
+            renderer.pauseAll()
             return TextAnimationStartResult.Skipped
         }
 
@@ -191,16 +191,47 @@ class SujianAnimationController(
                     }
                     RectF(oldX, cluster.visualRectInDocument.top, oldX + cluster.visualRectInDocument.width(), cluster.visualRectInDocument.bottom)
                 }
-                slices.add(AndroidAnimatedSlice.reflowMove(
-                    id = (vt.id shl 2) or 1u + lineSnapshot.visualLineOrdinal.toULong(),
-                    snapshotId = lineSnapshot.id,
-                    sourceRect = cluster.sourceRectInLineSnapshot,
-                    fromRect = oldRect,
-                    toRect = cluster.visualRectInDocument,
-                    byteStart = cluster.documentByteStart,
-                    byteEnd = cluster.documentByteEnd,
-                    shapingIdentity = cluster.shapingIdentity
-                ))
+
+                val shapingChanged = oldCluster != null &&
+                    oldCluster.shapingIdentity != null &&
+                    cluster.shapingIdentity != null &&
+                    oldCluster.shapingIdentity != cluster.shapingIdentity
+
+                if (shapingChanged && oldCluster != null) {
+                    slices.add(AndroidAnimatedSlice.crossfade(
+                        id = (vt.id shl 2) or 3u + cluster.platformTextStart.toULong(),
+                        role = AndroidAnimatedSliceRole.CrossfadeOld,
+                        snapshotId = oldLineSnap!!.id,
+                        sourceRect = oldCluster.sourceRectInLineSnapshot,
+                        fromRect = oldRect,
+                        toRect = cluster.visualRectInDocument,
+                        byteStart = cluster.documentByteStart,
+                        byteEnd = cluster.documentByteEnd,
+                        shapingIdentity = oldCluster.shapingIdentity
+                    ))
+                    slices.add(AndroidAnimatedSlice.crossfade(
+                        id = (vt.id shl 2) or 4u + cluster.platformTextStart.toULong(),
+                        role = AndroidAnimatedSliceRole.CrossfadeNew,
+                        snapshotId = lineSnapshot.id,
+                        sourceRect = cluster.sourceRectInLineSnapshot,
+                        fromRect = oldRect,
+                        toRect = cluster.visualRectInDocument,
+                        byteStart = cluster.documentByteStart,
+                        byteEnd = cluster.documentByteEnd,
+                        shapingIdentity = cluster.shapingIdentity
+                    ))
+                } else {
+                    slices.add(AndroidAnimatedSlice.reflowMove(
+                        id = (vt.id shl 2) or 1u + lineSnapshot.visualLineOrdinal.toULong(),
+                        snapshotId = lineSnapshot.id,
+                        sourceRect = cluster.sourceRectInLineSnapshot,
+                        fromRect = oldRect,
+                        toRect = cluster.visualRectInDocument,
+                        byteStart = cluster.documentByteStart,
+                        byteEnd = cluster.documentByteEnd,
+                        shapingIdentity = cluster.shapingIdentity
+                    ))
+                }
             }
 
             val animatedByteRanges = slices.map { Pair(it.documentByteStart, it.documentByteEnd) }
@@ -260,7 +291,11 @@ class SujianAnimationController(
 
         val decision = if (renderer.isScrolling()) AnimationModeData.SystemSuppressed else vt.animationMode
         if (decision == AnimationModeData.SystemSuppressed || decision == AnimationModeData.SnapshotAnimation) {
-            renderer.clearAnimations()
+            if (renderer.isScrolling()) {
+                renderer.pauseAll()
+            } else {
+                renderer.clearAnimations()
+            }
             consumeDeleteSnapshot(lastDeleteSnapshotId)
             return TextAnimationStartResult.Skipped
         }
@@ -334,10 +369,50 @@ class SujianAnimationController(
         for (newSnapshot in newLineSnapshots) {
             val reflowClusters = newSnapshot.clusters
             for (cluster in reflowClusters) {
+                val oldSnapshotMatch = oldSnapshots.find { it.visualLineOrdinal == newSnapshot.visualLineOrdinal }
+                val oldClusterMatch = oldSnapshotMatch?.clusters?.find { oc ->
+                    oc.documentByteStart == cluster.documentByteStart && oc.documentByteEnd == cluster.documentByteEnd
+                }
                 val oldY = cluster.visualRectInDocument.top - (newSnapshot.documentRect.top - (oldSnapshots.firstOrNull()?.documentRect?.top ?: 0f))
-                val oldRect = RectF(cluster.visualRectInDocument.left, oldY, cluster.visualRectInDocument.right, oldY + cluster.visualRectInDocument.height())
-                if (kotlin.math.abs(oldRect.top - cluster.visualRectInDocument.top) > 0.5f ||
-                    kotlin.math.abs(oldRect.left - cluster.visualRectInDocument.left) > 0.5f) {
+                val oldRect = if (oldClusterMatch != null) {
+                    RectF(oldClusterMatch.visualRectInDocument.left, oldClusterMatch.visualRectInDocument.top,
+                          oldClusterMatch.visualRectInDocument.right, oldClusterMatch.visualRectInDocument.bottom)
+                } else {
+                    RectF(cluster.visualRectInDocument.left, oldY, cluster.visualRectInDocument.right, oldY + cluster.visualRectInDocument.height())
+                }
+                val positionChanged = kotlin.math.abs(oldRect.top - cluster.visualRectInDocument.top) > 0.5f ||
+                    kotlin.math.abs(oldRect.left - cluster.visualRectInDocument.left) > 0.5f
+                if (!positionChanged) continue
+
+                val shapingChanged = oldClusterMatch != null &&
+                    oldClusterMatch.shapingIdentity != null &&
+                    cluster.shapingIdentity != null &&
+                    oldClusterMatch.shapingIdentity != cluster.shapingIdentity
+
+                if (shapingChanged && oldSnapshotMatch != null) {
+                    slices.add(AndroidAnimatedSlice.crossfade(
+                        id = (vt.id shl 2) or 5u + cluster.platformTextStart.toULong(),
+                        role = AndroidAnimatedSliceRole.CrossfadeOld,
+                        snapshotId = oldSnapshotMatch.id,
+                        sourceRect = oldClusterMatch!!.sourceRectInLineSnapshot,
+                        fromRect = oldRect,
+                        toRect = cluster.visualRectInDocument,
+                        byteStart = cluster.documentByteStart,
+                        byteEnd = cluster.documentByteEnd,
+                        shapingIdentity = oldClusterMatch.shapingIdentity
+                    ))
+                    slices.add(AndroidAnimatedSlice.crossfade(
+                        id = (vt.id shl 2) or 6u + cluster.platformTextStart.toULong(),
+                        role = AndroidAnimatedSliceRole.CrossfadeNew,
+                        snapshotId = newSnapshot.id,
+                        sourceRect = cluster.sourceRectInLineSnapshot,
+                        fromRect = oldRect,
+                        toRect = cluster.visualRectInDocument,
+                        byteStart = cluster.documentByteStart,
+                        byteEnd = cluster.documentByteEnd,
+                        shapingIdentity = cluster.shapingIdentity
+                    ))
+                } else {
                     slices.add(AndroidAnimatedSlice.reflowMove(
                         id = (vt.id shl 2) or 2u + cluster.platformTextStart.toULong(),
                         snapshotId = newSnapshot.id,

@@ -13,18 +13,6 @@ enum class EditorAnimationKindData {
     Cursor
 }
 
-@Deprecated("Legacy editor animation event. Use EditorVisualTransactionData instead.")
-data class EditorAnimationEventData(
-    val id: ULong,
-    val kind: EditorAnimationKindData,
-    val rangeStart: Int,
-    val rangeLen: Int,
-    val text: String,
-    val oldCursorIndex: Int,
-    val newCursorIndex: Int,
-    val durationMs: Long
-)
-
 /**
  * 分层动画模式 — 与 Core AnimationMode 对齐。
  */
