@@ -1780,6 +1780,7 @@ pub fn qtextlayout_x_to_cursor_on_line(
     para_start + para_byte
 }
 
+#[allow(dead_code)]
 pub fn qtextlayout_glyph_positions_on_line(
     para_text: &str,
     range_start: usize,
@@ -2047,6 +2048,7 @@ pub fn extract_shaped_runs_on_line(
 /// The QImage is rendered at DPR scale. The logical line content starts at
 /// (0, 0) in the QImage's logical coordinate space, with the baseline at
 /// y = line.ascent().
+#[allow(dead_code)]
 pub fn render_line_to_image(
     para_text: &str,
     font_size: f64,
@@ -2434,6 +2436,312 @@ pub fn prepare_paragraph_visual_snapshot(
         paragraph_document_byte_start,
         lines,
         index_map,
+    }
+}
+
+#[derive(Clone)]
+pub struct CanonicalDocumentVisualSnapshot {
+    pub text_revision: u64,
+    pub font_size: f64,
+    pub font_family: String,
+    pub line_spacing: f64,
+    pub text_indent: f64,
+    pub padding: f64,
+    pub width: f64,
+    pub dpr: f64,
+    pub text_color: String,
+    pub paragraphs: Vec<CanonicalParagraphSnapshot>,
+    pub visual_lines: Vec<VisualLine>,
+    pub content_height: f64,
+}
+
+impl CanonicalDocumentVisualSnapshot {
+    pub fn cursor_rect(
+        &self,
+        cursor_byte: usize,
+        affinity: CaretAffinity,
+        scroll_y: f64,
+        viewport_h: f64,
+    ) -> CaretRect {
+        let line = self.visual_lines
+            .iter()
+            .enumerate()
+            .find(|(idx, _)| {
+                line_contains_cursor_with_affinity(&self.visual_lines, *idx, cursor_byte, affinity)
+            })
+            .map(|(_, line)| line)
+            .or_else(|| self.visual_lines.last());
+
+        let fallback;
+        let line = match line {
+            Some(line) => line,
+            None => {
+                fallback = VisualLine {
+                    id: 0,
+                    byte_start: 0,
+                    byte_end: 0,
+                    qchar_start: 0,
+                    qchar_end: 0,
+                    hard_break: true,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: self.font_size * self.line_spacing,
+                    para_text: String::new(),
+                    para_start: 0,
+                    qtextline_idx: 0,
+                    para_qchar_start: 0,
+                    para_qchar_end: 0,
+                    line_wrap_width: 0.0,
+                    line_indent_x: 0.0,
+                    para_indent: 0.0,
+                    x_end_trailing: 0.0,
+                    qt_ascent: 0.0,
+                    qt_descent: 0.0,
+                };
+                &fallback
+            }
+        };
+
+        let cursor_x = self.calculate_cursor_x_for_line(line, cursor_byte, affinity);
+        let (cursor_y_doc, cursor_h) = cursor_rect_for_line(line, self.font_size, &self.font_family);
+        let cursor_y = cursor_y_doc - scroll_y;
+        let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
+
+        CaretRect {
+            x: cursor_x,
+            y: cursor_y,
+            h: cursor_h,
+            visual_line_id: line.id,
+            visible,
+        }
+    }
+
+    fn calculate_cursor_x_for_line(
+        &self,
+        line: &VisualLine,
+        cursor: usize,
+        affinity: CaretAffinity,
+    ) -> f64 {
+        if line.para_text.is_empty() {
+            if line.width > 0.0 && cursor == line.byte_end {
+                line.x + line.width
+            } else {
+                line.x
+            }
+        } else {
+            let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.byte_end;
+            let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
+            let x = line.x
+                + qtextlayout_cursor_to_x_on_line(
+                    &line.para_text,
+                    cursor,
+                    line.para_start,
+                    self.font_size,
+                    &self.font_family,
+                    paragraph_wrap_w,
+                    line.para_indent,
+                    line.qtextline_idx,
+                    use_trailing,
+                );
+
+            if x <= line.x + 0.5
+                && line.byte_start != line.byte_end
+                && affinity == CaretAffinity::Upstream
+                && cursor == line.byte_end
+                && line.x_end_trailing > 0.0
+            {
+                return line.x + line.x_end_trailing;
+            }
+
+            x
+        }
+    }
+
+    pub fn to_layout_snapshot(&self) -> LayoutSnapshot {
+        LayoutSnapshot {
+            text_revision: self.text_revision,
+            text_ptr: 0,
+            text_len: 0,
+            width: self.width,
+            font_size: self.font_size as f32,
+            font_family: self.font_family.clone(),
+            line_spacing: self.line_spacing as f32,
+            text_indent: self.text_indent as f32,
+            padding: self.padding as f32,
+            lines: self.visual_lines.clone(),
+            content_height: self.content_height as f32,
+        }
+    }
+}
+
+pub fn prepare_document_visual_snapshot(
+    text: &str,
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    padding: f64,
+    indent: f64,
+    width: f64,
+    dpr: f64,
+    text_color: &str,
+) -> CanonicalDocumentVisualSnapshot {
+    let metrics_h = get_font_ascent(font_family, font_size as f32)
+        + get_font_descent(font_family, font_size as f32);
+    let line_height = (font_size * line_spacing)
+        .max(font_size + 4.0)
+        .max(metrics_h);
+    let available = (width - padding * 2.0).max(font_size);
+
+    let mut paragraphs = Vec::new();
+    let mut visual_lines = Vec::new();
+    let mut y: f64 = padding;
+    let mut paragraph_start: usize = 0;
+    let mut paragraph_qchar_start: usize = 0;
+    let mut line_id: usize = 0;
+
+    for paragraph in text.split_inclusive('\n') {
+        let hard_break = paragraph.ends_with('\n');
+        let paragraph_text = paragraph.trim_end_matches('\n');
+
+        if paragraph_text.is_empty() {
+            let empty_ascent = get_font_ascent(font_family, font_size as f32);
+            let empty_descent = get_font_descent(font_family, font_size as f32);
+            visual_lines.push(VisualLine {
+                id: line_id,
+                byte_start: paragraph_start,
+                byte_end: paragraph_start,
+                qchar_start: paragraph_qchar_start,
+                qchar_end: paragraph_qchar_start,
+                hard_break,
+                x: padding + indent,
+                y,
+                width: 0.0,
+                height: line_height,
+                para_text: String::new(),
+                para_start: paragraph_start,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: available - indent,
+                line_indent_x: indent,
+                para_indent: indent,
+                x_end_trailing: 0.0,
+                qt_ascent: empty_ascent,
+                qt_descent: empty_descent,
+            });
+            line_id += 1;
+            y += line_height;
+            paragraph_start += paragraph.len();
+            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+
+            paragraphs.push(CanonicalParagraphSnapshot {
+                paragraph_text: String::new(),
+                paragraph_document_byte_start: paragraph_start,
+                lines: Vec::new(),
+                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", paragraph_start),
+            });
+            continue;
+        }
+
+        let canonical = prepare_paragraph_visual_snapshot(
+            paragraph_text,
+            paragraph_start,
+            font_size,
+            font_family,
+            available,
+            indent,
+            dpr,
+            text_color,
+        );
+
+        for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
+            let qt_metrics_h = canonical_line.ascent + canonical_line.descent;
+            let actual_line_h = if qt_metrics_h > 0.0 {
+                line_height.max(qt_metrics_h)
+            } else {
+                line_height
+            };
+
+            let is_first = line_idx == 0;
+
+            visual_lines.push(VisualLine {
+                id: line_id,
+                byte_start: canonical_line.document_byte_start,
+                byte_end: canonical_line.document_byte_end,
+                qchar_start: canonical_line.qchar_start + paragraph_qchar_start,
+                qchar_end: canonical_line.qchar_end + paragraph_qchar_start,
+                hard_break: hard_break && line_idx == canonical.lines.len() - 1,
+                x: padding + canonical_line.x_pos,
+                y,
+                width: canonical_line.width,
+                height: actual_line_h,
+                para_text: paragraph_text.to_string(),
+                para_start: paragraph_start,
+                qtextline_idx: line_idx as i32,
+                para_qchar_start: canonical_line.qchar_start,
+                para_qchar_end: canonical_line.qchar_end,
+                line_wrap_width: if is_first { available - indent } else { available },
+                line_indent_x: if is_first { indent } else { 0.0 },
+                para_indent: indent,
+                x_end_trailing: canonical_line.x_end_trailing,
+                qt_ascent: canonical_line.ascent,
+                qt_descent: canonical_line.descent,
+            });
+            line_id += 1;
+            y += actual_line_h;
+        }
+
+        paragraph_start += paragraph.len();
+        paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+
+        paragraphs.push(canonical);
+    }
+
+    if text.ends_with('\n') {
+        let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
+        visual_lines.push(VisualLine {
+            id: line_id,
+            byte_start: text.len(),
+            byte_end: text.len(),
+            qchar_start: text_qchar_len,
+            qchar_end: text_qchar_len,
+            hard_break: false,
+            x: padding + indent,
+            y,
+            width: 0.0,
+            height: line_height,
+            para_text: String::new(),
+            para_start: text.len(),
+            qtextline_idx: 0,
+            para_qchar_start: 0,
+            para_qchar_end: 0,
+            line_wrap_width: available - indent,
+            line_indent_x: indent,
+            para_indent: indent,
+            x_end_trailing: 0.0,
+            qt_ascent: 0.0,
+            qt_descent: 0.0,
+        });
+        y += line_height;
+    }
+
+    let content_height = y.max(1.0);
+
+    CanonicalDocumentVisualSnapshot {
+        text_revision,
+        font_size,
+        font_family: font_family.to_string(),
+        line_spacing,
+        text_indent: indent,
+        padding,
+        width,
+        dpr,
+        text_color: text_color.to_string(),
+        paragraphs,
+        visual_lines,
+        content_height,
     }
 }
 
