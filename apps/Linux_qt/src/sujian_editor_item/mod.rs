@@ -24,10 +24,8 @@ pub(crate) mod animation_mode;
 pub(crate) mod buffer;
 pub(crate) mod cursor_animation;
 pub(crate) mod cursor_controller;
-pub(crate) mod delete_animation;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;
-pub(crate) mod insert_animation;
 pub(crate) mod input_host;
 pub(crate) mod layout_ops;
 pub(crate) mod layout_snapshot;
@@ -41,7 +39,6 @@ pub(crate) mod static_line_patch;
 pub(crate) mod text_visual_transaction;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
-pub(crate) mod reflow_animation;
 pub(crate) mod render_plan;
 pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
@@ -49,12 +46,9 @@ pub(crate) mod shaped_visual_run;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
 pub(crate) mod transaction_key;
-pub(crate) mod transaction_queue;
-pub(crate) mod visual_payload;
 #[cfg(test)]
 mod tests;
 
-use crate::backend::diagnostics;
 use crate::editor::input::{self, EditorInputHost};
 use crate::editor::layout::{
     text_baseline_y, CaretAffinity, CursorLayoutRect, EditorLayout, LayoutParams, LayoutSnapshot,
@@ -75,6 +69,8 @@ use std::cell::Cell;
 use std::time::Instant;
 use animation_coordinator::LinuxEditorAnimationCoordinator;
 use layout_snapshot::EditorLayoutSnapshot;
+use texture_cache::TextureCache;
+use transaction_key::VisualTransactionKey;
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
@@ -311,7 +307,7 @@ pub struct SujianEditorItem {
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
     animation_coordinator: LinuxEditorAnimationCoordinator,
-    texture_cache: animation_coordinator::TextureCache,
+    texture_cache: TextureCache,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
     layout_revision: layout_snapshot::LayoutRevision,
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
@@ -546,14 +542,14 @@ impl SujianEditorItem {
     ) {
         let _ = (range_id, byte_start, byte_end);
         if let Some(tid) = transaction_id {
-            let key = animation_coordinator::VisualTransactionKey {
+            let key = VisualTransactionKey {
                 transaction_id: tid,
                 generation: tid,
             };
             let removed = self.animation_coordinator.finish_by_key(key);
             if removed {
                 editor_animation_debug_log(&format!(
-                    "on_insert_animation_{}: tid={}, cleared hidden range, has_active_insert={}",
+                    "on_insert_animation_{}: tid={}, cleared, has_active_insert={}",
                     if skipped { "skipped" } else { "finished" },
                     tid,
                     self.animation_coordinator.has_active_insert()

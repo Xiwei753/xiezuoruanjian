@@ -56,17 +56,6 @@ pub(crate) struct TextAnimationGlyphInfo {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TextAnimationPlan {
     pub glyphs: Vec<TextAnimationGlyphInfo>,
-    pub slice_items: Vec<TextSliceRenderItem>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TextSliceRenderItem {
-    pub snapshot_id: LineSnapshotId,
-    pub source_rect: (f64, f64, f64, f64),
-    pub destination_viewport_rect: (f64, f64, f64, f64),
-    pub opacity: f64,
-    pub is_delete: bool,
-    pub is_crossfade: bool,
 }
 
 #[derive(Clone, Debug, Default)]

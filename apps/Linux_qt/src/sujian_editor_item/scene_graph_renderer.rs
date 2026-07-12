@@ -1,6 +1,6 @@
 use crate::editor::scene_graph;
 use super::render_plan::RenderPlan;
-use super::texture_cache::{TextureCache, TextureCacheKey, LineSnapshotTextureKey};
+use super::texture_cache::{TextureCache, TextureCacheKey};
 use qmetaobject::QImage;
 
 pub(crate) fn render_frame(
@@ -24,7 +24,7 @@ fn render_text_animation_layer(
     plan: &RenderPlan,
     texture_cache: &TextureCache,
 ) {
-    if plan.text_animation.glyphs.is_empty() && plan.text_animation.slice_items.is_empty() {
+    if plan.text_animation.glyphs.is_empty() {
         scene_graph::clear_animation_layer(root_raw, item_ptr);
         return;
     }
@@ -40,28 +40,6 @@ fn render_text_animation_layer(
 
         let cache_key = TextureCacheKey::new(glyph.key, glyph.texture_phase, glyph.run_identity);
         match texture_cache.get(&cache_key) {
-            Some(texture) => {
-                glyph_images.push(texture.clone());
-                glyph_texture_changed.push(true);
-            }
-            None => {
-                glyph_images.push(QImage::new(
-                    qmetaobject::QSize { width: 1, height: 1 },
-                    qmetaobject::ImageFormat::ARGB32_Premultiplied,
-                ));
-                glyph_texture_changed.push(false);
-            }
-        }
-    }
-
-    for slice_item in &plan.text_animation.slice_items {
-        let (dst_x, dst_y, dst_w, dst_h) = slice_item.destination_viewport_rect;
-        glyph_data.extend_from_slice(&[
-            dst_x, dst_y, dst_w, dst_h, slice_item.opacity, dst_h * 0.8,
-        ]);
-
-        let line_key = LineSnapshotTextureKey::new(slice_item.snapshot_id);
-        match texture_cache.get_line_snapshot(&line_key) {
             Some(texture) => {
                 glyph_images.push(texture.clone());
                 glyph_texture_changed.push(true);

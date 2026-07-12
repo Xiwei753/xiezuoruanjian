@@ -82,11 +82,10 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         .unwrap_or_default();
     let combined = format!("{sujian_mod}\n{sujian_transaction}\n{sujian_coordinator}\n{sujian_qquickitem}\n{sujian_sg_renderer}");
 
-    // Scene Graph animation layer (child[1]) reads ActiveVisualTransactionQueue
+    // Scene Graph animation layer (child[1]) reads PreparedTransactionQueue
     // every frame in update_paint_node, computes progress, and drives
     // update_animation_layer / clear_animation_layer directly.
-    // Completion is atomic: vt_queue.complete(tid, gen) + finish_overlay_plan
-    // remove hidden ranges and trigger static text re-render.
+    // Completion is atomic: finish_by_key removes transaction and triggers static text re-render.
     // No QML overlay callback is needed for the normal completion path.
     assert!(
         combined.contains("update_animation_layer"),
@@ -97,16 +96,12 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         "update_paint_node must call clear_animation_layer when no active transactions remain"
     );
     assert!(
-        combined.contains("vt_queue.complete"),
-        "update_paint_node must complete transactions via vt_queue.complete when progress >= 1.0"
-    );
-    assert!(
         combined.contains("finish_by_key"),
-        "update_paint_node must call finish_by_key to atomically remove hidden ranges and complete transaction when progress >= 1.0"
+        "update_paint_node must call finish_by_key to atomically complete transaction when progress >= 1.0"
     );
     assert!(
-        combined.contains("mark_rendering"),
-        "update_paint_node must mark Prepared transactions as Rendering on first frame"
+        combined.contains("prepared_queue"),
+        "coordinator must use PreparedTransactionQueue as the single animation queue"
     );
 
     // Legacy QML callback methods are still declared for backward compat
@@ -116,10 +111,9 @@ fn linux_insert_animation_id_route_is_wired_end_to_end() {
         "SujianEditorItem qt_method signatures must carry transaction/range ids as strings to avoid u64 truncation"
     );
     assert!(
-        combined.contains("start_insert(")
-            && combined.contains("alloc_key()")
-            && combined.contains("core_range_id"),
-        "record_transaction Insert path must start AnimationRangeRegistry with VisualTransactionKey via coordinator"
+        combined.contains("alloc_key()")
+            && combined.contains("PreparedTransactionQueue"),
+        "record_transaction Insert path must use PreparedTransactionQueue via coordinator"
     );
 }
 

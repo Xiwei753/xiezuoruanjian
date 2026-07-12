@@ -479,7 +479,7 @@ impl SujianEditorItem {
                 missing
             );
             eprintln!("[ERROR][SujianEditorItemMetaObject] {}", message);
-            diagnostics::log_to_file("ERROR", "editor", "sujian_editor_metaobject_missing_signal", &message);
+            crate::backend::diagnostics::log_to_file("ERROR", "editor", "sujian_editor_metaobject_missing_signal", &message);
             false
         }
     }

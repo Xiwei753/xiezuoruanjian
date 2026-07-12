@@ -193,6 +193,10 @@ impl PreparedTransactionQueue {
         &self.transactions
     }
 
+    pub fn active_transactions_mut(&mut self) -> &mut [PreparedTextVisualTransaction] {
+        &mut self.transactions
+    }
+
     pub fn has_active(&self) -> bool {
         !self.transactions.is_empty()
     }

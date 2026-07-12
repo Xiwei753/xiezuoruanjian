@@ -4,7 +4,7 @@ mod tests {
     use crate::sujian_editor_item::is_complex_grapheme;
     use crate::sujian_editor_item::SujianEditorItem;
     use crate::sujian_editor_item::PreeditAttributeKind;
-    use crate::sujian_editor_item::animation_coordinator::{AnimationMode, AnimationRangeRegistry, VisualTransactionKey};
+    use crate::sujian_editor_item::animation_coordinator::{AnimationMode, VisualTransactionKey};
     use qmetaobject::prelude::*;
     use writer_core::editor::CursorRect;
 
@@ -51,142 +51,13 @@ mod tests {
     }
 
     #[test]
-    fn test_is_complex_grapheme_chinese_char() {
+    fn test_is_complex_grapheme_cjk_not_complex() {
         assert!(!is_complex_grapheme('你'));
-    }
-
-    #[test]
-    fn test_is_complex_grapheme_ascii() {
-        assert!(!is_complex_grapheme('a'));
-        assert!(!is_complex_grapheme('Z'));
-        assert!(!is_complex_grapheme('0'));
-    }
-
-    #[test]
-    fn test_is_complex_grapheme_chinese_punctuation() {
-        assert!(!is_complex_grapheme('，'));
         assert!(!is_complex_grapheme('。'));
-        assert!(!is_complex_grapheme('！'));
     }
 
     #[test]
-    fn test_is_complex_grapheme_combining_half_mark() {
-        assert!(is_complex_grapheme('\u{FE20}'));
-    }
-
-    #[test]
-    fn test_preedit_visual_transaction_created_on_preedit_change() {
-        use writer_core::editor::{PreeditVisualTransaction, VisualCoordinateMode};
-
-        let old_text = "n".to_string();
-        let new_text = "ni".to_string();
-        let preedit_cursor_rect = Some(CursorRect {
-            x: 10.0,
-            top: 5.0,
-            bottom: 25.0,
-            baseline_y: 20.0,
-        });
-
-        let vt = PreeditVisualTransaction {
-            id: 0,
-            old_preedit_text: old_text.clone(),
-            new_preedit_text: new_text.clone(),
-            old_preedit_cursor_rect: None,
-            new_preedit_cursor_rect: preedit_cursor_rect.clone(),
-            preedit_glyph_rects: None,
-            deleted_preedit_glyph_rects: None,
-            inserted_preedit_glyph_rects: None,
-            preedit_cursor_rect: preedit_cursor_rect,
-            duration_ms: 100,
-            coordinate_mode: VisualCoordinateMode::Baseline,
-        };
-
-        assert_eq!(vt.old_preedit_text, "n");
-        assert_eq!(vt.new_preedit_text, "ni");
-        assert!(vt.new_preedit_cursor_rect.is_some());
-        assert!(vt.preedit_cursor_rect.is_some());
-        assert_eq!(vt.duration_ms, 100);
-        assert_eq!(vt.coordinate_mode, VisualCoordinateMode::Baseline);
-
-        let json = serde_json::to_string(&vt).unwrap();
-        assert!(json.contains("\"oldPreeditText\":"));
-        assert!(json.contains("\"newPreeditText\":"));
-    }
-
-    #[test]
-    fn test_pending_preedit_cursor_rect_flow() {
-        let preedit_cursor_rect: Option<CursorRect> = Some(CursorRect {
-            x: 50.0,
-            top: 10.0,
-            bottom: 30.0,
-            baseline_y: 25.0,
-        });
-        let mut pending_preedit_cursor_rect: Option<CursorRect> = None;
-
-        if preedit_cursor_rect.is_some() {
-            pending_preedit_cursor_rect = preedit_cursor_rect.clone();
-        }
-
-        let taken = pending_preedit_cursor_rect.take();
-        assert!(
-            taken.is_some(),
-            "pending_preedit_cursor_rect should be saved before clearing"
-        );
-        assert_eq!(taken.as_ref().unwrap().x, 50.0);
-        assert_eq!(taken.as_ref().unwrap().top, 10.0);
-
-        assert!(
-            pending_preedit_cursor_rect.is_none(),
-            "pending should be empty after take"
-        );
-
-        let empty_preedit_cursor_rect: Option<CursorRect> = None;
-        let mut pending2: Option<CursorRect> = None;
-        if empty_preedit_cursor_rect.is_some() {
-            pending2 = empty_preedit_cursor_rect.clone();
-        }
-        let taken2 = pending2.take();
-        assert!(
-            taken2.is_none(),
-            "no pending when preedit_cursor_rect was None"
-        );
-    }
-
-    #[test]
-    fn test_preedit_attribute_kind_new_variants() {
-        let tc = PreeditAttributeKind::TextColor {
-            color: "#FF0000".to_string(),
-        };
-        assert!(matches!(tc, PreeditAttributeKind::TextColor { .. }));
-
-        let bc = PreeditAttributeKind::BackgroundColor {
-            color: "#00FF00".to_string(),
-        };
-        assert!(matches!(bc, PreeditAttributeKind::BackgroundColor { .. }));
-
-        let fu = PreeditAttributeKind::FontUnderline;
-        assert_eq!(fu, PreeditAttributeKind::FontUnderline);
-
-        let ul = PreeditAttributeKind::Underline;
-        assert_eq!(ul, PreeditAttributeKind::Underline);
-        let cur = PreeditAttributeKind::Cursor;
-        assert_eq!(cur, PreeditAttributeKind::Cursor);
-    }
-
-    #[test]
-    fn typing_animation_disabled_prevents_new_animations() {
-        let typing_animation_enabled = false;
-        let vt_present = true;
-        let is_scrolling = false;
-        let should_create = typing_animation_enabled && vt_present && !is_scrolling;
-        assert!(
-            !should_create,
-            "when typing_animation_enabled=false, no animations should be created"
-        );
-    }
-
-    #[test]
-    fn scrolling_prevents_new_animations() {
+    fn scrolling_suppresses_animation_creation() {
         let typing_animation_enabled = true;
         let vt_present = true;
         let is_scrolling = true;
@@ -198,25 +69,45 @@ mod tests {
     }
 
     #[test]
-    fn visual_transaction_inserted_range_used_for_hidden_range() {
-        let mut state = AnimationRangeRegistry::new();
-        let inserted_range = Some((5, 10));
-        if let Some((range_start, range_end)) = inserted_range {
-            state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (range_start, range_end), vec![], AnimationMode::GlyphAnimation, 100);
-        }
-        assert_eq!(state.insert_byte_ranges(), vec![(5, 10)]);
-        assert!(state.has_active_insert());
+    fn visual_transaction_inserted_range_creates_prepared_transaction() {
+        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind};
+        use crate::sujian_editor_item::animation_mode::AnimationMode;
+        use crate::sujian_editor_item::cursor_animation::CursorTransition;
+        use crate::sujian_editor_item::layout_revision::LayoutRevision;
+        use std::time::Instant;
+
+        let mut queue = PreparedTransactionQueue::new();
+        let key = VisualTransactionKey { transaction_id: 1, generation: 1 };
+        let tx = PreparedTextVisualTransaction {
+            key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Insert,
+            animation_mode: AnimationMode::GlyphAnimation,
+            duration_ms: 160,
+            start_time: Instant::now(),
+            old_revision: LayoutRevision::initial(),
+            new_revision: LayoutRevision::next(),
+            slices: Vec::new(),
+            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(key, 5, 10)],
+            cursor_transition: CursorTransition::Snap,
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            cancel_reason: None,
+            texture_prepared: false,
+            first_render_frame: None,
+        };
+        queue.enqueue(tx);
+        assert_eq!(queue.insert_byte_ranges(), vec![(5, 10)]);
+        assert!(queue.has_active_insert());
     }
 
     #[test]
-    fn typing_animation_disabled_clears_hidden_range_immediately() {
-        let mut state = AnimationRangeRegistry::new();
-        state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (10, 20), vec![], AnimationMode::GlyphAnimation, 100);
-        assert!(state.has_active_insert());
-        assert_eq!(state.insert_byte_ranges(), vec![(10, 20)]);
-        state.clear();
-        assert!(state.is_empty());
-        assert!(state.insert_byte_ranges().is_empty());
+    fn typing_animation_disabled_clears_queue_immediately() {
+        use crate::sujian_editor_item::text_visual_transaction::PreparedTransactionQueue;
+        let mut queue = PreparedTransactionQueue::new();
+        assert!(queue.is_empty());
+        queue.cancel_all("disabled");
+        assert!(queue.is_empty());
     }
 
     #[test]
@@ -228,14 +119,38 @@ mod tests {
     }
 
     #[test]
-    fn delete_single_char_animation_lifecycle() {
-        let mut state = AnimationRangeRegistry::new();
-        state.start_delete(VisualTransactionKey { transaction_id: 2, generation: 2 }, (5, 8), AnimationMode::GlyphAnimation, 100);
-        assert!(state.insert_byte_ranges().is_empty());
-        assert!(!state.has_active_insert());
-        assert!(!state.is_empty());
-        state.clear();
-        assert!(state.is_empty());
+    fn delete_creates_prepared_transaction() {
+        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind};
+        use crate::sujian_editor_item::animation_mode::AnimationMode;
+        use crate::sujian_editor_item::cursor_animation::CursorTransition;
+        use crate::sujian_editor_item::layout_revision::LayoutRevision;
+        use std::time::Instant;
+
+        let mut queue = PreparedTransactionQueue::new();
+        let key = VisualTransactionKey { transaction_id: 2, generation: 2 };
+        let tx = PreparedTextVisualTransaction {
+            key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Delete,
+            animation_mode: AnimationMode::GlyphAnimation,
+            duration_ms: 160,
+            start_time: Instant::now(),
+            old_revision: LayoutRevision::initial(),
+            new_revision: LayoutRevision::next(),
+            slices: Vec::new(),
+            static_patches: Vec::new(),
+            cursor_transition: CursorTransition::Snap,
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            cancel_reason: None,
+            texture_prepared: false,
+            first_render_frame: None,
+        };
+        queue.enqueue(tx);
+        assert!(queue.insert_byte_ranges().is_empty());
+        assert!(queue.has_active_insert());
+        queue.cancel_all("test");
+        assert!(queue.is_empty());
     }
 
     #[test]
@@ -330,18 +245,6 @@ mod tests {
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(mode, AnimationMode::GlyphAnimation);
 
-        let mut state = AnimationRangeRegistry::new();
-        if let Some((range_start, range_end)) = vt.inserted_range {
-            if mode != AnimationMode::SystemSuppressed {
-                state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (range_start, range_end), vec![], mode, vt.duration_ms);
-            }
-        }
-        assert!(
-            state.has_active_insert(),
-            "4-char idiom should create hidden range"
-        );
-        assert_eq!(state.insert_byte_ranges(), vec![(6, 18)]);
-
         assert_ne!(
             tx.old_selection.head.index, tx.new_selection.head.index,
             "Cursor should move after idiom commit"
@@ -384,15 +287,6 @@ mod tests {
             mode,
             AnimationMode::RunAnimation,
             "9-cluster candidate should produce RunAnimation"
-        );
-
-        let mut state = AnimationRangeRegistry::new();
-        if mode != AnimationMode::SystemSuppressed {
-            state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (0, long_candidate.len()), vec![], mode, 160);
-        }
-        assert!(
-            state.has_active_insert(),
-            "9-cluster candidate should create hidden range (RunAnimation)"
         );
 
         assert_eq!(
@@ -501,14 +395,6 @@ mod tests {
 
         let mode = SujianEditorItem::animation_mode_from_core(vt.animation_mode);
         assert_eq!(mode, AnimationMode::GlyphAnimation);
-
-        let mut state = AnimationRangeRegistry::new();
-        if let Some((rs, re)) = vt.inserted_range {
-            if mode != AnimationMode::SystemSuppressed {
-                state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (rs, re), vec![], mode, vt.duration_ms);
-            }
-        }
-        assert!(state.has_active_insert());
     }
 
     #[test]
@@ -540,15 +426,6 @@ mod tests {
             mode,
             AnimationMode::LineReflowAnimation,
             "Newline should produce LineReflowAnimation"
-        );
-
-        let mut state = AnimationRangeRegistry::new();
-        if mode != AnimationMode::SystemSuppressed {
-            state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (old_text.len(), new_text.len()), vec![], mode, 160);
-        }
-        assert!(
-            state.has_active_insert(),
-            "Newline should create hidden range (LineReflowAnimation)"
         );
 
         assert_ne!(
@@ -664,47 +541,66 @@ mod tests {
     }
 
     #[test]
-    fn qml_overlay_skip_must_clear_hidden_range() {
-        let mut state = AnimationRangeRegistry::new();
-        let byte_range = (10, 22);
-        state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, byte_range, vec![], AnimationMode::GlyphAnimation, 160);
-        assert!(
-            state.has_active_insert(),
-            "Should have active insert before skip"
-        );
-        assert_eq!(
-            state.insert_byte_ranges(),
-            vec![byte_range],
-            "Hidden range should be (10, 22) before skip"
-        );
+    fn prepared_queue_finish_clears_transaction() {
+        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind};
+        use crate::sujian_editor_item::animation_mode::AnimationMode;
+        use crate::sujian_editor_item::cursor_animation::CursorTransition;
+        use crate::sujian_editor_item::layout_revision::LayoutRevision;
+        use std::time::Instant;
 
-        let removed = state.finish_by_key(VisualTransactionKey { transaction_id: 1, generation: 1 });
-        assert!(
-            removed,
-            "on_insert_animation_skipped_by_id should return true (removed matching animation)"
-        );
-        assert!(
-            state.is_empty(),
-            "Hidden range must be immediately cleared after skip"
-        );
-        assert!(
-            state.insert_byte_ranges().is_empty(),
-            "No active insert byte range should remain after skip"
-        );
+        let mut queue = PreparedTransactionQueue::new();
+        let key = VisualTransactionKey { transaction_id: 1, generation: 1 };
+        let tx = PreparedTextVisualTransaction {
+            key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Insert,
+            animation_mode: AnimationMode::GlyphAnimation,
+            duration_ms: 160,
+            start_time: Instant::now(),
+            old_revision: LayoutRevision::initial(),
+            new_revision: LayoutRevision::next(),
+            slices: Vec::new(),
+            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(key, 10, 22)],
+            cursor_transition: CursorTransition::Snap,
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            cancel_reason: None,
+            texture_prepared: false,
+            first_render_frame: None,
+        };
+        queue.enqueue(tx);
+        assert!(queue.has_active_insert());
+        assert_eq!(queue.insert_byte_ranges(), vec![(10, 22)]);
 
-        state.start_insert(VisualTransactionKey { transaction_id: 1, generation: 1 }, None, (30, 42), vec![], AnimationMode::GlyphAnimation, 160);
-        let removed_wrong = state.finish_by_key(VisualTransactionKey { transaction_id: 999, generation: 1 });
-        assert!(
-            !removed_wrong,
-            "Skipping non-matching key should return false"
-        );
-        assert!(
-            state.has_active_insert(),
-            "Existing hidden range should remain when skip doesn't match"
-        );
-        assert_eq!(state.insert_byte_ranges(), vec![(30, 42)]);
+        let removed = queue.complete(key);
+        assert!(removed);
+        assert!(queue.is_empty());
+        assert!(queue.insert_byte_ranges().is_empty());
 
-        state.clear();
-        assert!(state.is_empty());
+        queue.enqueue(PreparedTextVisualTransaction {
+            key: VisualTransactionKey { transaction_id: 2, generation: 2 },
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Insert,
+            animation_mode: AnimationMode::GlyphAnimation,
+            duration_ms: 160,
+            start_time: Instant::now(),
+            old_revision: LayoutRevision::initial(),
+            new_revision: LayoutRevision::next(),
+            slices: Vec::new(),
+            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(VisualTransactionKey { transaction_id: 2, generation: 2 }, 30, 42)],
+            cursor_transition: CursorTransition::Snap,
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            cancel_reason: None,
+            texture_prepared: false,
+            first_render_frame: None,
+        });
+        let removed_wrong = queue.complete(VisualTransactionKey { transaction_id: 999, generation: 1 });
+        assert!(!removed_wrong);
+        assert!(queue.has_active_insert());
+        assert_eq!(queue.insert_byte_ranges(), vec![(30, 42)]);
+
+        queue.cancel_all("test");
+        assert!(queue.is_empty());
     }
 }

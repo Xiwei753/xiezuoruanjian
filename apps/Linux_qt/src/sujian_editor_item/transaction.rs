@@ -29,75 +29,7 @@ impl SujianEditorItem {
 
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
-                let width = self.bounding_width();
-                let old_snapshot = self.build_editor_layout_snapshot_for_text(&vt.old_text, width);
-                let new_snapshot = self.build_editor_layout_snapshot_for_text(&vt.new_text, width);
-                let offset_map = offset_map::OffsetMap::from_changes(&vt.old_text, &vt.new_text);
-
-                let snapshot_data = match vt.kind {
-                    EditorAnimationKind::Insert => {
-                        if let Some(inserted_range) = vt.inserted_range {
-                            let has_reflow = old_snapshot.visual_lines().len() != new_snapshot.visual_lines().len();
-                            if has_reflow {
-                                let deleted_ranges: Vec<(usize, usize)> = Vec::new();
-                                offset_map::build_slices_for_reflow(
-                                    &old_snapshot, &new_snapshot, &offset_map,
-                                    Some(inserted_range), &deleted_ranges,
-                                )
-                            } else {
-                                offset_map::build_slices_for_insert_no_reflow(
-                                    &old_snapshot, &new_snapshot, inserted_range, &offset_map,
-                                )
-                            }
-                        } else {
-                            offset_map::EditorVisualTransactionData::new()
-                        }
-                    }
-                    EditorAnimationKind::Delete => {
-                        let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
-                        let mut deleted_ranges: Vec<(usize, usize)> = Vec::new();
-                        for change in &changes {
-                            if let writer_core::editor::EditorChange::Delete { index, text } = change {
-                                deleted_ranges.push((*index, *index + text.len()));
-                            }
-                        }
-                        let has_reflow = old_snapshot.visual_lines().len() != new_snapshot.visual_lines().len();
-                        if has_reflow {
-                            offset_map::build_slices_for_reflow(
-                                &old_snapshot, &new_snapshot, &offset_map,
-                                None, &deleted_ranges,
-                            )
-                        } else {
-                            let mut data = offset_map::EditorVisualTransactionData::new();
-                            for (ds, de) in &deleted_ranges {
-                                let single = offset_map::build_slices_for_delete_no_reflow(
-                                    &old_snapshot, &new_snapshot, (*ds, *de),
-                                );
-                                data.slices.extend(single.slices);
-                                data.static_patches.extend(single.static_patches);
-                            }
-                            data
-                        }
-                    }
-                    EditorAnimationKind::Cursor => offset_map::EditorVisualTransactionData::new(),
-                };
-
-                if !snapshot_data.slices.is_empty() {
-                    let key = self.animation_coordinator.alloc_key();
-                    self.animation_coordinator.enqueue_snapshot_transaction(
-                        key,
-                        snapshot_data,
-                        vt.duration_ms,
-                    );
-                    editor_animation_debug_log(&format!(
-                        "record_transaction: snapshot path, kind={:?}, slices={}",
-                        vt.kind,
-                        self.animation_coordinator.snapshot_transactions.last().map(|st| st.data.slices.len()).unwrap_or(0),
-                    ));
-                }
-
-                let shaped_glyphs = self.extract_shaped_glyphs_for_transaction(vt);
-                let (old_layout_runs, new_layout_runs, insert_runs, reflow_old_runs, reflow_new_runs) =
+                let (_old_layout_runs, _new_layout_runs, insert_runs, reflow_old_runs, reflow_new_runs) =
                     self.extract_shaped_runs_for_transaction(vt);
                 let key = self.animation_coordinator.process_transaction(
                     vt,
@@ -108,45 +40,17 @@ impl SujianEditorItem {
                     self.current_is_applying_settings,
                     vt.old_cursor_rect.clone(),
                     vt.new_cursor_rect.clone(),
-                    self.cursor_ctrl.target_x,
-                    self.cursor_ctrl.target_y,
-                    self.cursor_ctrl.visual_h,
-                    self.current_editor_enabled,
-                    self.buffer.has_selection(),
-                    self.current_viewport_height.max(1.0) as f64,
-                    self.buffer.selection_anchor != self.buffer.cursor,
-                    !self.preedit_text.is_empty(),
-                    self.current_smooth_cursor_enabled,
-                    self.current_cursor_animation_duration_ms,
-                    self.current_coordinated_text_cursor_animation_enabled,
-                    self.current_scroll_y as f64,
-                    self.cursor_ctrl.last_scroll_y,
-                    self.cursor_ctrl.visible,
-                    self.cursor_ctrl.blink_visible,
-                    self.cursor_ctrl.visual_x,
-                    self.cursor_ctrl.visual_y,
-                    self.cursor_ctrl.force_snap_next,
-                    self.cursor_ctrl.animation.as_ref(),
-                    &self.current_font_family.to_string(),
-                    &shaped_glyphs,
-                    self.current_font_pixel_size as f64,
-                    &old_layout_runs,
-                    &new_layout_runs,
+                    &_old_layout_runs,
+                    &_new_layout_runs,
                     &insert_runs,
                     &reflow_old_runs,
                     &reflow_new_runs,
                 );
                 if let Some(key) = key {
                     self.prepare_transaction_textures(key);
-                    let is_prepared = self.animation_coordinator.vt_queue.active_transactions()
-                        .iter()
-                        .any(|t| t.key == key && t.texture_prepared);
-                    if is_prepared {
-                        self.animation_coordinator.vt_queue.mark_prepared(key);
-                    }
                 }
                 editor_animation_debug_log(&format!(
-                    "record_transaction: processed via coordinator, kind={:?}, has_active_insert={}",
+                    "record_transaction: processed via prepared queue, kind={:?}, has_active_insert={}",
                     vt.kind,
                     self.animation_coordinator.has_active_insert()
                 ));
@@ -184,78 +88,6 @@ impl SujianEditorItem {
             }
         }
         vt
-    }
-
-    pub(crate) fn extract_shaped_glyphs_for_transaction(
-        &mut self,
-        vt: &EditorVisualTransaction,
-    ) -> Vec<super::visual_payload::ShapedGlyphInfo> {
-        let width = self.bounding_width();
-        let font_size = self.current_font_pixel_size as f64;
-        let scroll_y = self.current_scroll_y as f64;
-        let viewport_h = self.current_viewport_height.max(1.0) as f64;
-        let mut result = Vec::new();
-
-        match vt.kind {
-            EditorAnimationKind::Insert => {
-                if let Some(ref rects) = vt.insert_glyph_rects {
-                    let snapshot = self.layout_snapshot_for_text(&self.plain_text.to_string(), width);
-                    for g in rects {
-                        let line = snapshot.lines.iter().find(|l| {
-                            l.byte_start <= g.byte_start && l.byte_end >= g.byte_end && !l.para_text.is_empty()
-                        });
-                        let (glyph_idx, raw_font) = match line {
-                            Some(l) => {
-                                let glyph_data = self.editor_layout.glyph_positions_on_line(
-                                    l, g.byte_start, g.byte_end, font_size, &self.current_font_family.to_string(),
-                                );
-                                match glyph_data.first() {
-                                    Some((_, _, _, gi, rf)) => (*gi, rf.clone()),
-                                    None => (0u32, self.current_font_family.to_string()),
-                                }
-                            }
-                            None => (0u32, self.current_font_family.to_string()),
-                        };
-                        let line_baseline_y = line.map(|l|
-                            super::super::editor::layout::text_baseline_y(l, font_size, &self.current_font_family.to_string()) - scroll_y
-                        ).unwrap_or(g.baseline_y);
-                        let visible = line.map(|l| {
-                            let line_top = l.y - scroll_y;
-                            let line_bottom = line_top + l.height;
-                            line_bottom >= 0.0 && line_top <= viewport_h
-                        }).unwrap_or(true);
-                        if !visible {
-                            continue;
-                        }
-                        result.push(super::visual_payload::ShapedGlyphInfo {
-                            font_id: if raw_font.is_empty() { self.current_font_family.to_string() } else { raw_font.clone() },
-                            glyph_index: glyph_idx,
-                            glyph_position_x: g.x,
-                            glyph_position_y: line_baseline_y,
-                            string_index: g.byte_start,
-                            raw_font_family: raw_font,
-                        });
-                    }
-                }
-            }
-            EditorAnimationKind::Delete => {
-                if let Some(ref rects) = vt.deleted_glyph_rects {
-                    for g in rects {
-                        result.push(super::visual_payload::ShapedGlyphInfo {
-                            font_id: self.current_font_family.to_string(),
-                            glyph_index: 0,
-                            glyph_position_x: g.x,
-                            glyph_position_y: g.baseline_y,
-                            string_index: g.byte_start,
-                            raw_font_family: String::new(),
-                        });
-                    }
-                }
-            }
-            EditorAnimationKind::Cursor => {}
-        }
-
-        result
     }
 
     pub(crate) fn extract_shaped_runs_for_transaction(

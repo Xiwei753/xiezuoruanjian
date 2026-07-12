@@ -1,7 +1,6 @@
 use super::input_host::is_left_button_pressed;
 use super::*;
 use super::transaction_key::VisualTransactionKey;
-use super::transaction_queue::VisualTransactionState;
 
 use super::render_plan::{FrameContext, CursorStyle};
 use std::time::Instant;
@@ -43,13 +42,6 @@ impl QQuickItem for SujianEditorItem {
         true
     }
 
-    /// Qt mature route: updatePaintNode() only consumes already-prepared visual data.
-    ///
-    /// This method does NOT re-layout text, perform business diffs, or do disk I/O.
-    /// All layout is done in EditorLayout::snapshot(), all visual snapshots are
-    /// pre-rendered via render_line_to_image(), and animation textures are extracted
-    /// via UV clipping from line snapshots. The animation plan (RenderPlan) carries
-    /// only position/size/opacity/texture-ref — no text-level metadata.
     fn update_paint_node(
         &mut self,
         node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
@@ -169,17 +161,19 @@ impl QQuickItem for SujianEditorItem {
         }
 
         if !final_root.is_null() && !item_ptr.is_null() {
-            let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
-                self.animation_coordinator.vt_queue.active_transactions().to_vec();
+            let has_active_txs = !self.animation_coordinator.prepared_queue.is_empty();
 
-            if active_txs.is_empty() && self.animation_coordinator.snapshot_transactions.is_empty() {
+            if !has_active_txs {
                 self.texture_cache.clear();
                 scene_graph::clear_animation_layer(final_root, item_ptr);
             }
 
-            let old_cursor_rect = active_txs.first().and_then(|tx| tx.payload.cursor_rects().0.cloned());
-            let new_cursor_rect = active_txs.first().and_then(|tx| tx.payload.cursor_rects().1.cloned());
-            let has_active_txs = !active_txs.is_empty() || !self.animation_coordinator.snapshot_transactions.is_empty();
+            let old_cursor_rect = self.animation_coordinator.prepared_queue.active_transactions()
+                .first()
+                .and_then(|tx| tx.old_cursor_rect.clone());
+            let new_cursor_rect = self.animation_coordinator.prepared_queue.active_transactions()
+                .first()
+                .and_then(|tx| tx.new_cursor_rect.clone());
 
             let cursor_plan = self.animation_coordinator.build_cursor_plan(
                 old_cursor_rect,
@@ -236,18 +230,11 @@ impl QQuickItem for SujianEditorItem {
                 &self.texture_cache,
             );
 
-            let mut txs_to_mark_rendering: Vec<VisualTransactionKey> = Vec::new();
-            for tx in active_txs {
-                if tx.state == VisualTransactionState::Prepared {
-                    txs_to_mark_rendering.push(tx.key);
-                }
-            }
-
             for key in &render_plan.frame_context.keys_to_complete {
                 self.animation_coordinator.finish_by_key(*key);
                 self.texture_cache.remove_for_transaction(key);
                 editor_animation_debug_log(&format!(
-                    "update_paint_node: VT tid={}, gen={} completed (progress >= 1.0)",
+                    "update_paint_node: tid={}, gen={} completed (progress >= 1.0)",
                     key.transaction_id, key.generation
                 ));
             }
@@ -257,18 +244,11 @@ impl QQuickItem for SujianEditorItem {
                 self.texture_cache.remove_for_transaction(key);
             }
 
-            for key in &txs_to_mark_rendering {
-                self.animation_coordinator.vt_queue.mark_rendering(*key);
-                editor_animation_debug_log(&format!(
-                    "update_paint_node: VT tid={} → Rendering", key.transaction_id
-                ));
-            }
-
             if !render_plan.frame_context.keys_to_complete.is_empty() {
                 self.render_dirty = true;
             }
 
-            if self.animation_coordinator.vt_queue.has_active()
+            if self.animation_coordinator.has_prepared_or_rendering()
                 || !render_plan.frame_context.keys_to_complete.is_empty()
             {
                 self.request_frame_update();
@@ -301,23 +281,67 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
 
-        let (runs, operation_kind, cache_keys) = {
-            let tx = self.animation_coordinator.vt_queue.active_transactions()
+        let (runs, cache_keys) = {
+            let tx = self.animation_coordinator.prepared_queue.active_transactions()
                 .iter()
                 .find(|t| t.key == key);
             match tx {
                 Some(t) => {
-                    let runs: Vec<super::shaped_visual_run::ShapedVisualRun> = t.payload.shaped_runs_for_texture().into_iter().cloned().collect();
-                    let op_kind = t.operation_kind;
-                    let keys = t.payload.texture_cache_keys(key, op_kind);
-                    (runs, op_kind, keys)
+                    let runs: Vec<super::shaped_visual_run::ShapedVisualRun> = t.slices.iter()
+                        .filter_map(|s| {
+                            if s.run_identity >= 0 {
+                                Some(super::shaped_visual_run::ShapedVisualRun {
+                                    glyphs: vec![super::shaped_visual_run::ShapedGlyph {
+                                        glyph_index: 0,
+                                        glyph_position_x: s.source_x,
+                                        glyph_position_y: s.source_y,
+                                        string_index: s.byte_start,
+                                        advance_width: s.source_w,
+                                    }],
+                                    clusters: vec![super::shaped_visual_run::ShapedCluster {
+                                        string_start: s.byte_start,
+                                        string_end: s.byte_end,
+                                        glyph_start: 0,
+                                        glyph_end: 1,
+                                    }],
+                                    raw_font_key: super::shaped_visual_run::RawFontCacheKey::new(&font_family, "", 50, font_size as i32),
+                                    flags: super::shaped_visual_run::RunFlags::empty(),
+                                    source_string_start: s.byte_start,
+                                    source_string_end: s.byte_end,
+                                    baseline_y: s.source_y + s.baseline_in_quad,
+                                    visual_x: s.source_x,
+                                    visual_y: s.source_y,
+                                    visual_w: s.source_w,
+                                    visual_h: s.source_h,
+                                    texture_atlas_x: 0.0,
+                                    texture_atlas_y: 0.0,
+                                    texture_atlas_w: s.source_w,
+                                    texture_atlas_h: s.source_h,
+                                    texture_translate_x: 0.0,
+                                    texture_translate_y: 0.0,
+                                    qglyphrun_index: s.run_identity,
+                                    para_text: None,
+                                    qtextline_idx: None,
+                                    paragraph_wrap_w: None,
+                                    para_indent: None,
+                                    line_y: 0.0,
+                                })
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    let keys: Vec<super::texture_cache::TextureCacheKey> = t.slices.iter()
+                        .map(|s| super::texture_cache::TextureCacheKey::new(key, s.texture_phase, s.run_identity))
+                        .collect();
+                    (runs, keys)
                 }
                 None => return,
             }
         };
 
         if runs.is_empty() {
-            self.animation_coordinator.vt_queue.mark_texture_prepared(key);
+            self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
             return;
         }
 
@@ -337,16 +361,10 @@ impl SujianEditorItem {
         } else {
             let ready_textures: Vec<qmetaobject::QImage> = textures.into_iter().map(|t| t.unwrap()).collect();
             self.texture_cache.insert_batch(cache_keys, ready_textures);
-            self.animation_coordinator.vt_queue.mark_texture_prepared(key);
+            self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
         }
     }
 
-    /// Qt mature route: extract animation texture from a pre-rendered line snapshot
-    /// using UV coordinates, instead of re-laying out text via render_glyph_run_texture.
-    ///
-    /// Core principle: layout once, visual snapshot once, animation phase no longer
-    /// understands text. The line snapshot is rendered once using QTextLine::draw();
-    /// individual run textures are extracted via UV rect clipping (QImage::copy).
     fn render_shaped_run_texture_via_line_snapshot(
         &mut self,
         run: &super::shaped_visual_run::ShapedVisualRun,
