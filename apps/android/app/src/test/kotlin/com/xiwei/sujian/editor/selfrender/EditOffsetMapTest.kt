@@ -160,10 +160,25 @@ class EditOffsetMapTest {
             insertedRangeEnd = 9,
             isDelete = false
         )
+        val oldRange = map.mapNewRangeToOld(0, 3)
+        assertNotNull(oldRange)
+        assertEquals(0, oldRange!!.start)
+        assertEquals(3, oldRange.end)
+    }
+
+    @Test
+    fun insert_chineseTextMiddle_suffixMapsCorrectly() {
+        val map = EditOffsetMap.fromEdit(
+            oldText = "你好吗",
+            newText = "你好的吗",
+            insertedRangeStart = 6,
+            insertedRangeEnd = 9,
+            isDelete = false
+        )
         val oldRange = map.mapNewRangeToOld(9, 12)
         assertNotNull(oldRange)
-        assertEquals(3, oldRange!!.start)
-        assertEquals(6, oldRange.end)
+        assertEquals(6, oldRange!!.start)
+        assertEquals(9, oldRange.end)
     }
 
     @Test
