@@ -29,6 +29,73 @@ impl SujianEditorItem {
 
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref vt) = vt {
+                let width = self.bounding_width();
+                let old_snapshot = self.build_editor_layout_snapshot_for_text(&vt.old_text, width);
+                let new_snapshot = self.build_editor_layout_snapshot_for_text(&vt.new_text, width);
+                let offset_map = offset_map::OffsetMap::from_changes(&vt.old_text, &vt.new_text);
+
+                let snapshot_data = match vt.kind {
+                    EditorAnimationKind::Insert => {
+                        if let Some(inserted_range) = vt.inserted_range {
+                            let has_reflow = old_snapshot.visual_lines().len() != new_snapshot.visual_lines().len();
+                            if has_reflow {
+                                let deleted_ranges: Vec<(usize, usize)> = Vec::new();
+                                offset_map::build_slices_for_reflow(
+                                    &old_snapshot, &new_snapshot, &offset_map,
+                                    Some(inserted_range), &deleted_ranges,
+                                )
+                            } else {
+                                offset_map::build_slices_for_insert_no_reflow(
+                                    &old_snapshot, &new_snapshot, inserted_range, &offset_map,
+                                )
+                            }
+                        } else {
+                            offset_map::EditorVisualTransactionData::new()
+                        }
+                    }
+                    EditorAnimationKind::Delete => {
+                        let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                        let mut deleted_ranges: Vec<(usize, usize)> = Vec::new();
+                        for change in &changes {
+                            if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                                deleted_ranges.push((*index, *index + text.len()));
+                            }
+                        }
+                        let has_reflow = old_snapshot.visual_lines().len() != new_snapshot.visual_lines().len();
+                        if has_reflow {
+                            offset_map::build_slices_for_reflow(
+                                &old_snapshot, &new_snapshot, &offset_map,
+                                None, &deleted_ranges,
+                            )
+                        } else {
+                            let mut data = offset_map::EditorVisualTransactionData::new();
+                            for (ds, de) in &deleted_ranges {
+                                let single = offset_map::build_slices_for_delete_no_reflow(
+                                    &old_snapshot, &new_snapshot, (*ds, *de),
+                                );
+                                data.slices.extend(single.slices);
+                                data.static_patches.extend(single.static_patches);
+                            }
+                            data
+                        }
+                    }
+                    EditorAnimationKind::Cursor => offset_map::EditorVisualTransactionData::new(),
+                };
+
+                if !snapshot_data.slices.is_empty() {
+                    let key = self.animation_coordinator.alloc_key();
+                    self.animation_coordinator.enqueue_snapshot_transaction(
+                        key,
+                        snapshot_data,
+                        vt.duration_ms,
+                    );
+                    editor_animation_debug_log(&format!(
+                        "record_transaction: snapshot path, kind={:?}, slices={}",
+                        vt.kind,
+                        self.animation_coordinator.snapshot_transactions.last().map(|st| st.data.slices.len()).unwrap_or(0),
+                    ));
+                }
+
                 let shaped_glyphs = self.extract_shaped_glyphs_for_transaction(vt);
                 let (old_layout_runs, new_layout_runs, insert_runs, reflow_old_runs, reflow_new_runs) =
                     self.extract_shaped_runs_for_transaction(vt);

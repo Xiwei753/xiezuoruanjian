@@ -11,6 +11,7 @@ pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 pub(crate) use super::render_plan::{
     HiddenRangeInfo, StaticTextPlan, TextAnimationPlan, TextAnimationGlyphInfo,
+    TextSliceRenderItem,
     SelectionPreeditPlan, SelectionRange, PreeditRange,
     ImeUpdateKind, ImeUpdatePlan, RenderPlan,
 
@@ -18,6 +19,7 @@ pub(crate) use super::render_plan::{
 pub(crate) use super::texture_cache::{TextureCache, TexturePhase};
 pub(crate) use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, ReflowVisualSnapshot};
 use super::visual_payload::ShapedGlyphInfo;
+use super::offset_map::{AnimatedSlice, AnimatedSliceKind, EditorVisualTransactionData, OffsetMap};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextAnimationKind {
@@ -237,6 +239,14 @@ pub(crate) struct LinuxEditorAnimationCoordinator {
     registry: AnimationRangeRegistry,
     next_key_id: u64,
     pub(crate) vt_queue: ActiveVisualTransactionQueue,
+    pub(crate) snapshot_transactions: Vec<SnapshotTransaction>,
+}
+
+pub(crate) struct SnapshotTransaction {
+    pub key: VisualTransactionKey,
+    pub data: EditorVisualTransactionData,
+    pub duration_ms: u64,
+    pub start_time: Instant,
 }
 
 impl LinuxEditorAnimationCoordinator {
@@ -245,10 +255,11 @@ impl LinuxEditorAnimationCoordinator {
             registry: AnimationRangeRegistry::new(),
             next_key_id: 1,
             vt_queue: ActiveVisualTransactionQueue::new(),
+            snapshot_transactions: Vec::new(),
         }
     }
 
-    fn alloc_key(&mut self) -> VisualTransactionKey {
+    pub(crate) fn alloc_key(&mut self) -> VisualTransactionKey {
         let id = self.next_key_id;
         self.next_key_id += 1;
         VisualTransactionKey::new(id, id)
@@ -591,6 +602,7 @@ impl LinuxEditorAnimationCoordinator {
         if registry_result {
             self.vt_queue.complete(key);
         }
+        self.snapshot_transactions.retain(|st| st.key != key);
         registry_result
     }
 
@@ -599,30 +611,52 @@ impl LinuxEditorAnimationCoordinator {
         if registry_result {
             self.vt_queue.cancel(key, reason);
         }
+        self.snapshot_transactions.retain(|st| st.key != key);
         registry_result
     }
 
     pub fn suppress_all(&mut self) -> bool {
-        if self.registry.is_empty() && self.vt_queue.is_empty() {
+        if self.registry.is_empty() && self.vt_queue.is_empty() && self.snapshot_transactions.is_empty() {
             return false;
         }
         self.registry.clear();
         self.vt_queue.cancel_all("suppress_all");
+        self.snapshot_transactions.clear();
         true
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
         let registry_changed = self.registry.tick(now);
         let queue_changed = self.vt_queue.tick(now);
-        registry_changed || queue_changed
+        let before = self.snapshot_transactions.len();
+        self.snapshot_transactions.retain(|st| {
+            let elapsed = now.duration_since(st.start_time).as_millis() as u64;
+            elapsed < st.duration_ms * 3 + 500
+        });
+        let snapshot_changed = self.snapshot_transactions.len() != before;
+        registry_changed || queue_changed || snapshot_changed
     }
 
     pub fn has_active_insert(&self) -> bool {
-        self.registry.has_active_insert() || self.vt_queue.has_active_insert()
+        self.registry.has_active_insert() || self.vt_queue.has_active_insert() || !self.snapshot_transactions.is_empty()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.registry.is_empty() && self.vt_queue.is_empty()
+        self.registry.is_empty() && self.vt_queue.is_empty() && self.snapshot_transactions.is_empty()
+    }
+
+    pub fn enqueue_snapshot_transaction(
+        &mut self,
+        key: VisualTransactionKey,
+        data: EditorVisualTransactionData,
+        duration_ms: u64,
+    ) {
+        self.snapshot_transactions.push(SnapshotTransaction {
+            key,
+            data,
+            duration_ms,
+            start_time: Instant::now(),
+        });
     }
 
     pub fn current_static_render_plan(&self) -> StaticTextPlan {
@@ -1151,7 +1185,58 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        (TextAnimationPlan { glyphs }, keys_to_complete)
+        let mut slice_items: Vec<TextSliceRenderItem> = Vec::new();
+        let mut snapshot_keys_to_complete: Vec<VisualTransactionKey> = Vec::new();
+
+        for st in &self.snapshot_transactions {
+            let elapsed_ms = now.duration_since(st.start_time).as_millis() as f64;
+            let progress = (elapsed_ms / st.duration_ms as f64).min(1.0);
+
+            if progress >= 1.0 {
+                snapshot_keys_to_complete.push(st.key);
+                continue;
+            }
+
+            for slice in &st.data.slices {
+                let (src_rect, dst_rect, opacity, is_delete, is_crossfade) = match &slice.kind {
+                    AnimatedSliceKind::Move { old_source_rect, new_destination_rect, .. } => {
+                        let eased = 1.0 - (1.0 - progress).powi(2);
+                        let x = old_source_rect.x + (new_destination_rect.x - old_source_rect.x) * eased;
+                        let y = old_source_rect.y + (new_destination_rect.y - old_source_rect.y) * eased;
+                        (old_source_rect.clone(), super::layout_snapshot::SourceRect { x, y, w: new_destination_rect.w, h: new_destination_rect.h }, 1.0, false, false)
+                    }
+                    AnimatedSliceKind::Insert { new_source_rect, new_destination_rect, .. } => {
+                        let eased = 1.0 - (1.0 - progress).powi(3);
+                        (new_source_rect.clone(), new_destination_rect.clone(), eased, false, false)
+                    }
+                    AnimatedSliceKind::Delete { old_source_rect, old_destination_rect, .. } => {
+                        let fade_out = 1.0 - progress;
+                        (old_source_rect.clone(), old_destination_rect.clone(), fade_out, true, false)
+                    }
+                    AnimatedSliceKind::CrossfadeOld { old_source_rect, old_destination_rect, .. } => {
+                        let fade_out = 1.0 - progress;
+                        (old_source_rect.clone(), old_destination_rect.clone(), fade_out, false, true)
+                    }
+                    AnimatedSliceKind::CrossfadeNew { new_source_rect, new_destination_rect, .. } => {
+                        let eased = 1.0 - (1.0 - progress).powi(2);
+                        (new_source_rect.clone(), new_destination_rect.clone(), eased, false, true)
+                    }
+                };
+
+                slice_items.push(TextSliceRenderItem {
+                    snapshot_id: slice.snapshot_id(),
+                    source_rect: (src_rect.x, src_rect.y, src_rect.w, src_rect.h),
+                    destination_viewport_rect: (dst_rect.x, dst_rect.y, dst_rect.w, dst_rect.h),
+                    opacity,
+                    is_delete,
+                    is_crossfade,
+                });
+            }
+        }
+
+        keys_to_complete.extend(snapshot_keys_to_complete);
+
+        (TextAnimationPlan { glyphs, slice_items }, keys_to_complete)
     }
 }
 

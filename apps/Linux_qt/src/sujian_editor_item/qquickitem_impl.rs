@@ -172,14 +172,14 @@ impl QQuickItem for SujianEditorItem {
             let active_txs: Vec<animation_coordinator::ActiveVisualTransaction> =
                 self.animation_coordinator.vt_queue.active_transactions().to_vec();
 
-            if active_txs.is_empty() {
+            if active_txs.is_empty() && self.animation_coordinator.snapshot_transactions.is_empty() {
                 self.texture_cache.clear();
                 scene_graph::clear_animation_layer(final_root, item_ptr);
             }
 
             let old_cursor_rect = active_txs.first().and_then(|tx| tx.payload.cursor_rects().0.cloned());
             let new_cursor_rect = active_txs.first().and_then(|tx| tx.payload.cursor_rects().1.cloned());
-            let has_active_txs = !active_txs.is_empty();
+            let has_active_txs = !active_txs.is_empty() || !self.animation_coordinator.snapshot_transactions.is_empty();
 
             let cursor_plan = self.animation_coordinator.build_cursor_plan(
                 old_cursor_rect,

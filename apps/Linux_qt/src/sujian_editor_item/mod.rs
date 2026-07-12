@@ -30,6 +30,8 @@ pub(crate) mod ime_visual;
 pub(crate) mod insert_animation;
 pub(crate) mod input_host;
 pub(crate) mod layout_ops;
+pub(crate) mod layout_snapshot;
+pub(crate) mod offset_map;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod reflow_animation;
@@ -65,6 +67,7 @@ use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
 use animation_coordinator::LinuxEditorAnimationCoordinator;
+use layout_snapshot::EditorLayoutSnapshot;
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
@@ -303,6 +306,9 @@ pub struct SujianEditorItem {
     animation_coordinator: LinuxEditorAnimationCoordinator,
     texture_cache: animation_coordinator::TextureCache,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
+    layout_revision: layout_snapshot::LayoutRevision,
+    current_layout_snapshot: Option<EditorLayoutSnapshot>,
+    previous_layout_snapshot: Option<EditorLayoutSnapshot>,
 }
 
 impl Default for SujianEditorItem {
@@ -445,6 +451,9 @@ impl Default for SujianEditorItem {
             animation_coordinator: LinuxEditorAnimationCoordinator::new(),
             texture_cache: animation_coordinator::TextureCache::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
+            layout_revision: layout_snapshot::LayoutRevision::initial(),
+            current_layout_snapshot: None,
+            previous_layout_snapshot: None,
         }
     }
 }
