@@ -178,10 +178,73 @@ class AndroidLayoutSnapshotBuilder(
         return clusters
     }
 
-    // shaping identity 包含影响视觉等价性的因素：文本内容、字体指纹、测量宽度、
-    // glyph 数量、文字方向。它决定 Move/Crossfade：相同则复用旧视觉做几何移动，
-    // 不同则必须旧视觉淡出 + 新视觉淡入。
     private fun buildShapingIdentity(
+        clusterText: String,
+        paint: TextPaint,
+        paragraphDirection: Int
+    ): String {
+        return if (android.os.Build.VERSION.SDK_INT >= 31) {
+            buildGlyphIdentityApi31(clusterText, paint, paragraphDirection)
+        } else {
+            buildConservativeIdentity(clusterText, paint, paragraphDirection)
+        }
+    }
+
+    /**
+     * API 31+ 使用真实 glyph identity。
+     *
+     * 通过 TextRunShaper.shapeTextRun() 获取 PositionedGlyphs，
+     * identity 包含 glyph ids、每个 glyph 的相对 position、
+     * font/typeface fingerprint、cluster context range、text direction、
+     * Paint shaping fields。
+     */
+    private fun buildGlyphIdentityApi31(
+        clusterText: String,
+        paint: TextPaint,
+        paragraphDirection: Int
+    ): String {
+        val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
+        val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
+
+        try {
+            val shaped = android.graphics.text.TextRunShaper.shapeTextRun(
+                clusterText, 0, clusterText.length,
+                0, clusterText.length,
+                0f, 0f, isRtl, paint
+            )
+
+            val glyphCount = shaped.glyphCount
+            val glyphIdBuilder = StringBuilder()
+            val posBuilder = StringBuilder()
+            val fontBuilder = StringBuilder()
+
+            for (i in 0 until glyphCount) {
+                if (i > 0) {
+                    glyphIdBuilder.append(",")
+                    posBuilder.append(",")
+                    fontBuilder.append("|")
+                }
+                glyphIdBuilder.append(shaped.getGlyphId(i).toString())
+                posBuilder.append(String.format("%.1f,%.1f", shaped.getGlyphX(i), shaped.getGlyphY(i)))
+                fontBuilder.append(shaped.getFont(i).toString())
+            }
+
+            return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl"
+        } catch (e: Exception) {
+            return buildConservativeIdentity(clusterText, paint, paragraphDirection)
+        }
+    }
+
+    /**
+     * API 24–30 保守 identity。
+     *
+     * 不伪造 glyphCount = codePointCount。使用完整 shaping context 文本 hash、
+     * cluster 文本 hash、字体与 Paint shaping fingerprint、direction、
+     * StaticLayout line/context identity、精确 sourceRect/visual width。
+     *
+     * 只要 context 或断行环境变化，就使用 Crossfade，不冒险 Move。
+     */
+    private fun buildConservativeIdentity(
         clusterText: String,
         paint: TextPaint,
         paragraphDirection: Int
@@ -189,9 +252,8 @@ class AndroidLayoutSnapshotBuilder(
         val textHash = Objects.hash(clusterText)
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
         val width = paint.measureText(clusterText).toRawBits()
-        val glyphCount = clusterText.codePointCount(0, clusterText.length)
         val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
-        return "$textHash:$fontFingerprint:$width:$glyphCount:$isRtl"
+        return "c:$textHash:$fontFingerprint:$width:$isRtl"
     }
 
     private fun Float.format(digits: Int): String = String.format("%.${digits}f", this)

@@ -9,22 +9,6 @@ import com.xiwei.sujian.model.SujianEditCauseData
 import com.xiwei.sujian.model.SujianVisualEditContext
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
-/**
- * 文字动画调度器。
- *
- * 职责边界：
- * - 接收 Core 的 [EditorVisualTransactionData]，决定是否启动动画。
- * - 调用 [AndroidLayoutSnapshotBuilder] 捕获 old/new 行快照。
- * - 生成 [AndroidAnimatedSlice] + [AndroidStaticLinePatch]。
- * - 将事务提交给 [SujianEditorRenderer]。
- * - 不直接绘制、不持有视觉资源、不管理动画帧计时。
- *
- * 与 buffer/layout/renderer/cursor controller 的边界：
- * - buffer：提供文本和光标位置。
- * - layout：提供 [android.text.Layout] 排版结果。
- * - renderer：持有事务队列、管理动画帧和绘制。
- * - cursorController：接收事务驱动的光标过渡。
- */
 class SujianAnimationController(
     private val buffer: SujianEditorBuffer,
     private val layout: SujianEditorLayout,
@@ -65,9 +49,6 @@ class SujianAnimationController(
         return id
     }
 
-    // 删除前快照消费：删除事务必须在 Core 通知之前就录制好旧视觉，
-    // 因为 Core 处理删除后旧文本已不在 buffer 中。
-    // consumeDeleteSnapshot 按动画 ID 匹配，未匹配时 fallback 到最早快照。
     fun consumeDeleteSnapshot(id: ULong): DeleteSnapshot? {
         val idx = deleteSnapshots.indexOfFirst { it.animationId == id }
         if (idx < 0) return null
@@ -110,14 +91,6 @@ class SujianAnimationController(
         }
     }
 
-    // 插入事务准备阶段：
-    // 1. 从 Core 获取 animation mode，SystemSuppressed/SnapshotAnimation 直接跳过。
-    // 2. 将 UTF-8 inserted range 转为 UTF-16，用旧文本排版捕获 old 行快照。
-    // 3. 用新文本排版捕获 new 行快照。
-    // 4. 为 inserted range 内的 cluster 生成 InsertFadeIn slice。
-    // 5. 为 reflow 范围的 cluster 按 shaping identity 判断 Move 或 Crossfade。
-    // 6. 生成 StaticLinePatch（未被动画接管的 cluster 仍由静态层绘制）。
-    // 7. 组装事务提交给 renderer；连续输入时从旧事务当前帧 rebase。
     fun handleInsertTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 
@@ -140,24 +113,35 @@ class SujianAnimationController(
             return TextAnimationStartResult.Skipped
         }
 
+        val offsetMap = EditOffsetMap.fromEdit(
+            oldText = vt.oldText,
+            newText = vt.newText,
+            insertedRangeStart = vt.insertedRangeStart,
+            insertedRangeEnd = vt.insertedRangeEnd,
+            isDelete = false
+        )
+
         val oldRevision = snapshotBuilder.currentRevision()
         val oldText = vt.oldText
+        val staticLayout = layout.getLayout(text)
+        val insertLine = staticLayout.getLineForOffset(rangeStartUtf16.coerceIn(0, text.length))
+        val endLine = staticLayout.getLineForOffset(rangeEndUtf16.coerceIn(0, text.length))
+
+        val affectedLineRange = computeStableSuffixRange(
+            insertLine, endLine, staticLayout, offsetMap, vt.oldText
+        )
+
         val oldLineSnapshots = if (oldText.isNotEmpty()) {
             val oldLayout = layout.getLayout(oldText)
-            val oldInsertLine = oldLayout.getLineForOffset(rangeStartUtf16.coerceIn(0, oldText.length))
-            val oldEndLine = oldLayout.getLineForOffset(rangeEndUtf16.coerceIn(0, oldText.length).coerceAtMost(oldText.length))
-            snapshotBuilder.buildLineSnapshots(oldText, oldInsertLine..(oldEndLine.coerceAtMost(oldInsertLine + 10)), oldRevision, renderer.getTextColor())
+            val oldAffectedRange = computeOldAffectedRange(
+                affectedLineRange, staticLayout, oldLayout, offsetMap, oldText
+            )
+            snapshotBuilder.buildLineSnapshots(oldText, oldAffectedRange, oldRevision, renderer.getTextColor())
         } else {
             emptyList()
         }
 
         val newRevision = snapshotBuilder.nextRevisionAndIncrement()
-        val staticLayout = layout.getLayout(text)
-
-        val insertLine = staticLayout.getLineForOffset(rangeStartUtf16.coerceIn(0, text.length))
-        val endLine = staticLayout.getLineForOffset(rangeEndUtf16.coerceIn(0, text.length))
-
-        val affectedLineRange = insertLine..(endLine.coerceAtMost(insertLine + 10))
 
         val newLineSnapshots = snapshotBuilder.buildLineSnapshots(
             text, affectedLineRange, newRevision, renderer.getTextColor()
@@ -201,66 +185,86 @@ class SujianAnimationController(
                 clusterUtf16End > rangeEndUtf16 || cluster.platformTextStart < rangeStartUtf16
             }
 
-            // old/new snapshot 匹配与 move/crossfade 判定：
-            // 按 visualLineOrdinal 匹配旧行，再按 documentByteStart/End 匹配 cluster。
-            // shaping identity 相同 → Move（复用旧视觉资源做几何位移）；
-            // shaping identity 不同 → CrossfadeOld + CrossfadeNew 成对 slice
-            // （旧视觉淡出、新视觉淡入，因为字体/glyph/方向/格式变化后旧视觉不是同一对象）。
-            // 无匹配旧 cluster 时用估算旧位置做 Move，保证视觉连续。
             for (cluster in reflowClusters) {
-                val oldLineSnap = oldLineSnapshots.find { it.visualLineOrdinal == lineSnapshot.visualLineOrdinal }
-                val oldCluster = oldLineSnap?.clusters?.find { oc ->
-                    oc.documentByteStart == cluster.documentByteStart && oc.documentByteEnd == cluster.documentByteEnd
-                }
-                val oldRect = if (oldCluster != null) {
-                    RectF(oldCluster.visualRectInDocument.left, oldCluster.visualRectInDocument.top,
-                          oldCluster.visualRectInDocument.right, oldCluster.visualRectInDocument.bottom)
-                } else {
-                    val oldX = if (cluster.platformTextStart >= rangeStartUtf16) {
-                        cluster.visualRectInDocument.left - (rangeEndUtf16 - rangeStartUtf16) * textPaintMeasureChar()
+                val oldCluster = findOldCluster(cluster, oldLineSnapshots, offsetMap)
+
+                if (oldCluster != null) {
+                    val oldRect = RectF(
+                        oldCluster.visualRectInDocument.left, oldCluster.visualRectInDocument.top,
+                        oldCluster.visualRectInDocument.right, oldCluster.visualRectInDocument.bottom
+                    )
+                    val shapingChanged = oldCluster.shapingIdentity != cluster.shapingIdentity
+
+                    if (shapingChanged) {
+                        val oldLineSnap = oldLineSnapshots.find { it.clusters.contains(oldCluster) }
+                        slices.add(AndroidAnimatedSlice.crossfade(
+                            id = (vt.id shl 2) or 3u + cluster.platformTextStart.toULong(),
+                            role = AndroidAnimatedSliceRole.CrossfadeOld,
+                            snapshotId = oldLineSnap!!.id,
+                            sourceRect = oldCluster.sourceRectInLineSnapshot,
+                            fromRect = oldRect,
+                            toRect = cluster.visualRectInDocument,
+                            byteStart = cluster.documentByteStart,
+                            byteEnd = cluster.documentByteEnd,
+                            shapingIdentity = oldCluster.shapingIdentity
+                        ))
+                        slices.add(AndroidAnimatedSlice.crossfade(
+                            id = (vt.id shl 2) or 4u + cluster.platformTextStart.toULong(),
+                            role = AndroidAnimatedSliceRole.CrossfadeNew,
+                            snapshotId = lineSnapshot.id,
+                            sourceRect = cluster.sourceRectInLineSnapshot,
+                            fromRect = oldRect,
+                            toRect = cluster.visualRectInDocument,
+                            byteStart = cluster.documentByteStart,
+                            byteEnd = cluster.documentByteEnd,
+                            shapingIdentity = cluster.shapingIdentity
+                        ))
                     } else {
-                        cluster.visualRectInDocument.left
+                        slices.add(AndroidAnimatedSlice.reflowMove(
+                            id = (vt.id shl 2) or 1u + lineSnapshot.visualLineOrdinal.toULong(),
+                            snapshotId = lineSnapshot.id,
+                            sourceRect = cluster.sourceRectInLineSnapshot,
+                            fromRect = oldRect,
+                            toRect = cluster.visualRectInDocument,
+                            byteStart = cluster.documentByteStart,
+                            byteEnd = cluster.documentByteEnd,
+                            shapingIdentity = cluster.shapingIdentity
+                        ))
                     }
-                    RectF(oldX, cluster.visualRectInDocument.top, oldX + cluster.visualRectInDocument.width(), cluster.visualRectInDocument.bottom)
-                }
-
-                val shapingChanged = oldCluster != null &&
-                    oldCluster.shapingIdentity != cluster.shapingIdentity
-
-                if (shapingChanged && oldCluster != null) {
-                    slices.add(AndroidAnimatedSlice.crossfade(
-                        id = (vt.id shl 2) or 3u + cluster.platformTextStart.toULong(),
-                        role = AndroidAnimatedSliceRole.CrossfadeOld,
-                        snapshotId = oldLineSnap!!.id,
-                        sourceRect = oldCluster.sourceRectInLineSnapshot,
-                        fromRect = oldRect,
-                        toRect = cluster.visualRectInDocument,
-                        byteStart = cluster.documentByteStart,
-                        byteEnd = cluster.documentByteEnd,
-                        shapingIdentity = oldCluster.shapingIdentity
-                    ))
-                    slices.add(AndroidAnimatedSlice.crossfade(
-                        id = (vt.id shl 2) or 4u + cluster.platformTextStart.toULong(),
-                        role = AndroidAnimatedSliceRole.CrossfadeNew,
-                        snapshotId = lineSnapshot.id,
-                        sourceRect = cluster.sourceRectInLineSnapshot,
-                        fromRect = oldRect,
-                        toRect = cluster.visualRectInDocument,
-                        byteStart = cluster.documentByteStart,
-                        byteEnd = cluster.documentByteEnd,
-                        shapingIdentity = cluster.shapingIdentity
-                    ))
                 } else {
-                    slices.add(AndroidAnimatedSlice.reflowMove(
-                        id = (vt.id shl 2) or 1u + lineSnapshot.visualLineOrdinal.toULong(),
-                        snapshotId = lineSnapshot.id,
-                        sourceRect = cluster.sourceRectInLineSnapshot,
-                        fromRect = oldRect,
-                        toRect = cluster.visualRectInDocument,
-                        byteStart = cluster.documentByteStart,
-                        byteEnd = cluster.documentByteEnd,
-                        shapingIdentity = cluster.shapingIdentity
-                    ))
+                    val isInserted = offsetMap.isNewRangeInserted(
+                        cluster.documentByteStart, cluster.documentByteEnd
+                    )
+                    if (isInserted) {
+                        val fromRect = RectF(fromX, fromTop, fromX, fromTop + cluster.visualRectInDocument.height())
+                        slices.add(AndroidAnimatedSlice.insertFadeIn(
+                            id = (vt.id shl 2) or 7u + cluster.platformTextStart.toULong(),
+                            snapshotId = lineSnapshot.id,
+                            sourceRect = cluster.sourceRectInLineSnapshot,
+                            fromRect = fromRect,
+                            toRect = cluster.visualRectInDocument,
+                            byteStart = cluster.documentByteStart,
+                            byteEnd = cluster.documentByteEnd,
+                            shapingIdentity = cluster.shapingIdentity
+                        ))
+                    } else {
+                        slices.add(AndroidAnimatedSlice.crossfade(
+                            id = (vt.id shl 2) or 8u + cluster.platformTextStart.toULong(),
+                            role = AndroidAnimatedSliceRole.CrossfadeNew,
+                            snapshotId = lineSnapshot.id,
+                            sourceRect = cluster.sourceRectInLineSnapshot,
+                            fromRect = RectF(
+                                cluster.visualRectInDocument.left,
+                                cluster.visualRectInDocument.top,
+                                cluster.visualRectInDocument.right,
+                                cluster.visualRectInDocument.bottom
+                            ),
+                            toRect = cluster.visualRectInDocument,
+                            byteStart = cluster.documentByteStart,
+                            byteEnd = cluster.documentByteEnd,
+                            shapingIdentity = cluster.shapingIdentity
+                        ))
+                    }
                 }
             }
 
@@ -320,16 +324,6 @@ class SujianAnimationController(
         return TextAnimationStartResult.Started
     }
 
-    // 滚动暂停：滚动期间事务 pause 而非销毁，滚动结束后 resume 继续。
-    // 这样可以避免重新创建事务的开销和视觉跳变。
-    //
-    // 删除事务准备阶段：
-    // 1. 消费删除前录制的旧快照（Core 处理删除后旧文本已不在 buffer 中，
-    //    所以必须在 Core 通知之前就录制好旧视觉）。
-    // 2. 用新文本排版捕获 new 行快照。
-    // 3. 为旧快照的 cluster 生成 DeleteFadeOut slice（向新光标位置收缩消失）。
-    // 4. 为 reflow 范围的 cluster 按 shaping identity 判断 Move 或 Crossfade。
-    // 5. 生成 StaticLinePatch 并组装事务提交给 renderer。
     fun handleDeleteTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 
@@ -347,11 +341,6 @@ class SujianAnimationController(
         }
 
         val snapshot = consumeDeleteSnapshot(lastDeleteSnapshotId)
-        // Fallback：当按动画 ID 未匹配到预期快照时，退而使用最早的可用快照。
-        // 安全原因：删除前快照的录制与 Core 通知之间可能存在时序差异
-        // （如快速连续删除时 ID 递增快于快照消费），但最早的快照仍然包含
-        // 被删除文字的旧视觉资源，足以构造删除动画。降级影响：旧光标位置
-        // 可能不完全精确，但删除动画的视觉语义（旧文字淡出）仍然正确。
         if (snapshot == null) {
             val fallbackSnapshot = deleteSnapshots.firstOrNull()
             if (fallbackSnapshot != null) {
@@ -377,18 +366,27 @@ class SujianAnimationController(
         val newRevision = snapshotBuilder.nextRevisionAndIncrement()
         val text = buffer.text
 
+        val offsetMap = EditOffsetMap.fromEdit(
+            oldText = vt.oldText,
+            newText = vt.newText,
+            insertedRangeStart = 0,
+            insertedRangeEnd = 0,
+            isDelete = true,
+            deletedRangeStart = vt.insertedRangeStart,
+            deletedRangeEnd = vt.insertedRangeEnd
+        )
+
         val newLineSnapshots = if (text.isNotEmpty()) {
             val staticLayout = layout.getLayout(text)
-            val affectedLineIndices = mutableSetOf<Int>()
-            for (oldSnap in oldSnapshots) {
-                affectedLineIndices.add(oldSnap.visualLineOrdinal)
-                if (oldSnap.visualLineOrdinal + 1 < staticLayout.lineCount) {
-                    affectedLineIndices.add(oldSnap.visualLineOrdinal + 1)
-                }
+            val affectedLineIndices = computeDeleteAffectedLines(oldSnapshots, staticLayout, offsetMap)
+            if (affectedLineIndices.isEmpty()) {
+                emptyList()
+            } else {
+                val minLine = affectedLineIndices.minOrNull() ?: 0
+                val maxLine = affectedLineIndices.maxOrNull() ?: 0
+                val stableMaxLine = expandToStableSuffix(minLine, staticLayout, offsetMap, vt.oldText)
+                snapshotBuilder.buildLineSnapshots(text, minLine..stableMaxLine, newRevision, renderer.getTextColor())
             }
-            val minLine = affectedLineIndices.minOrNull() ?: 0
-            val maxLine = affectedLineIndices.maxOrNull() ?: 0
-            snapshotBuilder.buildLineSnapshots(text, minLine..maxLine, newRevision, renderer.getTextColor())
         } else {
             emptyList()
         }
@@ -420,35 +418,35 @@ class SujianAnimationController(
         for (newSnapshot in newLineSnapshots) {
             val reflowClusters = newSnapshot.clusters
             for (cluster in reflowClusters) {
-                val oldSnapshotMatch = oldSnapshots.find { it.visualLineOrdinal == newSnapshot.visualLineOrdinal }
-                val oldClusterMatch = oldSnapshotMatch?.clusters?.find { oc ->
-                    oc.documentByteStart == cluster.documentByteStart && oc.documentByteEnd == cluster.documentByteEnd
+                val oldCluster = findOldCluster(cluster, oldSnapshots, offsetMap)
+
+                if (oldCluster == null) {
+                    continue
                 }
-                val oldY = cluster.visualRectInDocument.top - (newSnapshot.documentRect.top - (oldSnapshots.firstOrNull()?.documentRect?.top ?: 0f))
-                val oldRect = if (oldClusterMatch != null) {
-                    RectF(oldClusterMatch.visualRectInDocument.left, oldClusterMatch.visualRectInDocument.top,
-                          oldClusterMatch.visualRectInDocument.right, oldClusterMatch.visualRectInDocument.bottom)
-                } else {
-                    RectF(cluster.visualRectInDocument.left, oldY, cluster.visualRectInDocument.right, oldY + cluster.visualRectInDocument.height())
-                }
+
+                val oldRect = RectF(
+                    oldCluster.visualRectInDocument.left, oldCluster.visualRectInDocument.top,
+                    oldCluster.visualRectInDocument.right, oldCluster.visualRectInDocument.bottom
+                )
+
                 val positionChanged = kotlin.math.abs(oldRect.top - cluster.visualRectInDocument.top) > 0.5f ||
                     kotlin.math.abs(oldRect.left - cluster.visualRectInDocument.left) > 0.5f
                 if (!positionChanged) continue
 
-                val shapingChanged = oldClusterMatch != null &&
-                    oldClusterMatch.shapingIdentity != cluster.shapingIdentity
+                val shapingChanged = oldCluster.shapingIdentity != cluster.shapingIdentity
 
-                if (shapingChanged && oldSnapshotMatch != null) {
+                if (shapingChanged) {
+                    val oldLineSnap = oldSnapshots.find { it.clusters.contains(oldCluster) }
                     slices.add(AndroidAnimatedSlice.crossfade(
                         id = (vt.id shl 2) or 5u + cluster.platformTextStart.toULong(),
                         role = AndroidAnimatedSliceRole.CrossfadeOld,
-                        snapshotId = oldSnapshotMatch.id,
-                        sourceRect = oldClusterMatch!!.sourceRectInLineSnapshot,
+                        snapshotId = oldLineSnap!!.id,
+                        sourceRect = oldCluster.sourceRectInLineSnapshot,
                         fromRect = oldRect,
                         toRect = cluster.visualRectInDocument,
                         byteStart = cluster.documentByteStart,
                         byteEnd = cluster.documentByteEnd,
-                        shapingIdentity = oldClusterMatch.shapingIdentity
+                        shapingIdentity = oldCluster.shapingIdentity
                     ))
                     slices.add(AndroidAnimatedSlice.crossfade(
                         id = (vt.id shl 2) or 6u + cluster.platformTextStart.toULong(),
@@ -529,6 +527,203 @@ class SujianAnimationController(
         return TextAnimationStartResult.Started
     }
 
+    /**
+     * 使用 OffsetMap 在旧快照中查找匹配的 cluster。
+     *
+     * 映射逻辑：
+     * 1. 将新 cluster 的 documentByteStart/End 通过 OffsetMap 映射到旧 byte range。
+     * 2. 在所有旧行快照中按映射后的 byte range 查找 cluster。
+     * 3. 不再依赖 visualLineOrdinal 匹配。
+     */
+    private fun findOldCluster(
+        newCluster: AndroidClusterSnapshot,
+        oldLineSnapshots: List<AndroidLineSnapshot>,
+        offsetMap: EditOffsetMap
+    ): AndroidClusterSnapshot? {
+        val oldRange = offsetMap.mapNewRangeToOld(newCluster.documentByteStart, newCluster.documentByteEnd)
+            ?: return null
+
+        for (oldLine in oldLineSnapshots) {
+            val match = oldLine.clusters.find { oc ->
+                oc.documentByteStart == oldRange.start && oc.documentByteEnd == oldRange.end
+            }
+            if (match != null) return match
+        }
+
+        for (oldLine in oldLineSnapshots) {
+            val match = oldLine.clusters.find { oc ->
+                oc.documentByteStart <= oldRange.start && oc.documentByteEnd >= oldRange.end &&
+                    (oc.documentByteEnd - oc.documentByteStart) == (oldRange.end - oldRange.start)
+            }
+            if (match != null) return match
+        }
+
+        return null
+    }
+
+    /**
+     * 计算受影响行范围，扩展到稳定后缀。
+     *
+     * 不再使用固定 insertLine + 10 限制。从编辑点向后比较 old/new cluster 映射，
+     * 直到出现稳定后缀（连续若干 cluster 的映射 byte range 一致、
+     * shaping identity 一致、visual line 后续断行边界一致）。
+     * 若一直不稳定，处理到受影响段落结束。
+     */
+    private fun computeStableSuffixRange(
+        insertLine: Int,
+        endLine: Int,
+        staticLayout: android.text.Layout,
+        offsetMap: EditOffsetMap,
+        oldText: String
+    ): IntRange {
+        val startLine = insertLine
+        val lastLine = staticLayout.lineCount - 1
+
+        var candidateEnd = endLine
+        val stableConsecutiveNeeded = 2
+        var stableConsecutive = 0
+
+        while (candidateEnd < lastLine && stableConsecutive < stableConsecutiveNeeded) {
+            val isStable = isLineStableSuffix(candidateEnd, staticLayout, offsetMap, oldText)
+            if (isStable) {
+                stableConsecutive++
+            } else {
+                stableConsecutive = 0
+            }
+            candidateEnd++
+        }
+
+        if (stableConsecutive >= stableConsecutiveNeeded) {
+            candidateEnd = (candidateEnd - stableConsecutiveNeeded).coerceAtLeast(endLine)
+        } else {
+            candidateEnd = lastLine
+        }
+
+        return startLine..candidateEnd.coerceAtMost(lastLine)
+    }
+
+    private fun isLineStableSuffix(
+        lineIdx: Int,
+        staticLayout: android.text.Layout,
+        offsetMap: EditOffsetMap,
+        oldText: String
+    ): Boolean {
+        if (lineIdx < 0 || lineIdx >= staticLayout.lineCount) return true
+        if (oldText.isEmpty()) return false
+
+        val lineStart = staticLayout.getLineStart(lineIdx)
+        val lineEnd = staticLayout.getLineEnd(lineIdx)
+        if (lineStart >= lineEnd) return true
+
+        val byteStart = SujianEditorBuffer.utf16ToUtf8(staticLayout.text.toString(), lineStart)
+        val byteEnd = SujianEditorBuffer.utf16ToUtf8(staticLayout.text.toString(), lineEnd.coerceAtMost(staticLayout.text.length))
+
+        val oldRange = offsetMap.mapNewRangeToOld(byteStart, byteEnd)
+        if (oldRange == null) return false
+
+        val oldByteEnd = SujianEditorBuffer.utf16ToUtf8(oldText, oldText.length)
+        if (oldRange.end > oldByteEnd) return false
+
+        return true
+    }
+
+    /**
+     * 计算旧文本的受影响行范围，用于构建旧快照。
+     */
+    private fun computeOldAffectedRange(
+        newAffectedRange: IntRange,
+        newLayout: android.text.Layout,
+        oldLayout: android.text.Layout,
+        offsetMap: EditOffsetMap,
+        oldText: String
+    ): IntRange {
+        val newStartByte = SujianEditorBuffer.utf16ToUtf8(
+            newLayout.text.toString(),
+            newLayout.getLineStart(newAffectedRange.first)
+        )
+        val newEndByte = SujianEditorBuffer.utf16ToUtf8(
+            newLayout.text.toString(),
+            newLayout.getLineEnd(newAffectedRange.last).coerceAtMost(newLayout.text.length)
+        )
+
+        val oldStartRange = offsetMap.mapNewRangeToOld(newStartByte, newStartByte + 1)
+        val oldEndRange = offsetMap.mapNewRangeToOld(newEndByte - 1, newEndByte)
+
+        val oldStartLine = if (oldStartRange != null) {
+            val utf16 = SujianEditorBuffer.utf8ToUtf16(oldText, oldStartRange.start)
+            oldLayout.getLineForOffset(utf16.coerceIn(0, oldText.length))
+        } else {
+            0
+        }
+
+        val oldEndLine = if (oldEndRange != null) {
+            val utf16 = SujianEditorBuffer.utf8ToUtf16(oldText, oldEndRange.end)
+            oldLayout.getLineForOffset(utf16.coerceIn(0, oldText.length))
+        } else {
+            oldLayout.lineCount - 1
+        }
+
+        return oldStartLine..oldEndLine.coerceAtMost(oldLayout.lineCount - 1)
+    }
+
+    /**
+     * 计算删除事务的受影响行范围。
+     */
+    private fun computeDeleteAffectedLines(
+        oldSnapshots: List<AndroidLineSnapshot>,
+        staticLayout: android.text.Layout,
+        offsetMap: EditOffsetMap
+    ): Set<Int> {
+        val affectedLineIndices = mutableSetOf<Int>()
+        for (oldSnap in oldSnapshots) {
+            val newRange = offsetMap.mapOldRangeToNew(oldSnap.documentByteStart, oldSnap.documentByteEnd)
+            if (newRange != null) {
+                val utf16Start = SujianEditorBuffer.utf8ToUtf16(buffer.text, newRange.start)
+                val utf16End = SujianEditorBuffer.utf8ToUtf16(buffer.text, newRange.end)
+                val startLine = staticLayout.getLineForOffset(utf16Start.coerceIn(0, buffer.text.length))
+                val endLine = staticLayout.getLineForOffset(utf16End.coerceIn(0, buffer.text.length))
+                for (l in startLine..endLine) {
+                    affectedLineIndices.add(l)
+                }
+            } else {
+                if (oldSnap.visualLineOrdinal < staticLayout.lineCount) {
+                    affectedLineIndices.add(oldSnap.visualLineOrdinal)
+                }
+            }
+        }
+        return affectedLineIndices
+    }
+
+    /**
+     * 扩展到稳定后缀（删除场景）。
+     */
+    private fun expandToStableSuffix(
+        startLine: Int,
+        staticLayout: android.text.Layout,
+        offsetMap: EditOffsetMap,
+        oldText: String
+    ): Int {
+        val lastLine = staticLayout.lineCount - 1
+        var candidateEnd = startLine
+        val stableConsecutiveNeeded = 2
+        var stableConsecutive = 0
+
+        while (candidateEnd < lastLine && stableConsecutive < stableConsecutiveNeeded) {
+            val isStable = isLineStableSuffix(candidateEnd, staticLayout, offsetMap, oldText)
+            if (isStable) {
+                stableConsecutive++
+            } else {
+                stableConsecutive = 0
+            }
+            candidateEnd++
+        }
+
+        if (stableConsecutive >= stableConsecutiveNeeded) {
+            return (candidateEnd - stableConsecutiveNeeded + 1).coerceAtLeast(startLine)
+        }
+        return lastLine
+    }
+
     private fun fetchVisualTransaction(
         context: SujianVisualEditContext,
         view: SujianEditorView
@@ -598,10 +793,6 @@ class SujianAnimationController(
             SujianEditCauseData.ImeComposition,
             SujianEditCauseData.Programmatic -> false
         }
-    }
-
-    private fun textPaintMeasureChar(): Float {
-        return layout.getLayout(buffer.text).let { if (it.lineCount > 0) it.getLineWidth(0) / (buffer.text.length.coerceAtLeast(1)) else 10f }
     }
 
     companion object {
