@@ -4,7 +4,12 @@ import android.graphics.RectF
 import com.xiwei.sujian.model.AnimationModeData
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28])
 class ScrollQueueAndEmptyAnimationTest {
 
     @Test
