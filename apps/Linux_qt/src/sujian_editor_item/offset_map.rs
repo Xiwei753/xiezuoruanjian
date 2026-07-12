@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn test_animated_slice_kinds() {
         use crate::sujian_editor_item::layout_snapshot::{LineSnapshotId, LayoutRevision};
-        let id = LineSnapshotId::new(LayoutRevision::new(), 0);
+        let id = LineSnapshotId::new(LayoutRevision::next(), 0);
         let sr = SourceRect::zero();
 
         let insert = AnimatedSlice {

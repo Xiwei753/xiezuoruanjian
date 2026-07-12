@@ -2,7 +2,7 @@ use super::transaction_key::VisualTransactionKey;
 use super::cursor_animation::CursorAnimationPlan;
 use super::animation_mode::AnimationMode;
 use super::texture_cache::TexturePhase;
-use super::layout_snapshot::LineSnapshotId;
+use super::line_snapshot::LineSnapshotId;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenRangeInfo {
@@ -50,6 +50,7 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub is_delete: bool,
     pub texture_phase: TexturePhase,
     pub run_identity: i32,
+    pub line_snapshot_id: Option<LineSnapshotId>,
 }
 
 #[derive(Clone, Debug, Default)]

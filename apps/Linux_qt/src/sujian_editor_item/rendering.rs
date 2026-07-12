@@ -641,42 +641,6 @@ impl SujianEditorItem {
         None
     }
 
-    pub(crate) fn render_shaped_run_texture(
-        &self,
-        para_text: &str,
-        font_size: f64,
-        font_family: &str,
-        paragraph_wrap_w: f64,
-        indent_w: f64,
-        qtextline_idx: i32,
-        target_run_index: i32,
-        clip_x: f64,
-        clip_y: f64,
-        clip_w: f64,
-        clip_h: f64,
-        tex_trans_x: f64,
-        tex_trans_y: f64,
-        dpr: f64,
-    ) -> Option<QImage> {
-        crate::editor::layout::render_glyph_run_texture(
-            para_text,
-            font_size,
-            font_family,
-            paragraph_wrap_w,
-            indent_w,
-            qtextline_idx,
-            target_run_index,
-            clip_x,
-            clip_y,
-            clip_w,
-            clip_h,
-            tex_trans_x,
-            tex_trans_y,
-            dpr,
-            &self.current_text_color.to_string(),
-        )
-    }
-
     pub(crate) fn render_to_image(&mut self) -> Option<(QImage, f64, f64)> {
         // Tick text animations for timeout safety
         self.tick_text_animations();

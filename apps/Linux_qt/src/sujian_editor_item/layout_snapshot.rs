@@ -1,27 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
 use qmetaobject::QImage;
 use crate::editor::layout::{CaretAffinity, CaretRect, LayoutParams, LayoutSnapshot, VisualLine};
-
-static LAYOUT_REVISION_COUNTER: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(crate) struct LayoutRevision(pub u64);
-
-impl LayoutRevision {
-    pub fn new() -> Self {
-        Self(LAYOUT_REVISION_COUNTER.fetch_add(1, Ordering::Relaxed))
-    }
-
-    pub fn initial() -> Self {
-        Self(0)
-    }
-}
-
-impl Default for LayoutRevision {
-    fn default() -> Self {
-        Self::initial()
-    }
-}
+pub(crate) use super::layout_revision::LayoutRevision;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ParagraphIndexMap {
@@ -229,7 +208,7 @@ impl EditorLayoutSnapshot {
         caret_rect: Option<CaretRect>,
         caret_affinity: CaretAffinity,
     ) -> Self {
-        let revision = LayoutRevision::new();
+        let revision = LayoutRevision::next();
         let paragraph_index_map = ParagraphIndexMap::from_text(text);
 
         let line_snapshots = layout_snapshot.lines.iter().map(|line| {
@@ -290,8 +269,8 @@ mod tests {
 
     #[test]
     fn test_layout_revision_monotonic() {
-        let r1 = LayoutRevision::new();
-        let r2 = LayoutRevision::new();
+        let r1 = LayoutRevision::next();
+        let r2 = LayoutRevision::next();
         assert!(r2 > r1);
     }
 

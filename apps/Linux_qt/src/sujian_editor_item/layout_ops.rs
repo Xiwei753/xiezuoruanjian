@@ -91,7 +91,7 @@ impl SujianEditorItem {
         let new_snapshot = self.build_editor_layout_snapshot(width);
         self.previous_layout_snapshot = self.current_layout_snapshot.take();
         self.current_layout_snapshot = Some(new_snapshot);
-        self.layout_revision = layout_snapshot::LayoutRevision::new();
+        self.layout_revision = layout_snapshot::LayoutRevision::next();
     }
 
     pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
