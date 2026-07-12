@@ -242,14 +242,14 @@ impl PreparedTransactionQueue {
 
     pub fn tick(&mut self, now: Instant) -> Vec<VisualTransactionKey> {
         let mut expired = Vec::new();
-        self.transactions.retain(|t| {
-            if t.is_expired(now) {
-                expired.push(t.key);
-                false
-            } else {
-                true
+        for tx in &mut self.transactions {
+            if tx.is_expired(now) {
+                tx.state = TextVisualTransactionState::Cancelled;
+                tx.cancel_reason = Some("expired".to_string());
+                expired.push(tx.key);
             }
-        });
+        }
+        self.transactions.retain(|t| !expired.contains(&t.key));
         expired
     }
 
