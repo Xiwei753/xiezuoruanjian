@@ -637,8 +637,13 @@ class SujianAnimationController(
             }
             if (oldLine == null) return false
 
-            val newClusters = newLineSnapshots
-                .filter { it.documentByteStart >= byteStart && it.documentByteEnd <= byteEnd }
+            val newLine = newLineSnapshots.find {
+                it.documentByteStart <= byteStart && it.documentByteEnd >= byteEnd
+            }
+            if (newLine == null) return false
+            val newClusters = newLine.clusters.filter {
+                it.documentByteStart >= byteStart && it.documentByteEnd <= byteEnd
+            }
             val oldClusters = oldLine.clusters.filter {
                 it.documentByteStart >= oldRange.start && it.documentByteEnd <= oldRange.end
             }
