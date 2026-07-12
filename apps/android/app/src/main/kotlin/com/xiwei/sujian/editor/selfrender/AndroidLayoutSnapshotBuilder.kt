@@ -228,8 +228,8 @@ class AndroidLayoutSnapshotBuilder(
 
         try {
             val shaped = android.graphics.text.TextRunShaper.shapeTextRun(
-                fullText, contextStart, contextLen,
-                clusterStartUtf16 - contextStart, clusterLen,
+                fullText, clusterStartUtf16, clusterLen,
+                contextStart, contextLen,
                 0f, 0f, isRtl, paint
             )
 
