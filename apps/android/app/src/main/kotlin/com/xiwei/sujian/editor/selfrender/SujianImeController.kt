@@ -186,7 +186,7 @@ class SujianImeController(
      */
     fun onComposingChanged(composingText: String) {
         if (composingText.isNotEmpty()) {
-            renderer.clearAnimations()
+            renderer.pauseAll()
         }
         DiagnosticsLogger.d(TAG, "Composing changed: len=${composingText.length}")
     }

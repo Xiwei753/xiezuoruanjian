@@ -117,7 +117,8 @@ class ShapingIdentityAndCrossfadeTest {
             fromRect = RectF(0f, 0f, 10f, 20f),
             toRect = RectF(10f, 0f, 20f, 20f),
             byteStart = 0,
-            byteEnd = 3
+            byteEnd = 3,
+            shapingIdentity = "old"
         )
         val newSlice = AndroidAnimatedSlice.crossfade(
             id = 2u,
@@ -127,7 +128,8 @@ class ShapingIdentityAndCrossfadeTest {
             fromRect = RectF(0f, 0f, 10f, 20f),
             toRect = RectF(10f, 0f, 20f, 20f),
             byteStart = 0,
-            byteEnd = 3
+            byteEnd = 3,
+            shapingIdentity = "new"
         )
 
         assertEquals(1f, oldSlice.opacityFrom, 0.01f)
@@ -156,9 +158,7 @@ class ShapingIdentityAndCrossfadeTest {
             shapingIdentity = shapingId
         )
 
-        val shapingChanged = oldCluster.shapingIdentity != null &&
-            newCluster.shapingIdentity != null &&
-            oldCluster.shapingIdentity != newCluster.shapingIdentity
+        val shapingChanged = oldCluster.shapingIdentity != newCluster.shapingIdentity
 
         assertFalse(shapingChanged)
     }
@@ -184,41 +184,13 @@ class ShapingIdentityAndCrossfadeTest {
             shapingIdentity = newShapingId
         )
 
-        val shapingChanged = oldCluster.shapingIdentity != null &&
-            newCluster.shapingIdentity != null &&
-            oldCluster.shapingIdentity != newCluster.shapingIdentity
+        val shapingChanged = oldCluster.shapingIdentity != newCluster.shapingIdentity
 
         assertTrue(shapingChanged)
     }
 
     @Test
-    fun reflow_nullShaping_generatesMove_notCrossfade() {
-        val oldCluster = AndroidClusterSnapshot(
-            documentByteStart = 0, documentByteEnd = 3,
-            platformTextStart = 0, platformTextEnd = 3,
-            sourceRectInLineSnapshot = RectF(0f, 0f, 30f, 20f),
-            visualRectInDocument = RectF(0f, 0f, 30f, 20f),
-            textDirection = 0,
-            shapingIdentity = null
-        )
-        val newCluster = AndroidClusterSnapshot(
-            documentByteStart = 0, documentByteEnd = 3,
-            platformTextStart = 0, platformTextEnd = 3,
-            sourceRectInLineSnapshot = RectF(0f, 0f, 30f, 20f),
-            visualRectInDocument = RectF(40f, 0f, 70f, 20f),
-            textDirection = 0,
-            shapingIdentity = null
-        )
-
-        val shapingChanged = oldCluster.shapingIdentity != null &&
-            newCluster.shapingIdentity != null &&
-            oldCluster.shapingIdentity != newCluster.shapingIdentity
-
-        assertFalse(shapingChanged)
-    }
-
-    @Test
-    fun reflow_oneNullShaping_generatesMove_notCrossfade() {
+    fun reflow_sameShaping_differentPosition_generatesMove_notCrossfade() {
         val shapingId = buildTestShapingIdentity("abc", "sans-serif:16", false)
         val oldCluster = AndroidClusterSnapshot(
             documentByteStart = 0, documentByteEnd = 3,
@@ -234,14 +206,41 @@ class ShapingIdentityAndCrossfadeTest {
             sourceRectInLineSnapshot = RectF(0f, 0f, 30f, 20f),
             visualRectInDocument = RectF(40f, 0f, 70f, 20f),
             textDirection = 0,
-            shapingIdentity = null
+            shapingIdentity = shapingId
         )
 
-        val shapingChanged = oldCluster.shapingIdentity != null &&
-            newCluster.shapingIdentity != null &&
-            oldCluster.shapingIdentity != newCluster.shapingIdentity
+        val shapingChanged = oldCluster.shapingIdentity != newCluster.shapingIdentity
 
         assertFalse(shapingChanged)
+    }
+
+    @Test
+    fun crossfade_slices_alwaysHaveNonNullableShapingIdentity() {
+        val oldSlice = AndroidAnimatedSlice.crossfade(
+            id = 1u,
+            role = AndroidAnimatedSliceRole.CrossfadeOld,
+            snapshotId = AndroidLineSnapshotId(1L, 0),
+            sourceRect = RectF(0f, 0f, 10f, 20f),
+            fromRect = RectF(0f, 0f, 10f, 20f),
+            toRect = RectF(10f, 0f, 20f, 20f),
+            byteStart = 0,
+            byteEnd = 3,
+            shapingIdentity = "old-shape"
+        )
+        val newSlice = AndroidAnimatedSlice.crossfade(
+            id = 2u,
+            role = AndroidAnimatedSliceRole.CrossfadeNew,
+            snapshotId = AndroidLineSnapshotId(2L, 0),
+            sourceRect = RectF(0f, 0f, 10f, 20f),
+            fromRect = RectF(0f, 0f, 10f, 20f),
+            toRect = RectF(10f, 0f, 20f, 20f),
+            byteStart = 0,
+            byteEnd = 3,
+            shapingIdentity = "new-shape"
+        )
+
+        assertTrue(oldSlice.shapingIdentity.isNotEmpty())
+        assertTrue(newSlice.shapingIdentity.isNotEmpty())
     }
 
     private fun buildTestShapingIdentity(clusterText: String, fontFingerprint: String, isRtl: Boolean): String {

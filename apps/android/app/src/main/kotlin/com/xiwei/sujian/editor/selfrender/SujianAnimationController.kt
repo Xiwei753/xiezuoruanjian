@@ -110,15 +110,19 @@ class SujianAnimationController(
         }
     }
 
-    // 连续输入 rebase：新事务与旧事务 byte range 重叠时，先从旧事务当前
-    // progress 计算已显示帧位置，rebase 新 slice 的 fromDocumentRect，
-    // 再取消旧事务，保证视觉无跳变。
+    // 插入事务准备阶段：
+    // 1. 从 Core 获取 animation mode，SystemSuppressed/SnapshotAnimation 直接跳过。
+    // 2. 将 UTF-8 inserted range 转为 UTF-16，用旧文本排版捕获 old 行快照。
+    // 3. 用新文本排版捕获 new 行快照。
+    // 4. 为 inserted range 内的 cluster 生成 InsertFadeIn slice。
+    // 5. 为 reflow 范围的 cluster 按 shaping identity 判断 Move 或 Crossfade。
+    // 6. 生成 StaticLinePatch（未被动画接管的 cluster 仍由静态层绘制）。
+    // 7. 组装事务提交给 renderer；连续输入时从旧事务当前帧 rebase。
     fun handleInsertTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 
         if (renderer.isScrolling()) {
             renderer.pauseAll()
-            return TextAnimationStartResult.Skipped
         }
 
         val text = buffer.text
@@ -197,6 +201,12 @@ class SujianAnimationController(
                 clusterUtf16End > rangeEndUtf16 || cluster.platformTextStart < rangeStartUtf16
             }
 
+            // old/new snapshot 匹配与 move/crossfade 判定：
+            // 按 visualLineOrdinal 匹配旧行，再按 documentByteStart/End 匹配 cluster。
+            // shaping identity 相同 → Move（复用旧视觉资源做几何位移）；
+            // shaping identity 不同 → CrossfadeOld + CrossfadeNew 成对 slice
+            // （旧视觉淡出、新视觉淡入，因为字体/glyph/方向/格式变化后旧视觉不是同一对象）。
+            // 无匹配旧 cluster 时用估算旧位置做 Move，保证视觉连续。
             for (cluster in reflowClusters) {
                 val oldLineSnap = oldLineSnapshots.find { it.visualLineOrdinal == lineSnapshot.visualLineOrdinal }
                 val oldCluster = oldLineSnap?.clusters?.find { oc ->
@@ -215,8 +225,6 @@ class SujianAnimationController(
                 }
 
                 val shapingChanged = oldCluster != null &&
-                    oldCluster.shapingIdentity != null &&
-                    cluster.shapingIdentity != null &&
                     oldCluster.shapingIdentity != cluster.shapingIdentity
 
                 if (shapingChanged && oldCluster != null) {
@@ -274,6 +282,10 @@ class SujianAnimationController(
             ))
         }
 
+        if (slices.isEmpty()) {
+            return TextAnimationStartResult.Skipped
+        }
+
         val cursorTransition = if (vt.newCursorRect != null && vt.oldCursorRect != null) {
             val newCR = vt.newCursorRect!!
             val oldCR = vt.oldCursorRect!!
@@ -310,14 +322,24 @@ class SujianAnimationController(
 
     // 滚动暂停：滚动期间事务 pause 而非销毁，滚动结束后 resume 继续。
     // 这样可以避免重新创建事务的开销和视觉跳变。
+    //
+    // 删除事务准备阶段：
+    // 1. 消费删除前录制的旧快照（Core 处理删除后旧文本已不在 buffer 中，
+    //    所以必须在 Core 通知之前就录制好旧视觉）。
+    // 2. 用新文本排版捕获 new 行快照。
+    // 3. 为旧快照的 cluster 生成 DeleteFadeOut slice（向新光标位置收缩消失）。
+    // 4. 为 reflow 范围的 cluster 按 shaping identity 判断 Move 或 Crossfade。
+    // 5. 生成 StaticLinePatch 并组装事务提交给 renderer。
     fun handleDeleteTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 
-        val decision = if (renderer.isScrolling()) AnimationModeData.SystemSuppressed else vt.animationMode
+        if (renderer.isScrolling()) {
+            renderer.pauseAll()
+        }
+
+        val decision = vt.animationMode
         if (decision == AnimationModeData.SystemSuppressed || decision == AnimationModeData.SnapshotAnimation) {
-            if (renderer.isScrolling()) {
-                renderer.pauseAll()
-            } else {
+            if (!renderer.isScrolling()) {
                 renderer.clearAnimations()
             }
             consumeDeleteSnapshot(lastDeleteSnapshotId)
@@ -325,6 +347,11 @@ class SujianAnimationController(
         }
 
         val snapshot = consumeDeleteSnapshot(lastDeleteSnapshotId)
+        // Fallback：当按动画 ID 未匹配到预期快照时，退而使用最早的可用快照。
+        // 安全原因：删除前快照的录制与 Core 通知之间可能存在时序差异
+        // （如快速连续删除时 ID 递增快于快照消费），但最早的快照仍然包含
+        // 被删除文字的旧视觉资源，足以构造删除动画。降级影响：旧光标位置
+        // 可能不完全精确，但删除动画的视觉语义（旧文字淡出）仍然正确。
         if (snapshot == null) {
             val fallbackSnapshot = deleteSnapshots.firstOrNull()
             if (fallbackSnapshot != null) {
@@ -409,8 +436,6 @@ class SujianAnimationController(
                 if (!positionChanged) continue
 
                 val shapingChanged = oldClusterMatch != null &&
-                    oldClusterMatch.shapingIdentity != null &&
-                    cluster.shapingIdentity != null &&
                     oldClusterMatch.shapingIdentity != cluster.shapingIdentity
 
                 if (shapingChanged && oldSnapshotMatch != null) {
@@ -465,6 +490,10 @@ class SujianAnimationController(
                 destinationDocumentRect = newSnapshot.documentRect,
                 visibleSourceRects = visibleSourceRects
             ))
+        }
+
+        if (slices.isEmpty()) {
+            return TextAnimationStartResult.Skipped
         }
 
         val cursorTransition = if (vt.newCursorRect != null) {

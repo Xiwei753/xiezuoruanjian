@@ -20,7 +20,10 @@ impl ParagraphIndexMap {
             for _ in 0..utf16_len {
                 qchar_to_byte.push(abs_byte);
             }
-            byte_to_qchar.push(qchar_offset);
+            let char_len = ch.len_utf8();
+            for _ in 0..char_len {
+                byte_to_qchar.push(qchar_offset);
+            }
             qchar_offset += utf16_len;
         }
         byte_to_qchar.push(qchar_offset);

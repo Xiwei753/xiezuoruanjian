@@ -36,11 +36,8 @@ data class AndroidAnimatedSlice(
     val scaleTo: Float,
     val documentByteStart: Int,
     val documentByteEnd: Int,
-    val shapingIdentity: String?
+    val shapingIdentity: String
 ) {
-    /**
-     * 纯插值计算：根据 progress 在 from/to 之间插值，不得查询布局或修改事务。
-     */
     fun computeFrame(progress: Float, easedProgress: Float): SliceFrame {
         val x = fromDocumentRect.left + (toDocumentRect.left - fromDocumentRect.left) * easedProgress
         val y = fromDocumentRect.top + (toDocumentRect.top - fromDocumentRect.top) * easedProgress
@@ -55,10 +52,6 @@ data class AndroidAnimatedSlice(
         )
     }
 
-    /**
-     * 接收当前已显示视觉帧的位置和透明度，用于连续事务无跳变衔接。
-     * rebase 后 slice 从当前视觉状态开始，而不是从原始逻辑起点重新播放。
-     */
     fun rebaseFrom(currentRect: RectF, currentAlpha: Int) {
         fromDocumentRect = currentRect
         opacityFrom = currentAlpha / 255f
@@ -80,7 +73,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = AndroidAnimatedSliceRole.Insert,
@@ -105,7 +98,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = AndroidAnimatedSliceRole.Delete,
@@ -130,7 +123,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = AndroidAnimatedSliceRole.Move,
@@ -156,7 +149,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = role,

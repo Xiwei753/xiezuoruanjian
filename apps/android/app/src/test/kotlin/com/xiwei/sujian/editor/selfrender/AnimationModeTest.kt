@@ -73,4 +73,12 @@ class AnimationModeTest {
         assertTrue("Insert must consume vt.animationMode", source.contains("vt.animationMode"))
         assertFalse("Insert must not recompute mode locally", source.contains("fun chooseAnimationMode("))
     }
+
+    @Test
+    fun imeComposingDoesNotClearAnimations() {
+        val source = File("src/main/kotlin/com/xiwei/sujian/editor/selfrender/SujianImeController.kt").readText()
+        assertFalse("IME composing must not clearAnimations, should pauseAll instead",
+            source.contains("renderer.clearAnimations()"))
+        assertTrue("IME composing should pauseAll", source.contains("renderer.pauseAll()"))
+    }
 }
