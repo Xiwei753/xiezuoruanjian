@@ -15,7 +15,7 @@ data class AndroidClusterSnapshot(
     val sourceRectInLineSnapshot: RectF,
     val visualRectInDocument: RectF,
     val textDirection: Int,
-    val shapingIdentity: String?
+    val shapingIdentity: String
 )
 
 data class AndroidLineSnapshot(

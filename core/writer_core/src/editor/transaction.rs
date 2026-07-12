@@ -271,6 +271,9 @@ pub struct GlyphRect {
     pub byte_end: usize,
 }
 
+/// **DEPRECATED**: Use `EditorVisualTransaction` + `visual_transaction()` instead.
+/// Retained only for existing test coverage; production code must not call this.
+/// Removal tracked in #503 residual cleanup.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[deprecated(
@@ -594,6 +597,9 @@ impl EditorEngine {
         }
     }
 
+    /// **DEPRECATED**: Use `visual_transaction()` instead.
+    /// Retained only for existing test coverage; production code must not call this.
+    /// Removal tracked in #503 residual cleanup.
     #[deprecated(
         since = "0.12.0",
         note = "Use visual_transaction() instead. This will be removed in a future version."

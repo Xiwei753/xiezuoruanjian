@@ -304,6 +304,14 @@ impl LinuxEditorAnimationCoordinator {
                                         new_line.byte_end,
                                     ));
                                 }
+
+                                static_patches.push(StaticLinePatch::reflow_patch(
+                                    key,
+                                    new_line.id,
+                                    vec![new_src],
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                ));
                             }
                             _ => {}
                         }
