@@ -36,6 +36,11 @@ impl StaticTextPlan {
     }
 }
 
+/// Qt mature route: TextAnimationGlyphInfo carries only visual data
+/// (position, size, opacity, texture reference). The animation phase
+/// no longer understands text — no byte ranges, paragraph text, font IDs,
+/// or shaped run indices. All text-level concepts are resolved during
+/// layout/snapshot phase; animation only interpolates position and opacity.
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
     pub key: VisualTransactionKey,
@@ -45,13 +50,8 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub h: f64,
     pub opacity: f64,
     pub baseline_in_quad: f64,
-    pub byte_start: usize,
-    pub byte_end: usize,
     pub animation_mode: AnimationMode,
     pub is_delete: bool,
-    pub old_paragraph_text: Option<String>,
-    pub font_id: String,
-    pub shaped_run_index: Option<i32>,
     pub texture_phase: TexturePhase,
     pub run_identity: i32,
 }

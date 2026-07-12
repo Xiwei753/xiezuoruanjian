@@ -82,6 +82,7 @@ pub(crate) struct ShapedVisualRun {
     pub qtextline_idx: Option<i32>,
     pub paragraph_wrap_w: Option<f64>,
     pub para_indent: Option<f64>,
+    pub line_y: f64,
 }
 
 impl ShapedVisualRun {
@@ -425,6 +426,7 @@ mod tests {
             qtextline_idx: None,
             paragraph_wrap_w: None,
             para_indent: None,
+            line_y: 0.0,
         }
     }
 

@@ -257,6 +257,7 @@ impl SujianEditorItem {
                 qtextline_idx: Some(qtextline_idx),
                 paragraph_wrap_w: Some(wrap_w),
                 para_indent: Some(indent),
+                line_y: srd.line_y,
             }
         }
 

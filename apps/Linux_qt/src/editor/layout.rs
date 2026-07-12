@@ -381,6 +381,7 @@ cpp! {{
         double visualH;
         double textureTranslateX;
         double textureTranslateY;
+        double lineY;
     };
     thread_local std::vector<ShapedRunEntry> g_shaped_run_buf;
 
@@ -516,6 +517,7 @@ cpp! {{
                     re.visualH = runH;
                     re.textureTranslateX = texTransX;
                     re.textureTranslateY = texTransY;
+                    re.lineY = lineY;
                     g_shaped_run_buf.push_back(re);
 
                     // Extract per-glyph data
@@ -601,6 +603,49 @@ cpp! {{
                     }
                     runIdx++;
                 }
+                break;
+            }
+            first = false;
+            cur_idx++;
+        }
+        layout.endLayout();
+    }
+
+    // Qt mature route: render a single QTextLine to a QImage using QTextLine::draw().
+    // This produces a line-level visual snapshot that can be UV-clipped to extract
+    // individual glyph runs, clusters, or text segments — without re-laying out text
+    // for each animation texture. Core principle: layout once, snapshot once,
+    // animation phase no longer understands text.
+    void editor_render_line_to_image(
+        QImage* img, const QString& paraText,
+        double fs, const QString& ff,
+        double paragraph_wrap_w, double indent_w, int qtextline_idx,
+        double dpr, const QColor& textColor
+    ) {
+        if (!img) return;
+        QPainter painter(img);
+        painter.setRenderHint(QPainter::TextAntialiasing, true);
+        painter.scale(dpr, dpr);
+
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+
+        int cur_idx = 0;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
+            line.setLineWidth(lineWrap);
+            if (cur_idx == qtextline_idx) {
+                painter.setPen(QPen(textColor));
+                QPointF pos(0, line.ascent());
+                line.draw(&painter, pos);
                 break;
             }
             first = false;
@@ -1578,6 +1623,7 @@ pub struct ShapedRunData {
     pub visual_h: f64,
     pub texture_translate_x: f64,
     pub texture_translate_y: f64,
+    pub line_y: f64,
     pub glyphs: Vec<RunGlyphData>,
 }
 
@@ -1680,6 +1726,9 @@ pub fn extract_shaped_runs_on_line(
         let texture_translate_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             return g_shaped_run_buf[idx].textureTranslateY;
         });
+        let line_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            return g_shaped_run_buf[idx].lineY;
+        });
 
         let mut glyphs = Vec::with_capacity(glyph_count as usize);
         let glyph_offset: i32 = (0..i).map(|prev_idx| {
@@ -1745,12 +1794,84 @@ pub fn extract_shaped_runs_on_line(
             visual_h,
             texture_translate_x,
             texture_translate_y,
+            line_y,
             glyphs,
         });
     }
     result
 }
 
+/// Render a single QTextLine to a QImage using QTextLine::draw().
+///
+/// Qt mature route: this produces a line-level visual snapshot that can be
+/// UV-clipped to extract individual glyph runs, clusters, or text segments
+/// for animation — without re-laying out text per run. The line snapshot
+/// is rendered once; animation textures are extracted via UV coordinates.
+///
+/// The QImage is rendered at DPR scale. The logical line content starts at
+/// (0, 0) in the QImage's logical coordinate space, with the baseline at
+/// y = line.ascent().
+pub fn render_line_to_image(
+    para_text: &str,
+    font_size: f64,
+    font_family: &str,
+    paragraph_wrap_w: f64,
+    indent_w: f64,
+    qtextline_idx: i32,
+    dpr: f64,
+    text_color: &str,
+) -> Option<qmetaobject::QImage> {
+    let logical_w = paragraph_wrap_w;
+    let logical_h = font_size * 2.0;
+    let phys_w = (logical_w * dpr).ceil() as u32;
+    let phys_h = (logical_h * dpr).ceil() as u32;
+    if phys_w == 0 || phys_h == 0 || phys_w > 8192 || phys_h > 4096 {
+        return None;
+    }
+
+    let mut image = qmetaobject::QImage::new(
+        qmetaobject::QSize { width: phys_w, height: phys_h },
+        qmetaobject::ImageFormat::ARGB32_Premultiplied,
+    );
+    {
+        let img_ptr = &mut image as *mut qmetaobject::QImage;
+        cpp!(unsafe [img_ptr as "QImage*"] {
+            img_ptr->setDevicePixelRatio(1.0);
+        });
+    }
+    image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
+
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    let color = qmetaobject::QColor::from_name(text_color);
+
+    let img_ptr = &mut image as *mut qmetaobject::QImage;
+    cpp!(unsafe [
+        img_ptr as "QImage*",
+        para as "QString",
+        fs as "float",
+        ff as "QString",
+        paragraph_wrap_w as "double",
+        indent_w as "double",
+        qtextline_idx as "int",
+        dpr as "double",
+        color as "QColor"
+    ] {
+        editor_render_line_to_image(
+            img_ptr, para, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx,
+            dpr, color
+        );
+    });
+
+    Some(image)
+}
+
+/// Legacy: render a specific QGlyphRun to a QImage by re-laying out text.
+///
+/// **DEPRECATED** — violates the Qt mature route principle ("layout once, snapshot once,
+/// animation phase no longer understands text"). Use `render_line_to_image` + UV extraction
+/// instead. This function is kept only for fallback compatibility.
 #[allow(dead_code)]
 pub fn render_glyph_run_texture(
     para_text: &str,

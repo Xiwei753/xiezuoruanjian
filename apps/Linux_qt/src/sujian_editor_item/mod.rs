@@ -3,6 +3,15 @@
 //! 路线：SujianEditorItem(QQuickItem) + QTextLayout/QTextLine + QImage static texture
 //!       + QSGImageNode + Rust Coordinator → immutable RenderPlan → Scene Graph renderer
 //!
+//! Qt 成熟路线原则（Issue #501）：
+//!   排版一次，视觉快照一次，动画阶段不再理解文字。
+//!
+//!   - updatePaintNode() 只消费已准备好的视觉数据，不做排版/业务 diff/磁盘操作
+//!   - QTextLayout/QTextLine 一次排版，QTextLine::draw() 立即生成行快照 (QImage)
+//!   - 动画纹理从行快照 UV 裁剪提取，不再为每个 QGlyphRun 重新排版
+//!   - TextAnimationGlyphInfo 只携带位置/尺寸/透明度/纹理引用，不携带 byte_range/para_text/font_id
+//!   - QSGTransformNode 负责位移，QSGOpacityNode 负责淡入淡出，UV/sourceRect 负责裁剪
+//!
 //! 禁止旧路线：DocumentHandler / TextArea / QTextDocument / QQuickPaintedItem / QSG 三层 overlay
 //!             EditorAnimationOverlay / EditorGlyphGhost / visual_transaction_json QML overlay
 

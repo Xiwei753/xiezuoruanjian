@@ -43,6 +43,13 @@ impl QQuickItem for SujianEditorItem {
         true
     }
 
+    /// Qt mature route: updatePaintNode() only consumes already-prepared visual data.
+    ///
+    /// This method does NOT re-layout text, perform business diffs, or do disk I/O.
+    /// All layout is done in EditorLayout::snapshot(), all visual snapshots are
+    /// pre-rendered via render_line_to_image(), and animation textures are extracted
+    /// via UV clipping from line snapshots. The animation plan (RenderPlan) carries
+    /// only position/size/opacity/texture-ref — no text-level metadata.
     fn update_paint_node(
         &mut self,
         node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
@@ -316,7 +323,7 @@ impl SujianEditorItem {
 
         let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::with_capacity(runs.len());
         for run in &runs {
-            textures.push(self.render_shaped_run_texture_via_glyph_run(run, font_size, &font_family, dpr));
+            textures.push(self.render_shaped_run_texture_via_line_snapshot(run, font_size, &font_family, dpr));
         }
 
         let any_failed = textures.iter().any(|t| t.is_none());
@@ -334,7 +341,13 @@ impl SujianEditorItem {
         }
     }
 
-    fn render_shaped_run_texture_via_glyph_run(
+    /// Qt mature route: extract animation texture from a pre-rendered line snapshot
+    /// using UV coordinates, instead of re-laying out text via render_glyph_run_texture.
+    ///
+    /// Core principle: layout once, visual snapshot once, animation phase no longer
+    /// understands text. The line snapshot is rendered once using QTextLine::draw();
+    /// individual run textures are extracted via UV rect clipping (QImage::copy).
+    fn render_shaped_run_texture_via_line_snapshot(
         &mut self,
         run: &super::shaped_visual_run::ShapedVisualRun,
         font_size: f64,
@@ -348,24 +361,40 @@ impl SujianEditorItem {
         let qtextline_idx = run.qtextline_idx.unwrap_or(0);
         let wrap_w = run.paragraph_wrap_w.unwrap_or(99999.0);
         let indent_w = run.para_indent.unwrap_or(0.0);
-        let run_family = run.raw_font_key.raw_font_family_parsed();
 
-        crate::editor::layout::render_glyph_run_texture(
+        let line_image = crate::editor::layout::render_line_to_image(
             &para_text,
             font_size,
-            run_family,
+            &run.raw_font_key.raw_font_family_parsed().to_string(),
             wrap_w,
             indent_w,
             qtextline_idx,
-            run.qglyphrun_index,
-            0.0,
-            0.0,
-            run.visual_w,
-            run.visual_h,
-            run.texture_translate_x,
-            run.texture_translate_y,
             dpr,
             &self.current_text_color.to_string(),
-        )
+        )?;
+
+        let src_x = ((run.visual_x) * dpr).max(0.0) as i32;
+        let src_y = ((run.visual_y - run.line_y) * dpr).max(0.0) as i32;
+        let src_w = (run.visual_w * dpr).ceil() as i32;
+        let src_h = (run.visual_h * dpr).ceil() as i32;
+
+        let img_w = line_image.size().width;
+        let img_h = line_image.size().height;
+
+        if src_x + src_w > img_w as i32 || src_y + src_h > img_h as i32 || src_w <= 0 || src_h <= 0 {
+            return Some(line_image);
+        }
+
+        let cropped = cpp!(unsafe [
+            line_image as "QImage",
+            src_x as "int",
+            src_y as "int",
+            src_w as "int",
+            src_h as "int"
+        ] -> qmetaobject::QImage as "QImage" {
+            return line_image.copy(src_x, src_y, src_w, src_h);
+        });
+
+        Some(cropped)
     }
 }
