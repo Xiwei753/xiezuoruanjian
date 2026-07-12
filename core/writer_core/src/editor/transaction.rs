@@ -1,7 +1,10 @@
-//! 平台无关的编辑事务与动画事件模型。
+//! 平台无关的编辑事务与动画语义模型。
 //!
-//! 本模块只描述正文如何变化以及渲染层可以播放什么事件，不处理绘制、输入法、窗口、
-//! 鼠标或触摸。平台端必须把输入事件翻译成这里的 transaction，再由 renderer 决定如何画。
+//! Core 只输出编辑语义、byte range、cause、animation mode 和平台无关 cursor 语义；
+//! 平台视觉快照、glyph shaping、纹理、RenderNode/QImage 均不属于 Core。
+//!
+//! 平台端必须把输入事件翻译成这里的 transaction，再由平台渲染层决定如何绘制。
+//! Core 不保存 QImage / QTextLayout / RenderNode / Bitmap / StaticLayout / 像素坐标。
 
 use serde::{Deserialize, Serialize};
 
@@ -271,9 +274,10 @@ pub struct GlyphRect {
     pub byte_end: usize,
 }
 
-/// **DEPRECATED**: Use `EditorVisualTransaction` + `visual_transaction()` instead.
-/// Retained only for existing test coverage; production code must not call this.
-/// Removal tracked in #503 residual cleanup.
+/// **DEPRECATED**: 已被 `EditorVisualTransaction` + `visual_transaction()` 替代。
+/// 保留仅为现有测试覆盖；生产代码不得调用此类型。
+/// 当前主链是 `EditorVisualTransaction`，见 `visual_transaction()` 方法。
+/// 移除跟踪于 #503 residual cleanup。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[deprecated(
@@ -597,9 +601,10 @@ impl EditorEngine {
         }
     }
 
-    /// **DEPRECATED**: Use `visual_transaction()` instead.
-    /// Retained only for existing test coverage; production code must not call this.
-    /// Removal tracked in #503 residual cleanup.
+    /// **DEPRECATED**: 已被 `visual_transaction()` 替代。
+    /// 保留仅为现有测试覆盖；生产代码不得调用此方法。
+    /// 当前主链是 `visual_transaction()`，见该方法文档。
+    /// 移除跟踪于 #503 residual cleanup。
     #[deprecated(
         since = "0.12.0",
         note = "Use visual_transaction() instead. This will be removed in a future version."
