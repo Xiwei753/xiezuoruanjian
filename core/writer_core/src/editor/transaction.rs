@@ -277,7 +277,6 @@ pub struct GlyphRect {
 /// **DEPRECATED**: 已被 `EditorVisualTransaction` + `visual_transaction()` 替代。
 /// 保留仅为现有测试覆盖；生产代码不得调用此类型。
 /// 当前主链是 `EditorVisualTransaction`，见 `visual_transaction()` 方法。
-/// 移除跟踪于 #503 residual cleanup。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[deprecated(
@@ -437,7 +436,7 @@ pub struct PreeditVisualTransaction {
 }
 
 // =============================================================================
-// 跨平台视觉语义边界（Issue #503 阶段 2）
+// 跨平台视觉语义边界
 // =============================================================================
 //
 // Core 只输出 EditorVisualTransaction；平台端收到后，根据平台布局生成
@@ -474,9 +473,6 @@ pub struct VisualLayoutRevision {
 ///
 /// Glyph、Cluster、Run、LineReflow 只是对 cluster 的分组方式，
 /// 不再维护四套不同 payload。
-///
-/// SnapshotOld/SnapshotNew 已删除：SnapshotAnimation 不可用，
-/// 不存在 snapshot renderer，这两个角色无消费方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AnimatedSliceRole {
@@ -605,7 +601,6 @@ impl EditorEngine {
     /// **DEPRECATED**: 已被 `visual_transaction()` 替代。
     /// 保留仅为现有测试覆盖；生产代码不得调用此方法。
     /// 当前主链是 `visual_transaction()`，见该方法文档。
-    /// 移除跟踪于 #503 residual cleanup。
     #[deprecated(
         since = "0.12.0",
         note = "Use visual_transaction() instead. This will be removed in a future version."
