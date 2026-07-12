@@ -43,6 +43,14 @@ class AnimationModeTest {
     }
 
     @Test
+    fun imeComposingDoesNotClearAnimations() {
+        val source = File("src/main/kotlin/com/xiwei/sujian/editor/selfrender/SujianImeController.kt").readText()
+        assertFalse("IME composing must not clearAnimations, should pauseAll instead",
+            source.contains("renderer.clearAnimations()"))
+        assertTrue("IME composing should pauseAll", source.contains("renderer.pauseAll()"))
+    }
+
+    @Test
     fun coordinatedCursorOnlyStartsAfterTextAnimationStarted() {
         val source = controllerSource()
         assertTrue(source.contains("TextAnimationStartResult.Started"))

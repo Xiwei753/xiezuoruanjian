@@ -85,6 +85,7 @@ class SujianEditorRenderer(
 
     // ── Platform Visual Transaction 状态 ──
     private val activeTransactions = mutableListOf<AndroidPlatformVisualTransaction>()
+    private val pendingQueue = mutableListOf<AndroidPlatformVisualTransaction>()
     private var isScrolling = false
     private var animationTimeoutMs: Long = 520L
 
@@ -117,8 +118,9 @@ class SujianEditorRenderer(
 
     fun addTransaction(tx: AndroidPlatformVisualTransaction): Boolean {
         if (isScrolling) {
-            tx.cancel("scrolling")
-            return false
+            pendingQueue.removeAll { it.key == tx.key }
+            pendingQueue.add(tx)
+            return true
         }
         val conflicting = findConflictingTransaction(
             tx.slices.minOfOrNull { it.documentByteStart } ?: 0,
@@ -204,6 +206,17 @@ class SujianEditorRenderer(
                     tx.resume()
                 }
             }
+            flushPendingQueue()
+        }
+    }
+
+    private fun flushPendingQueue() {
+        if (pendingQueue.isEmpty()) return
+        val toAdd = pendingQueue.toList()
+        pendingQueue.clear()
+        for (tx in toAdd) {
+            if (tx.state == AndroidVisualTransactionState.Cancelled) continue
+            addTransaction(tx)
         }
     }
 
@@ -228,6 +241,10 @@ class SujianEditorRenderer(
             tx.cancel("clear")
         }
         activeTransactions.clear()
+        for (tx in pendingQueue) {
+            tx.cancel("clear")
+        }
+        pendingQueue.clear()
     }
 
     fun hasActiveAnimations(): Boolean = activeTransactions.any {

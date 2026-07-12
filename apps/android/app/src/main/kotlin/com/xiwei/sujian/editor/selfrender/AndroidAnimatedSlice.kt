@@ -19,7 +19,7 @@ data class AndroidAnimatedSlice(
     val scaleTo: Float,
     val documentByteStart: Int,
     val documentByteEnd: Int,
-    val shapingIdentity: String?
+    val shapingIdentity: String
 ) {
     fun computeFrame(progress: Float, easedProgress: Float): SliceFrame {
         val x = fromDocumentRect.left + (toDocumentRect.left - fromDocumentRect.left) * easedProgress
@@ -56,7 +56,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = AndroidAnimatedSliceRole.Insert,
@@ -81,7 +81,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = AndroidAnimatedSliceRole.Delete,
@@ -106,7 +106,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = AndroidAnimatedSliceRole.Move,
@@ -132,7 +132,7 @@ data class AndroidAnimatedSlice(
             toRect: RectF,
             byteStart: Int,
             byteEnd: Int,
-            shapingIdentity: String? = null
+            shapingIdentity: String
         ): AndroidAnimatedSlice = AndroidAnimatedSlice(
             id = id,
             role = role,

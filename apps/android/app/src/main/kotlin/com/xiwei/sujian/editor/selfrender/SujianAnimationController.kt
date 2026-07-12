@@ -96,7 +96,6 @@ class SujianAnimationController(
 
         if (renderer.isScrolling()) {
             renderer.pauseAll()
-            return TextAnimationStartResult.Skipped
         }
 
         val text = buffer.text
@@ -193,8 +192,6 @@ class SujianAnimationController(
                 }
 
                 val shapingChanged = oldCluster != null &&
-                    oldCluster.shapingIdentity != null &&
-                    cluster.shapingIdentity != null &&
                     oldCluster.shapingIdentity != cluster.shapingIdentity
 
                 if (shapingChanged && oldCluster != null) {
@@ -252,6 +249,10 @@ class SujianAnimationController(
             ))
         }
 
+        if (slices.isEmpty()) {
+            return TextAnimationStartResult.Skipped
+        }
+
         val cursorTransition = if (vt.newCursorRect != null && vt.oldCursorRect != null) {
             val newCR = vt.newCursorRect!!
             val oldCR = vt.oldCursorRect!!
@@ -289,11 +290,13 @@ class SujianAnimationController(
     fun handleDeleteTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 
-        val decision = if (renderer.isScrolling()) AnimationModeData.SystemSuppressed else vt.animationMode
+        if (renderer.isScrolling()) {
+            renderer.pauseAll()
+        }
+
+        val decision = vt.animationMode
         if (decision == AnimationModeData.SystemSuppressed || decision == AnimationModeData.SnapshotAnimation) {
-            if (renderer.isScrolling()) {
-                renderer.pauseAll()
-            } else {
+            if (!renderer.isScrolling()) {
                 renderer.clearAnimations()
             }
             consumeDeleteSnapshot(lastDeleteSnapshotId)
@@ -385,8 +388,6 @@ class SujianAnimationController(
                 if (!positionChanged) continue
 
                 val shapingChanged = oldClusterMatch != null &&
-                    oldClusterMatch.shapingIdentity != null &&
-                    cluster.shapingIdentity != null &&
                     oldClusterMatch.shapingIdentity != cluster.shapingIdentity
 
                 if (shapingChanged && oldSnapshotMatch != null) {
@@ -441,6 +442,10 @@ class SujianAnimationController(
                 destinationDocumentRect = newSnapshot.documentRect,
                 visibleSourceRects = visibleSourceRects
             ))
+        }
+
+        if (slices.isEmpty()) {
+            return TextAnimationStartResult.Skipped
         }
 
         val cursorTransition = if (vt.newCursorRect != null) {
