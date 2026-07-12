@@ -792,8 +792,13 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (hasWindowFocus && isFocused) {
-            cursorController.onFocusChanged(true)
+        if (hasWindowFocus) {
+            renderer.resumeAll()
+            if (isFocused) {
+                cursorController.onFocusChanged(true)
+            }
+        } else {
+            renderer.pauseAll()
         }
     }
 

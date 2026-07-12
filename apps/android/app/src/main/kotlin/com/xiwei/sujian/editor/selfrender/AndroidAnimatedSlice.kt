@@ -11,11 +11,11 @@ data class AndroidAnimatedSlice(
     val role: AndroidAnimatedSliceRole,
     val sourceSnapshotId: AndroidLineSnapshotId?,
     val sourceRect: RectF,
-    val fromDocumentRect: RectF,
+    var fromDocumentRect: RectF,
     val toDocumentRect: RectF,
-    val opacityFrom: Float,
+    var opacityFrom: Float,
     val opacityTo: Float,
-    val scaleFrom: Float,
+    var scaleFrom: Float,
     val scaleTo: Float,
     val documentByteStart: Int,
     val documentByteEnd: Int,
@@ -33,6 +33,12 @@ data class AndroidAnimatedSlice(
             alpha = alpha.toInt().coerceIn(0, 255),
             scale = scale
         )
+    }
+
+    fun rebaseFrom(currentRect: RectF, currentAlpha: Int) {
+        fromDocumentRect = currentRect
+        opacityFrom = currentAlpha / 255f
+        scaleFrom = 1f
     }
 
     data class SliceFrame(

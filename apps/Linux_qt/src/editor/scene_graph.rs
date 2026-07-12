@@ -379,7 +379,10 @@ pub fn update_animation_layer(
             // Set sourceRect for UV clipping from shared line texture
             if (sw > 0.0 && sh > 0.0) {
                 imgNode->setSourceRect(static_cast<qreal>(sx), static_cast<qreal>(sy),
-                                      static_cast<qreal>(sw), static_cast<qreal>(sh));
+                                       static_cast<qreal>(sw), static_cast<qreal>(sh));
+            } else {
+                imgNode->setSourceRect(static_cast<qreal>(0), static_cast<qreal>(0),
+                                       static_cast<qreal>(0), static_cast<qreal>(0));
             }
 
             bool needTextureUpdate = (texture_changed && texture_changed[i]);

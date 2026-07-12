@@ -47,6 +47,7 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub first_render_frame: Option<Instant>,
     pub rendering_started_at: Option<Instant>,
     pub accumulated_paused_duration_ms: u64,
+    pub pause_start: Option<Instant>,
     pub old_snapshot: Option<EditorLayoutSnapshot>,
     pub new_snapshot: Option<EditorLayoutSnapshot>,
 }
@@ -75,11 +76,28 @@ impl PreparedTextVisualTransaction {
     pub fn progress(&self, now: Instant) -> f64 {
         let effective_start = self.rendering_started_at.unwrap_or(self.first_render_frame.unwrap_or(self.start_time));
         let elapsed_ms = now.duration_since(effective_start).as_millis() as f64;
-        let effective_duration_ms = (self.duration_ms + self.accumulated_paused_duration_ms) as f64;
+        let effective_duration_ms = self.duration_ms as f64;
         if effective_duration_ms <= 0.0 {
             return 1.0;
         }
-        (elapsed_ms / effective_duration_ms).min(1.0)
+        let adjusted_elapsed = elapsed_ms - self.accumulated_paused_duration_ms as f64;
+        (adjusted_elapsed / effective_duration_ms).min(1.0).max(0.0)
+    }
+
+    pub fn pause(&mut self) {
+        if self.state == TextVisualTransactionState::Rendering {
+            self.state = TextVisualTransactionState::Paused;
+            self.pause_start = Some(Instant::now());
+        }
+    }
+
+    pub fn resume(&mut self) {
+        if self.state == TextVisualTransactionState::Paused {
+            if let Some(pause_start) = self.pause_start.take() {
+                self.accumulated_paused_duration_ms += Instant::now().duration_since(pause_start).as_millis() as u64;
+            }
+            self.state = TextVisualTransactionState::Rendering;
+        }
     }
 
     pub fn mark_first_render(&mut self) {

@@ -103,6 +103,7 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         };
@@ -157,6 +158,7 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         };
@@ -589,6 +591,7 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         };
@@ -626,6 +629,7 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         });

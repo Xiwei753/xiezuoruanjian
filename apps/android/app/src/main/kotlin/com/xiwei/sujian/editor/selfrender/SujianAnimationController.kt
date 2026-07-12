@@ -74,16 +74,20 @@ class SujianAnimationController(
             EditorAnimationKindData.Cursor -> TextAnimationStartResult.Skipped
         }
 
-        if (textAnimationResult == TextAnimationStartResult.Started &&
-            coordinatedAnimationEnabled && vt.oldCursorRect != null && vt.newCursorRect != null
-        ) {
-            val newRect = vt.newCursorRect!!
-            cursorController.updateCursorTarget(
-                newRect.x.toFloat(),
-                newRect.top.toFloat(),
-                newRect.bottom.toFloat(),
-                true
-            )
+        if (textAnimationResult == TextAnimationStartResult.Started) {
+            val activeTx = renderer.getActiveTransactions().lastOrNull()
+            if (activeTx != null && coordinatedAnimationEnabled) {
+                cursorController.setTransactionDrivenCursor(activeTx.cursorTransition)
+            }
+            if (coordinatedAnimationEnabled && vt.newCursorRect != null) {
+                val newRect = vt.newCursorRect!!
+                cursorController.updateCursorTarget(
+                    newRect.x.toFloat(),
+                    newRect.top.toFloat(),
+                    newRect.bottom.toFloat(),
+                    true
+                )
+            }
         }
     }
 
@@ -108,6 +112,17 @@ class SujianAnimationController(
 
         if (rangeStartUtf16 >= rangeEndUtf16) {
             return TextAnimationStartResult.Skipped
+        }
+
+        val oldRevision = snapshotBuilder.currentRevision()
+        val oldText = vt.oldText
+        val oldLineSnapshots = if (oldText.isNotEmpty()) {
+            val oldLayout = layout.getLayout(oldText)
+            val oldInsertLine = oldLayout.getLineForOffset(rangeStartUtf16.coerceIn(0, oldText.length))
+            val oldEndLine = oldLayout.getLineForOffset(rangeEndUtf16.coerceIn(0, oldText.length).coerceAtMost(oldText.length))
+            snapshotBuilder.buildLineSnapshots(oldText, oldInsertLine..(oldEndLine.coerceAtMost(oldInsertLine + 10)), oldRevision, renderer.getTextColor())
+        } else {
+            emptyList()
         }
 
         val newRevision = snapshotBuilder.nextRevisionAndIncrement()
@@ -138,7 +153,7 @@ class SujianAnimationController(
             val insertedClusters = lineSnapshot.clusters.filter { cluster ->
                 val clusterUtf16Start = cluster.platformTextStart
                 val clusterUtf16End = cluster.platformTextEnd
-                clusterUtf16Start >= rangeStartUtf16 && clusterUtf16End <= rangeEndUtf16
+                clusterUtf16Start < rangeEndUtf16 && clusterUtf16End > rangeStartUtf16
             }
 
             for (cluster in insertedClusters) {
@@ -161,12 +176,21 @@ class SujianAnimationController(
             }
 
             for (cluster in reflowClusters) {
-                val oldX = if (cluster.platformTextStart >= rangeStartUtf16) {
-                    cluster.visualRectInDocument.left - (rangeEndUtf16 - rangeStartUtf16) * textPaintMeasureChar()
-                } else {
-                    cluster.visualRectInDocument.left
+                val oldLineSnap = oldLineSnapshots.find { it.visualLineOrdinal == lineSnapshot.visualLineOrdinal }
+                val oldCluster = oldLineSnap?.clusters?.find { oc ->
+                    oc.documentByteStart == cluster.documentByteStart && oc.documentByteEnd == cluster.documentByteEnd
                 }
-                val oldRect = RectF(oldX, cluster.visualRectInDocument.top, oldX + cluster.visualRectInDocument.width(), cluster.visualRectInDocument.bottom)
+                val oldRect = if (oldCluster != null) {
+                    RectF(oldCluster.visualRectInDocument.left, oldCluster.visualRectInDocument.top,
+                          oldCluster.visualRectInDocument.right, oldCluster.visualRectInDocument.bottom)
+                } else {
+                    val oldX = if (cluster.platformTextStart >= rangeStartUtf16) {
+                        cluster.visualRectInDocument.left - (rangeEndUtf16 - rangeStartUtf16) * textPaintMeasureChar()
+                    } else {
+                        cluster.visualRectInDocument.left
+                    }
+                    RectF(oldX, cluster.visualRectInDocument.top, oldX + cluster.visualRectInDocument.width(), cluster.visualRectInDocument.bottom)
+                }
                 slices.add(AndroidAnimatedSlice.reflowMove(
                     id = (vt.id shl 2) or 1u + lineSnapshot.visualLineOrdinal.toULong(),
                     snapshotId = lineSnapshot.id,
@@ -215,10 +239,10 @@ class SujianAnimationController(
             operationKind = AndroidVisualOperationKind.Insert,
             animationMode = decision,
             durationMs = vt.durationMs,
-            oldRevision = newRevision - 1,
+            oldRevision = oldRevision,
             newRevision = newRevision,
             slices = slices,
-            oldLineSnapshots = mutableListOf(),
+            oldLineSnapshots = oldLineSnapshots.toMutableList(),
             newLineSnapshots = newLineSnapshots.toMutableList(),
             staticLinePatches = staticPatches.toMutableList(),
             cursorTransition = cursorTransition

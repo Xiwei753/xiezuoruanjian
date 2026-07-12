@@ -120,6 +120,26 @@ class SujianEditorRenderer(
             tx.cancel("scrolling")
             return false
         }
+        val conflicting = findConflictingTransaction(
+            tx.slices.minOfOrNull { it.documentByteStart } ?: 0,
+            tx.slices.maxOfOrNull { it.documentByteEnd } ?: 0
+        )
+        if (conflicting != null) {
+            val currentProgress = conflicting.progress
+            if (currentProgress in 0.01f..0.99f) {
+                for (slice in conflicting.slices) {
+                    val frame = slice.computeFrame(currentProgress, 1f - (1f - currentProgress) * (1f - currentProgress))
+                    val matchingNewSlice = tx.slices.find { ns ->
+                        ns.documentByteStart == slice.documentByteStart && ns.documentByteEnd == slice.documentByteEnd
+                    }
+                    if (matchingNewSlice != null) {
+                        matchingNewSlice.rebaseFrom(frame.destinationRect, frame.alpha)
+                    }
+                }
+            }
+            conflicting.cancel("rebased")
+            activeTransactions.removeAll { it.key == conflicting.key }
+        }
         activeTransactions.removeAll { it.key == tx.key }
         activeTransactions.add(tx)
         tx.markPrepared()
@@ -183,6 +203,22 @@ class SujianEditorRenderer(
                 if (tx.state == AndroidVisualTransactionState.Paused) {
                     tx.resume()
                 }
+            }
+        }
+    }
+
+    fun pauseAll() {
+        for (tx in activeTransactions) {
+            if (tx.state == AndroidVisualTransactionState.Rendering) {
+                tx.pause()
+            }
+        }
+    }
+
+    fun resumeAll() {
+        for (tx in activeTransactions) {
+            if (tx.state == AndroidVisualTransactionState.Paused) {
+                tx.resume()
             }
         }
     }

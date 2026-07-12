@@ -177,6 +177,13 @@ impl AnimatedSlice {
         matches!(self.kind, AnimatedSliceKind::DeleteFadeOut)
     }
 
+    pub fn rebase_from(&mut self, current_x: f64, current_y: f64, current_opacity: f64) {
+        self.from_document_rect.x = current_x;
+        self.from_document_rect.y = current_y;
+        self.opacity_from = current_opacity;
+        self.scale_from = 1.0;
+    }
+
     pub fn compute_frame(&self, progress: f64) -> AnimatedSliceFrame {
         match self.kind {
             AnimatedSliceKind::InsertFadeIn => {

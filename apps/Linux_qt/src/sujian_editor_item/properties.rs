@@ -353,13 +353,14 @@ impl SujianEditorItem {
         }
         self.current_is_scrolling = value;
         if value {
-            self.clear_active_text_animations();
+            self.animation_coordinator.pause_all();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
             self.request_static_repaint();
             return;
         }
         if !value {
+            self.animation_coordinator.resume_all();
             self.cursor_ctrl.force_snap_next = true;
             self.update_cursor_visual_position();
             self.request_static_repaint();

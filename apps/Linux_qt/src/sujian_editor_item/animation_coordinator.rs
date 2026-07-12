@@ -71,9 +71,22 @@ impl LinuxEditorAnimationCoordinator {
             EditorAnimationKind::Insert => {
                 if let Some((range_start, range_end)) = vt.inserted_range {
                     let conflicting = self.prepared_queue.find_conflicting_insert(range_start, range_end);
-                    if let Some(old_key) = conflicting {
+                    let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+                        let mut frames = Vec::new();
+                        if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
+                            let old_progress = old_tx.progress(Instant::now());
+                            if old_progress > 0.0 && old_progress < 1.0 {
+                                for old_slice in &old_tx.slices {
+                                    let frame = old_slice.compute_frame(old_progress);
+                                    frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                                }
+                            }
+                        }
                         self.prepared_queue.complete(old_key);
-                    }
+                        frames
+                    } else {
+                        Vec::new()
+                    };
 
                     let key = self.alloc_key();
                     let mut slices = Vec::new();
@@ -179,6 +192,12 @@ impl LinuxEditorAnimationCoordinator {
                         CursorTransition::Snap
                     };
 
+                    for (bs, be, fx, fy, fo) in &rebase_frames {
+                        if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                            new_slice.rebase_from(*fx, *fy, *fo);
+                        }
+                    }
+
                     let prepared = PreparedTextVisualTransaction {
                         key,
                         state: TextVisualTransactionState::Pending,
@@ -198,6 +217,7 @@ impl LinuxEditorAnimationCoordinator {
                         first_render_frame: None,
                         rendering_started_at: None,
                         accumulated_paused_duration_ms: 0,
+                        pause_start: None,
                         old_snapshot: Some(old_snapshot.clone()),
                         new_snapshot: Some(new_snapshot.clone()),
                     };
@@ -319,6 +339,7 @@ impl LinuxEditorAnimationCoordinator {
                     first_render_frame: None,
                     rendering_started_at: None,
                     accumulated_paused_duration_ms: 0,
+                    pause_start: None,
                     old_snapshot: Some(old_snapshot.clone()),
                     new_snapshot: Some(new_snapshot.clone()),
                 };
@@ -394,9 +415,6 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             for patch in &tx.static_patches {
-                if !patch.is_insert {
-                    continue;
-                }
                 let snapshot = if let Some(ref snap) = tx.new_snapshot {
                     snap.line_snapshots.iter().find(|l| l.id == patch.snapshot_id)
                 } else {
@@ -478,7 +496,7 @@ impl LinuxEditorAnimationCoordinator {
         let dy = (cursor_y - old_visual_y).abs();
 
         let large_distance = force_snap_next && (dx > 80.0 || dy > cursor_h * 1.5);
-        let cross_line_snap = dy > cursor_h * 3.0 && !has_active;
+        let cross_line_snap = dy > cursor_h * 3.0;
 
         let transition = if !should_be_visible {
             CursorTransition::Snap
@@ -489,8 +507,8 @@ impl LinuxEditorAnimationCoordinator {
                 && new_cursor_rect.is_some()
             {
                 CursorTransition::Tween {
-                    old_rect: old_cursor_rect.unwrap(),
-                    new_rect: new_cursor_rect.unwrap(),
+                    old_rect: old_cursor_rect.clone().unwrap(),
+                    new_rect: new_cursor_rect.clone().unwrap(),
                     duration_ms: smooth_cursor_duration_ms as u64,
                 }
             } else {
@@ -506,8 +524,8 @@ impl LinuxEditorAnimationCoordinator {
                     && new_cursor_rect.is_some()
                 {
                     CursorTransition::Tween {
-                        old_rect: old_cursor_rect.unwrap(),
-                        new_rect: new_cursor_rect.unwrap(),
+                        old_rect: old_cursor_rect.clone().unwrap(),
+                        new_rect: new_cursor_rect.clone().unwrap(),
                         duration_ms: smooth_cursor_duration_ms as u64,
                     }
                 } else {
@@ -539,8 +557,8 @@ impl LinuxEditorAnimationCoordinator {
                 && new_cursor_rect.is_some()
             {
                 CursorTransition::Tween {
-                    old_rect: old_cursor_rect.unwrap(),
-                    new_rect: new_cursor_rect.unwrap(),
+                    old_rect: old_cursor_rect.clone().unwrap(),
+                    new_rect: new_cursor_rect.clone().unwrap(),
                     duration_ms: smooth_cursor_duration_ms as u64,
                 }
             } else {
@@ -589,6 +607,26 @@ impl LinuxEditorAnimationCoordinator {
             },
             cursor_changed: position_changed,
             anchor_changed: false,
+        }
+    }
+
+    fn active_transaction_duration_ms(&self) -> Option<u64> {
+        self.prepared_queue.active_transactions()
+            .iter()
+            .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
+            .map(|t| t.duration_ms)
+            .min()
+    }
+
+    pub(crate) fn pause_all(&mut self) {
+        for tx in self.prepared_queue.active_transactions_mut() {
+            tx.pause();
+        }
+    }
+
+    pub(crate) fn resume_all(&mut self) {
+        for tx in self.prepared_queue.active_transactions_mut() {
+            tx.resume();
         }
     }
 

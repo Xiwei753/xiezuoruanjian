@@ -164,26 +164,14 @@ class AndroidLayoutSnapshotBuilder(
 
     private fun findClusterBoundary(text: String, start: Int, lineEnd: Int): Int {
         if (start >= text.length) return start
-        val codePoint = text.codePointAt(start)
-        val charCount = Character.charCount(codePoint)
-        var end = start + charCount
-
-        while (end < lineEnd.coerceAtMost(text.length)) {
-            val nextCp = text.codePointAt(end)
-            val nextType = Character.getType(nextCp)
-            if (nextType == Character.NON_SPACING_MARK.toInt() ||
-                nextType == Character.COMBINING_SPACING_MARK.toInt() ||
-                nextType == Character.ENCLOSING_MARK.toInt() ||
-                nextCp == 0x200D ||
-                nextCp in 0xFE00..0xFE0F ||
-                nextCp in 0xE0100..0xE01EF
-            ) {
-                end += Character.charCount(nextCp)
-            } else {
-                break
-            }
+        val breaker = android.icu.text.BreakIterator.getCharacterInstance()
+        breaker.setText(text)
+        val boundary = breaker.following(start)
+        if (boundary == android.icu.text.BreakIterator.DONE || boundary > lineEnd) {
+            val codePoint = text.codePointAt(start)
+            return (start + Character.charCount(codePoint)).coerceAtMost(lineEnd.coerceAtMost(text.length))
         }
-        return end
+        return boundary.coerceAtMost(lineEnd.coerceAtMost(text.length))
     }
 
     private fun findParagraphId(text: String, offset: Int): Int {

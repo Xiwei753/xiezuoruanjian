@@ -41,15 +41,7 @@ class RenderNodeVisualResource(
         val savedPaint = textPaint.color
         textPaint.color = textColor
         recordingCanvas.save()
-        val clipPath = android.graphics.Path()
-        layout.getSelectionPath(
-            layout.getLineStart(lineIdx),
-            layout.getLineEnd(lineIdx),
-            clipPath
-        )
-        if (!clipPath.isEmpty) {
-            recordingCanvas.clipPath(clipPath)
-        }
+        recordingCanvas.clipRect(0f, 0f, width.toFloat(), height.toFloat())
         layout.draw(recordingCanvas)
         recordingCanvas.restore()
         textPaint.color = savedPaint
@@ -106,15 +98,7 @@ class BitmapVisualResource : AndroidLineVisualResource {
         val savedPaint = textPaint.color
         textPaint.color = textColor
         bmpCanvas.save()
-        val clipPath = android.graphics.Path()
-        layout.getSelectionPath(
-            layout.getLineStart(lineIdx),
-            layout.getLineEnd(lineIdx),
-            clipPath
-        )
-        if (!clipPath.isEmpty) {
-            bmpCanvas.clipPath(clipPath)
-        }
+        bmpCanvas.clipRect(0f, 0f, w.toFloat(), h.toFloat())
         layout.draw(bmpCanvas)
         bmpCanvas.restore()
         textPaint.color = savedPaint
