@@ -38,11 +38,16 @@ class SujianClipboardController(
         val selected = buffer.getSelectedText() ?: return false
         val clip = ClipData.newPlainText("text", selected)
         clipboardManager.setPrimaryClip(clip)
-        if (layout != null && !buffer.selection.isCollapsed) {
+        // 记录删除前快照（如果 animationController 和 layout 可用）
+        if (animationController != null && layout != null && !buffer.selection.isCollapsed) {
             val selStart = buffer.selection.start
             val selEnd = buffer.selection.end
             if (selStart < selEnd) {
+                val deletedGlyphRects = layout.getGlyphRects(buffer.text, selStart, selEnd)
                 val oldCursorRect = layout.getCursorRect(buffer.text, buffer.selection.head)
+                animationController.recordDeleteSnapshot(selected, deletedGlyphRects, oldCursorRect)
+
+                // 设置 preDeleteOldCursorRect 供 runVisualEdit 复用
                 if (editorView != null) {
                     editorView.preDeleteOldCursorRect = com.xiwei.sujian.model.SujianCursorRectData(
                         oldCursorRect.x.toDouble(),
@@ -53,6 +58,7 @@ class SujianClipboardController(
                 }
             }
         }
+        // 删除选中文本 — 使用 runVisualEdit 包装
         if (editorView != null) {
             editorView.runVisualEdit(SujianEditCauseData.Delete) {
                 buffer.commitText("", SujianEditCause.Delete)

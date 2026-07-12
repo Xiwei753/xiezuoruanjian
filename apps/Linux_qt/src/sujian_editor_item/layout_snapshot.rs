@@ -1,87 +1,7 @@
 use qmetaobject::QImage;
-use crate::editor::layout::{CaretAffinity, CaretRect, LayoutParams, LayoutSnapshot, VisualLine};
+use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, VisualLine};
 pub(crate) use super::layout_revision::LayoutRevision;
-
-#[derive(Clone, Debug)]
-pub(crate) struct ParagraphIndexMap {
-    entries: Vec<ParagraphEntry>,
-}
-
-#[derive(Clone, Debug)]
-struct ParagraphEntry {
-    para_start_byte: usize,
-    para_end_byte: usize,
-    para_start_qchar: usize,
-    para_end_qchar: usize,
-}
-
-impl ParagraphIndexMap {
-    pub fn from_text(text: &str) -> Self {
-        let mut entries = Vec::new();
-        let mut byte_pos = 0usize;
-        let mut qchar_pos = 0usize;
-
-        for line in text.split('\n') {
-            let line_bytes = line.len();
-            let line_qchars = line.chars().count();
-
-            entries.push(ParagraphEntry {
-                para_start_byte: byte_pos,
-                para_end_byte: byte_pos + line_bytes,
-                para_start_qchar: qchar_pos,
-                para_end_qchar: qchar_pos + line_qchars,
-            });
-
-            byte_pos += line_bytes;
-            qchar_pos += line_qchars;
-
-            if byte_pos < text.len() {
-                byte_pos += 1;
-                qchar_pos += 1;
-            }
-        }
-
-        ParagraphIndexMap { entries }
-    }
-
-    pub fn byte_to_qchar(&self, byte_offset: usize) -> usize {
-        for entry in &self.entries {
-            if byte_offset >= entry.para_start_byte && byte_offset <= entry.para_end_byte {
-                let within_para_byte = byte_offset - entry.para_start_byte;
-                return entry.para_start_qchar + within_para_byte;
-            }
-        }
-        byte_offset
-    }
-
-    pub fn qchar_to_byte(&self, qchar_offset: usize) -> usize {
-        for entry in &self.entries {
-            if qchar_offset >= entry.para_start_qchar && qchar_offset <= entry.para_end_qchar {
-                let within_para_qchar = qchar_offset - entry.para_start_qchar;
-                return entry.para_start_byte + within_para_qchar;
-            }
-        }
-        qchar_offset
-    }
-
-    pub fn paragraph_for_byte(&self, byte_offset: usize) -> Option<usize> {
-        self.entries
-            .iter()
-            .position(|e| byte_offset >= e.para_start_byte && byte_offset <= e.para_end_byte)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct LineSnapshotId {
-    pub revision: LayoutRevision,
-    pub visual_line_id: usize,
-}
-
-impl LineSnapshotId {
-    pub fn new(revision: LayoutRevision, visual_line_id: usize) -> Self {
-        Self { revision, visual_line_id }
-    }
-}
+pub(crate) use super::snapshot_id::LineSnapshotId;
 
 #[derive(Clone, Debug)]
 pub(crate) struct LineClusterSnapshot {
@@ -151,6 +71,8 @@ pub(crate) struct PreparedLineSnapshot {
     pub qtextline_idx: i32,
     pub paragraph_wrap_w: f64,
     pub para_indent: f64,
+    pub visual_x: f64,
+    pub scroll_y: f64,
 }
 
 impl PreparedLineSnapshot {
@@ -189,52 +111,41 @@ impl PreparedLineSnapshot {
             .filter(|c| c.byte_end > byte_start && c.byte_start < byte_end)
             .collect()
     }
+
+    pub fn intersects_byte_range(&self, start: usize, end: usize) -> bool {
+        self.byte_end > start && self.byte_start < end
+    }
 }
 
 #[derive(Clone)]
 pub(crate) struct EditorLayoutSnapshot {
     pub revision: LayoutRevision,
     pub layout_snapshot: LayoutSnapshot,
-    pub paragraph_index_map: ParagraphIndexMap,
     pub line_snapshots: Vec<PreparedLineSnapshot>,
     pub caret_rect: Option<CaretRect>,
     pub caret_affinity: CaretAffinity,
 }
 
+impl std::fmt::Debug for EditorLayoutSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorLayoutSnapshot")
+            .field("revision", &self.revision)
+            .field("line_count", &self.line_snapshots.len())
+            .finish()
+    }
+}
+
 impl EditorLayoutSnapshot {
     pub fn new(
         layout_snapshot: LayoutSnapshot,
-        text: &str,
+        line_snapshots: Vec<PreparedLineSnapshot>,
         caret_rect: Option<CaretRect>,
         caret_affinity: CaretAffinity,
     ) -> Self {
         let revision = LayoutRevision::next();
-        let paragraph_index_map = ParagraphIndexMap::from_text(text);
-
-        let line_snapshots = layout_snapshot.lines.iter().map(|line| {
-            PreparedLineSnapshot {
-                id: LineSnapshotId::new(revision, line.id),
-                image: None,
-                clusters: Vec::new(),
-                document_origin_y: line.y,
-                baseline_y: 0.0,
-                dpr: 1.0,
-                line_height: line.height,
-                line_width: line.width,
-                byte_start: line.byte_start,
-                byte_end: line.byte_end,
-                para_text: line.para_text.clone(),
-                para_start: line.para_start,
-                qtextline_idx: line.qtextline_idx,
-                paragraph_wrap_w: line.line_wrap_width + line.line_indent_x,
-                para_indent: line.para_indent,
-            }
-        }).collect();
-
         EditorLayoutSnapshot {
             revision,
             layout_snapshot,
-            paragraph_index_map,
             line_snapshots,
             caret_rect,
             caret_affinity,
@@ -272,13 +183,6 @@ mod tests {
         let r1 = LayoutRevision::next();
         let r2 = LayoutRevision::next();
         assert!(r2 > r1);
-    }
-
-    #[test]
-    fn test_paragraph_index_map_simple() {
-        let map = ParagraphIndexMap::from_text("hello\nworld");
-        assert_eq!(map.paragraph_for_byte(0), Some(0));
-        assert_eq!(map.paragraph_for_byte(6), Some(1));
     }
 
     #[test]

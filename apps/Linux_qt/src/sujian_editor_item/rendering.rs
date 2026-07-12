@@ -183,7 +183,7 @@ impl SujianEditorItem {
         // fixing mixed-script cursor issues (e.g. "]\"" where cursor
         // lands inside the Chinese quote).
         let render_plan = self.animation_coordinator.current_static_render_plan();
-        let merged_skip_ranges = render_plan.merged_byte_ranges();
+        let hidden_clip_rects = render_plan.merged_clip_rects();
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
             let text_y = self
@@ -195,20 +195,25 @@ impl SujianEditorItem {
                 continue;
             }
 
-            // Use QTextLine::draw() for consistent shaping with cursor positions
             let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
+            let line_top = line.y + paint_offset_y;
+            let line_bottom = line_top + line.height;
 
-            // Find all skip ranges (insert + reflow) that intersect this line
-            let intersecting_ranges: Vec<(usize, usize)> = merged_skip_ranges
+            let line_hidden: Vec<(f64, f64, f64, f64)> = hidden_clip_rects
                 .iter()
-                .filter(|(rs, re)| *re > line.byte_start && *rs < line.byte_end)
-                .map(|&(rs, re)| {
-                    (rs.max(line.byte_start), re.min(line.byte_end))
+                .filter(|(left, top, right, bottom)| {
+                    *right > line.x && *left < line.x + line.width
+                        && *bottom > line.y && *top < line.y + line.height
                 })
+                .map(|(left, top, right, _bottom)| {
+                    let clip_left = (*left).max(line.x);
+                    let clip_right = (*right).min(line.x + line.width);
+                    (clip_left, line_top, clip_right - clip_left, line.height)
+                })
+                .filter(|(_, _, w, _)| *w > 0.01)
                 .collect();
 
-            if intersecting_ranges.is_empty() {
-                // No active animation skip ranges on this line — draw normally
+            if line_hidden.is_empty() {
                 crate::editor::layout::draw_line_text(
                     painter,
                     &line.para_text,
@@ -222,50 +227,29 @@ impl SujianEditorItem {
                     &self.current_text_color.to_string(),
                 );
             } else {
-                // One or more skip ranges (insert + reflow) intersect this line.
-                // Compute the x-coordinates for each range boundary,
-                // then draw the line in segments that exclude all skip ranges.
-                let line_top = line.y + paint_offset_y;
                 let line_left = line.x;
                 let line_right = line.x + line.width;
 
-                // Build sorted list of (x_start, x_end) for each intersecting range
-                let mut x_ranges: Vec<(f64, f64)> = intersecting_ranges
+                let mut segments: Vec<(f64, f64)> = Vec::new();
+                let mut cursor_x = line_left;
+                let mut sorted_hidden: Vec<(f64, f64)> = line_hidden
                     .iter()
-                    .map(|&(rs, re)| {
-                        let x_start = self.editor_layout.cursor_x_for_line(
-                            &snapshot,
-                            line,
-                            rs,
-                            CaretAffinity::Downstream,
-                        );
-                        let x_end = self.editor_layout.cursor_x_for_line(
-                            &snapshot,
-                            line,
-                            re,
-                            CaretAffinity::Downstream,
-                        );
-                        (x_start, x_end)
-                    })
+                    .map(|(x, _y, w, _h)| (*x, x + w))
                     .collect();
-                x_ranges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                sorted_hidden.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-                // Merge overlapping x_ranges to avoid double-clipping
-                let mut merged: Vec<(f64, f64)> = Vec::new();
-                for (xs, xe) in x_ranges {
-                    if let Some(last) = merged.last_mut() {
+                let mut merged_hidden: Vec<(f64, f64)> = Vec::new();
+                for (xs, xe) in sorted_hidden {
+                    if let Some(last) = merged_hidden.last_mut() {
                         if xs <= last.1 + 0.01 {
                             last.1 = last.1.max(xe);
                             continue;
                         }
                     }
-                    merged.push((xs, xe));
+                    merged_hidden.push((xs, xe));
                 }
 
-                // Compute visible segments: gaps between merged exclusion ranges
-                let mut segments: Vec<(f64, f64)> = Vec::new();
-                let mut cursor_x = line_left;
-                for (xs, xe) in &merged {
+                for (xs, xe) in &merged_hidden {
                     if *xs > cursor_x + 0.01 {
                         segments.push((cursor_x, *xs));
                     }
@@ -275,7 +259,6 @@ impl SujianEditorItem {
                     segments.push((cursor_x, line_right));
                 }
 
-                // Draw each visible segment with its own clip rect
                 cpp!(unsafe [painter as "QPainter*"] {
                     painter->save();
                 });

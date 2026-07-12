@@ -6,10 +6,8 @@ use super::animated_slice::AnimatedSlice;
 use super::animation_mode::AnimationMode;
 use super::cursor_animation::CursorTransition;
 use super::layout_revision::LayoutRevision;
-use super::line_snapshot::EditorLayoutSnapshot;
-use super::shaped_visual_run::ShapedVisualRun;
+use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use super::static_line_patch::StaticLinePatch;
-use super::texture_cache::TexturePhase;
 use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,7 +38,6 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub old_revision: LayoutRevision,
     pub new_revision: LayoutRevision,
     pub slices: Vec<AnimatedSlice>,
-    pub source_runs: Vec<ShapedVisualRun>,
     pub static_patches: Vec<StaticLinePatch>,
     pub cursor_transition: CursorTransition,
     pub old_cursor_rect: Option<CursorRect>,
@@ -50,6 +47,8 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub first_render_frame: Option<Instant>,
     pub rendering_started_at: Option<Instant>,
     pub accumulated_paused_duration_ms: u64,
+    pub old_snapshot: Option<EditorLayoutSnapshot>,
+    pub new_snapshot: Option<EditorLayoutSnapshot>,
 }
 
 impl PreparedTextVisualTransaction {
@@ -92,14 +91,6 @@ impl PreparedTextVisualTransaction {
         }
     }
 
-    pub fn find_source_run_for_slice(&self, slice: &AnimatedSlice) -> Option<&ShapedVisualRun> {
-        self.source_runs.iter().find(|r| {
-            r.source_string_start == slice.byte_start
-                && r.source_string_end == slice.byte_end
-                && r.qglyphrun_index == slice.run_identity
-        })
-    }
-
     pub fn inserted_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.static_patches
             .iter()
@@ -131,6 +122,16 @@ impl PreparedTextVisualTransaction {
                 .static_patches
                 .iter()
                 .any(|p| p.intersects(byte_start, byte_end))
+    }
+
+    pub fn snapshot_ids(&self) -> Vec<LineSnapshotId> {
+        let mut ids: Vec<LineSnapshotId> = self.slices.iter().map(|s| s.snapshot_id).collect();
+        for patch in &self.static_patches {
+            ids.push(patch.snapshot_id);
+        }
+        ids.sort_by_key(|id| (id.layout_revision, id.paragraph_id, id.visual_line_ordinal));
+        ids.dedup();
+        ids
     }
 }
 

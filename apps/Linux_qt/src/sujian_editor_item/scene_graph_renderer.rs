@@ -1,7 +1,7 @@
 use crate::editor::scene_graph;
 use super::render_plan::RenderPlan;
-use super::texture_cache::{TextureCache, TextureCacheKey};
-use qmetaobject::QImage;
+use super::texture_cache::TextureCache;
+use super::layout_snapshot::LineSnapshotId;
 
 pub(crate) fn render_frame(
     root_raw: *mut std::ffi::c_void,
@@ -30,22 +30,27 @@ fn render_text_animation_layer(
     }
 
     let mut glyph_data: Vec<f64> = Vec::new();
-    let mut glyph_images: Vec<QImage> = Vec::new();
+    let mut glyph_images: Vec<qmetaobject::QImage> = Vec::new();
     let mut glyph_texture_changed: Vec<bool> = Vec::new();
+    let mut source_rects: Vec<f64> = Vec::new();
 
     for glyph in &plan.text_animation.glyphs {
         glyph_data.extend_from_slice(&[
-            glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity, glyph.baseline_in_quad,
+            glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity,
         ]);
 
-        let cache_key = TextureCacheKey::new(glyph.key, glyph.texture_phase, glyph.run_identity);
-        match texture_cache.get(&cache_key) {
+        source_rects.extend_from_slice(&[
+            glyph.source_rect.x, glyph.source_rect.y,
+            glyph.source_rect.w, glyph.source_rect.h,
+        ]);
+
+        match texture_cache.get_line(&glyph.snapshot_id) {
             Some(texture) => {
                 glyph_images.push(texture.clone());
                 glyph_texture_changed.push(true);
             }
             None => {
-                glyph_images.push(QImage::new(
+                glyph_images.push(qmetaobject::QImage::new(
                     qmetaobject::QSize { width: 1, height: 1 },
                     qmetaobject::ImageFormat::ARGB32_Premultiplied,
                 ));
@@ -54,15 +59,16 @@ fn render_text_animation_layer(
         }
     }
 
-    let glyph_count = glyph_data.len() / 6;
+    let glyph_count = glyph_data.len() / 5;
     if glyph_count > 0 && glyph_count == glyph_images.len() {
         let glyph_data_ptr = glyph_data.as_ptr();
-        let image_ptrs: Vec<*const QImage> = glyph_images
+        let image_ptrs: Vec<*const qmetaobject::QImage> = glyph_images
             .iter()
-            .map(|img| img as *const QImage)
+            .map(|img| img as *const qmetaobject::QImage)
             .collect();
         let image_ptrs_ptr = image_ptrs.as_ptr();
         let texture_changed_ptr = glyph_texture_changed.as_ptr();
+        let source_rects_ptr = source_rects.as_ptr();
 
         scene_graph::update_animation_layer(
             root_raw,
@@ -71,6 +77,7 @@ fn render_text_animation_layer(
             glyph_data_ptr,
             image_ptrs_ptr,
             texture_changed_ptr,
+            source_rects_ptr,
         );
     } else {
         scene_graph::clear_animation_layer(root_raw, item_ptr);

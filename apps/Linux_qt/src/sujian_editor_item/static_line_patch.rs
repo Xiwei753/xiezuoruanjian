@@ -1,26 +1,45 @@
+use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Debug)]
 pub(crate) struct StaticLinePatch {
     pub key: VisualTransactionKey,
+    pub snapshot_id: LineSnapshotId,
+    pub hidden_source_rects: Vec<SourceRect>,
     pub byte_start: usize,
     pub byte_end: usize,
     pub is_insert: bool,
 }
 
 impl StaticLinePatch {
-    pub fn insert_patch(key: VisualTransactionKey, byte_start: usize, byte_end: usize) -> Self {
+    pub fn insert_patch(
+        key: VisualTransactionKey,
+        snapshot_id: LineSnapshotId,
+        hidden_source_rects: Vec<SourceRect>,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Self {
         Self {
             key,
+            snapshot_id,
+            hidden_source_rects,
             byte_start,
             byte_end,
             is_insert: true,
         }
     }
 
-    pub fn reflow_patch(key: VisualTransactionKey, byte_start: usize, byte_end: usize) -> Self {
+    pub fn reflow_patch(
+        key: VisualTransactionKey,
+        snapshot_id: LineSnapshotId,
+        hidden_source_rects: Vec<SourceRect>,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Self {
         Self {
             key,
+            snapshot_id,
+            hidden_source_rects,
             byte_start,
             byte_end,
             is_insert: false,

@@ -1,63 +1,46 @@
-use std::collections::HashMap;
-
-use super::transaction_key::VisualTransactionKey;
-use qmetaobject::QImage;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum TexturePhase {
-    Insert,
-    DeleteOld,
-    OldReflow,
-    NewReflow,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct TextureCacheKey {
-    pub transaction_key: VisualTransactionKey,
-    pub phase: TexturePhase,
-    pub run_identity: i32,
-}
-
-impl TextureCacheKey {
-    pub fn new(transaction_key: VisualTransactionKey, phase: TexturePhase, run_identity: i32) -> Self {
-        Self { transaction_key, phase, run_identity }
-    }
-}
+use super::line_snapshot::LineTextureStore;
+pub(crate) use super::layout_snapshot::LineSnapshotId;
 
 pub(crate) struct TextureCache {
-    textures: HashMap<TextureCacheKey, QImage>,
+    line_store: LineTextureStore,
 }
 
 impl TextureCache {
     pub fn new() -> Self {
         Self {
-            textures: HashMap::new(),
+            line_store: LineTextureStore::new(),
         }
     }
 
-    pub fn insert(&mut self, key: TextureCacheKey, texture: QImage) {
-        self.textures.insert(key, texture);
+    pub fn insert_line(&mut self, id: LineSnapshotId, texture: qmetaobject::QImage) {
+        self.line_store.insert(id, texture);
     }
 
-    pub fn insert_batch(&mut self, keys: Vec<TextureCacheKey>, textures: Vec<QImage>) {
-        for (k, t) in keys.into_iter().zip(textures.into_iter()) {
-            self.textures.insert(k, t);
+    pub fn get_line(&self, id: &LineSnapshotId) -> Option<&qmetaobject::QImage> {
+        self.line_store.get(id)
+    }
+
+    pub fn contains_line(&self, id: &LineSnapshotId) -> bool {
+        self.line_store.contains(id)
+    }
+
+    pub fn remove_for_transaction(&mut self, _snapshot_ids: &[LineSnapshotId]) {
+        for id in _snapshot_ids {
+            self.line_store.remove(id);
         }
-    }
-
-    pub fn get(&self, key: &TextureCacheKey) -> Option<&QImage> {
-        self.textures.get(key)
-    }
-
-    pub fn remove_for_transaction(&mut self, transaction_key: &VisualTransactionKey) {
-        self.textures.retain(|k, _| k.transaction_key != *transaction_key);
     }
 
     pub fn clear(&mut self) {
-        self.textures.clear();
+        self.line_store.clear();
     }
 
     pub fn is_empty(&self) -> bool {
-        self.textures.is_empty()
+        self.line_store.is_empty()
+    }
+}
+
+impl Default for TextureCache {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -232,7 +232,13 @@ impl QQuickItem for SujianEditorItem {
 
             for key in &render_plan.frame_context.keys_to_complete {
                 self.animation_coordinator.finish_by_key(*key);
-                self.texture_cache.remove_for_transaction(key);
+                let tx = self.animation_coordinator.prepared_queue.active_transactions()
+                    .iter()
+                    .find(|t| t.key == *key);
+                if let Some(t) = tx {
+                    let snapshot_ids = t.snapshot_ids();
+                    self.texture_cache.remove_for_transaction(&snapshot_ids);
+                }
                 editor_animation_debug_log(&format!(
                     "update_paint_node: tid={}, gen={} completed (progress >= 1.0)",
                     key.transaction_id, key.generation
@@ -241,7 +247,6 @@ impl QQuickItem for SujianEditorItem {
 
             for key in &render_plan.frame_context.keys_to_cancel {
                 self.animation_coordinator.cancel_by_key(*key, "texture_failed");
-                self.texture_cache.remove_for_transaction(key);
             }
 
             if !render_plan.frame_context.keys_to_complete.is_empty() {
@@ -268,118 +273,8 @@ impl QQuickItem for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
-        let dpr = {
-            let item_ptr = self.get_cpp_object();
-            if !item_ptr.is_null() {
-                renderer::sujian_item_dpr(item_ptr)
-            } else {
-                1.0
-            }
-        };
-
-        let font_size = self.current_font_pixel_size as f64;
-        let font_family = self.current_font_family.to_string();
-
-        let (slices, source_runs, cache_keys) = {
-            let tx = self.animation_coordinator.prepared_queue.active_transactions()
-                .iter()
-                .find(|t| t.key == key);
-            match tx {
-                Some(t) => {
-                    let slices: Vec<super::animated_slice::AnimatedSlice> = t.slices.clone();
-                    let source_runs: Vec<super::shaped_visual_run::ShapedVisualRun> = t.source_runs.clone();
-                    let keys: Vec<super::texture_cache::TextureCacheKey> = t.slices.iter()
-                        .map(|s| super::texture_cache::TextureCacheKey::new(key, s.texture_phase, s.run_identity))
-                        .collect();
-                    (slices, source_runs, keys)
-                }
-                None => return,
-            }
-        };
-
-        if slices.is_empty() {
-            self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
-            return;
-        }
-
-        let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::with_capacity(slices.len());
-        for slice in &slices {
-            let source_run = source_runs.iter().find(|r| {
-                r.source_string_start == slice.byte_start
-                    && r.source_string_end == slice.byte_end
-                    && r.qglyphrun_index == slice.run_identity
-            });
-            let texture = match source_run {
-                Some(run) => self.render_line_snapshot_texture(run, font_size, &font_family, dpr),
-                None => None,
-            };
-            textures.push(texture);
-        }
-
-        let any_failed = textures.iter().any(|t| t.is_none());
-        if any_failed {
-            editor_animation_debug_log(&format!(
-                "prepare_transaction_textures: texture failed for tid={}, cancelling",
-                key.transaction_id
-            ));
-            self.animation_coordinator.cancel_by_key(key, "texture_failed");
-            self.render_dirty = true;
-        } else {
-            let ready_textures: Vec<qmetaobject::QImage> = textures.into_iter().map(|t| t.unwrap()).collect();
-            self.texture_cache.insert_batch(cache_keys, ready_textures);
-            self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
-        }
-    }
-
-    fn render_line_snapshot_texture(
-        &mut self,
-        run: &super::shaped_visual_run::ShapedVisualRun,
-        font_size: f64,
-        _font_family: &str,
-        dpr: f64,
-    ) -> Option<qmetaobject::QImage> {
-        let para_text = match &run.para_text {
-            Some(t) if !t.is_empty() => t.clone(),
-            _ => return None,
-        };
-        let qtextline_idx = run.qtextline_idx.unwrap_or(0);
-        let wrap_w = run.paragraph_wrap_w.unwrap_or(99999.0);
-        let indent_w = run.para_indent.unwrap_or(0.0);
-
-        let line_image = crate::editor::layout::render_line_to_image(
-            &para_text,
-            font_size,
-            &run.raw_font_key.raw_font_family_parsed().to_string(),
-            wrap_w,
-            indent_w,
-            qtextline_idx,
-            dpr,
-            &self.current_text_color.to_string(),
-        )?;
-
-        let src_x = ((run.visual_x) * dpr).max(0.0) as i32;
-        let src_y = ((run.visual_y - run.line_y) * dpr).max(0.0) as i32;
-        let src_w = (run.visual_w * dpr).ceil() as i32;
-        let src_h = (run.visual_h * dpr).ceil() as i32;
-
-        let img_w = line_image.size().width;
-        let img_h = line_image.size().height;
-
-        if src_x + src_w > img_w as i32 || src_y + src_h > img_h as i32 || src_w <= 0 || src_h <= 0 {
-            return Some(line_image);
-        }
-
-        let cropped = cpp!(unsafe [
-            line_image as "QImage",
-            src_x as "int",
-            src_y as "int",
-            src_w as "int",
-            src_h as "int"
-        ] -> qmetaobject::QImage as "QImage" {
-            return line_image.copy(src_x, src_y, src_w, src_h);
-        });
-
-        Some(cropped)
+    pub(crate) fn tick_text_animations(&mut self) {
+        let now = Instant::now();
+        self.animation_coordinator.tick(now);
     }
 }

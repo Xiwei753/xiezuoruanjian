@@ -1,26 +1,30 @@
 use super::transaction_key::VisualTransactionKey;
 use super::cursor_animation::CursorAnimationPlan;
 use super::animation_mode::AnimationMode;
-use super::texture_cache::TexturePhase;
-use super::line_snapshot::LineSnapshotId;
+use super::layout_snapshot::{LineSnapshotId, SourceRect};
 
 #[derive(Clone, Debug)]
-pub(crate) struct HiddenRangeInfo {
+pub(crate) struct HiddenClipRect {
     pub key: VisualTransactionKey,
-    pub byte_range: (usize, usize),
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub byte_start: usize,
+    pub byte_end: usize,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct StaticTextPlan {
-    pub hidden_ranges: Vec<HiddenRangeInfo>,
+    pub hidden_clip_rects: Vec<HiddenClipRect>,
 }
 
 impl StaticTextPlan {
     pub fn merged_byte_ranges(&self) -> Vec<(usize, usize)> {
         let mut all: Vec<(usize, usize)> = self
-            .hidden_ranges
+            .hidden_clip_rects
             .iter()
-            .map(|r| r.byte_range)
+            .map(|r| (r.byte_start, r.byte_end))
             .collect();
         all.sort_by_key(|r| r.0);
         let mut merged: Vec<(usize, usize)> = Vec::new();
@@ -35,6 +39,27 @@ impl StaticTextPlan {
         }
         merged
     }
+
+    pub fn merged_clip_rects(&self) -> Vec<(f64, f64, f64, f64)> {
+        let mut all: Vec<(f64, f64, f64, f64)> = self
+            .hidden_clip_rects
+            .iter()
+            .map(|r| (r.x, r.y, r.x + r.w, r.y + r.h))
+            .collect();
+        all.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut merged: Vec<(f64, f64, f64, f64)> = Vec::new();
+        for (left, top, right, bottom) in all {
+            if let Some(last) = merged.last_mut() {
+                if left <= last.2 + 0.01 && top <= last.3 + 0.01 {
+                    last.2 = last.2.max(right);
+                    last.3 = last.3.max(bottom);
+                    continue;
+                }
+            }
+            merged.push((left, top, right, bottom));
+        }
+        merged
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -45,12 +70,10 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub w: f64,
     pub h: f64,
     pub opacity: f64,
-    pub baseline_in_quad: f64,
     pub animation_mode: AnimationMode,
     pub is_delete: bool,
-    pub texture_phase: TexturePhase,
-    pub run_identity: i32,
-    pub line_snapshot_id: Option<LineSnapshotId>,
+    pub snapshot_id: LineSnapshotId,
+    pub source_rect: SourceRect,
 }
 
 #[derive(Clone, Debug, Default)]

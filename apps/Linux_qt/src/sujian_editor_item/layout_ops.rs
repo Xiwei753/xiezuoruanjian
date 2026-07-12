@@ -55,6 +55,18 @@ impl SujianEditorItem {
         let layout_snap = self.layout_snapshot(width);
         let scroll_y = self.current_scroll_y as f64;
         let viewport_h = self.current_viewport_height.max(1.0) as f64;
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+        let text_indent = self.current_text_indent as f64;
+        let dpr = {
+            let item_ptr = self.get_cpp_object();
+            if !item_ptr.is_null() {
+                crate::editor::renderer::sujian_item_dpr(item_ptr)
+            } else {
+                1.0
+            }
+        };
+        let text_color = &self.current_text_color.to_string();
         let caret = self.editor_layout.caret_rect(
             &layout_snap,
             self.buffer.cursor,
@@ -62,9 +74,22 @@ impl SujianEditorItem {
             scroll_y,
             viewport_h,
         );
+        let revision = LayoutRevision::next();
+        let line_snapshots = super::line_snapshot_builder::LineSnapshotBuilder::build_from_layout(
+            revision,
+            &layout_snap,
+            font_size,
+            font_family,
+            scroll_y,
+            viewport_h,
+            text_indent,
+            dpr,
+            text_color,
+            false,
+        ).line_snapshots;
         EditorLayoutSnapshot::new(
             layout_snap,
-            &self.buffer.text,
+            line_snapshots,
             Some(caret),
             self.cursor_ctrl.affinity,
         )
@@ -76,11 +101,10 @@ impl SujianEditorItem {
         width: f64,
     ) -> EditorLayoutSnapshot {
         let layout_snap = self.layout_snapshot_for_text(text, width);
-        let scroll_y = self.current_scroll_y as f64;
-        let viewport_h = self.current_viewport_height.max(1.0) as f64;
+        let revision = LayoutRevision::next();
         EditorLayoutSnapshot::new(
             layout_snap,
-            text,
+            Vec::new(),
             None,
             CaretAffinity::Downstream,
         )
@@ -91,7 +115,7 @@ impl SujianEditorItem {
         let new_snapshot = self.build_editor_layout_snapshot(width);
         self.previous_layout_snapshot = self.current_layout_snapshot.take();
         self.current_layout_snapshot = Some(new_snapshot);
-        self.layout_revision = layout_snapshot::LayoutRevision::next();
+        self.layout_revision = LayoutRevision::next();
     }
 
     pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {

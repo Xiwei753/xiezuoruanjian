@@ -126,6 +126,7 @@ class SujianImeController(
         var deleteStart = (cursorPos - beforeLength).coerceAtLeast(0)
         var deleteEnd = (cursorPos + afterLength).coerceAtMost(text.length)
 
+        // 钳位到 code point 边界，避免拆开 surrogate pair
         deleteStart = SujianEditorBuffer.clampToCharBoundary(text, deleteStart)
         if (deleteEnd < text.length && Character.isLowSurrogate(text[deleteEnd])
             && deleteEnd > 0 && Character.isHighSurrogate(text[deleteEnd - 1])) {
@@ -133,8 +134,11 @@ class SujianImeController(
         }
 
         if (deleteStart < deleteEnd) {
+            val deletedGlyphRects = layout.getGlyphRects(text, deleteStart, deleteEnd)
             val oldCursorRect = layout.getCursorRect(text, cursorPos)
+            val deletedText = text.substring(deleteStart, deleteEnd)
 
+            // 设置 preDeleteOldCursorRect 供 runVisualEdit 复用
             val editorView = view as? SujianEditorView
             if (editorView != null) {
                 editorView.preDeleteOldCursorRect = com.xiwei.sujian.model.SujianCursorRectData(
@@ -145,7 +149,7 @@ class SujianImeController(
                 )
             }
 
-            return 0u
+            return animationController.recordDeleteSnapshot(deletedText, deletedGlyphRects, oldCursorRect)
         }
         return 0u
     }
@@ -163,8 +167,11 @@ class SujianImeController(
         val selStart = buffer.selection.start
         val selEnd = buffer.selection.end
         if (selStart < selEnd) {
+            val deletedGlyphRects = layout.getGlyphRects(text, selStart, selEnd)
             val oldCursorRect = layout.getCursorRect(text, buffer.selection.head)
+            val deletedText = text.substring(selStart, selEnd)
 
+            // 设置 preDeleteOldCursorRect 供 runVisualEdit 复用
             val editorView = view as? SujianEditorView
             if (editorView != null) {
                 editorView.preDeleteOldCursorRect = com.xiwei.sujian.model.SujianCursorRectData(
@@ -175,7 +182,7 @@ class SujianImeController(
                 )
             }
 
-            return 0u
+            return animationController.recordDeleteSnapshot(deletedText, deletedGlyphRects, oldCursorRect)
         }
         return 0u
     }
@@ -186,7 +193,7 @@ class SujianImeController(
      */
     fun onComposingChanged(composingText: String) {
         if (composingText.isNotEmpty()) {
-            renderer.clearAnimations()
+            renderer.clearActiveInsertRanges()
         }
         DiagnosticsLogger.d(TAG, "Composing changed: len=${composingText.length}")
     }

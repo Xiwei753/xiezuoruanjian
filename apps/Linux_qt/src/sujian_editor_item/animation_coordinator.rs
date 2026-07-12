@@ -8,12 +8,11 @@ pub(crate) use super::transaction_key::VisualTransactionKey;
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 pub(crate) use super::render_plan::{
-    HiddenRangeInfo, StaticTextPlan, TextAnimationPlan, TextAnimationGlyphInfo,
+    HiddenClipRect, StaticTextPlan, TextAnimationPlan, TextAnimationGlyphInfo,
     SelectionPreeditPlan, SelectionRange, PreeditRange,
     ImeUpdateKind, ImeUpdatePlan, RenderPlan,
 };
 pub(crate) use super::texture_cache::TextureCache;
-pub(crate) use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, ReflowVisualSnapshot};
 use super::animated_slice::{AnimatedSlice, AnimatedSliceFrame, AnimatedSliceKind};
 use super::text_visual_transaction::{
     PreparedTextVisualTransaction, PreparedTransactionQueue,
@@ -21,8 +20,7 @@ use super::text_visual_transaction::{
 };
 use super::static_line_patch::StaticLinePatch;
 use super::layout_revision::LayoutRevision;
-use super::line_snapshot::LineSnapshotId;
-use super::texture_cache::TexturePhase;
+use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
 
 pub(crate) struct LinuxEditorAnimationCoordinator {
     next_key_id: u64,
@@ -55,11 +53,8 @@ impl LinuxEditorAnimationCoordinator {
         is_applying_settings: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
-        old_layout_runs: &[ShapedVisualRun],
-        new_layout_runs: &[ShapedVisualRun],
-        insert_runs: &[ShapedVisualRun],
-        reflow_old_runs: &[ShapedVisualRun],
-        reflow_new_runs: &[ShapedVisualRun],
+        old_snapshot: &EditorLayoutSnapshot,
+        new_snapshot: &EditorLayoutSnapshot,
     ) -> Option<VisualTransactionKey> {
         if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format || is_applying_settings {
             return None;
@@ -83,51 +78,94 @@ impl LinuxEditorAnimationCoordinator {
                     let key = self.alloc_key();
                     let mut slices = Vec::new();
                     let mut static_patches = Vec::new();
-                    let mut source_runs = Vec::new();
-
-                    static_patches.push(StaticLinePatch::insert_patch(key, range_start, range_end));
 
                     let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
                     let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-                    for run in insert_runs {
-                        source_runs.push(run.clone());
-                        slices.push(AnimatedSlice::insert_fade_in(
-                            key, run, old_cx, old_cy, mode, None,
-                        ));
+                    for new_line in new_snapshot.lines_in_byte_range(range_start, range_end) {
+                        if let Some(source_rect) = new_line.source_rect_for_byte_range(range_start, range_end) {
+                            slices.push(AnimatedSlice::insert_fade_in(
+                                key,
+                                new_line.id,
+                                source_rect.clone(),
+                                old_cx,
+                                old_cy,
+                                range_start,
+                                range_end,
+                                new_line.clusters.first().map(|c| c.shaping_identity.clone()),
+                            ));
+
+                            static_patches.push(StaticLinePatch::insert_patch(
+                                key,
+                                new_line.id,
+                                vec![source_rect],
+                                range_start,
+                                range_end,
+                            ));
+                        }
                     }
 
-                    if !reflow_old_runs.is_empty() && !reflow_new_runs.is_empty() {
-                        let reflow_snapshot = ReflowVisualSnapshot::new(
-                            reflow_old_runs.to_vec(),
-                            reflow_new_runs.to_vec(),
-                        );
+                    let reflow_start = range_end;
+                    for new_line in &new_snapshot.line_snapshots {
+                        if new_line.byte_end <= range_end {
+                            continue;
+                        }
+                        if new_line.byte_start < range_end {
+                            continue;
+                        }
 
-                        for (run_idx, new_run) in reflow_snapshot.new_shaped_runs.iter().enumerate() {
-                            let can_reuse = reflow_snapshot.can_reuse_texture_for_run(run_idx);
-                            let needs_crossfade = reflow_snapshot.run_needs_crossfade(run_idx);
+                        let old_line = old_snapshot.line_for_byte(new_line.byte_start.saturating_sub(range_end - range_start));
+                        if let Some(ol) = old_line {
+                            let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
+                            let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
-                            if can_reuse && !needs_crossfade {
-                                if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
-                                    source_runs.push(old_run.clone());
-                                    slices.push(AnimatedSlice::reflow_move(key, old_run, new_run, mode, None));
-                                }
-                            } else if needs_crossfade {
-                                if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
-                                    source_runs.push(old_run.clone());
-                                    slices.push(AnimatedSlice::reflow_crossfade(
-                                        key, old_run, new_run, mode, TexturePhase::OldReflow, None,
+                            match (old_sr, new_sr) {
+                                (Some(old_src), Some(new_src)) => {
+                                    let same_shaping = ol.clusters.iter()
+                                        .zip(new_line.clusters.iter())
+                                        .take_while(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity))
+                                        .count() == ol.clusters.len().min(new_line.clusters.len());
+
+                                    if same_shaping {
+                                        slices.push(AnimatedSlice::reflow_move(
+                                            key,
+                                            ol.id,
+                                            old_src,
+                                            new_line.id,
+                                            new_src.clone(),
+                                            new_line.byte_start,
+                                            new_line.byte_end,
+                                            ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                                        ));
+                                    } else {
+                                        slices.push(AnimatedSlice::reflow_crossfade_old(
+                                            key,
+                                            ol.id,
+                                            old_src.clone(),
+                                            old_src,
+                                            new_line.byte_start,
+                                            new_line.byte_end,
+                                        ));
+                                        slices.push(AnimatedSlice::reflow_crossfade_new(
+                                            key,
+                                            new_line.id,
+                                            new_src.clone(),
+                                            new_src.clone(),
+                                            new_line.byte_start,
+                                            new_line.byte_end,
+                                        ));
+                                    }
+
+                                    static_patches.push(StaticLinePatch::reflow_patch(
+                                        key,
+                                        new_line.id,
+                                        vec![new_src],
+                                        new_line.byte_start,
+                                        new_line.byte_end,
                                     ));
-                                    source_runs.push(new_run.clone());
-                                    slices.push(AnimatedSlice::reflow_crossfade(
-                                        key, old_run, new_run, mode, TexturePhase::NewReflow, None,
-                                    ));
                                 }
+                                _ => {}
                             }
-
-                            static_patches.push(StaticLinePatch::reflow_patch(
-                                key, new_run.source_string_start, new_run.source_string_end,
-                            ));
                         }
                     }
 
@@ -151,7 +189,6 @@ impl LinuxEditorAnimationCoordinator {
                         old_revision: self.layout_revision,
                         new_revision,
                         slices,
-                        source_runs,
                         static_patches,
                         cursor_transition,
                         old_cursor_rect,
@@ -161,6 +198,8 @@ impl LinuxEditorAnimationCoordinator {
                         first_render_frame: None,
                         rendering_started_at: None,
                         accumulated_paused_duration_ms: 0,
+                        old_snapshot: Some(old_snapshot.clone()),
+                        new_snapshot: Some(new_snapshot.clone()),
                     };
 
                     self.layout_revision = new_revision;
@@ -181,54 +220,72 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                let delete_runs: Vec<ShapedVisualRun> = old_layout_runs.iter()
-                    .filter(|run| {
-                        deleted_ranges.iter().any(|(ds, de)| {
-                            run.source_string_end > *ds && run.source_string_start < *de
-                        })
-                    })
-                    .cloned()
-                    .collect();
-
-                if delete_runs.is_empty() && old_layout_runs.is_empty() {
-                    return None;
-                }
-
                 let mut slices = Vec::new();
-                let mut source_runs = Vec::new();
+                let mut static_patches = Vec::new();
                 let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
                 let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-                for run in &delete_runs {
-                    source_runs.push(run.clone());
-                    slices.push(AnimatedSlice::delete_fade_out(key, run, new_cx, new_cy, mode, None));
+                for (del_start, del_end) in &deleted_ranges {
+                    for old_line in old_snapshot.lines_in_byte_range(*del_start, *del_end) {
+                        if let Some(source_rect) = old_line.source_rect_for_byte_range(*del_start, *del_end) {
+                            slices.push(AnimatedSlice::delete_fade_out(
+                                key,
+                                old_line.id,
+                                source_rect,
+                                new_cx,
+                                new_cy,
+                                *del_start,
+                                *del_end,
+                                old_line.clusters.first().map(|c| c.shaping_identity.clone()),
+                            ));
+                        }
+                    }
                 }
 
-                if !new_layout_runs.is_empty() {
-                    let reflow_snapshot = ReflowVisualSnapshot::new(
-                        old_layout_runs.to_vec(),
-                        new_layout_runs.to_vec(),
-                    );
-                    for (run_idx, new_run) in reflow_snapshot.new_shaped_runs.iter().enumerate() {
-                        let can_reuse = reflow_snapshot.can_reuse_texture_for_run(run_idx);
-                        let needs_crossfade = reflow_snapshot.run_needs_crossfade(run_idx);
+                for new_line in &new_snapshot.line_snapshots {
+                    let old_line = old_snapshot.line_for_byte(new_line.byte_start);
+                    if let Some(ol) = old_line {
+                        let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
+                        let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
-                        if can_reuse && !needs_crossfade {
-                            if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
-                                source_runs.push(old_run.clone());
-                                slices.push(AnimatedSlice::reflow_move(key, old_run, new_run, mode, None));
+                        match (old_sr, new_sr) {
+                            (Some(old_src), Some(new_src)) => {
+                                let same_shaping = ol.clusters.iter()
+                                    .zip(new_line.clusters.iter())
+                                    .take_while(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity))
+                                    .count() == ol.clusters.len().min(new_line.clusters.len());
+
+                                if same_shaping {
+                                    slices.push(AnimatedSlice::reflow_move(
+                                        key,
+                                        ol.id,
+                                        old_src,
+                                        new_line.id,
+                                        new_src.clone(),
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                        ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                                    ));
+                                } else {
+                                    slices.push(AnimatedSlice::reflow_crossfade_old(
+                                        key,
+                                        ol.id,
+                                        old_src.clone(),
+                                        old_src,
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                    ));
+                                    slices.push(AnimatedSlice::reflow_crossfade_new(
+                                        key,
+                                        new_line.id,
+                                        new_src.clone(),
+                                        new_src.clone(),
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                    ));
+                                }
                             }
-                        } else if needs_crossfade {
-                            if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
-                                source_runs.push(old_run.clone());
-                                slices.push(AnimatedSlice::reflow_crossfade(
-                                    key, old_run, new_run, mode, TexturePhase::OldReflow, None,
-                                ));
-                                source_runs.push(new_run.clone());
-                                slices.push(AnimatedSlice::reflow_crossfade(
-                                    key, old_run, new_run, mode, TexturePhase::NewReflow, None,
-                                ));
-                            }
+                            _ => {}
                         }
                     }
                 }
@@ -253,8 +310,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_revision: self.layout_revision,
                     new_revision,
                     slices,
-                    source_runs,
-                    static_patches: Vec::new(),
+                    static_patches,
                     cursor_transition,
                     old_cursor_rect: old_cursor_rect.clone(),
                     new_cursor_rect: new_cursor_rect.clone(),
@@ -263,6 +319,8 @@ impl LinuxEditorAnimationCoordinator {
                     first_render_frame: None,
                     rendering_started_at: None,
                     accumulated_paused_duration_ms: 0,
+                    old_snapshot: Some(old_snapshot.clone()),
+                    new_snapshot: Some(new_snapshot.clone()),
                 };
 
                 self.layout_revision = new_revision;
@@ -326,7 +384,7 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     fn build_static_render_plan(&self) -> StaticTextPlan {
-        let mut hidden_ranges = Vec::new();
+        let mut hidden_clip_rects = Vec::new();
 
         for tx in self.prepared_queue.active_transactions() {
             if tx.state == TextVisualTransactionState::Cancelled || tx.state == TextVisualTransactionState::Completed {
@@ -336,16 +394,45 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             for patch in &tx.static_patches {
-                if patch.is_insert {
-                    hidden_ranges.push(HiddenRangeInfo {
+                if !patch.is_insert {
+                    continue;
+                }
+                let snapshot = if let Some(ref snap) = tx.new_snapshot {
+                    snap.line_snapshots.iter().find(|l| l.id == patch.snapshot_id)
+                } else {
+                    None
+                };
+                if let Some(line_snap) = snapshot {
+                    for sr in &patch.hidden_source_rects {
+                        let doc_x = sr.x / line_snap.dpr + line_snap.visual_x;
+                        let doc_y = line_snap.document_origin_y + sr.y / line_snap.dpr;
+                        let doc_w = sr.w / line_snap.dpr;
+                        let doc_h = sr.h / line_snap.dpr;
+                        hidden_clip_rects.push(HiddenClipRect {
+                            key: tx.key,
+                            x: doc_x,
+                            y: doc_y,
+                            w: doc_w,
+                            h: doc_h,
+                            byte_start: patch.byte_start,
+                            byte_end: patch.byte_end,
+                        });
+                    }
+                } else {
+                    hidden_clip_rects.push(HiddenClipRect {
                         key: tx.key,
-                        byte_range: (patch.byte_start, patch.byte_end),
+                        x: 0.0,
+                        y: 0.0,
+                        w: 0.0,
+                        h: 0.0,
+                        byte_start: patch.byte_start,
+                        byte_end: patch.byte_end,
                     });
                 }
             }
         }
 
-        StaticTextPlan { hidden_ranges }
+        StaticTextPlan { hidden_clip_rects }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -391,11 +478,11 @@ impl LinuxEditorAnimationCoordinator {
         let dy = (cursor_y - old_visual_y).abs();
 
         let large_distance = force_snap_next && (dx > 80.0 || dy > cursor_h * 1.5);
-        let safety_snap = dy > cursor_h * 3.0;
+        let cross_line_snap = dy > cursor_h * 3.0 && !has_active;
 
         let transition = if !should_be_visible {
             CursorTransition::Snap
-        } else if should_snap || !smooth_cursor_enabled || large_distance || safety_snap {
+        } else if should_snap || !smooth_cursor_enabled || large_distance || cross_line_snap {
             if coordinated_enabled
                 && has_active
                 && old_cursor_rect.is_some()
@@ -563,12 +650,10 @@ impl LinuxEditorAnimationCoordinator {
                     w: frame.w,
                     h: frame.h,
                     opacity: frame.opacity,
-                    baseline_in_quad: frame.baseline_in_quad,
                     animation_mode: tx.animation_mode,
                     is_delete: tx.is_delete(),
-                    texture_phase: slice.texture_phase,
-                    run_identity: slice.run_identity,
-                    line_snapshot_id: slice.line_snapshot_id,
+                    snapshot_id: frame.snapshot_id,
+                    source_rect: frame.source_rect,
                 });
             }
         }
@@ -580,13 +665,6 @@ impl LinuxEditorAnimationCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::super::shaped_visual_run::{RawFontCacheKey, RunFlags};
-    use std::time::Duration;
-    use writer_core::editor::AnimationMode as CoreAnimationMode;
-
-    fn make_key(id: u64) -> VisualTransactionKey {
-        VisualTransactionKey::new(id, id)
-    }
 
     #[test]
     fn test_coordinator_suppress_all() {
@@ -599,7 +677,7 @@ mod tests {
     #[test]
     fn test_coordinator_finish_by_key() {
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        let key = make_key(1);
+        let key = VisualTransactionKey::new(1, 1);
         let removed = coord.finish_by_key(key);
         assert!(!removed);
     }
@@ -629,83 +707,5 @@ mod tests {
     fn test_animation_mode_glyph_creates_transaction() {
         let mode = AnimationMode::GlyphAnimation;
         assert!(mode.should_create_transaction());
-    }
-
-    #[test]
-    fn test_scroll_suppresses_insert_animation() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        let vt = EditorVisualTransaction {
-            id: 1,
-            kind: EditorAnimationKind::Insert,
-            cause: writer_core::editor::EditorTransactionCause::Typing,
-            old_text: "a".into(),
-            new_text: "ab".into(),
-            old_selection: writer_core::editor::EditorSelection::collapsed("a", 1),
-            new_selection: writer_core::editor::EditorSelection::collapsed("ab", 2),
-            inserted_range: Some((1, 2)),
-            deleted_glyph_rects: None,
-            insert_glyph_rects: Some(vec![]),
-            reflow_glyph_rects: None,
-            animation_mode: CoreAnimationMode::GlyphAnimation,
-            cluster_rects: None,
-            cluster_runs: None,
-            hidden_visual_ranges: vec![],
-            old_cursor_rect: None,
-            new_cursor_rect: None,
-            duration_ms: 160,
-            coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
-        };
-        coord.process_transaction(
-            &vt,
-            true,
-            true,
-            false, false, false,
-            None, None,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-        assert!(coord.is_empty());
-    }
-
-    #[test]
-    fn test_loading_suppresses_insert_animation() {
-        let mut coord = LinuxEditorAnimationCoordinator::new();
-        let vt = EditorVisualTransaction {
-            id: 1,
-            kind: EditorAnimationKind::Insert,
-            cause: writer_core::editor::EditorTransactionCause::Typing,
-            old_text: "a".into(),
-            new_text: "ab".into(),
-            old_selection: writer_core::editor::EditorSelection::collapsed("a", 1),
-            new_selection: writer_core::editor::EditorSelection::collapsed("ab", 2),
-            inserted_range: Some((1, 2)),
-            deleted_glyph_rects: None,
-            insert_glyph_rects: Some(vec![]),
-            reflow_glyph_rects: None,
-            animation_mode: CoreAnimationMode::GlyphAnimation,
-            cluster_rects: None,
-            cluster_runs: None,
-            hidden_visual_ranges: vec![],
-            old_cursor_rect: None,
-            new_cursor_rect: None,
-            duration_ms: 160,
-            coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
-        };
-        coord.process_transaction(
-            &vt,
-            true,
-            false,
-            true, false, false,
-            None, None,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-        assert!(coord.is_empty());
     }
 }

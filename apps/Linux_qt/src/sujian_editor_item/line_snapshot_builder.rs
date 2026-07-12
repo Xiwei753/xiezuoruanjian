@@ -1,8 +1,11 @@
 use super::layout_revision::LayoutRevision;
-use super::line_snapshot::{EditorLayoutSnapshot, LineSnapshotId, PreparedLineSnapshot};
-use super::shaped_visual_run::{ReflowVisualSnapshot, ShapedVisualRun};
-use crate::editor::layout::extract_shaped_runs_on_line;
-use crate::editor::layout::LayoutSnapshot;
+use super::layout_snapshot::{
+    EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
+    ShapingIdentity, SourceRect,
+};
+use super::line_snapshot::LineTextureStore;
+use crate::editor::layout::{LayoutSnapshot, VisualLine};
+use crate::editor::layout;
 
 pub(crate) struct LineSnapshotBuilder;
 
@@ -15,58 +18,94 @@ impl LineSnapshotBuilder {
         scroll_y: f64,
         viewport_h: f64,
         text_indent: f64,
+        dpr: f64,
+        text_color: &str,
+        generate_images: bool,
     ) -> EditorLayoutSnapshot {
-        let mut lines = Vec::new();
+        let mut line_snapshots = Vec::new();
+        let mut paragraph_id: u64 = 0;
+        let mut prev_para_start: Option<usize> = None;
+        let mut visual_line_ordinal: u32 = 0;
 
         for (line_idx, line) in snapshot.lines.iter().enumerate() {
             if line.para_text.is_empty() {
                 continue;
             }
+
+            if prev_para_start != Some(line.para_start) {
+                paragraph_id = paragraph_id.wrapping_add(1);
+                visual_line_ordinal = 0;
+                prev_para_start = Some(line.para_start);
+            }
+
             let line_top = line.y - scroll_y;
             let line_bottom = line_top + line.height;
-            if line_bottom < 0.0 || line_top > viewport_h {
+            if line_bottom < -line.height || line_top > viewport_h + line.height {
+                visual_line_ordinal += 1;
                 continue;
             }
 
             let wrap_w = line.line_wrap_width + line.line_indent_x;
             let indent = text_indent;
-            let baseline_y = crate::editor::layout::text_baseline_y(line, font_size, font_family);
+            let baseline_y = layout::text_baseline_y(line, font_size, font_family);
 
-            let shaped_run_data = extract_shaped_runs_on_line(
+            let image = if generate_images {
+                layout::render_line_to_image(
+                    &line.para_text,
+                    font_size,
+                    font_family,
+                    wrap_w,
+                    indent,
+                    line.qtextline_idx,
+                    dpr,
+                    text_color,
+                )
+            } else {
+                None
+            };
+
+            let clusters = Self::build_clusters_for_line(
+                line,
                 &line.para_text,
-                line.byte_start,
-                line.byte_end,
-                line.byte_start,
                 font_size,
                 font_family,
                 wrap_w,
                 indent,
-                line.qtextline_idx,
+                dpr,
             );
 
-            let shaped_runs: Vec<ShapedVisualRun> = shaped_run_data
-                .iter()
-                .map(|srd| Self::convert_shaped_run_data(srd, &line.para_text, line.qtextline_idx, wrap_w, indent))
-                .collect();
+            let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
-            lines.push(PreparedLineSnapshot {
-                id: LineSnapshotId::new(revision, line_idx),
+            line_snapshots.push(PreparedLineSnapshot {
+                id,
+                image,
+                clusters,
+                document_origin_y: line.y,
+                baseline_y,
+                dpr,
+                line_height: line.height,
+                line_width: line.width,
                 byte_start: line.byte_start,
                 byte_end: line.byte_end,
-                visual_x: line.x,
-                visual_y: line.y,
-                visual_w: line.width,
-                visual_h: line.height,
-                baseline_y,
-                shaped_runs,
                 para_text: line.para_text.clone(),
+                para_start: line.para_start,
                 qtextline_idx: line.qtextline_idx,
                 paragraph_wrap_w: wrap_w,
                 para_indent: indent,
+                visual_x: line.x,
+                scroll_y,
             });
+
+            visual_line_ordinal += 1;
         }
 
-        EditorLayoutSnapshot { revision, lines }
+        EditorLayoutSnapshot {
+            revision,
+            layout_snapshot: snapshot.clone(),
+            line_snapshots,
+            caret_rect: None,
+            caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+        }
     }
 
     pub fn build_old_new_snapshots(
@@ -79,90 +118,151 @@ impl LineSnapshotBuilder {
         scroll_y: f64,
         viewport_h: f64,
         text_indent: f64,
+        dpr: f64,
+        text_color: &str,
     ) -> (EditorLayoutSnapshot, EditorLayoutSnapshot) {
         let old_layout = Self::build_from_layout(
-            old_revision, old_snapshot, font_size, font_family, scroll_y, viewport_h, text_indent,
+            old_revision, old_snapshot, font_size, font_family, scroll_y, viewport_h, text_indent, dpr, text_color, true,
         );
         let new_layout = Self::build_from_layout(
-            new_revision, new_snapshot, font_size, font_family, scroll_y, viewport_h, text_indent,
+            new_revision, new_snapshot, font_size, font_family, scroll_y, viewport_h, text_indent, dpr, text_color, true,
         );
         (old_layout, new_layout)
     }
 
-    fn convert_shaped_run_data(
-        srd: &crate::editor::layout::ShapedRunData,
+    fn build_clusters_for_line(
+        line: &VisualLine,
         para_text: &str,
-        qtextline_idx: i32,
+        font_size: f64,
+        font_family: &str,
         wrap_w: f64,
         indent: f64,
-    ) -> ShapedVisualRun {
-        use super::shaped_visual_run::{RawFontCacheKey, RunFlags, ShapedCluster, ShapedGlyph, derive_clusters_from_glyphs};
-
-        let font_key = RawFontCacheKey::new(
-            &srd.raw_font_family,
-            &srd.raw_font_style,
-            srd.raw_font_weight,
-            srd.raw_font_pixel_size,
+        dpr: f64,
+    ) -> Vec<LineClusterSnapshot> {
+        let shaped_run_data = layout::extract_shaped_runs_on_line(
+            para_text,
+            line.byte_start,
+            line.byte_end,
+            line.byte_start,
+            font_size,
+            font_family,
+            wrap_w,
+            indent,
+            line.qtextline_idx,
         );
-        let mut flags = RunFlags::empty();
-        if srd.is_rtl { flags |= RunFlags::RTL; }
-        if srd.has_underline { flags |= RunFlags::UNDERLINE; }
-        let glyphs: Vec<ShapedGlyph> = srd.glyphs.iter().map(|g| ShapedGlyph {
-            glyph_index: g.glyph_index,
-            glyph_position_x: g.position_x,
-            glyph_position_y: g.position_y,
-            string_index: g.string_index.max(0) as usize,
-            advance_width: g.advance_width,
-        }).collect();
-        let clusters = derive_clusters_from_glyphs(&glyphs);
-        ShapedVisualRun {
-            glyphs,
-            clusters,
-            raw_font_key: font_key,
-            flags,
-            source_string_start: srd.string_start,
-            source_string_end: srd.string_end,
-            baseline_y: srd.baseline_y,
-            visual_x: srd.visual_x,
-            visual_y: srd.visual_y,
-            visual_w: srd.visual_w,
-            visual_h: srd.visual_h,
-            texture_atlas_x: 0.0,
-            texture_atlas_y: 0.0,
-            texture_atlas_w: srd.visual_w,
-            texture_atlas_h: srd.visual_h,
-            texture_translate_x: srd.texture_translate_x,
-            texture_translate_y: srd.texture_translate_y,
-            qglyphrun_index: srd.run_index,
-            para_text: Some(para_text.to_string()),
-            qtextline_idx: Some(qtextline_idx),
-            paragraph_wrap_w: Some(wrap_w),
-            para_indent: Some(indent),
-            line_y: srd.line_y,
+
+        let mut clusters = Vec::new();
+        for srd in &shaped_run_data {
+            let run_x = srd.visual_x;
+            let run_h = srd.visual_h;
+
+            if srd.glyphs.is_empty() {
+                continue;
+            }
+
+            let mut glyph_clusters: Vec<(usize, usize, i32, i32)> = Vec::new();
+            let mut cluster_start = 0usize;
+            for i in 1..srd.glyphs.len() {
+                if srd.glyphs[i].string_index != srd.glyphs[i - 1].string_index {
+                    glyph_clusters.push((
+                        cluster_start,
+                        i,
+                        srd.glyphs[cluster_start].string_index,
+                        srd.glyphs[i - 1].string_index,
+                    ));
+                    cluster_start = i;
+                }
+            }
+            glyph_clusters.push((
+                cluster_start,
+                srd.glyphs.len(),
+                srd.glyphs[cluster_start].string_index,
+                srd.glyphs.last().unwrap().string_index,
+            ));
+
+            for (glyph_start, glyph_end, str_start, str_end) in &glyph_clusters {
+                let mut min_x = f64::MAX;
+                let mut max_x = f64::MIN;
+                for g in &srd.glyphs[*glyph_start..*glyph_end] {
+                    min_x = min_x.min(g.position_x);
+                    max_x = max_x.max(g.position_x + g.advance_width);
+                }
+
+                if min_x >= max_x {
+                    continue;
+                }
+
+                let local_x = (min_x - run_x).max(0.0);
+                let local_w = max_x - min_x;
+
+                let byte_start = line.byte_start + (*str_start as usize);
+                let byte_end = line.byte_start + (*str_end as usize) + 1;
+
+                let source_rect = SourceRect {
+                    x: local_x * dpr,
+                    y: 0.0,
+                    w: local_w * dpr,
+                    h: run_h * dpr,
+                };
+
+                let shaping_identity = ShapingIdentity {
+                    text_content_hash: Self::hash_u32(&[*str_start as u32, *str_end as u32]),
+                    raw_font_fingerprint: format!("{}:w{}:s{}", srd.raw_font_family, srd.raw_font_weight, srd.raw_font_pixel_size),
+                    glyph_indexes_hash: Self::hash_glyph_indexes(&srd.glyphs[*glyph_start..*glyph_end]),
+                    cluster_glyph_count: glyph_end - glyph_start,
+                    direction_rtl: srd.is_rtl,
+                    format_fingerprint: 0,
+                };
+
+                clusters.push(LineClusterSnapshot {
+                    byte_start,
+                    byte_end,
+                    source_rect,
+                    shaping_identity,
+                    visual_line_id: line.id,
+                });
+            }
         }
+
+        clusters
     }
 
-    pub fn build_reflow_snapshot(
-        old_lines: &[PreparedLineSnapshot],
-        new_lines: &[PreparedLineSnapshot],
-        affected_byte_start: usize,
-        affected_byte_end: usize,
-    ) -> ReflowVisualSnapshot {
-        let mut old_runs: Vec<ShapedVisualRun> = Vec::new();
-        let mut new_runs: Vec<ShapedVisualRun> = Vec::new();
+    fn hash_u32(data: &[u32]) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        data.hash(&mut hasher);
+        hasher.finish()
+    }
 
-        for line in old_lines {
-            if line.intersects_byte_range(affected_byte_start, affected_byte_end) {
-                old_runs.extend(line.shaped_runs.iter().cloned());
+    fn hash_glyph_indexes(glyphs: &[layout::RunGlyphData]) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        for g in glyphs {
+            g.glyph_index.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    pub fn prepare_line_textures(
+        old_snapshot: &EditorLayoutSnapshot,
+        new_snapshot: &EditorLayoutSnapshot,
+        texture_store: &mut LineTextureStore,
+    ) {
+        for line in &old_snapshot.line_snapshots {
+            if let Some(ref image) = line.image {
+                if !texture_store.contains(&line.id) {
+                    texture_store.insert(line.id, image.clone());
+                }
             }
         }
-
-        for line in new_lines {
-            if line.intersects_byte_range(affected_byte_start, affected_byte_end) {
-                new_runs.extend(line.shaped_runs.iter().cloned());
+        for line in &new_snapshot.line_snapshots {
+            if let Some(ref image) = line.image {
+                if !texture_store.contains(&line.id) {
+                    texture_store.insert(line.id, image.clone());
+                }
             }
         }
-
-        ReflowVisualSnapshot::new(old_runs, new_runs)
     }
 }

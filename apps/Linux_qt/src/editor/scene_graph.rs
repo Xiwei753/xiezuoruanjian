@@ -305,7 +305,8 @@ pub fn update_cursor_node(
 }
 
 /// Update the animation layer (child[1]) with a list of animated glyph quads.
-/// Incremental update: reuses existing nodes, only updates rect/opacity/texture.
+/// Each glyph uses a shared line texture with sourceRect for UV clipping.
+/// Incremental update: reuses existing nodes, only updates rect/opacity/texture/sourceRect.
 /// If glyph_count > existing child count, new nodes are appended.
 /// If glyph_count < existing child count, excess nodes are removed.
 pub fn update_animation_layer(
@@ -315,6 +316,7 @@ pub fn update_animation_layer(
     glyph_data: *const f64,
     images: *const *const qmetaobject::QImage,
     texture_changed: *const bool,
+    source_rects: *const f64,
 ) {
     cpp!(unsafe [
         root_raw as "QSGNode*",
@@ -322,7 +324,8 @@ pub fn update_animation_layer(
         glyph_count as "int",
         glyph_data as "const double*",
         images as "QImage**",
-        texture_changed as "const bool*"
+        texture_changed as "const bool*",
+        source_rects as "const double*"
     ] {
         auto *root = static_cast<QSGTransformNode*>(root_raw);
         if (!root) return;
@@ -339,27 +342,29 @@ pub fn update_animation_layer(
             delete child;
         }
 
-        // Each glyph: 6 doubles = x, y, w, h, opacity, baselineY
+        // Each glyph: 5 doubles = x, y, w, h, opacity
+        // Each sourceRect: 4 doubles = sx, sy, sw, sh
         for (int i = 0; i < glyph_count; i++) {
-            const double *d = glyph_data + i * 6;
+            const double *d = glyph_data + i * 5;
             double gx = d[0], gy = d[1], gw = d[2], gh = d[3], gopacity = d[4];
+
+            const double *sr = source_rects + i * 4;
+            double sx = sr[0], sy = sr[1], sw = sr[2], sh = sr[3];
 
             QSGOpacityNode *opNode = nullptr;
             QSGImageNode *imgNode = nullptr;
 
             if (i < animLayer->childCount()) {
-                // Reuse existing node — only update opacity, rect, texture
                 opNode = dynamic_cast<QSGOpacityNode*>(child_at(animLayer, i));
                 if (opNode && opNode->childCount() > 0) {
                     imgNode = static_cast<QSGImageNode*>(opNode->firstChild());
                 }
             } else {
-                // Create new node
                 opNode = new QSGOpacityNode;
                 animLayer->appendChildNode(opNode);
 
                 imgNode = item_ptr->window()->createImageNode();
-                imgNode->setFiltering(QSGTexture::Nearest);
+                imgNode->setFiltering(QSGTexture::Linear);
                 imgNode->setOwnsTexture(true);
                 opNode->appendChildNode(imgNode);
             }
@@ -371,11 +376,16 @@ pub fn update_animation_layer(
             imgNode->setRect(static_cast<qreal>(gx), static_cast<qreal>(gy),
                             static_cast<qreal>(gw), static_cast<qreal>(gh));
 
-            // Only update texture when it has changed (first frame or re-prepared)
+            // Set sourceRect for UV clipping from shared line texture
+            if (sw > 0.0 && sh > 0.0) {
+                imgNode->setSourceRect(static_cast<qreal>(sx), static_cast<qreal>(sy),
+                                      static_cast<qreal>(sw), static_cast<qreal>(sh));
+            }
+
             bool needTextureUpdate = (texture_changed && texture_changed[i]);
             if (needTextureUpdate && images && images[i]) {
                 QSGTexture *tex = item_ptr->window()->createTextureFromImage(*images[i]);
-                tex->setFiltering(QSGTexture::Nearest);
+                tex->setFiltering(QSGTexture::Linear);
                 imgNode->setTexture(tex);
             }
 

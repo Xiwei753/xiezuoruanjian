@@ -88,8 +88,13 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
-            source_runs: Vec::new(),
-            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(key, 5, 10)],
+            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
+                key,
+                crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
+                Vec::new(),
+                5,
+                10,
+            )],
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
@@ -98,6 +103,8 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            old_snapshot: None,
+            new_snapshot: None,
         };
         queue.enqueue(tx);
         assert_eq!(queue.insert_byte_ranges(), vec![(5, 10)]);
@@ -141,7 +148,6 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
-            source_runs: Vec::new(),
             static_patches: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -151,6 +157,8 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            old_snapshot: None,
+            new_snapshot: None,
         };
         queue.enqueue(tx);
         assert!(queue.insert_byte_ranges().is_empty());
@@ -566,8 +574,13 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
-            source_runs: Vec::new(),
-            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(key, 10, 22)],
+            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
+                key,
+                crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
+                Vec::new(),
+                10,
+                22,
+            )],
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
@@ -576,6 +589,8 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            old_snapshot: None,
+            new_snapshot: None,
         };
         queue.enqueue(tx);
         assert!(queue.has_active_insert());
@@ -596,8 +611,13 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
-            source_runs: Vec::new(),
-            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(VisualTransactionKey { transaction_id: 2, generation: 2 }, 30, 42)],
+            static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
+                VisualTransactionKey { transaction_id: 2, generation: 2 },
+                crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
+                Vec::new(),
+                30,
+                42,
+            )],
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
@@ -606,6 +626,8 @@ mod tests {
             first_render_frame: None,
             rendering_started_at: None,
             accumulated_paused_duration_ms: 0,
+            old_snapshot: None,
+            new_snapshot: None,
         });
         let removed_wrong = queue.complete(VisualTransactionKey { transaction_id: 999, generation: 1 });
         assert!(!removed_wrong);

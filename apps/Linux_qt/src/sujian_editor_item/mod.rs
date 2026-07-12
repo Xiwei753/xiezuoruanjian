@@ -29,9 +29,7 @@ pub(crate) mod ime_visual;
 pub(crate) mod input_host;
 pub(crate) mod layout_ops;
 pub(crate) mod layout_snapshot;
-pub(crate) mod offset_map;
 pub(crate) mod layout_revision;
-pub(crate) mod paragraph_index_map;
 pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
 pub(crate) mod animated_slice;
@@ -42,7 +40,7 @@ pub(crate) mod qquickitem_impl;
 pub(crate) mod render_plan;
 pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
-pub(crate) mod shaped_visual_run;
+pub(crate) mod snapshot_id;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
 pub(crate) mod transaction_key;
@@ -71,6 +69,7 @@ use animation_coordinator::LinuxEditorAnimationCoordinator;
 use layout_snapshot::EditorLayoutSnapshot;
 use texture_cache::TextureCache;
 use transaction_key::VisualTransactionKey;
+use layout_revision::LayoutRevision;
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
@@ -309,7 +308,7 @@ pub struct SujianEditorItem {
     animation_coordinator: LinuxEditorAnimationCoordinator,
     texture_cache: TextureCache,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
-    layout_revision: layout_snapshot::LayoutRevision,
+    layout_revision: LayoutRevision,
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
     previous_layout_snapshot: Option<EditorLayoutSnapshot>,
 }
@@ -454,7 +453,7 @@ impl Default for SujianEditorItem {
             animation_coordinator: LinuxEditorAnimationCoordinator::new(),
             texture_cache: animation_coordinator::TextureCache::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
-            layout_revision: layout_snapshot::LayoutRevision::initial(),
+            layout_revision: LayoutRevision::initial(),
             current_layout_snapshot: None,
             previous_layout_snapshot: None,
         }
@@ -554,7 +553,7 @@ impl SujianEditorItem {
                     tid,
                     self.animation_coordinator.has_active_insert()
                 ));
-                self.texture_cache.remove_for_transaction(&key);
+                self.texture_cache.clear();
                 self.request_static_repaint();
                 self.cursor_rect_changed();
             }

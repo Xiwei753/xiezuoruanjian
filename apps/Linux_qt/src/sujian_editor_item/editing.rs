@@ -32,14 +32,6 @@ impl SujianEditorItem {
         }
     }
 
-    pub(crate) fn tick_text_animations(&mut self) {
-        let now = Instant::now();
-        if self.animation_coordinator.tick(now) {
-            editor_animation_debug_log("tick_text_animations: cleared timed-out animations");
-            self.request_static_repaint();
-        }
-    }
-
     pub(crate) fn clear_undo_stack(&mut self) {
         self.buffer.undo_stack.clear();
         self.buffer.redo_stack.clear();
