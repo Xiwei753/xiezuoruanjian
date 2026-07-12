@@ -229,7 +229,7 @@ class AndroidLayoutSnapshotBuilder(
 
             return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl:ctx[$clusterStartUtf16,$clusterEndUtf16]"
         } catch (e: Exception) {
-            return buildConservativeIdentity(clusterText, paint, paragraphDirection, clusterStartUtf16, null)
+            return buildConservativeIdentityFallback(clusterText, paint, paragraphDirection, clusterStartUtf16)
         }
     }
 
@@ -250,12 +250,11 @@ class AndroidLayoutSnapshotBuilder(
         return "c:$textHash:$fontFingerprint:$width:$isRtl:line[$lineIdx,$lineLeft,$lineRight,$lineBreakOffset]"
     }
 
-    private fun buildConservativeIdentity(
+    private fun buildConservativeIdentityFallback(
         clusterText: String,
         paint: TextPaint,
         paragraphDirection: Int,
-        clusterStartUtf16: Int,
-        staticLayout: Layout?
+        clusterStartUtf16: Int
     ): String {
         val textHash = Objects.hash(clusterText)
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
