@@ -2,6 +2,7 @@ use super::transaction_key::VisualTransactionKey;
 use super::cursor_animation::CursorAnimationPlan;
 use super::animation_mode::AnimationMode;
 use super::texture_cache::TexturePhase;
+use super::line_snapshot::LineSnapshotId;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenRangeInfo {
@@ -36,11 +37,6 @@ impl StaticTextPlan {
     }
 }
 
-/// Qt mature route: TextAnimationGlyphInfo carries only visual data
-/// (position, size, opacity, texture reference). The animation phase
-/// no longer understands text — no byte ranges, paragraph text, font IDs,
-/// or shaped run indices. All text-level concepts are resolved during
-/// layout/snapshot phase; animation only interpolates position and opacity.
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
     pub key: VisualTransactionKey,
@@ -54,6 +50,7 @@ pub(crate) struct TextAnimationGlyphInfo {
     pub is_delete: bool,
     pub texture_phase: TexturePhase,
     pub run_identity: i32,
+    pub line_snapshot_id: Option<LineSnapshotId>,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -18,6 +18,14 @@ pub(crate) use super::render_plan::{
 pub(crate) use super::texture_cache::{TextureCache, TexturePhase};
 pub(crate) use super::shaped_visual_run::{ShapedVisualRun, ShapedGlyph, ShapedCluster, ReflowVisualSnapshot};
 use super::visual_payload::ShapedGlyphInfo;
+use super::animated_slice::{AnimatedSlice, AnimatedSliceFrame, AnimatedSliceKind};
+use super::text_visual_transaction::{
+    PreparedTextVisualTransaction, PreparedTransactionQueue,
+    TextVisualTransactionState, TextVisualOperationKind,
+};
+use super::static_line_patch::StaticLinePatch;
+use super::layout_revision::LayoutRevision;
+use super::line_snapshot::LineSnapshotId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextAnimationKind {
@@ -237,6 +245,8 @@ pub(crate) struct LinuxEditorAnimationCoordinator {
     registry: AnimationRangeRegistry,
     next_key_id: u64,
     pub(crate) vt_queue: ActiveVisualTransactionQueue,
+    pub(crate) prepared_queue: PreparedTransactionQueue,
+    layout_revision: LayoutRevision,
 }
 
 impl LinuxEditorAnimationCoordinator {
@@ -245,6 +255,8 @@ impl LinuxEditorAnimationCoordinator {
             registry: AnimationRangeRegistry::new(),
             next_key_id: 1,
             vt_queue: ActiveVisualTransactionQueue::new(),
+            prepared_queue: PreparedTransactionQueue::new(),
+            layout_revision: LayoutRevision::initial(),
         }
     }
 
@@ -586,11 +598,234 @@ impl LinuxEditorAnimationCoordinator {
         None
     }
 
+    pub fn process_transaction_prepared(
+        &mut self,
+        vt: &EditorVisualTransaction,
+        typing_animation_enabled: bool,
+        is_scrolling: bool,
+        is_loading: bool,
+        is_applying_format: bool,
+        is_applying_settings: bool,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+        old_layout_runs: &[ShapedVisualRun],
+        new_layout_runs: &[ShapedVisualRun],
+        insert_runs: &[ShapedVisualRun],
+        reflow_old_runs: &[ShapedVisualRun],
+        reflow_new_runs: &[ShapedVisualRun],
+    ) -> Option<VisualTransactionKey> {
+        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format || is_applying_settings {
+            return None;
+        }
+
+        let mode = AnimationMode::from_core(vt.animation_mode);
+        if !mode.should_create_transaction() {
+            return None;
+        }
+
+        let new_revision = LayoutRevision::next();
+
+        match vt.kind {
+            EditorAnimationKind::Insert => {
+                if let Some((range_start, range_end)) = vt.inserted_range {
+                    let conflicting = self.prepared_queue.find_conflicting_insert(range_start, range_end);
+                    if let Some(old_key) = conflicting {
+                        self.prepared_queue.complete(old_key);
+                        self.registry.finish_by_key(old_key);
+                    }
+
+                    let key = self.alloc_key();
+                    let mut slices = Vec::new();
+                    let mut static_patches = Vec::new();
+
+                    static_patches.push(StaticLinePatch::insert_patch(key, range_start, range_end));
+
+                    let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+                    let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+
+                    for run in insert_runs {
+                        slices.push(AnimatedSlice::insert_fade_in(
+                            key, run, old_cx, old_cy, mode, None,
+                        ));
+                    }
+
+                    if !reflow_old_runs.is_empty() && !reflow_new_runs.is_empty() {
+                        let reflow_snapshot = ReflowVisualSnapshot::new(
+                            reflow_old_runs.to_vec(),
+                            reflow_new_runs.to_vec(),
+                        );
+
+                        for (run_idx, new_run) in reflow_snapshot.new_shaped_runs.iter().enumerate() {
+                            let can_reuse = reflow_snapshot.can_reuse_texture_for_run(run_idx);
+                            let needs_crossfade = reflow_snapshot.run_needs_crossfade(run_idx);
+
+                            if can_reuse && !needs_crossfade {
+                                if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                    slices.push(AnimatedSlice::reflow_move(key, old_run, new_run, mode, None));
+                                }
+                            } else if needs_crossfade {
+                                if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                    slices.push(AnimatedSlice::reflow_crossfade(
+                                        key, old_run, new_run, mode, TexturePhase::OldReflow, None,
+                                    ));
+                                    slices.push(AnimatedSlice::reflow_crossfade(
+                                        key, old_run, new_run, mode, TexturePhase::NewReflow, None,
+                                    ));
+                                }
+                            }
+
+                            static_patches.push(StaticLinePatch::reflow_patch(
+                                key, new_run.source_string_start, new_run.source_string_end,
+                            ));
+                        }
+                    }
+
+                    let cursor_transition = if old_cursor_rect.is_some() && new_cursor_rect.is_some() {
+                        CursorTransition::Tween {
+                            old_rect: old_cursor_rect.clone().unwrap(),
+                            new_rect: new_cursor_rect.clone().unwrap(),
+                            duration_ms: vt.duration_ms,
+                        }
+                    } else {
+                        CursorTransition::Snap
+                    };
+
+                    let prepared = PreparedTextVisualTransaction {
+                        key,
+                        state: TextVisualTransactionState::Pending,
+                        operation_kind: TextVisualOperationKind::Insert,
+                        animation_mode: mode,
+                        duration_ms: vt.duration_ms,
+                        start_time: Instant::now(),
+                        old_revision: self.layout_revision,
+                        new_revision,
+                        slices,
+                        static_patches,
+                        cursor_transition,
+                        old_cursor_rect,
+                        new_cursor_rect,
+                        cancel_reason: None,
+                        texture_prepared: false,
+                        first_render_frame: None,
+                    };
+
+                    self.layout_revision = new_revision;
+                    self.prepared_queue.enqueue(prepared);
+
+                    let reflow_ranges: Vec<(usize, usize)> = reflow_new_runs
+                        .iter()
+                        .map(|r| r.string_range())
+                        .collect();
+                    let core_range_id = vt.hidden_visual_ranges.first().map(|r| r.id);
+                    self.registry.start_insert(key, core_range_id, (range_start, range_end), reflow_ranges, mode, vt.duration_ms);
+
+                    return Some(key);
+                }
+            }
+            EditorAnimationKind::Delete => {
+                let key = self.alloc_key();
+                let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                let mut deleted_ranges: Vec<(usize, usize)> = Vec::new();
+                for change in &changes {
+                    if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                        let range_start = *index;
+                        let range_end = range_start + text.len();
+                        deleted_ranges.push((range_start, range_end));
+                        self.registry.start_delete(key, (range_start, range_end), mode, vt.duration_ms);
+                    }
+                }
+
+                let delete_runs: Vec<ShapedVisualRun> = old_layout_runs.iter()
+                    .filter(|run| {
+                        deleted_ranges.iter().any(|(ds, de)| {
+                            run.source_string_end > *ds && run.source_string_start < *de
+                        })
+                    })
+                    .cloned()
+                    .collect();
+
+                if delete_runs.is_empty() && old_layout_runs.is_empty() {
+                    return None;
+                }
+
+                let mut slices = Vec::new();
+                let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+                let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+
+                for run in &delete_runs {
+                    slices.push(AnimatedSlice::delete_fade_out(key, run, new_cx, new_cy, mode, None));
+                }
+
+                if !new_layout_runs.is_empty() {
+                    let reflow_snapshot = ReflowVisualSnapshot::new(
+                        old_layout_runs.to_vec(),
+                        new_layout_runs.to_vec(),
+                    );
+                    for (run_idx, new_run) in reflow_snapshot.new_shaped_runs.iter().enumerate() {
+                        let can_reuse = reflow_snapshot.can_reuse_texture_for_run(run_idx);
+                        let needs_crossfade = reflow_snapshot.run_needs_crossfade(run_idx);
+
+                        if can_reuse && !needs_crossfade {
+                            if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                slices.push(AnimatedSlice::reflow_move(key, old_run, new_run, mode, None));
+                            }
+                        } else if needs_crossfade {
+                            if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                slices.push(AnimatedSlice::reflow_crossfade(
+                                    key, old_run, new_run, mode, TexturePhase::OldReflow, None,
+                                ));
+                                slices.push(AnimatedSlice::reflow_crossfade(
+                                    key, old_run, new_run, mode, TexturePhase::NewReflow, None,
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                let cursor_transition = if old_cursor_rect.is_some() && new_cursor_rect.is_some() {
+                    CursorTransition::Tween {
+                        old_rect: old_cursor_rect.clone().unwrap(),
+                        new_rect: new_cursor_rect.clone().unwrap(),
+                        duration_ms: vt.duration_ms,
+                    }
+                } else {
+                    CursorTransition::Snap
+                };
+
+                let prepared = PreparedTextVisualTransaction {
+                    key,
+                    state: TextVisualTransactionState::Pending,
+                    operation_kind: TextVisualOperationKind::Delete,
+                    animation_mode: mode,
+                    duration_ms: vt.duration_ms,
+                    start_time: Instant::now(),
+                    old_revision: self.layout_revision,
+                    new_revision,
+                    slices,
+                    static_patches: Vec::new(),
+                    cursor_transition,
+                    old_cursor_rect: old_cursor_rect.clone(),
+                    new_cursor_rect: new_cursor_rect.clone(),
+                    cancel_reason: None,
+                    texture_prepared: false,
+                    first_render_frame: None,
+                };
+
+                self.layout_revision = new_revision;
+                self.prepared_queue.enqueue(prepared);
+                return Some(key);
+            }
+            EditorAnimationKind::Cursor => {}
+        }
+        None
+    }
+
     pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> bool {
         let registry_result = self.registry.finish_by_key(key);
         if registry_result {
             self.vt_queue.complete(key);
         }
+        self.prepared_queue.complete(key);
         registry_result
     }
 
@@ -599,30 +834,37 @@ impl LinuxEditorAnimationCoordinator {
         if registry_result {
             self.vt_queue.cancel(key, reason);
         }
+        self.prepared_queue.cancel(key, reason);
         registry_result
     }
 
     pub fn suppress_all(&mut self) -> bool {
-        if self.registry.is_empty() && self.vt_queue.is_empty() {
+        if self.registry.is_empty() && self.vt_queue.is_empty() && self.prepared_queue.is_empty() {
             return false;
         }
         self.registry.clear();
         self.vt_queue.cancel_all("suppress_all");
+        self.prepared_queue.cancel_all("suppress_all");
         true
     }
 
     pub fn tick(&mut self, now: Instant) -> bool {
         let registry_changed = self.registry.tick(now);
         let queue_changed = self.vt_queue.tick(now);
-        registry_changed || queue_changed
+        let expired = self.prepared_queue.tick(now);
+        let prepared_changed = !expired.is_empty();
+        for key in &expired {
+            self.registry.finish_by_key(*key);
+        }
+        registry_changed || queue_changed || prepared_changed
     }
 
     pub fn has_active_insert(&self) -> bool {
-        self.registry.has_active_insert() || self.vt_queue.has_active_insert()
+        self.registry.has_active_insert() || self.vt_queue.has_active_insert() || self.prepared_queue.has_active_insert()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.registry.is_empty() && self.vt_queue.is_empty()
+        self.registry.is_empty() && self.vt_queue.is_empty() && self.prepared_queue.is_empty()
     }
 
     pub fn current_static_render_plan(&self) -> StaticTextPlan {
@@ -644,7 +886,12 @@ impl LinuxEditorAnimationCoordinator {
             if e.kind == TextAnimationKind::Insert {
                 let tx = self.vt_queue.active_transactions().iter().find(|t| t.key == e.key);
                 let texture_prepared = tx.map(|t| t.texture_prepared).unwrap_or(false);
-                if !texture_prepared {
+                let prepared_texture_prepared = self.prepared_queue.active_transactions()
+                    .iter()
+                    .find(|t| t.key == e.key)
+                    .map(|t| t.texture_prepared)
+                    .unwrap_or(false);
+                if !texture_prepared && !prepared_texture_prepared {
                     continue;
                 }
                 hidden_ranges.push(HiddenRangeInfo {
@@ -655,6 +902,23 @@ impl LinuxEditorAnimationCoordinator {
                     hidden_ranges.push(HiddenRangeInfo {
                         key: e.key,
                         byte_range: r.byte_range,
+                    });
+                }
+            }
+        }
+
+        for tx in self.prepared_queue.active_transactions() {
+            if tx.state == TextVisualTransactionState::Cancelled || tx.state == TextVisualTransactionState::Completed {
+                continue;
+            }
+            if !tx.texture_prepared {
+                continue;
+            }
+            for patch in &tx.static_patches {
+                if patch.is_insert {
+                    hidden_ranges.push(HiddenRangeInfo {
+                        key: tx.key,
+                        byte_range: (patch.byte_start, patch.byte_end),
                     });
                 }
             }
@@ -831,8 +1095,10 @@ impl LinuxEditorAnimationCoordinator {
         let static_text = self.build_static_render_plan();
         let (text_animation, keys_to_complete) = self.build_text_animation_plan();
         frame_context.keys_to_complete = keys_to_complete;
-        frame_context.active_transaction_keys = self.vt_queue.active_transactions()
+        let mut active_keys: Vec<VisualTransactionKey> = self.vt_queue.active_transactions()
             .iter().map(|t| t.key).collect();
+        active_keys.extend(self.prepared_queue.active_transactions().iter().map(|t| t.key));
+        frame_context.active_transaction_keys = active_keys;
         RenderPlan {
             static_text,
             text_animation,
@@ -862,6 +1128,37 @@ impl LinuxEditorAnimationCoordinator {
         let mut glyphs = Vec::new();
         let mut keys_to_complete = Vec::new();
         let now = Instant::now();
+
+        for tx in self.prepared_queue.active_transactions() {
+            if tx.state == TextVisualTransactionState::Cancelled || tx.state == TextVisualTransactionState::Completed {
+                continue;
+            }
+
+            let progress = tx.progress(now);
+
+            if progress >= 1.0 {
+                keys_to_complete.push(tx.key);
+                continue;
+            }
+
+            for slice in &tx.slices {
+                let frame = slice.compute_frame(progress);
+                glyphs.push(TextAnimationGlyphInfo {
+                    key: tx.key,
+                    x: frame.x,
+                    y: frame.y,
+                    w: frame.w,
+                    h: frame.h,
+                    opacity: frame.opacity,
+                    baseline_in_quad: frame.baseline_in_quad,
+                    animation_mode: tx.animation_mode,
+                    is_delete: tx.is_delete(),
+                    texture_phase: slice.texture_phase,
+                    run_identity: slice.run_identity,
+                    line_snapshot_id: slice.line_snapshot_id,
+                });
+            }
+        }
 
         for tx in self.vt_queue.active_transactions() {
             if tx.state == VisualTransactionState::Cancelled {
@@ -905,6 +1202,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: true,
                             texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
                             run_identity: run.qglyphrun_index,
+                            line_snapshot_id: None,
                         });
                     } else {
                         let eased = 1.0 - (1.0 - progress).powi(3);
@@ -927,6 +1225,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: false,
                             texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
                             run_identity: run.qglyphrun_index,
+                            line_snapshot_id: None,
                         });
                     }
                 }
@@ -954,6 +1253,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: true,
                             texture_phase: TexturePhase::DeleteOld,
                             run_identity: payload.run_identity,
+                            line_snapshot_id: None,
                         });
                     } else {
                         let eased = 1.0 - (1.0 - progress).powi(3);
@@ -976,6 +1276,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: false,
                             texture_phase: TexturePhase::Insert,
                             run_identity: payload.run_identity,
+                            line_snapshot_id: None,
                         });
                     }
                 }
@@ -1003,6 +1304,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: true,
                             texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
                             run_identity: run.qglyphrun_index,
+                            line_snapshot_id: None,
                         });
                     } else {
                         let eased = 1.0 - (1.0 - progress).powi(3);
@@ -1025,6 +1327,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: false,
                             texture_phase: if is_delete { TexturePhase::DeleteOld } else { TexturePhase::Insert },
                             run_identity: run.qglyphrun_index,
+                            line_snapshot_id: None,
                         });
                     }
 
@@ -1062,6 +1365,7 @@ impl LinuxEditorAnimationCoordinator {
                                 is_delete: false,
                                 texture_phase: TexturePhase::NewReflow,
                                 run_identity: new_run.qglyphrun_index,
+                                line_snapshot_id: None,
                             });
                         }
                     }
@@ -1101,6 +1405,7 @@ impl LinuxEditorAnimationCoordinator {
                                     is_delete: false,
                                     texture_phase: TexturePhase::OldReflow,
                                     run_identity: old_run.map(|r| r.qglyphrun_index + (mapping.unwrap().old_run_index as i32)).unwrap_or(new_run.qglyphrun_index + (run_idx as i32)),
+                                    line_snapshot_id: None,
                                 });
                             }
                             let eased = 1.0 - (1.0 - progress).powi(2);
@@ -1121,6 +1426,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: false,
                             texture_phase: phase,
                             run_identity: new_run.qglyphrun_index + (run_idx as i32),
+                            line_snapshot_id: None,
                         });
                     }
 
@@ -1145,6 +1451,7 @@ impl LinuxEditorAnimationCoordinator {
                             is_delete: false,
                             texture_phase: TexturePhase::Insert,
                             run_identity: insert_run.qglyphrun_index,
+                            line_snapshot_id: None,
                         });
                     }
                 }
