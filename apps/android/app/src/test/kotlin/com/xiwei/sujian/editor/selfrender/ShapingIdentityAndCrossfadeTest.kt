@@ -17,10 +17,9 @@ class ShapingIdentityAndCrossfadeTest {
         val paintFingerprint = "sans-serif:16:1.00:0.00"
         val textHash = clusterText.hashCode()
         val isRtl = false
-        val identity = "$textHash:$paintFingerprint:0:3:$isRtl"
+        val identity = "c:$textHash:$paintFingerprint:0:$isRtl"
         assertNotNull(identity)
         assertTrue(identity.isNotEmpty())
-        assertTrue(identity.contains("3"))
         assertTrue(identity.contains("sans-serif"))
         assertTrue(identity.contains("false"))
     }
@@ -75,6 +74,12 @@ class ShapingIdentityAndCrossfadeTest {
         val id = buildTestShapingIdentity(clusterText, "sans-serif:16", false)
         assertNotNull(id)
         assertTrue(id.isNotEmpty())
+    }
+
+    @Test
+    fun shapingIdentity_conservativeFormat_noCodePointCount() {
+        val id = buildTestShapingIdentity("abc", "sans-serif:16", false)
+        assertTrue(id.startsWith("c:"))
     }
 
     @Test
@@ -250,6 +255,6 @@ class ShapingIdentityAndCrossfadeTest {
 
     private fun buildTestShapingIdentity(clusterText: String, fontFingerprint: String, isRtl: Boolean): String {
         val textHash = clusterText.hashCode()
-        return "$textHash:$fontFingerprint:0:${clusterText.codePointCount(0, clusterText.length)}:$isRtl"
+        return "c:$textHash:$fontFingerprint:0:$isRtl"
     }
 }
