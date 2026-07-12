@@ -213,7 +213,7 @@ class AndroidLayoutSnapshotBuilder(
                 0f, 0f, isRtl, paint
             )
 
-            val glyphCount = shaped.glyphCount
+            val glyphCount = shaped.glyphCount()
             val glyphIdBuilder = StringBuilder()
             val posBuilder = StringBuilder()
             val fontBuilder = StringBuilder()
