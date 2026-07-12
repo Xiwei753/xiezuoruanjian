@@ -1,8 +1,17 @@
+//! Linux Qt 文字动画的平台视觉快照层。
+//!
+//! 本模块把一次 Qt 排版结果固化为不可变行视觉资源和 cluster 几何信息。
+//! 动画阶段只能裁剪、移动和混合这些资源，不得再次调用文字排版生成第二套视觉结果。
+
 use qmetaobject::QImage;
 use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, VisualLine};
 pub(crate) use super::layout_revision::LayoutRevision;
 pub(crate) use super::snapshot_id::LineSnapshotId;
 
+/// 一次平台排版后的不可变 glyph cluster 视觉快照。
+///
+/// `byte_start`/`byte_end` 是 UTF-8 文档范围；`source_rect` 是行视觉资源内的局部裁剪区域；
+/// `shaping_identity` 用于判断旧视觉是否能直接移动复用（相同则 Move，不同则 CrossFade）。
 #[derive(Clone, Debug)]
 pub(crate) struct LineClusterSnapshot {
     pub byte_start: usize,
@@ -12,6 +21,11 @@ pub(crate) struct LineClusterSnapshot {
     pub visual_line_id: usize,
 }
 
+/// 通用矩形载体，具体坐标空间由字段契约决定。
+///
+/// 在 cluster 快照中 `source_rect` 使用行视觉资源局部坐标（已乘 DPR）；
+/// 在动画切片中 `from_document_rect`/`to_document_rect` 使用文档坐标（不含滚动偏移）。
+/// 不得仅凭此类型假设是文档坐标。
 #[derive(Clone, Debug)]
 pub(crate) struct SourceRect {
     pub x: f64,
@@ -33,6 +47,11 @@ impl SourceRect {
     }
 }
 
+/// 平台 shaping 结果是否可视为同一视觉对象的指纹。
+///
+/// 这不是文字逻辑 identity，而是"当前平台 shaping 结果是否可视为同一视觉对象"的判断依据。
+/// 字体、glyph 索引、方向、格式任一变化都应视为不同 shaping，此时旧视觉不能直接移动，
+/// 必须走 CrossFade（旧视觉淡出 + 新视觉淡入）。
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ShapingIdentity {
     pub text_content_hash: u64,
@@ -54,6 +73,11 @@ impl ShapingIdentity {
     }
 }
 
+/// 一次平台视觉事务持有的不可变行快照。
+///
+/// `image`/视觉资源、clusters、文档 byte range、visual line、DPR、段落上下文共同构成
+/// 一次排版的完整视觉记录。事务进入 `Completed` 或 `Cancelled` 前，所有被 slice 引用的
+/// 视觉资源必须保持有效。
 #[derive(Clone)]
 pub(crate) struct PreparedLineSnapshot {
     pub id: LineSnapshotId,
@@ -76,6 +100,8 @@ pub(crate) struct PreparedLineSnapshot {
 }
 
 impl PreparedLineSnapshot {
+    /// 聚合与 `byte_start..byte_end` 相交的所有 cluster 的 `source_rect`。
+    /// 相交语义：cluster 的 byte range 与查询 range 有重叠即纳入。
     pub fn source_rect_for_byte_range(&self, byte_start: usize, byte_end: usize) -> Option<SourceRect> {
         let mut min_x = f64::MAX;
         let mut min_y = f64::MAX;
@@ -117,6 +143,11 @@ impl PreparedLineSnapshot {
     }
 }
 
+/// 一次完整排版的不可变快照集合。
+///
+/// `revision` 标识同一批布局视觉结果，不是正文版本号的替代品。
+/// old/new snapshot 的 revision 不同，动画切片只能引用创建时对应的 revision，
+/// 不得混用。
 #[derive(Clone)]
 pub(crate) struct EditorLayoutSnapshot {
     pub revision: LayoutRevision,
