@@ -9,28 +9,12 @@ import android.graphics.RenderNode
 import android.os.Build
 import android.text.Layout
 
-/**
- * 行视觉资源的平台抽象。
- *
- * API 29+ 使用 [RenderNode]（[RenderNodeVisualResource]），
- * API 24–28 使用 [Bitmap]（[BitmapVisualResource]），是同一抽象的不同后端。
- *
- * [record] 负责一次性录制完整视觉行；动画帧只修改 destination/alpha/scale 并裁剪，
- * 不再调用 `drawText()` 重新 shaping。
- *
- * 资源释放和重复录制的生命周期约束：[release] 必须可重复调用；
- * 事务结束前不能释放仍被 slice 引用的资源。
- */
 interface AndroidLineVisualResource {
     fun record(layout: Layout, lineIdx: Int, textPaint: Paint, textColor: Int, scrollX: Int, scrollY: Int)
     fun drawSlice(canvas: Canvas, sourceRect: RectF, destinationRect: RectF, alpha: Int, scale: Float)
     fun release()
 }
 
-/**
- * API 29+ 后端：使用 [RenderNode] 录制行视觉资源。
- * 动画帧通过 alpha/translate/clip 变换 RenderNode，不重新 shaping。
- */
 class RenderNodeVisualResource(
     private val name: String
 ) : AndroidLineVisualResource {
@@ -85,10 +69,6 @@ class RenderNodeVisualResource(
     }
 }
 
-/**
- * API 24–28 后端：使用 [Bitmap] 录制行视觉资源。
- * 动画帧通过 drawBitmap + src/dst rect 变换，不重新 shaping。
- */
 class BitmapVisualResource : AndroidLineVisualResource {
 
     private var bitmap: Bitmap? = null

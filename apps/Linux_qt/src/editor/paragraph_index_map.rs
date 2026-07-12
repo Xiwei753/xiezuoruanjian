@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct ParagraphIndexMap {
     qchar_to_document_byte: Vec<usize>,
     document_byte_to_qchar: Vec<usize>,

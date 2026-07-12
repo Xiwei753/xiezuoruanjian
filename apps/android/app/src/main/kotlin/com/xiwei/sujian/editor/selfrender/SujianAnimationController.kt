@@ -9,22 +9,6 @@ import com.xiwei.sujian.model.SujianEditCauseData
 import com.xiwei.sujian.model.SujianVisualEditContext
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
-/**
- * 文字动画调度器。
- *
- * 职责边界：
- * - 接收 Core 的 [EditorVisualTransactionData]，决定是否启动动画。
- * - 调用 [AndroidLayoutSnapshotBuilder] 捕获 old/new 行快照。
- * - 生成 [AndroidAnimatedSlice] + [AndroidStaticLinePatch]。
- * - 将事务提交给 [SujianEditorRenderer]。
- * - 不直接绘制、不持有视觉资源、不管理动画帧计时。
- *
- * 与 buffer/layout/renderer/cursor controller 的边界：
- * - buffer：提供文本和光标位置。
- * - layout：提供 [android.text.Layout] 排版结果。
- * - renderer：持有事务队列、管理动画帧和绘制。
- * - cursorController：接收事务驱动的光标过渡。
- */
 class SujianAnimationController(
     private val buffer: SujianEditorBuffer,
     private val layout: SujianEditorLayout,
@@ -65,9 +49,6 @@ class SujianAnimationController(
         return id
     }
 
-    // 删除前快照消费：删除事务必须在 Core 通知之前就录制好旧视觉，
-    // 因为 Core 处理删除后旧文本已不在 buffer 中。
-    // consumeDeleteSnapshot 按动画 ID 匹配，未匹配时 fallback 到最早快照。
     fun consumeDeleteSnapshot(id: ULong): DeleteSnapshot? {
         val idx = deleteSnapshots.indexOfFirst { it.animationId == id }
         if (idx < 0) return null
@@ -110,9 +91,6 @@ class SujianAnimationController(
         }
     }
 
-    // 连续输入 rebase：新事务与旧事务 byte range 重叠时，先从旧事务当前
-    // progress 计算已显示帧位置，rebase 新 slice 的 fromDocumentRect，
-    // 再取消旧事务，保证视觉无跳变。
     fun handleInsertTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 
@@ -308,8 +286,6 @@ class SujianAnimationController(
         return TextAnimationStartResult.Started
     }
 
-    // 滚动暂停：滚动期间事务 pause 而非销毁，滚动结束后 resume 继续。
-    // 这样可以避免重新创建事务的开销和视觉跳变。
     fun handleDeleteTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
         if (!animationEnabled) return TextAnimationStartResult.Skipped
 

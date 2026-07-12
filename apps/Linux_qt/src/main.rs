@@ -35,7 +35,7 @@
 // 遵守 Qt QSG 线程边界，不受 LayoutPlan 影响。
 // =============================================================================
 
-#![recursion_limit = "4096"]
+#![recursion_limit = "8192"]
 //! Linux_qt 客户端入口：只负责 Qt/QML 启动、资源注册和顶层 Backend 注册。
 
 use cpp::cpp;

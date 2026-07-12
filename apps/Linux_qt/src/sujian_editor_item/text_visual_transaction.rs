@@ -10,15 +10,6 @@ use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
 
-/// 平台视觉事务状态机：
-///
-/// ```text
-/// Pending → Prepared → Rendering ↔ Paused → Completed
-///    └──── 任一未终态 ────→ Cancelled
-/// ```
-///
-/// 动画计时只能在首次进入 Rendering 时开始（`first_render_frame`），
-/// 暂停时累计暂停时长，恢复后 progress 连续。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextVisualTransactionState {
     Pending,
@@ -36,11 +27,6 @@ pub(crate) enum TextVisualOperationKind {
     Cursor,
 }
 
-/// 一次平台视觉事务持有的全部资源。
-///
-/// 它拥有一次动画所需的 slices、patches、cursor transition 和 old/new snapshots。
-/// `texture_prepared` 为 true 后，静态层才允许隐藏对应范围，否则会出现一帧空洞。
-/// 事务完成、取消或超时移除后，对应快照资源才可以释放。
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedTextVisualTransaction {
     pub key: VisualTransactionKey,
@@ -167,11 +153,6 @@ impl PreparedTextVisualTransaction {
     }
 }
 
-/// Linux 当前唯一事务队列。
-///
-/// 冲突判断基于 byte range 与仍活跃的视觉资源，不是简单"新输入清空旧动画"：
-/// 新事务的 byte range 与现有事务的 slices/patches 有重叠时，先从旧事务的当前视觉帧
-/// rebase，再取消旧事务，保证连续输入无跳变。
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PreparedTransactionQueue {
     transactions: Vec<PreparedTextVisualTransaction>,

@@ -1,25 +1,14 @@
 use super::layout_snapshot::{LineSnapshotId, SourceRect, ShapingIdentity};
 use super::transaction_key::VisualTransactionKey;
 
-/// 动画切片类型，决定视觉语义和插值行为。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnimatedSliceKind {
-    /// 新快照视觉从光标附近进入目标位置（透明→不透明）。
     InsertFadeIn,
-    /// 旧快照视觉向删除后的光标位置收缩并消失（不透明→透明，缩小 0.7）。
     DeleteFadeOut,
-    /// old/new shaping identity 相同，复用旧视觉资源做几何移动。
     ReflowMove,
-    /// shaping 发生变化，旧视觉淡出、新视觉淡入；同一逻辑对象由成对 slice 表达。
     ReflowCrossFade,
 }
 
-/// 一次动画切片的完整描述。
-///
-/// 坐标契约：
-/// - `source_rect`：`snapshot_id` 对应视觉资源内的裁剪区域（行局部坐标，已乘 DPR）。
-/// - `from_document_rect`/`to_document_rect`：文档坐标，不包含当前滚动偏移。
-/// - `byte_start`/`byte_end`：用于事务冲突判断和静态层隐藏，不参与逐帧排版。
 #[derive(Clone, Debug)]
 pub(crate) struct AnimatedSlice {
     pub key: VisualTransactionKey,
@@ -188,8 +177,6 @@ impl AnimatedSlice {
         matches!(self.kind, AnimatedSliceKind::DeleteFadeOut)
     }
 
-    /// 接收当前已显示视觉帧的位置和透明度，用于连续事务无跳变衔接。
-    /// rebase 后 slice 从当前视觉状态开始，而不是从原始逻辑起点重新播放。
     pub fn rebase_from(&mut self, current_x: f64, current_y: f64, current_opacity: f64) {
         self.from_document_rect.x = current_x;
         self.from_document_rect.y = current_y;
@@ -197,7 +184,6 @@ impl AnimatedSlice {
         self.scale_from = 1.0;
     }
 
-    /// 纯插值计算：根据 progress 在 from/to 之间插值，不得查询布局或修改事务。
     pub fn compute_frame(&self, progress: f64) -> AnimatedSliceFrame {
         match self.kind {
             AnimatedSliceKind::InsertFadeIn => {

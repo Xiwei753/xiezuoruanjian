@@ -7,18 +7,6 @@ import android.text.TextPaint
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import java.util.Objects
 
-/**
- * 从同一个 [Layout]/[StaticLayout] revision 捕获不可变行快照。
- *
- * 这是 Android 文字动画唯一的排版视觉来源。动画帧只消费已录制的
- * [AndroidLineVisualResource]，不会重新调用文字排版。
- *
- * 坐标约定：
- * - 文档范围使用 UTF-8 byte offset，平台范围使用 UTF-16 offset。
- * - [Layout.getPrimaryHorizontal]、line left/top/baseline 产生的坐标
- *   分别变换到行局部（sourceRect）与文档坐标（visualRect）。
- * - revision 只标识同一批布局视觉结果，不是正文版本号的替代品。
- */
 class AndroidLayoutSnapshotBuilder(
     private val layout: SujianEditorLayout,
     private val textPaint: TextPaint
@@ -99,9 +87,6 @@ class AndroidLayoutSnapshotBuilder(
 
         val clusters = buildClusterSnapshots(text, staticLayout, lineIdx, lineStart, lineEnd)
 
-        // UTF-16 → UTF-8 byte offset 的转换边界：
-        // Android Layout API 全部使用 UTF-16 offset（getLineStart/End, getPrimaryHorizontal），
-        // 跨平台事务和 byte range 使用 UTF-8，必须在此处转换。
         val byteStart = SujianEditorBuffer.utf16ToUtf8(text, lineStart)
         val byteEnd = SujianEditorBuffer.utf16ToUtf8(text, lineEnd.coerceAtMost(text.length))
 
@@ -178,9 +163,6 @@ class AndroidLayoutSnapshotBuilder(
         return clusters
     }
 
-    // shaping identity 包含影响视觉等价性的因素：文本内容、字体指纹、测量宽度、
-    // glyph 数量、文字方向。它决定 Move/Crossfade：相同则复用旧视觉做几何移动，
-    // 不同则必须旧视觉淡出 + 新视觉淡入。
     private fun buildShapingIdentity(
         clusterText: String,
         paint: TextPaint,
@@ -196,9 +178,6 @@ class AndroidLayoutSnapshotBuilder(
 
     private fun Float.format(digits: Int): String = String.format("%.${digits}f", this)
 
-    // BreakIterator 用于 grapheme/cluster 边界，不能用单个 UTF-16 code unit
-    // 或 code point 代替：ZWJ emoji、组合字符、ligature 的边界必须由
-    // ICU BreakIterator 判定。
     private fun findClusterBoundary(text: String, start: Int, lineEnd: Int): Int {
         if (start >= text.length) return start
         val breaker = android.icu.text.BreakIterator.getCharacterInstance()

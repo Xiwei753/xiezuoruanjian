@@ -1,8 +1,3 @@
-//! 行视觉快照构建器。
-//!
-//! 同一次 `QTextLayout`/`QTextLine` 结果用于生成行图像、cluster/source rect 和
-//! shaping identity。动画阶段只消费快照，不再次排版文字。
-
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
@@ -11,6 +6,7 @@ use super::layout_snapshot::{
 use super::line_snapshot::LineTextureStore;
 use crate::editor::layout::{LayoutSnapshot, VisualLine};
 use crate::editor::layout;
+use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
 pub(crate) struct LineSnapshotBuilder;
 
@@ -32,6 +28,8 @@ impl LineSnapshotBuilder {
         let mut prev_para_start: Option<usize> = None;
         let mut visual_line_ordinal: u32 = 0;
 
+        let mut canonical_cache: Option<(usize, layout::CanonicalParagraphSnapshot)> = None;
+
         for (line_idx, line) in snapshot.lines.iter().enumerate() {
             if line.para_text.is_empty() {
                 continue;
@@ -41,6 +39,20 @@ impl LineSnapshotBuilder {
                 paragraph_id = paragraph_id.wrapping_add(1);
                 visual_line_ordinal = 0;
                 prev_para_start = Some(line.para_start);
+
+                if generate_images {
+                    let canonical = layout::prepare_paragraph_visual_snapshot(
+                        &line.para_text,
+                        line.para_start,
+                        font_size,
+                        font_family,
+                        line.line_wrap_width + line.line_indent_x,
+                        text_indent,
+                        dpr,
+                        text_color,
+                    );
+                    canonical_cache = Some((line.para_start, canonical));
+                }
             }
 
             let line_top = line.y - scroll_y;
@@ -54,30 +66,33 @@ impl LineSnapshotBuilder {
             let indent = text_indent;
             let baseline_y = layout::text_baseline_y(line, font_size, font_family);
 
-            let image = if generate_images {
-                layout::render_line_to_image(
+            let (image, clusters) = if generate_images {
+                if let Some((_, ref canonical)) = canonical_cache {
+                    if canonical.paragraph_document_byte_start == line.para_start {
+                        let canonical_line = canonical.lines.get(line.qtextline_idx as usize);
+                        let img = canonical_line.and_then(|cl| cl.image.clone());
+                        let cls = canonical_line
+                            .map(|cl| Self::build_clusters_from_canonical(cl, line, &canonical.index_map))
+                            .unwrap_or_default();
+                        (img, cls)
+                    } else {
+                        (None, Vec::new())
+                    }
+                } else {
+                    (None, Vec::new())
+                }
+            } else {
+                let clusters = Self::build_clusters_for_line(
+                    line,
                     &line.para_text,
                     font_size,
                     font_family,
                     wrap_w,
                     indent,
-                    line.qtextline_idx,
                     dpr,
-                    text_color,
-                )
-            } else {
-                None
+                );
+                (None, clusters)
             };
-
-            let clusters = Self::build_clusters_for_line(
-                line,
-                &line.para_text,
-                font_size,
-                font_family,
-                wrap_w,
-                indent,
-                dpr,
-            );
 
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
@@ -133,6 +148,43 @@ impl LineSnapshotBuilder {
             new_revision, new_snapshot, font_size, font_family, scroll_y, viewport_h, text_indent, dpr, text_color, true,
         );
         (old_layout, new_layout)
+    }
+
+    fn build_clusters_from_canonical(
+        canonical_line: &layout::CanonicalLineSnapshot,
+        line: &VisualLine,
+        index_map: &ParagraphIndexMap,
+    ) -> Vec<LineClusterSnapshot> {
+        canonical_line
+            .clusters
+            .iter()
+            .map(|cc| {
+                let shaping_identity = ShapingIdentity {
+                    text_content_hash: Self::hash_u32(&[
+                        cc.qchar_start as u32,
+                        cc.qchar_end as u32,
+                    ]),
+                    raw_font_fingerprint: cc.raw_font_fingerprint.clone(),
+                    glyph_indexes_hash: Self::hash_u32(&[cc.first_glyph_index]),
+                    cluster_glyph_count: cc.glyph_count,
+                    direction_rtl: cc.is_rtl,
+                    format_fingerprint: 0,
+                };
+
+                LineClusterSnapshot {
+                    byte_start: cc.document_byte_start,
+                    byte_end: cc.document_byte_end,
+                    source_rect: SourceRect {
+                        x: cc.source_rect_x,
+                        y: cc.source_rect_y,
+                        w: cc.source_rect_w,
+                        h: cc.source_rect_h,
+                    },
+                    shaping_identity,
+                    visual_line_id: line.id,
+                }
+            })
+            .collect()
     }
 
     fn build_clusters_for_line(
@@ -200,17 +252,9 @@ impl LineSnapshotBuilder {
                 let local_x = (min_x - run_x).max(0.0);
                 let local_w = max_x - min_x;
 
-                // UTF-8 byte offset 与 Qt UTF-16/QChar offset 的转换边界：
-                // Qt glyph 的 string_index 是 QChar offset（UTF-16），需加 line.byte_start
-                // 转为 UTF-8 文档 byte offset。
                 let byte_start = line.byte_start + (*str_start as usize);
                 let byte_end = line.byte_start + (*str_end as usize) + 1;
 
-                // glyph run/cluster 边界由 Qt shaping 决定，不能按 Rust `char` 或
-                // 单个 code point 推断：一个 cluster 可能包含多个 glyph（ligature），
-                // 也可能一个 glyph 覆盖多个 code point（ZWJ emoji）。
-                // source_rect 使用行视觉资源局部坐标，已乘 DPR；
-                // local_x 是从 run 起始位置偏移后的逻辑坐标，乘 DPR 后对应 QImage 像素坐标。
                 let source_rect = SourceRect {
                     x: local_x * dpr,
                     y: 0.0,

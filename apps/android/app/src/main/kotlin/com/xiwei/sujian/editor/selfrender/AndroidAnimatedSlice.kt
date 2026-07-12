@@ -2,27 +2,10 @@ package com.xiwei.sujian.editor.selfrender
 
 import android.graphics.RectF
 
-/**
- * 动画切片角色，与 Linux `AnimatedSliceKind` 使用同一套语义。
- *
- * - [Insert]：新快照视觉从光标附近进入目标位置（透明→不透明）。
- * - [Delete]：旧快照视觉向删除后的光标位置收缩并消失（不透明→透明）。
- * - [Move]：shaping identity 等价时复用旧视觉资源做几何移动。
- * - [CrossfadeOld]/[CrossfadeNew]：shaping 变化时必须成对出现，
- *   分别引用 old/new snapshot；旧视觉淡出、新视觉淡入。
- */
 enum class AndroidAnimatedSliceRole {
     Insert, Delete, Move, CrossfadeOld, CrossfadeNew, SnapshotOld, SnapshotNew
 }
 
-/**
- * 一次动画切片的完整描述。
- *
- * 坐标契约：
- * - [sourceRect]：[sourceSnapshotId] 对应视觉资源内的裁剪区域（行局部坐标）。
- * - [fromDocumentRect]/[toDocumentRect]：文档坐标，不包含当前滚动偏移。
- * - [documentByteStart]/[documentByteEnd]：用于事务冲突判断和静态层隐藏，不参与逐帧排版。
- */
 data class AndroidAnimatedSlice(
     val id: ULong,
     val role: AndroidAnimatedSliceRole,
@@ -38,9 +21,6 @@ data class AndroidAnimatedSlice(
     val documentByteEnd: Int,
     val shapingIdentity: String?
 ) {
-    /**
-     * 纯插值计算：根据 progress 在 from/to 之间插值，不得查询布局或修改事务。
-     */
     fun computeFrame(progress: Float, easedProgress: Float): SliceFrame {
         val x = fromDocumentRect.left + (toDocumentRect.left - fromDocumentRect.left) * easedProgress
         val y = fromDocumentRect.top + (toDocumentRect.top - fromDocumentRect.top) * easedProgress
@@ -55,10 +35,6 @@ data class AndroidAnimatedSlice(
         )
     }
 
-    /**
-     * 接收当前已显示视觉帧的位置和透明度，用于连续事务无跳变衔接。
-     * rebase 后 slice 从当前视觉状态开始，而不是从原始逻辑起点重新播放。
-     */
     fun rebaseFrom(currentRect: RectF, currentAlpha: Int) {
         fromDocumentRect = currentRect
         opacityFrom = currentAlpha / 255f

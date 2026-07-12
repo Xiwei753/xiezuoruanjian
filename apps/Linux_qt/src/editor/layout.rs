@@ -633,6 +633,298 @@ cpp! {{
         }
         layout.endLayout();
     }
+
+    // ── Canonical paragraph visual snapshot ──
+    // One QTextLayout per paragraph: layout, glyphRuns, clusters, line images,
+    // cursor data — all from the same instance. No re-layout after this.
+
+    struct CanonicalLineEntry {
+        int qcharStart;
+        int qcharEnd;
+        double xPos;
+        double width;
+        double height;
+        double ascent;
+        double descent;
+        double y;
+        double xEndLeading;
+        double xEndTrailing;
+        int clusterStartIndex;
+        int clusterCount;
+        int imagePhysW;
+        int imagePhysH;
+    };
+
+    struct CanonicalClusterEntry {
+        int qcharStart;
+        int qcharEnd;
+        double sourceRectX;
+        double sourceRectY;
+        double sourceRectW;
+        double sourceRectH;
+        int glyphCount;
+        int glyphStartIndex;
+        char rawFontFingerprint[256];
+        bool isRTL;
+        unsigned int firstGlyphIndex;
+    };
+
+    struct CanonicalClusterGlyphEntry {
+        unsigned int glyphIndex;
+        double positionX;
+        double positionY;
+        int stringIndex;
+    };
+
+    thread_local std::vector<CanonicalLineEntry> g_canonical_line_buf;
+    thread_local std::vector<CanonicalClusterEntry> g_canonical_cluster_buf;
+    thread_local std::vector<CanonicalClusterGlyphEntry> g_canonical_cluster_glyph_buf;
+    thread_local std::vector<QImage> g_canonical_line_images;
+
+    void editor_prepare_paragraph_visual_snapshot(
+        const QString& paraText,
+        double fs, const QString& ff,
+        double wrap_w, double indent_w,
+        double dpr, const QColor& textColor
+    ) {
+        g_canonical_line_buf.clear();
+        g_canonical_cluster_buf.clear();
+        g_canonical_cluster_glyph_buf.clear();
+        g_canonical_line_images.clear();
+
+        if (paraText.isEmpty()) return;
+
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.setCacheEnabled(true);
+        layout.beginLayout();
+
+        QVector<QTextLine> textLines;
+        bool first = true;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+            line.setLineWidth(lineWrap);
+            textLines.push_back(line);
+            first = false;
+        }
+        layout.endLayout();
+
+        for (int i = 0; i < textLines.size(); i++) {
+            const QTextLine& line = textLines[i];
+            bool isFirst = (i == 0);
+
+            CanonicalLineEntry entry;
+            entry.qcharStart = line.textStart();
+            entry.qcharEnd = line.textStart() + line.textLength();
+            entry.xPos = isFirst ? indent_w : 0.0;
+            entry.width = line.naturalTextWidth();
+            entry.height = line.height();
+            entry.ascent = line.ascent();
+            entry.descent = line.descent();
+            entry.y = line.y();
+            entry.xEndLeading = line.cursorToX(entry.qcharEnd, QTextLine::Leading);
+            entry.xEndTrailing = line.cursorToX(entry.qcharEnd, QTextLine::Trailing);
+
+            double logical_w = wrap_w;
+            double logical_h = line.height();
+            int phys_w = (int)ceil(logical_w * dpr);
+            int phys_h = (int)ceil(logical_h * dpr);
+
+            if (phys_w > 0 && phys_h > 0 && phys_w <= 8192 && phys_h <= 4096) {
+                QImage img(phys_w, phys_h, QImage::Format_ARGB32_Premultiplied);
+                img.setDevicePixelRatio(dpr);
+                img.fill(Qt::transparent);
+
+                QPainter painter(&img);
+                painter.setRenderHint(QPainter::TextAntialiasing, true);
+                painter.scale(dpr, dpr);
+                painter.setPen(QPen(textColor));
+                QPointF pos(0, line.ascent());
+                line.draw(&painter, pos);
+
+                entry.imagePhysW = phys_w;
+                entry.imagePhysH = phys_h;
+                g_canonical_line_images.push_back(img);
+            } else {
+                entry.imagePhysW = 0;
+                entry.imagePhysH = 0;
+                g_canonical_line_images.push_back(QImage());
+            }
+
+            int clusterStartIdx = (int)g_canonical_cluster_buf.size();
+
+            const auto glyphRuns = line.glyphRuns();
+
+            for (const auto& run : glyphRuns) {
+                const auto& positions = run.positions();
+                const auto& glyphIndexes = run.glyphIndexes();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+                const auto& stringIndexes = run.stringIndexes();
+#endif
+                int count = positions.size();
+                if (count == 0) continue;
+
+                QRawFont rawFont = run.rawFont();
+                QString rawFontFamily = rawFont.familyName();
+                QByteArray rawFontKeyBytes = rawFontFamily.toUtf8();
+
+                int glyphBufStart = (int)g_canonical_cluster_glyph_buf.size();
+
+                for (int gi = 0; gi < count; gi++) {
+                    unsigned int gIdx = (gi < glyphIndexes.size()) ? glyphIndexes[gi] : 0;
+                    double gx = positions[gi].x();
+                    double gy = positions[gi].y();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+                    int si = (gi < stringIndexes.size()) ? stringIndexes[gi] : -1;
+#else
+                    int si = -1;
+#endif
+
+                    CanonicalClusterGlyphEntry ge;
+                    ge.glyphIndex = gIdx;
+                    ge.positionX = gx;
+                    ge.positionY = gy;
+                    ge.stringIndex = si;
+                    g_canonical_cluster_glyph_buf.push_back(ge);
+                }
+
+                struct TempCluster {
+                    int qcharVal;
+                    int glyphStart;
+                    int glyphEnd;
+                    double visMinX, visMinY, visMaxX, visMaxY;
+                };
+                std::vector<TempCluster> tempClusters;
+
+                if (count > 0) {
+                    int curQchar = g_canonical_cluster_glyph_buf[glyphBufStart].stringIndex;
+                    int clStart = 0;
+                    double clMinX = 1e9, clMinY = 1e9, clMaxX = -1e9, clMaxY = -1e9;
+
+                    for (int gi = 0; gi <= count; gi++) {
+                        int si = (gi < count)
+                            ? g_canonical_cluster_glyph_buf[glyphBufStart + gi].stringIndex
+                            : INT_MAX;
+
+                        if (gi == count || si != curQchar) {
+                            if (curQchar >= 0) {
+                                TempCluster tc;
+                                tc.qcharVal = curQchar;
+                                tc.glyphStart = clStart;
+                                tc.glyphEnd = gi;
+                                tc.visMinX = clMinX;
+                                tc.visMinY = clMinY;
+                                tc.visMaxX = clMaxX;
+                                tc.visMaxY = clMaxY;
+                                tempClusters.push_back(tc);
+                            }
+                            if (gi < count) {
+                                curQchar = si;
+                                clStart = gi;
+                                clMinX = 1e9; clMinY = 1e9;
+                                clMaxX = -1e9; clMaxY = -1e9;
+                            }
+                        }
+
+                        if (gi < count && si == curQchar) {
+                            unsigned int gIdx2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].glyphIndex;
+                            double gx2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].positionX;
+                            double gy2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].positionY;
+                            QRectF gb = rawFont.boundingRect(gIdx2);
+                            double gl = gx2 + gb.left();
+                            double gr = gx2 + gb.right();
+                            double gt = gy2 + gb.top();
+                            double gbo = gy2 + gb.bottom();
+                            if (gl < clMinX) clMinX = gl;
+                            if (gr > clMaxX) clMaxX = gr;
+                            if (gt < clMinY) clMinY = gt;
+                            if (gbo > clMaxY) clMaxY = gbo;
+                        }
+                    }
+                }
+
+                double aaMargin = 1.0;
+                for (int ci = 0; ci < (int)tempClusters.size(); ci++) {
+                    const TempCluster& tc = tempClusters[ci];
+                    if (tc.qcharVal < 0) continue;
+
+                    int qcharStart = tc.qcharVal;
+                    int qcharEnd;
+                    if (ci + 1 < (int)tempClusters.size()) {
+                        qcharEnd = tempClusters[ci + 1].qcharVal;
+                    } else {
+                        qcharEnd = entry.qcharEnd;
+                    }
+                    if (qcharEnd <= qcharStart) qcharEnd = qcharStart + 1;
+
+                    double srcX = (tc.visMinX - aaMargin) - line.x();
+                    double srcY = (tc.visMinY - aaMargin) - line.y();
+                    double srcW = (tc.visMaxX - tc.visMinX) + aaMargin * 2.0;
+                    double srcH = (tc.visMaxY - tc.visMinY) + aaMargin * 2.0;
+
+                    if (srcW < 0.01) srcW = 10.0;
+                    if (srcH < 0.01) srcH = line.height();
+
+                    if (srcX < 0) { srcW += srcX; srcX = 0; }
+                    if (srcY < 0) { srcH += srcY; srcY = 0; }
+                    if (srcX + srcW > logical_w) srcW = logical_w - srcX;
+                    if (srcY + srcH > logical_h) srcH = logical_h - srcY;
+
+                    CanonicalClusterEntry ce;
+                    ce.qcharStart = qcharStart;
+                    ce.qcharEnd = qcharEnd;
+                    ce.sourceRectX = srcX * dpr;
+                    ce.sourceRectY = srcY * dpr;
+                    ce.sourceRectW = srcW * dpr;
+                    ce.sourceRectH = srcH * dpr;
+                    ce.glyphCount = tc.glyphEnd - tc.glyphStart;
+                    ce.glyphStartIndex = glyphBufStart + tc.glyphStart;
+                    memset(ce.rawFontFingerprint, 0, sizeof(ce.rawFontFingerprint));
+                    if (rawFontKeyBytes.size() > 0) {
+                        int copyLen = rawFontKeyBytes.size();
+                        if (copyLen > (int)sizeof(ce.rawFontFingerprint) - 1)
+                            copyLen = (int)sizeof(ce.rawFontFingerprint) - 1;
+                        memcpy(ce.rawFontFingerprint, rawFontKeyBytes.constData(), copyLen);
+                    }
+                    ce.isRTL = run.isRightToLeft();
+                    ce.firstGlyphIndex = (tc.glyphStart < count)
+                        ? g_canonical_cluster_glyph_buf[glyphBufStart + tc.glyphStart].glyphIndex
+                        : 0;
+
+                    g_canonical_cluster_buf.push_back(ce);
+                }
+            }
+
+            entry.clusterStartIndex = clusterStartIdx;
+            entry.clusterCount = (int)g_canonical_cluster_buf.size() - clusterStartIdx;
+
+            g_canonical_line_buf.push_back(entry);
+        }
+    }
+
+    int editor_canonical_line_count() {
+        return static_cast<int>(g_canonical_line_buf.size());
+    }
+
+    int editor_canonical_cluster_count() {
+        return static_cast<int>(g_canonical_cluster_buf.size());
+    }
+
+    int editor_canonical_cluster_glyph_count() {
+        return static_cast<int>(g_canonical_cluster_glyph_buf.size());
+    }
+
+    void editor_copy_canonical_line_image(int line_idx, QImage* out_img) {
+        if (line_idx >= 0 && line_idx < (int)g_canonical_line_images.size()) {
+            *out_img = g_canonical_line_images[line_idx];
+        }
+    }
 }}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1864,6 +2156,285 @@ pub fn qchar_offset_to_byte_offset(text: &str, qchar_offset: usize) -> usize {
         qchar_count += ch.len_utf16();
     }
     text.len()
+}
+
+// ── Canonical paragraph visual snapshot ──
+
+#[derive(Clone, Debug)]
+pub struct CanonicalClusterSnapshot {
+    pub qchar_start: usize,
+    pub qchar_end: usize,
+    pub document_byte_start: usize,
+    pub document_byte_end: usize,
+    pub source_rect_x: f64,
+    pub source_rect_y: f64,
+    pub source_rect_w: f64,
+    pub source_rect_h: f64,
+    pub glyph_count: usize,
+    pub raw_font_fingerprint: String,
+    pub is_rtl: bool,
+    pub first_glyph_index: u32,
+}
+
+#[derive(Clone)]
+pub struct CanonicalLineSnapshot {
+    pub qchar_start: usize,
+    pub qchar_end: usize,
+    pub document_byte_start: usize,
+    pub document_byte_end: usize,
+    pub x_pos: f64,
+    pub width: f64,
+    pub height: f64,
+    pub ascent: f64,
+    pub descent: f64,
+    pub y: f64,
+    pub x_end_leading: f64,
+    pub x_end_trailing: f64,
+    pub image: Option<qmetaobject::QImage>,
+    pub clusters: Vec<CanonicalClusterSnapshot>,
+}
+
+#[derive(Clone)]
+pub struct CanonicalParagraphSnapshot {
+    pub paragraph_text: String,
+    pub paragraph_document_byte_start: usize,
+    pub lines: Vec<CanonicalLineSnapshot>,
+    pub index_map: crate::editor::paragraph_index_map::ParagraphIndexMap,
+}
+
+pub fn prepare_paragraph_visual_snapshot(
+    paragraph_text: &str,
+    paragraph_document_byte_start: usize,
+    font_size: f64,
+    font_family: &str,
+    wrap_w: f64,
+    indent_w: f64,
+    dpr: f64,
+    text_color: &str,
+) -> CanonicalParagraphSnapshot {
+    let index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+        paragraph_text,
+        paragraph_document_byte_start,
+    );
+
+    if paragraph_text.is_empty() {
+        return CanonicalParagraphSnapshot {
+            paragraph_text: paragraph_text.to_string(),
+            paragraph_document_byte_start,
+            lines: Vec::new(),
+            index_map,
+        };
+    }
+
+    let para: QString = paragraph_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    let color = qmetaobject::QColor::from_name(text_color);
+
+    let line_count = cpp!(unsafe [
+        para as "QString",
+        fs as "float",
+        ff as "QString",
+        wrap_w as "double",
+        indent_w as "double",
+        dpr as "double",
+        color as "QColor"
+    ] -> i32 as "int" {
+        editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color);
+        return static_cast<int>(g_canonical_line_buf.size());
+    });
+
+    let mut lines = Vec::with_capacity(line_count as usize);
+
+    for line_idx in 0..line_count {
+        let idx = line_idx;
+
+        let qchar_start = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return static_cast<qulonglong>(g_canonical_line_buf[idx].qcharStart);
+            return 0;
+        });
+        let qchar_end = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return static_cast<qulonglong>(g_canonical_line_buf[idx].qcharEnd);
+            return 0;
+        });
+        let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].xPos;
+            return 0.0;
+        });
+        let width = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].width;
+            return 0.0;
+        });
+        let height = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].height;
+            return 0.0;
+        });
+        let ascent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].ascent;
+            return 0.0;
+        });
+        let descent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].descent;
+            return 0.0;
+        });
+        let y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].y;
+            return 0.0;
+        });
+        let x_end_leading = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].xEndLeading;
+            return 0.0;
+        });
+        let x_end_trailing = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].xEndTrailing;
+            return 0.0;
+        });
+        let cluster_start = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].clusterStartIndex;
+            return 0;
+        });
+        let cluster_count = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].clusterCount;
+            return 0;
+        });
+        let image_phys_w = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].imagePhysW;
+            return 0;
+        });
+        let image_phys_h = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].imagePhysH;
+            return 0;
+        });
+
+        let image = if image_phys_w > 0 && image_phys_h > 0 {
+            let mut img = qmetaobject::QImage::new(
+                qmetaobject::QSize { width: 1, height: 1 },
+                qmetaobject::ImageFormat::ARGB32_Premultiplied,
+            );
+            let img_ptr = &mut img as *mut qmetaobject::QImage;
+            cpp!(unsafe [img_ptr as "QImage*", idx as "int"] {
+                editor_copy_canonical_line_image(idx, img_ptr);
+            });
+            Some(img)
+        } else {
+            None
+        };
+
+        let doc_byte_start = index_map.qchar_to_document_byte(qchar_start);
+        let doc_byte_end = index_map.qchar_to_document_byte(qchar_end);
+
+        let mut clusters = Vec::with_capacity(cluster_count as usize);
+        for ci in 0..cluster_count {
+            let cidx = cluster_start + ci;
+
+            let c_qchar_start = cpp!(unsafe [cidx as "int"] -> usize as "qulonglong" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return static_cast<qulonglong>(g_canonical_cluster_buf[cidx].qcharStart);
+                return 0;
+            });
+            let c_qchar_end = cpp!(unsafe [cidx as "int"] -> usize as "qulonglong" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return static_cast<qulonglong>(g_canonical_cluster_buf[cidx].qcharEnd);
+                return 0;
+            });
+            let c_src_x = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return g_canonical_cluster_buf[cidx].sourceRectX;
+                return 0.0;
+            });
+            let c_src_y = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return g_canonical_cluster_buf[cidx].sourceRectY;
+                return 0.0;
+            });
+            let c_src_w = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return g_canonical_cluster_buf[cidx].sourceRectW;
+                return 0.0;
+            });
+            let c_src_h = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return g_canonical_cluster_buf[cidx].sourceRectH;
+                return 0.0;
+            });
+            let c_glyph_count = cpp!(unsafe [cidx as "int"] -> i32 as "int" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return g_canonical_cluster_buf[cidx].glyphCount;
+                return 0;
+            });
+            let c_raw_font: QString = cpp!(unsafe [cidx as "int"] -> QString as "QString" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return QString::fromUtf8(g_canonical_cluster_buf[cidx].rawFontFingerprint);
+                return QString();
+            });
+            let c_is_rtl = cpp!(unsafe [cidx as "int"] -> bool as "bool" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return g_canonical_cluster_buf[cidx].isRTL;
+                return false;
+            });
+            let c_first_glyph = cpp!(unsafe [cidx as "int"] -> u32 as "quint32" {
+                if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
+                    return g_canonical_cluster_buf[cidx].firstGlyphIndex;
+                return 0;
+            });
+
+            let c_doc_byte_start = index_map.qchar_to_document_byte(c_qchar_start);
+            let c_doc_byte_end = index_map.qchar_to_document_byte(c_qchar_end);
+
+            clusters.push(CanonicalClusterSnapshot {
+                qchar_start: c_qchar_start,
+                qchar_end: c_qchar_end,
+                document_byte_start: c_doc_byte_start,
+                document_byte_end: c_doc_byte_end,
+                source_rect_x: c_src_x,
+                source_rect_y: c_src_y,
+                source_rect_w: c_src_w,
+                source_rect_h: c_src_h,
+                glyph_count: c_glyph_count as usize,
+                raw_font_fingerprint: c_raw_font.to_string(),
+                is_rtl: c_is_rtl,
+                first_glyph_index: c_first_glyph,
+            });
+        }
+
+        lines.push(CanonicalLineSnapshot {
+            qchar_start,
+            qchar_end,
+            document_byte_start: doc_byte_start,
+            document_byte_end: doc_byte_end,
+            x_pos,
+            width,
+            height,
+            ascent,
+            descent,
+            y,
+            x_end_leading,
+            x_end_trailing,
+            image,
+            clusters,
+        });
+    }
+
+    CanonicalParagraphSnapshot {
+        paragraph_text: paragraph_text.to_string(),
+        paragraph_document_byte_start,
+        lines,
+        index_map,
+    }
 }
 
 #[cfg(not(test))]
