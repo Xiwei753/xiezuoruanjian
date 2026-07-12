@@ -611,7 +611,9 @@ class SujianAnimationController(
         staticLayout: android.text.Layout,
         offsetMap: EditOffsetMap,
         oldText: String,
-        oldLineSnapshots: List<AndroidLineSnapshot>? = null
+        oldLineSnapshots: List<AndroidLineSnapshot>? = null,
+        newLineSnapshots: List<AndroidLineSnapshot>? = null,
+        oldLayout: android.text.Layout? = null
     ): Boolean {
         if (lineIdx < 0 || lineIdx >= staticLayout.lineCount) return true
         if (oldText.isEmpty()) return false
@@ -629,13 +631,13 @@ class SujianAnimationController(
         val oldByteEnd = SujianEditorBuffer.utf16ToUtf8(oldText, oldText.length)
         if (oldRange.end > oldByteEnd) return false
 
-        if (oldLineSnapshots != null) {
+        if (oldLineSnapshots != null && newLineSnapshots != null) {
             val oldLine = oldLineSnapshots.find {
                 it.documentByteStart <= oldRange.start && it.documentByteEnd >= oldRange.end
             }
             if (oldLine == null) return false
 
-            val newClusters = currentLineSnapshots
+            val newClusters = newLineSnapshots
                 .filter { it.documentByteStart >= byteStart && it.documentByteEnd <= byteEnd }
             val oldClusters = oldLine.clusters.filter {
                 it.documentByteStart >= oldRange.start && it.documentByteEnd <= oldRange.end
@@ -652,13 +654,12 @@ class SujianAnimationController(
             }
 
             val nextLineIdx = lineIdx + 1
-            if (nextLineIdx < staticLayout.lineCount) {
+            if (nextLineIdx < staticLayout.lineCount && oldLayout != null) {
                 val nextLineStart = staticLayout.getLineStart(nextLineIdx)
                 val nextByteStart = SujianEditorBuffer.utf16ToUtf8(staticLayout.text.toString(), nextLineStart)
                 val nextOldRange = offsetMap.mapNewRangeToOld(nextByteStart, nextByteStart + 1)
                 if (nextOldRange == null) return false
                 val oldNextUtf16 = SujianEditorBuffer.utf8ToUtf16(oldText, nextOldRange.start)
-                val oldLayout = renderer.currentOldLayout ?: return false
                 val oldNextLine = oldLayout.getLineForOffset(oldNextUtf16.coerceIn(0, oldText.length))
                 if (oldNextLine != nextLineIdx) return false
             }
