@@ -177,13 +177,11 @@ data class SujianReflowGlyphRectData(
 data class SujianVisualEditContext(
     val oldText: String,
     val newText: String,
-    val oldSelectionAnchor: Int,  // UTF-16 offset in oldText
-    val oldSelectionHead: Int,    // UTF-16 offset in oldText
-    val newSelectionAnchor: Int,  // UTF-16 offset in newText
-    val newSelectionHead: Int,    // UTF-16 offset in newText
+    val oldSelectionAnchor: Int,
+    val oldSelectionHead: Int,
+    val newSelectionAnchor: Int,
+    val newSelectionHead: Int,
     val oldCursorRect: SujianCursorRectData?,
     val newCursorRect: SujianCursorRectData?,
-    val cause: SujianEditCauseData,
-    /** 受局部 reflow 影响的 glyph 旧/新位置列表，由 runVisualEdit 填充 */
-    val reflowGlyphRects: List<SujianReflowGlyphRectData> = emptyList()
+    val cause: SujianEditCauseData
 )
