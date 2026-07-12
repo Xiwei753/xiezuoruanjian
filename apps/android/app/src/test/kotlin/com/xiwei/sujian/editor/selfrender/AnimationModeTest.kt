@@ -30,7 +30,6 @@ class AnimationModeTest {
     @Test
     fun systemSuppressionIsOnlyADowngradeAfterCoreMode() {
         val source = controllerSource()
-        assertTrue(source.contains("if (renderer.isScrolling())"))
         assertTrue(source.contains("AnimationModeData.SystemSuppressed"))
         assertTrue(source.contains("vt.animationMode"))
     }
@@ -53,30 +52,25 @@ class AnimationModeTest {
     }
 
     @Test
-    fun rendererDoesNotContainSnapshotKindBranch() {
+    fun rendererUsesPlatformVisualTransactionModel() {
         val source = rendererSource()
-        assertFalse("Renderer must not contain snapshot kind branch", source.contains("\"snapshot\""))
+        assertTrue("Renderer must use AndroidPlatformVisualTransaction", source.contains("AndroidPlatformVisualTransaction"))
+        assertTrue("Renderer must use AndroidAnimatedSlice", source.contains("AndroidAnimatedSlice"))
+        assertTrue("Renderer must use AndroidStaticLinePatch", source.contains("AndroidStaticLinePatch"))
     }
 
     @Test
-    fun overlayAnimDoesNotContainInsertRangeField() {
+    fun rendererDoesNotUsePerCharGhostModel() {
         val source = rendererSource()
-        assertFalse("SujianOverlayAnim must not contain insertRange field", source.contains("val insertRange:"))
-        assertFalse("SujianOverlayAnim must not contain reflowInsertRanges field", source.contains("val reflowInsertRanges:"))
-        assertFalse("SujianOverlayAnim must not contain animationMode field", source.contains("val animationMode:"))
-    }
-
-    @Test
-    fun noRemoveActiveInsertRangeByValue() {
-        val source = rendererSource()
-        assertFalse("Must not have removeActiveInsertRange(range: HalfOpenRange)", source.contains("fun removeActiveInsertRange(range:"))
-        assertTrue("Must have removeActiveInsertRangeById", source.contains("fun removeActiveInsertRangeById"))
+        assertFalse("Renderer must not contain SujianOverlayAnim", source.contains("SujianOverlayAnim"))
+        assertFalse("Renderer must not use activeInsertRanges", source.contains("activeInsertRanges"))
+        assertFalse("Renderer must not draw per-char text in animations", source.contains("drawText(glyphRect.char"))
     }
 
     @Test
     fun insertDeleteOnlyConsumeVtAnimationMode() {
         val source = controllerSource()
-        assertTrue("Insert must consume vt.animationMode", source.contains("val decision = vt.animationMode"))
+        assertTrue("Insert must consume vt.animationMode", source.contains("vt.animationMode"))
         assertFalse("Insert must not recompute mode locally", source.contains("fun chooseAnimationMode("))
     }
 }

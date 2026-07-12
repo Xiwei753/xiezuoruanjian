@@ -17,10 +17,8 @@ import android.view.inputmethod.InputConnection
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.model.SujianCursorRectData
 import com.xiwei.sujian.model.SujianEditCauseData
-import com.xiwei.sujian.model.SujianReflowGlyphRectData
 import com.xiwei.sujian.model.SujianVisualEditContext
 import com.google.android.material.color.MaterialColors
-import kotlin.math.absoluteValue
 
 /**
  * SujianEditorView — Android 自研写作区核心 View（唯一主路径）
@@ -72,6 +70,7 @@ class SujianEditorView @JvmOverloads constructor(
     val buffer = SujianEditorBuffer()
     val layoutEngine = SujianEditorLayout(textPaint)
     val renderer = SujianEditorRenderer(textPaint, resources.displayMetrics.density)
+    val snapshotBuilder = AndroidLayoutSnapshotBuilder(layoutEngine, textPaint)
     val cursorController = SujianCursorController(this, buffer, renderer)
     val animationController = SujianAnimationController(buffer, layoutEngine, renderer, cursorController)
     val imeController = SujianImeController(this, buffer, layoutEngine, renderer, animationController)
@@ -109,7 +108,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     // ── 初始化 ──
     init {
-        // Buffer 变更监听
+        animationController.setSnapshotBuilder(snapshotBuilder)
+
         buffer.onTextChanged = { result ->
             layoutEngine.invalidate()
 
@@ -171,9 +171,8 @@ class SujianEditorView @JvmOverloads constructor(
      * @return edit lambda 的返回值
      */
     fun <T> runVisualEdit(cause: SujianEditCauseData, edit: () -> T): T {
-        // 步骤 1：捕获编辑前快照
         val oldText = buffer.text
-        val oldSelection = buffer.selection  // SujianSelection(anchor, head)
+        val oldSelection = buffer.selection
 
         val oldCursorRect: SujianCursorRectData? = if (cause == SujianEditCauseData.Delete) {
             preDeleteOldCursorRect?.also { preDeleteOldCursorRect = null }
@@ -186,20 +185,20 @@ class SujianEditorView @JvmOverloads constructor(
             }
         }
 
-        // 步骤 1.5：编辑前捕获 reflow 候选 glyph 位置（仅 Insert 场景）
-        // 中间插入时，记录插入点右侧 glyph 的旧位置，用于后续 reflow 计算
-        val reflowOldGlyphs = if (cause == SujianEditCauseData.Typing || cause == SujianEditCauseData.TypingCommit) {
-            captureReflowOldGlyphs(oldText, oldSelection.head)
+        val oldLineSnapshots = if (cause == SujianEditCauseData.Delete && oldText.isNotEmpty()) {
+            val staticLayout = layoutEngine.getLayout(oldText)
+            val cursorLine = staticLayout.getLineForOffset(oldSelection.head.coerceIn(0, oldText.length))
+            val startLine = (cursorLine - 1).coerceAtLeast(0)
+            val endLine = (cursorLine + 2).coerceAtMost(staticLayout.lineCount - 1)
+            snapshotBuilder.buildLineSnapshots(oldText, startLine..endLine, snapshotBuilder.currentRevision(), renderer.getTextColor())
         } else {
             emptyList()
         }
 
-        // 步骤 2：执行编辑
         insideVisualEdit = true
         try {
             val result = edit()
 
-            // 步骤 3：捕获编辑后快照
             val newText = buffer.text
             val newSelection = buffer.selection
 
@@ -215,25 +214,22 @@ class SujianEditorView @JvmOverloads constructor(
                 null
             }
 
-            // 步骤 3.5：编辑后计算 reflow 数据（仅纯插入场景）
-            // 纯插入：旧选区无范围（anchor == head），即没有选区替换
-            val isPureInsert = oldSelection.anchor == oldSelection.head
-            val reflowGlyphRects = if ((cause == SujianEditCauseData.Typing || cause == SujianEditCauseData.TypingCommit)
-                && reflowOldGlyphs.isNotEmpty() && newText.isNotEmpty()
-            ) {
-                computeReflowGlyphRects(
-                    reflowOldGlyphs,
-                    oldSelection.head,
-                    newSelection.head,
-                    isPureInsert,
-                    newText,
-                    newSelection.head
+            if (cause == SujianEditCauseData.Delete && oldLineSnapshots.isNotEmpty()) {
+                val oldCR = if (oldCursorRect != null) {
+                    SujianCursorRect(oldCursorRect.x.toFloat(), oldCursorRect.top.toFloat(), oldCursorRect.bottom.toFloat(), oldCursorRect.baselineY.toFloat())
+                } else if (oldText.isNotEmpty()) {
+                    val cr = layoutEngine.getCursorRect(oldText, oldSelection.head)
+                    SujianCursorRect(cr.x, cr.top, cr.bottom, cr.baselineY)
+                } else {
+                    SujianCursorRect(0f, 0f, textPaint.textSize, textPaint.textSize)
+                }
+                animationController.recordDeleteSnapshot(
+                    deletedText = oldText,
+                    oldLineSnapshots = oldLineSnapshots,
+                    oldCursorRect = oldCR
                 )
-            } else {
-                emptyList()
             }
 
-            // 步骤 4：构造完整快照并分发动画
             val context = SujianVisualEditContext(
                 oldText = oldText,
                 newText = newText,
@@ -243,8 +239,7 @@ class SujianEditorView @JvmOverloads constructor(
                 newSelectionHead = newSelection.head,
                 oldCursorRect = oldCursorRect,
                 newCursorRect = newCursorRect,
-                cause = cause,
-                reflowGlyphRects = reflowGlyphRects
+                cause = cause
             )
             animationController.handleVisualEdit(context, this)
             requestAnimationFrameIfNeeded()
@@ -914,206 +909,4 @@ class SujianEditorView @JvmOverloads constructor(
         return super.performAccessibilityAction(action, arguments)
     }
 
-    // ── Reflow 辅助方法 ──
-
-    /**
-     * 捕获插入点右侧 glyph 的旧位置，用于 reflow 计算。
-     *
-     * 只收集插入点所在行中插入点之后的 glyph（最多 20 个字符），
-     * 以及相邻 1-2 行的 glyph。超过 2 行、跨段落、滚动中时不收集。
-     *
-     * @param text 编辑前文本
-     * @param cursorHead 光标位置（UTF-16 offset）
-     * @return 旧 glyph 位置列表（char, utf16Offset, x, y, baselineY, w, h, lineIndex）
-     */
-    private data class ReflowOldGlyph(
-        val char: String,
-        val utf16Offset: Int,
-        val x: Float,
-        val y: Float,
-        val baselineY: Float,
-        val w: Float,
-        val h: Float,
-        val lineIndex: Int
-    )
-
-    private fun captureReflowOldGlyphs(text: String, cursorHead: Int): List<ReflowOldGlyph> {
-        if (text.isEmpty() || cursorHead < 0 || cursorHead >= text.length) return emptyList()
-
-        try {
-            val layout = layoutEngine.getLayout(text)
-            val insertLine = layout.getLineForOffset(cursorHead.coerceIn(0, text.length))
-            val result = mutableListOf<ReflowOldGlyph>()
-            val maxReflowLines = 2
-            val maxReflowChars = 20
-            var lineCount = 0
-
-            for (lineIdx in insertLine until minOf(insertLine + maxReflowLines + 1, layout.lineCount)) {
-                val lineStart = layout.getLineStart(lineIdx)
-                val lineEnd = layout.getLineEnd(lineIdx)
-                if (lineStart >= lineEnd) continue
-
-                // 确定该行 reflow 范围的起始位置
-                val reflowStart = if (lineIdx == insertLine) {
-                    cursorHead.coerceIn(lineStart, lineEnd)
-                } else {
-                    lineStart
-                }
-
-                if (reflowStart >= lineEnd) continue
-
-                // 检查是否跨段落（简单检查：行间是否有换行符分隔）
-                if (lineIdx > insertLine) {
-                    val prevLineEnd = layout.getLineEnd(lineIdx - 1)
-                    if (prevLineEnd > 0 && text.getOrNull(prevLineEnd - 1) != '\n') {
-                        // 同一段落内的折行，可以 reflow
-                    } else {
-                        // 跨段落，停止
-                        break
-                    }
-                }
-
-                lineCount++
-                if (lineCount > maxReflowLines) break
-
-                // 收集该行 reflow 范围内的 glyph
-                var charCount = 0
-                var currentOffset = reflowStart
-                while (currentOffset < lineEnd && charCount < maxReflowChars) {
-                    val codePoint = text.codePointAt(currentOffset)
-                    val charCountUtf16 = Character.charCount(codePoint)
-                    val charStr = text.substring(currentOffset, (currentOffset + charCountUtf16).coerceAtMost(lineEnd))
-
-                    // 跳过复杂 grapheme（emoji/ZWJ/surrogate pair）
-                    if (Character.isHighSurrogate(text[currentOffset]) || Character.isLowSurrogate(text[currentOffset])) {
-                        currentOffset += charCountUtf16
-                        continue
-                    }
-
-                    val x = layout.getPrimaryHorizontal(currentOffset)
-                    val baseline = layout.getLineBaseline(lineIdx).toFloat()
-                    val ascent = layout.getLineAscent(lineIdx).toFloat()
-                    val descent = layout.getLineDescent(lineIdx).toFloat()
-
-                    val nextX = if (currentOffset + charCountUtf16 < text.length) {
-                        layout.getPrimaryHorizontal(currentOffset + charCountUtf16)
-                    } else {
-                        x + textPaint.measureText(charStr)
-                    }
-                    val width = nextX - x
-
-                    result.add(ReflowOldGlyph(
-                        char = charStr,
-                        utf16Offset = currentOffset,
-                        x = x,
-                        y = baseline + ascent,
-                        baselineY = baseline,
-                        w = width.coerceAtLeast(0f),
-                        h = descent - ascent,
-                        lineIndex = lineIdx
-                    ))
-
-                    currentOffset += charCountUtf16
-                    charCount++
-                }
-            }
-
-            return result
-        } catch (e: Exception) {
-            DiagnosticsLogger.d(TAG, "captureReflowOldGlyphs failed: ${e.message}")
-            return emptyList()
-        }
-    }
-
-    /**
-     * 编辑后计算 reflow 数据：对比旧 glyph 位置和新布局中的位置。
-     *
-     * Android 已启用 reflow ghost 动画。中间插入时，插入点右侧文字做轻量位移动画（局部挤开）。
-     * 静态正文层在动画期间跳过 reflow ranges，由 overlay reflow ghost 显示位移动画。
-     * 动画结束后清除 reflow hidden ranges，正文层恢复完整绘制。
-     *
-     * 只对纯插入做 reflow；选区替换、composition 替换、多 change 直接 snap，不做右侧挤字动画。
-     *
-     * @param oldGlyphs 编辑前捕获的 glyph 位置列表
-     * @param insertStartUtf16 纯插入的起始位置（UTF-16 offset）
-     * @param insertEndUtf16 纯插入的结束位置（UTF-16 offset）
-     * @param isPureInsert 是否为纯插入（非选区替换、非 composition 替换、非多 change）
-     * @param newText 编辑后文本
-     * @param newCursorHead 编辑后光标位置（UTF-16 offset）
-     * @return reflow glyph rect 数据列表
-     */
-    private fun computeReflowGlyphRects(
-        oldGlyphs: List<ReflowOldGlyph>,
-        insertStartUtf16: Int,
-        insertEndUtf16: Int,
-        isPureInsert: Boolean,
-        newText: String,
-        newCursorHead: Int
-    ): List<SujianReflowGlyphRectData> {
-        if (newText.isEmpty() || oldGlyphs.isEmpty()) return emptyList()
-        // 只对纯插入做 reflow；选区替换、composition 替换、多 change 直接 snap
-        if (!isPureInsert) return emptyList()
-
-        try {
-            val newLayout = layoutEngine.getLayout(newText)
-            val result = mutableListOf<SujianReflowGlyphRectData>()
-
-            // 精确计算插入长度（UTF-16），不使用全文长度差泛化
-            val insertedCharCount = insertEndUtf16 - insertStartUtf16
-
-            for (oldGlyph in oldGlyphs) {
-                // 在新文本中找对应字符的位置
-                // 插入点之前的字符 offset 不变，插入点之后的字符 offset += insertedCharCount
-                val newOffset = if (oldGlyph.utf16Offset >= insertStartUtf16) {
-                    oldGlyph.utf16Offset + insertedCharCount
-                } else {
-                    oldGlyph.utf16Offset
-                }
-
-                // 安全检查：新 offset 必须在新文本范围内，且字符匹配
-                if (newOffset < 0 || newOffset >= newText.length) continue
-
-                // 验证字符是否匹配
-                val newCharEnd = (newOffset + oldGlyph.char.length).coerceAtMost(newText.length)
-                val newChar = newText.substring(newOffset, newCharEnd)
-                if (newChar != oldGlyph.char) continue
-
-                // 获取新布局中的位置
-                val newLine = newLayout.getLineForOffset(newOffset)
-                val newX = newLayout.getPrimaryHorizontal(newOffset)
-                val newBaseline = newLayout.getLineBaseline(newLine).toFloat()
-                val newAscent = newLayout.getLineAscent(newLine).toFloat()
-                val newDescent = newLayout.getLineDescent(newLine).toFloat()
-
-                // 只有位置实际发生变化才记录
-                val dx = (newX - oldGlyph.x).toDouble()
-                val dy = ((newBaseline + newAscent) - oldGlyph.y).toDouble()
-                if (dx.absoluteValue < 0.1 && dy.absoluteValue < 0.1) continue
-
-                result.add(SujianReflowGlyphRectData(
-                    char = oldGlyph.char,
-                    byteStart = SujianEditorBuffer.utf16ToUtf8(newText, newOffset),
-                    byteEnd = SujianEditorBuffer.utf16ToUtf8(newText, newCharEnd),
-                    oldX = oldGlyph.x.toDouble(),
-                    oldY = oldGlyph.y.toDouble(),
-                    oldBaselineY = oldGlyph.baselineY.toDouble(),
-                    newX = newX.toDouble(),
-                    newY = (newBaseline + newAscent).toDouble(),
-                    newBaselineY = newBaseline.toDouble(),
-                    w = oldGlyph.w.toDouble(),
-                    h = oldGlyph.h.toDouble(),
-                    lineIndex = newLine
-                ))
-            }
-
-            if (result.isNotEmpty()) {
-                DiagnosticsLogger.d(TAG, "computeReflowGlyphRects: ${result.size} reflow glyphs detected")
-            }
-
-            return result
-        } catch (e: Exception) {
-            DiagnosticsLogger.d(TAG, "computeReflowGlyphRects failed: ${e.message}")
-            return emptyList()
-        }
-    }
 }
