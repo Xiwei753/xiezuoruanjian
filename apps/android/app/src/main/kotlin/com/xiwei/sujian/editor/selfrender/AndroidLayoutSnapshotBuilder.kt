@@ -170,7 +170,7 @@ class AndroidLayoutSnapshotBuilder(
                 sourceRectInLineSnapshot = sourceRect,
                 visualRectInDocument = visualRect,
                 textDirection = if (staticLayout.getParagraphDirection(lineIdx) == Layout.DIR_RIGHT_TO_LEFT) 1 else 0,
-                shapingIdentity = buildShapingIdentity(clusterText, textPaint, staticLayout.getParagraphDirection(lineIdx))
+                shapingIdentity = buildShapingIdentity(clusterText, textPaint, staticLayout.getParagraphDirection(lineIdx), currentOffset, clusterEnd, lineIdx, staticLayout)
             ))
 
             currentOffset = clusterEnd
@@ -181,27 +181,25 @@ class AndroidLayoutSnapshotBuilder(
     private fun buildShapingIdentity(
         clusterText: String,
         paint: TextPaint,
-        paragraphDirection: Int
+        paragraphDirection: Int,
+        clusterStartUtf16: Int,
+        clusterEndUtf16: Int,
+        lineIdx: Int,
+        staticLayout: Layout
     ): String {
         return if (android.os.Build.VERSION.SDK_INT >= 31) {
-            buildGlyphIdentityApi31(clusterText, paint, paragraphDirection)
+            buildGlyphIdentityApi31(clusterText, paint, paragraphDirection, clusterStartUtf16, clusterEndUtf16)
         } else {
-            buildConservativeIdentity(clusterText, paint, paragraphDirection)
+            buildConservativeIdentity(clusterText, paint, paragraphDirection, lineIdx, staticLayout)
         }
     }
 
-    /**
-     * API 31+ 使用真实 glyph identity。
-     *
-     * 通过 TextRunShaper.shapeTextRun() 获取 PositionedGlyphs，
-     * identity 包含 glyph ids、每个 glyph 的相对 position、
-     * font/typeface fingerprint、cluster context range、text direction、
-     * Paint shaping fields。
-     */
     private fun buildGlyphIdentityApi31(
         clusterText: String,
         paint: TextPaint,
-        paragraphDirection: Int
+        paragraphDirection: Int,
+        clusterStartUtf16: Int,
+        clusterEndUtf16: Int
     ): String {
         val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
@@ -229,31 +227,41 @@ class AndroidLayoutSnapshotBuilder(
                 fontBuilder.append(shaped.getFont(i).toString())
             }
 
-            return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl"
+            return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl:ctx[$clusterStartUtf16,$clusterEndUtf16]"
         } catch (e: Exception) {
-            return buildConservativeIdentity(clusterText, paint, paragraphDirection)
+            return buildConservativeIdentity(clusterText, paint, paragraphDirection, clusterStartUtf16, null)
         }
     }
 
-    /**
-     * API 24–30 保守 identity。
-     *
-     * 不伪造 glyphCount = codePointCount。使用完整 shaping context 文本 hash、
-     * cluster 文本 hash、字体与 Paint shaping fingerprint、direction、
-     * StaticLayout line/context identity、精确 sourceRect/visual width。
-     *
-     * 只要 context 或断行环境变化，就使用 Crossfade，不冒险 Move。
-     */
     private fun buildConservativeIdentity(
         clusterText: String,
         paint: TextPaint,
-        paragraphDirection: Int
+        paragraphDirection: Int,
+        lineIdx: Int,
+        staticLayout: Layout
     ): String {
         val textHash = Objects.hash(clusterText)
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
         val width = paint.measureText(clusterText).toRawBits()
         val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
-        return "c:$textHash:$fontFingerprint:$width:$isRtl"
+        val lineLeft = staticLayout.getLineLeft(lineIdx).toRawBits()
+        val lineRight = staticLayout.getLineRight(lineIdx).toRawBits()
+        val lineBreakOffset = staticLayout.getLineEnd(lineIdx)
+        return "c:$textHash:$fontFingerprint:$width:$isRtl:line[$lineIdx,$lineLeft,$lineRight,$lineBreakOffset]"
+    }
+
+    private fun buildConservativeIdentity(
+        clusterText: String,
+        paint: TextPaint,
+        paragraphDirection: Int,
+        clusterStartUtf16: Int,
+        staticLayout: Layout?
+    ): String {
+        val textHash = Objects.hash(clusterText)
+        val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
+        val width = paint.measureText(clusterText).toRawBits()
+        val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
+        return "c:$textHash:$fontFingerprint:$width:$isRtl:ctx[$clusterStartUtf16]"
     }
 
     private fun Float.format(digits: Int): String = String.format("%.${digits}f", this)

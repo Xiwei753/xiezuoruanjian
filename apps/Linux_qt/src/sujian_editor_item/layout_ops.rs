@@ -52,12 +52,13 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn build_editor_layout_snapshot(&mut self, width: f64) -> EditorLayoutSnapshot {
-        let layout_snap = self.layout_snapshot(width);
         let scroll_y = self.current_scroll_y as f64;
         let viewport_h = self.current_viewport_height.max(1.0) as f64;
         let font_size = self.current_font_pixel_size as f64;
         let font_family = &self.current_font_family.to_string();
         let text_indent = self.current_text_indent as f64;
+        let line_spacing = self.current_line_spacing as f64;
+        let padding = self.current_padding as f64;
         let dpr = {
             let item_ptr = self.get_cpp_object();
             if !item_ptr.is_null() {
@@ -67,47 +68,37 @@ impl SujianEditorItem {
             }
         };
         let text_color = &self.current_text_color.to_string();
-        let caret = self.editor_layout.caret_rect(
-            &layout_snap,
+        let revision = LayoutRevision::next();
+
+        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
+            &self.buffer.text,
+            self.text_revision,
+            font_size,
+            font_family,
+            line_spacing,
+            padding,
+            text_indent,
+            width,
+            dpr,
+            text_color,
+        );
+
+        let caret = doc_snapshot.cursor_rect(
             self.buffer.cursor,
             self.cursor_ctrl.affinity,
             scroll_y,
             viewport_h,
         );
-        let revision = LayoutRevision::next();
-        let line_snapshots = super::line_snapshot_builder::LineSnapshotBuilder::build_from_layout(
+
+        let mut snapshot = super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
             revision,
-            &layout_snap,
-            font_size,
-            font_family,
+            &doc_snapshot,
             scroll_y,
             viewport_h,
-            text_indent,
-            dpr,
-            text_color,
-            false,
-        ).line_snapshots;
-        EditorLayoutSnapshot::new(
-            layout_snap,
-            line_snapshots,
-            Some(caret),
-            self.cursor_ctrl.affinity,
-        )
-    }
-
-    pub(crate) fn build_editor_layout_snapshot_for_text(
-        &mut self,
-        text: &str,
-        width: f64,
-    ) -> EditorLayoutSnapshot {
-        let layout_snap = self.layout_snapshot_for_text(text, width);
-        let revision = LayoutRevision::next();
-        EditorLayoutSnapshot::new(
-            layout_snap,
-            Vec::new(),
-            None,
-            CaretAffinity::Downstream,
-        )
+        );
+        snapshot.caret_rect = Some(caret);
+        snapshot.caret_affinity = self.cursor_ctrl.affinity;
+        snapshot
     }
 
     pub(crate) fn update_current_layout_snapshot(&mut self) {

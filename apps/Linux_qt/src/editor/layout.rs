@@ -653,7 +653,16 @@ cpp! {{
         int clusterCount;
         int imagePhysW;
         int imagePhysH;
+        int cursorXMapStart;
+        int cursorXMapCount;
     };
+
+    struct CursorXMapEntry {
+        int qcharPos;
+        double xLeading;
+        double xTrailing;
+    };
+    thread_local std::vector<CursorXMapEntry> g_cursor_x_map_buf;
 
     struct CanonicalClusterEntry {
         int qcharStart;
@@ -691,6 +700,7 @@ cpp! {{
         g_canonical_cluster_buf.clear();
         g_canonical_cluster_glyph_buf.clear();
         g_canonical_line_images.clear();
+        g_cursor_x_map_buf.clear();
 
         if (paraText.isEmpty()) return;
 
@@ -903,6 +913,17 @@ cpp! {{
 
             entry.clusterStartIndex = clusterStartIdx;
             entry.clusterCount = (int)g_canonical_cluster_buf.size() - clusterStartIdx;
+
+            entry.cursorXMapStart = (int)g_cursor_x_map_buf.size();
+            entry.cursorXMapCount = 0;
+            for (int qpos = entry.qcharStart; qpos <= entry.qcharEnd; qpos++) {
+                CursorXMapEntry me;
+                me.qcharPos = qpos;
+                me.xLeading = line.cursorToX(qpos, QTextLine::Leading);
+                me.xTrailing = line.cursorToX(qpos, QTextLine::Trailing);
+                g_cursor_x_map_buf.push_back(me);
+                entry.cursorXMapCount++;
+            }
 
             g_canonical_line_buf.push_back(entry);
         }
@@ -1117,27 +1138,6 @@ impl EditorLayout {
         affinity: CaretAffinity,
     ) -> f64 {
         calculate_cursor_x_for_line(line, cursor, affinity, snapshot)
-    }
-
-    pub fn glyph_positions_on_line(
-        &self,
-        line: &VisualLine,
-        range_start: usize,
-        range_end: usize,
-        font_size: f64,
-        font_family: &str,
-    ) -> Vec<(usize, f64, f64, u32, String)> {
-        qtextlayout_glyph_positions_on_line(
-            &line.para_text,
-            range_start,
-            range_end,
-            line.para_start,
-            font_size,
-            font_family,
-            line.line_wrap_width + line.line_indent_x,
-            line.para_indent,
-            line.qtextline_idx,
-        )
     }
 
     pub fn text_width(&self, text: &str, font_size: f64, font_family: &str) -> f64 {
@@ -1780,331 +1780,6 @@ pub fn qtextlayout_x_to_cursor_on_line(
     para_start + para_byte
 }
 
-#[allow(dead_code)]
-pub fn qtextlayout_glyph_positions_on_line(
-    para_text: &str,
-    range_start: usize,
-    range_end: usize,
-    para_start: usize,
-    font_size: f64,
-    font_family: &str,
-    paragraph_wrap_w: f64,
-    indent_w: f64,
-    qtextline_idx: i32,
-) -> Vec<(usize, f64, f64, u32, String)> {
-    let seg_start_in_para = range_start.saturating_sub(para_start);
-    let seg_end_in_para = range_end.saturating_sub(para_start).min(para_text.len());
-    let qchar_start = byte_offset_to_qchar_offset(para_text, seg_start_in_para) as i32;
-    let qchar_end = byte_offset_to_qchar_offset(para_text, seg_end_in_para) as i32;
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    let count = cpp!(unsafe [
-        para as "QString",
-        qchar_start as "int",
-        qchar_end as "int",
-        fs as "float",
-        ff as "QString",
-        paragraph_wrap_w as "double",
-        indent_w as "double",
-        qtextline_idx as "int"
-    ] -> i32 as "int" {
-        editor_layout_glyph_positions_on_line(
-            para, qchar_start, qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx
-        );
-        return static_cast<int>(g_glyph_buf.size());
-    });
-    let mut result = Vec::with_capacity(count as usize);
-    for i in 0..count {
-        let idx = i;
-        let qchar_off = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
-            return static_cast<qulonglong>(g_glyph_buf[idx].stringIndex);
-        });
-        let w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_glyph_buf[idx].width;
-        });
-        let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_glyph_buf[idx].xPos;
-        });
-        let glyph_idx = cpp!(unsafe [idx as "int"] -> u32 as "quint32" {
-            return g_glyph_buf[idx].glyphIndex;
-        });
-        let raw_font_family = cpp!(unsafe [idx as "int"] -> QString as "QString" {
-            return QString::fromUtf8(g_glyph_buf[idx].rawFontKey);
-        });
-        let raw_font_family_str = raw_font_family.to_string();
-        let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off);
-        let abs_byte = para_start + para_byte;
-        result.push((abs_byte, x_pos, w, glyph_idx, raw_font_family_str));
-    }
-    result
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub struct ShapedRunData {
-    pub run_index: i32,
-    pub glyph_count: usize,
-    pub string_start: usize,
-    pub string_end: usize,
-    pub is_rtl: bool,
-    pub has_underline: bool,
-    pub raw_font_family: String,
-    pub raw_font_style: String,
-    pub raw_font_weight: i32,
-    pub raw_font_pixel_size: i32,
-    pub baseline_y: f64,
-    pub visual_x: f64,
-    pub visual_y: f64,
-    pub visual_w: f64,
-    pub visual_h: f64,
-    pub texture_translate_x: f64,
-    pub texture_translate_y: f64,
-    pub line_y: f64,
-    pub glyphs: Vec<RunGlyphData>,
-}
-
-#[allow(dead_code)]
-#[derive(Clone, Debug)]
-pub struct RunGlyphData {
-    pub glyph_index: u32,
-    pub position_x: f64,
-    pub position_y: f64,
-    pub string_index: i32,
-    pub advance_width: f64,
-}
-
-#[allow(dead_code)]
-pub fn extract_shaped_runs_on_line(
-    para_text: &str,
-    range_start: usize,
-    range_end: usize,
-    para_start: usize,
-    font_size: f64,
-    font_family: &str,
-    paragraph_wrap_w: f64,
-    indent_w: f64,
-    qtextline_idx: i32,
-) -> Vec<ShapedRunData> {
-    let seg_start_in_para = range_start.saturating_sub(para_start);
-    let seg_end_in_para = range_end.saturating_sub(para_start).min(para_text.len());
-    let qchar_start = byte_offset_to_qchar_offset(para_text, seg_start_in_para) as i32;
-    let qchar_end = byte_offset_to_qchar_offset(para_text, seg_end_in_para) as i32;
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    let run_count = cpp!(unsafe [
-        para as "QString",
-        qchar_start as "int",
-        qchar_end as "int",
-        fs as "float",
-        ff as "QString",
-        paragraph_wrap_w as "double",
-        indent_w as "double",
-        qtextline_idx as "int"
-    ] -> i32 as "int" {
-        editor_layout_shaped_runs_on_line(
-            para, qchar_start, qchar_end, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx
-        );
-        return static_cast<int>(g_shaped_run_buf.size());
-    });
-
-    let mut result = Vec::with_capacity(run_count as usize);
-    for i in 0..run_count {
-        let idx = i;
-        let run_index = cpp!(unsafe [idx as "int"] -> i32 as "int" {
-            return g_shaped_run_buf[idx].runIndex;
-        });
-        let glyph_count = cpp!(unsafe [idx as "int"] -> i32 as "int" {
-            return g_shaped_run_buf[idx].glyphCount;
-        });
-        let str_start = cpp!(unsafe [idx as "int"] -> i32 as "int" {
-            return g_shaped_run_buf[idx].stringStart;
-        });
-        let str_end = cpp!(unsafe [idx as "int"] -> i32 as "int" {
-            return g_shaped_run_buf[idx].stringEnd;
-        });
-        let is_rtl = cpp!(unsafe [idx as "int"] -> bool as "bool" {
-            return g_shaped_run_buf[idx].isRTL;
-        });
-        let has_underline = cpp!(unsafe [idx as "int"] -> bool as "bool" {
-            return g_shaped_run_buf[idx].hasUnderline;
-        });
-        let raw_font_family = cpp!(unsafe [idx as "int"] -> QString as "QString" {
-            return QString::fromUtf8(g_shaped_run_buf[idx].rawFontFamily);
-        });
-        let raw_font_style = cpp!(unsafe [idx as "int"] -> QString as "QString" {
-            return QString::fromUtf8(g_shaped_run_buf[idx].rawFontStyle);
-        });
-        let raw_font_weight = cpp!(unsafe [idx as "int"] -> i32 as "int" {
-            return g_shaped_run_buf[idx].rawFontWeight;
-        });
-        let raw_font_pixel_size = cpp!(unsafe [idx as "int"] -> i32 as "int" {
-            return g_shaped_run_buf[idx].rawFontPixelSize;
-        });
-        let baseline_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].baselineY;
-        });
-        let visual_x = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].visualX;
-        });
-        let visual_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].visualY;
-        });
-        let visual_w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].visualW;
-        });
-        let visual_h = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].visualH;
-        });
-        let texture_translate_x = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].textureTranslateX;
-        });
-        let texture_translate_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].textureTranslateY;
-        });
-        let line_y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
-            return g_shaped_run_buf[idx].lineY;
-        });
-
-        let mut glyphs = Vec::with_capacity(glyph_count as usize);
-        let glyph_offset: i32 = (0..i).map(|prev_idx| {
-            let prev_count = cpp!(unsafe [prev_idx as "int"] -> i32 as "int" {
-                return g_shaped_run_buf[prev_idx].glyphCount;
-            });
-            prev_count
-        }).sum();
-        for gi in 0..glyph_count {
-            let glyph_idx_in_buf = glyph_offset + gi;
-            let g_glyph_index = cpp!(unsafe [glyph_idx_in_buf as "int"] -> u32 as "quint32" {
-                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
-                    return g_run_glyph_buf[glyph_idx_in_buf].glyphIndex;
-                return 0u;
-            });
-            let g_pos_x = cpp!(unsafe [glyph_idx_in_buf as "int"] -> f64 as "double" {
-                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
-                    return g_run_glyph_buf[glyph_idx_in_buf].positionX;
-                return 0.0;
-            });
-            let g_pos_y = cpp!(unsafe [glyph_idx_in_buf as "int"] -> f64 as "double" {
-                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
-                    return g_run_glyph_buf[glyph_idx_in_buf].positionY;
-                return 0.0;
-            });
-            let g_string_index = cpp!(unsafe [glyph_idx_in_buf as "int"] -> i32 as "int" {
-                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
-                    return g_run_glyph_buf[glyph_idx_in_buf].stringIndex;
-                return -1;
-            });
-            let g_advance = cpp!(unsafe [glyph_idx_in_buf as "int"] -> f64 as "double" {
-                if (glyph_idx_in_buf >= 0 && glyph_idx_in_buf < (int)g_run_glyph_buf.size())
-                    return g_run_glyph_buf[glyph_idx_in_buf].advanceWidth;
-                return 0.0;
-            });
-            glyphs.push(RunGlyphData {
-                glyph_index: g_glyph_index,
-                position_x: g_pos_x,
-                position_y: g_pos_y,
-                string_index: g_string_index,
-                advance_width: g_advance,
-            });
-        }
-
-        let str_start_byte = para_start + qchar_offset_to_byte_offset(para_text, str_start as usize);
-        let str_end_byte = para_start + qchar_offset_to_byte_offset(para_text, str_end as usize);
-
-        result.push(ShapedRunData {
-            run_index,
-            glyph_count: glyph_count as usize,
-            string_start: str_start_byte,
-            string_end: str_end_byte,
-            is_rtl,
-            has_underline,
-            raw_font_family: raw_font_family.to_string(),
-            raw_font_style: raw_font_style.to_string(),
-            raw_font_weight,
-            raw_font_pixel_size,
-            baseline_y,
-            visual_x,
-            visual_y,
-            visual_w,
-            visual_h,
-            texture_translate_x,
-            texture_translate_y,
-            line_y,
-            glyphs,
-        });
-    }
-    result
-}
-
-/// Render a single QTextLine to a QImage using QTextLine::draw().
-///
-/// Qt mature route: this produces a line-level visual snapshot that can be
-/// UV-clipped to extract individual glyph runs, clusters, or text segments
-/// for animation — without re-laying out text per run. The line snapshot
-/// is rendered once; animation textures are extracted via UV coordinates.
-///
-/// The QImage is rendered at DPR scale. The logical line content starts at
-/// (0, 0) in the QImage's logical coordinate space, with the baseline at
-/// y = line.ascent().
-#[allow(dead_code)]
-pub fn render_line_to_image(
-    para_text: &str,
-    font_size: f64,
-    font_family: &str,
-    paragraph_wrap_w: f64,
-    indent_w: f64,
-    qtextline_idx: i32,
-    dpr: f64,
-    text_color: &str,
-) -> Option<qmetaobject::QImage> {
-    let logical_w = paragraph_wrap_w;
-    let logical_h = font_size * 2.0;
-    let phys_w = (logical_w * dpr).ceil() as u32;
-    let phys_h = (logical_h * dpr).ceil() as u32;
-    if phys_w == 0 || phys_h == 0 || phys_w > 8192 || phys_h > 4096 {
-        return None;
-    }
-
-    let mut image = qmetaobject::QImage::new(
-        qmetaobject::QSize { width: phys_w, height: phys_h },
-        qmetaobject::ImageFormat::ARGB32_Premultiplied,
-    );
-    {
-        let img_ptr = &mut image as *mut qmetaobject::QImage;
-        cpp!(unsafe [img_ptr as "QImage*"] {
-            img_ptr->setDevicePixelRatio(1.0);
-        });
-    }
-    image.fill(qmetaobject::QColor::from_rgba(0, 0, 0, 0));
-
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    let color = qmetaobject::QColor::from_name(text_color);
-
-    let img_ptr = &mut image as *mut qmetaobject::QImage;
-    cpp!(unsafe [
-        img_ptr as "QImage*",
-        para as "QString",
-        fs as "float",
-        ff as "QString",
-        paragraph_wrap_w as "double",
-        indent_w as "double",
-        qtextline_idx as "int",
-        dpr as "double",
-        color as "QColor"
-    ] {
-        editor_render_line_to_image(
-            img_ptr, para, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx,
-            dpr, color
-        );
-    });
-
-    Some(image)
-}
-
 /// This ensures the text rendering uses the same shaping data as
 /// cursorToX() / xToCursor(), fixing mixed-script cursor issues.
 pub fn draw_line_text(
@@ -2179,6 +1854,13 @@ pub struct CanonicalClusterSnapshot {
 }
 
 #[derive(Clone)]
+pub struct CursorXMapEntry {
+    pub qchar_pos: usize,
+    pub x_leading: f64,
+    pub x_trailing: f64,
+}
+
+#[derive(Clone)]
 pub struct CanonicalLineSnapshot {
     pub qchar_start: usize,
     pub qchar_end: usize,
@@ -2194,6 +1876,7 @@ pub struct CanonicalLineSnapshot {
     pub x_end_trailing: f64,
     pub image: Option<qmetaobject::QImage>,
     pub clusters: Vec<CanonicalClusterSnapshot>,
+    pub cursor_x_map: Vec<CursorXMapEntry>,
 }
 
 #[derive(Clone)]
@@ -2413,6 +2096,42 @@ pub fn prepare_paragraph_visual_snapshot(
             });
         }
 
+        let cursor_x_map_start = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].cursorXMapStart;
+            return 0;
+        });
+        let cursor_x_map_count = cpp!(unsafe [idx as "int"] -> i32 as "int" {
+            if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+                return g_canonical_line_buf[idx].cursorXMapCount;
+            return 0;
+        });
+
+        let mut cursor_x_map = Vec::with_capacity(cursor_x_map_count as usize);
+        for mi in 0..cursor_x_map_count {
+            let midx = cursor_x_map_start + mi;
+            let m_qchar = cpp!(unsafe [midx as "int"] -> usize as "qulonglong" {
+                if (midx >= 0 && midx < (int)g_cursor_x_map_buf.size())
+                    return static_cast<qulonglong>(g_cursor_x_map_buf[midx].qcharPos);
+                return 0;
+            });
+            let m_x_leading = cpp!(unsafe [midx as "int"] -> f64 as "double" {
+                if (midx >= 0 && midx < (int)g_cursor_x_map_buf.size())
+                    return g_cursor_x_map_buf[midx].xLeading;
+                return 0.0;
+            });
+            let m_x_trailing = cpp!(unsafe [midx as "int"] -> f64 as "double" {
+                if (midx >= 0 && midx < (int)g_cursor_x_map_buf.size())
+                    return g_cursor_x_map_buf[midx].xTrailing;
+                return 0.0;
+            });
+            cursor_x_map.push(CursorXMapEntry {
+                qchar_pos: m_qchar,
+                x_leading: m_x_leading,
+                x_trailing: m_x_trailing,
+            });
+        }
+
         lines.push(CanonicalLineSnapshot {
             qchar_start,
             qchar_end,
@@ -2428,6 +2147,7 @@ pub fn prepare_paragraph_visual_snapshot(
             x_end_trailing,
             image,
             clusters,
+            cursor_x_map,
         });
     }
 
@@ -2503,7 +2223,7 @@ impl CanonicalDocumentVisualSnapshot {
             }
         };
 
-        let cursor_x = self.calculate_cursor_x_for_line(line, cursor_byte, affinity);
+        let cursor_x = self.cursor_x_from_canonical(line, cursor_byte, affinity);
         let (cursor_y_doc, cursor_h) = cursor_rect_for_line(line, self.font_size, &self.font_family);
         let cursor_y = cursor_y_doc - scroll_y;
         let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
@@ -2517,44 +2237,64 @@ impl CanonicalDocumentVisualSnapshot {
         }
     }
 
-    fn calculate_cursor_x_for_line(
+    fn cursor_x_from_canonical(
         &self,
         line: &VisualLine,
-        cursor: usize,
+        cursor_byte: usize,
         affinity: CaretAffinity,
     ) -> f64 {
         if line.para_text.is_empty() {
-            if line.width > 0.0 && cursor == line.byte_end {
-                line.x + line.width
-            } else {
-                line.x
+            if line.width > 0.0 && cursor_byte == line.byte_end {
+                return line.x + line.width;
             }
-        } else {
-            let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.byte_end;
-            let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
-            let x = line.x
-                + qtextlayout_cursor_to_x_on_line(
-                    &line.para_text,
-                    cursor,
-                    line.para_start,
-                    self.font_size,
-                    &self.font_family,
-                    paragraph_wrap_w,
-                    line.para_indent,
-                    line.qtextline_idx,
-                    use_trailing,
-                );
+            return line.x;
+        }
 
-            if x <= line.x + 0.5
-                && line.byte_start != line.byte_end
-                && affinity == CaretAffinity::Upstream
-                && cursor == line.byte_end
-                && line.x_end_trailing > 0.0
-            {
-                return line.x + line.x_end_trailing;
+        let cursor_in_para = cursor_byte.saturating_sub(line.para_start);
+        let para = match self.paragraphs.iter().find(|p| {
+            p.paragraph_document_byte_start <= cursor_byte
+                && cursor_byte <= p.paragraph_document_byte_start + p.paragraph_text.len()
+        }) {
+            Some(p) => p,
+            None => return line.x,
+        };
+
+        let cursor_qchar = byte_offset_to_qchar_offset(&para.paragraph_text, cursor_in_para);
+
+        let canonical_line = para.lines.iter().find(|cl| {
+            cl.qchar_start <= cursor_qchar && cursor_qchar <= cl.qchar_end
+        });
+
+        match canonical_line {
+            Some(cl) => {
+                let use_trailing = affinity == CaretAffinity::Upstream && cursor_byte == line.byte_end;
+                let entry = cl.cursor_x_map.iter().find(|m| m.qchar_pos == cursor_qchar);
+                let x_in_line = match entry {
+                    Some(m) => {
+                        if use_trailing { m.x_trailing } else { m.x_leading }
+                    }
+                    None => {
+                        if let Some(last) = cl.cursor_x_map.last() {
+                            if use_trailing { last.x_trailing } else { last.x_leading }
+                        } else {
+                            0.0
+                        }
+                    }
+                };
+                let x = line.x + x_in_line;
+
+                if x <= line.x + 0.5
+                    && line.byte_start != line.byte_end
+                    && affinity == CaretAffinity::Upstream
+                    && cursor_byte == line.byte_end
+                    && line.x_end_trailing > 0.0
+                {
+                    return line.x + line.x_end_trailing;
+                }
+
+                x
             }
-
-            x
+            None => line.x,
         }
     }
 
