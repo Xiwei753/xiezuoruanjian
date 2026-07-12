@@ -85,7 +85,6 @@ class SujianEditorRenderer(
 
     // ── Platform Visual Transaction 状态 ──
     private val activeTransactions = mutableListOf<AndroidPlatformVisualTransaction>()
-    private val pendingQueue = mutableListOf<AndroidPlatformVisualTransaction>()
     private var isScrolling = false
     private var animationTimeoutMs: Long = 520L
 
@@ -118,9 +117,8 @@ class SujianEditorRenderer(
 
     fun addTransaction(tx: AndroidPlatformVisualTransaction): Boolean {
         if (isScrolling) {
-            pendingQueue.removeAll { it.key == tx.key }
-            pendingQueue.add(tx)
-            return true
+            tx.cancel("scrolling")
+            return false
         }
         val conflicting = findConflictingTransaction(
             tx.slices.minOfOrNull { it.documentByteStart } ?: 0,
@@ -206,17 +204,6 @@ class SujianEditorRenderer(
                     tx.resume()
                 }
             }
-            flushPendingQueue()
-        }
-    }
-
-    private fun flushPendingQueue() {
-        if (pendingQueue.isEmpty()) return
-        val toAdd = pendingQueue.toList()
-        pendingQueue.clear()
-        for (tx in toAdd) {
-            if (tx.state == AndroidVisualTransactionState.Cancelled) continue
-            addTransaction(tx)
         }
     }
 
@@ -241,10 +228,6 @@ class SujianEditorRenderer(
             tx.cancel("clear")
         }
         activeTransactions.clear()
-        for (tx in pendingQueue) {
-            tx.cancel("clear")
-        }
-        pendingQueue.clear()
     }
 
     fun hasActiveAnimations(): Boolean = activeTransactions.any {
@@ -277,6 +260,21 @@ class SujianEditorRenderer(
         return affectedLines
     }
 
+    /**
+     * 主绘制入口。
+     *
+     * 绘制顺序（从底到顶）：
+     * 1. 搜索高亮背景
+     * 2. 选区背景
+     * 3. 静态正文（含 static patch 裁剪）
+     * 4. 预输入文字和下划线
+     * 5. 动画切片 overlay
+     * 6. 光标
+     *
+     * 滚动偏移应用点：`canvas.translate(-scrollX, -scrollY)` 在方法开头一次性应用，
+     * 所有后续绘制使用文档坐标。动画切片的 destination rect 也是文档坐标，
+     * 不需要额外减去滚动量。
+     */
     fun draw(
         canvas: Canvas,
         layout: Layout,
@@ -325,6 +323,13 @@ class SujianEditorRenderer(
         canvas.restore()
     }
 
+    /**
+     * 绘制静态正文层，含 static patch 裁剪。
+     *
+     * 裁剪依据是已经排版好的视觉矩形（来自 [AndroidStaticLinePatch]），
+     * 而不是重新从 byte range 反推 x 坐标——这样才能保持 ligature、RTL、
+     * emoji/ZWJ 和复杂 shaping 的一致性。
+     */
     private fun drawStaticTextWithPatches(
         canvas: Canvas,
         layout: Layout,
@@ -480,6 +485,13 @@ class SujianEditorRenderer(
         return null
     }
 
+    /**
+     * 绘制动画切片 overlay。
+     *
+     * 遍历活跃事务的 slices，通过 [AndroidLineVisualResource.drawSlice] 绘制。
+     * sourceRect 使用行视觉资源局部坐标，destinationRect 使用文档坐标，
+     * alpha 和 scale 由 [AndroidAnimatedSlice.computeFrame] 插值计算。
+     */
     private fun drawAnimatedSlices(canvas: Canvas) {
         for (tx in activeTransactions) {
             if (tx.state != AndroidVisualTransactionState.Rendering &&
