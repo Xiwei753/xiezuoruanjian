@@ -83,6 +83,7 @@ impl LinuxEditorAnimationCoordinator {
                     let key = self.alloc_key();
                     let mut slices = Vec::new();
                     let mut static_patches = Vec::new();
+                    let mut source_runs = Vec::new();
 
                     static_patches.push(StaticLinePatch::insert_patch(key, range_start, range_end));
 
@@ -90,6 +91,7 @@ impl LinuxEditorAnimationCoordinator {
                     let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
                     for run in insert_runs {
+                        source_runs.push(run.clone());
                         slices.push(AnimatedSlice::insert_fade_in(
                             key, run, old_cx, old_cy, mode, None,
                         ));
@@ -107,13 +109,16 @@ impl LinuxEditorAnimationCoordinator {
 
                             if can_reuse && !needs_crossfade {
                                 if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                    source_runs.push(old_run.clone());
                                     slices.push(AnimatedSlice::reflow_move(key, old_run, new_run, mode, None));
                                 }
                             } else if needs_crossfade {
                                 if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                    source_runs.push(old_run.clone());
                                     slices.push(AnimatedSlice::reflow_crossfade(
                                         key, old_run, new_run, mode, TexturePhase::OldReflow, None,
                                     ));
+                                    source_runs.push(new_run.clone());
                                     slices.push(AnimatedSlice::reflow_crossfade(
                                         key, old_run, new_run, mode, TexturePhase::NewReflow, None,
                                     ));
@@ -146,6 +151,7 @@ impl LinuxEditorAnimationCoordinator {
                         old_revision: self.layout_revision,
                         new_revision,
                         slices,
+                        source_runs,
                         static_patches,
                         cursor_transition,
                         old_cursor_rect,
@@ -153,6 +159,8 @@ impl LinuxEditorAnimationCoordinator {
                         cancel_reason: None,
                         texture_prepared: false,
                         first_render_frame: None,
+                        rendering_started_at: None,
+                        accumulated_paused_duration_ms: 0,
                     };
 
                     self.layout_revision = new_revision;
@@ -187,10 +195,12 @@ impl LinuxEditorAnimationCoordinator {
                 }
 
                 let mut slices = Vec::new();
+                let mut source_runs = Vec::new();
                 let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
                 let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
                 for run in &delete_runs {
+                    source_runs.push(run.clone());
                     slices.push(AnimatedSlice::delete_fade_out(key, run, new_cx, new_cy, mode, None));
                 }
 
@@ -205,13 +215,16 @@ impl LinuxEditorAnimationCoordinator {
 
                         if can_reuse && !needs_crossfade {
                             if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                source_runs.push(old_run.clone());
                                 slices.push(AnimatedSlice::reflow_move(key, old_run, new_run, mode, None));
                             }
                         } else if needs_crossfade {
                             if let Some(old_run) = reflow_snapshot.old_run_for_new(run_idx) {
+                                source_runs.push(old_run.clone());
                                 slices.push(AnimatedSlice::reflow_crossfade(
                                     key, old_run, new_run, mode, TexturePhase::OldReflow, None,
                                 ));
+                                source_runs.push(new_run.clone());
                                 slices.push(AnimatedSlice::reflow_crossfade(
                                     key, old_run, new_run, mode, TexturePhase::NewReflow, None,
                                 ));
@@ -240,6 +253,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_revision: self.layout_revision,
                     new_revision,
                     slices,
+                    source_runs,
                     static_patches: Vec::new(),
                     cursor_transition,
                     old_cursor_rect: old_cursor_rect.clone(),
@@ -247,6 +261,8 @@ impl LinuxEditorAnimationCoordinator {
                     cancel_reason: None,
                     texture_prepared: false,
                     first_render_frame: None,
+                    rendering_started_at: None,
+                    accumulated_paused_duration_ms: 0,
                 };
 
                 self.layout_revision = new_revision;

@@ -7,7 +7,9 @@ use super::animation_mode::AnimationMode;
 use super::cursor_animation::CursorTransition;
 use super::layout_revision::LayoutRevision;
 use super::line_snapshot::EditorLayoutSnapshot;
+use super::shaped_visual_run::ShapedVisualRun;
 use super::static_line_patch::StaticLinePatch;
+use super::texture_cache::TexturePhase;
 use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -15,6 +17,7 @@ pub(crate) enum TextVisualTransactionState {
     Pending,
     Prepared,
     Rendering,
+    Paused,
     Completed,
     Cancelled,
 }
@@ -23,6 +26,7 @@ pub(crate) enum TextVisualTransactionState {
 pub(crate) enum TextVisualOperationKind {
     Insert,
     Delete,
+    Cursor,
 }
 
 #[derive(Clone, Debug)]
@@ -36,6 +40,7 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub old_revision: LayoutRevision,
     pub new_revision: LayoutRevision,
     pub slices: Vec<AnimatedSlice>,
+    pub source_runs: Vec<ShapedVisualRun>,
     pub static_patches: Vec<StaticLinePatch>,
     pub cursor_transition: CursorTransition,
     pub old_cursor_rect: Option<CursorRect>,
@@ -43,6 +48,8 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub cancel_reason: Option<String>,
     pub texture_prepared: bool,
     pub first_render_frame: Option<Instant>,
+    pub rendering_started_at: Option<Instant>,
+    pub accumulated_paused_duration_ms: u64,
 }
 
 impl PreparedTextVisualTransaction {
@@ -54,23 +61,43 @@ impl PreparedTextVisualTransaction {
         self.operation_kind == TextVisualOperationKind::Delete
     }
 
+    pub fn is_cursor(&self) -> bool {
+        self.operation_kind == TextVisualOperationKind::Cursor
+    }
+
     pub fn is_expired(&self, now: Instant) -> bool {
-        let effective_start = self.first_render_frame.unwrap_or(self.start_time);
+        let effective_start = self.rendering_started_at.unwrap_or(self.first_render_frame.unwrap_or(self.start_time));
         let elapsed = now.duration_since(effective_start).as_millis() as u64;
-        let timeout = self.duration_ms * 3 + 500;
+        let effective_duration = self.duration_ms + self.accumulated_paused_duration_ms;
+        let timeout = effective_duration * 3 + 500;
         elapsed > timeout
     }
 
     pub fn progress(&self, now: Instant) -> f64 {
-        let effective_start = self.first_render_frame.unwrap_or(self.start_time);
+        let effective_start = self.rendering_started_at.unwrap_or(self.first_render_frame.unwrap_or(self.start_time));
         let elapsed_ms = now.duration_since(effective_start).as_millis() as f64;
-        (elapsed_ms / self.duration_ms as f64).min(1.0)
+        let effective_duration_ms = (self.duration_ms + self.accumulated_paused_duration_ms) as f64;
+        if effective_duration_ms <= 0.0 {
+            return 1.0;
+        }
+        (elapsed_ms / effective_duration_ms).min(1.0)
     }
 
     pub fn mark_first_render(&mut self) {
         if self.first_render_frame.is_none() {
             self.first_render_frame = Some(Instant::now());
         }
+        if self.rendering_started_at.is_none() {
+            self.rendering_started_at = Some(Instant::now());
+        }
+    }
+
+    pub fn find_source_run_for_slice(&self, slice: &AnimatedSlice) -> Option<&ShapedVisualRun> {
+        self.source_runs.iter().find(|r| {
+            r.source_string_start == slice.byte_start
+                && r.source_string_end == slice.byte_end
+                && r.qglyphrun_index == slice.run_identity
+        })
     }
 
     pub fn inserted_byte_ranges(&self) -> Vec<(usize, usize)> {

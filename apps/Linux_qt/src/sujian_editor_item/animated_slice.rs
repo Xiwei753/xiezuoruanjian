@@ -3,6 +3,7 @@ use super::line_snapshot::LineSnapshotId;
 use super::texture_cache::TexturePhase;
 use super::transaction_key::VisualTransactionKey;
 use super::shaped_visual_run::ShapedVisualRun;
+use writer_core::editor::AnimatedSliceRole;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnimatedSliceKind {
@@ -12,10 +13,22 @@ pub(crate) enum AnimatedSliceKind {
     ReflowCrossFade,
 }
 
+impl AnimatedSliceKind {
+    pub fn to_role(self) -> AnimatedSliceRole {
+        match self {
+            Self::InsertFadeIn => AnimatedSliceRole::Insert,
+            Self::DeleteFadeOut => AnimatedSliceRole::Delete,
+            Self::ReflowMove => AnimatedSliceRole::Move,
+            Self::ReflowCrossFade => AnimatedSliceRole::CrossfadeOld,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct AnimatedSlice {
     pub key: VisualTransactionKey,
     pub kind: AnimatedSliceKind,
+    pub role: AnimatedSliceRole,
     pub line_snapshot_id: Option<LineSnapshotId>,
     pub source_x: f64,
     pub source_y: f64,
@@ -26,11 +39,16 @@ pub(crate) struct AnimatedSlice {
     pub target_w: f64,
     pub target_h: f64,
     pub baseline_in_quad: f64,
+    pub opacity_from: f64,
+    pub opacity_to: f64,
+    pub scale_from: f64,
+    pub scale_to: f64,
     pub animation_mode: AnimationMode,
     pub texture_phase: TexturePhase,
     pub run_identity: i32,
     pub byte_start: usize,
     pub byte_end: usize,
+    pub shaping_identity: Option<String>,
 }
 
 impl AnimatedSlice {
@@ -45,6 +63,7 @@ impl AnimatedSlice {
         Self {
             key,
             kind: AnimatedSliceKind::InsertFadeIn,
+            role: AnimatedSliceRole::Insert,
             line_snapshot_id,
             source_x: old_cursor_x,
             source_y: old_cursor_y,
@@ -55,11 +74,16 @@ impl AnimatedSlice {
             target_w: run.visual_w,
             target_h: run.visual_h,
             baseline_in_quad: run.baseline_y - run.visual_y,
+            opacity_from: 0.0,
+            opacity_to: 1.0,
+            scale_from: 1.0,
+            scale_to: 1.0,
             animation_mode,
             texture_phase: TexturePhase::Insert,
             run_identity: run.qglyphrun_index,
             byte_start: run.source_string_start,
             byte_end: run.source_string_end,
+            shaping_identity: Some(run.font_id()),
         }
     }
 
@@ -74,6 +98,7 @@ impl AnimatedSlice {
         Self {
             key,
             kind: AnimatedSliceKind::DeleteFadeOut,
+            role: AnimatedSliceRole::Delete,
             line_snapshot_id,
             source_x: run.visual_x,
             source_y: run.visual_y,
@@ -84,11 +109,16 @@ impl AnimatedSlice {
             target_w: run.visual_w * 0.7,
             target_h: run.visual_h * 0.7,
             baseline_in_quad: (run.baseline_y - run.visual_y) * 0.7,
+            opacity_from: 1.0,
+            opacity_to: 0.0,
+            scale_from: 1.0,
+            scale_to: 0.7,
             animation_mode,
             texture_phase: TexturePhase::DeleteOld,
             run_identity: run.qglyphrun_index,
             byte_start: run.source_string_start,
             byte_end: run.source_string_end,
+            shaping_identity: Some(run.font_id()),
         }
     }
 
@@ -102,6 +132,7 @@ impl AnimatedSlice {
         Self {
             key,
             kind: AnimatedSliceKind::ReflowMove,
+            role: AnimatedSliceRole::Move,
             line_snapshot_id,
             source_x: old_run.visual_x,
             source_y: old_run.visual_y,
@@ -112,11 +143,16 @@ impl AnimatedSlice {
             target_w: new_run.visual_w,
             target_h: new_run.visual_h,
             baseline_in_quad: new_run.baseline_y - new_run.visual_y,
+            opacity_from: 1.0,
+            opacity_to: 1.0,
+            scale_from: 1.0,
+            scale_to: 1.0,
             animation_mode,
             texture_phase: TexturePhase::NewReflow,
             run_identity: new_run.qglyphrun_index,
             byte_start: new_run.source_string_start,
             byte_end: new_run.source_string_end,
+            shaping_identity: Some(new_run.font_id()),
         }
     }
 
@@ -133,9 +169,20 @@ impl AnimatedSlice {
         } else {
             (new_run.visual_x, new_run.visual_y, new_run.visual_w, new_run.visual_h, new_run.baseline_y - new_run.visual_y)
         };
+        let role = if phase == TexturePhase::OldReflow {
+            AnimatedSliceRole::CrossfadeOld
+        } else {
+            AnimatedSliceRole::CrossfadeNew
+        };
+        let (opacity_from, opacity_to) = if phase == TexturePhase::OldReflow {
+            (1.0, 0.0)
+        } else {
+            (0.0, 1.0)
+        };
         Self {
             key,
             kind: AnimatedSliceKind::ReflowCrossFade,
+            role,
             line_snapshot_id,
             source_x: src_x,
             source_y: src_y,
@@ -146,6 +193,10 @@ impl AnimatedSlice {
             target_w: src_w,
             target_h: src_h,
             baseline_in_quad: bl,
+            opacity_from,
+            opacity_to,
+            scale_from: 1.0,
+            scale_to: 1.0,
             animation_mode,
             texture_phase: phase,
             run_identity: if phase == TexturePhase::OldReflow {
@@ -163,6 +214,11 @@ impl AnimatedSlice {
             } else {
                 new_run.source_string_end
             },
+            shaping_identity: Some(if phase == TexturePhase::OldReflow {
+                old_run.font_id()
+            } else {
+                new_run.font_id()
+            }),
         }
     }
 

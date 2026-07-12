@@ -426,8 +426,114 @@ pub struct PreeditVisualTransaction {
     pub preedit_cursor_rect: Option<CursorRect>,
     /// 动画时长（毫秒）
     pub duration_ms: u64,
-    /// 坐标模式
     pub coordinate_mode: VisualCoordinateMode,
+}
+
+// =============================================================================
+// 跨平台视觉语义边界（Issue #503 阶段 2）
+// =============================================================================
+//
+// Core 只输出 EditorVisualTransaction；平台端收到后，根据平台布局生成
+// 自己的 PlatformVisualTransaction。两端共享以下语义概念和状态机，
+// 不共享平台渲染结构（QImage / RenderNode / Bitmap 等）。
+//
+// 规则：
+//   - Core 不保存 QImage / QTextLayout / RenderNode / Bitmap / StaticLayout / 像素坐标
+//   - 平台视觉资源只存在于平台层
+//   - 动画只能引用创建时的 old/new revision
+//   - 进入动画协调器后只使用 document UTF-8 byte range；平台 UTF-16 index
+//     只存在于布局适配层
+
+/// 视觉布局版本指纹。
+///
+/// 以下变化都必须产生新 layout revision：
+/// 正文、宽度、字号、字体和 fallback、行距、首行缩进、文字方向、
+/// 主题正文色、Android density / Linux DPR。
+///
+/// 动画只能引用创建时的 old/new revision。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisualLayoutRevision {
+    pub document_revision: u64,
+    pub layout_revision: u64,
+    pub viewport_width: f64,
+    pub font_fingerprint: String,
+    pub paragraph_style_fingerprint: String,
+    pub text_color_fingerprint: String,
+    pub density_or_dpr: f64,
+}
+
+/// 动画切片角色 — 所有文字动画统一为 AnimatedSlice，角色区分行为。
+///
+/// Glyph、Cluster、Run、LineReflow 只是对 cluster 的分组方式，
+/// 不再维护四套不同 payload。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimatedSliceRole {
+    Insert,
+    Delete,
+    Move,
+    CrossfadeOld,
+    CrossfadeNew,
+    SnapshotOld,
+    SnapshotNew,
+}
+
+/// 静态行补丁 — 动画期间静态正文不能先完整显示新文字再叠一层动画。
+///
+/// 每个受影响的新视觉行生成一个补丁，平台静态层在动画期间跳过整条
+/// 受影响视觉行，再使用 StaticLinePatch 画出没有被 AnimatedSlice 接管的部分。
+///
+/// 不能只按 byte range 在完整正文纹理上猜一块矩形，也不能恢复透明 Span。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StaticLinePatch {
+    pub new_snapshot_id: u64,
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub destination_rect: Rect,
+    pub visible_source_rects: Vec<Rect>,
+}
+
+/// 平台视觉事务状态机。
+///
+/// 动画时间只能在首次进入 Rendering 时开始。
+/// 滚动开始时 Rendering → Paused，滚动结束后 revision 未变则累加
+/// pausedDuration 继续，revision 已变则取消失效事务。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PlatformVisualTransactionState {
+    Pending,
+    Prepared,
+    Rendering,
+    Paused,
+    Completed,
+    Cancelled,
+}
+
+/// 跨平台视觉事务语义边界。
+///
+/// Core 输出 EditorVisualTransaction；平台端收到后，根据平台布局
+/// 生成 PlatformVisualTransaction。两端共享此结构和状态机概念，
+/// 不共享平台渲染结构。
+///
+/// `visualResource` 字段由平台各自实现，不进入此结构。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformVisualTransaction {
+    pub transaction_id: u64,
+    pub generation: u64,
+    pub state: PlatformVisualTransactionState,
+    pub old_revision: VisualLayoutRevision,
+    pub new_revision: VisualLayoutRevision,
+    pub slice_roles: Vec<AnimatedSliceRole>,
+    pub slice_document_byte_ranges: Vec<(usize, usize)>,
+    pub static_line_patches: Vec<StaticLinePatch>,
+    pub cursor_transition_byte_start: usize,
+    pub cursor_transition_byte_end: usize,
+    pub duration_ms: u64,
+    pub rendering_started_at_ms: Option<u64>,
+    pub accumulated_paused_duration_ms: u64,
 }
 
 #[derive(Debug, Clone)]

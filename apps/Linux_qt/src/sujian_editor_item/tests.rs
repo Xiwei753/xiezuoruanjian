@@ -88,6 +88,7 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
+            source_runs: Vec::new(),
             static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(key, 5, 10)],
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -95,6 +96,8 @@ mod tests {
             cancel_reason: None,
             texture_prepared: false,
             first_render_frame: None,
+            rendering_started_at: None,
+            accumulated_paused_duration_ms: 0,
         };
         queue.enqueue(tx);
         assert_eq!(queue.insert_byte_ranges(), vec![(5, 10)]);
@@ -138,6 +141,7 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
+            source_runs: Vec::new(),
             static_patches: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -145,6 +149,8 @@ mod tests {
             cancel_reason: None,
             texture_prepared: false,
             first_render_frame: None,
+            rendering_started_at: None,
+            accumulated_paused_duration_ms: 0,
         };
         queue.enqueue(tx);
         assert!(queue.insert_byte_ranges().is_empty());
@@ -560,6 +566,7 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
+            source_runs: Vec::new(),
             static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(key, 10, 22)],
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -567,6 +574,8 @@ mod tests {
             cancel_reason: None,
             texture_prepared: false,
             first_render_frame: None,
+            rendering_started_at: None,
+            accumulated_paused_duration_ms: 0,
         };
         queue.enqueue(tx);
         assert!(queue.has_active_insert());
@@ -587,6 +596,7 @@ mod tests {
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
+            source_runs: Vec::new(),
             static_patches: vec![crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(VisualTransactionKey { transaction_id: 2, generation: 2 }, 30, 42)],
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
@@ -594,6 +604,8 @@ mod tests {
             cancel_reason: None,
             texture_prepared: false,
             first_render_frame: None,
+            rendering_started_at: None,
+            accumulated_paused_duration_ms: 0,
         });
         let removed_wrong = queue.complete(VisualTransactionKey { transaction_id: 999, generation: 1 });
         assert!(!removed_wrong);

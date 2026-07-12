@@ -281,73 +281,40 @@ impl SujianEditorItem {
         let font_size = self.current_font_pixel_size as f64;
         let font_family = self.current_font_family.to_string();
 
-        let (runs, cache_keys) = {
+        let (slices, source_runs, cache_keys) = {
             let tx = self.animation_coordinator.prepared_queue.active_transactions()
                 .iter()
                 .find(|t| t.key == key);
             match tx {
                 Some(t) => {
-                    let runs: Vec<super::shaped_visual_run::ShapedVisualRun> = t.slices.iter()
-                        .filter_map(|s| {
-                            if s.run_identity >= 0 {
-                                Some(super::shaped_visual_run::ShapedVisualRun {
-                                    glyphs: vec![super::shaped_visual_run::ShapedGlyph {
-                                        glyph_index: 0,
-                                        glyph_position_x: s.source_x,
-                                        glyph_position_y: s.source_y,
-                                        string_index: s.byte_start,
-                                        advance_width: s.source_w,
-                                    }],
-                                    clusters: vec![super::shaped_visual_run::ShapedCluster {
-                                        string_start: s.byte_start,
-                                        string_end: s.byte_end,
-                                        glyph_start: 0,
-                                        glyph_end: 1,
-                                    }],
-                                    raw_font_key: super::shaped_visual_run::RawFontCacheKey::new(&font_family, "", 50, font_size as i32),
-                                    flags: super::shaped_visual_run::RunFlags::empty(),
-                                    source_string_start: s.byte_start,
-                                    source_string_end: s.byte_end,
-                                    baseline_y: s.source_y + s.baseline_in_quad,
-                                    visual_x: s.source_x,
-                                    visual_y: s.source_y,
-                                    visual_w: s.source_w,
-                                    visual_h: s.source_h,
-                                    texture_atlas_x: 0.0,
-                                    texture_atlas_y: 0.0,
-                                    texture_atlas_w: s.source_w,
-                                    texture_atlas_h: s.source_h,
-                                    texture_translate_x: 0.0,
-                                    texture_translate_y: 0.0,
-                                    qglyphrun_index: s.run_identity,
-                                    para_text: None,
-                                    qtextline_idx: None,
-                                    paragraph_wrap_w: None,
-                                    para_indent: None,
-                                    line_y: 0.0,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+                    let slices: Vec<super::animated_slice::AnimatedSlice> = t.slices.clone();
+                    let source_runs: Vec<super::shaped_visual_run::ShapedVisualRun> = t.source_runs.clone();
                     let keys: Vec<super::texture_cache::TextureCacheKey> = t.slices.iter()
                         .map(|s| super::texture_cache::TextureCacheKey::new(key, s.texture_phase, s.run_identity))
                         .collect();
-                    (runs, keys)
+                    (slices, source_runs, keys)
                 }
                 None => return,
             }
         };
 
-        if runs.is_empty() {
+        if slices.is_empty() {
             self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
             return;
         }
 
-        let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::with_capacity(runs.len());
-        for run in &runs {
-            textures.push(self.render_shaped_run_texture_via_line_snapshot(run, font_size, &font_family, dpr));
+        let mut textures: Vec<Option<qmetaobject::QImage>> = Vec::with_capacity(slices.len());
+        for slice in &slices {
+            let source_run = source_runs.iter().find(|r| {
+                r.source_string_start == slice.byte_start
+                    && r.source_string_end == slice.byte_end
+                    && r.qglyphrun_index == slice.run_identity
+            });
+            let texture = match source_run {
+                Some(run) => self.render_line_snapshot_texture(run, font_size, &font_family, dpr),
+                None => None,
+            };
+            textures.push(texture);
         }
 
         let any_failed = textures.iter().any(|t| t.is_none());
@@ -365,7 +332,7 @@ impl SujianEditorItem {
         }
     }
 
-    fn render_shaped_run_texture_via_line_snapshot(
+    fn render_line_snapshot_texture(
         &mut self,
         run: &super::shaped_visual_run::ShapedVisualRun,
         font_size: f64,
