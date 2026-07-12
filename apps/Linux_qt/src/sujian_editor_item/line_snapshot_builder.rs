@@ -1,3 +1,8 @@
+//! 行视觉快照构建器。
+//!
+//! 同一次 `QTextLayout`/`QTextLine` 结果用于生成行图像、cluster/source rect 和
+//! shaping identity。动画阶段只消费快照，不再次排版文字。
+
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
@@ -195,9 +200,17 @@ impl LineSnapshotBuilder {
                 let local_x = (min_x - run_x).max(0.0);
                 let local_w = max_x - min_x;
 
+                // UTF-8 byte offset 与 Qt UTF-16/QChar offset 的转换边界：
+                // Qt glyph 的 string_index 是 QChar offset（UTF-16），需加 line.byte_start
+                // 转为 UTF-8 文档 byte offset。
                 let byte_start = line.byte_start + (*str_start as usize);
                 let byte_end = line.byte_start + (*str_end as usize) + 1;
 
+                // glyph run/cluster 边界由 Qt shaping 决定，不能按 Rust `char` 或
+                // 单个 code point 推断：一个 cluster 可能包含多个 glyph（ligature），
+                // 也可能一个 glyph 覆盖多个 code point（ZWJ emoji）。
+                // source_rect 使用行视觉资源局部坐标，已乘 DPR；
+                // local_x 是从 run 起始位置偏移后的逻辑坐标，乘 DPR 后对应 QImage 像素坐标。
                 let source_rect = SourceRect {
                     x: local_x * dpr,
                     y: 0.0,
