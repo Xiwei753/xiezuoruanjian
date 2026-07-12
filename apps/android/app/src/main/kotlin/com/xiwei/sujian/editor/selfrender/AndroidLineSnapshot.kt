@@ -18,9 +18,7 @@ data class AndroidLineSnapshotId(
  * - [platformTextStart]/[platformTextEnd]：Android `CharSequence` 的 UTF-16 offset。
  * - [sourceRectInLineSnapshot]：行视觉资源局部坐标。
  * - [visualRectInDocument]：文档坐标。
- *
- * [visualResource] 在事务结束前由 snapshot 持有，[release] 必须可重复调用且
- * 不能提前释放仍被 slice 引用的资源。
+ * - [shapingIdentity]：用于判断 old/new cluster 是否可复用同一视觉资源（Move vs Crossfade）。
  */
 data class AndroidClusterSnapshot(
     val documentByteStart: Int,

@@ -170,7 +170,7 @@ class AndroidLayoutSnapshotBuilder(
                 sourceRectInLineSnapshot = sourceRect,
                 visualRectInDocument = visualRect,
                 textDirection = if (staticLayout.getParagraphDirection(lineIdx) == Layout.DIR_RIGHT_TO_LEFT) 1 else 0,
-                shapingIdentity = buildShapingIdentity(clusterText, textPaint, staticLayout.getParagraphDirection(lineIdx), currentOffset, clusterEnd, lineIdx, staticLayout)
+                shapingIdentity = buildShapingIdentity(clusterText, textPaint, staticLayout.getParagraphDirection(lineIdx), currentOffset, clusterEnd, lineIdx, staticLayout, text)
             ))
 
             currentOffset = clusterEnd
@@ -185,17 +185,18 @@ class AndroidLayoutSnapshotBuilder(
         clusterStartUtf16: Int,
         clusterEndUtf16: Int,
         lineIdx: Int,
-        staticLayout: Layout
+        staticLayout: Layout,
+        fullText: String
     ): String {
         return if (android.os.Build.VERSION.SDK_INT >= 31) {
-            buildGlyphIdentityApi31(clusterText, paint, paragraphDirection, clusterStartUtf16, clusterEndUtf16)
+            buildGlyphIdentityApi31(fullText, paint, paragraphDirection, clusterStartUtf16, clusterEndUtf16)
         } else {
-            buildConservativeIdentity(clusterText, paint, paragraphDirection, lineIdx, staticLayout)
+            buildConservativeIdentity(clusterText, paint, paragraphDirection, lineIdx, staticLayout, fullText, clusterStartUtf16, clusterEndUtf16)
         }
     }
 
     private fun buildGlyphIdentityApi31(
-        clusterText: String,
+        fullText: String,
         paint: TextPaint,
         paragraphDirection: Int,
         clusterStartUtf16: Int,
@@ -203,11 +204,32 @@ class AndroidLayoutSnapshotBuilder(
     ): String {
         val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
+        val clusterLen = clusterEndUtf16 - clusterStartUtf16
+
+        var contextStart = (clusterStartUtf16 - 64).coerceAtLeast(0)
+        var contextEnd = (clusterEndUtf16 + 64).coerceAtMost(fullText.length)
+        var searchStart = clusterStartUtf16 - 1
+        while (searchStart >= contextStart) {
+            if (fullText[searchStart] == '\n') {
+                contextStart = searchStart + 1
+                break
+            }
+            searchStart--
+        }
+        var searchEnd = clusterEndUtf16
+        while (searchEnd < contextEnd) {
+            if (fullText[searchEnd] == '\n') {
+                contextEnd = searchEnd
+                break
+            }
+            searchEnd++
+        }
+        val contextLen = contextEnd - contextStart
 
         try {
             val shaped = android.graphics.text.TextRunShaper.shapeTextRun(
-                clusterText, 0, clusterText.length,
-                0, clusterText.length,
+                fullText, contextStart, contextLen,
+                clusterStartUtf16 - contextStart, clusterLen,
                 0f, 0f, isRtl, paint
             )
 
@@ -227,8 +249,9 @@ class AndroidLayoutSnapshotBuilder(
                 fontBuilder.append(shaped.getFont(i).toString())
             }
 
-            return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl:ctx[$clusterStartUtf16,$clusterEndUtf16]"
+            return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl:ctx[$contextStart,$contextEnd]"
         } catch (e: Exception) {
+            val clusterText = fullText.substring(clusterStartUtf16, clusterEndUtf16.coerceAtMost(fullText.length))
             return buildConservativeIdentityFallback(clusterText, paint, paragraphDirection, clusterStartUtf16)
         }
     }
@@ -238,16 +261,23 @@ class AndroidLayoutSnapshotBuilder(
         paint: TextPaint,
         paragraphDirection: Int,
         lineIdx: Int,
-        staticLayout: Layout
+        staticLayout: Layout,
+        fullText: String,
+        clusterStartUtf16: Int,
+        clusterEndUtf16: Int
     ): String {
+        val contextStart = (clusterStartUtf16 - 32).coerceAtLeast(0)
+        val contextEnd = (clusterEndUtf16 + 32).coerceAtMost(fullText.length)
+        val contextText = fullText.substring(contextStart, contextEnd)
         val textHash = Objects.hash(clusterText)
+        val contextHash = Objects.hash(contextText)
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
         val width = paint.measureText(clusterText).toRawBits()
         val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
         val lineLeft = staticLayout.getLineLeft(lineIdx).toRawBits()
         val lineRight = staticLayout.getLineRight(lineIdx).toRawBits()
         val lineBreakOffset = staticLayout.getLineEnd(lineIdx)
-        return "c:$textHash:$fontFingerprint:$width:$isRtl:line[$lineIdx,$lineLeft,$lineRight,$lineBreakOffset]"
+        return "c:$textHash:$contextHash:$fontFingerprint:$width:$isRtl:line[$lineIdx,$lineLeft,$lineRight,$lineBreakOffset]"
     }
 
     private fun buildConservativeIdentityFallback(

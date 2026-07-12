@@ -189,7 +189,8 @@ class SujianEditorView @JvmOverloads constructor(
             val staticLayout = layoutEngine.getLayout(oldText)
             val cursorLine = staticLayout.getLineForOffset(oldSelection.head.coerceIn(0, oldText.length))
             val startLine = (cursorLine - 1).coerceAtLeast(0)
-            val endLine = (cursorLine + 2).coerceAtMost(staticLayout.lineCount - 1)
+            val paragraphEndLine = findParagraphEndLine(oldText, staticLayout, cursorLine)
+            val endLine = (cursorLine + paragraphEndLine).coerceAtMost(staticLayout.lineCount - 1)
             snapshotBuilder.buildLineSnapshots(oldText, startLine..endLine, snapshotBuilder.currentRevision(), renderer.getTextColor())
         } else {
             emptyList()
@@ -921,6 +922,19 @@ class SujianEditorView @JvmOverloads constructor(
             }
         }
         return super.performAccessibilityAction(action, arguments)
+    }
+
+    private fun findParagraphEndLine(text: String, layout: android.text.Layout, cursorLine: Int): Int {
+        var endLine = cursorLine
+        val totalLines = layout.lineCount
+        while (endLine < totalLines - 1) {
+            val lineEnd = layout.getLineEnd(endLine)
+            if (lineEnd > 0 && lineEnd <= text.length && text[lineEnd - 1] == '\n') {
+                break
+            }
+            endLine++
+        }
+        return (endLine - cursorLine) + 2
     }
 
 }

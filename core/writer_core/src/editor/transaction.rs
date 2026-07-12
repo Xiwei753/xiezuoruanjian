@@ -474,6 +474,9 @@ pub struct VisualLayoutRevision {
 ///
 /// Glyph、Cluster、Run、LineReflow 只是对 cluster 的分组方式，
 /// 不再维护四套不同 payload。
+///
+/// SnapshotOld/SnapshotNew 已删除：SnapshotAnimation 不可用，
+/// 不存在 snapshot renderer，这两个角色无消费方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AnimatedSliceRole {
@@ -482,8 +485,6 @@ pub enum AnimatedSliceRole {
     Move,
     CrossfadeOld,
     CrossfadeNew,
-    SnapshotOld,
-    SnapshotNew,
 }
 
 /// 静态行补丁 — 动画期间静态正文不能先完整显示新文字再叠一层动画。

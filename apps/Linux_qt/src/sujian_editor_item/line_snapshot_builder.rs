@@ -1,3 +1,21 @@
+//! 从 CanonicalDocumentVisualSnapshot 构建 EditorLayoutSnapshot。
+//!
+//! 输入是 CanonicalDocumentVisualSnapshot（由 layout 模块完成 QTextLayout 排版后产出）。
+//! PreparedLineSnapshot 的 image、cluster、byte range、visual line 和 shaping identity
+//! 均来自同一批 canonical 排版结果，动画阶段只消费快照，不再次排版。
+//!
+//! source_rect 坐标单位为像素，已乘 DPR；消费端直接用于 QImage 裁剪。
+//!
+//! canonical 排版使用 QChar/UTF-16 offset（QTextLayout 原生坐标），
+//! 此处通过 CanonicalClusterSnapshot 的 document_byte_start/document_byte_end
+//! 将 UTF-16 范围转换为 UTF-8 document byte range，供跨平台事务使用。
+//!
+//! 职责边界：
+//! - build_from_canonical_document()：从整个文档快照构建 EditorLayoutSnapshot，
+//!   包含视口裁剪、段落 ID 分配、baseline 计算和空行处理。
+//! - build_clusters_from_canonical()：从单条 canonical line 的 cluster 列表
+//!   构建 LineClusterSnapshot，负责 source_rect 裁剪和 shaping identity 哈希。
+
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,

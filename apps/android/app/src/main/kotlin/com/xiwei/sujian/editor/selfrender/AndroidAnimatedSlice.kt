@@ -12,7 +12,7 @@ import android.graphics.RectF
  *   分别引用 old/new snapshot；旧视觉淡出、新视觉淡入。
  */
 enum class AndroidAnimatedSliceRole {
-    Insert, Delete, Move, CrossfadeOld, CrossfadeNew, SnapshotOld, SnapshotNew
+    Insert, Delete, Move, CrossfadeOld, CrossfadeNew
 }
 
 /**

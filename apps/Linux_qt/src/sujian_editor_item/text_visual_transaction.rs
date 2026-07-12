@@ -214,18 +214,29 @@ impl PreparedTransactionQueue {
     }
 
     pub fn complete(&mut self, key: VisualTransactionKey) -> bool {
-        let before = self.transactions.len();
-        self.transactions.retain(|t| t.key != key);
-        self.transactions.len() < before
+        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
+            tx.state = TextVisualTransactionState::Completed;
+            self.transactions.retain(|t| t.key != key);
+            return true;
+        }
+        false
     }
 
     pub fn cancel(&mut self, key: VisualTransactionKey, reason: &str) -> bool {
-        let before = self.transactions.len();
-        self.transactions.retain(|t| t.key != key);
-        self.transactions.len() < before
+        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
+            tx.state = TextVisualTransactionState::Cancelled;
+            tx.cancel_reason = Some(reason.to_string());
+            self.transactions.retain(|t| t.key != key);
+            return true;
+        }
+        false
     }
 
     pub fn cancel_all(&mut self, reason: &str) {
+        for tx in &mut self.transactions {
+            tx.state = TextVisualTransactionState::Cancelled;
+            tx.cancel_reason = Some(reason.to_string());
+        }
         self.transactions.clear();
     }
 
