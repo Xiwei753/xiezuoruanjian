@@ -1,3 +1,29 @@
+//! Linux Qt 文字动画协调器。
+//!
+//! 主链：
+//! ```text
+//! Core EditorVisualTransaction
+//! → 捕获 old/new layout snapshot
+//! → 生成 AnimatedSlice + StaticLinePatch
+//! → 准备平台视觉资源
+//! → PreparedTransactionQueue
+//! → rendering overlay + cursor transition
+//! ```
+//!
+//! 关键约束：
+//! - 先完成视觉资源准备，再允许静态层隐藏：`texture_prepared` 为 true 前静态层不裁剪，
+//!   否则准备纹理与第一帧 overlay 之间会出现空白帧。
+//! - 连续输入从当前视觉帧 rebase：新事务与旧事务 byte range 重叠时，先从旧事务当前
+//!   progress 计算已显示帧位置，rebase 新 slice 的 from_document_rect，再取消旧事务，
+//!   保证视觉无跳变。
+//! - scrolling/window inactive 使用 pause/resume 而非销毁事务：滚动结束后 revision
+//!   未变则累加 paused duration 继续，避免重新创建事务的开销和视觉跳变。
+//! - revision 不匹配时必须取消：旧 source rect 是旧布局的产物，不能套到新布局上，
+//!   否则坐标和 shaping 全部错误。
+//! - shaping identity 变化走 crossfade 而非强行 move：字体、glyph、方向、格式任一变化
+//!   都意味着旧视觉资源与新排版结果不是同一视觉对象，强行移动会导致 ligature/RTL/emoji
+//!   渲染错误。
+
 use std::time::Instant;
 
 use writer_core::editor::{

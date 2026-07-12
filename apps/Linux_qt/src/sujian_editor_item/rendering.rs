@@ -102,7 +102,16 @@ impl SujianEditorItem {
     // atomically via transactionId + generation in updatePaintNode.
 
     /// 渲染静态正文到 painter。不包含任何动画内容。
-    /// buffer_scroll_y 和 buffer_h 定义缓冲区可见范围。
+    ///
+    /// 绘制顺序：Layer 1 选区背景 → Layer 2 正文（含动画裁剪）→ Layer 2.5 选中文字叠层
+    /// → Layer 3 预输入。
+    ///
+    /// 滚动偏移应用点：`paint_offset_y = -scroll_y`，所有行坐标先加此偏移再绘制。
+    ///
+    /// 动画裁剪：当 Insert/Reflow 动画活跃时，静态层通过 `hidden_clip_rects` 裁剪掉
+    /// 被动画切片接管的区域。裁剪依据是已经排版好的视觉矩形（来自 `StaticLinePatch`），
+    /// 而不是重新从 byte range 反推 x 坐标——这样才能保持 ligature、RTL、emoji/ZWJ 和
+    /// 复杂 shaping 的一致性。
     pub(crate) fn paint_onto(&mut self, painter: &mut QPainter, buffer_scroll_y: f64, buffer_h: f64) {
         let paint_start = Instant::now();
         let width = self.bounding_width();
