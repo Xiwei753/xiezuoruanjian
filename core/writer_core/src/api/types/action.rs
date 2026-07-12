@@ -158,3 +158,71 @@ impl From<ActionResultDto> for crate::action_registry::ActionResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::action_registry::{ActionKind, ActionRiskLevel, ActionDescriptor, ActionResult};
+    use serde_json::json;
+
+    #[test]
+    fn test_action_kind_conversion() {
+        let dto: ActionKindDto = ActionKind::Query.into();
+        assert_eq!(dto, ActionKindDto::Query);
+        let internal: ActionKind = ActionKindDto::Preview.into();
+        assert_eq!(internal, ActionKind::Preview);
+    }
+
+    #[test]
+    fn test_action_risk_level_conversion() {
+        let dto: ActionRiskLevelDto = ActionRiskLevel::SafeWrite.into();
+        assert_eq!(dto, ActionRiskLevelDto::SafeWrite);
+        let internal: ActionRiskLevel = ActionRiskLevelDto::Dangerous.into();
+        assert_eq!(internal, ActionRiskLevel::Dangerous);
+    }
+
+    #[test]
+    fn test_action_descriptor_conversion() {
+        let internal = ActionDescriptor {
+            id: "test_action".to_string(),
+            title: "Test Action".to_string(),
+            description: "A test action".to_string(),
+            category: "test".to_string(),
+            kind: ActionKind::Mutation,
+            risk_level: ActionRiskLevel::ContentWrite,
+            confirm_required: true,
+            undoable: false,
+            platforms: vec!["desktop".to_string()],
+            input_schema: Some(json!({"type": "object"})),
+            ui_schema: None,
+        };
+
+        let dto: ActionDescriptorDto = internal.clone().into();
+        assert_eq!(dto.id, "test_action");
+        assert_eq!(dto.kind, ActionKindDto::Mutation);
+        assert_eq!(dto.input_schema, Some(r#"{"type":"object"}"#.to_string()));
+
+        let back_internal: ActionDescriptor = dto.into();
+        assert_eq!(internal.id, back_internal.id);
+        assert_eq!(internal.input_schema, back_internal.input_schema);
+    }
+
+    #[test]
+    fn test_action_result_conversion() {
+        let internal = ActionResult {
+            success: true,
+            message: Some("success".to_string()),
+            data: Some(json!({"key": "value"})),
+            proposed_ui: None,
+            requires_confirmation: Some(false),
+        };
+
+        let dto: ActionResultDto = internal.clone().into();
+        assert!(dto.success);
+        assert_eq!(dto.data, Some(r#"{"key":"value"}"#.to_string()));
+
+        let back_internal: ActionResult = dto.into();
+        assert_eq!(internal.success, back_internal.success);
+        assert_eq!(internal.data, back_internal.data);
+    }
+}
