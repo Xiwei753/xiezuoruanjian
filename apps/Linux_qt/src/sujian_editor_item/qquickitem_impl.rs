@@ -231,13 +231,8 @@ impl QQuickItem for SujianEditorItem {
             );
 
             for key in &render_plan.frame_context.keys_to_complete {
-                self.animation_coordinator.finish_by_key(*key);
-                let tx = self.animation_coordinator.prepared_queue.active_transactions()
-                    .iter()
-                    .find(|t| t.key == *key);
-                if let Some(t) = tx {
-                    let snapshot_ids = t.snapshot_ids();
-                    self.texture_cache.remove_for_transaction(&snapshot_ids);
+                if let Some(ids) = self.animation_coordinator.finish_by_key(*key) {
+                    self.texture_cache.remove_for_transaction(&ids);
                 }
                 editor_animation_debug_log(&format!(
                     "update_paint_node: tid={}, gen={} completed (progress >= 1.0)",

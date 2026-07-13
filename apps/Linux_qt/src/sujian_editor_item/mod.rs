@@ -548,7 +548,7 @@ impl SujianEditorItem {
                 generation: tid,
             };
             let removed = self.animation_coordinator.finish_by_key(key);
-            if removed {
+            if let Some(ids) = removed {
                 editor_animation_debug_log(&format!(
                     "on_insert_animation_{}: tid={}, cleared, has_active_insert={}",
                     if skipped { "skipped" } else { "finished" },

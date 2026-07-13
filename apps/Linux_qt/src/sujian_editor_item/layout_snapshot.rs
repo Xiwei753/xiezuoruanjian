@@ -141,6 +141,21 @@ impl PreparedLineSnapshot {
     pub fn intersects_byte_range(&self, start: usize, end: usize) -> bool {
         self.byte_end > start && self.byte_start < end
     }
+
+    /// 将行局部物理像素 source_rect 转换为文档逻辑坐标。
+    ///
+    /// source_rect 来自 cluster 快照，使用行视觉资源局部坐标（已乘 DPR）。
+    /// 渲染管线的 `from_document_rect`/`to_document_rect` 要求文档逻辑坐标，
+    /// 此方法完成坐标和单位转换。
+    pub fn source_rect_to_document_rect(&self, source_rect: &SourceRect) -> SourceRect {
+        let dpr = self.dpr.max(0.001);
+        SourceRect {
+            x: source_rect.x / dpr + self.visual_x,
+            y: self.document_origin_y + source_rect.y / dpr,
+            w: source_rect.w / dpr,
+            h: source_rect.h / dpr,
+        }
+    }
 }
 
 /// 一次完整排版的不可变快照集合。

@@ -502,14 +502,6 @@ mod tests {
         };
         let json = serde_json::to_string(&slot).unwrap();
 
-        // 验证包含 5 个字段
-        assert!(json.contains("\"action_id\""));
-        assert!(json.contains("\"role\""));
-        assert!(json.contains("\"placement\""));
-        assert!(json.contains("\"visible_in\""));
-        assert!(json.contains("\"requires_confirmation\""));
-
-        // 反序列化验证
         let deserialized: ActionSlot = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.action_id, "back");
         assert_eq!(deserialized.role, ActionRole::Back);

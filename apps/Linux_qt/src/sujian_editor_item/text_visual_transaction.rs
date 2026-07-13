@@ -213,13 +213,14 @@ impl PreparedTransactionQueue {
         }
     }
 
-    pub fn complete(&mut self, key: VisualTransactionKey) -> bool {
+    pub fn complete(&mut self, key: VisualTransactionKey) -> Option<Vec<LineSnapshotId>> {
         if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
             tx.state = TextVisualTransactionState::Completed;
+            let ids = tx.snapshot_ids();
             self.transactions.retain(|t| t.key != key);
-            return true;
+            return Some(ids);
         }
-        false
+        None
     }
 
     pub fn cancel(&mut self, key: VisualTransactionKey, reason: &str) -> bool {

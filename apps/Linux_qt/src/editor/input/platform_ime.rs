@@ -103,8 +103,19 @@ extern "C" fn sujian_ime_preedit(
         return;
     };
     let text = decode_utf16_ptr(text, text_len);
+    let char_offsets: Vec<usize> = {
+        let mut offsets = Vec::new();
+        let mut byte_pos = 0;
+        offsets.push(0);
+        for ch in text.chars() {
+            byte_pos += ch.len_utf8();
+            offsets.push(byte_pos);
+        }
+        offsets
+    };
+    let cursor_byte = char_offsets.get(cursor.max(0) as usize).copied().unwrap_or(text.len()) as i32;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ime_preedit(item, text, cursor);
+        ime_preedit(item, text, cursor_byte);
     }));
 }
 
@@ -187,8 +198,20 @@ extern "C" fn sujian_ime_preedit_attrs(
         }
     }
 
+    let char_offsets: Vec<usize> = {
+        let mut offsets = Vec::new();
+        let mut byte_pos = 0;
+        offsets.push(0);
+        for ch in text.chars() {
+            byte_pos += ch.len_utf8();
+            offsets.push(byte_pos);
+        }
+        offsets
+    };
+    let cursor_byte = char_offsets.get(cursor.max(0) as usize).copied().unwrap_or(text.len()) as i32;
+
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ime_preedit_with_attrs(item, text, cursor, attributes);
+        ime_preedit_with_attrs(item, text, cursor_byte, attributes);
     }));
 }
 

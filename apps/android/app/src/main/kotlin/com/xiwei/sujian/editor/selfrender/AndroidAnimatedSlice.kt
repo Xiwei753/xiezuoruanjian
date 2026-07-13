@@ -41,19 +41,36 @@ data class AndroidAnimatedSlice(
     fun computeFrame(progress: Float, easedProgress: Float): SliceFrame {
         val x = fromDocumentRect.left + (toDocumentRect.left - fromDocumentRect.left) * easedProgress
         val y = fromDocumentRect.top + (toDocumentRect.top - fromDocumentRect.top) * easedProgress
-        val w = fromDocumentRect.width() + (toDocumentRect.width() - fromDocumentRect.width()) * easedProgress
-        val h = fromDocumentRect.height() + (toDocumentRect.height() - fromDocumentRect.height()) * easedProgress
         val alpha = (opacityFrom + (opacityTo - opacityFrom) * easedProgress) * 255f
-        val scale = scaleFrom + (scaleTo - scaleFrom) * easedProgress
+
+        val w: Float
+        val h: Float
+
+        when (role) {
+            AndroidAnimatedSliceRole.Insert, AndroidAnimatedSliceRole.Move -> {
+                w = toDocumentRect.width()
+                h = toDocumentRect.height()
+            }
+            AndroidAnimatedSliceRole.Delete -> {
+                val scale = scaleFrom + (scaleTo - scaleFrom) * easedProgress
+                w = fromDocumentRect.width() * scale
+                h = fromDocumentRect.height() * scale
+            }
+            AndroidAnimatedSliceRole.CrossfadeOld, AndroidAnimatedSliceRole.CrossfadeNew -> {
+                w = fromDocumentRect.width() + (toDocumentRect.width() - fromDocumentRect.width()) * easedProgress
+                h = fromDocumentRect.height() + (toDocumentRect.height() - fromDocumentRect.height()) * easedProgress
+            }
+        }
+
         return SliceFrame(
             destinationRect = RectF(x, y, x + w, y + h),
             alpha = alpha.toInt().coerceIn(0, 255),
-            scale = scale
+            scale = 1f
         )
     }
 
     fun rebaseFrom(currentRect: RectF, currentAlpha: Int) {
-        fromDocumentRect = currentRect
+        fromDocumentRect = RectF(currentRect)
         opacityFrom = currentAlpha / 255f
         scaleFrom = 1f
     }

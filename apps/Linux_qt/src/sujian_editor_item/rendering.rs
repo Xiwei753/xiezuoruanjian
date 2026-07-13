@@ -541,7 +541,9 @@ impl SujianEditorItem {
                     // composition string (e.g. between pinyin segments)
                     // Allow cursor at end of preedit (common case: cursor after last pinyin letter)
                     let preedit_cursor_pos = self.preedit_cursor;
-                    if preedit_cursor_pos > 0 && preedit_cursor_pos <= self.preedit_text.len() {
+                    if preedit_cursor_pos > 0 && preedit_cursor_pos <= self.preedit_text.len()
+                        && self.preedit_text.is_char_boundary(preedit_cursor_pos)
+                    {
                         // Check if there's an explicit Cursor attribute
                         let has_cursor_attr = self.preedit_attributes.iter()
                             .any(|a| a.kind == super::PreeditAttributeKind::Cursor);

@@ -261,7 +261,7 @@ class SujianAnimationController(
             }
 
             for (cluster in insertedClusters) {
-                val fromRect = RectF(fromX, fromTop, fromX, fromTop + (cluster.visualRectInDocument.height()))
+                val fromRect = RectF(fromX, fromTop, fromX + cluster.visualRectInDocument.width(), fromTop + cluster.visualRectInDocument.height())
                 slices.add(AndroidAnimatedSlice.insertFadeIn(
                     id = (vt.id shl 2) + lineSnapshot.visualLineOrdinal.toULong(),
                     snapshotId = lineSnapshot.id,
@@ -287,12 +287,16 @@ class SujianAnimationController(
                         oldCluster.visualRectInDocument.left, oldCluster.visualRectInDocument.top,
                         oldCluster.visualRectInDocument.right, oldCluster.visualRectInDocument.bottom
                     )
+                    val positionChanged = kotlin.math.abs(oldRect.top - cluster.visualRectInDocument.top) > 0.5f ||
+                        kotlin.math.abs(oldRect.left - cluster.visualRectInDocument.left) > 0.5f
                     val shapingChanged = oldCluster.shapingIdentity != cluster.shapingIdentity
+
+                    if (!positionChanged && !shapingChanged) continue
 
                     if (shapingChanged) {
                         val oldLineSnap = expandedOldLineSnapshots.find { it.clusters.contains(oldCluster) }
                         slices.add(AndroidAnimatedSlice.crossfade(
-                            id = (vt.id shl 2) or 3u + cluster.platformTextStart.toULong(),
+                            id = ((vt.id shl 2) or 3u) + cluster.platformTextStart.toULong(),
                             role = AndroidAnimatedSliceRole.CrossfadeOld,
                             snapshotId = oldLineSnap!!.id,
                             sourceRect = oldCluster.sourceRectInLineSnapshot,
@@ -303,7 +307,7 @@ class SujianAnimationController(
                             shapingIdentity = oldCluster.shapingIdentity
                         ))
                         slices.add(AndroidAnimatedSlice.crossfade(
-                            id = (vt.id shl 2) or 4u + cluster.platformTextStart.toULong(),
+                            id = ((vt.id shl 2) or 4u) + cluster.platformTextStart.toULong(),
                             role = AndroidAnimatedSliceRole.CrossfadeNew,
                             snapshotId = lineSnapshot.id,
                             sourceRect = cluster.sourceRectInLineSnapshot,
@@ -315,7 +319,7 @@ class SujianAnimationController(
                         ))
                     } else {
                         slices.add(AndroidAnimatedSlice.reflowMove(
-                            id = (vt.id shl 2) or 1u + lineSnapshot.visualLineOrdinal.toULong(),
+                            id = ((vt.id shl 2) or 1u) + lineSnapshot.visualLineOrdinal.toULong(),
                             snapshotId = lineSnapshot.id,
                             sourceRect = cluster.sourceRectInLineSnapshot,
                             fromRect = oldRect,
@@ -330,9 +334,9 @@ class SujianAnimationController(
                         cluster.documentByteStart, cluster.documentByteEnd
                     )
                     if (isInserted) {
-                        val fromRect = RectF(fromX, fromTop, fromX, fromTop + cluster.visualRectInDocument.height())
+                        val fromRect = RectF(fromX, fromTop, fromX + cluster.visualRectInDocument.width(), fromTop + cluster.visualRectInDocument.height())
                         slices.add(AndroidAnimatedSlice.insertFadeIn(
-                            id = (vt.id shl 2) or 7u + cluster.platformTextStart.toULong(),
+                            id = ((vt.id shl 2) or 7u) + cluster.platformTextStart.toULong(),
                             snapshotId = lineSnapshot.id,
                             sourceRect = cluster.sourceRectInLineSnapshot,
                             fromRect = fromRect,
@@ -343,7 +347,7 @@ class SujianAnimationController(
                         ))
                     } else {
                         slices.add(AndroidAnimatedSlice.crossfade(
-                            id = (vt.id shl 2) or 8u + cluster.platformTextStart.toULong(),
+                            id = ((vt.id shl 2) or 8u) + cluster.platformTextStart.toULong(),
                             role = AndroidAnimatedSliceRole.CrossfadeNew,
                             snapshotId = lineSnapshot.id,
                             sourceRect = cluster.sourceRectInLineSnapshot,
@@ -559,7 +563,9 @@ class SujianAnimationController(
                     if (matchedInNew) continue
                 }
                 if (offsetMap.isOldRangeDeleted(cluster.documentByteStart, cluster.documentByteEnd)) {
-                    val toRect = RectF(toX, toTop, toX, toTop + cluster.visualRectInDocument.height())
+                    val shrinkW = cluster.visualRectInDocument.width() * 0.7f
+                    val shrinkH = cluster.visualRectInDocument.height() * 0.7f
+                    val toRect = RectF(toX, toTop, toX + shrinkW, toTop + shrinkH)
                     slices.add(AndroidAnimatedSlice.deleteFadeOut(
                         id = (vt.id shl 2) + cluster.platformTextStart.toULong(),
                         snapshotId = oldSnapshot.id,
@@ -584,9 +590,9 @@ class SujianAnimationController(
                         cluster.documentByteStart, cluster.documentByteEnd
                     )
                     if (isInserted) {
-                        val fromRect = RectF(toX, toTop, toX, toTop + cluster.visualRectInDocument.height())
+                        val fromRect = RectF(toX, toTop, toX + cluster.visualRectInDocument.width(), toTop + cluster.visualRectInDocument.height())
                         slices.add(AndroidAnimatedSlice.insertFadeIn(
-                            id = (vt.id shl 2) or 9u + cluster.platformTextStart.toULong(),
+                            id = ((vt.id shl 2) or 9u) + cluster.platformTextStart.toULong(),
                             snapshotId = newSnapshot.id,
                             sourceRect = cluster.sourceRectInLineSnapshot,
                             fromRect = fromRect,
@@ -597,7 +603,7 @@ class SujianAnimationController(
                         ))
                     } else {
                         slices.add(AndroidAnimatedSlice.crossfade(
-                            id = (vt.id shl 2) or 10u + cluster.platformTextStart.toULong(),
+                            id = ((vt.id shl 2) or 10u) + cluster.platformTextStart.toULong(),
                             role = AndroidAnimatedSliceRole.CrossfadeNew,
                             snapshotId = newSnapshot.id,
                             sourceRect = cluster.sourceRectInLineSnapshot,
@@ -623,14 +629,14 @@ class SujianAnimationController(
 
                 val positionChanged = kotlin.math.abs(oldRect.top - cluster.visualRectInDocument.top) > 0.5f ||
                     kotlin.math.abs(oldRect.left - cluster.visualRectInDocument.left) > 0.5f
-                if (!positionChanged) continue
-
                 val shapingChanged = oldCluster.shapingIdentity != cluster.shapingIdentity
+
+                if (!positionChanged && !shapingChanged) continue
 
                 if (shapingChanged) {
                     val oldLineSnap = expandedOldSnapshots.find { it.clusters.contains(oldCluster) }
                     slices.add(AndroidAnimatedSlice.crossfade(
-                        id = (vt.id shl 2) or 5u + cluster.platformTextStart.toULong(),
+                        id = ((vt.id shl 2) or 5u) + cluster.platformTextStart.toULong(),
                         role = AndroidAnimatedSliceRole.CrossfadeOld,
                         snapshotId = oldLineSnap!!.id,
                         sourceRect = oldCluster.sourceRectInLineSnapshot,
@@ -641,7 +647,7 @@ class SujianAnimationController(
                         shapingIdentity = oldCluster.shapingIdentity
                     ))
                     slices.add(AndroidAnimatedSlice.crossfade(
-                        id = (vt.id shl 2) or 6u + cluster.platformTextStart.toULong(),
+                        id = ((vt.id shl 2) or 6u) + cluster.platformTextStart.toULong(),
                         role = AndroidAnimatedSliceRole.CrossfadeNew,
                         snapshotId = newSnapshot.id,
                         sourceRect = cluster.sourceRectInLineSnapshot,
@@ -653,7 +659,7 @@ class SujianAnimationController(
                     ))
                 } else {
                     slices.add(AndroidAnimatedSlice.reflowMove(
-                        id = (vt.id shl 2) or 2u + cluster.platformTextStart.toULong(),
+                        id = ((vt.id shl 2) or 2u) + cluster.platformTextStart.toULong(),
                         snapshotId = newSnapshot.id,
                         sourceRect = cluster.sourceRectInLineSnapshot,
                         fromRect = oldRect,
@@ -852,7 +858,7 @@ class SujianAnimationController(
         }
 
         if (stableConsecutive >= stableConsecutiveNeeded) {
-            candidateEnd = (candidateEnd - stableConsecutiveNeeded).coerceAtLeast(endLine)
+            candidateEnd = (candidateEnd - stableConsecutiveNeeded + 1).coerceAtLeast(endLine)
         } else {
             candidateEnd = affectedParagraphEndLine.coerceAtMost(lastLine)
         }

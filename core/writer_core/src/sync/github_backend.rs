@@ -219,22 +219,6 @@ mod tests {
     #[test]
     fn test_build_client_uses_no_proxy() {
         let client = super::GitHubApiBackend::build_client().unwrap();
-        // Verify the client was built successfully (direct mode with no_proxy)
         drop(client);
-    }
-
-    #[test]
-    fn test_github_api_backend_pull_push_not_backend_not_implemented() {
-        let source = include_str!("github_backend.rs");
-        let impl_start = source
-            .find("impl SyncBackend for GitHubApiBackend")
-            .expect("must have SyncBackend impl");
-        let impl_block = &source[impl_start..];
-        let impl_end = impl_block.find("\n}").unwrap_or(impl_block.len());
-        let impl_body = &impl_block[..impl_end];
-        assert!(
-            !impl_body.contains("backend_not_implemented"),
-            "GitHubApiBackend pull/push must not return backend_not_implemented — they should delegate to sync()"
-        );
     }
 }

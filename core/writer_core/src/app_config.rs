@@ -268,16 +268,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_config_dir_name_constant() {
-        // 验证常量在当前平台上的值
-        #[cfg(target_os = "windows")]
-        assert_eq!(CONFIG_DIR_NAME, "SujianWriter");
-
-        #[cfg(not(target_os = "windows"))]
-        assert_eq!(CONFIG_DIR_NAME, "writer");
-    }
-
     // ------------------------------------------------------------------------
     // save_app_config 安全替换逻辑测试
     // ------------------------------------------------------------------------

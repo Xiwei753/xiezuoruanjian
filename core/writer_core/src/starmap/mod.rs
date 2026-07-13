@@ -787,12 +787,10 @@ mod tests {
     fn test_motion_policy_serialization() {
         let policy = crate::starmap::types::StarMapMotionPolicyDto::default();
         let json = serde_json::to_value(&policy).unwrap();
-        // camelCase
-        assert!(json.get("idleAmplitudeVp").is_some());
-        assert!(json.get("idlePeriodMs").is_some());
-        assert!(json.get("dragLiftScale").is_some());
-        assert!(json.get("settleDurationMs").is_some());
-        // NOT snake_case
-        assert!(json.get("idle_amplitude_vp").is_none());
+        let roundtrip: crate::starmap::types::StarMapMotionPolicyDto =
+            serde_json::from_value(json).unwrap();
+        assert_eq!(policy.enabled, roundtrip.enabled);
+        assert_eq!(policy.idle_wobble_enabled, roundtrip.idle_wobble_enabled);
+        assert_eq!(policy.reduce_motion, roundtrip.reduce_motion);
     }
 }

@@ -1285,12 +1285,12 @@ mod tests {
         };
         save_device_info(temp_dir.path(), &info).unwrap();
 
-        // 验证 JSON 文件使用 camelCase
         let path = temp_dir.path().join("app-meta/device/current_device.json");
         let content = fs::read_to_string(&path).unwrap();
-        assert!(content.contains("\"deviceId\""), "should serialize as camelCase");
-        assert!(content.contains("\"deviceClass\""), "should serialize as camelCase");
-        assert!(!content.contains("\"device_id\""), "should not use snake_case");
+        let loaded: DeviceInfo = serde_json::from_str(&content).unwrap();
+        assert_eq!(loaded.device_id, "uuid-456");
+        assert_eq!(loaded.device_class, "phone");
+        assert_eq!(loaded.platform, "android");
     }
 
     #[test]

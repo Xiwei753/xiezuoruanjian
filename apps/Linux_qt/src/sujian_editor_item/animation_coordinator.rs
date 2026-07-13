@@ -123,10 +123,12 @@ impl LinuxEditorAnimationCoordinator {
 
                     for new_line in new_snapshot.lines_in_byte_range(range_start, range_end) {
                         if let Some(source_rect) = new_line.source_rect_for_byte_range(range_start, range_end) {
+                            let to_doc = new_line.source_rect_to_document_rect(&source_rect);
                             slices.push(AnimatedSlice::insert_fade_in(
                                 key,
                                 new_line.id,
                                 source_rect.clone(),
+                                to_doc,
                                 old_cx,
                                 old_cy,
                                 range_start,
@@ -160,18 +162,23 @@ impl LinuxEditorAnimationCoordinator {
 
                             match (old_sr, new_sr) {
                                 (Some(old_src), Some(new_src)) => {
-                                    let same_shaping = ol.clusters.iter()
-                                        .zip(new_line.clusters.iter())
-                                        .take_while(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity))
-                                        .count() == ol.clusters.len().min(new_line.clusters.len());
+                                    let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                                        && ol.clusters.iter()
+                                            .zip(new_line.clusters.iter())
+                                            .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+
+                                    let old_doc = ol.source_rect_to_document_rect(&old_src);
+                                    let new_doc = new_line.source_rect_to_document_rect(&new_src);
 
                                     if same_shaping {
                                         slices.push(AnimatedSlice::reflow_move(
                                             key,
                                             ol.id,
                                             old_src,
+                                            old_doc,
                                             new_line.id,
                                             new_src.clone(),
+                                            new_doc,
                                             new_line.byte_start,
                                             new_line.byte_end,
                                             ol.clusters.first().map(|c| c.shaping_identity.clone()),
@@ -181,7 +188,8 @@ impl LinuxEditorAnimationCoordinator {
                                             key,
                                             ol.id,
                                             old_src.clone(),
-                                            old_src,
+                                            old_doc.clone(),
+                                            new_doc.clone(),
                                             new_line.byte_start,
                                             new_line.byte_end,
                                         ));
@@ -189,7 +197,8 @@ impl LinuxEditorAnimationCoordinator {
                                             key,
                                             new_line.id,
                                             new_src.clone(),
-                                            new_src.clone(),
+                                            old_doc,
+                                            new_doc,
                                             new_line.byte_start,
                                             new_line.byte_end,
                                         ));
@@ -274,10 +283,12 @@ impl LinuxEditorAnimationCoordinator {
                 for (del_start, del_end) in &deleted_ranges {
                     for old_line in old_snapshot.lines_in_byte_range(*del_start, *del_end) {
                         if let Some(source_rect) = old_line.source_rect_for_byte_range(*del_start, *del_end) {
+                            let from_doc = old_line.source_rect_to_document_rect(&source_rect);
                             slices.push(AnimatedSlice::delete_fade_out(
                                 key,
                                 old_line.id,
                                 source_rect,
+                                from_doc,
                                 new_cx,
                                 new_cy,
                                 *del_start,
@@ -288,26 +299,46 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
+                let sorted_deleted_ranges: Vec<(usize, usize)> = {
+                    let mut r = deleted_ranges.clone();
+                    r.sort_by_key(|(s, _)| *s);
+                    r
+                };
+                let deleted_len_before = |new_byte: usize| -> usize {
+                    let mut offset = 0usize;
+                    for (ds, de) in &sorted_deleted_ranges {
+                        if *ds <= new_byte + offset {
+                            offset += de - ds;
+                        }
+                    }
+                    offset
+                };
                 for new_line in &new_snapshot.line_snapshots {
-                    let old_line = old_snapshot.line_for_byte(new_line.byte_start);
+                    let old_byte_start = new_line.byte_start + deleted_len_before(new_line.byte_start);
+                    let old_line = old_snapshot.line_for_byte(old_byte_start);
                     if let Some(ol) = old_line {
                         let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                         let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
                         match (old_sr, new_sr) {
                             (Some(old_src), Some(new_src)) => {
-                                let same_shaping = ol.clusters.iter()
-                                    .zip(new_line.clusters.iter())
-                                    .take_while(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity))
-                                    .count() == ol.clusters.len().min(new_line.clusters.len());
+                                let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                                    && ol.clusters.iter()
+                                        .zip(new_line.clusters.iter())
+                                        .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+
+                                let old_doc = ol.source_rect_to_document_rect(&old_src);
+                                let new_doc = new_line.source_rect_to_document_rect(&new_src);
 
                                 if same_shaping {
                                     slices.push(AnimatedSlice::reflow_move(
                                         key,
                                         ol.id,
                                         old_src,
+                                        old_doc,
                                         new_line.id,
                                         new_src.clone(),
+                                        new_doc,
                                         new_line.byte_start,
                                         new_line.byte_end,
                                         ol.clusters.first().map(|c| c.shaping_identity.clone()),
@@ -317,7 +348,8 @@ impl LinuxEditorAnimationCoordinator {
                                         key,
                                         ol.id,
                                         old_src.clone(),
-                                        old_src,
+                                        old_doc.clone(),
+                                        new_doc.clone(),
                                         new_line.byte_start,
                                         new_line.byte_end,
                                     ));
@@ -325,7 +357,8 @@ impl LinuxEditorAnimationCoordinator {
                                         key,
                                         new_line.id,
                                         new_src.clone(),
-                                        new_src.clone(),
+                                        old_doc,
+                                        new_doc,
                                         new_line.byte_start,
                                         new_line.byte_end,
                                     ));
@@ -387,7 +420,7 @@ impl LinuxEditorAnimationCoordinator {
         None
     }
 
-    pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> bool {
+    pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> Option<Vec<LineSnapshotId>> {
         self.prepared_queue.complete(key)
     }
 
@@ -751,7 +784,7 @@ mod tests {
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = VisualTransactionKey::new(1, 1);
         let removed = coord.finish_by_key(key);
-        assert!(!removed);
+        assert!(removed.is_none());
     }
 
     #[test]

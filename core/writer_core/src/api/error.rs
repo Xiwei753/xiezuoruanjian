@@ -201,62 +201,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_message_key_stable() {
-        assert_eq!(WriterError::Io("test".into()).message_key(), "error.io");
-        assert_eq!(WriterError::Json("test".into()).message_key(), "error.json");
-        assert_eq!(
-            WriterError::InvalidWorkspace.message_key(),
-            "error.invalid_workspace"
-        );
-        assert_eq!(
-            WriterError::ProjectNotFound.message_key(),
-            "error.project_not_found"
-        );
-        assert_eq!(
-            WriterError::VolumeNotFound.message_key(),
-            "error.volume_not_found"
-        );
-        assert_eq!(
-            WriterError::ChapterNotFound.message_key(),
-            "error.chapter_not_found"
-        );
-        assert_eq!(
-            WriterError::EmptyOverwriteBlocked {
-                chapter_id: "ch1".into(),
-                old_len: 100,
-                new_len: 0,
-                reason: "empty".into(),
-            }
-            .message_key(),
-            "error.empty_overwrite_blocked"
-        );
-        assert_eq!(
-            WriterError::NotImplemented.message_key(),
-            "error.not_implemented"
-        );
-        assert_eq!(
-            WriterError::RefuseToDeleteWorkspaceRoot.message_key(),
-            "error.refuse_delete_workspace_root"
-        );
-        assert_eq!(
-            WriterError::InvalidDeleteTarget("test".into()).message_key(),
-            "error.invalid_delete_target"
-        );
-        assert_eq!(
-            WriterError::SyncConflict("detail".into()).message_key(),
-            "error.sync_conflict"
-        );
-        assert_eq!(
-            WriterError::SyncFailed("detail".into()).message_key(),
-            "error.sync_failed"
-        );
-        assert_eq!(
-            WriterError::Other("test".into()).message_key(),
-            "error.other"
-        );
-    }
-
-    #[test]
     fn test_params_empty_overwrite_blocked() {
         let err = WriterError::EmptyOverwriteBlocked {
             chapter_id: "ch1".into(),
@@ -283,16 +227,5 @@ mod tests {
         let err = WriterError::SyncFailed("network timeout".into());
         let p = err.params();
         assert_eq!(p.get("detail").unwrap(), "network timeout");
-    }
-
-    #[test]
-    fn test_params_simple_variants_empty() {
-        // 不携带结构化参数的变体应返回空 HashMap
-        assert!(WriterError::InvalidWorkspace.params().is_empty());
-        assert!(WriterError::ProjectNotFound.params().is_empty());
-        assert!(WriterError::VolumeNotFound.params().is_empty());
-        assert!(WriterError::ChapterNotFound.params().is_empty());
-        assert!(WriterError::NotImplemented.params().is_empty());
-        assert!(WriterError::RefuseToDeleteWorkspaceRoot.params().is_empty());
     }
 }

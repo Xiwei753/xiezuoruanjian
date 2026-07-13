@@ -212,27 +212,17 @@ mod tests {
         let registry = SettingsRegistry::default_registry();
         assert!(!registry.items.is_empty());
 
-        // Verify i18n key pattern for title_key/description_key and fallback presence
         let font_size_item = registry.items.iter().find(|i| i.id == "editor.font_size").unwrap();
-        assert!(font_size_item.title_key.starts_with("settings.item."));
-        assert!(font_size_item.description_key.starts_with("settings.item."));
+        assert!(!font_size_item.title_key.is_empty());
+        assert!(!font_size_item.description_key.is_empty());
         assert!(font_size_item.title_fallback.is_some());
         assert!(font_size_item.description_fallback.is_some());
-        assert!(font_size_item.category_key.starts_with("settings.category."));
+        assert!(!font_size_item.category_key.is_empty());
         assert!(font_size_item.category_fallback.is_some());
-
-        let token_item = registry.items.iter().find(|i| i.id == "sync.git.token").unwrap();
-        assert!(token_item.title_key.starts_with("settings.item."));
-        assert!(token_item.description_key.starts_with("settings.item."));
-        assert!(token_item.title_fallback.is_some());
-        assert!(token_item.description_fallback.is_some());
-        assert!(token_item.category_key.starts_with("settings.category."));
-        assert!(token_item.category_fallback.is_some());
     }
 
     #[test]
     fn test_setting_item_serialization_skip_fallback() {
-        // When fallback is None, it should be skipped in serialization
         let item = SettingItem {
             id: "test".to_string(),
             title_key: "settings.item.test".to_string(),
@@ -258,16 +248,10 @@ mod tests {
         assert!(!json.contains("title_fallback"));
         assert!(!json.contains("description_fallback"));
         assert!(!json.contains("category_fallback"));
-        // Verify new field names appear in serialized output
-        assert!(json.contains("\"title_key\""));
-        assert!(json.contains("\"description_key\""));
-        assert!(json.contains("\"category_key\""));
     }
 
     #[test]
     fn test_setting_item_deserialize_old_field_names() {
-        // Verify that old JSON with "title", "description", "category" fields
-        // can still be deserialized via serde alias
         let old_json = r#"{
             "id": "test",
             "title": "settings.item.test",

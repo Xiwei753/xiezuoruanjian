@@ -465,8 +465,16 @@ class SujianEditorRenderer(
             visibleSegments.add(Pair(pos, lineEnd))
         }
 
-        for ((segStart, segEnd) in visibleSegments) {
-            drawLineSegment(canvas, layout, text, lineIdx, segStart, segEnd)
+        val hasPatchForLine = patches.any { patch ->
+            val patchLineTop = patch.destinationDocumentRect.top
+            val patchLineBottom = patch.destinationDocumentRect.bottom
+            patchLineBottom > lineTop && patchLineTop < lineBottom
+        }
+
+        if (!hasPatchForLine) {
+            for ((segStart, segEnd) in visibleSegments) {
+                drawLineSegment(canvas, layout, text, lineIdx, segStart, segEnd)
+            }
         }
 
         for (patch in patches) {

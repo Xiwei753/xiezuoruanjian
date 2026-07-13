@@ -260,7 +260,11 @@ impl SujianEditorItem {
         );
 
         let preedit_before_cursor =
-            &self.preedit_text[..self.preedit_cursor.min(self.preedit_text.len())];
+            if self.preedit_text.is_char_boundary(self.preedit_cursor.min(self.preedit_text.len())) {
+                &self.preedit_text[..self.preedit_cursor.min(self.preedit_text.len())]
+            } else {
+                ""
+            };
         let preedit_cursor_offset =
             self.editor_layout
                 .text_width(preedit_before_cursor, font_size, font_family);

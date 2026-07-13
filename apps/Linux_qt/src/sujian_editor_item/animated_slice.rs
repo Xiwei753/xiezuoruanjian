@@ -42,25 +42,25 @@ impl AnimatedSlice {
         key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
+        to_document_rect: SourceRect,
         cursor_x: f64,
         cursor_y: f64,
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
     ) -> Self {
-        let dest = source_rect.clone();
         Self {
             key,
             kind: AnimatedSliceKind::InsertFadeIn,
             snapshot_id,
-            source_rect: source_rect.clone(),
+            source_rect,
             from_document_rect: SourceRect {
                 x: cursor_x,
                 y: cursor_y,
-                w: source_rect.w,
-                h: source_rect.h,
+                w: to_document_rect.w,
+                h: to_document_rect.h,
             },
-            to_document_rect: dest,
+            to_document_rect,
             opacity_from: 0.0,
             opacity_to: 1.0,
             scale_from: 1.0,
@@ -75,23 +75,26 @@ impl AnimatedSlice {
         key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
+        from_document_rect: SourceRect,
         cursor_x: f64,
         cursor_y: f64,
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
     ) -> Self {
+        let shrink_w = from_document_rect.w * 0.7;
+        let shrink_h = from_document_rect.h * 0.7;
         Self {
             key,
             kind: AnimatedSliceKind::DeleteFadeOut,
             snapshot_id,
-            source_rect: source_rect.clone(),
-            from_document_rect: source_rect.clone(),
+            source_rect,
+            from_document_rect,
             to_document_rect: SourceRect {
                 x: cursor_x,
                 y: cursor_y,
-                w: source_rect.w * 0.7,
-                h: source_rect.h * 0.7,
+                w: shrink_w,
+                h: shrink_h,
             },
             opacity_from: 1.0,
             opacity_to: 0.0,
@@ -107,8 +110,10 @@ impl AnimatedSlice {
         key: VisualTransactionKey,
         old_snapshot_id: LineSnapshotId,
         old_source_rect: SourceRect,
-        new_snapshot_id: LineSnapshotId,
-        new_dest_rect: SourceRect,
+        from_document_rect: SourceRect,
+        _new_snapshot_id: LineSnapshotId,
+        _new_source_rect: SourceRect,
+        to_document_rect: SourceRect,
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
@@ -117,9 +122,9 @@ impl AnimatedSlice {
             key,
             kind: AnimatedSliceKind::ReflowMove,
             snapshot_id: old_snapshot_id,
-            source_rect: old_source_rect.clone(),
-            from_document_rect: old_source_rect,
-            to_document_rect: new_dest_rect,
+            source_rect: old_source_rect,
+            from_document_rect,
+            to_document_rect,
             opacity_from: 1.0,
             opacity_to: 1.0,
             scale_from: 1.0,
@@ -134,7 +139,8 @@ impl AnimatedSlice {
         key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
-        dest_rect: SourceRect,
+        from_document_rect: SourceRect,
+        to_document_rect: SourceRect,
         byte_start: usize,
         byte_end: usize,
     ) -> Self {
@@ -142,9 +148,9 @@ impl AnimatedSlice {
             key,
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
-            source_rect: source_rect.clone(),
-            from_document_rect: source_rect.clone(),
-            to_document_rect: dest_rect,
+            source_rect,
+            from_document_rect,
+            to_document_rect,
             opacity_from: 1.0,
             opacity_to: 0.0,
             scale_from: 1.0,
@@ -159,7 +165,8 @@ impl AnimatedSlice {
         key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
-        dest_rect: SourceRect,
+        from_document_rect: SourceRect,
+        to_document_rect: SourceRect,
         byte_start: usize,
         byte_end: usize,
     ) -> Self {
@@ -167,9 +174,9 @@ impl AnimatedSlice {
             key,
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
-            source_rect: source_rect.clone(),
-            from_document_rect: source_rect.clone(),
-            to_document_rect: dest_rect,
+            source_rect,
+            from_document_rect,
+            to_document_rect,
             opacity_from: 0.0,
             opacity_to: 1.0,
             scale_from: 1.0,
@@ -201,7 +208,7 @@ impl AnimatedSlice {
     pub fn compute_frame(&self, progress: f64) -> AnimatedSliceFrame {
         match self.kind {
             AnimatedSliceKind::InsertFadeIn => {
-                let eased = 1.0 - (1.0 - progress).powi(3);
+                let eased = 1.0 - (1.0 - progress).powi(2);
                 let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * eased;
                 let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * eased;
                 AnimatedSliceFrame {
@@ -215,16 +222,17 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteFadeOut => {
-                let fade_out = 1.0 - progress;
-                let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * progress;
-                let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * progress;
-                let scale = 1.0 - 0.3 * progress;
+                let eased = 1.0 - (1.0 - progress).powi(2);
+                let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                let scale = self.scale_from + (self.scale_to - self.scale_from) * eased;
+                let opacity = self.opacity_from + (self.opacity_to - self.opacity_from) * eased;
                 AnimatedSliceFrame {
                     x,
                     y,
                     w: self.from_document_rect.w * scale,
                     h: self.from_document_rect.h * scale,
-                    opacity: fade_out,
+                    opacity,
                     source_rect: self.source_rect.clone(),
                     snapshot_id: self.snapshot_id,
                 }
@@ -244,28 +252,20 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::ReflowCrossFade => {
-                if self.opacity_to < self.opacity_from {
-                    let fade_out = 1.0 - progress;
-                    AnimatedSliceFrame {
-                        x: self.from_document_rect.x,
-                        y: self.from_document_rect.y,
-                        w: self.from_document_rect.w,
-                        h: self.from_document_rect.h,
-                        opacity: fade_out,
-                        source_rect: self.source_rect.clone(),
-                        snapshot_id: self.snapshot_id,
-                    }
-                } else {
-                    let eased = 1.0 - (1.0 - progress).powi(2);
-                    AnimatedSliceFrame {
-                        x: self.from_document_rect.x,
-                        y: self.from_document_rect.y,
-                        w: self.from_document_rect.w,
-                        h: self.from_document_rect.h,
-                        opacity: eased,
-                        source_rect: self.source_rect.clone(),
-                        snapshot_id: self.snapshot_id,
-                    }
+                let eased = 1.0 - (1.0 - progress).powi(2);
+                let x = self.from_document_rect.x + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                let y = self.from_document_rect.y + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                let w = self.from_document_rect.w + (self.to_document_rect.w - self.from_document_rect.w) * eased;
+                let h = self.from_document_rect.h + (self.to_document_rect.h - self.from_document_rect.h) * eased;
+                let opacity = self.opacity_from + (self.opacity_to - self.opacity_from) * eased;
+                AnimatedSliceFrame {
+                    x,
+                    y,
+                    w,
+                    h,
+                    opacity,
+                    source_rect: self.source_rect.clone(),
+                    snapshot_id: self.snapshot_id,
                 }
             }
         }

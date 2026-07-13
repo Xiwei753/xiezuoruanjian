@@ -15,8 +15,9 @@ import android.text.Layout
  * API 29+ 使用 [RenderNode]（[RenderNodeVisualResource]），
  * API 24–28 使用 [Bitmap]（[BitmapVisualResource]），是同一抽象的不同后端。
  *
- * [record] 负责一次性录制完整视觉行；动画帧只修改 destination/alpha/scale 并裁剪，
- * 不再调用 `drawText()` 重新 shaping。
+ * [record] 负责一次性录制完整视觉行；动画帧只修改 destination/alpha 并裁剪，
+ * 不再调用 `drawText()` 重新 shaping。drawSlice 通过 sourceRect→destinationRect
+ * 缩放映射控制视觉尺寸，scale 参数已弃用（始终为 1f）。
  *
  * 资源释放和重复录制的生命周期约束：[release] 必须可重复调用；
  * 事务结束前不能释放仍被 slice 引用的资源。
@@ -71,14 +72,17 @@ class RenderNodeVisualResource(
 
         node.alpha = alpha / 255f
         canvas.save()
-        canvas.scale(scale, scale, destinationRect.centerX(), destinationRect.centerY())
         canvas.clipRect(
             destinationRect.left.toInt(),
             destinationRect.top.toInt(),
             destinationRect.right.toInt(),
             destinationRect.bottom.toInt()
         )
-        canvas.translate(destinationRect.left - sourceRect.left, destinationRect.top - sourceRect.top)
+        val sx = if (sourceRect.width() > 0f) destinationRect.width() / sourceRect.width() else 1f
+        val sy = if (sourceRect.height() > 0f) destinationRect.height() / sourceRect.height() else 1f
+        canvas.translate(destinationRect.left, destinationRect.top)
+        canvas.scale(sx, sy)
+        canvas.translate(-sourceRect.left, -sourceRect.top)
         canvas.drawRenderNode(node)
         canvas.restore()
     }
@@ -132,17 +136,12 @@ class BitmapVisualResource : AndroidLineVisualResource {
         if (bmp.isRecycled) return
 
         bitmapPaint.alpha = alpha
-        canvas.save()
-        if (scale != 1f) {
-            canvas.scale(scale, scale, destinationRect.centerX(), destinationRect.centerY())
-        }
         val src = Rect(
             sourceRect.left.toInt(), sourceRect.top.toInt(),
             sourceRect.right.toInt().coerceAtMost(bitmapWidth),
             sourceRect.bottom.toInt().coerceAtMost(bitmapHeight)
         )
         canvas.drawBitmap(bmp, src, destinationRect, bitmapPaint)
-        canvas.restore()
     }
 
     override fun release() {

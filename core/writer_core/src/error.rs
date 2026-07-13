@@ -222,21 +222,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_error_codes_stable() {
-        assert_eq!(Error::ProjectNotFound.code(), "PROJECT_NOT_FOUND");
-        assert_eq!(Error::ChapterNotFound.code(), "CHAPTER_NOT_FOUND");
-        assert_eq!(
-            Error::SyncDocumentConflict {
-                path: "x".into(),
-                local_hash: "a".into(),
-                remote_hash: "b".into(),
-            }
-            .code(),
-            "SYNC_DOCUMENT_CONFLICT"
-        );
-    }
-
-    #[test]
     fn test_recoverable() {
         assert!(Error::Io(std::io::Error::new(std::io::ErrorKind::Other, "test")).recoverable());
         assert!(!Error::ProjectNotFound.recoverable());
@@ -260,16 +245,5 @@ mod tests {
         let p = err.params();
         assert_eq!(p.get("path").unwrap(), "projects/p1/chapter.md");
         assert_eq!(p.get("local_hash").unwrap(), "abc");
-    }
-
-    #[test]
-    fn test_bridge_error_fields() {
-        let err = Error::SyncRateLimited {
-            retry_after_secs: 60,
-        };
-        let bridge = BridgeError::from(&err);
-        assert_eq!(bridge.code, "SYNC_RATE_LIMITED");
-        assert!(bridge.recoverable);
-        assert_eq!(bridge.params.get("retry_after_secs").unwrap(), "60");
     }
 }

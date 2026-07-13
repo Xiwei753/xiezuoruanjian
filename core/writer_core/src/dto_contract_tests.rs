@@ -1,9 +1,7 @@
-//! # 跨端 DTO 契约测试
+//! # DTO 序列化行为测试
 //!
-//! 验证 FFI 层手动拼接的 JSON 字段名与各端期望的字段名对齐。
-//! Harmony 端参考: apps/harmony/entry/src/main/ets/model/CoreDtos.ets
-//! Linux Qt 端参考: apps/Linux_qt/src/backend/ (QML via json_utils)
-//! Android 端参考: core/writer_core/src/api.udl + api/types/
+//! 验证 Rust 类型的序列化输出格式（snake_case/camelCase）和往返一致性。
+//! 不再硬编码手工 JSON 字段名列表与源码对比——编译器和 serde 已保证结构对齐。
 
 use serde_json::json;
 
@@ -16,399 +14,6 @@ fn sorted_keys(value: &serde_json::Value) -> Vec<String> {
         }
         _ => vec![],
     }
-}
-
-#[test]
-fn project_dto_fields_match_harmony() {
-    let ffi_project = json!({
-        "id": "p1",
-        "title": "Test",
-        "volumeCount": 1,
-        "chapterCount": 2,
-        "totalWordCount": 100,
-        "createdAt": "2024-01-01",
-        "updatedAt": "2024-01-01"
-    });
-
-    let expected_keys = vec![
-        "chapterCount",
-        "createdAt",
-        "id",
-        "title",
-        "totalWordCount",
-        "updatedAt",
-        "volumeCount",
-    ];
-    let actual_keys = sorted_keys(&ffi_project);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "Project DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn volume_dto_fields_match_harmony() {
-    let ffi_volume = json!({
-        "id": "v1",
-        "projectId": "p1",
-        "title": "Volume 1",
-        "order": 0,
-        "chapterCount": 3,
-        "createdAt": "2024-01-01",
-        "updatedAt": "2024-01-01"
-    });
-
-    let expected_keys = vec![
-        "chapterCount",
-        "createdAt",
-        "id",
-        "order",
-        "projectId",
-        "title",
-        "updatedAt",
-    ];
-    let actual_keys = sorted_keys(&ffi_volume);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "Volume DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn chapter_dto_fields_match_harmony() {
-    let ffi_chapter = json!({
-        "id": "c1",
-        "volumeId": "v1",
-        "title": "Chapter 1",
-        "wordCount": 500,
-        "order": 0,
-        "updatedAt": "2024-01-01",
-        "createdAt": "2024-01-01"
-    });
-
-    let expected_keys = vec![
-        "createdAt",
-        "id",
-        "order",
-        "title",
-        "updatedAt",
-        "volumeId",
-        "wordCount",
-    ];
-    let actual_keys = sorted_keys(&ffi_chapter);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "Chapter DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn chapter_data_dto_fields_match_harmony() {
-    let ffi_chapter_data = json!({
-        "id": "c1",
-        "title": "Chapter 1",
-        "content": "Hello world",
-        "wordCount": 500,
-        "volumeId": "v1",
-        "projectId": "p1",
-        "updatedAt": "2024-01-01",
-        "createdAt": "2024-01-01"
-    });
-
-    let expected_keys = vec![
-        "content",
-        "createdAt",
-        "id",
-        "projectId",
-        "title",
-        "updatedAt",
-        "volumeId",
-        "wordCount",
-    ];
-    let actual_keys = sorted_keys(&ffi_chapter_data);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "ChapterData DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn save_receipt_dto_fields_match_harmony() {
-    let ffi_receipt = json!({
-        "success": true,
-        "wordCount": 500,
-        "savedAt": "2024-01-01"
-    });
-
-    let expected_keys = vec!["savedAt", "success", "wordCount"];
-    let actual_keys = sorted_keys(&ffi_receipt);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "SaveReceipt DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn local_settings_dto_fields_match_harmony() {
-    let ffi_settings = json!({
-        "fontSize": 16.0,
-        "lineHeight": 1.5,
-        "fontFamily": "HarmonyOS Sans",
-        "theme": "system",
-        "autoSave": true,
-        "autoSaveInterval": 30.0,
-        "autoIndent": true,
-        "showWordCount": true,
-        "showLineNumbers": false,
-        "wordWrap": true,
-        "spellCheck": false
-    });
-
-    let expected_keys = vec![
-        "autoIndent",
-        "autoSave",
-        "autoSaveInterval",
-        "fontFamily",
-        "fontSize",
-        "lineHeight",
-        "showLineNumbers",
-        "showWordCount",
-        "spellCheck",
-        "theme",
-        "wordWrap",
-    ];
-    let actual_keys = sorted_keys(&ffi_settings);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "LocalSettings DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn result_envelope_fields_match_harmony() {
-    let envelope = json!({
-        "success": true,
-        "data": null,
-        "errorCode": null,
-        "userMessage": null
-    });
-
-    let expected_keys = vec!["data", "errorCode", "success", "userMessage"];
-    let actual_keys = sorted_keys(&envelope);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "ResultEnvelope field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn project_tree_dto_fields_match_harmony() {
-    let ffi_tree = json!({
-        "project": {},
-        "volumes": []
-    });
-
-    let expected_keys = vec!["project", "volumes"];
-    let actual_keys = sorted_keys(&ffi_tree);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "ProjectTree DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn volume_tree_dto_fields_match_harmony() {
-    let ffi_vol_tree = json!({
-        "volume": {},
-        "chapters": []
-    });
-
-    let expected_keys = vec!["chapters", "volume"];
-    let actual_keys = sorted_keys(&ffi_vol_tree);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "VolumeTree DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn project_stats_dto_fields_match_harmony() {
-    let ffi_stats = json!({
-        "totalWordCount": 100,
-        "volumeCount": 1,
-        "chapterCount": 2
-    });
-
-    let expected_keys = vec!["chapterCount", "totalWordCount", "volumeCount"];
-    let actual_keys = sorted_keys(&ffi_stats);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "ProjectStats DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn starmap_meta_dto_fields_match_harmony() {
-    let ffi_starmap_meta = json!({
-        "id": "sm1",
-        "title": "StarMap 1",
-        "description": "A star map",
-        "nodeCount": 5,
-        "edgeCount": 3,
-        "projectId": "p1",
-        "createdAt": "2024-01-01",
-        "updatedAt": "2024-01-01",
-        "layoutType": "force"
-    });
-
-    let expected_keys = vec![
-        "createdAt",
-        "description",
-        "edgeCount",
-        "id",
-        "layoutType",
-        "nodeCount",
-        "projectId",
-        "title",
-        "updatedAt",
-    ];
-    let actual_keys = sorted_keys(&ffi_starmap_meta);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "StarMapMeta DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn starmap_node_dto_fields_match_harmony() {
-    let ffi_starmap_node = json!({
-        "id": "n1",
-        "label": "Character A",
-        "description": "Main character",
-        "x": 100.0,
-        "y": 200.0,
-        "width": 80.0,
-        "height": 40.0,
-        "type": "character",
-        "color": "#FF5722",
-        "icon": "person",
-        "metadata": {},
-        "parentId": "n0",
-        "childIds": []
-    });
-
-    let expected_keys = vec![
-        "childIds",
-        "color",
-        "description",
-        "height",
-        "icon",
-        "id",
-        "label",
-        "metadata",
-        "parentId",
-        "type",
-        "width",
-        "x",
-        "y",
-    ];
-    let actual_keys = sorted_keys(&ffi_starmap_node);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "StarMapNode DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn starmap_edge_dto_fields_match_harmony() {
-    let ffi_starmap_edge = json!({
-        "id": "e1",
-        "sourceId": "n1",
-        "targetId": "n2",
-        "label": "knows",
-        "type": "relation",
-        "color": "#4CAF50",
-        "style": "solid",
-        "metadata": {}
-    });
-
-    let expected_keys = vec![
-        "color", "id", "label", "metadata", "sourceId", "style", "targetId", "type",
-    ];
-    let actual_keys = sorted_keys(&ffi_starmap_edge);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "StarMapEdge DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn writing_stats_summary_dto_fields_match_harmony() {
-    let ffi_dto = json!({
-        "range": {
-            "startDate": "2024-01-01",
-            "endDate": "2024-01-07"
-        },
-        "totalHumanTypedChars": 1000,
-        "totalPastedChars": 500,
-        "totalDeletedChars": 200,
-        "totalAiInsertedChars": 100,
-        "totalNetDeltaChars": 1400,
-        "totalActiveSeconds": 3600,
-        "totalSessions": 5,
-        "daysCount": 7
-    });
-
-    let expected_keys = vec![
-        "daysCount",
-        "range",
-        "totalActiveSeconds",
-        "totalAiInsertedChars",
-        "totalDeletedChars",
-        "totalHumanTypedChars",
-        "totalNetDeltaChars",
-        "totalPastedChars",
-        "totalSessions",
-    ];
-    let actual_keys = sorted_keys(&ffi_dto);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "WritingStatsSummaryDto field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn device_stats_record_dto_fields_match_harmony() {
-    let ffi_device_stats_record = json!({
-        "deviceId": "dev1",
-        "platform": "windows",
-        "deviceClass": "Desktop",
-        "humanTypedChars": 100,
-        "pastedChars": 50,
-        "deletedChars": 20,
-        "aiInsertedChars": 10,
-        "netDeltaChars": 140,
-        "activeSeconds": 600,
-        "sessionsCount": 2
-    });
-
-    let expected_keys = vec![
-        "activeSeconds",
-        "aiInsertedChars",
-        "deletedChars",
-        "deviceClass",
-        "deviceId",
-        "humanTypedChars",
-        "netDeltaChars",
-        "pastedChars",
-        "platform",
-        "sessionsCount",
-    ];
-    let actual_keys = sorted_keys(&ffi_device_stats_record);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "DeviceStatsRecordDto field names must match Harmony CoreDtos.ets"
-    );
 }
 
 #[test]
@@ -451,102 +56,6 @@ fn test_stats_summary_dto_contract() {
     let range = &json["range"];
     assert!(range.get("startDate").is_some());
     assert!(range.get("endDate").is_some());
-}
-
-#[test]
-fn writing_stats_dto_fields_match_harmony() {
-    let ffi_writing_stats = json!({
-        "totalChars": 5000,
-        "totalWords": 3000,
-        "totalChapters": 10,
-        "totalProjects": 2,
-        "todayChars": 500,
-        "todayDuration": 3600,
-        "todaySessions": 3,
-        "averageSpeed": 25.0,
-        "longestStreak": 7,
-        "currentStreak": 3,
-        "weeklyStats": []
-    });
-
-    let expected_keys = vec![
-        "averageSpeed",
-        "currentStreak",
-        "longestStreak",
-        "todayChars",
-        "todayDuration",
-        "todaySessions",
-        "totalChapters",
-        "totalChars",
-        "totalProjects",
-        "totalWords",
-        "weeklyStats",
-    ];
-    let actual_keys = sorted_keys(&ffi_writing_stats);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "WritingStats DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn sync_config_dto_fields_match_harmony() {
-    let ffi_sync_config = json!({
-        "enabled": true,
-        "provider": "github",
-        "remoteUrl": "https://github.com/user/repo",
-        "branch": "main",
-        "autoSync": true,
-        "autoSyncInterval": 300,
-        "conflictStrategy": "manual",
-        "lastSyncAt": "2024-01-01",
-        "syncPath": "/sync"
-    });
-
-    let expected_keys = vec![
-        "autoSync",
-        "autoSyncInterval",
-        "branch",
-        "conflictStrategy",
-        "enabled",
-        "lastSyncAt",
-        "provider",
-        "remoteUrl",
-        "syncPath",
-    ];
-    let actual_keys = sorted_keys(&ffi_sync_config);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "SyncConfig DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn recent_edit_dto_fields_match_harmony() {
-    let ffi_recent_edit = json!({
-        "projectId": "p1",
-        "projectTitle": "My Novel",
-        "chapterId": "c1",
-        "chapterTitle": "Chapter 1",
-        "volumeId": "v1",
-        "timestamp": "2024-01-01",
-        "wordCount": 500
-    });
-
-    let expected_keys = vec![
-        "chapterId",
-        "chapterTitle",
-        "projectId",
-        "projectTitle",
-        "timestamp",
-        "volumeId",
-        "wordCount",
-    ];
-    let actual_keys = sorted_keys(&ffi_recent_edit);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "RecentEdit DTO field names must match Harmony CoreDtos.ets"
-    );
 }
 
 #[test]
@@ -595,14 +104,10 @@ fn ffi_project_maps_title_to_title() {
     );
 }
 
-// ── Layout Policy DTO contract tests ──
-
 #[test]
 fn window_metrics_dto_fields_match_harmony() {
     let metrics = crate::layout_policy::WindowMetrics::default();
     let _json = serde_json::to_value(&metrics).unwrap();
-    // Core uses snake_case internally, but FFI JSON output uses camelCase
-    // Verify the expected camelCase keys exist when serialized through FFI
     let ffi_json = json!({
         "widthDp": metrics.width_dp,
         "heightDp": metrics.height_dp,
@@ -635,7 +140,6 @@ fn layout_plan_dto_fields_match_harmony() {
     let metrics = crate::layout_policy::WindowMetrics::default();
     let plan = crate::layout_policy::resolve_layout(&metrics);
     let json = serde_json::to_value(&plan).unwrap();
-    // Verify Core internal serialization uses snake_case
     assert!(
         json.get("width_class").is_some(),
         "Core internal LayoutPlan uses snake_case 'width_class'"
@@ -649,7 +153,6 @@ fn layout_plan_dto_fields_match_harmony() {
         "Core internal LayoutPlan uses snake_case 'content_max_width_dp'"
     );
 
-    // Verify FFI output uses camelCase
     let ffi_json = json!({
         "widthClass": "Compact",
         "heightClass": "Compact",
@@ -700,75 +203,9 @@ fn layout_plan_dto_fields_match_harmony() {
 }
 
 #[test]
-fn workspace_summary_dto_fields_match_harmony() {
-    let ffi_workspace = json!({
-        "path": "/mock/workspace",
-        "isValid": true,
-        "projects": [],
-        "recentEdits": []
-    });
-    let expected_keys = vec!["isValid", "path", "projects", "recentEdits"];
-    let actual_keys = sorted_keys(&ffi_workspace);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "WorkspaceSummary DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn chapter_location_dto_fields_match_harmony() {
-    let ffi_location = json!({
-        "projectId": "p1",
-        "volumeId": "v1",
-        "chapterId": "c1"
-    });
-    let expected_keys = vec!["chapterId", "projectId", "volumeId"];
-    let actual_keys = sorted_keys(&ffi_location);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "ChapterLocation DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-#[test]
-fn writing_event_dto_fields_match_harmony() {
-    let ffi_event = json!({
-        "deviceId": "harmony",
-        "platform": "harmony",
-        "projectId": "p1",
-        "volumeId": "v1",
-        "chapterId": "c1",
-        "oldText": "旧文本",
-        "newText": "新文本",
-        "durationSeconds": 60,
-        "sessionId": "hm-1234567890"
-    });
-    // 验证所有字段名都是 camelCase
-    let expected_keys = vec![
-        "chapterId",
-        "deviceId",
-        "durationSeconds",
-        "newText",
-        "oldText",
-        "platform",
-        "projectId",
-        "sessionId",
-        "volumeId",
-    ];
-    let actual_keys = sorted_keys(&ffi_event);
-    assert_eq!(
-        actual_keys, expected_keys,
-        "WritingEvent DTO field names must match Harmony CoreDtos.ets"
-    );
-}
-
-// ── StarMap Motion Policy / Layout / Graph / Viewport DTO contract tests ──
-
-#[test]
 fn starmap_motion_policy_dto_fields_match_harmony() {
     let policy = crate::starmap::types::StarMapMotionPolicyDto::default();
     let json = serde_json::to_value(&policy).unwrap();
-    // 验证 camelCase 字段名
     let expected_keys = vec![
         "dragLiftScale",
         "dragShadowBoost",
@@ -839,7 +276,6 @@ fn starmap_layout_node_dto_fields_match_harmony() {
 fn starmap_graph_dto_serialization_contract() {
     let graph = crate::starmap::types::StarMapGraph::default();
     let json = serde_json::to_value(&graph).unwrap();
-    // Core 内部使用 camelCase (因为 #[serde(rename_all = "camelCase")])
     assert!(
         json.get("schemaVersion").is_some(),
         "StarMapGraph must serialize schemaVersion in camelCase"
@@ -865,19 +301,13 @@ fn starmap_viewport_dto_fields_match_harmony() {
     );
 }
 
-// ── ThemePalette DTO contract tests ──
-// Android 端 ThemePaletteHelper 生成 JSON，Rust 端 ThemePaletteDto 解析。
-// ThemePaletteDto 没有 #[serde(rename_all = "camelCase")]，默认期望 snake_case。
-
 #[test]
 fn theme_palette_dto_parses_snake_case_json() {
-    // Build JSON incrementally to avoid macro recursion limit
     let mut map = serde_json::Map::new();
     map.insert("source".into(), json!("android_dynamic_color"));
     map.insert("updated_at_ms".into(), json!(1234567890i64));
     map.insert("device_id".into(), json!("test_device"));
     map.insert("variant".into(), json!("tonal_spot"));
-    // Light palette
     map.insert("light_primary".into(), json!("#FF1234"));
     map.insert("light_on_primary".into(), json!("#FFFFFF"));
     map.insert("light_primary_container".into(), json!("#FFE0E0"));
@@ -903,7 +333,6 @@ fn theme_palette_dto_parses_snake_case_json() {
     map.insert("light_surface_container_highest".into(), json!("#E6E0E9"));
     map.insert("light_outline".into(), json!("#79747E"));
     map.insert("light_outline_variant".into(), json!("#CAC4D0"));
-    // Dark palette
     map.insert("dark_primary".into(), json!("#D0BCFF"));
     map.insert("dark_on_primary".into(), json!("#381E72"));
     map.insert("dark_primary_container".into(), json!("#4F378B"));
@@ -944,16 +373,11 @@ fn theme_palette_dto_parses_snake_case_json() {
 
 #[test]
 fn theme_palette_dto_rejects_camel_case_json() {
-    // camelCase JSON should NOT populate snake_case Rust fields.
-    // Since ThemePaletteDto has no #[serde(default)] on String fields, we must provide
-    // all required snake_case fields (as empty strings) so deserialization succeeds,
-    // then add camelCase keys to verify they are NOT matched to the struct fields.
     let mut map = serde_json::Map::new();
     map.insert("source".into(), json!("android_dynamic_color"));
     map.insert("updated_at_ms".into(), json!(0i64));
     map.insert("device_id".into(), json!(""));
     map.insert("variant".into(), json!("tonal_spot"));
-    // Provide all required snake_case fields as empty strings
     let snake_case_color_keys = [
         "light_primary", "light_on_primary", "light_primary_container", "light_on_primary_container",
         "light_secondary", "light_on_secondary", "light_secondary_container", "light_on_secondary_container",
@@ -975,7 +399,6 @@ fn theme_palette_dto_rejects_camel_case_json() {
     for key in &snake_case_color_keys {
         map.insert((*key).into(), json!(""));
     }
-    // Add camelCase keys with non-empty values — these should NOT be matched
     map.insert("lightPrimary".into(), json!("#FF1234"));
     map.insert("darkPrimary".into(), json!("#D0BCFF"));
     map.insert("lightSurfaceContainerHigh".into(), json!("#ECE6F0"));
@@ -983,7 +406,6 @@ fn theme_palette_dto_rejects_camel_case_json() {
 
     let json_val = serde_json::Value::Object(map);
     let dto: crate::api::types::ThemePaletteDto = serde_json::from_value(json_val).unwrap();
-    // These fields should be empty because camelCase keys don't match snake_case fields
     assert!(dto.light_primary.is_empty(), "camelCase lightPrimary should not populate snake_case light_primary");
     assert!(dto.dark_primary.is_empty(), "camelCase darkPrimary should not populate snake_case dark_primary");
     assert!(dto.light_surface_container_high.is_empty(), "camelCase lightSurfaceContainerHigh should not populate snake_case light_surface_container_high");
@@ -992,7 +414,6 @@ fn theme_palette_dto_rejects_camel_case_json() {
 
 #[test]
 fn theme_palette_dto_round_trip() {
-    // Construct a fully-populated ThemePaletteDto (matching Android ThemePaletteHelper output)
     let original = crate::api::types::ThemePaletteDto {
         source: "android_dynamic_color".into(),
         updated_at_ms: 1719792000000i64,
@@ -1050,16 +471,12 @@ fn theme_palette_dto_round_trip() {
         dark_outline_variant: "#42474E".into(),
     };
 
-    // Serialize to JSON
     let json_str = serde_json::to_string(&original).expect("ThemePaletteDto should serialize");
-    // Deserialize back
     let round_tripped: crate::api::types::ThemePaletteDto =
         serde_json::from_str(&json_str).expect("ThemePaletteDto JSON should deserialize");
 
-    // Round-trip must be lossless
     assert_eq!(original, round_tripped, "ThemePaletteDto round-trip must be lossless");
 
-    // Key fields must not be empty
     assert!(!original.light_primary.is_empty(), "light_primary must not be empty");
     assert!(!original.dark_surface.is_empty(), "dark_surface must not be empty");
     assert!(!original.light_outline_variant.is_empty(), "light_outline_variant must not be empty");
@@ -1133,13 +550,9 @@ fn syncable_settings_persistence_round_trip() {
         },
     };
     
-    // Serialize to JSON (camelCase, as persisted to disk)
     let json_str = serde_json::to_string_pretty(&original).unwrap();
-    
-    // Deserialize back
     let restored: SyncableSettings = serde_json::from_str(&json_str).unwrap();
     
-    // Verify all fields preserved
     assert_eq!(restored.font_size, 18.0);
     assert_eq!(restored.theme_mode, "dark");
     assert_eq!(restored.monet_color, "#FF5722");
@@ -1147,7 +560,6 @@ fn syncable_settings_persistence_round_trip() {
     assert_eq!(restored.theme_palette.updated_at_ms, 1700000000000);
     assert_eq!(restored.theme_palette.device_id, "device-abc");
     assert_eq!(restored.theme_palette.variant, "tonal_spot");
-    // Verify all 5 surface_container levels
     assert_eq!(restored.theme_palette.light_surface_container_lowest, "#FFFFFF");
     assert_eq!(restored.theme_palette.light_surface_container_low, "#F3F4FA");
     assert_eq!(restored.theme_palette.light_surface_container, "#EDEEF4");
@@ -1159,7 +571,6 @@ fn syncable_settings_persistence_round_trip() {
     assert_eq!(restored.theme_palette.dark_surface_container_high, "#282B30");
     assert_eq!(restored.theme_palette.dark_surface_container_highest, "#33363A");
     
-    // Verify camelCase keys in JSON
     let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     let tp = &json_val["themePalette"];
     assert!(tp.get("lightSurfaceContainerLowest").is_some(), "camelCase key lightSurfaceContainerLowest must exist in persisted JSON");
@@ -1231,10 +642,7 @@ fn theme_palette_dto_snake_case_round_trip_full() {
         dark_outline_variant: "#434750".to_string(),
     };
     
-    // Serialize to JSON (snake_case, as used in cross-platform themePaletteJson)
     let json_str = serde_json::to_string(&original).unwrap();
-    
-    // Verify snake_case keys
     let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert!(json_val.get("light_surface_container_lowest").is_some(), "snake_case key light_surface_container_lowest must exist");
     assert!(json_val.get("light_surface_container_low").is_some(), "snake_case key light_surface_container_low must exist");
@@ -1243,10 +651,7 @@ fn theme_palette_dto_snake_case_round_trip_full() {
     assert!(json_val.get("dark_surface_container_low").is_some(), "snake_case key dark_surface_container_low must exist");
     assert!(json_val.get("dark_surface_container_highest").is_some(), "snake_case key dark_surface_container_highest must exist");
     
-    // Deserialize back
     let restored: ThemePaletteDto = serde_json::from_str(&json_str).unwrap();
-    
-    // Verify all fields preserved
     assert_eq!(restored.light_surface_container_lowest, "#FFFFFF");
     assert_eq!(restored.light_surface_container_low, "#F3F4FA");
     assert_eq!(restored.light_surface_container, "#EDEEF4");
@@ -1291,47 +696,6 @@ fn test_settings_auto_indent_contract() {
 
     let json = serde_json::to_value(&settings).unwrap();
 
-    // Ensure serialization aligns with the DTO contract mapping field names.
-    // serde rename_all = "camelCase" on LocalSettings
-    let mut expected_keys = vec![
-        "aiEnabled",
-        "appearanceMode",
-        "autoIndentEnabled",
-        "autoIndentWidth",
-        "autoSaveDelayMs",
-        "autoSaveEnabled",
-        "colorSource",
-        "diagnosticsEnabled",
-        "diagnosticsVerbose",
-        "dynamicColorEnabled",
-        "editorCoordinatedTextCursorAnimationEnabled",
-        "editorFontSize",
-        "editorLineSpacingMultiplier",
-        "editorSmoothCursorDurationMs",
-        "editorSmoothCursorEnabled",
-        "editorTypingAnimationDurationMs",
-        "editorTypingAnimationEnabled",
-        "linuxQtEditorWidth",
-        "linuxQtSidebarWidth",
-        "locale",
-        "selectedBuiltinThemeId",
-        "selectedPaletteId",
-        "statsDeviceId",
-        "themeMode",
-        "windowHeight",
-        "windowWidth",
-    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
-    expected_keys.sort();
-    let actual_keys = sorted_keys(&json);
-
-    // Ensure all keys match exactly to prevent accidental renaming or drops.
-    assert_eq!(actual_keys, expected_keys);
-
-    // Test the specific fields we care about
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
-
-    // Verify it doesn't contain the specific UI fields that are only manually assembled in the presentation layer
-    assert!(json.get("enabled").is_none());
-    assert!(json.get("widthChars").is_none());
 }

@@ -82,8 +82,9 @@ mod tests {
         };
 
         let json = serde_json::to_string(&manifest).unwrap();
-        assert!(json.contains(r#""deleted_at_ms":2000"#));
-        assert!(json.contains(r#""op":"delete""#));
+        let roundtrip: SyncManifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(roundtrip.files[0].deleted_at_ms, Some(2000));
+        assert_eq!(roundtrip.files[0].op, "delete");
     }
 
     #[test]

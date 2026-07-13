@@ -9,28 +9,6 @@ mod tests {
     use writer_core::editor::CursorRect;
 
     #[test]
-    fn meta_object_dump_contains_animation_signals() {
-        let item_box = QObjectBox::new(SujianEditorItem::default());
-        item_box.pinned().get_or_create_cpp_object();
-        let dump = {
-            let pinned = item_box.pinned();
-            let item = pinned.borrow();
-            item.debug_meta_object_animation_signals().to_string()
-        };
-        eprintln!("[sujian-test] SujianEditorItem metaObject animation signals: {dump}");
-        assert!(dump.contains("visual_transaction_changed"), "missing visual_transaction_changed in {dump}");
-        assert!(dump.contains("preedit_visual_transaction_changed"), "missing preedit_visual_transaction_changed in {dump}");
-        assert!(dump.contains("transaction_created"), "missing transaction_created in {dump}");
-        assert!(dump.contains("explicit_clear_requested"), "missing explicit_clear_requested in {dump}");
-        let verified = {
-            let pinned = item_box.pinned();
-            let item = pinned.borrow();
-            item.verify_animation_signal_meta_object()
-        };
-        assert!(verified, "hard metaObject verification failed for {dump}");
-    }
-
-    #[test]
     fn test_is_complex_grapheme_emoji() {
         assert!(is_complex_grapheme('😀'));
     }
@@ -600,7 +578,7 @@ mod tests {
         assert_eq!(queue.insert_byte_ranges(), vec![(10, 22)]);
 
         let removed = queue.complete(key);
-        assert!(removed);
+        assert!(removed.is_some());
         assert!(queue.is_empty());
         assert!(queue.insert_byte_ranges().is_empty());
 
@@ -634,7 +612,7 @@ mod tests {
             new_snapshot: None,
         });
         let removed_wrong = queue.complete(VisualTransactionKey { transaction_id: 999, generation: 1 });
-        assert!(!removed_wrong);
+        assert!(removed_wrong.is_none());
         assert!(queue.has_active_insert());
         assert_eq!(queue.insert_byte_ranges(), vec![(30, 42)]);
 
