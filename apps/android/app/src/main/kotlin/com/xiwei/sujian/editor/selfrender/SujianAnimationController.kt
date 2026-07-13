@@ -459,6 +459,7 @@ class SujianAnimationController(
             return TextAnimationStartResult.Skipped
         }
 
+        val oldRevision = snapshotBuilder.currentCommittedRevision()
         val newRevision = snapshotBuilder.allocateNextRevision()
         val text = buffer.text
 
@@ -701,7 +702,7 @@ class SujianAnimationController(
             operationKind = AndroidVisualOperationKind.Delete,
             animationMode = vt.animationMode,
             durationMs = vt.durationMs,
-            oldRevision = newRevision - 1,
+            oldRevision = oldRevision,
             newRevision = newRevision,
             slices = slices,
             oldLineSnapshots = expandedOldSnapshots.toMutableList(),

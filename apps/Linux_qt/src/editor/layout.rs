@@ -2516,28 +2516,27 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     let available = (width - padding * 2.0).max(font_size);
 
     let mut affected_para_indices: Vec<usize> = Vec::new();
+    let paragraphs_split: Vec<&str> = text.split_inclusive('\n').collect();
+    let total_paras = paragraphs_split.len();
     let mut para_start: usize = 0;
-    let mut para_idx: usize = 0;
-    for paragraph in text.split_inclusive('\n') {
+    for (para_idx, paragraph) in paragraphs_split.iter().enumerate() {
         let para_end = para_start + paragraph.len();
         if para_start < affected_byte_end && para_end > affected_byte_start {
             affected_para_indices.push(para_idx);
-        }
-        if para_idx > 0 && !affected_para_indices.contains(&(para_idx - 1)) {
-            if para_start < affected_byte_end && para_end > affected_byte_start {
+            if para_idx > 0 && !affected_para_indices.contains(&(para_idx - 1)) {
                 affected_para_indices.push(para_idx - 1);
             }
         }
-        if para_idx + 1 < text.split_inclusive('\n').count() {
+        if para_idx + 1 < total_paras {
             let next_para_start = para_end;
-            if next_para_start < affected_byte_end && next_para_start + text.split_inclusive('\n').nth(para_idx + 1).map_or(0, |p| p.len()) > affected_byte_start {
+            let next_para_len = paragraphs_split[para_idx + 1].len();
+            if next_para_start < affected_byte_end && next_para_start + next_para_len > affected_byte_start {
                 if !affected_para_indices.contains(&(para_idx + 1)) {
                     affected_para_indices.push(para_idx + 1);
                 }
             }
         }
         para_start = para_end;
-        para_idx += 1;
     }
 
     if affected_para_indices.is_empty() {
@@ -2654,8 +2653,6 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             });
             line_id += 1;
             y += line_height;
-            paragraph_start += paragraph.len();
-            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
 
             paragraphs.push(CanonicalParagraphSnapshot {
                 paragraph_text: String::new(),
@@ -2663,6 +2660,9 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 lines: Vec::new(),
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", paragraph_start),
             });
+
+            paragraph_start += paragraph.len();
+            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
             current_para_idx += 1;
             continue;
         }

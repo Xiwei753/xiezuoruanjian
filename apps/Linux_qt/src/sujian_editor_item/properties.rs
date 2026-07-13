@@ -29,6 +29,7 @@ impl SujianEditorItem {
         self.buffer.selection_anchor = 0;
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
+        self.previous_canonical_snapshot = None;
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -57,6 +58,7 @@ impl SujianEditorItem {
         self.buffer.selection_anchor = clamp_to_char_boundary(&self.buffer.text, old_anchor);
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
+        self.previous_canonical_snapshot = None;
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.preedit_text.clear();
         self.preedit_cursor = 0;
