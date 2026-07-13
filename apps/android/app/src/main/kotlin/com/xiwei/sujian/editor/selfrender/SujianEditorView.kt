@@ -144,7 +144,7 @@ class SujianEditorView @JvmOverloads constructor(
         applyThemeColors()
     }
 
-    // ── 视觉事务提供者（Phase 2） ──
+    // ── 视觉事务提供者 ──
     internal var visualTransactionProvider: com.xiwei.sujian.ui.VisualTransactionProvider? = null
 
     /**

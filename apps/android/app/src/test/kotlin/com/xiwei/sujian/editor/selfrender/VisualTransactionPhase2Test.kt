@@ -12,7 +12,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * 视觉事务收敛 Phase 2 单元测试
+ * 视觉事务单元测试
  *
  * 覆盖：
  * 1. runVisualEdit 快照捕获（oldCursorRect / newCursorRect）

@@ -25,7 +25,7 @@ enum class AnimationModeData {
     SystemSuppressed
 }
 
-// ── Visual Transaction 数据模型 (Phase 2) ──
+// ── Visual Transaction 数据模型 ──
 
 /**
  * 编辑原因枚举，与 Core EditorTransactionCauseDto 对齐。

@@ -323,7 +323,7 @@ pub enum VisualCoordinateMode {
 /// coordinate_mode 固定为 Baseline：所有 y 坐标使用 baselineY，
 /// 不使用 top+height 拼接 baseline。
 ///
-/// 这是 `EditorAnimationEvent` 的替代方案（Phase 1 视觉事务收敛）。
+/// 这是 `EditorAnimationEvent` 的替代方案。
 /// 旧 API `animation_events()` 返回多个事件（Insert + Cursor 等），
 /// 新 API `visual_transaction()` 返回单个统一事务，平台层自行决定
 /// 如何渲染动画和光标移动。

@@ -40,7 +40,7 @@ Rust Core EditorTransaction
 | `apps/Linux_qt/src/sujian_editor_item/cursor_controller.rs` | 光标控制 |
 | `apps/Linux_qt/src/sujian_editor_item/buffer.rs` | 渲染缓冲 |
 | `apps/Linux_qt/src/sujian_editor_item/animation_coordinator.rs` | 动画协调器，生成 RenderPlan |
-| `apps/Linux_qt/src/sujian_editor_item/animated_slice.rs` | 统一 AnimatedSlice 数据模型（Insert/Delete/Move/CrossfadeOld/CrossfadeNew/SnapshotOld/SnapshotNew） |
+| `apps/Linux_qt/src/sujian_editor_item/animated_slice.rs` | 统一 AnimatedSlice 数据模型（InsertFadeIn/DeleteFadeOut/ReflowMove/ReflowCrossFade） |
 | `apps/Linux_qt/src/sujian_editor_item/render_plan.rs` | 渲染计划，驱动 Scene Graph 更新 |
 | `apps/Linux_qt/src/editor/layout.rs` | QTextLayout 排版封装 |
 | `apps/Linux_qt/src/editor/renderer.rs` | 渲染器 |
