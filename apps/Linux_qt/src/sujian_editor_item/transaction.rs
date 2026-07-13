@@ -49,22 +49,22 @@ impl SujianEditorItem {
                 let (affected_byte_start, affected_byte_end) = vt.inserted_range
                     .unwrap_or_else(|| {
                         let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
-                        let mut min_b = 0usize;
+                        let mut min_b = usize::MAX;
                         let mut max_b = 0usize;
                         for change in &changes {
                             match change {
                                 writer_core::editor::EditorChange::Insert { index, text } => {
-                                    if min_b == 0 && max_b == 0 { min_b = *index; }
+                                    min_b = min_b.min(*index);
                                     max_b = (*index + text.len()).max(max_b);
                                 }
                                 writer_core::editor::EditorChange::Delete { index, text } => {
-                                    if min_b == 0 && max_b == 0 { min_b = *index; }
+                                    min_b = min_b.min(*index);
                                     max_b = (*index + text.len()).max(max_b);
                                 }
                                 _ => {}
                             }
                         }
-                        (min_b, max_b)
+                        (min_b.min(max_b), max_b)
                     });
 
                 let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();

@@ -2381,8 +2381,6 @@ pub fn prepare_document_visual_snapshot(
             });
             line_id += 1;
             y += line_height;
-            paragraph_start += paragraph.len();
-            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
 
             paragraphs.push(CanonicalParagraphSnapshot {
                 paragraph_text: String::new(),
@@ -2390,6 +2388,9 @@ pub fn prepare_document_visual_snapshot(
                 lines: Vec::new(),
                 index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", paragraph_start),
             });
+
+            paragraph_start += paragraph.len();
+            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
             continue;
         }
 
