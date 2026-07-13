@@ -2523,18 +2523,14 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     for (para_idx, paragraph) in paragraphs_split.iter().enumerate() {
         let para_end = para_start + paragraph.len();
         if para_start < affected_byte_end && para_end > affected_byte_start {
-            affected_para_indices.push(para_idx);
+            if !affected_para_indices.contains(&para_idx) {
+                affected_para_indices.push(para_idx);
+            }
             if para_idx > 0 && !affected_para_indices.contains(&(para_idx - 1)) {
                 affected_para_indices.push(para_idx - 1);
             }
-        }
-        if para_idx + 1 < total_paras {
-            let next_para_start = para_end;
-            let next_para_len = paragraphs_split[para_idx + 1].len();
-            if next_para_start < affected_byte_end && next_para_start + next_para_len > affected_byte_start {
-                if !affected_para_indices.contains(&(para_idx + 1)) {
-                    affected_para_indices.push(para_idx + 1);
-                }
+            if para_idx + 1 < total_paras && !affected_para_indices.contains(&(para_idx + 1)) {
+                affected_para_indices.push(para_idx + 1);
             }
         }
         para_start = para_end;
@@ -2559,14 +2555,21 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         let is_affected = affected_para_indices.contains(&current_para_idx);
 
         if !is_affected {
+            let mut reused_from_prev = false;
             if let Some(prev) = previous_snapshot {
-                let prev_para = prev.paragraphs.iter().find(|p| {
-                    p.paragraph_document_byte_start == paragraph_start
+                let prev_para_idx = prev.paragraphs.iter().position(|p| {
+                    p.paragraph_text == paragraph_text
                 });
-                let prev_lines: Vec<VisualLine> = prev.visual_lines.iter()
-                    .filter(|l| l.para_start == paragraph_start)
-                    .cloned()
-                    .collect();
+                let prev_lines: Vec<VisualLine> = if let Some(pidx) = prev_para_idx {
+                    let prev_p = &prev.paragraphs[pidx];
+                    let prev_para_byte_start = prev_p.paragraph_document_byte_start;
+                    prev.visual_lines.iter()
+                        .filter(|l| l.para_start == prev_para_byte_start)
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
 
                 if !prev_lines.is_empty() {
                     if let Some(first_prev) = prev_lines.first() {
@@ -2577,10 +2580,27 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                             visual_lines.push(vl);
                             line_id += 1;
                         }
-                    } else {
-                        y += line_height;
+                        if let Some(last_vl) = visual_lines.last() {
+                            y = last_vl.y + last_vl.height;
+                        }
+                        reused_from_prev = true;
                     }
-                } else if paragraph_text.is_empty() {
+                }
+
+                if let Some(pidx) = prev_para_idx {
+                    paragraphs.push(prev.paragraphs[pidx].clone());
+                } else {
+                    paragraphs.push(CanonicalParagraphSnapshot {
+                        paragraph_text: paragraph_text.to_string(),
+                        paragraph_document_byte_start: paragraph_start,
+                        lines: Vec::new(),
+                        index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(paragraph_text, paragraph_start),
+                    });
+                }
+            }
+
+            if !reused_from_prev {
+                if paragraph_text.is_empty() {
                     visual_lines.push(VisualLine {
                         id: line_id,
                         byte_start: paragraph_start,
@@ -2606,24 +2626,59 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                     });
                     line_id += 1;
                     y += line_height;
-                }
-
-                if let Some(prev_p) = prev_para {
-                    paragraphs.push(prev_p.clone());
                 } else {
-                    paragraphs.push(CanonicalParagraphSnapshot {
-                        paragraph_text: paragraph_text.to_string(),
-                        paragraph_document_byte_start: paragraph_start,
-                        lines: Vec::new(),
-                        index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(paragraph_text, paragraph_start),
-                    });
+                    let canonical = prepare_paragraph_visual_snapshot(
+                        paragraph_text,
+                        paragraph_start,
+                        font_size,
+                        font_family,
+                        available,
+                        indent,
+                        dpr,
+                        text_color,
+                    );
+                    for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
+                        let qt_metrics_h = canonical_line.ascent + canonical_line.descent;
+                        let actual_line_h = if qt_metrics_h > 0.0 {
+                            line_height.max(qt_metrics_h)
+                        } else {
+                            line_height
+                        };
+                        let is_first = line_idx == 0;
+                        visual_lines.push(VisualLine {
+                            id: line_id,
+                            byte_start: canonical_line.document_byte_start,
+                            byte_end: canonical_line.document_byte_end,
+                            qchar_start: canonical_line.qchar_start + paragraph_qchar_start,
+                            qchar_end: canonical_line.qchar_end + paragraph_qchar_start,
+                            hard_break: hard_break && line_idx == canonical.lines.len() - 1,
+                            x: padding + canonical_line.x_pos,
+                            y,
+                            width: canonical_line.width,
+                            height: actual_line_h,
+                            para_text: paragraph_text.to_string(),
+                            para_start: paragraph_start,
+                            qtextline_idx: line_idx as i32,
+                            para_qchar_start: canonical_line.qchar_start,
+                            para_qchar_end: canonical_line.qchar_end,
+                            line_wrap_width: if is_first { available - indent } else { available },
+                            line_indent_x: if is_first { indent } else { 0.0 },
+                            para_indent: indent,
+                            x_end_trailing: canonical_line.x_end_trailing,
+                            qt_ascent: canonical_line.ascent,
+                            qt_descent: canonical_line.descent,
+                        });
+                        line_id += 1;
+                        y += actual_line_h;
+                    }
+                    paragraphs.push(canonical);
                 }
-
-                paragraph_start += paragraph.len();
-                paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
-                current_para_idx += 1;
-                continue;
             }
+
+            paragraph_start += paragraph.len();
+            paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            current_para_idx += 1;
+            continue;
         }
 
         if paragraph_text.is_empty() {
