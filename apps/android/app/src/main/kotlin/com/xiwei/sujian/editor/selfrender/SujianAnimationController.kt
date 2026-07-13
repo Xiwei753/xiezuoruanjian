@@ -480,8 +480,8 @@ class SujianAnimationController(
             if (affectedLineIndices.isEmpty()) {
                 emptyList()
             } else {
-                val minLine = affectedLineIndices.minOrNull() ?: 0
-                val maxLine = affectedLineIndices.maxOrNull() ?: 0
+                val minLine = affectedLineIndices.minOrNull()!!
+                val maxLine = affectedLineIndices.maxOrNull()!!
                 val preliminaryNewSnapshots = snapshotBuilder.buildLineSnapshots(
                     text, minLine..maxLine, newRevision, renderer.getTextColor()
                 )
