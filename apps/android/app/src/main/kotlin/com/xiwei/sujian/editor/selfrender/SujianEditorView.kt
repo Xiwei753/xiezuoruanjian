@@ -187,11 +187,14 @@ class SujianEditorView @JvmOverloads constructor(
 
         val oldLineSnapshots = if (cause == SujianEditCauseData.Delete && oldText.isNotEmpty()) {
             val staticLayout = layoutEngine.getLayout(oldText)
-            val cursorLine = staticLayout.getLineForOffset(oldSelection.head.coerceIn(0, oldText.length))
-            val startLine = (cursorLine - 1).coerceAtLeast(0)
-            val paragraphEndLine = findParagraphEndLine(oldText, staticLayout, cursorLine)
-            val endLine = (cursorLine + paragraphEndLine).coerceAtMost(staticLayout.lineCount - 1)
-            snapshotBuilder.buildLineSnapshots(oldText, startLine..endLine, snapshotBuilder.currentRevision(), renderer.getTextColor())
+            val selStart = oldSelection.start.coerceIn(0, oldText.length)
+            val selEnd = oldSelection.end.coerceIn(0, oldText.length)
+            val startLine = staticLayout.getLineForOffset(selStart.coerceIn(0, oldText.length))
+            val endLine = staticLayout.getLineForOffset(selEnd.coerceIn(0, oldText.length))
+            val paragraphEndLine = findParagraphEndLine(oldText, staticLayout, endLine)
+            val snapshotEndLine = (endLine + paragraphEndLine).coerceAtMost(staticLayout.lineCount - 1)
+            val snapshotStartLine = (startLine - 1).coerceAtLeast(0)
+            snapshotBuilder.buildLineSnapshots(oldText, snapshotStartLine..snapshotEndLine, snapshotBuilder.currentCommittedRevision(), renderer.getTextColor())
         } else {
             emptyList()
         }

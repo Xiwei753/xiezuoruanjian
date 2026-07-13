@@ -148,7 +148,8 @@ class SujianAnimationController(
             isDelete = false
         )
 
-        val oldRevision = snapshotBuilder.currentRevision()
+        val oldRevision = snapshotBuilder.currentCommittedRevision()
+        val newRevision = snapshotBuilder.allocateNextRevision()
         val oldText = vt.oldText
         val staticLayout = layout.getLayout(text)
         val insertLine = staticLayout.getLineForOffset(rangeStartUtf16.coerceIn(0, text.length))
@@ -167,7 +168,7 @@ class SujianAnimationController(
         }
 
         val preliminaryNewLineSnapshots = snapshotBuilder.buildLineSnapshots(
-            text, preliminaryRange, oldRevision, renderer.getTextColor()
+            text, preliminaryRange, newRevision, renderer.getTextColor()
         )
 
         val oldLayout = if (oldText.isNotEmpty()) layout.getLayout(oldText) else null
@@ -191,16 +192,15 @@ class SujianAnimationController(
             }
             oldLineSnapshots = ol
             newLineSnapshots = snapshotBuilder.buildLineSnapshots(
-                text, affectedLineRange, oldRevision, renderer.getTextColor()
+                text, affectedLineRange, newRevision, renderer.getTextColor()
             )
         } else {
             oldLineSnapshots = preliminaryOldLineSnapshots
             newLineSnapshots = preliminaryNewLineSnapshots
         }
 
-        val newRevision = snapshotBuilder.nextRevisionAndIncrement()
-
         if (newLineSnapshots.isEmpty()) {
+            snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
 
@@ -412,9 +412,11 @@ class SujianAnimationController(
         )
 
         if (!renderer.addTransaction(tx)) {
+            snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
 
+        snapshotBuilder.commitRevision(newRevision)
         return TextAnimationStartResult.Started
     }
 
@@ -457,7 +459,7 @@ class SujianAnimationController(
             return TextAnimationStartResult.Skipped
         }
 
-        val newRevision = snapshotBuilder.nextRevisionAndIncrement()
+        val newRevision = snapshotBuilder.allocateNextRevision()
         val text = buffer.text
 
         val offsetMap = EditOffsetMap.fromEdit(
@@ -530,7 +532,7 @@ class SujianAnimationController(
                 val expandEnd = (oldLayout.getLineForOffset(utf16End) + 1).coerceAtMost(oldLayout.lineCount - 1)
                 val expandedSnapshots = snapshotBuilder.buildLineSnapshots(
                     vt.oldText, expandStart..expandEnd,
-                    snapshotBuilder.currentRevision(), renderer.getTextColor()
+                    snapshotBuilder.currentCommittedRevision(), renderer.getTextColor()
                 )
                 val mergedSnapshots = mutableListOf<AndroidLineSnapshot>()
                 mergedSnapshots.addAll(expandedOldSnapshots)
@@ -709,9 +711,11 @@ class SujianAnimationController(
         )
 
         if (!renderer.addTransaction(tx)) {
+            snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
 
+        snapshotBuilder.commitRevision(newRevision)
         return TextAnimationStartResult.Started
     }
 
@@ -744,10 +748,9 @@ class SujianAnimationController(
     /**
      * 计算受影响行范围，扩展到稳定后缀。
      *
-     * 不再使用固定 insertLine + 10 限制。从编辑点向后比较 old/new cluster 映射，
-     * 直到出现稳定后缀（连续若干 cluster 的映射 byte range 一致、
-     * shaping identity 一致、visual line 后续断行边界一致）。
-     * 若一直不稳定，处理到受影响段落结束。
+     * 从编辑点向后逐行比较 old/new cluster 映射和 shaping identity，
+     * 直到出现稳定后缀（连续若干行映射一致、shaping identity 一致、断行边界一致）。
+     * 不会扩展到整个章节末尾：不稳定时只扩展到受影响段落及因换行合并/拆分关联的相邻段落。
      */
     private fun computeStableSuffixRange(
         insertLine: Int,
@@ -755,21 +758,34 @@ class SujianAnimationController(
         staticLayout: android.text.Layout,
         offsetMap: EditOffsetMap,
         oldText: String,
-        oldLineSnapshots: List<AndroidLineSnapshot>,
-        newLineSnapshots: List<AndroidLineSnapshot>,
+        preliminaryOldLineSnapshots: List<AndroidLineSnapshot>,
+        preliminaryNewLineSnapshots: List<AndroidLineSnapshot>,
         oldLayout: android.text.Layout
     ): IntRange {
         val startLine = insertLine
         val lastLine = staticLayout.lineCount - 1
+
+        val affectedParagraphEndLine = findAffectedParagraphEndLine(staticLayout, endLine)
 
         var candidateEnd = endLine
         val stableConsecutiveNeeded = 2
         var stableConsecutive = 0
 
         while (candidateEnd < lastLine && stableConsecutive < stableConsecutiveNeeded) {
-            val isStable = isLineStableSuffix(
+            if (candidateEnd > affectedParagraphEndLine + 1) {
+                break
+            }
+
+            val oldLineSnapshot = if (candidateEnd < preliminaryOldLineSnapshots.size + startLine) {
+                preliminaryOldLineSnapshots.getOrNull(candidateEnd - startLine)
+            } else null
+            val newLineSnapshot = if (candidateEnd < preliminaryNewLineSnapshots.size + startLine) {
+                preliminaryNewLineSnapshots.getOrNull(candidateEnd - startLine)
+            } else null
+
+            val isStable = isLineStableSuffixWithSnapshots(
                 candidateEnd, staticLayout, offsetMap, oldText,
-                oldLineSnapshots, newLineSnapshots, oldLayout
+                oldLineSnapshot, newLineSnapshot, oldLayout
             )
             if (isStable) {
                 stableConsecutive++
@@ -782,10 +798,85 @@ class SujianAnimationController(
         if (stableConsecutive >= stableConsecutiveNeeded) {
             candidateEnd = (candidateEnd - stableConsecutiveNeeded).coerceAtLeast(endLine)
         } else {
-            candidateEnd = lastLine
+            candidateEnd = affectedParagraphEndLine.coerceAtMost(lastLine)
         }
 
         return startLine..candidateEnd.coerceAtMost(lastLine)
+    }
+
+    private fun findAffectedParagraphEndLine(
+        staticLayout: android.text.Layout,
+        startFromLine: Int
+    ): Int {
+        var endLine = startFromLine
+        val totalLines = staticLayout.lineCount
+        val text = staticLayout.text.toString()
+        while (endLine < totalLines - 1) {
+            val lineEnd = staticLayout.getLineEnd(endLine)
+            if (lineEnd > 0 && lineEnd <= text.length && text[lineEnd - 1] == '\n') {
+                break
+            }
+            endLine++
+        }
+        return (endLine + 1).coerceAtMost(totalLines - 1)
+    }
+
+    private fun isLineStableSuffixWithSnapshots(
+        lineIdx: Int,
+        staticLayout: android.text.Layout,
+        offsetMap: EditOffsetMap,
+        oldText: String,
+        oldLineSnapshot: AndroidLineSnapshot?,
+        newLineSnapshot: AndroidLineSnapshot?,
+        oldLayout: android.text.Layout?
+    ): Boolean {
+        if (lineIdx < 0 || lineIdx >= staticLayout.lineCount) return true
+        if (oldText.isEmpty()) return false
+
+        val lineStart = staticLayout.getLineStart(lineIdx)
+        val lineEnd = staticLayout.getLineEnd(lineIdx)
+        if (lineStart >= lineEnd) return true
+
+        val byteStart = SujianEditorBuffer.utf16ToUtf8(staticLayout.text.toString(), lineStart)
+        val byteEnd = SujianEditorBuffer.utf16ToUtf8(staticLayout.text.toString(), lineEnd.coerceAtMost(staticLayout.text.length))
+
+        val oldRange = offsetMap.mapNewRangeToOld(byteStart, byteEnd)
+        if (oldRange == null) return false
+
+        val oldByteEnd = SujianEditorBuffer.utf16ToUtf8(oldText, oldText.length)
+        if (oldRange.end > oldByteEnd) return false
+
+        if (oldLineSnapshot != null && newLineSnapshot != null) {
+            val newClusters = newLineSnapshot.clusters.filter {
+                it.documentByteStart >= byteStart && it.documentByteEnd <= byteEnd
+            }
+            val oldClusters = oldLineSnapshot.clusters.filter {
+                it.documentByteStart >= oldRange.start && it.documentByteEnd <= oldRange.end
+            }
+
+            for (newCluster in newClusters) {
+                val mappedOld = offsetMap.mapNewRangeToOld(newCluster.documentByteStart, newCluster.documentByteEnd)
+                if (mappedOld == null) return false
+                val matchingOld = oldClusters.find {
+                    it.documentByteStart == mappedOld.start && it.documentByteEnd == mappedOld.end
+                }
+                if (matchingOld == null) return false
+                if (matchingOld.shapingIdentity != newCluster.shapingIdentity) return false
+            }
+
+            val nextLineIdx = lineIdx + 1
+            if (nextLineIdx < staticLayout.lineCount && oldLayout != null) {
+                val nextLineStart = staticLayout.getLineStart(nextLineIdx)
+                val nextByteStart = SujianEditorBuffer.utf16ToUtf8(staticLayout.text.toString(), nextLineStart)
+                val nextOldRange = offsetMap.mapNewRangeToOld(nextByteStart, nextByteStart + 1)
+                if (nextOldRange == null) return false
+                val oldNextUtf16 = SujianEditorBuffer.utf8ToUtf16(oldText, nextOldRange.start)
+                val oldNextLine = oldLayout.getLineForOffset(oldNextUtf16.coerceIn(0, oldText.length))
+                if (oldNextLine != nextLineIdx) return false
+            }
+        }
+
+        return true
     }
 
     private fun isLineStableSuffix(
@@ -929,6 +1020,7 @@ class SujianAnimationController(
 
     /**
      * 扩展到稳定后缀（删除场景）。
+     * 不扩展到整个章节末尾：不稳定时只扩展到受影响段落及因换行合并/拆分关联的相邻段落。
      */
     private fun expandToStableSuffix(
         startLine: Int,
@@ -940,11 +1032,17 @@ class SujianAnimationController(
         oldLayout: android.text.Layout
     ): Int {
         val lastLine = staticLayout.lineCount - 1
+        val affectedParagraphEndLine = findAffectedParagraphEndLine(staticLayout, startLine)
+
         var candidateEnd = startLine
         val stableConsecutiveNeeded = 2
         var stableConsecutive = 0
 
         while (candidateEnd < lastLine && stableConsecutive < stableConsecutiveNeeded) {
+            if (candidateEnd > affectedParagraphEndLine + 1) {
+                break
+            }
+
             val isStable = isLineStableSuffix(
                 candidateEnd, staticLayout, offsetMap, oldText,
                 oldLineSnapshots, newLineSnapshots, oldLayout
@@ -960,7 +1058,7 @@ class SujianAnimationController(
         if (stableConsecutive >= stableConsecutiveNeeded) {
             return (candidateEnd - stableConsecutiveNeeded + 1).coerceAtLeast(startLine)
         }
-        return lastLine
+        return affectedParagraphEndLine.coerceAtMost(lastLine)
     }
 
     private fun fetchVisualTransaction(

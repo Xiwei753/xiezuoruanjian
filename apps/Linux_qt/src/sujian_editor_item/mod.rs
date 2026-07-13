@@ -311,6 +311,7 @@ pub struct SujianEditorItem {
     layout_revision: LayoutRevision,
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
     previous_layout_snapshot: Option<EditorLayoutSnapshot>,
+    previous_canonical_snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
 }
 
 impl Default for SujianEditorItem {
@@ -456,6 +457,7 @@ impl Default for SujianEditorItem {
             layout_revision: LayoutRevision::initial(),
             current_layout_snapshot: None,
             previous_layout_snapshot: None,
+            previous_canonical_snapshot: None,
         }
     }
 }

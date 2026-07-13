@@ -46,7 +46,30 @@ impl SujianEditorItem {
                 };
                 let text_color = &self.current_text_color.to_string();
 
-                let old_doc_snapshot = layout::prepare_document_visual_snapshot(
+                let (affected_byte_start, affected_byte_end) = vt.inserted_range
+                    .unwrap_or_else(|| {
+                        let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                        let mut min_b = 0usize;
+                        let mut max_b = 0usize;
+                        for change in &changes {
+                            match change {
+                                writer_core::editor::EditorChange::Insert { index, text } => {
+                                    if min_b == 0 && max_b == 0 { min_b = *index; }
+                                    max_b = (*index + text.len()).max(max_b);
+                                }
+                                writer_core::editor::EditorChange::Delete { index, text } => {
+                                    if min_b == 0 && max_b == 0 { min_b = *index; }
+                                    max_b = (*index + text.len()).max(max_b);
+                                }
+                                _ => {}
+                            }
+                        }
+                        (min_b, max_b)
+                    });
+
+                let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
+
+                let old_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
                     &vt.old_text,
                     0,
                     font_size,
@@ -57,8 +80,11 @@ impl SujianEditorItem {
                     width,
                     dpr,
                     text_color,
+                    affected_byte_start,
+                    affected_byte_end,
+                    None,
                 );
-                let new_doc_snapshot = layout::prepare_document_visual_snapshot(
+                let new_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
                     &new.text,
                     0,
                     font_size,
@@ -69,6 +95,9 @@ impl SujianEditorItem {
                     width,
                     dpr,
                     text_color,
+                    affected_byte_start,
+                    affected_byte_end,
+                    prev_new_snapshot,
                 );
 
                 let old_caret = old_doc_snapshot.cursor_rect(
@@ -131,6 +160,7 @@ impl SujianEditorItem {
                     EditorLayoutSnapshot::new(old_doc_snapshot.to_layout_snapshot(), Vec::new(), None, crate::editor::layout::CaretAffinity::Downstream)
                 }));
                 self.current_layout_snapshot = Some(new_snap);
+                self.previous_canonical_snapshot = Some(new_doc_snapshot);
 
                 editor_animation_debug_log(&format!(
                     "record_transaction: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",

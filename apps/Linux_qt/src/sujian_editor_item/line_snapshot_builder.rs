@@ -173,10 +173,7 @@ impl LineSnapshotBuilder {
             .iter()
             .map(|cc| {
                 let shaping_identity = ShapingIdentity {
-                    text_content_hash: Self::hash_u32(&[
-                        cc.qchar_start as u32,
-                        cc.qchar_end as u32,
-                    ]),
+                    text_content_hash: Self::hash_str(&cc.cluster_text),
                     raw_font_fingerprint: cc.raw_font_fingerprint.clone(),
                     glyph_indexes_hash: Self::hash_u32(&[cc.first_glyph_index]),
                     cluster_glyph_count: cc.glyph_count,
@@ -201,6 +198,14 @@ impl LineSnapshotBuilder {
     }
 
     fn hash_u32(data: &[u32]) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        data.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn hash_str(data: &str) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut hasher = DefaultHasher::new();

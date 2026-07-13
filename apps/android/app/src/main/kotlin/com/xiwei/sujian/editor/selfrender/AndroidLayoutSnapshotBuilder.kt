@@ -24,9 +24,20 @@ class AndroidLayoutSnapshotBuilder(
     private val textPaint: TextPaint
 ) {
     private val TAG = "AndroidSnapshotBuilder"
+    private var currentCommittedRevision: Long = 0L
     private var nextRevision: Long = 1L
 
-    fun currentRevision(): Long = nextRevision
+    fun currentCommittedRevision(): Long = currentCommittedRevision
+
+    fun allocateNextRevision(): Long {
+        val rev = nextRevision
+        nextRevision++
+        return rev
+    }
+
+    fun commitRevision(rev: Long) {
+        currentCommittedRevision = rev
+    }
 
     fun buildLineSnapshots(
         text: String,
@@ -147,16 +158,24 @@ class AndroidLayoutSnapshotBuilder(
             val ascent = staticLayout.getLineAscent(lineIdx).toFloat()
             val descent = staticLayout.getLineDescent(lineIdx).toFloat()
 
+            val lineLeft = staticLayout.getLineLeft(lineIdx)
+            val lineTop = staticLayout.getLineTop(lineIdx)
+
+            val visualLeft = kotlin.math.min(x, nextX)
+            val visualRight = kotlin.math.max(x, nextX)
+            val visualTop = baseline + ascent
+            val visualBottom = baseline + descent
+
             val visualRect = RectF(
-                x, baseline + ascent,
-                nextX, baseline + descent
+                visualLeft, visualTop,
+                visualRight, visualBottom
             )
 
             val sourceRect = RectF(
-                x - staticLayout.getLineLeft(lineIdx),
-                0f,
-                nextX - staticLayout.getLineLeft(lineIdx),
-                (baseline + descent - (baseline + ascent)).coerceAtLeast(0f)
+                visualLeft - lineLeft,
+                visualTop - lineTop,
+                visualRight - lineLeft,
+                visualBottom - lineTop
             )
 
             val byteStart = SujianEditorBuffer.utf16ToUtf8(text, currentOffset)
@@ -225,6 +244,9 @@ class AndroidLayoutSnapshotBuilder(
             searchEnd++
         }
         val contextLen = contextEnd - contextStart
+        val contextText = fullText.substring(contextStart, contextEnd)
+        val contextHash = Objects.hash(contextText)
+        val clusterOffsetInContext = clusterStartUtf16 - contextStart
 
         try {
             val shaped = android.graphics.text.TextRunShaper.shapeTextRun(
@@ -249,10 +271,10 @@ class AndroidLayoutSnapshotBuilder(
                 fontBuilder.append(shaped.getFont(i).toString())
             }
 
-            return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl:ctx[$contextStart,$contextEnd]"
+            return "g31:$glyphIdBuilder:$posBuilder:$fontFingerprint:$fontBuilder:$isRtl:ctxH[$contextHash]:cOff[$clusterOffsetInContext,$clusterLen]"
         } catch (e: Exception) {
             val clusterText = fullText.substring(clusterStartUtf16, clusterEndUtf16.coerceAtMost(fullText.length))
-            return buildConservativeIdentityFallback(clusterText, paint, paragraphDirection, clusterStartUtf16)
+            return buildConservativeIdentityFallback(clusterText, paint, paragraphDirection)
         }
     }
 
@@ -274,23 +296,21 @@ class AndroidLayoutSnapshotBuilder(
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
         val width = paint.measureText(clusterText).toRawBits()
         val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
-        val lineLeft = staticLayout.getLineLeft(lineIdx).toRawBits()
-        val lineRight = staticLayout.getLineRight(lineIdx).toRawBits()
-        val lineBreakOffset = staticLayout.getLineEnd(lineIdx)
-        return "c:$textHash:$contextHash:$fontFingerprint:$width:$isRtl:line[$lineIdx,$lineLeft,$lineRight,$lineBreakOffset]"
+        val clusterOffsetInContext = clusterStartUtf16 - contextStart
+        val clusterLen = clusterEndUtf16 - clusterStartUtf16
+        return "c:$textHash:$contextHash:$fontFingerprint:$width:$isRtl:cOff[$clusterOffsetInContext,$clusterLen]"
     }
 
     private fun buildConservativeIdentityFallback(
         clusterText: String,
         paint: TextPaint,
-        paragraphDirection: Int,
-        clusterStartUtf16: Int
+        paragraphDirection: Int
     ): String {
         val textHash = Objects.hash(clusterText)
         val fontFingerprint = "${paint.typeface}:${paint.textSize.toInt()}:${paint.textScaleX.format(2)}:${paint.letterSpacing.format(2)}"
         val width = paint.measureText(clusterText).toRawBits()
         val isRtl = paragraphDirection == Layout.DIR_RIGHT_TO_LEFT
-        return "c:$textHash:$fontFingerprint:$width:$isRtl:ctx[$clusterStartUtf16]"
+        return "c:$textHash:$fontFingerprint:$width:$isRtl"
     }
 
     private fun Float.format(digits: Int): String = String.format("%.${digits}f", this)
@@ -318,9 +338,10 @@ class AndroidLayoutSnapshotBuilder(
         return paragraphId
     }
 
+    @Deprecated("Use allocateNextRevision() + commitRevision() instead", ReplaceWith("allocateNextRevision().also { commitRevision(it) }"))
     fun nextRevisionAndIncrement(): Long {
-        val rev = nextRevision
-        nextRevision++
+        val rev = allocateNextRevision()
+        commitRevision(rev)
         return rev
     }
 }
