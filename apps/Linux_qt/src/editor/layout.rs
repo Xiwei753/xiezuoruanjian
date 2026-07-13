@@ -2081,11 +2081,18 @@ pub fn prepare_paragraph_visual_snapshot(
             let c_doc_byte_start = index_map.qchar_to_document_byte(c_qchar_start);
             let c_doc_byte_end = index_map.qchar_to_document_byte(c_qchar_end);
 
-            let c_cluster_text: String = paragraph_text
-                .chars()
-                .skip(c_qchar_start)
-                .take(c_qchar_end.saturating_sub(c_qchar_start))
-                .collect();
+            let (c_byte_start, c_byte_end) = index_map.qchar_range_to_document_byte_range(c_qchar_start, c_qchar_end);
+            let c_cluster_text: String = if c_byte_start <= c_byte_end && c_byte_end <= paragraph_text.len() + paragraph_document_byte_start {
+                let local_start = c_byte_start.saturating_sub(paragraph_document_byte_start);
+                let local_end = c_byte_end.saturating_sub(paragraph_document_byte_start);
+                if local_start <= local_end && local_end <= paragraph_text.len() {
+                    paragraph_text[local_start..local_end].to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
 
             clusters.push(CanonicalClusterSnapshot {
                 qchar_start: c_qchar_start,

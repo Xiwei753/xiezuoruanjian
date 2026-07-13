@@ -82,7 +82,7 @@ impl SujianEditorItem {
                     text_color,
                     affected_byte_start,
                     affected_byte_end,
-                    None,
+                    prev_new_snapshot,
                 );
                 let new_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
                     &new.text,

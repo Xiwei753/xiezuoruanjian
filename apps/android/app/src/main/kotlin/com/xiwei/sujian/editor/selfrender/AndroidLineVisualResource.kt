@@ -53,11 +53,11 @@ class RenderNodeVisualResource(
         node.setPosition(0, 0, width, height)
 
         val recordingCanvas = node.beginRecording(width, height)
-        recordingCanvas.translate(-lineLeft.toFloat(), -lineTop.toFloat())
         val savedPaint = textPaint.color
         textPaint.color = textColor
         recordingCanvas.save()
         recordingCanvas.clipRect(0f, 0f, width.toFloat(), height.toFloat())
+        recordingCanvas.translate(-lineLeft.toFloat(), -lineTop.toFloat())
         layout.draw(recordingCanvas)
         recordingCanvas.restore()
         textPaint.color = savedPaint
@@ -72,10 +72,13 @@ class RenderNodeVisualResource(
         node.alpha = alpha / 255f
         canvas.save()
         canvas.scale(scale, scale, destinationRect.centerX(), destinationRect.centerY())
+        canvas.clipRect(
+            destinationRect.left.toInt(),
+            destinationRect.top.toInt(),
+            destinationRect.right.toInt(),
+            destinationRect.bottom.toInt()
+        )
         canvas.translate(destinationRect.left - sourceRect.left, destinationRect.top - sourceRect.top)
-        canvas.clipRect(sourceRect.left.toInt(), sourceRect.top.toInt(),
-            sourceRect.right.toInt().coerceAtMost(width),
-            sourceRect.bottom.toInt().coerceAtMost(height))
         canvas.drawRenderNode(node)
         canvas.restore()
     }
@@ -114,11 +117,11 @@ class BitmapVisualResource : AndroidLineVisualResource {
         val bmp = bitmap ?: return
         bmp.eraseColor(0)
         val bmpCanvas = Canvas(bmp)
-        bmpCanvas.translate(-lineLeft.toFloat(), -lineTop.toFloat())
         val savedPaint = textPaint.color
         textPaint.color = textColor
         bmpCanvas.save()
         bmpCanvas.clipRect(0f, 0f, w.toFloat(), h.toFloat())
+        bmpCanvas.translate(-lineLeft.toFloat(), -lineTop.toFloat())
         layout.draw(bmpCanvas)
         bmpCanvas.restore()
         textPaint.color = savedPaint

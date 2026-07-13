@@ -770,6 +770,9 @@ class SujianAnimationController(
 
         val affectedParagraphEndLine = findAffectedParagraphEndLine(staticLayout, endLine)
 
+        val mutableOldSnapshots = preliminaryOldLineSnapshots.toMutableList()
+        val mutableNewSnapshots = preliminaryNewLineSnapshots.toMutableList()
+
         var candidateEnd = endLine
         val stableConsecutiveNeeded = 2
         var stableConsecutive = 0
@@ -780,21 +783,54 @@ class SujianAnimationController(
             }
 
             val newIdx = candidateEnd - startLine
-            val newLineSnapshot = if (newIdx < preliminaryNewLineSnapshots.size) {
-                preliminaryNewLineSnapshots.getOrNull(newIdx)
+            var newLineSnapshot = if (newIdx < mutableNewSnapshots.size) {
+                mutableNewSnapshots.getOrNull(newIdx)
             } else null
-            val oldLineSnapshot = if (newLineSnapshot != null) {
+
+            if (newLineSnapshot == null && candidateEnd < staticLayout.lineCount) {
+                val onTheFlyNew = snapshotBuilder.buildLineSnapshots(
+                    buffer.text, candidateEnd..candidateEnd,
+                    snapshotBuilder.allocateNextRevision(), renderer.getTextColor()
+                )
+                if (onTheFlyNew.isNotEmpty()) {
+                    newLineSnapshot = onTheFlyNew.first()
+                    mutableNewSnapshots.add(newLineSnapshot)
+                }
+            }
+
+            var oldLineSnapshot = if (newLineSnapshot != null) {
                 val oldByteStart = newLineSnapshot.clusters.firstOrNull()?.documentByteStart
                 val oldByteEnd = newLineSnapshot.clusters.lastOrNull()?.documentByteEnd
                 if (oldByteStart != null && oldByteEnd != null) {
                     val mappedOld = offsetMap.mapNewRangeToOld(oldByteStart, oldByteEnd)
                     if (mappedOld != null) {
-                        preliminaryOldLineSnapshots.find { snap ->
+                        mutableOldSnapshots.find { snap ->
                             snap.clusters.any { it.documentByteStart == mappedOld.start || it.documentByteEnd == mappedOld.end }
                         }
                     } else null
                 } else null
             } else null
+
+            if (oldLineSnapshot == null && oldText.isNotEmpty() && newLineSnapshot != null) {
+                val newByteStart = newLineSnapshot.clusters.firstOrNull()?.documentByteStart
+                val newByteEnd = newLineSnapshot.clusters.lastOrNull()?.documentByteEnd
+                if (newByteStart != null && newByteEnd != null) {
+                    val mappedOld = offsetMap.mapNewRangeToOld(newByteStart, newByteEnd)
+                    if (mappedOld != null) {
+                        val oldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, mappedOld.start).coerceIn(0, oldText.length)
+                        val oldUtf16End = SujianEditorBuffer.utf8ToUtf16(oldText, mappedOld.end).coerceIn(0, oldText.length)
+                        val oldLineIdx = oldLayout.getLineForOffset(oldUtf16Start)
+                        val onTheFlyOld = snapshotBuilder.buildLineSnapshots(
+                            oldText, oldLineIdx..oldLineIdx,
+                            snapshotBuilder.currentCommittedRevision(), renderer.getTextColor()
+                        )
+                        if (onTheFlyOld.isNotEmpty()) {
+                            oldLineSnapshot = onTheFlyOld.first()
+                            mutableOldSnapshots.add(oldLineSnapshot)
+                        }
+                    }
+                }
+            }
 
             val isStable = if (oldLineSnapshot != null && newLineSnapshot != null) {
                 isLineStableSuffixWithSnapshots(
@@ -804,7 +840,7 @@ class SujianAnimationController(
             } else {
                 isLineStableSuffix(
                     candidateEnd, staticLayout, offsetMap, oldText,
-                    preliminaryOldLineSnapshots, preliminaryNewLineSnapshots, oldLayout
+                    mutableOldSnapshots, mutableNewSnapshots, oldLayout
                 )
             }
             if (isStable) {
@@ -1030,10 +1066,16 @@ class SujianAnimationController(
                 if (offsetMap.isOldRangeDeleted(oldSnap.documentByteStart, oldSnap.documentByteEnd)) {
                     continue
                 }
-                val approxUtf16 = SujianEditorBuffer.utf8ToUtf16(buffer.text, newRange?.start ?: 0)
-                val approxLine = staticLayout.getLineForOffset(approxUtf16.coerceIn(0, buffer.text.length))
-                if (approxLine < staticLayout.lineCount) {
-                    affectedLineIndices.add(approxLine)
+                val adjacentNewByte = offsetMap.mapOldRangeToNew(
+                    oldSnap.documentByteStart.coerceAtMost(buffer.text.length),
+                    (oldSnap.documentByteStart + 1).coerceAtMost(buffer.text.length)
+                )
+                if (adjacentNewByte != null) {
+                    val utf16Start = SujianEditorBuffer.utf8ToUtf16(buffer.text, adjacentNewByte.start)
+                    val line = staticLayout.getLineForOffset(utf16Start.coerceIn(0, buffer.text.length))
+                    if (line < staticLayout.lineCount) {
+                        affectedLineIndices.add(line)
+                    }
                 }
             }
         }
@@ -1056,6 +1098,9 @@ class SujianAnimationController(
         val lastLine = staticLayout.lineCount - 1
         val affectedParagraphEndLine = findAffectedParagraphEndLine(staticLayout, startLine)
 
+        val mutableOldSnapshots = oldLineSnapshots.toMutableList()
+        val mutableNewSnapshots = newLineSnapshots.toMutableList()
+
         var candidateEnd = startLine
         val stableConsecutiveNeeded = 2
         var stableConsecutive = 0
@@ -1065,9 +1110,57 @@ class SujianAnimationController(
                 break
             }
 
+            val hasNewSnapshot = mutableNewSnapshots.any { snap ->
+                val lineStart = staticLayout.getLineStart(candidateEnd)
+                val lineEnd = staticLayout.getLineEnd(candidateEnd)
+                val byteStart = SujianEditorBuffer.utf16ToUtf8(buffer.text, lineStart)
+                val byteEnd = SujianEditorBuffer.utf16ToUtf8(buffer.text, lineEnd.coerceAtMost(buffer.text.length))
+                snap.documentByteStart <= byteStart && snap.documentByteEnd >= byteEnd
+            }
+
+            if (!hasNewSnapshot && candidateEnd < staticLayout.lineCount) {
+                val onTheFlyNew = snapshotBuilder.buildLineSnapshots(
+                    buffer.text, candidateEnd..candidateEnd,
+                    snapshotBuilder.allocateNextRevision(), renderer.getTextColor()
+                )
+                if (onTheFlyNew.isNotEmpty()) {
+                    mutableNewSnapshots.add(onTheFlyNew.first())
+                }
+            }
+
+            val hasOldSnapshot = mutableOldSnapshots.any { snap ->
+                val lineStart = staticLayout.getLineStart(candidateEnd)
+                val lineEnd = staticLayout.getLineEnd(candidateEnd)
+                val byteStart = SujianEditorBuffer.utf16ToUtf8(buffer.text, lineStart)
+                val byteEnd = SujianEditorBuffer.utf16ToUtf8(buffer.text, lineEnd.coerceAtMost(buffer.text.length))
+                val oldRange = offsetMap.mapNewRangeToOld(byteStart, byteEnd)
+                if (oldRange != null) {
+                    snap.documentByteStart <= oldRange.start && snap.documentByteEnd >= oldRange.end
+                } else false
+            }
+
+            if (!hasOldSnapshot && oldText.isNotEmpty()) {
+                val lineStart = staticLayout.getLineStart(candidateEnd)
+                val lineEnd = staticLayout.getLineEnd(candidateEnd)
+                val byteStart = SujianEditorBuffer.utf16ToUtf8(buffer.text, lineStart)
+                val byteEnd = SujianEditorBuffer.utf16ToUtf8(buffer.text, lineEnd.coerceAtMost(buffer.text.length))
+                val oldRange = offsetMap.mapNewRangeToOld(byteStart, byteEnd)
+                if (oldRange != null) {
+                    val oldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, oldRange.start).coerceIn(0, oldText.length)
+                    val oldLineIdx = oldLayout.getLineForOffset(oldUtf16Start)
+                    val onTheFlyOld = snapshotBuilder.buildLineSnapshots(
+                        oldText, oldLineIdx..oldLineIdx,
+                        snapshotBuilder.currentCommittedRevision(), renderer.getTextColor()
+                    )
+                    if (onTheFlyOld.isNotEmpty()) {
+                        mutableOldSnapshots.add(onTheFlyOld.first())
+                    }
+                }
+            }
+
             val isStable = isLineStableSuffix(
                 candidateEnd, staticLayout, offsetMap, oldText,
-                oldLineSnapshots, newLineSnapshots, oldLayout
+                mutableOldSnapshots, mutableNewSnapshots, oldLayout
             )
             if (isStable) {
                 stableConsecutive++
