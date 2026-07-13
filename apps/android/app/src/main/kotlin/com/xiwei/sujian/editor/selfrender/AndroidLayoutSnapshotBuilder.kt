@@ -210,7 +210,7 @@ class AndroidLayoutSnapshotBuilder(
         return if (android.os.Build.VERSION.SDK_INT >= 31) {
             buildGlyphIdentityApi31(fullText, paint, paragraphDirection, clusterStartUtf16, clusterEndUtf16)
         } else {
-            buildConservativeIdentity(clusterText, paint, paragraphDirection, lineIdx, staticLayout, fullText, clusterStartUtf16, clusterEndUtf16)
+            buildConservativeIdentity(clusterText, paint, paragraphDirection, fullText, clusterStartUtf16, clusterEndUtf16)
         }
     }
 
@@ -282,14 +282,28 @@ class AndroidLayoutSnapshotBuilder(
         clusterText: String,
         paint: TextPaint,
         paragraphDirection: Int,
-        lineIdx: Int,
-        staticLayout: Layout,
         fullText: String,
         clusterStartUtf16: Int,
         clusterEndUtf16: Int
     ): String {
-        val contextStart = (clusterStartUtf16 - 32).coerceAtLeast(0)
-        val contextEnd = (clusterEndUtf16 + 32).coerceAtMost(fullText.length)
+        var contextStart = (clusterStartUtf16 - 32).coerceAtLeast(0)
+        var contextEnd = (clusterEndUtf16 + 32).coerceAtMost(fullText.length)
+        var searchStart = clusterStartUtf16 - 1
+        while (searchStart >= contextStart) {
+            if (fullText[searchStart] == '\n') {
+                contextStart = searchStart + 1
+                break
+            }
+            searchStart--
+        }
+        var searchEnd = clusterEndUtf16
+        while (searchEnd < contextEnd) {
+            if (fullText[searchEnd] == '\n') {
+                contextEnd = searchEnd
+                break
+            }
+            searchEnd++
+        }
         val contextText = fullText.substring(contextStart, contextEnd)
         val textHash = Objects.hash(clusterText)
         val contextHash = Objects.hash(contextText)

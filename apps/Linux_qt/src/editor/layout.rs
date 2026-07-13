@@ -2574,9 +2574,18 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 if !prev_lines.is_empty() {
                     if let Some(first_prev) = prev_lines.first() {
                         let y_offset = y - first_prev.y;
+                        let byte_offset = paragraph_start as i64 - first_prev.para_start as i64;
                         for mut vl in prev_lines {
                             vl.id = line_id;
                             vl.y = vl.y + y_offset;
+                            if byte_offset != 0 {
+                                let new_para_start = (vl.para_start as i64 + byte_offset) as usize;
+                                let new_byte_start = (vl.byte_start as i64 + byte_offset) as usize;
+                                let new_byte_end = (vl.byte_end as i64 + byte_offset) as usize;
+                                vl.para_start = new_para_start;
+                                vl.byte_start = new_byte_start;
+                                vl.byte_end = new_byte_end;
+                            }
                             visual_lines.push(vl);
                             line_id += 1;
                         }
@@ -2588,7 +2597,21 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 }
 
                 if let Some(pidx) = prev_para_idx {
-                    paragraphs.push(prev.paragraphs[pidx].clone());
+                    let mut para = prev.paragraphs[pidx].clone();
+                    let byte_offset = paragraph_start as i64 - para.paragraph_document_byte_start as i64;
+                    if byte_offset != 0 {
+                        para.paragraph_document_byte_start = paragraph_start;
+                        para.index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(&para.paragraph_text, paragraph_start);
+                        for line in &mut para.lines {
+                            line.document_byte_start = (line.document_byte_start as i64 + byte_offset) as usize;
+                            line.document_byte_end = (line.document_byte_end as i64 + byte_offset) as usize;
+                            for cluster in &mut line.clusters {
+                                cluster.document_byte_start = (cluster.document_byte_start as i64 + byte_offset) as usize;
+                                cluster.document_byte_end = (cluster.document_byte_end as i64 + byte_offset) as usize;
+                            }
+                        }
+                    }
+                    paragraphs.push(para);
                 } else {
                     paragraphs.push(CanonicalParagraphSnapshot {
                         paragraph_text: paragraph_text.to_string(),
