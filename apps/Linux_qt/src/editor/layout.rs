@@ -2557,9 +2557,13 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         if !is_affected {
             let mut reused_from_prev = false;
             if let Some(prev) = previous_snapshot {
-                let prev_para_idx = prev.paragraphs.iter().position(|p| {
-                    p.paragraph_text == paragraph_text
-                });
+                let prev_para_idx = if current_para_idx < prev.paragraphs.len()
+                    && prev.paragraphs[current_para_idx].paragraph_text == paragraph_text
+                {
+                    Some(current_para_idx)
+                } else {
+                    None
+                };
                 let prev_lines: Vec<VisualLine> = if let Some(pidx) = prev_para_idx {
                     let prev_p = &prev.paragraphs[pidx];
                     let prev_para_byte_start = prev_p.paragraph_document_byte_start;
@@ -2575,6 +2579,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                     if let Some(first_prev) = prev_lines.first() {
                         let y_offset = y - first_prev.y;
                         let byte_offset = paragraph_start as i64 - first_prev.para_start as i64;
+                        let qchar_offset = paragraph_qchar_start as i64 - first_prev.qchar_start as i64 + first_prev.para_qchar_start as i64;
                         for mut vl in prev_lines {
                             vl.id = line_id;
                             vl.y = vl.y + y_offset;
@@ -2585,6 +2590,10 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                                 vl.para_start = new_para_start;
                                 vl.byte_start = new_byte_start;
                                 vl.byte_end = new_byte_end;
+                            }
+                            if qchar_offset != 0 {
+                                vl.qchar_start = (vl.qchar_start as i64 + qchar_offset) as usize;
+                                vl.qchar_end = (vl.qchar_end as i64 + qchar_offset) as usize;
                             }
                             visual_lines.push(vl);
                             line_id += 1;
