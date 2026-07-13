@@ -108,7 +108,7 @@ impl LinuxEditorAnimationCoordinator {
                                 }
                             }
                         }
-                        self.prepared_queue.complete(old_key);
+                        self.prepared_queue.cancel(old_key, "rebased");
                         frames
                     } else {
                         Vec::new()
