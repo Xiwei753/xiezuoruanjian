@@ -465,6 +465,25 @@ class AndroidLayoutSnapshotBuilder(
         val endsWithNewline = lineEnd > 0 && lineEnd <= text.length && text[lineEnd - 1] == '\n'
         val isLastLine = lineIdx >= staticLayout.lineCount - 1
         val paragraphDirection = staticLayout.getParagraphDirection(lineIdx)
-        return "brk:nl[$endsWithNewline]:last[$isLastLine]:dir[$paragraphDirection]:le[$lineEnd]"
+        val lineStart = staticLayout.getLineStart(lineIdx)
+        val trailingTextHash = if (lineEnd > lineStart) {
+            val trailingLen = (lineEnd - lineStart).coerceAtMost(8)
+            Objects.hash(text.substring((lineEnd - trailingLen).coerceAtLeast(lineStart), lineEnd.coerceAtMost(text.length)))
+        } else {
+            0
+        }
+        val nextLineStartHash = if (!isLastLine && lineIdx + 1 < staticLayout.lineCount) {
+            val nextStart = staticLayout.getLineStart(lineIdx + 1)
+            val nextEnd = staticLayout.getLineEnd(lineIdx + 1)
+            if (nextEnd > nextStart) {
+                val leadingLen = (nextEnd - nextStart).coerceAtMost(8)
+                Objects.hash(text.substring(nextStart, (nextStart + leadingLen).coerceAtMost(nextEnd.coerceAtMost(text.length))))
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+        return "brk:nl[$endsWithNewline]:last[$isLastLine]:dir[$paragraphDirection]:tH[$trailingTextHash]:nH[$nextLineStartHash]"
     }
 }
