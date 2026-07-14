@@ -53,7 +53,6 @@ class SujianInputConnection(
 
         val textStr = text.toString()
 
-        // 空字符串：如果有选区，删除选区；否则无操作
         if (textStr.isEmpty()) {
             if (!buffer.selection.isCollapsed) {
                 val editorView = view as? SujianEditorView
@@ -72,17 +71,34 @@ class SujianInputConnection(
             return true
         }
 
-        // 判断是 Typing 还是 TypingCommit
         val wasComposing = buffer.hasComposing
-        val cause = if (wasComposing) {
-            SujianEditCauseData.TypingCommit
-        } else if (textStr.length == 1) {
+
+        if (wasComposing) {
+            val editorView = view as? SujianEditorView
+            if (editorView != null) {
+                editorView.runVisualEdit(SujianEditCauseData.TypingCommit) {
+                    val result = buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
+                    imeController.onEditResult(result)
+                    imeController.updateSelection()
+                }
+                editorView.animationController.handleCompositionCommitOrCancel(
+                    committedText = buffer.text,
+                    isCommit = true
+                )
+            } else {
+                val result = buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
+                imeController.onEditResult(result)
+                imeController.updateSelection()
+            }
+            return true
+        }
+
+        val cause = if (textStr.length == 1) {
             SujianEditCauseData.Typing
         } else {
             SujianEditCauseData.TypingCommit
         }
 
-        // 使用 runVisualEdit 包装编辑操作
         val editorView = view as? SujianEditorView
         if (editorView != null) {
             editorView.runVisualEdit(cause) {
@@ -91,7 +107,6 @@ class SujianInputConnection(
                 imeController.updateSelection()
             }
         } else {
-            // 非 SujianEditorView 宿主只执行 buffer 更新，避免恢复 WriterEditText/Span 写作区路线。
             val result = buffer.replaceSelectionOrInsert(textStr, cause.toLegacyCause())
             imeController.onEditResult(result)
             imeController.updateSelection()
@@ -160,7 +175,7 @@ class SujianInputConnection(
         if (editorView != null && wasComposing) {
             editorView.animationController.handleCompositionCommitOrCancel(
                 committedText = buffer.text,
-                wasComposing = false
+                isCommit = false
             )
         }
 
