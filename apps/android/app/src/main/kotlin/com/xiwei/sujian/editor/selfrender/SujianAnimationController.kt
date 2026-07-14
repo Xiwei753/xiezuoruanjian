@@ -405,6 +405,7 @@ class SujianAnimationController(
             oldLineSnapshots = oldLineSnapshots.toMutableList(),
             newLineSnapshots = newLineSnapshots.toMutableList(),
             staticLinePatches = staticPatches.toMutableList(),
+            decorationSlices = mutableListOf(),
             cursorTransition = cursorTransition
         )
 
@@ -691,6 +692,7 @@ class SujianAnimationController(
             oldLineSnapshots = finalOldSnapshots.toMutableList(),
             newLineSnapshots = newLineSnapshots.toMutableList(),
             staticLinePatches = staticPatches.toMutableList(),
+            decorationSlices = mutableListOf(),
             cursorTransition = cursorTransition
         )
 
@@ -1459,6 +1461,11 @@ class SujianAnimationController(
             animationDurationMs
         )
 
+        val decorationSlices = mutableListOf<AndroidDecorationSlice>()
+        for (decRange in compositionRevision.decorationRanges) {
+            decorationSlices.add(AndroidDecorationSlice(decRange, DecorationKind.Underline))
+        }
+
         val tx = AndroidPlatformVisualTransaction(
             key = nextAnimationId(),
             state = AndroidVisualTransactionState.Pending,
@@ -1471,6 +1478,7 @@ class SujianAnimationController(
             oldLineSnapshots = oldLineSnapshots.toMutableList(),
             newLineSnapshots = newLineSnapshots.toMutableList(),
             staticLinePatches = staticPatches.toMutableList(),
+            decorationSlices = decorationSlices,
             cursorTransition = cursorTransition
         )
 
@@ -1492,12 +1500,13 @@ class SujianAnimationController(
 
     fun handleCompositionCommitOrCancel(
         committedText: String,
-        wasComposing: Boolean
+        isCommit: Boolean
     ): TextAnimationStartResult {
-        val prevRevision = compositionManager.getCurrent()
+        val prevRevision = compositionManager.takeCurrentForTransaction()
         compositionManager.clear()
 
         if (!animationEnabled || prevRevision == null) {
+            if (prevRevision != null) prevRevision.release()
             return TextAnimationStartResult.Skipped
         }
 
@@ -1508,35 +1517,154 @@ class SujianAnimationController(
         val newText = committedText
         val newLayout = if (newText.isNotEmpty()) layout.getLayout(newText) else null
 
-        val newLineSnapshots: List<AndroidLineSnapshot> = if (newLayout != null && newText.isNotEmpty()) {
+        val newAffectedRange: IntRange? = if (newLayout != null && newText.isNotEmpty()) {
             val startLine = 0.coerceAtMost(newLayout.lineCount - 1)
             val endLine = (newLayout.lineCount - 1).coerceAtLeast(startLine)
-            snapshotBuilder.buildLineSnapshots(newText, startLine..endLine, newRevision, renderer.getTextColor())
+            startLine..endLine
         } else {
-            emptyList()
+            null
         }
+
+        val newLineSnapshots: List<AndroidLineSnapshot> = newAffectedRange?.let {
+            snapshotBuilder.buildLineSnapshots(newText, it, newRevision, renderer.getTextColor())
+        } ?: emptyList()
 
         val slices = mutableListOf<AndroidAnimatedSlice>()
         val staticPatches = mutableListOf<AndroidStaticLinePatch>()
 
-        for (oldSnap in prevRevision.lineSnapshots) {
-            for (cluster in oldSnap.clusters) {
-                val utf16Start = cluster.platformTextStart
-                val utf16End = cluster.platformTextEnd
-                val wasPreedit = prevRevision.compositionReplaceRange.let { r ->
-                    utf16Start < r.last + prevRevision.preeditText.length && utf16End > r.first
+        val offsetMap = EditOffsetMap.fromEdit(
+            oldText = prevRevision.virtualText,
+            newText = newText,
+            insertedRangeStart = 0,
+            insertedRangeEnd = 0,
+            isDelete = true
+        )
+
+        if (isCommit) {
+            val visualTextUnchanged = prevRevision.virtualText == newText
+            if (visualTextUnchanged) {
+                // 视觉文字完全相同：不重复播放吐字，只移除 underline/装饰
+                // oldLineSnapshots 和 newLineSnapshots 都不需要动画
+                // 但仍需创建事务来清理 composition 装饰
+            } else {
+                // 候选转换导致文字变化：旧 preedit 执行 Delete/Crossfade，新 committed 执行 Insert/Crossfade
+                for (oldSnap in prevRevision.lineSnapshots) {
+                    for (cluster in oldSnap.clusters) {
+                        val utf16Start = cluster.platformTextStart
+                        val utf16End = cluster.platformTextEnd
+                        val wasPreedit = prevRevision.compositionReplaceRange.let { r ->
+                            utf16Start < r.first + prevRevision.preeditText.length && utf16End > r.first
+                        }
+                        if (wasPreedit) {
+                            val mappedNew = offsetMap.mapOldRangeToNew(cluster.documentByteStart, cluster.documentByteEnd)
+                            val matchedInNew = mappedNew != null && newLineSnapshots.any { ns ->
+                                ns.clusters.any { nc ->
+                                    nc.documentByteStart == mappedNew.start && nc.documentByteEnd == mappedNew.end
+                                }
+                            }
+                            if (!matchedInNew) {
+                                slices.add(AndroidAnimatedSlice.deleteFadeOut(
+                                    id = nextAnimationId(),
+                                    snapshotId = oldSnap.id,
+                                    sourceRect = cluster.sourceRectInLineSnapshot,
+                                    fromRect = cluster.visualRectInDocument,
+                                    toRect = RectF(prevRevision.cursorRect.left, prevRevision.cursorRect.top, prevRevision.cursorRect.left + cluster.visualRectInDocument.width() * 0.7f, prevRevision.cursorRect.top + cluster.visualRectInDocument.height() * 0.7f),
+                                    byteStart = cluster.documentByteStart,
+                                    byteEnd = cluster.documentByteEnd,
+                                    shapingIdentity = cluster.shapingIdentity
+                                ))
+                            } else {
+                                val oldCluster = cluster
+                                val newCluster = newLineSnapshots.flatMap { it.clusters }.find { nc ->
+                                    mappedNew != null && nc.documentByteStart == mappedNew.start && nc.documentByteEnd == mappedNew.end
+                                }
+                                if (newCluster != null && oldCluster.shapingIdentity != newCluster.shapingIdentity) {
+                                    val oldLineSnap = prevRevision.lineSnapshots.find { it.clusters.contains(oldCluster) }
+                                    if (oldLineSnap != null) {
+                                        slices.add(AndroidAnimatedSlice.crossfade(
+                                            id = nextAnimationId(),
+                                            role = AndroidAnimatedSliceRole.CrossfadeOld,
+                                            snapshotId = oldLineSnap.id,
+                                            sourceRect = oldCluster.sourceRectInLineSnapshot,
+                                            fromRect = oldCluster.visualRectInDocument,
+                                            toRect = newCluster.visualRectInDocument,
+                                            byteStart = oldCluster.documentByteStart,
+                                            byteEnd = oldCluster.documentByteEnd,
+                                            shapingIdentity = oldCluster.shapingIdentity
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-                if (wasPreedit && !wasComposing) {
-                    slices.add(AndroidAnimatedSlice.deleteFadeOut(
-                        id = nextAnimationId(),
-                        snapshotId = oldSnap.id,
-                        sourceRect = cluster.sourceRectInLineSnapshot,
-                        fromRect = cluster.visualRectInDocument,
-                        toRect = RectF(prevRevision.cursorRect.left, prevRevision.cursorRect.top, prevRevision.cursorRect.left + cluster.visualRectInDocument.width() * 0.7f, prevRevision.cursorRect.top + cluster.visualRectInDocument.height() * 0.7f),
-                        byteStart = cluster.documentByteStart,
-                        byteEnd = cluster.documentByteEnd,
-                        shapingIdentity = cluster.shapingIdentity
-                    ))
+
+                for (newSnap in newLineSnapshots) {
+                    for (cluster in newSnap.clusters) {
+                        val mappedOld = offsetMap.mapNewRangeToOld(cluster.documentByteStart, cluster.documentByteEnd)
+                        val foundInOld = mappedOld != null && prevRevision.lineSnapshots.any { os ->
+                            os.clusters.any { oc ->
+                                oc.documentByteStart == mappedOld.start && oc.documentByteEnd == mappedOld.end
+                            }
+                        }
+                        if (!foundInOld) {
+                            val composingStartUtf16 = prevRevision.compositionReplaceRange.first
+                            val composingEndUtf16 = composingStartUtf16 + prevRevision.preeditText.length
+                            val isComposing = cluster.platformTextStart < composingEndUtf16 && cluster.platformTextEnd > composingStartUtf16
+                            if (isComposing) {
+                                slices.add(AndroidAnimatedSlice.insertFadeIn(
+                                    id = nextAnimationId(),
+                                    snapshotId = newSnap.id,
+                                    sourceRect = cluster.sourceRectInLineSnapshot,
+                                    fromRect = RectF(prevRevision.cursorRect.left, prevRevision.cursorRect.top, prevRevision.cursorRect.left + cluster.visualRectInDocument.width(), prevRevision.cursorRect.top + cluster.visualRectInDocument.height()),
+                                    toRect = cluster.visualRectInDocument,
+                                    byteStart = cluster.documentByteStart,
+                                    byteEnd = cluster.documentByteEnd,
+                                    shapingIdentity = cluster.shapingIdentity
+                                ))
+                            }
+                        } else {
+                            val oldCluster = prevRevision.lineSnapshots.flatMap { it.clusters }.find { oc ->
+                                mappedOld != null && oc.documentByteStart == mappedOld.start && oc.documentByteEnd == mappedOld.end
+                            }
+                            if (oldCluster != null && oldCluster.shapingIdentity != cluster.shapingIdentity) {
+                                slices.add(AndroidAnimatedSlice.crossfade(
+                                    id = nextAnimationId(),
+                                    role = AndroidAnimatedSliceRole.CrossfadeNew,
+                                    snapshotId = newSnap.id,
+                                    sourceRect = cluster.sourceRectInLineSnapshot,
+                                    fromRect = oldCluster.visualRectInDocument,
+                                    toRect = cluster.visualRectInDocument,
+                                    byteStart = cluster.documentByteStart,
+                                    byteEnd = cluster.documentByteEnd,
+                                    shapingIdentity = cluster.shapingIdentity
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // cancel：预输入文字执行 Delete + reflow
+            for (oldSnap in prevRevision.lineSnapshots) {
+                for (cluster in oldSnap.clusters) {
+                    val utf16Start = cluster.platformTextStart
+                    val utf16End = cluster.platformTextEnd
+                    val wasPreedit = prevRevision.compositionReplaceRange.let { r ->
+                        utf16Start < r.first + prevRevision.preeditText.length && utf16End > r.first
+                    }
+                    if (wasPreedit) {
+                        slices.add(AndroidAnimatedSlice.deleteFadeOut(
+                            id = nextAnimationId(),
+                            snapshotId = oldSnap.id,
+                            sourceRect = cluster.sourceRectInLineSnapshot,
+                            fromRect = cluster.visualRectInDocument,
+                            toRect = RectF(prevRevision.cursorRect.left, prevRevision.cursorRect.top, prevRevision.cursorRect.left + cluster.visualRectInDocument.width() * 0.7f, prevRevision.cursorRect.top + cluster.visualRectInDocument.height() * 0.7f),
+                            byteStart = cluster.documentByteStart,
+                            byteEnd = cluster.documentByteEnd,
+                            shapingIdentity = cluster.shapingIdentity
+                        ))
+                    }
                 }
             }
         }
@@ -1589,6 +1717,7 @@ class SujianAnimationController(
             oldLineSnapshots = oldLineSnapshots,
             newLineSnapshots = newLineSnapshots.toMutableList(),
             staticLinePatches = staticPatches.toMutableList(),
+            decorationSlices = mutableListOf(),
             cursorTransition = cursorTransition
         )
 
@@ -1619,6 +1748,53 @@ class SujianAnimationController(
             if (match != null) return match
         }
         return null
+    }
+
+    fun handleCursorOnlyTransaction(
+        oldCursorRect: RectF,
+        newCursorRect: RectF,
+        durationMs: Long = cursorController.smoothCursorDurationMs
+    ): TextAnimationStartResult {
+        if (!cursorController.smoothCursorEnabled) {
+            return TextAnimationStartResult.Skipped
+        }
+
+        val oldRevision = snapshotBuilder.currentCommittedRevision()
+        val newRevision = snapshotBuilder.allocateNextRevision()
+
+        val cursorTransition = AndroidCursorTransition.tween(
+            oldCursorRect, newCursorRect, durationMs
+        )
+
+        val tx = AndroidPlatformVisualTransaction(
+            key = nextAnimationId(),
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.Cursor,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = durationMs,
+            oldRevision = oldRevision,
+            newRevision = newRevision,
+            slices = mutableListOf(),
+            oldLineSnapshots = mutableListOf(),
+            newLineSnapshots = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = cursorTransition
+        )
+
+        if (!renderer.addTransaction(tx)) {
+            snapshotBuilder.commitRevision(newRevision)
+            return TextAnimationStartResult.Skipped
+        }
+
+        snapshotBuilder.commitRevision(newRevision)
+
+        if (coordinatedAnimationEnabled) {
+            cursorController.setTransactionDrivenCursor(cursorTransition)
+            cursorController.setActiveTransaction(tx)
+        }
+
+        return TextAnimationStartResult.Started
     }
 
     fun tick() {
