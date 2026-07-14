@@ -97,7 +97,7 @@ impl LinuxEditorAnimationCoordinator {
         match vt.kind {
             EditorAnimationKind::Insert => {
                 if let Some((range_start, range_end)) = vt.inserted_range {
-                    let conflicting = self.prepared_queue.find_conflicting_insert(range_start, range_end);
+                    let conflicting = self.prepared_queue.find_conflicting_transaction(range_start, range_end);
                     let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
                         let mut frames = Vec::new();
                         if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
@@ -261,7 +261,6 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
             EditorAnimationKind::Delete => {
-                let key = self.alloc_key();
                 let deleted_ranges: Vec<(usize, usize)> = if let Some((ds, de)) = vt.deleted_range {
                     vec![(ds, de)]
                 } else {
@@ -276,6 +275,29 @@ impl LinuxEditorAnimationCoordinator {
                     }
                     ranges
                 };
+
+                let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
+                let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
+                let conflicting = self.prepared_queue.find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
+                let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+                    let mut frames = Vec::new();
+                    if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
+                        let old_progress = old_tx.progress(Instant::now());
+                        if old_progress > 0.0 && old_progress < 1.0 {
+                            for old_slice in &old_tx.slices {
+                                let frame = old_slice.compute_frame(old_progress);
+                                frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                            }
+                        }
+                    }
+                    self.prepared_queue.cancel(old_key, "rebased");
+                    frames
+                } else {
+                    Vec::new()
+                };
+
+                let key = self.alloc_key();
+                let new_revision = LayoutRevision::next();
 
                 let mut slices = Vec::new();
                 let mut static_patches = Vec::new();
@@ -388,6 +410,12 @@ impl LinuxEditorAnimationCoordinator {
                 } else {
                     CursorTransition::Snap
                 };
+
+                for (bs, be, fx, fy, fo) in &rebase_frames {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                        new_slice.rebase_from(*fx, *fy, *fo);
+                    }
+                }
 
                 let prepared = PreparedTextVisualTransaction {
                     key,
@@ -718,6 +746,49 @@ impl LinuxEditorAnimationCoordinator {
                 && t.state != TextVisualTransactionState::Completed)
     }
 
+    pub fn handle_cursor_only(
+        &mut self,
+        duration_ms: u64,
+        old_cursor_rect: Option<CursorRect>,
+        new_cursor_rect: Option<CursorRect>,
+    ) -> Option<VisualTransactionKey> {
+        let key = self.alloc_key();
+        let new_revision = LayoutRevision::next();
+
+        let cursor_transition = match (&old_cursor_rect, &new_cursor_rect) {
+            (Some(old), Some(new)) => CursorTransition::Tween {
+                old_rect: old.clone(),
+                new_rect: new.clone(),
+                duration_ms,
+            },
+            _ => CursorTransition::Snap,
+        };
+
+        let prepared = PreparedTextVisualTransaction {
+            key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Cursor,
+            animation_mode: AnimationMode::GlyphAnimation,
+            timeline: TransactionTimeline::new(duration_ms),
+            old_revision: self.layout_revision,
+            new_revision,
+            slices: Vec::new(),
+            static_patches: Vec::new(),
+            decoration_slices: Vec::new(),
+            cursor_transition,
+            old_cursor_rect: old_cursor_rect.clone(),
+            new_cursor_rect: new_cursor_rect.clone(),
+            cancel_reason: None,
+            texture_prepared: true,
+            old_snapshot: None,
+            new_snapshot: None,
+        };
+
+        self.layout_revision = new_revision;
+        self.prepared_queue.enqueue(prepared);
+        Some(key)
+    }
+
     pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> Option<Vec<LineSnapshotId>> {
         self.prepared_queue.complete(key)
     }
@@ -741,6 +812,20 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn has_active_insert(&self) -> bool {
         self.prepared_queue.has_active_insert()
+    }
+
+    pub fn active_cursor_progress(&self) -> Option<f64> {
+        let now = Instant::now();
+        self.prepared_queue.active_transactions()
+            .iter()
+            .filter(|t| t.state != TextVisualTransactionState::Cancelled
+                && t.state != TextVisualTransactionState::Completed
+                && t.state != TextVisualTransactionState::Pending)
+            .filter_map(|t| {
+                let p = t.progress(now);
+                if p > 0.0 && p < 1.0 { Some(p) } else { None }
+            })
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
     }
 
     pub fn is_empty(&self) -> bool {
