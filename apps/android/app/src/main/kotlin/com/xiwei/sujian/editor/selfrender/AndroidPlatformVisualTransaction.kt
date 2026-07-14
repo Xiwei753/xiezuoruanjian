@@ -61,6 +61,7 @@ data class AndroidPlatformVisualTransaction(
     val oldLineSnapshots: MutableList<AndroidLineSnapshot>,
     val newLineSnapshots: MutableList<AndroidLineSnapshot>,
     val staticLinePatches: MutableList<AndroidStaticLinePatch>,
+    val decorationSlices: MutableList<AndroidDecorationSlice>,
     var cursorTransition: AndroidCursorTransition,
     var cancelReason: String? = null
 ) {
