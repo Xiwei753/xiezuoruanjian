@@ -75,8 +75,12 @@ private fun EditorVisualTransactionDto.toModel(): EditorVisualTransactionData = 
     oldSelectionHead = oldSelectionHead.toInt(),
     newSelectionAnchor = newSelectionAnchor.toInt(),
     newSelectionHead = newSelectionHead.toInt(),
+    hasInsertedRange = hasInsertedRange,
     insertedRangeStart = insertedRangeStart.toInt(),
     insertedRangeEnd = insertedRangeEnd.toInt(),
+    hasDeletedRange = hasDeletedRange,
+    deletedRangeStart = deletedRangeStart.toInt(),
+    deletedRangeEnd = deletedRangeEnd.toInt(),
     animationMode = when (animationMode) {
         AnimationModeDto.GLYPH_ANIMATION -> AnimationModeData.GlyphAnimation
         AnimationModeDto.CLUSTER_ANIMATION -> AnimationModeData.ClusterAnimation

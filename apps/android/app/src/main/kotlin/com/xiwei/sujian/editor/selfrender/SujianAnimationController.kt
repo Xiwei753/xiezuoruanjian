@@ -171,6 +171,10 @@ class SujianAnimationController(
             return TextAnimationStartResult.Skipped
         }
 
+        if (!vt.hasInsertedRange) {
+            return TextAnimationStartResult.Skipped
+        }
+
         val rangeStartUtf16 = buffer.utf8ToUtf16(vt.insertedRangeStart)
         val rangeEndUtf16 = buffer.utf8ToUtf16(vt.insertedRangeEnd)
 
@@ -463,11 +467,11 @@ class SujianAnimationController(
         val offsetMap = EditOffsetMap.fromEdit(
             oldText = vt.oldText,
             newText = vt.newText,
-            insertedRangeStart = 0,
-            insertedRangeEnd = 0,
-            isDelete = true,
-            deletedRangeStart = vt.insertedRangeStart,
-            deletedRangeEnd = vt.insertedRangeEnd
+            insertedRangeStart = if (vt.hasInsertedRange) vt.insertedRangeStart else 0,
+            insertedRangeEnd = if (vt.hasInsertedRange) vt.insertedRangeEnd else 0,
+            isDelete = vt.hasDeletedRange,
+            deletedRangeStart = if (vt.hasDeletedRange) vt.deletedRangeStart else 0,
+            deletedRangeEnd = if (vt.hasDeletedRange) vt.deletedRangeEnd else 0
         )
 
         val staticLayout = if (text.isNotEmpty()) layout.getLayout(text) else null

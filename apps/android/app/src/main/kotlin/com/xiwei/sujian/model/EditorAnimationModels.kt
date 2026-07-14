@@ -75,10 +75,18 @@ data class EditorVisualTransactionData(
     val newSelectionAnchor: Int,
     /** 新选区 head（UTF-8 byte offset） */
     val newSelectionHead: Int,
+    /** 是否有插入范围 — 必须先检查此标志，不能依赖 insertedRangeStart/end == 0 判断 */
+    val hasInsertedRange: Boolean,
     /** 插入范围起始（UTF-8 byte offset），无插入时为 0 */
     val insertedRangeStart: Int,
     /** 插入范围结束（UTF-8 byte offset），无插入时为 0 */
     val insertedRangeEnd: Int,
+    /** 是否有删除范围 — 必须先检查此标志，不能依赖 deletedRangeStart/end == 0 判断 */
+    val hasDeletedRange: Boolean,
+    /** 删除范围起始（UTF-8 byte offset），无删除时为 0 */
+    val deletedRangeStart: Int,
+    /** 删除范围结束（UTF-8 byte offset），无删除时为 0 */
+    val deletedRangeEnd: Int,
     /** Core 决定的动画模式，是 Android 渲染端唯一语义来源 */
     val animationMode: AnimationModeData = AnimationModeData.GlyphAnimation,
     val durationMs: Long,
