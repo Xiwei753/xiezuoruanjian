@@ -83,6 +83,7 @@ class AndroidPlatformVisualTransactionPausedTest {
             oldLineSnapshots = mutableListOf(),
             newLineSnapshots = mutableListOf(),
             staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
             cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF(0f, 0f, 0f, 0f))
         )
 
@@ -111,6 +112,7 @@ class AndroidPlatformVisualTransactionPausedTest {
             oldLineSnapshots = mutableListOf(),
             newLineSnapshots = mutableListOf(),
             staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
             cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF(0f, 0f, 0f, 0f))
         )
 
