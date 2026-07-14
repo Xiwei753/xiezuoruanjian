@@ -39,6 +39,7 @@ impl SujianEditorItem {
         self.preedit_cursor_rect = None;
         self.pending_preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
+        self.composition_session = None;
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -68,6 +69,7 @@ impl SujianEditorItem {
         self.preedit_cursor_rect = None;
         self.pending_preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
+        self.composition_session = None;
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;

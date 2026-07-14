@@ -790,24 +790,48 @@ pub struct CursorPath {
 
 /// 预输入视觉修订 — 把预输入改为临时视觉正文版本。
 ///
-/// virtualText 仅用于排版和渲染，不写入正文、Undo、保存、同步和 Core 正文状态。
+/// virtualText 仅用于排版和渲染，不写入正文、Undo、保存和同步和 Core 正文状态。
 /// 每次预输入变化生成新 CompositionVisualRevision，
 /// 使用相同 StaticLinePatch + AnimatedSlice 分类。
 ///
 /// #516: virtualText 必须通过 `build_virtual_text()` 构造，
 /// 严格按 committedText[0..replaceStart] + preeditText + committedText[replaceEnd..] 拼接。
 /// 不得丢失 replaceEnd 后正文，也不得默认把预输入永远当成零长度插入。
+///
+/// #517: 增加不可变 revision 链接。每次更新必须从 previous visual revision 接续，
+/// 不允许从 committed revision 重新开始。replaceStart/replaceEndExclusive 始终是
+/// committed 正文坐标，preeditCursorOffset 始终是 preedit 内部坐标。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompositionVisualRevision {
+    /// 修订唯一 ID（递增，由 CompositionSession 分配）
+    #[serde(default)]
+    pub revision_id: u64,
+    /// 所属 composition session ID
+    #[serde(default)]
+    pub session_id: u64,
+    /// 此修订基于的 committed revision ID
+    #[serde(default)]
+    pub committed_revision_id: u64,
     /// 已提交文本（不含预输入）
     pub committed_text: String,
-    /// 预输入替换范围（UTF-8 byte offset）
+    /// 预输入替换范围（UTF-8 byte offset，committed 正文坐标）
+    ///
+    /// #517: replaceStart/replaceEndExclusive 始终是 committed 正文坐标，
+    /// 不是 virtualText 坐标，也不是 preedit 长度。
+    /// 普通 setComposingText 初次预输入默认是零长度插入：
+    /// replaceStart == replaceEndExclusive == 原 committed 光标位置。
+    /// 只有 setComposingRegion 或平台明确给出替换范围时才能形成非零替换范围。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_replace_range: Option<(usize, usize)>,
     /// 预输入文本
     #[serde(default)]
     pub preedit_text: String,
+    /// 预输入光标偏移（preedit 内部 UTF-8 byte offset）
+    ///
+    /// #517: 始终是 preedit 内部坐标，不能与 composition_replace_range 混用。
+    #[serde(default)]
+    pub preedit_cursor_offset: usize,
     /// 虚拟文本 — 仅用于排版和渲染，不写入正文
     /// 必须通过 `build_virtual_text()` 构造，不得手动拼接
     #[serde(default)]
@@ -826,6 +850,14 @@ pub struct CompositionVisualRevision {
     /// IME 光标范围/位置（UTF-8 byte offset）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ime_cursor_range: Option<(usize, usize)>,
+    /// 从上一 CompositionVisualRevision 的偏移映射
+    ///
+    /// #517: 连续更新必须从 previous visual revision 接续，
+    /// 不允许从 committed revision 重新开始。
+    /// OffsetMap 记录 old virtualText → new virtualText 的字符映射，
+    /// 用于后续正文 cluster 保持身份并生成 Move，而不是全部 Crossfade/Insert。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_map_from_previous: Option<OffsetMap>,
 }
 
 impl CompositionVisualRevision {
@@ -845,17 +877,431 @@ impl CompositionVisualRevision {
             &preedit_text,
         );
         Self {
+            revision_id: 0,
+            session_id: 0,
+            committed_revision_id: 0,
             committed_text,
             composition_replace_range,
             preedit_text,
+            preedit_cursor_offset: 0,
             virtual_text,
             affected_paragraph_range,
             line_snapshot_ids: Vec::new(),
             cursor_rect: None,
             decoration_ranges: Vec::new(),
             ime_cursor_range: None,
+            offset_map_from_previous: None,
         }
     }
+
+    /// #517: 从 previous visual revision 构造新 CompositionVisualRevision。
+    ///
+    /// 更新链必须是：previous visual revision -> new visual revision，
+    /// 而不是：committed revision -> 每一次新的 preedit。
+    ///
+    /// 此方法自动计算 OffsetMap，记录 old virtualText → new virtualText 的映射。
+    pub fn from_previous(
+        previous: &CompositionVisualRevision,
+        new_preedit_text: String,
+        new_preedit_cursor_offset: usize,
+        affected_paragraph_range: (usize, usize),
+    ) -> Self {
+        let virtual_text = build_virtual_text(
+            &previous.committed_text,
+            previous.composition_replace_range,
+            &new_preedit_text,
+        );
+        let offset_map = OffsetMap::build(&previous.virtual_text, &virtual_text);
+        Self {
+            revision_id: 0,
+            session_id: previous.session_id,
+            committed_revision_id: previous.committed_revision_id,
+            committed_text: previous.committed_text.clone(),
+            composition_replace_range: previous.composition_replace_range,
+            preedit_text: new_preedit_text,
+            preedit_cursor_offset: new_preedit_cursor_offset,
+            virtual_text,
+            affected_paragraph_range,
+            line_snapshot_ids: Vec::new(),
+            cursor_rect: None,
+            decoration_ranges: Vec::new(),
+            ime_cursor_range: None,
+            offset_map_from_previous: Some(offset_map),
+        }
+    }
+
+    /// 预输入文本在 virtualText 中的字节范围。
+    ///
+    /// #517: 此范围只能表示 virtualText 中 preedit 的范围，
+    /// 不能表示 committed replaceRange；两者必须分开命名和存储。
+    pub fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
+        match self.composition_replace_range {
+            Some((replace_start, _)) => {
+                (replace_start, replace_start + self.preedit_text.len())
+            }
+            None => {
+                let start = self.committed_text.len();
+                (start, start + self.preedit_text.len())
+            }
+        }
+    }
+}
+
+/// #517: 偏移映射 — 两个 visualText 之间的字符身份映射。
+///
+/// 记录 old virtualText 中每个字符在 new virtualText 中的对应位置。
+/// 用于后续正文 cluster 保持身份并生成 Move，而不是全部 Crossfade/Insert。
+///
+/// 映射规则：
+/// - 前缀相同部分：old[i] → new[i]（identity）
+/// - 中间差异部分：无映射（Insert/Delete/Crossfade）
+/// - 后缀相同部分：old[i] → new[j]（shifted）
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsetMap {
+    /// 映射条目列表，按 old byte offset 排序
+    pub entries: Vec<OffsetMapEntry>,
+}
+
+/// #517: 单个偏移映射条目。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OffsetMapEntry {
+    /// old virtualText 中的 UTF-8 byte offset
+    pub old_byte_offset: usize,
+    /// new virtualText 中的 UTF-8 byte offset
+    pub new_byte_offset: usize,
+    /// 映射的字符数（UTF-8 bytes）
+    pub length: usize,
+    /// 映射类型
+    pub kind: OffsetMapKind,
+}
+
+/// #517: 偏移映射类型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OffsetMapKind {
+    /// 文本和位置均相同（前缀/后缀静态部分）
+    Identity,
+    /// 文本相同但位置变化（后缀移动）
+    Shifted,
+}
+
+impl OffsetMap {
+    /// 从 old/new virtualText 构建偏移映射。
+    ///
+    /// 使用最长公共前缀/后缀算法确定映射区域。
+    pub fn build(old_text: &str, new_text: &str) -> Self {
+        if old_text.is_empty() || new_text.is_empty() || old_text == new_text {
+            return OffsetMap { entries: Vec::new() };
+        }
+
+        let prefix = common_prefix_byte_len(old_text, new_text);
+        let suffix = common_suffix_byte_len(old_text, new_text, prefix);
+
+        let mut entries = Vec::new();
+
+        if prefix > 0 {
+            entries.push(OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                length: prefix,
+                kind: OffsetMapKind::Identity,
+            });
+        }
+
+        if suffix > 0 {
+            let old_suffix_start = old_text.len() - suffix;
+            let new_suffix_start = new_text.len() - suffix;
+            let kind = if prefix > 0 || (old_text.len() != new_text.len()) {
+                OffsetMapKind::Shifted
+            } else {
+                OffsetMapKind::Identity
+            };
+            entries.push(OffsetMapEntry {
+                old_byte_offset: old_suffix_start,
+                new_byte_offset: new_suffix_start,
+                length: suffix,
+                kind,
+            });
+        }
+
+        OffsetMap { entries }
+    }
+
+    /// 查找 old byte offset 在 new text 中的对应位置。
+    pub fn map_old_to_new(&self, old_byte_offset: usize) -> Option<usize> {
+        for entry in &self.entries {
+            if old_byte_offset >= entry.old_byte_offset
+                && old_byte_offset < entry.old_byte_offset + entry.length
+            {
+                let offset_within = old_byte_offset - entry.old_byte_offset;
+                return Some(entry.new_byte_offset + offset_within);
+            }
+        }
+        None
+    }
+}
+
+/// #517: 预输入会话 — 跨平台 composition 状态模型。
+///
+/// Android 和 Linux 都必须维护一个明确的 composition session，
+/// 而不是零散地存 preedit_text 和临时 snapshot。
+///
+/// 关键规则：
+/// - replaceStart/replaceEndExclusive 始终是 committed 正文坐标
+/// - preeditCursorOffset 始终是 preedit 内部坐标
+/// - virtualText 由 committed replaceRange 和 preeditText 构造
+/// - composing 更新不能修改 committed buffer、Undo、保存、同步和 Core 正文状态
+/// - 连续 setComposingText 必须保持原 session 的 committed replaceRange，
+///   不能随着 preedit 长度变化而移动 end
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionSession {
+    /// 会话唯一 ID
+    pub session_id: u64,
+    /// 此会话基于的 committed revision ID
+    pub committed_revision_id: u64,
+    /// 会话开始时的 committed 文本
+    pub committed_text_at_start: String,
+    /// committed 正文替换范围起始（UTF-8 byte offset）
+    pub replace_start: usize,
+    /// committed 正文替换范围结束（不含，UTF-8 byte offset）
+    pub replace_end_exclusive: usize,
+    /// 当前预输入文本
+    #[serde(default)]
+    pub preedit_text: String,
+    /// 预输入光标偏移（preedit 内部 UTF-8 byte offset）
+    #[serde(default)]
+    pub preedit_cursor_offset: usize,
+    /// 当前视觉修订
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_visual_revision: Option<CompositionVisualRevision>,
+    /// 最后提交的 generation
+    #[serde(default)]
+    pub last_submitted_generation: u64,
+    /// 下一个 revision ID
+    #[serde(default)]
+    pub next_revision_id: u64,
+}
+
+impl CompositionSession {
+    /// 创建新的 composition session。
+    ///
+    /// #517: 普通 setComposingText 初次预输入默认是零长度插入：
+    /// replace_start == replace_end_exclusive == 原 committed 光标位置。
+    /// 只有 setComposingRegion 或平台明确给出替换范围时才能形成非零替换范围。
+    pub fn new(
+        session_id: u64,
+        committed_revision_id: u64,
+        committed_text: String,
+        cursor_position: usize,
+    ) -> Self {
+        Self {
+            session_id,
+            committed_revision_id,
+            committed_text_at_start: committed_text.clone(),
+            replace_start: cursor_position,
+            replace_end_exclusive: cursor_position,
+            preedit_text: String::new(),
+            preedit_cursor_offset: 0,
+            current_visual_revision: None,
+            last_submitted_generation: 0,
+            next_revision_id: 1,
+        }
+    }
+
+    /// 创建带替换范围的 composition session（setComposingRegion）。
+    pub fn new_with_replace_range(
+        session_id: u64,
+        committed_revision_id: u64,
+        committed_text: String,
+        replace_start: usize,
+        replace_end_exclusive: usize,
+    ) -> Self {
+        Self {
+            session_id,
+            committed_revision_id,
+            committed_text_at_start: committed_text,
+            replace_start,
+            replace_end_exclusive,
+            preedit_text: String::new(),
+            preedit_cursor_offset: 0,
+            current_visual_revision: None,
+            last_submitted_generation: 0,
+            next_revision_id: 1,
+        }
+    }
+
+    /// 更新预输入文本。
+    ///
+    /// #517: 连续 setComposingText 必须保持原 session 的 committed replaceRange，
+    /// 不能随着 preedit 长度变化而移动 end。
+    pub fn update_preedit(
+        &mut self,
+        new_preedit_text: String,
+        new_preedit_cursor_offset: usize,
+    ) -> CompositionVisualRevision {
+        let new_revision = match &self.current_visual_revision {
+            Some(previous) => {
+                let mut rev = CompositionVisualRevision::from_previous(
+                    previous,
+                    new_preedit_text.clone(),
+                    new_preedit_cursor_offset,
+                    (0, self.committed_text_at_start.len()),
+                );
+                rev.revision_id = self.take_revision_id();
+                rev.session_id = self.session_id;
+                rev.committed_revision_id = self.committed_revision_id;
+                rev
+            }
+            None => {
+                let mut rev = CompositionVisualRevision::new(
+                    self.committed_text_at_start.clone(),
+                    Some((self.replace_start, self.replace_end_exclusive)),
+                    new_preedit_text.clone(),
+                    (0, self.committed_text_at_start.len()),
+                );
+                rev.revision_id = self.take_revision_id();
+                rev.session_id = self.session_id;
+                rev.committed_revision_id = self.committed_revision_id;
+                rev
+            }
+        };
+        self.preedit_text = new_preedit_text;
+        self.preedit_cursor_offset = new_preedit_cursor_offset;
+        self.current_visual_revision = Some(new_revision.clone());
+        self.last_submitted_generation = self.last_submitted_generation.saturating_add(1);
+        new_revision
+    }
+
+    /// 通过 setComposingRegion 更新替换范围。
+    ///
+    /// #517: 只有 setComposingRegion 或平台明确给出替换范围时才能修改 replaceRange。
+    pub fn set_composing_region(&mut self, start: usize, end: usize) {
+        self.replace_start = start.min(self.committed_text_at_start.len());
+        self.replace_end_exclusive = end.min(self.committed_text_at_start.len());
+        if self.replace_start > self.replace_end_exclusive {
+            std::mem::swap(&mut self.replace_start, &mut self.replace_end_exclusive);
+        }
+    }
+
+    /// 会话是否活跃（有预输入文本或有视觉修订）。
+    pub fn is_active(&self) -> bool {
+        !self.preedit_text.is_empty() || self.current_visual_revision.is_some()
+    }
+
+    /// 获取当前 composition_replace_range。
+    pub fn composition_replace_range(&self) -> Option<(usize, usize)> {
+        if self.replace_start == self.replace_end_exclusive && self.preedit_text.is_empty() {
+            None
+        } else {
+            Some((self.replace_start, self.replace_end_exclusive))
+        }
+    }
+
+    /// 构造当前虚拟文本。
+    pub fn virtual_text(&self) -> String {
+        build_virtual_text(
+            &self.committed_text_at_start,
+            self.composition_replace_range(),
+            &self.preedit_text,
+        )
+    }
+
+    /// 预输入文本在 virtualText 中的字节范围。
+    ///
+    /// #517: 此范围只能表示 virtualText 中 preedit 的范围，
+    /// 不能表示 committed replaceRange；两者必须分开命名和存储。
+    pub fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
+        let start = self.replace_start;
+        let end = start + self.preedit_text.len();
+        (start, end)
+    }
+
+    /// 提交预输入。
+    ///
+    /// #517: commitText 必须使用 session 的 replaceRange 替换 committed 正文。
+    /// 返回 (composition_visual_revision, committed_text_after)。
+    /// 如果 commit 文字与当前视觉文字相同，调用方可标记 is_visual_same 以避免重复吐字。
+    pub fn commit(&mut self, commit_text: &str) -> (CompositionVisualRevision, String) {
+        let composition_revision = self.current_visual_revision.clone().unwrap_or_else(|| {
+            CompositionVisualRevision::new(
+                self.committed_text_at_start.clone(),
+                self.composition_replace_range(),
+                self.preedit_text.clone(),
+                (0, self.committed_text_at_start.len()),
+            )
+        });
+
+        let mut committed_after = self.committed_text_at_start.clone();
+        committed_after.replace_range(
+            self.replace_start..self.replace_end_exclusive,
+            commit_text,
+        );
+
+        self.preedit_text.clear();
+        self.preedit_cursor_offset = 0;
+        self.current_visual_revision = None;
+        self.replace_start = 0;
+        self.replace_end_exclusive = 0;
+
+        (composition_revision, committed_after)
+    }
+
+    /// 取消预输入。
+    ///
+    /// #517: cancel 删除 preedit 并让后续正文回流。
+    /// 返回取消前的 composition_visual_revision。
+    pub fn cancel(&mut self) -> CompositionVisualRevision {
+        let composition_revision = self.current_visual_revision.clone().unwrap_or_else(|| {
+            CompositionVisualRevision::new(
+                self.committed_text_at_start.clone(),
+                self.composition_replace_range(),
+                self.preedit_text.clone(),
+                (0, self.committed_text_at_start.len()),
+            )
+        });
+
+        self.preedit_text.clear();
+        self.preedit_cursor_offset = 0;
+        self.current_visual_revision = None;
+        self.replace_start = 0;
+        self.replace_end_exclusive = 0;
+
+        composition_revision
+    }
+
+    /// 清除会话。
+    pub fn clear(&mut self) {
+        self.preedit_text.clear();
+        self.preedit_cursor_offset = 0;
+        self.current_visual_revision = None;
+        self.replace_start = 0;
+        self.replace_end_exclusive = 0;
+        self.last_submitted_generation = 0;
+    }
+
+    fn take_revision_id(&mut self) -> u64 {
+        let id = self.next_revision_id;
+        self.next_revision_id = self.next_revision_id.saturating_add(1);
+        id
+    }
+}
+
+/// #517: 快照所有权状态 — 单一所有权，不允许 Manager 与事务共享同一个可释放资源引用。
+///
+/// 如果 Kotlin 层难以表达 move semantics，使用显式 owner token/state。
+/// 任何 release 前必须校验 owner。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SnapshotOwner {
+    /// 由 CompositionSession 持有
+    OwnedBySession,
+    /// 由指定事务持有
+    OwnedByTransaction { transaction_id: u64 },
+    /// 已释放
+    Released,
 }
 
 /// 连续事务 rebase — 新事务与旧事务冲突时。
@@ -1220,12 +1666,17 @@ impl EditorEngine {
         })
     }
 
-    /// #516: 创建 CompositionUpdate 事务 — 预输入更新。
+    /// #516/#517: 创建 CompositionUpdate 事务 — 预输入更新。
     ///
     /// 每次 setComposingText 触发。预输入文字必须真实推动后续正文、
     /// 触发换行和 reflow，不能在原正文上盖一段文字。
     ///
     /// composing 更新不会修改 committed text、Undo、保存和同步状态。
+    ///
+    /// #517: 支持从 previous visual revision 接续。
+    /// 如果提供了 previous_revision，新 revision 从 previous 接续，
+    /// 自动计算 OffsetMap，后续正文 cluster 保持身份并生成 Move。
+    /// 如果没有提供，则从 committed 状态开始（首次预输入）。
     pub fn composition_update_transaction(
         &mut self,
         committed_text: &str,
@@ -1252,6 +1703,38 @@ impl EditorEngine {
         CompositionUpdateTransaction {
             id: self.take_animation_id(),
             old_revision,
+            new_revision,
+            visual_class_kinds,
+            duration_ms: self.animation_duration_ms,
+        }
+    }
+
+    /// #517: 从 previous visual revision 创建 CompositionUpdate 事务。
+    ///
+    /// 更新链必须是：previous visual revision -> new visual revision，
+    /// 而不是：committed revision -> 每一次新的 preedit。
+    ///
+    /// 此方法使用 CompositionVisualRevision::from_previous 自动计算 OffsetMap，
+    /// 后续正文 cluster 通过 OffsetMap 保持身份并生成 Move。
+    pub fn composition_update_from_previous(
+        &mut self,
+        previous_revision: &CompositionVisualRevision,
+        new_preedit_text: &str,
+        new_preedit_cursor_offset: usize,
+    ) -> CompositionUpdateTransaction {
+        let new_revision = CompositionVisualRevision::from_previous(
+            previous_revision,
+            new_preedit_text.to_string(),
+            new_preedit_cursor_offset,
+            previous_revision.affected_paragraph_range,
+        );
+        let visual_class_kinds = classify_visual_diff(
+            &previous_revision.virtual_text,
+            &new_revision.virtual_text,
+        );
+        CompositionUpdateTransaction {
+            id: self.take_animation_id(),
+            old_revision: previous_revision.clone(),
             new_revision,
             visual_class_kinds,
             duration_ms: self.animation_duration_ms,
@@ -3038,9 +3521,13 @@ mod tests {
     #[test]
     fn composition_visual_revision_serializes_camel_case() {
         let rev = CompositionVisualRevision {
+            revision_id: 1,
+            session_id: 1,
+            committed_revision_id: 10,
             committed_text: "hello".to_string(),
             composition_replace_range: Some((5, 7)),
             preedit_text: "ni".to_string(),
+            preedit_cursor_offset: 2,
             virtual_text: "helloni".to_string(),
             affected_paragraph_range: (0, 7),
             line_snapshot_ids: vec![1, 2],
@@ -3053,6 +3540,7 @@ mod tests {
                 color: None,
             }],
             ime_cursor_range: Some((5, 7)),
+            offset_map_from_previous: None,
         };
         let json = serde_json::to_string(&rev).unwrap();
         assert!(json.contains("\"committedText\":"));
@@ -3068,15 +3556,20 @@ mod tests {
     #[test]
     fn composition_visual_revision_skips_none_and_empty() {
         let rev = CompositionVisualRevision {
+            revision_id: 0,
+            session_id: 0,
+            committed_revision_id: 0,
             committed_text: "hello".to_string(),
             composition_replace_range: None,
             preedit_text: String::new(),
+            preedit_cursor_offset: 0,
             virtual_text: String::new(),
             affected_paragraph_range: (0, 5),
             line_snapshot_ids: Vec::new(),
             cursor_rect: None,
             decoration_ranges: Vec::new(),
             ime_cursor_range: None,
+            offset_map_from_previous: None,
         };
         let json = serde_json::to_string(&rev).unwrap();
         assert!(!json.contains("\"compositionReplaceRange\":"));
@@ -3791,5 +4284,598 @@ mod tests {
         assert!(json.contains("\"isVisualSame\":"));
         assert!(json.contains("\"compositionRevision\":"));
         assert!(json.contains("\"committedTextAfter\":"));
+    }
+
+    // ========================================================================
+    // #517 行为测试 — 覆盖 issue 验收标准
+    // ========================================================================
+
+    // --- #517: replaceRange 测试 ---
+
+    #[test]
+    fn build_virtual_text_zero_length_replace_preserves_text_after_cursor() {
+        let committed = "你好世界";
+        let cursor = "你好".len();
+        let preedit = "abc";
+        let vt = build_virtual_text(committed, Some((cursor, cursor)), preedit);
+        assert_eq!(vt, "你好abc世界", "Zero-length replace must preserve text after cursor");
+    }
+
+    #[test]
+    fn build_virtual_text_preedit_length_does_not_determine_replace_end() {
+        let committed = "你好世界";
+        let cursor = "你好".len();
+        let vt_short = build_virtual_text(committed, Some((cursor, cursor)), "a");
+        let vt_long = build_virtual_text(committed, Some((cursor, cursor)), "abcdef");
+        assert_eq!(vt_short, "你好a世界");
+        assert_eq!(vt_long, "你好abcdef世界");
+    }
+
+    #[test]
+    fn build_virtual_text_composing_region_replaces_correctly() {
+        let committed = "你好世界";
+        let vt = build_virtual_text(committed, Some((3, 9)), "abc");
+        assert_eq!(vt, "你abc界");
+    }
+
+    #[test]
+    fn build_virtual_text_preedit_and_replace_different_lengths() {
+        let committed = "hello world";
+        let vt = build_virtual_text(committed, Some((0, 5)), "goodbye");
+        assert_eq!(vt, "goodbye world");
+        let vt2 = build_virtual_text(committed, Some((0, 5)), "hi");
+        assert_eq!(vt2, "hi world");
+    }
+
+    #[test]
+    fn build_virtual_text_emoji_boundary() {
+        let committed = "ab😀cd";
+        let emoji_start = "ab".len();
+        let emoji_char = '😀';
+        let emoji_end = emoji_start + emoji_char.len_utf8();
+        let vt = build_virtual_text(committed, Some((emoji_start, emoji_end)), "XX");
+        assert_eq!(vt, "abXXcd");
+    }
+
+    #[test]
+    fn build_virtual_text_combining_mark_boundary() {
+        let committed = "e\u{0301}test";
+        let combining_end = "e\u{0301}".len();
+        let vt = build_virtual_text(committed, Some((0, combining_end)), "X");
+        assert_eq!(vt, "Xtest");
+    }
+
+    // --- #517: CompositionSession 测试 ---
+
+    #[test]
+    fn composition_session_zero_length_replace_by_default() {
+        let session = CompositionSession::new(
+            1, 10, "你好世界".to_string(), "你好".len(),
+        );
+        assert_eq!(session.replace_start, "你好".len());
+        assert_eq!(session.replace_end_exclusive, "你好".len());
+    }
+
+    #[test]
+    fn composition_session_update_preedit_preserves_replace_range() {
+        let mut session = CompositionSession::new(
+            1, 10, "你好世界".to_string(), "你好".len(),
+        );
+        let rev1 = session.update_preedit("a".to_string(), 1);
+        assert_eq!(rev1.virtual_text, "你好a世界");
+        assert_eq!(session.replace_start, "你好".len());
+        assert_eq!(session.replace_end_exclusive, "你好".len());
+
+        let rev2 = session.update_preedit("abcdef".to_string(), 6);
+        assert_eq!(rev2.virtual_text, "你好abcdef世界");
+        assert_eq!(session.replace_start, "你好".len());
+        assert_eq!(session.replace_end_exclusive, "你好".len(),
+            "replace_end must NOT change with preedit length");
+    }
+
+    #[test]
+    fn composition_session_set_composing_region() {
+        let mut session = CompositionSession::new(
+            1, 10, "你好世界".to_string(), 0,
+        );
+        session.set_composing_region(3, 9);
+        assert_eq!(session.replace_start, 3);
+        assert_eq!(session.replace_end_exclusive, 9);
+        let rev = session.update_preedit("abc".to_string(), 3);
+        assert_eq!(rev.virtual_text, "你abc界");
+    }
+
+    #[test]
+    fn composition_session_update_creates_revision_chain() {
+        let mut session = CompositionSession::new(
+            1, 10, "hello world".to_string(), 5,
+        );
+
+        let rev1 = session.update_preedit("n".to_string(), 1);
+        assert_eq!(rev1.revision_id, 1);
+        assert_eq!(rev1.session_id, 1);
+        assert!(rev1.offset_map_from_previous.is_none(), "First revision has no previous");
+
+        let rev2 = session.update_preedit("ni".to_string(), 2);
+        assert_eq!(rev2.revision_id, 2);
+        assert!(rev2.offset_map_from_previous.is_some(), "Second revision must have offset map");
+        assert_eq!(rev2.preedit_text, "ni");
+
+        let rev3 = session.update_preedit("nih".to_string(), 3);
+        assert_eq!(rev3.revision_id, 3);
+        assert!(rev3.offset_map_from_previous.is_some());
+    }
+
+    #[test]
+    fn composition_session_does_not_modify_committed_text() {
+        let mut session = CompositionSession::new(
+            1, 10, "original".to_string(), 4,
+        );
+        session.update_preedit("test".to_string(), 4);
+        assert_eq!(session.committed_text_at_start, "original");
+    }
+
+    #[test]
+    fn composition_session_clear_resets_preedit() {
+        let mut session = CompositionSession::new(
+            1, 10, "hello".to_string(), 5,
+        );
+        session.update_preedit("world".to_string(), 5);
+        assert!(!session.preedit_text.is_empty());
+        session.clear();
+        assert!(session.preedit_text.is_empty());
+        assert!(session.current_visual_revision.is_none());
+    }
+
+    // --- #517: CompositionVisualRevision::from_previous 测试 ---
+
+    #[test]
+    fn composition_visual_revision_from_previous_chains_correctly() {
+        let rev1 = CompositionVisualRevision::new(
+            "hello world".to_string(),
+            Some((6, 6)),
+            "n".to_string(),
+            (0, 11),
+        );
+        assert_eq!(rev1.virtual_text, "hello nworld");
+        let rev2 = CompositionVisualRevision::from_previous(
+            &rev1, "ni".to_string(), 2, (0, 11),
+        );
+        assert_eq!(rev2.virtual_text, "hello niworld");
+        assert_eq!(rev2.committed_text, "hello world");
+        assert_eq!(rev2.composition_replace_range, Some((6, 6)));
+        assert!(rev2.offset_map_from_previous.is_some());
+    }
+
+    #[test]
+    fn composition_visual_revision_preedit_byte_range_in_virtual_text() {
+        let rev = CompositionVisualRevision::new(
+            "你好世界".to_string(),
+            Some((6, 6)),
+            "abc".to_string(),
+            (0, 12),
+        );
+        let (start, end) = rev.preedit_byte_range_in_virtual_text();
+        assert_eq!(start, 6);
+        assert_eq!(end, 9);
+    }
+
+    #[test]
+    fn composition_visual_revision_preedit_byte_range_no_replace() {
+        let rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            None,
+            "world".to_string(),
+            (0, 5),
+        );
+        let (start, end) = rev.preedit_byte_range_in_virtual_text();
+        assert_eq!(start, 5);
+        assert_eq!(end, 10);
+    }
+
+    // --- #517: OffsetMap 测试 ---
+
+    #[test]
+    fn offset_map_prefix_identity() {
+        let map = OffsetMap::build("hello world", "hello WORLD");
+        assert!(!map.entries.is_empty());
+        let first = &map.entries[0];
+        assert_eq!(first.kind, OffsetMapKind::Identity);
+        assert_eq!(first.old_byte_offset, 0);
+        assert_eq!(first.new_byte_offset, 0);
+        assert_eq!(first.length, 6);
+    }
+
+    #[test]
+    fn offset_map_suffix_shifted() {
+        let map = OffsetMap::build("ab", "aXb");
+        assert!(map.entries.len() >= 2);
+        let suffix = map.entries.iter().find(|e| e.kind == OffsetMapKind::Shifted);
+        assert!(suffix.is_some(), "Suffix after insert must be Shifted");
+        let suffix = suffix.unwrap();
+        assert_eq!(suffix.old_byte_offset, 1);
+        assert_eq!(suffix.new_byte_offset, 2);
+        assert_eq!(suffix.length, 1);
+    }
+
+    #[test]
+    fn offset_map_map_old_to_new_identity() {
+        let map = OffsetMap::build("abcde", "abXde");
+        assert_eq!(map.map_old_to_new(0), Some(0));
+        assert_eq!(map.map_old_to_new(1), Some(1));
+    }
+
+    #[test]
+    fn offset_map_map_old_to_new_shifted() {
+        let map = OffsetMap::build("ab", "aXb");
+        assert_eq!(map.map_old_to_new(1), Some(2));
+    }
+
+    #[test]
+    fn offset_map_map_old_to_new_no_mapping_for_middle() {
+        let map = OffsetMap::build("abc", "aXc");
+        assert!(map.map_old_to_new(1).is_none(), "Middle changed region has no mapping");
+    }
+
+    #[test]
+    fn offset_map_empty_texts() {
+        let map = OffsetMap::build("", "");
+        assert!(map.entries.is_empty());
+        let map2 = OffsetMap::build("", "abc");
+        assert!(map2.entries.is_empty());
+    }
+
+    #[test]
+    fn offset_map_same_text() {
+        let map = OffsetMap::build("abc", "abc");
+        assert!(map.entries.is_empty(), "Same text has no offset map");
+    }
+
+    // --- #517: SnapshotOwner 测试 ---
+
+    #[test]
+    fn snapshot_owner_serializes_camel_case() {
+        let json = serde_json::to_string(&SnapshotOwner::OwnedBySession).unwrap();
+        assert!(json.contains("\"ownedBySession\""));
+        let json2 = serde_json::to_string(&SnapshotOwner::OwnedByTransaction { transaction_id: 42 }).unwrap();
+        assert!(json2.contains("\"ownedByTransaction\""));
+        let json3 = serde_json::to_string(&SnapshotOwner::Released).unwrap();
+        assert!(json3.contains("\"released\""));
+    }
+
+    #[test]
+    fn snapshot_owner_equality() {
+        assert_eq!(SnapshotOwner::OwnedBySession, SnapshotOwner::OwnedBySession);
+        assert_eq!(
+            SnapshotOwner::OwnedByTransaction { transaction_id: 1 },
+            SnapshotOwner::OwnedByTransaction { transaction_id: 1 },
+        );
+        assert_ne!(
+            SnapshotOwner::OwnedByTransaction { transaction_id: 1 },
+            SnapshotOwner::OwnedByTransaction { transaction_id: 2 },
+        );
+        assert_eq!(SnapshotOwner::Released, SnapshotOwner::Released);
+        assert_ne!(SnapshotOwner::OwnedBySession, SnapshotOwner::Released);
+    }
+
+    // --- #517: revision 接续测试 ---
+
+    #[test]
+    fn composition_update_from_previous_creates_chained_revision() {
+        let mut engine = EditorEngine::new();
+        let rev1 = CompositionVisualRevision::new(
+            "hello world".to_string(),
+            Some((6, 6)),
+            "n".to_string(),
+            (0, 11),
+        );
+        let tx = engine.composition_update_from_previous(&rev1, "ni", 2);
+        assert_eq!(tx.old_revision.virtual_text, "hello nworld");
+        assert_eq!(tx.new_revision.virtual_text, "hello niworld");
+        assert!(tx.new_revision.offset_map_from_previous.is_some());
+    }
+
+    #[test]
+    fn composition_update_from_previous_n_to_ni_to_nih() {
+        let mut engine = EditorEngine::new();
+        let rev1 = CompositionVisualRevision::new(
+            "hello ".to_string(),
+            Some((6, 6)),
+            "n".to_string(),
+            (0, 6),
+        );
+        let tx1 = engine.composition_update_from_previous(&rev1, "ni", 2);
+        assert_eq!(tx1.old_revision.preedit_text, "n");
+        assert_eq!(tx1.new_revision.preedit_text, "ni");
+
+        let tx2 = engine.composition_update_from_previous(&tx1.new_revision, "nih", 3);
+        assert_eq!(tx2.old_revision.preedit_text, "ni");
+        assert_eq!(tx2.new_revision.preedit_text, "nih");
+        assert!(tx2.new_revision.offset_map_from_previous.is_some());
+    }
+
+    // --- #517: commit/cancel 使用真实 replaceRange ---
+
+    #[test]
+    fn commit_with_replace_range_replaces_correctly() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello world".to_string(),
+            Some((6, 11)),
+            "earth".to_string(),
+            (0, 11),
+        );
+        let committed_after = "hello earth";
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello world",
+            committed_after,
+            comp_rev,
+            true,
+        );
+        assert!(tx.is_commit);
+        assert!(tx.is_visual_same, "Same visual text on commit with replace range");
+    }
+
+    #[test]
+    fn cancel_with_replace_range_restores_committed() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello world".to_string(),
+            Some((6, 11)),
+            "earth".to_string(),
+            (0, 11),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello world",
+            "hello world",
+            comp_rev,
+            false,
+        );
+        assert!(!tx.is_commit);
+        assert!(!tx.visual_class_kinds.is_empty(), "Cancel must produce visual classifications");
+    }
+
+    #[test]
+    fn commit_same_visual_text_no_repeat() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            Some((5, 5)),
+            " world".to_string(),
+            (0, 5),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello",
+            "hello world",
+            comp_rev,
+            true,
+        );
+        assert!(tx.is_visual_same);
+    }
+
+    #[test]
+    fn commit_candidate_conversion_generates_crossfade() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello ".to_string(),
+            Some((6, 8)),
+            "ni".to_string(),
+            (0, 8),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello ",
+            "hello 你",
+            comp_rev,
+            true,
+        );
+        assert!(!tx.is_visual_same);
+        assert!(!tx.visual_class_kinds.is_empty());
+    }
+
+    // --- #517: CompositionSession 完整流程 ---
+
+    #[test]
+    fn composition_session_full_lifecycle() {
+        let mut session = CompositionSession::new(
+            1, 100, "你好世界".to_string(), "你好".len(),
+        );
+
+        let rev1 = session.update_preedit("n".to_string(), 1);
+        assert_eq!(rev1.virtual_text, "你好n世界");
+        assert_eq!(rev1.composition_replace_range, Some((6, 6)));
+
+        let rev2 = session.update_preedit("ni".to_string(), 2);
+        assert_eq!(rev2.virtual_text, "你好ni世界");
+        assert_eq!(rev2.composition_replace_range, Some((6, 6)));
+        assert!(rev2.offset_map_from_previous.is_some());
+
+        let rev3 = session.update_preedit("nih".to_string(), 3);
+        assert_eq!(rev3.virtual_text, "你好nih世界");
+        assert_eq!(rev3.composition_replace_range, Some((6, 6)));
+    }
+
+    #[test]
+    fn composition_session_with_composing_region() {
+        let mut session = CompositionSession::new_with_replace_range(
+            1, 100, "你好世界".to_string(), 3, 9,
+        );
+        let rev = session.update_preedit("abc".to_string(), 3);
+        assert_eq!(rev.virtual_text, "你abc界");
+        assert_eq!(rev.composition_replace_range, Some((3, 9)));
+    }
+
+    // --- #517: CompositionVisualRevision 新字段序列化 ---
+
+    #[test]
+    fn composition_visual_revision_new_fields_serialize() {
+        let rev = CompositionVisualRevision {
+            revision_id: 42,
+            session_id: 7,
+            committed_revision_id: 100,
+            committed_text: "hello".to_string(),
+            composition_replace_range: Some((5, 5)),
+            preedit_text: "world".to_string(),
+            preedit_cursor_offset: 3,
+            virtual_text: "helloworld".to_string(),
+            affected_paragraph_range: (0, 5),
+            line_snapshot_ids: Vec::new(),
+            cursor_rect: None,
+            decoration_ranges: Vec::new(),
+            ime_cursor_range: None,
+            offset_map_from_previous: Some(OffsetMap {
+                entries: vec![OffsetMapEntry {
+                    old_byte_offset: 0,
+                    new_byte_offset: 0,
+                    length: 5,
+                    kind: OffsetMapKind::Identity,
+                }],
+            }),
+        };
+        let json = serde_json::to_string(&rev).unwrap();
+        assert!(json.contains("\"revisionId\":42"));
+        assert!(json.contains("\"sessionId\":7"));
+        assert!(json.contains("\"committedRevisionId\":100"));
+        assert!(json.contains("\"preeditCursorOffset\":3"));
+        assert!(json.contains("\"offsetMapFromPrevious\":"));
+        assert!(json.contains("\"identity\""));
+    }
+
+    #[test]
+    fn composition_session_serializes_camel_case() {
+        let session = CompositionSession::new(1, 10, "hello".to_string(), 5);
+        let json = serde_json::to_string(&session).unwrap();
+        assert!(json.contains("\"sessionId\":1"));
+        assert!(json.contains("\"committedRevisionId\":10"));
+        assert!(json.contains("\"committedTextAtStart\":"));
+        assert!(json.contains("\"replaceStart\":5"));
+        assert!(json.contains("\"replaceEndExclusive\":5"));
+        assert!(json.contains("\"preeditText\":"));
+        assert!(json.contains("\"preeditCursorOffset\":0"));
+    }
+
+    // --- #517: OffsetMap 序列化 ---
+
+    #[test]
+    fn offset_map_serializes_camel_case() {
+        let map = OffsetMap {
+            entries: vec![
+                OffsetMapEntry {
+                    old_byte_offset: 0,
+                    new_byte_offset: 0,
+                    length: 5,
+                    kind: OffsetMapKind::Identity,
+                },
+                OffsetMapEntry {
+                    old_byte_offset: 8,
+                    new_byte_offset: 10,
+                    length: 3,
+                    kind: OffsetMapKind::Shifted,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&map).unwrap();
+        assert!(json.contains("\"entries\":"));
+        assert!(json.contains("\"oldByteOffset\":"));
+        assert!(json.contains("\"newByteOffset\":"));
+        assert!(json.contains("\"length\":"));
+        assert!(json.contains("\"kind\":"));
+        assert!(json.contains("\"identity\""));
+        assert!(json.contains("\"shifted\""));
+    }
+
+    // --- #517: CompositionSession is_active/virtual_text/commit/cancel 测试 ---
+
+    #[test]
+    fn composition_session_is_active() {
+        let mut session = CompositionSession::new(1, 1, "hello".to_string(), 5);
+        assert!(!session.is_active());
+        session.update_preedit("abc".to_string(), 0);
+        assert!(session.is_active());
+    }
+
+    #[test]
+    fn composition_session_virtual_text_zero_length_replace() {
+        let mut session = CompositionSession::new(1, 1, "你好世界".to_string(), "你好".len());
+        session.update_preedit("abc".to_string(), 0);
+        assert_eq!(session.virtual_text(), "你好abc世界");
+    }
+
+    #[test]
+    fn composition_session_virtual_text_nonzero_replace() {
+        let mut session = CompositionSession::new_with_replace_range(
+            1, 1, "你好世界".to_string(), 3, 6,
+        );
+        session.update_preedit("abc".to_string(), 0);
+        assert_eq!(session.virtual_text(), "你abc世界");
+    }
+
+    #[test]
+    fn composition_session_preedit_byte_range_in_virtual_text() {
+        let mut session = CompositionSession::new_with_replace_range(
+            1, 1, "你好世界".to_string(), 3, 6,
+        );
+        session.update_preedit("abcdef".to_string(), 6);
+        let (start, end) = session.preedit_byte_range_in_virtual_text();
+        assert_eq!(start, 3);
+        assert_eq!(end, 9, "preedit range in virtualText differs from replaceRange");
+    }
+
+    #[test]
+    fn composition_session_commit_uses_replace_range() {
+        let mut session = CompositionSession::new(1, 1, "你好世界".to_string(), "你好".len());
+        session.update_preedit("abc".to_string(), 0);
+        let (comp_rev, committed_after) = session.commit("abc");
+        assert_eq!(committed_after, "你好abc世界");
+        assert_eq!(comp_rev.virtual_text, "你好abc世界");
+        assert!(!session.is_active());
+    }
+
+    #[test]
+    fn composition_session_commit_with_nonzero_replace_range() {
+        let mut session = CompositionSession::new_with_replace_range(
+            1, 1, "你好世界".to_string(), 3, 6,
+        );
+        session.update_preedit("abc".to_string(), 0);
+        let (comp_rev, committed_after) = session.commit("abc");
+        assert_eq!(committed_after, "你abc世界");
+        assert_eq!(comp_rev.virtual_text, "你abc世界");
+    }
+
+    #[test]
+    fn composition_session_cancel_restores_committed_text() {
+        let mut session = CompositionSession::new(1, 1, "你好世界".to_string(), "你好".len());
+        session.update_preedit("abc".to_string(), 0);
+        let comp_rev = session.cancel();
+        assert_eq!(comp_rev.virtual_text, "你好abc世界");
+        assert!(!session.is_active());
+    }
+
+    #[test]
+    fn composition_session_commit_same_visual_no_repeat() {
+        let mut session = CompositionSession::new(1, 1, "你好世界".to_string(), "你好".len());
+        session.update_preedit("abc".to_string(), 0);
+        let (comp_rev, committed_after) = session.commit("abc");
+        assert_eq!(comp_rev.virtual_text, committed_after);
+    }
+
+    #[test]
+    fn composition_session_clear_resets_last_submitted_generation() {
+        let mut session = CompositionSession::new(1, 1, "hello".to_string(), 5);
+        session.update_preedit("abc".to_string(), 0);
+        assert!(session.is_active());
+        session.clear();
+        assert!(!session.is_active());
+        assert!(session.preedit_text.is_empty());
+        assert!(session.current_visual_revision.is_none());
+        assert_eq!(session.last_submitted_generation, 0);
+    }
+
+    #[test]
+    fn composition_session_emoji_boundary() {
+        let text = "👨‍👩‍👧‍👦hello";
+        let emoji_len = "👨‍👩‍👧‍👦".len();
+        let mut session = CompositionSession::new(1, 1, text.to_string(), emoji_len);
+        session.update_preedit("abc".to_string(), 0);
+        assert_eq!(session.virtual_text(), "👨‍👩‍👧‍👦abchello");
     }
 }

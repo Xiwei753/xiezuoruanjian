@@ -16,7 +16,7 @@ package com.xiwei.sujian.platform
  * - context menu: Android context menu
  *
  * 未真实接入：
- * - replacement commit: Android InputConnection 未实现 setComposingRegion 修正
+ * - (无)
  */
 data class PlatformCapabilities(
     val supportsImePreedit: Boolean = false,
@@ -33,7 +33,7 @@ data class PlatformCapabilities(
         fun android(): PlatformCapabilities = PlatformCapabilities(
             supportsImePreedit = true,
             supportsCursorAnchor = true,
-            supportsReplacementCommit = false,
+            supportsReplacementCommit = true,
             supportsTextAnimation = true,
             supportsSmoothCursor = true,
             supportsReflowAnimation = true,

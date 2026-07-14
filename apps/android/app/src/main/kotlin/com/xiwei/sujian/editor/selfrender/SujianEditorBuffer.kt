@@ -61,6 +61,8 @@ class SujianEditorBuffer {
     var selection: SujianSelection = SujianSelection.collapsed(0)
         private set
 
+    var committedRevisionId: Long = 0
+
     // ── Composing 状态 ──
     var composingStart: Int = -1
         private set
@@ -81,6 +83,14 @@ class SujianEditorBuffer {
     var composingText: String = ""
         private set
     val hasComposing: Boolean get() = composingStart >= 0 && composingEnd >= 0 && composingStart != composingEnd
+
+    var compositionSession: CompositionSession = CompositionSession.EMPTY
+        private set
+
+    val hasActiveCompositionSession: Boolean get() = compositionSession.isActive
+
+    val compositionReplaceStart: Int get() = compositionSession.replaceStart
+    val compositionReplaceEndExclusive: Int get() = compositionSession.replaceEndExclusive
 
     // ── 配置 ──
     var maxAnimatedChars: Int = 8
@@ -223,8 +233,31 @@ class SujianEditorBuffer {
      * 设置 composing 区域（仅更新 preedit 层，不触发正文变更/动画）
      */
     fun setComposingRegion(start: Int, end: Int) {
-        composingStart = start.coerceIn(0, text.length)
-        composingEnd = end.coerceIn(0, text.length)
+        var clampedStart = start.coerceIn(0, text.length)
+        var clampedEnd = end.coerceIn(0, text.length)
+        clampedStart = clampToCharBoundary(text, clampedStart)
+        if (clampedEnd < text.length && Character.isLowSurrogate(text[clampedEnd])
+            && clampedEnd > 0 && Character.isHighSurrogate(text[clampedEnd - 1])) {
+            clampedEnd += 1
+        }
+        val preedit = text.substring(clampedStart, clampedEnd)
+
+        if (hasActiveCompositionSession) {
+            compositionSession = compositionSession.setComposingRegion(clampedStart, clampedEnd, preedit)
+        } else {
+            compositionSession = CompositionSession.createNew(
+                committedRevisionId = committedRevisionId,
+                committedText = text,
+                replaceStart = clampedStart,
+                replaceEndExclusive = clampedEnd,
+                preeditText = preedit,
+                preeditCursorOffset = preedit.length
+            )
+        }
+
+        composingStart = clampedStart
+        composingEnd = clampedEnd
+        composingText = text.substring(clampedStart, clampedEnd)
     }
 
     /**
@@ -240,21 +273,32 @@ class SujianEditorBuffer {
             clearComposing()
             return
         }
-        // composing text 不进正文 buffer，只记录 composing 状态
-        // 实际的 preedit 显示由 SujianEditorRenderer 的 preedit 层处理
-        composingText = composing
-        composingStart = selection.head
-        composingEnd = selection.head + composing.length
-        // 记录 composing 内光标位置
-        // Android API: newCursorPosition > 0 表示从 composing 开头算的偏移
-        // newCursorPosition < 0 表示从 composing 末尾算的偏移
+        val cursorOffset: Int
         if (newCursorPos > 0) {
-            composingCursor = (newCursorPos - 1).coerceIn(0, composing.length)
+            cursorOffset = (newCursorPos - 1).coerceIn(0, composing.length)
         } else if (newCursorPos < 0) {
-            composingCursor = (composing.length + newCursorPos + 1).coerceIn(0, composing.length)
+            cursorOffset = (composing.length + newCursorPos + 1).coerceIn(0, composing.length)
         } else {
-            composingCursor = 0
+            cursorOffset = 0
         }
+
+        if (hasActiveCompositionSession) {
+            compositionSession = compositionSession.updatePreedit(composing, cursorOffset)
+        } else {
+            compositionSession = CompositionSession.createNew(
+                committedRevisionId = committedRevisionId,
+                committedText = text,
+                replaceStart = selection.head,
+                replaceEndExclusive = selection.head,
+                preeditText = composing,
+                preeditCursorOffset = cursorOffset
+            )
+        }
+
+        composingText = composing
+        composingStart = compositionSession.replaceStart
+        composingEnd = compositionSession.replaceStart + composing.length
+        composingCursor = cursorOffset
     }
 
     /**
@@ -407,6 +451,7 @@ class SujianEditorBuffer {
         composingEnd = -1
         composingCursor = 0
         composingText = ""
+        compositionSession = CompositionSession.EMPTY
     }
 
 }

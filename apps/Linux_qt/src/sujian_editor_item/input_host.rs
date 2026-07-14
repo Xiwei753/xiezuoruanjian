@@ -1,13 +1,61 @@
 use super::*;
 
-fn build_virtual_text(committed_text: &str, replace_start: usize, replace_end: usize, preedit_text: &str) -> String {
-    writer_core::editor::build_virtual_text(committed_text, Some((replace_start, replace_end)), preedit_text)
-}
-
 pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
     cpp!(unsafe [event as "const QMouseEvent*"] -> bool as "bool" {
         return event ? (event->buttons() & Qt::LeftButton) : false;
     })
+}
+
+impl SujianEditorItem {
+    fn ensure_composition_session(&mut self) {
+        if self.composition_session.is_none() {
+            let cursor = self.buffer.cursor;
+            self.composition_session = Some(CompositionSession::new(
+                self.text_revision,
+                self.visual_revision,
+                self.buffer.text.clone(),
+                cursor,
+            ));
+        }
+    }
+
+    pub(crate) fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
+        if let Some(ref session) = self.composition_session {
+            session.preedit_byte_range_in_virtual_text()
+        } else {
+            (self.buffer.cursor, self.buffer.cursor)
+        }
+    }
+
+    fn prepare_composition_update(&mut self, text: String, cursor: usize) -> CompositionUpdateData {
+        self.ensure_composition_session();
+
+        let (old_preedit, generation, composition_byte_start, composition_byte_end, virtual_text) = {
+            let session = self.composition_session.as_mut().unwrap();
+            let old_preedit = session.preedit_text.clone();
+            session.update_preedit(text, cursor);
+            let generation = session.last_submitted_generation;
+            let (start, end) = session.preedit_byte_range_in_virtual_text();
+            let vt = session.virtual_text();
+            (old_preedit, generation, start, end, vt)
+        };
+
+        CompositionUpdateData {
+            old_preedit,
+            generation,
+            composition_byte_start,
+            composition_byte_end,
+            virtual_text,
+        }
+    }
+}
+
+struct CompositionUpdateData {
+    old_preedit: String,
+    generation: u64,
+    composition_byte_start: usize,
+    composition_byte_end: usize,
+    virtual_text: String,
 }
 
 impl EditorInputHost for SujianEditorItem {
@@ -72,12 +120,11 @@ impl EditorInputHost for SujianEditorItem {
     }
 
     fn input_clear_preedit(&mut self) {
-        if !self.preedit_text.is_empty() {
+        if !self.preedit_text.is_empty() || self.composition_session.is_some() {
             self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
 
             if self.typing_animation_enabled {
-                let composition_byte_start = self.buffer.cursor;
-                let composition_byte_end = self.buffer.cursor + self.preedit_text.len();
+                let (composition_byte_start, composition_byte_end) = self.preedit_byte_range_in_virtual_text();
                 let width = self.bounding_width();
                 let old_cursor_rect = self.preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
                 let new_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
@@ -112,6 +159,7 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
+        self.composition_session = None;
         self.update_ime_cursor_for_preedit();
     }
 
@@ -122,16 +170,25 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes.clear();
 
         if self.typing_animation_enabled && !text.is_empty() {
-            let composition_byte_start = self.buffer.cursor;
-            let composition_byte_end = self.buffer.cursor + text.len();
+            let data = self.prepare_composition_update(text, cursor);
             let width = self.bounding_width();
 
-            let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
-                self.build_editor_layout_snapshot(width)
-            });
+            let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
+                self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                    self.build_editor_layout_snapshot(width)
+                })
+            } else {
+                self.animation_coordinator
+                    .active_composition_new_snapshot()
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                            self.build_editor_layout_snapshot(width)
+                        })
+                    })
+            };
 
-            let virtual_text = build_virtual_text(&self.buffer.text, composition_byte_start, composition_byte_start, &text);
-            let new_snapshot = self.build_virtual_layout_snapshot(&virtual_text, width);
+            let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
 
             let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
@@ -140,8 +197,8 @@ impl EditorInputHost for SujianEditorItem {
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
-                composition_byte_start,
-                composition_byte_end,
+                data.composition_byte_start,
+                data.composition_byte_end,
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -165,16 +222,25 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes = attributes;
 
         if self.typing_animation_enabled && !text.is_empty() {
-            let composition_byte_start = self.buffer.cursor;
-            let composition_byte_end = self.buffer.cursor + text.len();
+            let data = self.prepare_composition_update(text, cursor);
             let width = self.bounding_width();
 
-            let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
-                self.build_editor_layout_snapshot(width)
-            });
+            let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
+                self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                    self.build_editor_layout_snapshot(width)
+                })
+            } else {
+                self.animation_coordinator
+                    .active_composition_new_snapshot()
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                            self.build_editor_layout_snapshot(width)
+                        })
+                    })
+            };
 
-            let virtual_text = build_virtual_text(&self.buffer.text, composition_byte_start, composition_byte_start, &text);
-            let new_snapshot = self.build_virtual_layout_snapshot(&virtual_text, width);
+            let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
 
             let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
@@ -183,8 +249,8 @@ impl EditorInputHost for SujianEditorItem {
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
-                composition_byte_start,
-                composition_byte_end,
+                data.composition_byte_start,
+                data.composition_byte_end,
                 old_cursor_rect,
                 new_cursor_rect,
             );

@@ -90,17 +90,33 @@ class EditOffsetMap private constructor(
     data class NewRange(val start: Int, val end: Int)
 
     companion object {
-        /**
-         * 从 old/new 文本和编辑范围构建 OffsetMap。
-         *
-         * @param oldText 编辑前文本
-         * @param newText 编辑后文本
-         * @param insertedRangeStart 插入范围起始（UTF-8 byte offset，基于 newText）
-         * @param insertedRangeEnd 插入范围结束（UTF-8 byte offset，基于 newText）
-         * @param isDelete 是否为删除操作
-         * @param deletedRangeStart 删除范围起始（UTF-8 byte offset，基于 oldText），仅删除时有效
-         * @param deletedRangeEnd 删除范围结束（UTF-8 byte offset，基于 oldText），仅删除时有效
-         */
+        fun fromReplacement(
+            oldText: String,
+            newText: String,
+            oldReplaceStart: Int,
+            oldReplaceEnd: Int,
+            newReplaceStart: Int,
+            newReplaceEnd: Int
+        ): EditOffsetMap {
+            val unchangedSegments = mutableListOf<ByteSegment>()
+            val insertedRanges = mutableListOf<ByteSegment>()
+            val deletedRanges = mutableListOf<ByteSegment>()
+
+            val oldLen = SujianEditorBuffer.utf16ToUtf8(oldText, oldText.length)
+            val newLen = SujianEditorBuffer.utf16ToUtf8(newText, newText.length)
+
+            if (oldReplaceStart > 0) {
+                unchangedSegments.add(ByteSegment(0, oldReplaceStart, 0, newReplaceStart))
+            }
+            deletedRanges.add(ByteSegment(oldReplaceStart, oldReplaceEnd, newReplaceStart, newReplaceStart))
+            insertedRanges.add(ByteSegment(oldReplaceStart, oldReplaceStart, newReplaceStart, newReplaceEnd))
+            if (oldReplaceEnd < oldLen) {
+                unchangedSegments.add(ByteSegment(oldReplaceEnd, oldLen, newReplaceEnd, newLen))
+            }
+
+            return EditOffsetMap(unchangedSegments, insertedRanges, deletedRanges)
+        }
+
         fun fromEdit(
             oldText: String,
             newText: String,

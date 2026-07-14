@@ -19,12 +19,15 @@ import android.graphics.RectF
 data class AndroidCompositionVisualRevision(
     val committedText: String,
     val compositionReplaceRange: IntRange,
+    val preeditRangeInVirtualText: IntRange,
     val preeditText: String,
     val virtualText: String,
     val affectedParagraphRange: IntRange,
     val lineSnapshots: List<AndroidLineSnapshot>,
     val cursorRect: RectF,
-    val decorationRanges: List<IntRange>
+    val decorationRanges: List<IntRange>,
+    val revisionId: Long = 0,
+    val sessionId: CompositionSessionId = CompositionSessionId(0)
 ) {
     fun release() {
         lineSnapshots.forEach { it.release() }
@@ -53,58 +56,73 @@ enum class DecorationKind {
  * - 事务完成或取消后统一释放其持有的 old/new snapshots。
  * - clear() 只能释放仍由 manager 持有、尚未转移给事务的资源。
  */
+enum class SnapshotOwner {
+    OwnedBySession, OwnedByTransaction, Released
+}
+
+data class OwnedRevision(
+    val revision: AndroidCompositionVisualRevision,
+    var owner: SnapshotOwner = SnapshotOwner.OwnedBySession
+) {
+    fun release() {
+        check(owner != SnapshotOwner.Released) { "Double release of revision ${revision.revisionId}" }
+        owner = SnapshotOwner.Released
+        revision.release()
+    }
+}
+
 class AndroidCompositionManager {
-    private var currentRevision: AndroidCompositionVisualRevision? = null
-    private var previousRevision: AndroidCompositionVisualRevision? = null
-    private var currentTransferred: Boolean = false
-    private var previousTransferred: Boolean = false
+    private val TAG = "CompositionManager"
+    private var currentOwned: OwnedRevision? = null
+    private var previousOwned: OwnedRevision? = null
 
     fun setCurrent(revision: AndroidCompositionVisualRevision?) {
-        val oldPrevious = previousRevision
-        val oldPreviousTransferred = previousTransferred
+        val oldPrevious = previousOwned
 
-        previousRevision = currentRevision
-        previousTransferred = currentTransferred
+        previousOwned = currentOwned
 
-        if (oldPrevious != null && !oldPreviousTransferred) {
-            oldPrevious.release()
+        if (oldPrevious != null) {
+            if (oldPrevious.owner == SnapshotOwner.OwnedBySession) {
+                oldPrevious.release()
+            }
         }
 
-        currentRevision = revision
-        currentTransferred = false
+        currentOwned = if (revision != null) OwnedRevision(revision) else null
     }
 
-    fun getCurrent(): AndroidCompositionVisualRevision? = currentRevision
+    fun getCurrent(): AndroidCompositionVisualRevision? = currentOwned?.revision
 
-    fun getPrevious(): AndroidCompositionVisualRevision? = previousRevision
+    fun getPrevious(): AndroidCompositionVisualRevision? = previousOwned?.revision
 
     fun takeCurrentForTransaction(): AndroidCompositionVisualRevision? {
-        val rev = currentRevision
-        if (rev != null) {
-            currentTransferred = true
+        val owned = currentOwned ?: return null
+        check(owned.owner == SnapshotOwner.OwnedBySession) {
+            "takeCurrentForTransaction: current revision ${owned.revision.revisionId} owner is ${owned.owner}, expected OwnedBySession"
         }
-        return rev
+        owned.owner = SnapshotOwner.OwnedByTransaction
+        currentOwned = null
+        return owned.revision
     }
 
     fun takePreviousForTransaction(): AndroidCompositionVisualRevision? {
-        val rev = previousRevision
-        if (rev != null) {
-            previousTransferred = true
+        val owned = previousOwned ?: return null
+        check(owned.owner == SnapshotOwner.OwnedBySession) {
+            "takePreviousForTransaction: previous revision ${owned.revision.revisionId} owner is ${owned.owner}, expected OwnedBySession"
         }
-        return rev
+        owned.owner = SnapshotOwner.OwnedByTransaction
+        previousOwned = null
+        return owned.revision
     }
 
     fun clear() {
-        if (currentRevision != null && !currentTransferred) {
-            currentRevision!!.release()
+        if (currentOwned != null && currentOwned!!.owner == SnapshotOwner.OwnedBySession) {
+            currentOwned!!.release()
         }
-        if (previousRevision != null && !previousTransferred) {
-            previousRevision!!.release()
+        if (previousOwned != null && previousOwned!!.owner == SnapshotOwner.OwnedBySession) {
+            previousOwned!!.release()
         }
-        currentRevision = null
-        previousRevision = null
-        currentTransferred = false
-        previousTransferred = false
+        currentOwned = null
+        previousOwned = null
     }
 
     fun buildVirtualText(committedText: String, compositionReplaceRange: IntRange, preeditText: String): String {

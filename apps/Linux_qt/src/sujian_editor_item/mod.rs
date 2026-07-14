@@ -73,9 +73,9 @@ use transaction_key::VisualTransactionKey;
 use layout_revision::LayoutRevision;
 
 use writer_core::editor::{
-    AnimationMode as CoreAnimationMode, CursorRect, EditorAnimationKind, EditorCursor,
-    EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
-    ReflowGlyphRect,
+    AnimationMode as CoreAnimationMode, CompositionSession, CursorRect, EditorAnimationKind,
+    EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction,
+    GlyphRect, PreeditVisualTransaction, ReflowGlyphRect,
 };
 
 use animation_coordinator::AnimationMode;
@@ -299,6 +299,7 @@ pub struct SujianEditorItem {
     preedit_cursor_rect: Option<CursorRect>,
     pending_preedit_cursor_rect: Option<CursorRect>,
     suppress_next_ime_commit: bool,
+    composition_session: Option<CompositionSession>,
     editor_layout: EditorLayout,
     text_revision: u64,
     visual_revision: u64,
@@ -445,6 +446,7 @@ impl Default for SujianEditorItem {
             preedit_cursor_rect: None,
             pending_preedit_cursor_rect: None,
             suppress_next_ime_commit: false,
+            composition_session: None,
             editor_layout: EditorLayout::default(),
             text_revision: 0,
             visual_revision: 0,

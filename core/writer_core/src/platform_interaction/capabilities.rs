@@ -63,14 +63,11 @@ impl PlatformCapabilities {
     /// - reflow animation: Core reflow visual transaction → animation layer
     /// - clipboard: Android ClipboardManager
     /// - context menu: Android context menu
-    ///
-    /// 未真实接入：
-    /// - replacement commit: Android InputConnection 未实现 setComposingRegion 修正
     pub fn android() -> Self {
         Self {
             supports_ime_preedit: true,
             supports_cursor_anchor: true,
-            supports_replacement_commit: false,
+            supports_replacement_commit: true,
             supports_text_animation: true,
             supports_smooth_cursor: true,
             supports_reflow_animation: true,
@@ -206,7 +203,7 @@ mod tests {
         let caps = PlatformCapabilities::android();
         assert!(caps.supports_ime_preedit);
         assert!(caps.supports_cursor_anchor);
-        assert!(!caps.supports_replacement_commit);
+        assert!(caps.supports_replacement_commit);
         assert!(caps.has_any_animation_support());
     }
 
@@ -223,7 +220,7 @@ mod tests {
     #[test]
     fn platform_kind_default_capabilities() {
         assert!(PlatformKind::LinuxQt.default_capabilities().supports_cursor_anchor);
-        assert!(!PlatformKind::Android.default_capabilities().supports_replacement_commit);
+        assert!(PlatformKind::Android.default_capabilities().supports_replacement_commit);
         assert!(!PlatformKind::Harmony.default_capabilities().supports_text_animation);
         assert!(!PlatformKind::Unknown.default_capabilities().has_any_animation_support());
     }

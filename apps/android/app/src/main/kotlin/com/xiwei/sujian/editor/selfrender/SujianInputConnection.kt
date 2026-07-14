@@ -75,8 +75,15 @@ class SujianInputConnection(
 
         if (wasComposing) {
             val editorView = view as? SujianEditorView
+            val replaceStart = buffer.compositionReplaceStart
+            val replaceEndExclusive = buffer.compositionReplaceEndExclusive
+            val hasNonTrivialReplaceRange = replaceStart != replaceEndExclusive
             if (editorView != null) {
-                val result = buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
+                val result = if (hasNonTrivialReplaceRange) {
+                    buffer.replaceRange(replaceStart, replaceEndExclusive, textStr, SujianEditCause.TypingCommit)
+                } else {
+                    buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
+                }
                 imeController.onEditResult(result)
                 imeController.updateSelection()
                 editorView.animationController.handleCompositionCommitOrCancel(
@@ -84,7 +91,11 @@ class SujianInputConnection(
                     isCommit = true
                 )
             } else {
-                val result = buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
+                val result = if (hasNonTrivialReplaceRange) {
+                    buffer.replaceRange(replaceStart, replaceEndExclusive, textStr, SujianEditCause.TypingCommit)
+                } else {
+                    buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
+                }
                 imeController.onEditResult(result)
                 imeController.updateSelection()
             }
@@ -127,10 +138,8 @@ class SujianInputConnection(
 
         val editorView = view as? SujianEditorView
         if (editorView != null) {
-            val composingStart = buffer.composingStart
-            val composingEnd = buffer.composingEnd
-            val compositionReplaceRange = if (composingStart >= 0 && composingEnd >= 0) {
-                composingStart..composingEnd
+            val compositionReplaceRange = if (buffer.hasActiveCompositionSession) {
+                buffer.compositionReplaceStart..buffer.compositionReplaceEndExclusive
             } else {
                 buffer.selection.head..buffer.selection.head
             }
@@ -138,7 +147,8 @@ class SujianInputConnection(
                 committedText = buffer.text,
                 compositionReplaceRange = compositionReplaceRange,
                 preeditText = text.toString(),
-                composingCursorUtf16 = buffer.composingCursor
+                composingCursorUtf16 = buffer.composingCursor,
+                sessionId = buffer.compositionSession.sessionId
             )
         }
 
@@ -154,9 +164,19 @@ class SujianInputConnection(
         if (isClosed) return false
 
         buffer.setComposingRegion(start, end)
-        imeController.updateSelection()
 
-        // 触发重绘以显示 composing 下划线
+        val editorView = view as? SujianEditorView
+        if (editorView != null) {
+            editorView.animationController.handleCompositionUpdate(
+                committedText = buffer.text,
+                compositionReplaceRange = buffer.compositionReplaceStart..buffer.compositionReplaceEndExclusive,
+                preeditText = buffer.composingText,
+                composingCursorUtf16 = buffer.composingCursor,
+                sessionId = buffer.compositionSession.sessionId
+            )
+        }
+
+        imeController.updateSelection()
         view.invalidate()
 
         return true
