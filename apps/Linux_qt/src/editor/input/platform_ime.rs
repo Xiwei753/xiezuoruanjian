@@ -14,6 +14,7 @@
 use crate::sujian_editor_item::SujianEditorItem;
 use super::controller::*;
 use super::events::decode_utf16_ptr;
+use crate::editor::paragraph_index_map::{utf16_code_unit_to_utf8_byte, utf16_code_unit_range_to_utf8_byte_range};
 use std::ffi::c_void;
 
 #[repr(C)]
@@ -103,17 +104,7 @@ extern "C" fn sujian_ime_preedit(
         return;
     };
     let text = decode_utf16_ptr(text, text_len);
-    let char_offsets: Vec<usize> = {
-        let mut offsets = Vec::new();
-        let mut byte_pos = 0;
-        offsets.push(0);
-        for ch in text.chars() {
-            byte_pos += ch.len_utf8();
-            offsets.push(byte_pos);
-        }
-        offsets
-    };
-    let cursor_byte = char_offsets.get(cursor.max(0) as usize).copied().unwrap_or(text.len()) as i32;
+    let cursor_byte = utf16_code_unit_to_utf8_byte(&text, cursor.max(0) as usize) as i32;
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_preedit(item, text, cursor_byte);
     }));
@@ -151,21 +142,10 @@ extern "C" fn sujian_ime_preedit_attrs(
             &vec![0i32; attr_count as usize]
         };
 
-        let char_offsets: Vec<usize> = {
-            let mut offsets = Vec::new();
-            let mut byte_pos = 0;
-            offsets.push(0);
-            for ch in text.chars() {
-                byte_pos += ch.len_utf8();
-                offsets.push(byte_pos);
-            }
-            offsets
-        };
-
         for i in 0..attr_count as usize {
             let attr_type = types_slice[i];
-            let char_start = starts_slice[i].max(0) as usize;
-            let char_length = lengths_slice[i].max(0) as usize;
+            let qchar_start = starts_slice[i].max(0) as usize;
+            let qchar_length = lengths_slice[i].max(0) as usize;
             let format_code = formats_slice[i];
 
             let kind = if attr_type == 0 {
@@ -185,9 +165,7 @@ extern "C" fn sujian_ime_preedit_attrs(
                 continue;
             };
 
-            let byte_start = char_offsets.get(char_start).copied().unwrap_or(text.len());
-            let char_end = char_start + char_length;
-            let byte_end = char_offsets.get(char_end).copied().unwrap_or(text.len());
+            let (byte_start, byte_end) = utf16_code_unit_range_to_utf8_byte_range(&text, qchar_start, qchar_length);
             let byte_length = byte_end.saturating_sub(byte_start);
 
             attributes.push(crate::sujian_editor_item::PreeditAttribute {
@@ -198,17 +176,7 @@ extern "C" fn sujian_ime_preedit_attrs(
         }
     }
 
-    let char_offsets: Vec<usize> = {
-        let mut offsets = Vec::new();
-        let mut byte_pos = 0;
-        offsets.push(0);
-        for ch in text.chars() {
-            byte_pos += ch.len_utf8();
-            offsets.push(byte_pos);
-        }
-        offsets
-    };
-    let cursor_byte = char_offsets.get(cursor.max(0) as usize).copied().unwrap_or(text.len()) as i32;
+    let cursor_byte = utf16_code_unit_to_utf8_byte(&text, cursor.max(0) as usize) as i32;
 
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_preedit_with_attrs(item, text, cursor_byte, attributes);

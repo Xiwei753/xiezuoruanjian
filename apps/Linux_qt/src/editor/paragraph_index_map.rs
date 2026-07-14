@@ -93,6 +93,31 @@ impl ParagraphIndexMap {
     }
 }
 
+pub fn utf16_code_unit_to_utf8_byte(text: &str, qchar_offset: usize) -> usize {
+    let mut utf16_offset: usize = 0;
+    for (byte_pos, ch) in text.char_indices() {
+        if utf16_offset == qchar_offset {
+            return byte_pos;
+        }
+        let utf16_len = ch.len_utf16();
+        if utf16_offset + utf16_len > qchar_offset && utf16_len > 1 {
+            return byte_pos;
+        }
+        utf16_offset += utf16_len;
+    }
+    text.len()
+}
+
+pub fn utf16_code_unit_range_to_utf8_byte_range(
+    text: &str,
+    qchar_start: usize,
+    qchar_length: usize,
+) -> (usize, usize) {
+    let byte_start = utf16_code_unit_to_utf8_byte(text, qchar_start);
+    let byte_end = utf16_code_unit_to_utf8_byte(text, qchar_start + qchar_length);
+    (byte_start, byte_end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +202,57 @@ mod tests {
         assert_eq!(map.document_byte_to_qchar(0, 0), 0);
         assert_eq!(map.document_byte_to_qchar(1, 0), 1);
         assert_eq!(map.document_byte_to_qchar(5, 0), 3);
+    }
+
+    #[test]
+    fn test_utf16_to_utf8_ascii() {
+        assert_eq!(utf16_code_unit_to_utf8_byte("hello", 0), 0);
+        assert_eq!(utf16_code_unit_to_utf8_byte("hello", 3), 3);
+        assert_eq!(utf16_code_unit_to_utf8_byte("hello", 5), 5);
+        assert_eq!(utf16_code_unit_to_utf8_byte("hello", 10), 5);
+    }
+
+    #[test]
+    fn test_utf16_to_utf8_cjk() {
+        assert_eq!(utf16_code_unit_to_utf8_byte("你好世界", 0), 0);
+        assert_eq!(utf16_code_unit_to_utf8_byte("你好世界", 1), 3);
+        assert_eq!(utf16_code_unit_to_utf8_byte("你好世界", 2), 6);
+    }
+
+    #[test]
+    fn test_utf16_to_utf8_emoji() {
+        assert_eq!(utf16_code_unit_to_utf8_byte("a😀b", 0), 0);
+        assert_eq!(utf16_code_unit_to_utf8_byte("a😀b", 1), 1);
+        assert_eq!(utf16_code_unit_to_utf8_byte("a😀b", 2), 1);
+        assert_eq!(utf16_code_unit_to_utf8_byte("a😀b", 3), 5);
+    }
+
+    #[test]
+    fn test_utf16_to_utf8_mixed() {
+        assert_eq!(utf16_code_unit_to_utf8_byte("a你b好", 0), 0);
+        assert_eq!(utf16_code_unit_to_utf8_byte("a你b好", 1), 1);
+        assert_eq!(utf16_code_unit_to_utf8_byte("a你b好", 2), 4);
+        assert_eq!(utf16_code_unit_to_utf8_byte("a你b好", 3), 5);
+    }
+
+    #[test]
+    fn test_utf16_range_to_utf8_range() {
+        assert_eq!(utf16_code_unit_range_to_utf8_byte_range("a😀b", 1, 2), (1, 5));
+        assert_eq!(utf16_code_unit_range_to_utf8_byte_range("你好", 0, 2), (0, 6));
+        assert_eq!(utf16_code_unit_range_to_utf8_byte_range("abc", 0, 3), (0, 3));
+    }
+
+    #[test]
+    fn test_utf16_to_utf8_empty() {
+        assert_eq!(utf16_code_unit_to_utf8_byte("", 0), 0);
+    }
+
+    #[test]
+    fn test_utf16_to_utf8_multiple_emoji() {
+        assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 0), 0);
+        assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 1), 0);
+        assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 2), 4);
+        assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 3), 4);
+        assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 4), 8);
     }
 }

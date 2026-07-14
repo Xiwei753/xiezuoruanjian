@@ -358,4 +358,113 @@ class AndroidLayoutSnapshotBuilder(
         commitRevision(rev)
         return rev
     }
+
+    fun buildLineLayoutProbes(
+        text: String,
+        affectedLineRange: IntRange
+    ): List<AndroidLineLayoutProbe> {
+        val staticLayout = layout.getLayout(text)
+        val result = mutableListOf<AndroidLineLayoutProbe>()
+
+        val startLine = affectedLineRange.first.coerceIn(0, staticLayout.lineCount - 1)
+        val endLine = affectedLineRange.last.coerceIn(0, staticLayout.lineCount - 1)
+
+        for (lineIdx in startLine..endLine) {
+            val probe = buildLineLayoutProbe(text, staticLayout, lineIdx)
+            if (probe != null) {
+                result.add(probe)
+            }
+        }
+        return result
+    }
+
+    private fun buildLineLayoutProbe(
+        text: String,
+        staticLayout: Layout,
+        lineIdx: Int
+    ): AndroidLineLayoutProbe? {
+        if (lineIdx < 0 || lineIdx >= staticLayout.lineCount) return null
+
+        val lineStart = staticLayout.getLineStart(lineIdx)
+        val lineEnd = staticLayout.getLineEnd(lineIdx)
+        val lineTop = staticLayout.getLineTop(lineIdx)
+        val lineBottom = staticLayout.getLineBottom(lineIdx)
+
+        val byteStart = SujianEditorBuffer.utf16ToUtf8(text, lineStart)
+        val byteEnd = SujianEditorBuffer.utf16ToUtf8(text, lineEnd.coerceAtMost(text.length))
+
+        val clusters = buildClusterLayoutProbes(text, staticLayout, lineIdx, lineStart, lineEnd)
+
+        val breakIdentity = buildBreakIdentity(text, staticLayout, lineIdx, lineEnd)
+
+        return AndroidLineLayoutProbe(
+            visualLineOrdinal = lineIdx,
+            documentByteStart = byteStart,
+            documentByteEnd = byteEnd,
+            lineStartUtf16 = lineStart,
+            lineEndUtf16 = lineEnd,
+            lineTop = lineTop,
+            lineBottom = lineBottom,
+            clusters = clusters,
+            breakIdentity = breakIdentity
+        )
+    }
+
+    private fun buildClusterLayoutProbes(
+        text: String,
+        staticLayout: Layout,
+        lineIdx: Int,
+        lineStart: Int,
+        lineEnd: Int
+    ): List<AndroidClusterLayoutProbe> {
+        val probes = mutableListOf<AndroidClusterLayoutProbe>()
+        if (lineStart >= lineEnd || text.isEmpty()) return probes
+
+        var currentOffset = lineStart
+        while (currentOffset < lineEnd.coerceAtMost(text.length)) {
+            val clusterEnd = findClusterBoundary(text, currentOffset, lineEnd)
+            val clusterText = text.substring(currentOffset, clusterEnd.coerceAtMost(text.length))
+
+            val x = staticLayout.getPrimaryHorizontal(currentOffset)
+            val nextX = if (clusterEnd < text.length) {
+                staticLayout.getPrimaryHorizontal(clusterEnd)
+            } else {
+                x + textPaint.measureText(clusterText)
+            }
+            val visualWidth = kotlin.math.abs(nextX - x)
+            val isRtl = staticLayout.getParagraphDirection(lineIdx) == Layout.DIR_RIGHT_TO_LEFT
+
+            val byteStart = SujianEditorBuffer.utf16ToUtf8(text, currentOffset)
+            val byteEnd = SujianEditorBuffer.utf16ToUtf8(text, clusterEnd.coerceAtMost(text.length))
+
+            val shapingIdentity = buildShapingIdentity(
+                clusterText, textPaint,
+                staticLayout.getParagraphDirection(lineIdx),
+                currentOffset, clusterEnd, lineIdx, staticLayout, text
+            )
+
+            probes.add(AndroidClusterLayoutProbe(
+                documentByteStart = byteStart,
+                documentByteEnd = byteEnd,
+                visualWidth = visualWidth,
+                isRtl = isRtl,
+                shapingIdentity = shapingIdentity
+            ))
+
+            currentOffset = clusterEnd
+        }
+        return probes
+    }
+
+    private fun buildBreakIdentity(
+        text: String,
+        staticLayout: Layout,
+        lineIdx: Int,
+        lineEnd: Int
+    ): String {
+        val endsWithNewline = lineEnd > 0 && lineEnd <= text.length && text[lineEnd - 1] == '\n'
+        val isLastLine = lineIdx >= staticLayout.lineCount - 1
+        val paragraphDirection = staticLayout.getParagraphDirection(lineIdx)
+        return "brk:nl[$endsWithNewline]:last[$isLastLine]:dir[$paragraphDirection]:le[$lineEnd]"
+    }
 }

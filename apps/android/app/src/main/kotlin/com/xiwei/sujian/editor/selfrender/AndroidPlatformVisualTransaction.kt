@@ -130,7 +130,7 @@ data class AndroidPlatformVisualTransaction(
         releaseSnapshots()
     }
 
-    private fun releaseSnapshots() {
+    internal fun releaseSnapshots() {
         for (snapshot in oldLineSnapshots) {
             snapshot.release()
         }
