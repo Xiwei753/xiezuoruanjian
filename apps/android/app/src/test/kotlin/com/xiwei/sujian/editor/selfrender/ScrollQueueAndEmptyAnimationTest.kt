@@ -39,6 +39,7 @@ class ScrollQueueAndEmptyAnimationTest {
             oldLineSnapshots = mutableListOf(),
             newLineSnapshots = mutableListOf(),
             staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
             cursorTransition = AndroidCursorTransition.snap(RectF(0f, 0f, 0f, 0f))
         )
 
@@ -74,6 +75,7 @@ class ScrollQueueAndEmptyAnimationTest {
             oldLineSnapshots = mutableListOf(),
             newLineSnapshots = mutableListOf(),
             staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
             cursorTransition = AndroidCursorTransition.snap(RectF(0f, 0f, 0f, 0f))
         )
 
@@ -112,6 +114,7 @@ class ScrollQueueAndEmptyAnimationTest {
             oldLineSnapshots = mutableListOf(),
             newLineSnapshots = mutableListOf(),
             staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
             cursorTransition = AndroidCursorTransition.snap(RectF(0f, 0f, 0f, 0f))
         )
 
@@ -148,6 +151,7 @@ class ScrollQueueAndEmptyAnimationTest {
             oldLineSnapshots = mutableListOf(),
             newLineSnapshots = mutableListOf(),
             staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
             cursorTransition = AndroidCursorTransition.snap(RectF(0f, 0f, 0f, 0f))
         )
 
