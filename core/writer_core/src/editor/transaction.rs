@@ -519,6 +519,265 @@ pub enum PlatformVisualTransactionState {
     Cancelled,
 }
 
+/// 统一时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress。
+///
+/// Choreographer 和 Qt update 只负责请求帧，不得给光标维护独立开始时间。
+/// Paused 状态返回暂停瞬间的 progress，不能返回 0。
+/// resume 后从暂停进度继续。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Timeline {
+    /// 首帧可见时间戳（毫秒，单调时钟）
+    pub first_visible_frame_time_ms: Option<u64>,
+    /// 动画时长（毫秒）
+    pub duration_ms: u64,
+    /// 暂停开始时间戳（毫秒，单调时钟）；None 表示未暂停
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_started_at_ms: Option<u64>,
+    /// 累计暂停时长（毫秒）
+    #[serde(default)]
+    pub accumulated_paused_duration_ms: u64,
+    /// 暂停瞬间的 progress（0.0–1.0）；Paused 状态必须返回此值，不能返回 0
+    #[serde(default)]
+    pub paused_progress: f64,
+}
+
+impl Timeline {
+    pub fn new(duration_ms: u64) -> Self {
+        Self {
+            first_visible_frame_time_ms: None,
+            duration_ms,
+            pause_started_at_ms: None,
+            accumulated_paused_duration_ms: 0,
+            paused_progress: 0.0,
+        }
+    }
+
+    /// 计算当前进度（0.0–1.0）。
+    ///
+    /// - 未开始（first_visible_frame_time_ms == None）→ 0.0
+    /// - Paused → paused_progress（暂停瞬间快照，不返回 0）
+    /// - 正常播放 → clamp(effective_elapsed / duration, 0.0, 1.0)
+    ///   effective_elapsed = frame_time - start - accumulated_paused_duration
+    /// - 完成 → 1.0
+    pub fn progress(&self, frame_time_ms: u64) -> f64 {
+        let start = match self.first_visible_frame_time_ms {
+            Some(t) => t,
+            None => return 0.0,
+        };
+
+        if self.pause_started_at_ms.is_some() {
+            return self.paused_progress;
+        }
+
+        if self.duration_ms == 0 {
+            return 1.0;
+        }
+
+        let effective_elapsed = frame_time_ms
+            .saturating_sub(start)
+            .saturating_sub(self.accumulated_paused_duration_ms);
+        let p = (effective_elapsed as f64) / (self.duration_ms as f64);
+        p.clamp(0.0, 1.0)
+    }
+
+    /// 标记首帧可见时间。
+    pub fn mark_first_visible_frame(&mut self, frame_time_ms: u64) {
+        if self.first_visible_frame_time_ms.is_none() {
+            self.first_visible_frame_time_ms = Some(frame_time_ms);
+        }
+    }
+
+    /// 暂停 — 记录暂停瞬间的 progress，不能返回 0。
+    pub fn pause(&mut self, frame_time_ms: u64) {
+        if self.pause_started_at_ms.is_some() {
+            return;
+        }
+        self.paused_progress = self.progress(frame_time_ms);
+        self.pause_started_at_ms = Some(frame_time_ms);
+    }
+
+    /// 恢复 — 从暂停进度继续。
+    ///
+    /// 关键：resume 后 progress 必须从 paused_progress 平滑过渡。
+    /// 调整 first_visible_frame_time_ms 使得
+    /// progress(resume_time) = paused_progress，即：
+    ///   new_start = resume_time - paused_progress * duration
+    pub fn resume(&mut self, frame_time_ms: u64) {
+        if self.pause_started_at_ms.is_none() {
+            return;
+        }
+
+        if self.first_visible_frame_time_ms.is_none() {
+            self.pause_started_at_ms = None;
+            self.paused_progress = 0.0;
+            return;
+        }
+
+        let new_start = frame_time_ms
+            .saturating_sub((self.paused_progress * self.duration_ms as f64) as u64);
+        self.first_visible_frame_time_ms = Some(new_start);
+        self.accumulated_paused_duration_ms = 0;
+        self.pause_started_at_ms = None;
+        self.paused_progress = 0.0;
+    }
+
+    /// 是否已暂停。
+    pub fn is_paused(&self) -> bool {
+        self.pause_started_at_ms.is_some()
+    }
+
+    /// 是否已完成。
+    pub fn is_completed(&self, frame_time_ms: u64) -> bool {
+        self.progress(frame_time_ms) >= 1.0
+    }
+}
+
+/// 统一事务类型 — 最终 Linux 和 Android 只保留四种事务。
+///
+/// 所有事务共用 VisualRevision、LineSnapshot、AnimatedSlice、
+/// StaticLinePatch、DecorationSlice、CursorPath 和 Timeline。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UnifiedTransactionKind {
+    /// 正文编辑：普通插入、删除、换行、段落合并和删除回流
+    BodyEdit,
+    /// 预输入更新：setComposingText 触发
+    CompositionUpdate,
+    /// 预输入提交或取消
+    CompositionCommitOrCancel,
+    /// 仅光标移动：无正文变更的光标移动
+    CursorOnly,
+}
+
+/// 视觉对象分类 — 通过 old/new VisualRevision、OffsetMap 和 shaping identity 分类。
+///
+/// 中间插入、换行、段落合并和删除回流全部使用这套分类，不建立特例。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VisualClassKind {
+    /// 文本、shaping、位置均相同，进入 StaticLinePatch
+    Static,
+    /// 仅 new 存在，使用 new snapshot 从光标附近移动到最终位置并淡入
+    Insert,
+    /// 仅 old 存在，使用 old snapshot 向删除后光标或收缩中心移动并淡出
+    Delete,
+    /// shaping 相同但位置变化，从 oldRect 移到 newRect
+    Move,
+    /// 文本可映射但 shaping 改变，old 淡出、new 淡入
+    Crossfade,
+}
+
+/// 装饰切片 — 预输入下划线、分段颜色和 IME cursor。
+///
+/// 使用同一 Timeline，不另起独立时间链。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecorationSlice {
+    /// 装饰类型
+    pub kind: DecorationSliceKind,
+    /// UTF-8 byte 范围起始
+    pub byte_start: usize,
+    /// UTF-8 byte 范围结束
+    pub byte_end: usize,
+    /// 矩形区域（由平台层填充）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<Rect>,
+    /// 颜色（如 underline color、text color 等）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+}
+
+/// 装饰切片类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DecorationSliceKind {
+    Underline,
+    TextColor,
+    BackgroundColor,
+    Cursor,
+}
+
+/// 光标路径 — 光标移动轨迹，使用同一 Timeline。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CursorPath {
+    /// 起始光标矩形
+    pub from_rect: CursorRect,
+    /// 目标光标矩形
+    pub to_rect: CursorRect,
+    /// 是否 snap（无动画）
+    pub is_snap: bool,
+}
+
+/// 预输入视觉修订 — 把预输入改为临时视觉正文版本。
+///
+/// virtualText 仅用于排版和渲染，不写入正文、Undo、保存、同步和 Core 正文状态。
+/// 每次预输入变化生成新 CompositionVisualRevision，
+/// 使用相同 StaticLinePatch + AnimatedSlice 分类。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionVisualRevision {
+    /// 已提交文本（不含预输入）
+    pub committed_text: String,
+    /// 预输入替换范围（UTF-8 byte offset）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition_replace_range: Option<(usize, usize)>,
+    /// 预输入文本
+    #[serde(default)]
+    pub preedit_text: String,
+    /// 虚拟文本 — 仅用于排版和渲染，不写入正文
+    #[serde(default)]
+    pub virtual_text: String,
+    /// 受影响段落范围（UTF-8 byte offset）
+    pub affected_paragraph_range: (usize, usize),
+    /// 行快照 ID 列表（由平台层填充）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_snapshot_ids: Vec<u64>,
+    /// 光标矩形
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_rect: Option<CursorRect>,
+    /// 装饰范围
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decoration_ranges: Vec<DecorationSlice>,
+}
+
+/// 连续事务 rebase — 新事务与旧事务冲突时。
+///
+/// 预输入开始、更新、提交、取消以及连续正文输入都不得调用 pauseAll 叠加另一条事务。
+/// 新事务与旧事务冲突时：
+/// 1. 读取旧事务当前 progress
+/// 2. 计算当前视觉帧
+/// 3. 将当前 frame rect/alpha/scale 作为新事务 old state
+/// 4. 取消旧事务
+/// 5. 启动新事务
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransactionRebase {
+    /// 被取消的旧事务 ID
+    pub cancelled_transaction_id: u64,
+    /// 旧事务在 rebase 瞬间的 progress（0.0–1.0）
+    pub old_progress: f64,
+    /// 旧事务当前帧的视觉状态快照（由平台层填充）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_frame_snapshot: Option<RebaseFrameSnapshot>,
+}
+
+/// Rebase 瞬间的帧快照 — 将当前 frame rect/alpha/scale 作为新事务 old state。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RebaseFrameSnapshot {
+    /// 各切片的当前帧矩形
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slice_rects: Vec<Rect>,
+    /// 各切片的当前帧透明度
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slice_alphas: Vec<f64>,
+    /// 光标当前位置
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_rect: Option<CursorRect>,
+}
+
 /// 跨平台视觉事务语义边界。
 ///
 /// Core 输出 EditorVisualTransaction；平台端收到后，根据平台布局
@@ -526,6 +785,9 @@ pub enum PlatformVisualTransactionState {
 /// 不共享平台渲染结构。
 ///
 /// `visualResource` 字段由平台各自实现，不进入此结构。
+///
+/// #515: 增加统一 Timeline、UnifiedTransactionKind、VisualClassKind、
+/// DecorationSlice、CursorPath、CompositionVisualRevision、TransactionRebase。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformVisualTransaction {
@@ -542,6 +804,27 @@ pub struct PlatformVisualTransaction {
     pub duration_ms: u64,
     pub rendering_started_at_ms: Option<u64>,
     pub accumulated_paused_duration_ms: u64,
+    /// #515: 统一时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<Timeline>,
+    /// #515: 统一事务类型
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unified_kind: Option<UnifiedTransactionKind>,
+    /// #515: 视觉对象分类列表（与 slice_roles/slice_document_byte_ranges 对应）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_class_kinds: Vec<VisualClassKind>,
+    /// #515: 装饰切片（预输入下划线、分段颜色、IME cursor）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decoration_slices: Vec<DecorationSlice>,
+    /// #515: 光标路径（使用同一 Timeline）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_path: Option<CursorPath>,
+    /// #515: 预输入视觉修订（仅 CompositionUpdate/CompositionCommitOrCancel 事务）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition_revision: Option<CompositionVisualRevision>,
+    /// #515: 连续事务 rebase 信息
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rebase: Option<TransactionRebase>,
 }
 
 #[derive(Debug, Clone)]
@@ -2233,5 +2516,304 @@ mod tests {
         assert_eq!(clusters[0].byte_end, emoji.len());
         assert_eq!(clusters[0].text, emoji);
         assert!(clusters[0].is_complex, "Variation selector emoji should be complex");
+    }
+
+    // --- #515: Timeline tests ---
+
+    #[test]
+    fn timeline_progress_before_start_returns_zero() {
+        let tl = Timeline::new(160);
+        assert_eq!(tl.progress(0), 0.0);
+        assert_eq!(tl.progress(100), 0.0);
+    }
+
+    #[test]
+    fn timeline_progress_after_start_clamps_to_one() {
+        let mut tl = Timeline::new(160);
+        tl.mark_first_visible_frame(1000);
+        assert!((tl.progress(1160) - 1.0).abs() < f64::EPSILON);
+        assert!((tl.progress(2000) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn timeline_progress_mid_animation() {
+        let mut tl = Timeline::new(200);
+        tl.mark_first_visible_frame(1000);
+        let p = tl.progress(1100);
+        assert!((p - 0.5).abs() < f64::EPSILON, "Expected 0.5, got {}", p);
+    }
+
+    #[test]
+    fn timeline_paused_returns_paused_progress_not_zero() {
+        let mut tl = Timeline::new(200);
+        tl.mark_first_visible_frame(1000);
+        let p_before_pause = tl.progress(1150);
+        assert!((p_before_pause - 0.75).abs() < 0.01);
+        tl.pause(1150);
+        assert!(tl.is_paused());
+        assert!((tl.paused_progress - 0.75).abs() < 0.01);
+        let p_after_pause = tl.progress(1200);
+        assert!((p_after_pause - 0.75).abs() < 0.01, "Paused must return paused_progress, not 0");
+    }
+
+    #[test]
+    fn timeline_resume_continues_from_paused_progress() {
+        let mut tl = Timeline::new(200);
+        tl.mark_first_visible_frame(1000);
+        tl.pause(1100);
+        tl.resume(1200);
+        assert!(!tl.is_paused());
+        // resume at 1200, paused_progress=0.5, new_start=1200-100=1100
+        // progress(1200) = (1200-1100)/200 = 0.5 (resumes from paused_progress)
+        let p_at_resume = tl.progress(1200);
+        assert!((p_at_resume - 0.5).abs() < 0.01, "Expected 0.5 at resume time, got {}", p_at_resume);
+        // progress(1300) = (1300-1100)/200 = 1.0 (200ms effective elapsed)
+        let p = tl.progress(1300);
+        assert!((p - 1.0).abs() < 0.01, "Expected 1.0 at 1300, got {}", p);
+    }
+
+    #[test]
+    fn timeline_zero_duration_returns_one() {
+        let mut tl = Timeline::new(0);
+        tl.mark_first_visible_frame(1000);
+        assert!((tl.progress(1000) - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn timeline_double_pause_is_noop() {
+        let mut tl = Timeline::new(200);
+        tl.mark_first_visible_frame(1000);
+        tl.pause(1100);
+        let first_paused = tl.paused_progress;
+        tl.pause(1200);
+        assert!((tl.paused_progress - first_paused).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn timeline_resume_without_pause_is_noop() {
+        let mut tl = Timeline::new(200);
+        tl.mark_first_visible_frame(1000);
+        tl.resume(1100);
+        assert_eq!(tl.accumulated_paused_duration_ms, 0);
+    }
+
+    #[test]
+    fn timeline_is_completed() {
+        let mut tl = Timeline::new(100);
+        tl.mark_first_visible_frame(1000);
+        assert!(!tl.is_completed(1050));
+        assert!(tl.is_completed(1100));
+    }
+
+    // --- #515: UnifiedTransactionKind / VisualClassKind serialization ---
+
+    #[test]
+    fn unified_transaction_kind_serializes_camel_case() {
+        let json = serde_json::to_string(&UnifiedTransactionKind::BodyEdit).unwrap();
+        assert!(json.contains("\"bodyEdit\""));
+        let json2 = serde_json::to_string(&UnifiedTransactionKind::CompositionUpdate).unwrap();
+        assert!(json2.contains("\"compositionUpdate\""));
+        let json3 = serde_json::to_string(&UnifiedTransactionKind::CompositionCommitOrCancel).unwrap();
+        assert!(json3.contains("\"compositionCommitOrCancel\""));
+        let json4 = serde_json::to_string(&UnifiedTransactionKind::CursorOnly).unwrap();
+        assert!(json4.contains("\"cursorOnly\""));
+    }
+
+    #[test]
+    fn visual_class_kind_serializes_camel_case() {
+        assert!(serde_json::to_string(&VisualClassKind::Static).unwrap().contains("\"static\""));
+        assert!(serde_json::to_string(&VisualClassKind::Insert).unwrap().contains("\"insert\""));
+        assert!(serde_json::to_string(&VisualClassKind::Delete).unwrap().contains("\"delete\""));
+        assert!(serde_json::to_string(&VisualClassKind::Move).unwrap().contains("\"move\""));
+        assert!(serde_json::to_string(&VisualClassKind::Crossfade).unwrap().contains("\"crossfade\""));
+    }
+
+    // --- #515: CompositionVisualRevision serialization ---
+
+    #[test]
+    fn composition_visual_revision_serializes_camel_case() {
+        let rev = CompositionVisualRevision {
+            committed_text: "hello".to_string(),
+            composition_replace_range: Some((5, 7)),
+            preedit_text: "ni".to_string(),
+            virtual_text: "helloni".to_string(),
+            affected_paragraph_range: (0, 7),
+            line_snapshot_ids: vec![1, 2],
+            cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            decoration_ranges: vec![DecorationSlice {
+                kind: DecorationSliceKind::Underline,
+                byte_start: 5,
+                byte_end: 7,
+                rect: None,
+                color: None,
+            }],
+        };
+        let json = serde_json::to_string(&rev).unwrap();
+        assert!(json.contains("\"committedText\":"));
+        assert!(json.contains("\"compositionReplaceRange\":"));
+        assert!(json.contains("\"preeditText\":"));
+        assert!(json.contains("\"virtualText\":"));
+        assert!(json.contains("\"affectedParagraphRange\":"));
+        assert!(json.contains("\"lineSnapshotIds\":"));
+        assert!(json.contains("\"cursorRect\":"));
+        assert!(json.contains("\"decorationRanges\":"));
+    }
+
+    #[test]
+    fn composition_visual_revision_skips_none_and_empty() {
+        let rev = CompositionVisualRevision {
+            committed_text: "hello".to_string(),
+            composition_replace_range: None,
+            preedit_text: String::new(),
+            virtual_text: String::new(),
+            affected_paragraph_range: (0, 5),
+            line_snapshot_ids: Vec::new(),
+            cursor_rect: None,
+            decoration_ranges: Vec::new(),
+        };
+        let json = serde_json::to_string(&rev).unwrap();
+        assert!(!json.contains("\"compositionReplaceRange\":"));
+        assert!(!json.contains("\"lineSnapshotIds\":"));
+        assert!(!json.contains("\"cursorRect\":"));
+        assert!(!json.contains("\"decorationRanges\":"));
+    }
+
+    // --- #515: PlatformVisualTransaction with new fields ---
+
+    #[test]
+    fn platform_visual_transaction_with_timeline_serializes() {
+        let mut tl = Timeline::new(160);
+        tl.mark_first_visible_frame(1000);
+        let pvt = PlatformVisualTransaction {
+            transaction_id: 1,
+            generation: 1,
+            state: PlatformVisualTransactionState::Rendering,
+            old_revision: VisualLayoutRevision {
+                document_revision: 1,
+                layout_revision: 1,
+                viewport_width: 800.0,
+                font_fingerprint: "f1".to_string(),
+                paragraph_style_fingerprint: "p1".to_string(),
+                text_color_fingerprint: "t1".to_string(),
+                density_or_dpr: 2.0,
+            },
+            new_revision: VisualLayoutRevision {
+                document_revision: 2,
+                layout_revision: 2,
+                viewport_width: 800.0,
+                font_fingerprint: "f1".to_string(),
+                paragraph_style_fingerprint: "p1".to_string(),
+                text_color_fingerprint: "t1".to_string(),
+                density_or_dpr: 2.0,
+            },
+            slice_roles: vec![AnimatedSliceRole::Insert],
+            slice_document_byte_ranges: vec![(2, 3)],
+            static_line_patches: Vec::new(),
+            cursor_transition_byte_start: 2,
+            cursor_transition_byte_end: 3,
+            duration_ms: 160,
+            rendering_started_at_ms: Some(1000),
+            accumulated_paused_duration_ms: 0,
+            timeline: Some(tl),
+            unified_kind: Some(UnifiedTransactionKind::BodyEdit),
+            visual_class_kinds: vec![VisualClassKind::Insert],
+            decoration_slices: Vec::new(),
+            cursor_path: Some(CursorPath {
+                from_rect: CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 },
+                to_rect: CursorRect { x: 30.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 },
+                is_snap: false,
+            }),
+            composition_revision: None,
+            rebase: None,
+        };
+        let json = serde_json::to_string(&pvt).unwrap();
+        assert!(json.contains("\"timeline\":"));
+        assert!(json.contains("\"unifiedKind\":"));
+        assert!(json.contains("\"bodyEdit\""));
+        assert!(json.contains("\"visualClassKinds\":"));
+        assert!(json.contains("\"cursorPath\":"));
+        assert!(!json.contains("\"compositionRevision\":"));
+        assert!(!json.contains("\"rebase\":"));
+    }
+
+    // --- #515: TransactionRebase serialization ---
+
+    #[test]
+    fn transaction_rebase_serializes_camel_case() {
+        let rebase = TransactionRebase {
+            cancelled_transaction_id: 42,
+            old_progress: 0.6,
+            old_frame_snapshot: Some(RebaseFrameSnapshot {
+                slice_rects: vec![Rect { x: 10.0, y: 20.0, w: 30.0, h: 40.0 }],
+                slice_alphas: vec![0.8],
+                cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            }),
+        };
+        let json = serde_json::to_string(&rebase).unwrap();
+        assert!(json.contains("\"cancelledTransactionId\":"));
+        assert!(json.contains("\"oldProgress\":"));
+        assert!(json.contains("\"oldFrameSnapshot\":"));
+        assert!(json.contains("\"sliceRects\":"));
+        assert!(json.contains("\"sliceAlphas\":"));
+        assert!(json.contains("\"cursorRect\":"));
+    }
+
+    #[test]
+    fn transaction_rebase_skips_none() {
+        let rebase = TransactionRebase {
+            cancelled_transaction_id: 1,
+            old_progress: 0.0,
+            old_frame_snapshot: None,
+        };
+        let json = serde_json::to_string(&rebase).unwrap();
+        assert!(!json.contains("\"oldFrameSnapshot\":"));
+    }
+
+    // --- #515: DecorationSlice serialization ---
+
+    #[test]
+    fn decoration_slice_serializes_camel_case() {
+        let ds = DecorationSlice {
+            kind: DecorationSliceKind::Underline,
+            byte_start: 5,
+            byte_end: 7,
+            rect: Some(Rect { x: 10.0, y: 20.0, w: 30.0, h: 2.0 }),
+            color: Some("#FF0000".to_string()),
+        };
+        let json = serde_json::to_string(&ds).unwrap();
+        assert!(json.contains("\"byteStart\":"));
+        assert!(json.contains("\"byteEnd\":"));
+        assert!(json.contains("\"rect\":"));
+        assert!(json.contains("\"color\":"));
+        assert!(json.contains("\"underline\""));
+    }
+
+    #[test]
+    fn decoration_slice_skips_none() {
+        let ds = DecorationSlice {
+            kind: DecorationSliceKind::Cursor,
+            byte_start: 0,
+            byte_end: 0,
+            rect: None,
+            color: None,
+        };
+        let json = serde_json::to_string(&ds).unwrap();
+        assert!(!json.contains("\"rect\":"));
+        assert!(!json.contains("\"color\":"));
+    }
+
+    // --- #515: CursorPath serialization ---
+
+    #[test]
+    fn cursor_path_serializes_camel_case() {
+        let cp = CursorPath {
+            from_rect: CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 },
+            to_rect: CursorRect { x: 30.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 },
+            is_snap: false,
+        };
+        let json = serde_json::to_string(&cp).unwrap();
+        assert!(json.contains("\"fromRect\":"));
+        assert!(json.contains("\"toRect\":"));
+        assert!(json.contains("\"isSnap\":"));
     }
 }

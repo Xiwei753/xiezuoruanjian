@@ -143,6 +143,7 @@ class SujianAnimationController(
             val activeTx = renderer.getActiveTransactions().lastOrNull()
             if (activeTx != null && coordinatedAnimationEnabled) {
                 cursorController.setTransactionDrivenCursor(activeTx.cursorTransition)
+                cursorController.setActiveTransaction(activeTx)
             }
             if (coordinatedAnimationEnabled && vt.newCursorRect != null) {
                 val newRect = vt.newCursorRect!!
@@ -1317,11 +1318,315 @@ class SujianAnimationController(
         renderer.setScrolling(scrolling)
     }
 
-    fun tick() {
-        renderer.tickAnimations()
+    private val compositionManager = AndroidCompositionManager()
+
+    fun handleCompositionUpdate(
+        committedText: String,
+        compositionReplaceRange: IntRange,
+        preeditText: String,
+        composingCursorUtf16: Int
+    ): TextAnimationStartResult {
+        if (!animationEnabled || preeditText.isEmpty()) {
+            return TextAnimationStartResult.Skipped
+        }
+
+        val virtualText = compositionManager.buildVirtualText(committedText, compositionReplaceRange, preeditText)
+
+        val oldRevision = snapshotBuilder.currentCommittedRevision()
+        val newRevision = snapshotBuilder.allocateNextRevision()
+
+        val virtualLayout = if (virtualText.isNotEmpty()) layout.getLayout(virtualText) else null
+        if (virtualLayout == null) {
+            snapshotBuilder.commitRevision(newRevision)
+            return TextAnimationStartResult.Skipped
+        }
+
+        val committedLayout = if (committedText.isNotEmpty()) layout.getLayout(committedText) else null
+
+        val affectedStartLine = if (committedLayout != null && compositionReplaceRange.first < committedText.length) {
+            committedLayout.getLineForOffset(compositionReplaceRange.first.coerceIn(0, committedText.length))
+        } else {
+            0
+        }
+        val affectedEndLine = (virtualLayout.lineCount - 1).coerceAtLeast(affectedStartLine)
+
+        val oldLineSnapshots: List<AndroidLineSnapshot> = if (committedLayout != null && committedText.isNotEmpty()) {
+            val endLine = (affectedEndLine + 1).coerceAtMost(committedLayout.lineCount - 1)
+            snapshotBuilder.buildLineSnapshots(committedText, affectedStartLine..endLine, oldRevision, renderer.getTextColor())
+        } else {
+            emptyList()
+        }
+
+        val newLineSnapshots = snapshotBuilder.buildLineSnapshots(
+            virtualText, affectedStartLine..affectedEndLine, newRevision, renderer.getTextColor()
+        )
+
+        if (newLineSnapshots.isEmpty()) {
+            oldLineSnapshots.forEach { it.release() }
+            snapshotBuilder.commitRevision(newRevision)
+            return TextAnimationStartResult.Skipped
+        }
+
+        val slices = mutableListOf<AndroidAnimatedSlice>()
+        val staticPatches = mutableListOf<AndroidStaticLinePatch>()
+
+        val composingStartUtf16 = compositionReplaceRange.first
+        val composingEndUtf16 = composingStartUtf16 + preeditText.length
+
+        for (lineSnapshot in newLineSnapshots) {
+            for (cluster in lineSnapshot.clusters) {
+                val clusterUtf16Start = cluster.platformTextStart
+                val clusterUtf16End = cluster.platformTextEnd
+                val isComposing = clusterUtf16Start < composingEndUtf16 && clusterUtf16End > composingStartUtf16
+
+                if (isComposing) {
+                    slices.add(AndroidAnimatedSlice.insertFadeIn(
+                        id = (nextAnimationId() shl 2) + lineSnapshot.visualLineOrdinal.toULong(),
+                        snapshotId = lineSnapshot.id,
+                        sourceRect = cluster.sourceRectInLineSnapshot,
+                        fromRect = RectF(cluster.visualRectInDocument.left, cluster.visualRectInDocument.top, cluster.visualRectInDocument.left + cluster.visualRectInDocument.width(), cluster.visualRectInDocument.top + cluster.visualRectInDocument.height()),
+                        toRect = cluster.visualRectInDocument,
+                        byteStart = cluster.documentByteStart,
+                        byteEnd = cluster.documentByteEnd,
+                        shapingIdentity = cluster.shapingIdentity
+                    ))
+                } else {
+                    val oldCluster = findOldClusterByPosition(cluster, oldLineSnapshots)
+                    if (oldCluster != null) {
+                        val oldRect = oldCluster.visualRectInDocument
+                        val positionChanged = kotlin.math.abs(oldRect.top - cluster.visualRectInDocument.top) > 0.5f ||
+                            kotlin.math.abs(oldRect.left - cluster.visualRectInDocument.left) > 0.5f
+                        if (positionChanged) {
+                            slices.add(AndroidAnimatedSlice.reflowMove(
+                                id = (nextAnimationId() shl 2) + cluster.platformTextStart.toULong(),
+                                snapshotId = lineSnapshot.id,
+                                sourceRect = cluster.sourceRectInLineSnapshot,
+                                fromRect = RectF(oldRect.left, oldRect.top, oldRect.right, oldRect.bottom),
+                                toRect = cluster.visualRectInDocument,
+                                byteStart = cluster.documentByteStart,
+                                byteEnd = cluster.documentByteEnd,
+                                shapingIdentity = cluster.shapingIdentity
+                            ))
+                        }
+                    }
+                }
+            }
+
+            val animatedByteRanges = slices.map { Pair(it.documentByteStart, it.documentByteEnd) }
+            val visibleSourceRects = mutableListOf<RectF>()
+            for (cluster in lineSnapshot.clusters) {
+                val isAnimated = animatedByteRanges.any { (start, end) ->
+                    !(cluster.documentByteEnd <= start || cluster.documentByteStart >= end)
+                }
+                if (!isAnimated) {
+                    visibleSourceRects.add(cluster.sourceRectInLineSnapshot)
+                }
+            }
+            staticPatches.add(AndroidStaticLinePatch(
+                newSnapshotId = lineSnapshot.id,
+                destinationDocumentRect = lineSnapshot.documentRect,
+                visibleSourceRects = visibleSourceRects
+            ))
+        }
+
+        val cursorRect = if (virtualText.isNotEmpty() && virtualLayout != null) {
+            val cursorUtf16 = (composingStartUtf16 + composingCursorUtf16).coerceIn(0, virtualText.length)
+            val cursorLine = virtualLayout.getLineForOffset(cursorUtf16)
+            val cursorX = virtualLayout.getPrimaryHorizontal(cursorUtf16)
+            val baseline = virtualLayout.getLineBaseline(cursorLine).toFloat()
+            val ascent = virtualLayout.getLineAscent(cursorLine).toFloat()
+            val descent = virtualLayout.getLineDescent(cursorLine).toFloat()
+            RectF(cursorX, baseline + ascent, cursorX, baseline + descent)
+        } else {
+            RectF(0f, 0f, 0f, 0f)
+        }
+
+        val compositionRevision = AndroidCompositionVisualRevision(
+            committedText = committedText,
+            compositionReplaceRange = compositionReplaceRange,
+            preeditText = preeditText,
+            virtualText = virtualText,
+            affectedParagraphRange = affectedStartLine..affectedEndLine,
+            lineSnapshots = newLineSnapshots,
+            cursorRect = cursorRect,
+            decorationRanges = listOf(composingStartUtf16..composingEndUtf16)
+        )
+        compositionManager.setCurrent(compositionRevision)
+
+        val cursorTransition = AndroidCursorTransition.tween(
+            cursorRect,
+            cursorRect,
+            animationDurationMs
+        )
+
+        val tx = AndroidPlatformVisualTransaction(
+            key = nextAnimationId(),
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = animationDurationMs,
+            oldRevision = oldRevision,
+            newRevision = newRevision,
+            slices = slices,
+            oldLineSnapshots = oldLineSnapshots.toMutableList(),
+            newLineSnapshots = newLineSnapshots.toMutableList(),
+            staticLinePatches = staticPatches.toMutableList(),
+            cursorTransition = cursorTransition
+        )
+
+        if (!renderer.addTransaction(tx)) {
+            tx.releaseSnapshots()
+            snapshotBuilder.commitRevision(newRevision)
+            return TextAnimationStartResult.Skipped
+        }
+
+        snapshotBuilder.commitRevision(newRevision)
+
+        if (coordinatedAnimationEnabled) {
+            cursorController.setTransactionDrivenCursor(cursorTransition)
+            cursorController.setActiveTransaction(renderer.getActiveTransactions().lastOrNull())
+        }
+
+        return TextAnimationStartResult.Started
     }
 
-    fun hasActiveAnimations(): Boolean = renderer.hasActiveAnimations()
+    fun handleCompositionCommitOrCancel(
+        committedText: String,
+        wasComposing: Boolean
+    ): TextAnimationStartResult {
+        val prevRevision = compositionManager.getCurrent()
+        compositionManager.clear()
+
+        if (!animationEnabled || prevRevision == null) {
+            return TextAnimationStartResult.Skipped
+        }
+
+        val oldRevision = snapshotBuilder.currentCommittedRevision()
+        val newRevision = snapshotBuilder.allocateNextRevision()
+
+        val oldLineSnapshots = prevRevision.lineSnapshots.toMutableList()
+        val newText = committedText
+        val newLayout = if (newText.isNotEmpty()) layout.getLayout(newText) else null
+
+        val newLineSnapshots: List<AndroidLineSnapshot> = if (newLayout != null && newText.isNotEmpty()) {
+            val startLine = 0.coerceAtMost(newLayout.lineCount - 1)
+            val endLine = (newLayout.lineCount - 1).coerceAtLeast(startLine)
+            snapshotBuilder.buildLineSnapshots(newText, startLine..endLine, newRevision, renderer.getTextColor())
+        } else {
+            emptyList()
+        }
+
+        val slices = mutableListOf<AndroidAnimatedSlice>()
+        val staticPatches = mutableListOf<AndroidStaticLinePatch>()
+
+        for (oldSnap in prevRevision.lineSnapshots) {
+            for (cluster in oldSnap.clusters) {
+                val utf16Start = cluster.platformTextStart
+                val utf16End = cluster.platformTextEnd
+                val wasPreedit = prevRevision.compositionReplaceRange.let { r ->
+                    utf16Start < r.last + prevRevision.preeditText.length && utf16End > r.first
+                }
+                if (wasPreedit && !wasComposing) {
+                    slices.add(AndroidAnimatedSlice.deleteFadeOut(
+                        id = nextAnimationId(),
+                        snapshotId = oldSnap.id,
+                        sourceRect = cluster.sourceRectInLineSnapshot,
+                        fromRect = cluster.visualRectInDocument,
+                        toRect = RectF(prevRevision.cursorRect.left, prevRevision.cursorRect.top, prevRevision.cursorRect.left + cluster.visualRectInDocument.width() * 0.7f, prevRevision.cursorRect.top + cluster.visualRectInDocument.height() * 0.7f),
+                        byteStart = cluster.documentByteStart,
+                        byteEnd = cluster.documentByteEnd,
+                        shapingIdentity = cluster.shapingIdentity
+                    ))
+                }
+            }
+        }
+
+        for (newSnap in newLineSnapshots) {
+            val animatedByteRanges = slices.map { Pair(it.documentByteStart, it.documentByteEnd) }
+            val visibleSourceRects = mutableListOf<RectF>()
+            for (cluster in newSnap.clusters) {
+                val isAnimated = animatedByteRanges.any { (start, end) ->
+                    !(cluster.documentByteEnd <= start || cluster.documentByteStart >= end)
+                }
+                if (!isAnimated) {
+                    visibleSourceRects.add(cluster.sourceRectInLineSnapshot)
+                }
+            }
+            staticPatches.add(AndroidStaticLinePatch(
+                newSnapshotId = newSnap.id,
+                destinationDocumentRect = newSnap.documentRect,
+                visibleSourceRects = visibleSourceRects
+            ))
+        }
+
+        val cursorRect = if (newLayout != null && newText.isNotEmpty()) {
+            val cursorPos = buffer.selection.head.coerceIn(0, newText.length)
+            val cursorLine = newLayout.getLineForOffset(cursorPos)
+            val cursorX = newLayout.getPrimaryHorizontal(cursorPos)
+            val baseline = newLayout.getLineBaseline(cursorLine).toFloat()
+            val ascent = newLayout.getLineAscent(cursorLine).toFloat()
+            val descent = newLayout.getLineDescent(cursorLine).toFloat()
+            RectF(cursorX, baseline + ascent, cursorX, baseline + descent)
+        } else {
+            prevRevision.cursorRect
+        }
+
+        val cursorTransition = AndroidCursorTransition.tween(
+            prevRevision.cursorRect,
+            cursorRect,
+            animationDurationMs
+        )
+
+        val tx = AndroidPlatformVisualTransaction(
+            key = nextAnimationId(),
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.CompositionCommitOrCancel,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = animationDurationMs,
+            oldRevision = oldRevision,
+            newRevision = newRevision,
+            slices = slices,
+            oldLineSnapshots = oldLineSnapshots,
+            newLineSnapshots = newLineSnapshots.toMutableList(),
+            staticLinePatches = staticPatches.toMutableList(),
+            cursorTransition = cursorTransition
+        )
+
+        if (!renderer.addTransaction(tx)) {
+            tx.releaseSnapshots()
+            snapshotBuilder.commitRevision(newRevision)
+            return TextAnimationStartResult.Skipped
+        }
+
+        snapshotBuilder.commitRevision(newRevision)
+
+        if (coordinatedAnimationEnabled) {
+            cursorController.setTransactionDrivenCursor(cursorTransition)
+            cursorController.setActiveTransaction(renderer.getActiveTransactions().lastOrNull())
+        }
+
+        return TextAnimationStartResult.Started
+    }
+
+    private fun findOldClusterByPosition(
+        newCluster: AndroidClusterSnapshot,
+        oldLineSnapshots: List<AndroidLineSnapshot>
+    ): AndroidClusterSnapshot? {
+        for (oldLine in oldLineSnapshots) {
+            val match = oldLine.clusters.find { oc ->
+                oc.documentByteStart == newCluster.documentByteStart && oc.documentByteEnd == newCluster.documentByteEnd
+            }
+            if (match != null) return match
+        }
+        return null
+    }
+
+    fun tick() {
+        renderer.tickAnimations()
+        cursorController.tickCursorFromTimeline()
+    }
+
+    fun hasActiveAnimations(): Boolean = renderer.hasActiveAnimations() || cursorController.isCursorAnimating
 
     fun onDetachedFromWindow() {
         renderer.clearAnimations()

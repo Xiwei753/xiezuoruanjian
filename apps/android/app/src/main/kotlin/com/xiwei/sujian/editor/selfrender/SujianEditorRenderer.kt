@@ -174,7 +174,7 @@ class SujianEditorRenderer(
             if (tx.state == AndroidVisualTransactionState.Rendering) {
                 if (tx.isFinished) {
                     toComplete.add(tx)
-                } else if (tx.firstRenderFrameMs > 0 && (now - tx.firstRenderFrameMs - tx.accumulatedPausedDurationMs) > animationTimeoutMs) {
+                } else if (tx.timeline.isStarted && (now - tx.timeline.firstVisibleFrameTimeMs - tx.timeline.accumulatedPausedDurationMs) > animationTimeoutMs) {
                     toTimeout.add(tx)
                 }
             }
@@ -315,13 +315,26 @@ class SujianEditorRenderer(
         drawSelection(canvas, layout, text, selection)
         drawStaticTextWithPatches(canvas, layout, text, scrollY, viewportHeight)
 
-        if (composingText.isNotEmpty() && composingStart >= 0) {
-            drawComposingTextAndUnderline(canvas, layout, text, composingStart, composingText, composingCursor)
-        } else if (composingStart >= 0 && composingEnd >= 0 && composingStart < composingEnd && composingStart < text.length) {
-            drawComposingUnderline(canvas, layout, text, composingStart, composingEnd)
+        val hasCompositionTransaction = activeTransactions.any {
+            it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
+            (it.state == AndroidVisualTransactionState.Rendering ||
+             it.state == AndroidVisualTransactionState.Paused ||
+             it.state == AndroidVisualTransactionState.Prepared)
+        }
+
+        if (!hasCompositionTransaction) {
+            if (composingText.isNotEmpty() && composingStart >= 0) {
+                drawComposingTextAndUnderline(canvas, layout, text, composingStart, composingText, composingCursor)
+            } else if (composingStart >= 0 && composingEnd >= 0 && composingStart < composingEnd && composingStart < text.length) {
+                drawComposingUnderline(canvas, layout, text, composingStart, composingEnd)
+            }
         }
 
         drawAnimatedSlices(canvas)
+
+        if (hasCompositionTransaction && composingText.isNotEmpty()) {
+            drawCompositionDecoration(canvas, layout, text, composingStart, composingText, composingCursor)
+        }
 
         if (cursorVisible && cursorBlinkOn && selection.isCollapsed) {
             if (hasComposingCursor) {
@@ -523,7 +536,7 @@ class SujianEditorRenderer(
                 tx.state != AndroidVisualTransactionState.Paused) continue
 
             val progress = tx.progress
-            if (progress >= 1f) continue
+            if (progress >= 1f && tx.state == AndroidVisualTransactionState.Rendering) continue
 
             val easedProgress = 1f - (1f - progress) * (1f - progress)
 
@@ -729,6 +742,81 @@ class SujianEditorRenderer(
             val lineDrawX = composingLayout.getLineLeft(i)
 
             canvas.drawText(lineText, lineDrawX, drawBaselineY, textPaint)
+
+            val descent = composingLayout.getLineDescent(i).toFloat()
+            val underlineY = drawBaselineY + descent + 2f
+            val textWidth = textPaint.measureText(lineText)
+            if (textWidth > 0f) {
+                canvas.drawLine(lineDrawX, underlineY, lineDrawX + textWidth, underlineY, composingUnderlinePaint)
+            }
+        }
+
+        val cursorOffset = composingCursor.coerceIn(0, composingText.length)
+        val cursorLine = composingLayout.getLineForOffset(cursorOffset)
+        val cursorXInComposing = composingLayout.getPrimaryHorizontal(cursorOffset)
+        val cursorBaselineY = startBaselineY + (composingLayout.getLineBaseline(cursorLine).toFloat() - firstLineBaseline)
+        val cursorAscent = composingLayout.getLineAscent(cursorLine).toFloat()
+        val cursorDescent = composingLayout.getLineDescent(cursorLine).toFloat()
+
+        hasComposingCursor = true
+        composingCursorX = cursorXInComposing
+        composingCursorTop = cursorBaselineY + cursorAscent
+        composingCursorBottom = cursorBaselineY + cursorDescent
+    }
+
+    /**
+     * 绘制预输入装饰（下划线和光标），用于 CompositionUpdate 事务。
+     * 预输入文字本身已通过 AnimatedSlice 渲染，这里只画装饰。
+     */
+    private fun drawCompositionDecoration(
+        canvas: Canvas,
+        layout: Layout,
+        text: String,
+        composingStart: Int,
+        composingText: String,
+        composingCursor: Int
+    ) {
+        if (composingText.isEmpty()) return
+
+        val safeOffset = composingStart.coerceIn(0, text.length)
+        val startLine = if (text.isNotEmpty()) layout.getLineForOffset(safeOffset) else 0
+        val startX = if (text.isNotEmpty()) layout.getPrimaryHorizontal(safeOffset) else 0f
+        val startBaselineY = if (text.isNotEmpty()) layout.getLineBaseline(startLine).toFloat() else textPaint.textSize
+
+        val layoutWidth = layout.width.coerceAtLeast(1)
+        val composingLayout: StaticLayout
+
+        if (startX > 0f) {
+            val indentPx = Math.round(startX)
+            val spannedString = android.text.SpannableString(composingText)
+            val marginSpan = android.text.style.LeadingMarginSpan.Standard(indentPx, 0)
+            spannedString.setSpan(marginSpan, 0, composingText.length, android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE)
+
+            composingLayout = StaticLayout.Builder.obtain(
+                spannedString, 0, spannedString.length, textPaint, layoutWidth
+            ).setAlignment(Layout.Alignment.ALIGN_NORMAL)
+             .setLineSpacing(layout.spacingAdd, layout.spacingMultiplier)
+             .setIncludePad(false)
+             .build()
+        } else {
+            composingLayout = StaticLayout.Builder.obtain(
+                composingText, 0, composingText.length, textPaint, layoutWidth
+            ).setAlignment(Layout.Alignment.ALIGN_NORMAL)
+             .setLineSpacing(layout.spacingAdd, layout.spacingMultiplier)
+             .setIncludePad(false)
+             .build()
+        }
+
+        val firstLineBaseline = composingLayout.getLineBaseline(0).toFloat()
+
+        for (i in 0 until composingLayout.lineCount) {
+            val lineStart = composingLayout.getLineStart(i)
+            val lineEnd = composingLayout.getLineEnd(i)
+            if (lineStart >= lineEnd) continue
+
+            val lineText = composingText.substring(lineStart, lineEnd)
+            val drawBaselineY = startBaselineY + (composingLayout.getLineBaseline(i).toFloat() - firstLineBaseline)
+            val lineDrawX = composingLayout.getLineLeft(i)
 
             val descent = composingLayout.getLineDescent(i).toFloat()
             val underlineY = drawBaselineY + descent + 2f

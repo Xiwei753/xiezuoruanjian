@@ -48,11 +48,10 @@ mod tests {
 
     #[test]
     fn visual_transaction_inserted_range_creates_prepared_transaction() {
-        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind};
+        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline};
         use crate::sujian_editor_item::animation_mode::AnimationMode;
         use crate::sujian_editor_item::cursor_animation::CursorTransition;
         use crate::sujian_editor_item::layout_revision::LayoutRevision;
-        use std::time::Instant;
 
         let mut queue = PreparedTransactionQueue::new();
         let key = VisualTransactionKey { transaction_id: 1, generation: 1 };
@@ -61,8 +60,7 @@ mod tests {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Insert,
             animation_mode: AnimationMode::GlyphAnimation,
-            duration_ms: 160,
-            start_time: Instant::now(),
+            timeline: TransactionTimeline::new(160),
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
@@ -73,15 +71,12 @@ mod tests {
                 5,
                 10,
             )],
+            decoration_slices: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
             texture_prepared: false,
-            first_render_frame: None,
-            rendering_started_at: None,
-            accumulated_paused_duration_ms: 0,
-            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         };
@@ -109,11 +104,10 @@ mod tests {
 
     #[test]
     fn delete_creates_prepared_transaction() {
-        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind};
+        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline};
         use crate::sujian_editor_item::animation_mode::AnimationMode;
         use crate::sujian_editor_item::cursor_animation::CursorTransition;
         use crate::sujian_editor_item::layout_revision::LayoutRevision;
-        use std::time::Instant;
 
         let mut queue = PreparedTransactionQueue::new();
         let key = VisualTransactionKey { transaction_id: 2, generation: 2 };
@@ -122,21 +116,17 @@ mod tests {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Delete,
             animation_mode: AnimationMode::GlyphAnimation,
-            duration_ms: 160,
-            start_time: Instant::now(),
+            timeline: TransactionTimeline::new(160),
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
             static_patches: Vec::new(),
+            decoration_slices: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
             texture_prepared: false,
-            first_render_frame: None,
-            rendering_started_at: None,
-            accumulated_paused_duration_ms: 0,
-            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         };
@@ -536,11 +526,10 @@ mod tests {
 
     #[test]
     fn prepared_queue_finish_clears_transaction() {
-        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind};
+        use crate::sujian_editor_item::text_visual_transaction::{PreparedTransactionQueue, PreparedTextVisualTransaction, TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline};
         use crate::sujian_editor_item::animation_mode::AnimationMode;
         use crate::sujian_editor_item::cursor_animation::CursorTransition;
         use crate::sujian_editor_item::layout_revision::LayoutRevision;
-        use std::time::Instant;
 
         let mut queue = PreparedTransactionQueue::new();
         let key = VisualTransactionKey { transaction_id: 1, generation: 1 };
@@ -549,8 +538,7 @@ mod tests {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Insert,
             animation_mode: AnimationMode::GlyphAnimation,
-            duration_ms: 160,
-            start_time: Instant::now(),
+            timeline: TransactionTimeline::new(160),
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
@@ -561,15 +549,12 @@ mod tests {
                 10,
                 22,
             )],
+            decoration_slices: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
             texture_prepared: false,
-            first_render_frame: None,
-            rendering_started_at: None,
-            accumulated_paused_duration_ms: 0,
-            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         };
@@ -587,8 +572,7 @@ mod tests {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Insert,
             animation_mode: AnimationMode::GlyphAnimation,
-            duration_ms: 160,
-            start_time: Instant::now(),
+            timeline: TransactionTimeline::new(160),
             old_revision: LayoutRevision::initial(),
             new_revision: LayoutRevision::next(),
             slices: Vec::new(),
@@ -599,15 +583,12 @@ mod tests {
                 30,
                 42,
             )],
+            decoration_slices: Vec::new(),
             cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
             texture_prepared: false,
-            first_render_frame: None,
-            rendering_started_at: None,
-            accumulated_paused_duration_ms: 0,
-            pause_start: None,
             old_snapshot: None,
             new_snapshot: None,
         });

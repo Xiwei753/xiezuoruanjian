@@ -68,29 +68,30 @@ impl ScrollBuffer {
     }
 }
 
-/// 光标动画状态 — 固定时长 tween，不再用指数追赶
+/// 光标动画状态 — 使用事务 Timeline 的 progress 而非独立时间源。
+///
+/// Issue #515: 光标不再维护独立 Choreographer/start_time，
+/// 而是消费与文字动画相同的 Timeline progress。
 #[derive(Clone, Debug)]
 pub struct CursorAnimationState {
     pub start_x: f64,
     pub start_y: f64,
     pub target_x: f64,
     pub target_y: f64,
-    pub start_time: Instant,
-    pub duration_ms: u64,
+    pub progress: f64,
 }
 
 impl CursorAnimationState {
-    pub fn current_position(&self, now: Instant) -> (f64, f64) {
-        let elapsed_ms = now.duration_since(self.start_time).as_millis() as f64;
-        let t = (elapsed_ms / self.duration_ms as f64).min(1.0);
+    pub fn current_position(&self) -> (f64, f64) {
+        let t = self.progress.clamp(0.0, 1.0);
         let eased = 1.0 - (1.0 - t).powi(3i32);
         let x = self.start_x + (self.target_x - self.start_x) * eased;
         let y = self.start_y + (self.target_y - self.start_y) * eased;
         (x, y)
     }
 
-    pub fn is_finished(&self, now: Instant) -> bool {
-        now.duration_since(self.start_time).as_millis() as u64 >= self.duration_ms
+    pub fn is_finished(&self) -> bool {
+        self.progress >= 1.0
     }
 }
 

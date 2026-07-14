@@ -9,16 +9,8 @@ use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
+use super::decoration_slice::DecorationSlice;
 
-/// 平台视觉事务状态机：
-///
-/// ```text
-/// Pending → Prepared → Rendering ↔ Paused → Completed
-///    └──── 任一未终态 ────→ Cancelled
-/// ```
-///
-/// 动画计时只能在首次进入 Rendering 时开始（`first_render_frame`），
-/// 暂停时累计暂停时长，恢复后 progress 连续。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextVisualTransactionState {
     Pending,
@@ -34,39 +26,123 @@ pub(crate) enum TextVisualOperationKind {
     Insert,
     Delete,
     Cursor,
+    CompositionUpdate,
+    CompositionCommitOrCancel,
+}
+
+/// 统一事务时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress。
+///
+/// Choreographer 和 Qt update 只负责请求帧，不得给光标维护独立开始时间。
+/// Paused 状态必须返回暂停瞬间的 progress，不能返回 0。
+/// resume 后从暂停进度继续。
+#[derive(Clone, Debug)]
+pub(crate) struct TransactionTimeline {
+    pub duration_ms: u64,
+    pub first_render_frame: Option<Instant>,
+    pub rendering_started_at: Option<Instant>,
+    pub pause_start: Option<Instant>,
+    pub accumulated_paused_duration_ms: u64,
+    pub paused_progress: f64,
+}
+
+impl TransactionTimeline {
+    pub fn new(duration_ms: u64) -> Self {
+        Self {
+            duration_ms,
+            first_render_frame: None,
+            rendering_started_at: None,
+            pause_start: None,
+            accumulated_paused_duration_ms: 0,
+            paused_progress: 0.0,
+        }
+    }
+
+    pub fn progress(&self, now: Instant) -> f64 {
+        let Some(start) = self.effective_start() else {
+            return 0.0;
+        };
+        if self.duration_ms == 0 {
+            return 1.0;
+        }
+        if self.pause_start.is_some() {
+            return self.paused_progress;
+        }
+        let elapsed_ms = now.duration_since(start).as_millis() as f64;
+        let adjusted = elapsed_ms - self.accumulated_paused_duration_ms as f64;
+        (adjusted / self.duration_ms as f64).clamp(0.0, 1.0)
+    }
+
+    pub fn mark_first_frame(&mut self) {
+        let now = Instant::now();
+        if self.first_render_frame.is_none() {
+            self.first_render_frame = Some(now);
+        }
+        if self.rendering_started_at.is_none() {
+            self.rendering_started_at = Some(now);
+        }
+    }
+
+    pub fn pause(&mut self, now: Instant) {
+        if self.pause_start.is_some() {
+            return;
+        }
+        self.paused_progress = self.progress(now);
+        self.pause_start = Some(now);
+    }
+
+    pub fn resume(&mut self, now: Instant) {
+        if let Some(pause_start) = self.pause_start.take() {
+            self.accumulated_paused_duration_ms += now.duration_since(pause_start).as_millis() as u64;
+        }
+    }
+
+    pub fn is_started(&self) -> bool {
+        self.first_render_frame.is_some()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.pause_start.is_some()
+    }
+
+    pub fn effective_start(&self) -> Option<Instant> {
+        self.rendering_started_at.or(self.first_render_frame)
+    }
 }
 
 /// 一次平台视觉事务持有的全部资源。
 ///
-/// 它拥有一次动画所需的 slices、patches、cursor transition 和 old/new snapshots。
+/// 它拥有一次动画所需的 slices、patches、cursor transition、decoration slices
+/// 和 old/new snapshots。
 /// `texture_prepared` 为 true 后，静态层才允许隐藏对应范围，否则会出现一帧空洞。
 /// 事务完成、取消或超时移除后，对应快照资源才可以释放。
+///
+/// 文字切片、光标、预输入装饰全部消费同一个 Timeline progress。
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedTextVisualTransaction {
     pub key: VisualTransactionKey,
     pub state: TextVisualTransactionState,
     pub operation_kind: TextVisualOperationKind,
     pub animation_mode: AnimationMode,
-    pub duration_ms: u64,
-    pub start_time: Instant,
+    pub timeline: TransactionTimeline,
     pub old_revision: LayoutRevision,
     pub new_revision: LayoutRevision,
     pub slices: Vec<AnimatedSlice>,
     pub static_patches: Vec<StaticLinePatch>,
+    pub decoration_slices: Vec<DecorationSlice>,
     pub cursor_transition: CursorTransition,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
     pub cancel_reason: Option<String>,
     pub texture_prepared: bool,
-    pub first_render_frame: Option<Instant>,
-    pub rendering_started_at: Option<Instant>,
-    pub accumulated_paused_duration_ms: u64,
-    pub pause_start: Option<Instant>,
     pub old_snapshot: Option<EditorLayoutSnapshot>,
     pub new_snapshot: Option<EditorLayoutSnapshot>,
 }
 
 impl PreparedTextVisualTransaction {
+    pub fn duration_ms(&self) -> u64 {
+        self.timeline.duration_ms
+    }
+
     pub fn is_insert(&self) -> bool {
         self.operation_kind == TextVisualOperationKind::Insert
     }
@@ -79,48 +155,40 @@ impl PreparedTextVisualTransaction {
         self.operation_kind == TextVisualOperationKind::Cursor
     }
 
+    pub fn is_composition(&self) -> bool {
+        matches!(self.operation_kind, TextVisualOperationKind::CompositionUpdate | TextVisualOperationKind::CompositionCommitOrCancel)
+    }
+
     pub fn is_expired(&self, now: Instant) -> bool {
-        let effective_start = self.rendering_started_at.unwrap_or(self.first_render_frame.unwrap_or(self.start_time));
+        let Some(effective_start) = self.timeline.effective_start() else {
+            return false;
+        };
         let elapsed = now.duration_since(effective_start).as_millis() as u64;
-        let effective_duration = self.duration_ms + self.accumulated_paused_duration_ms;
+        let effective_duration = self.timeline.duration_ms + self.timeline.accumulated_paused_duration_ms;
         let timeout = effective_duration * 3 + 500;
         elapsed > timeout
     }
 
     pub fn progress(&self, now: Instant) -> f64 {
-        let effective_start = self.rendering_started_at.unwrap_or(self.first_render_frame.unwrap_or(self.start_time));
-        let elapsed_ms = now.duration_since(effective_start).as_millis() as f64;
-        let effective_duration_ms = self.duration_ms as f64;
-        if effective_duration_ms <= 0.0 {
-            return 1.0;
-        }
-        let adjusted_elapsed = elapsed_ms - self.accumulated_paused_duration_ms as f64;
-        (adjusted_elapsed / effective_duration_ms).min(1.0).max(0.0)
+        self.timeline.progress(now)
     }
 
     pub fn pause(&mut self) {
         if self.state == TextVisualTransactionState::Rendering {
             self.state = TextVisualTransactionState::Paused;
-            self.pause_start = Some(Instant::now());
+            self.timeline.pause(Instant::now());
         }
     }
 
     pub fn resume(&mut self) {
         if self.state == TextVisualTransactionState::Paused {
-            if let Some(pause_start) = self.pause_start.take() {
-                self.accumulated_paused_duration_ms += Instant::now().duration_since(pause_start).as_millis() as u64;
-            }
+            self.timeline.resume(Instant::now());
             self.state = TextVisualTransactionState::Rendering;
         }
     }
 
     pub fn mark_first_render(&mut self) {
-        if self.first_render_frame.is_none() {
-            self.first_render_frame = Some(Instant::now());
-        }
-        if self.rendering_started_at.is_none() {
-            self.rendering_started_at = Some(Instant::now());
-        }
+        self.timeline.mark_first_frame();
     }
 
     pub fn inserted_byte_ranges(&self) -> Vec<(usize, usize)> {

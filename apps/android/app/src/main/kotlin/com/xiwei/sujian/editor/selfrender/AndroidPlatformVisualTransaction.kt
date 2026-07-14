@@ -23,7 +23,7 @@ enum class AndroidVisualTransactionState {
 }
 
 enum class AndroidVisualOperationKind {
-    Insert, Delete, Cursor
+    Insert, Delete, Cursor, CompositionUpdate, CompositionCommitOrCancel
 }
 
 data class AndroidCursorTransition(
@@ -44,13 +44,10 @@ data class AndroidCursorTransition(
 /**
  * 一次平台视觉事务持有的全部资源。
  *
- * [firstRenderFrameMs] 是动画可见计时起点，不能用事务创建时间替代——
- * 事务可能在 Pending/Prepared 状态停留多帧，此时用户看不到动画。
- *
- * [accumulatedPausedDurationMs]：暂停期间不计入动画进度，
- * 恢复后 progress 从暂停点连续推进。
- *
- * [progress] 在 Paused 状态不应推进，恢复后连续。
+ * 统一时钟原则（issue #515）：
+ * - [timeline] 是唯一时间源，文字切片、光标、预输入装饰全部消费同一个 progress。
+ * - Paused 状态返回暂停瞬间的 progress，不返回 0。
+ * - resume 后从暂停进度连续推进。
  */
 data class AndroidPlatformVisualTransaction(
     val key: ULong,
@@ -65,21 +62,18 @@ data class AndroidPlatformVisualTransaction(
     val newLineSnapshots: MutableList<AndroidLineSnapshot>,
     val staticLinePatches: MutableList<AndroidStaticLinePatch>,
     var cursorTransition: AndroidCursorTransition,
-    var startTimeMs: Long = 0L,
-    var firstRenderFrameMs: Long = 0L,
-    var accumulatedPausedDurationMs: Long = 0L,
-    var pauseStartMs: Long = 0L,
     var cancelReason: String? = null
 ) {
+    val timeline: AndroidTimeline = AndroidTimeline(durationMs)
+
     val progress: Float
         get() {
+            if (state == AndroidVisualTransactionState.Paused) {
+                return timeline.pausedProgress.coerceIn(0f, 1f)
+            }
             if (state != AndroidVisualTransactionState.Rendering) return 0f
             if (durationMs <= 0) return 1f
-            val now = System.currentTimeMillis()
-            val effectiveStart = firstRenderFrameMs
-            if (effectiveStart <= 0) return 0f
-            val elapsed = (now - effectiveStart - accumulatedPausedDurationMs).coerceAtLeast(0L)
-            return (elapsed.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+            return timeline.progress(System.currentTimeMillis())
         }
 
     val isFinished: Boolean
@@ -94,28 +88,21 @@ data class AndroidPlatformVisualTransaction(
     fun markRendering() {
         if (state == AndroidVisualTransactionState.Prepared) {
             state = AndroidVisualTransactionState.Rendering
-            val now = System.currentTimeMillis()
-            if (firstRenderFrameMs <= 0L) {
-                firstRenderFrameMs = now
-            }
-            startTimeMs = now
+            timeline.recordFirstFrame(System.currentTimeMillis())
         }
     }
 
     fun pause() {
         if (state == AndroidVisualTransactionState.Rendering) {
             state = AndroidVisualTransactionState.Paused
-            pauseStartMs = System.currentTimeMillis()
+            timeline.pause(System.currentTimeMillis())
         }
     }
 
     fun resume() {
         if (state == AndroidVisualTransactionState.Paused) {
             state = AndroidVisualTransactionState.Rendering
-            if (pauseStartMs > 0) {
-                accumulatedPausedDurationMs += System.currentTimeMillis() - pauseStartMs
-                pauseStartMs = 0L
-            }
+            timeline.resume(System.currentTimeMillis())
         }
     }
 

@@ -3,10 +3,20 @@ package com.xiwei.sujian.editor.selfrender
 import android.graphics.RectF
 import android.os.Handler
 import android.os.Looper
-import android.view.Choreographer
 import android.view.View
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
 
+/**
+ * SujianCursorController — 光标控制器（统一 Timeline 版本，issue #515）
+ *
+ * 核心变更：
+ * - 删除独立 Choreographer 路线。光标位置由事务 Timeline progress 驱动。
+ * - 每帧由 SujianEditorView.onDraw() → tickCursorFromTimeline() 调用，
+ *   不再自己 post Choreographer.FrameCallback。
+ * - transactionDrivenCursor 的 progress 来自 AndroidPlatformVisualTransaction.timeline。
+ * - 普通（无正文变更的）光标移动创建 CursorOnly PlatformVisualTransaction，
+ *   仍使用相同 Timeline 类型。
+ */
 class SujianCursorController(
     private val view: View,
     private val buffer: SujianEditorBuffer,
@@ -24,28 +34,17 @@ class SujianCursorController(
     var smoothCursorEnabled = false
     var smoothCursorDurationMs = 80L
 
-    data class CursorVisualState(
-        val currentX: Float,
-        val currentTop: Float,
-        val currentBottom: Float,
-        val targetX: Float,
-        val targetTop: Float,
-        val targetBottom: Float,
-        val startX: Float,
-        val startTop: Float,
-        val startBottom: Float,
-        val startTimeNanos: Long,
-        val durationMs: Long
-    )
+    private var cursorFromX: Float = 0f
+    private var cursorFromTop: Float = 0f
+    private var cursorFromBottom: Float = 0f
+    private var cursorTargetX: Float = 0f
+    private var cursorTargetTop: Float = 0f
+    private var cursorTargetBottom: Float = 0f
 
-    private var cursorVisualState: CursorVisualState? = null
-    private var isCursorAnimating = false
+    internal var isCursorAnimating = false
     private var forceSnapNext = false
 
-    private var transactionDrivenCursor: AndroidCursorTransition? = null
-
-    private val choreographer = Choreographer.getInstance()
-    private var frameCallback: Choreographer.FrameCallback? = null
+    private var activeTransaction: AndroidPlatformVisualTransaction? = null
 
     private val interpolator = android.view.animation.PathInterpolator(0.4f, 0.0f, 0.2f, 1.0f)
 
@@ -120,19 +119,32 @@ class SujianCursorController(
         renderer.smoothCursorEnabled = enabled
         if (!enabled) {
             stopCursorAnimation()
-            val state = cursorVisualState
-            if (state != null) {
-                renderer.cursorVisualX = state.targetX
-                renderer.cursorVisualTop = state.targetTop
-                renderer.cursorVisualBottom = state.targetBottom
-                cursorVisualState = null
-                view.invalidate()
-            }
+            renderer.cursorVisualX = cursorTargetX
+            renderer.cursorVisualTop = cursorTargetTop
+            renderer.cursorVisualBottom = cursorTargetBottom
+            view.invalidate()
         }
     }
 
-    fun setTransactionDrivenCursor(transition: AndroidCursorTransition?) {
-        transactionDrivenCursor = transition
+    fun setTransactionDrivenCursor(transition: AndroidCursorTransition) {
+        if (transition.isSnap) {
+            val rect = transition.newRect ?: return
+            snapCursorTo(rect.left, rect.top, rect.bottom)
+            return
+        }
+
+        val oldRect = transition.oldRect ?: return
+        val newRect = transition.newRect ?: return
+
+        cursorFromX = oldRect.left
+        cursorFromTop = oldRect.top
+        cursorFromBottom = oldRect.bottom
+        cursorTargetX = newRect.left
+        cursorTargetTop = newRect.top
+        cursorTargetBottom = newRect.bottom
+        isCursorAnimating = true
+        renderer.isCursorAnimating = true
+        renderer.smoothCursorEnabled = smoothCursorEnabled
     }
 
     fun updateCursorTarget(targetX: Float, targetTop: Float, targetBottom: Float, animate: Boolean) {
@@ -140,129 +152,96 @@ class SujianCursorController(
         renderer.cursorTargetTop = targetTop
         renderer.cursorTargetBottom = targetBottom
 
-        val currentState = cursorVisualState
-
         if (!smoothCursorEnabled || !animate || forceSnapNext) {
             forceSnapNext = false
             stopCursorAnimation()
-            renderer.cursorVisualX = targetX
-            renderer.cursorVisualTop = targetTop
-            renderer.cursorVisualBottom = targetBottom
-            cursorVisualState = CursorVisualState(
-                currentX = targetX, currentTop = targetTop, currentBottom = targetBottom,
-                targetX = targetX, targetTop = targetTop, targetBottom = targetBottom,
-                startX = targetX, startTop = targetTop, startBottom = targetBottom,
-                startTimeNanos = 0, durationMs = 0
-            )
-            view.invalidate()
+            snapCursorTo(targetX, targetTop, targetBottom)
             return
         }
 
-        val startX = currentState?.currentX ?: targetX
-        val startTop = currentState?.currentTop ?: targetTop
-        val startBottom = currentState?.currentBottom ?: targetBottom
-
-        val txTransition = transactionDrivenCursor
-        if (txTransition != null && !txTransition.isSnap && txTransition.oldRect != null && txTransition.newRect != null) {
-            val duration = txTransition.durationMs.coerceAtLeast(1L)
-            cursorVisualState = CursorVisualState(
-                currentX = startX, currentTop = startTop, currentBottom = startBottom,
-                targetX = targetX, targetTop = targetTop, targetBottom = targetBottom,
-                startX = startX, startTop = startTop, startBottom = startBottom,
-                startTimeNanos = -1L,
-                durationMs = duration
-            )
-            transactionDrivenCursor = null
-            startCursorAnimation()
+        val tx = activeTransaction
+        if (tx != null && (tx.state == AndroidVisualTransactionState.Rendering || tx.state == AndroidVisualTransactionState.Paused)) {
+            cursorFromX = renderer.cursorVisualX
+            cursorFromTop = renderer.cursorVisualTop
+            cursorFromBottom = renderer.cursorVisualBottom
+            cursorTargetX = targetX
+            cursorTargetTop = targetTop
+            cursorTargetBottom = targetBottom
+            isCursorAnimating = true
+            renderer.isCursorAnimating = true
+            renderer.smoothCursorEnabled = smoothCursorEnabled
             return
         }
 
-        cursorVisualState = CursorVisualState(
-            currentX = startX, currentTop = startTop, currentBottom = startBottom,
-            targetX = targetX, targetTop = targetTop, targetBottom = targetBottom,
-            startX = startX, startTop = startTop, startBottom = startBottom,
-            startTimeNanos = -1L,
-            durationMs = smoothCursorDurationMs
-        )
-
-        startCursorAnimation()
-    }
-
-    private fun startCursorAnimation() {
-        if (isCursorAnimating) return
+        cursorFromX = renderer.cursorVisualX
+        cursorFromTop = renderer.cursorVisualTop
+        cursorFromBottom = renderer.cursorVisualBottom
+        cursorTargetX = targetX
+        cursorTargetTop = targetTop
+        cursorTargetBottom = targetBottom
         isCursorAnimating = true
         renderer.isCursorAnimating = true
         renderer.smoothCursorEnabled = smoothCursorEnabled
-
-        val callback = object : Choreographer.FrameCallback {
-            override fun doFrame(frameTimeNanos: Long) {
-                if (!isCursorAnimating) return
-                tickCursorAnimation(frameTimeNanos)
-                if (isCursorAnimating) {
-                    choreographer.postFrameCallback(this)
-                }
-            }
-        }
-        frameCallback = callback
-        choreographer.postFrameCallback(callback)
     }
 
-    private fun stopCursorAnimation() {
-        isCursorAnimating = false
-        renderer.isCursorAnimating = false
-        frameCallback?.let { choreographer.removeFrameCallback(it) }
-        frameCallback = null
-    }
+    /**
+     * 每帧由 onDraw() 调用，从事务 Timeline progress 计算光标位置。
+     * 不再使用独立 Choreographer。
+     */
+    fun tickCursorFromTimeline() {
+        if (!isCursorAnimating) return
 
-    private fun tickCursorAnimation(frameTimeNanos: Long) {
-        val state = cursorVisualState ?: run {
-            stopCursorAnimation()
-            return
-        }
-
-        var startTimeNanos = state.startTimeNanos
-        if (startTimeNanos < 0) {
-            startTimeNanos = frameTimeNanos
-            cursorVisualState = state.copy(startTimeNanos = startTimeNanos)
-        }
-
-        val elapsedNanos = frameTimeNanos - startTimeNanos
-        val durationNanos = state.durationMs * 1_000_000f
-        val progress = if (durationNanos > 0) {
-            (elapsedNanos / durationNanos).coerceIn(0f, 1f)
+        val tx = activeTransaction
+        val progress: Float
+        if (tx != null && (tx.state == AndroidVisualTransactionState.Rendering || tx.state == AndroidVisualTransactionState.Paused)) {
+            progress = tx.progress
         } else {
-            1f
+            progress = 1f
         }
 
         val interpolated = interpolator.getInterpolation(progress)
 
-        val currentX = state.startX + (state.targetX - state.startX) * interpolated
-        val currentTop = state.startTop + (state.targetTop - state.startTop) * interpolated
-        val currentBottom = state.startBottom + (state.targetBottom - state.startBottom) * interpolated
+        val currentX = cursorFromX + (cursorTargetX - cursorFromX) * interpolated
+        val currentTop = cursorFromTop + (cursorTargetTop - cursorFromTop) * interpolated
+        val currentBottom = cursorFromBottom + (cursorTargetBottom - cursorFromBottom) * interpolated
 
         renderer.cursorVisualX = currentX
         renderer.cursorVisualTop = currentTop
         renderer.cursorVisualBottom = currentBottom
 
-        cursorVisualState = state.copy(
-            currentX = currentX,
-            currentTop = currentTop,
-            currentBottom = currentBottom
-        )
-
-        view.invalidate()
-
         if (progress >= 1f) {
-            renderer.cursorVisualX = state.targetX
-            renderer.cursorVisualTop = state.targetTop
-            renderer.cursorVisualBottom = state.targetBottom
-            cursorVisualState = state.copy(
-                currentX = state.targetX,
-                currentTop = state.targetTop,
-                currentBottom = state.targetBottom
-            )
-            stopCursorAnimation()
+            renderer.cursorVisualX = cursorTargetX
+            renderer.cursorVisualTop = cursorTargetTop
+            renderer.cursorVisualBottom = cursorTargetBottom
+            isCursorAnimating = false
+            renderer.isCursorAnimating = false
+            activeTransaction = null
         }
+    }
+
+    fun setActiveTransaction(tx: AndroidPlatformVisualTransaction?) {
+        activeTransaction = tx
+    }
+
+    private fun snapCursorTo(x: Float, top: Float, bottom: Float) {
+        renderer.cursorVisualX = x
+        renderer.cursorVisualTop = top
+        renderer.cursorVisualBottom = bottom
+        cursorFromX = x
+        cursorFromTop = top
+        cursorFromBottom = bottom
+        cursorTargetX = x
+        cursorTargetTop = top
+        cursorTargetBottom = bottom
+        isCursorAnimating = false
+        renderer.isCursorAnimating = false
+        view.invalidate()
+    }
+
+    private fun stopCursorAnimation() {
+        isCursorAnimating = false
+        renderer.isCursorAnimating = false
+        activeTransaction = null
     }
 
     private fun startBlinking() {

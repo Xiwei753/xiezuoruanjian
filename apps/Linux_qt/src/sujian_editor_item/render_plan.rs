@@ -2,6 +2,7 @@ use super::transaction_key::VisualTransactionKey;
 use super::cursor_animation::CursorAnimationPlan;
 use super::animation_mode::AnimationMode;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
+use super::decoration_slice::DecorationSlice;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenClipRect {
@@ -157,6 +158,7 @@ pub(crate) struct RenderPlan {
     pub static_text: StaticTextPlan,
     pub text_animation: TextAnimationPlan,
     pub selection_preedit: SelectionPreeditPlan,
+    pub decorations: Vec<DecorationSlice>,
     pub cursor: CursorAnimationPlan,
     pub ime: ImeUpdatePlan,
     pub frame_context: FrameContext,

@@ -253,6 +253,172 @@ impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto
     }
 }
 
+// ── #515: Unified Timeline DTO ──
+
+/// 统一时钟 DTO — 文字切片、光标、预输入装饰全部消费同一个 progress。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TimelineDto {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_visible_frame_time_ms: Option<u64>,
+    pub duration_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pause_started_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "u64_is_zero")]
+    pub accumulated_paused_duration_ms: u64,
+    #[serde(default, skip_serializing_if = "f64_is_zero")]
+    pub paused_progress: f64,
+}
+
+fn u64_is_zero(v: &u64) -> bool {
+    *v == 0
+}
+
+fn f64_is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
+impl From<crate::editor::Timeline> for TimelineDto {
+    fn from(t: crate::editor::Timeline) -> Self {
+        Self {
+            first_visible_frame_time_ms: t.first_visible_frame_time_ms,
+            duration_ms: t.duration_ms,
+            pause_started_at_ms: t.pause_started_at_ms,
+            accumulated_paused_duration_ms: t.accumulated_paused_duration_ms,
+            paused_progress: t.paused_progress,
+        }
+    }
+}
+
+// ── #515: Unified Transaction Kind DTO ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum UnifiedTransactionKindDto {
+    #[default]
+    BodyEdit,
+    CompositionUpdate,
+    CompositionCommitOrCancel,
+    CursorOnly,
+}
+
+impl From<crate::editor::UnifiedTransactionKind> for UnifiedTransactionKindDto {
+    fn from(k: crate::editor::UnifiedTransactionKind) -> Self {
+        match k {
+            crate::editor::UnifiedTransactionKind::BodyEdit => Self::BodyEdit,
+            crate::editor::UnifiedTransactionKind::CompositionUpdate => Self::CompositionUpdate,
+            crate::editor::UnifiedTransactionKind::CompositionCommitOrCancel => {
+                Self::CompositionCommitOrCancel
+            }
+            crate::editor::UnifiedTransactionKind::CursorOnly => Self::CursorOnly,
+        }
+    }
+}
+
+// ── #515: Visual Class Kind DTO ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum VisualClassKindDto {
+    #[default]
+    Static,
+    Insert,
+    Delete,
+    Move,
+    Crossfade,
+}
+
+impl From<crate::editor::VisualClassKind> for VisualClassKindDto {
+    fn from(k: crate::editor::VisualClassKind) -> Self {
+        match k {
+            crate::editor::VisualClassKind::Static => Self::Static,
+            crate::editor::VisualClassKind::Insert => Self::Insert,
+            crate::editor::VisualClassKind::Delete => Self::Delete,
+            crate::editor::VisualClassKind::Move => Self::Move,
+            crate::editor::VisualClassKind::Crossfade => Self::Crossfade,
+        }
+    }
+}
+
+// ── #515: Decoration Slice DTO ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum DecorationSliceKindDto {
+    #[default]
+    Underline,
+    TextColor,
+    BackgroundColor,
+    Cursor,
+}
+
+impl From<crate::editor::DecorationSliceKind> for DecorationSliceKindDto {
+    fn from(k: crate::editor::DecorationSliceKind) -> Self {
+        match k {
+            crate::editor::DecorationSliceKind::Underline => Self::Underline,
+            crate::editor::DecorationSliceKind::TextColor => Self::TextColor,
+            crate::editor::DecorationSliceKind::BackgroundColor => Self::BackgroundColor,
+            crate::editor::DecorationSliceKind::Cursor => Self::Cursor,
+        }
+    }
+}
+
+// ── #515: PlatformVisualTransaction DTO ──
+
+/// 跨平台视觉事务 DTO — 包含 #515 统一时钟和分类。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlatformVisualTransactionDto {
+    pub transaction_id: u64,
+    pub generation: u64,
+    pub state: PlatformVisualTransactionStateDto,
+    pub duration_ms: u64,
+    pub unified_kind: UnifiedTransactionKindDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline: Option<TimelineDto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_class_kinds: Vec<VisualClassKindDto>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PlatformVisualTransactionStateDto {
+    #[default]
+    Pending,
+    Prepared,
+    Rendering,
+    Paused,
+    Completed,
+    Cancelled,
+}
+
+impl From<crate::editor::PlatformVisualTransactionState> for PlatformVisualTransactionStateDto {
+    fn from(s: crate::editor::PlatformVisualTransactionState) -> Self {
+        match s {
+            crate::editor::PlatformVisualTransactionState::Pending => Self::Pending,
+            crate::editor::PlatformVisualTransactionState::Prepared => Self::Prepared,
+            crate::editor::PlatformVisualTransactionState::Rendering => Self::Rendering,
+            crate::editor::PlatformVisualTransactionState::Paused => Self::Paused,
+            crate::editor::PlatformVisualTransactionState::Completed => Self::Completed,
+            crate::editor::PlatformVisualTransactionState::Cancelled => Self::Cancelled,
+        }
+    }
+}
+
+impl From<crate::editor::PlatformVisualTransaction> for PlatformVisualTransactionDto {
+    fn from(t: crate::editor::PlatformVisualTransaction) -> Self {
+        Self {
+            transaction_id: t.transaction_id,
+            generation: t.generation,
+            state: t.state.into(),
+            duration_ms: t.duration_ms,
+            unified_kind: t.unified_kind.map(|k| k.into()).unwrap_or_default(),
+            timeline: t.timeline.map(Into::into),
+            visual_class_kinds: t.visual_class_kinds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +632,155 @@ mod tests {
         assert!(!json.contains("\"has_deleted_range\":"));
         assert!(!json.contains("\"duration_ms\":"));
         assert!(!json.contains("\"coordinate_mode\":"));
+    }
+
+    // --- #515: TimelineDto tests ---
+
+    #[test]
+    fn timeline_dto_from_core_timeline() {
+        let mut tl = crate::editor::Timeline::new(200);
+        tl.mark_first_visible_frame(1000);
+        tl.pause(1100);
+        let dto: TimelineDto = tl.into();
+        assert_eq!(dto.duration_ms, 200);
+        assert_eq!(dto.first_visible_frame_time_ms, Some(1000));
+        assert_eq!(dto.pause_started_at_ms, Some(1100));
+        assert!((dto.paused_progress - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn timeline_dto_serializes_camel_case() {
+        let dto = TimelineDto {
+            first_visible_frame_time_ms: Some(1000),
+            duration_ms: 200,
+            pause_started_at_ms: None,
+            accumulated_paused_duration_ms: 50,
+            paused_progress: 0.3,
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"firstVisibleFrameTimeMs\":"));
+        assert!(json.contains("\"durationMs\":"));
+        assert!(json.contains("\"accumulatedPausedDurationMs\":"));
+        assert!(json.contains("\"pausedProgress\":"));
+        assert!(!json.contains("\"pauseStartedAtMs\":"));
+
+        // Verify zero defaults are skipped
+        let dto_zero = TimelineDto {
+            first_visible_frame_time_ms: None,
+            duration_ms: 200,
+            pause_started_at_ms: None,
+            accumulated_paused_duration_ms: 0,
+            paused_progress: 0.0,
+        };
+        let json_zero = serde_json::to_string(&dto_zero).unwrap();
+        assert!(!json_zero.contains("\"firstVisibleFrameTimeMs\":"));
+        assert!(!json_zero.contains("\"pauseStartedAtMs\":"));
+        assert!(!json_zero.contains("\"accumulatedPausedDurationMs\":"));
+        assert!(!json_zero.contains("\"pausedProgress\":"));
+    }
+
+    // --- #515: UnifiedTransactionKindDto tests ---
+
+    #[test]
+    fn unified_transaction_kind_dto_from_core() {
+        assert_eq!(
+            UnifiedTransactionKindDto::from(crate::editor::UnifiedTransactionKind::BodyEdit),
+            UnifiedTransactionKindDto::BodyEdit
+        );
+        assert_eq!(
+            UnifiedTransactionKindDto::from(crate::editor::UnifiedTransactionKind::CompositionUpdate),
+            UnifiedTransactionKindDto::CompositionUpdate
+        );
+        assert_eq!(
+            UnifiedTransactionKindDto::from(crate::editor::UnifiedTransactionKind::CompositionCommitOrCancel),
+            UnifiedTransactionKindDto::CompositionCommitOrCancel
+        );
+        assert_eq!(
+            UnifiedTransactionKindDto::from(crate::editor::UnifiedTransactionKind::CursorOnly),
+            UnifiedTransactionKindDto::CursorOnly
+        );
+    }
+
+    #[test]
+    fn unified_transaction_kind_dto_serializes_camel_case() {
+        let json = serde_json::to_string(&UnifiedTransactionKindDto::CompositionUpdate).unwrap();
+        assert!(json.contains("\"compositionUpdate\""));
+    }
+
+    // --- #515: VisualClassKindDto tests ---
+
+    #[test]
+    fn visual_class_kind_dto_from_core() {
+        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Static), VisualClassKindDto::Static);
+        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Insert), VisualClassKindDto::Insert);
+        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Delete), VisualClassKindDto::Delete);
+        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Move), VisualClassKindDto::Move);
+        assert_eq!(VisualClassKindDto::from(crate::editor::VisualClassKind::Crossfade), VisualClassKindDto::Crossfade);
+    }
+
+    // --- #515: PlatformVisualTransactionDto tests ---
+
+    #[test]
+    fn platform_visual_transaction_dto_from_core() {
+        let mut tl = crate::editor::Timeline::new(160);
+        tl.mark_first_visible_frame(1000);
+        let pvt = crate::editor::PlatformVisualTransaction {
+            transaction_id: 1,
+            generation: 1,
+            state: crate::editor::PlatformVisualTransactionState::Rendering,
+            old_revision: crate::editor::VisualLayoutRevision {
+                document_revision: 1, layout_revision: 1,
+                viewport_width: 800.0, font_fingerprint: "f1".into(),
+                paragraph_style_fingerprint: "p1".into(),
+                text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
+            },
+            new_revision: crate::editor::VisualLayoutRevision {
+                document_revision: 2, layout_revision: 2,
+                viewport_width: 800.0, font_fingerprint: "f1".into(),
+                paragraph_style_fingerprint: "p1".into(),
+                text_color_fingerprint: "t1".into(), density_or_dpr: 2.0,
+            },
+            slice_roles: vec![crate::editor::AnimatedSliceRole::Insert],
+            slice_document_byte_ranges: vec![(2, 3)],
+            static_line_patches: Vec::new(),
+            cursor_transition_byte_start: 2,
+            cursor_transition_byte_end: 3,
+            duration_ms: 160,
+            rendering_started_at_ms: Some(1000),
+            accumulated_paused_duration_ms: 0,
+            timeline: Some(tl),
+            unified_kind: Some(crate::editor::UnifiedTransactionKind::BodyEdit),
+            visual_class_kinds: vec![crate::editor::VisualClassKind::Insert],
+            decoration_slices: Vec::new(),
+            cursor_path: None,
+            composition_revision: None,
+            rebase: None,
+        };
+        let dto: PlatformVisualTransactionDto = pvt.into();
+        assert_eq!(dto.transaction_id, 1);
+        assert_eq!(dto.state, PlatformVisualTransactionStateDto::Rendering);
+        assert_eq!(dto.unified_kind, UnifiedTransactionKindDto::BodyEdit);
+        assert!(dto.timeline.is_some());
+        assert_eq!(dto.visual_class_kinds.len(), 1);
+        assert_eq!(dto.visual_class_kinds[0], VisualClassKindDto::Insert);
+    }
+
+    #[test]
+    fn platform_visual_transaction_dto_serializes_camel_case() {
+        let dto = PlatformVisualTransactionDto {
+            transaction_id: 1,
+            generation: 1,
+            state: PlatformVisualTransactionStateDto::Pending,
+            duration_ms: 160,
+            unified_kind: UnifiedTransactionKindDto::BodyEdit,
+            timeline: None,
+            visual_class_kinds: vec![VisualClassKindDto::Insert],
+        };
+        let json = serde_json::to_string(&dto).unwrap();
+        assert!(json.contains("\"transactionId\":"));
+        assert!(json.contains("\"unifiedKind\":"));
+        assert!(json.contains("\"bodyEdit\""));
+        assert!(json.contains("\"visualClassKinds\":"));
+        assert!(!json.contains("\"timeline\":"));
     }
 }

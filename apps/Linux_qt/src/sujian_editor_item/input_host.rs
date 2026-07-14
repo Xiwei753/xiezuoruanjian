@@ -70,6 +70,31 @@ impl EditorInputHost for SujianEditorItem {
     fn input_clear_preedit(&mut self) {
         if !self.preedit_text.is_empty() {
             self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
+
+            if self.typing_animation_enabled {
+                let was_composing = false;
+                let composition_byte_start = self.buffer.cursor;
+                let composition_byte_end = self.buffer.cursor + self.preedit_text.len();
+                let width = self.bounding_width();
+                let old_cursor_rect = self.preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+                let new_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+
+                let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                    self.build_editor_layout_snapshot(width)
+                });
+                let new_snapshot = self.build_editor_layout_snapshot(width);
+
+                self.animation_coordinator.handle_composition_commit_or_cancel(
+                    self.current_typing_animation_duration_ms as u64,
+                    &old_snapshot,
+                    &new_snapshot,
+                    composition_byte_start,
+                    composition_byte_end,
+                    was_composing,
+                    old_cursor_rect,
+                    new_cursor_rect,
+                );
+            }
         }
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -83,10 +108,38 @@ impl EditorInputHost for SujianEditorItem {
 
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
         self.preedit_old_text = self.preedit_text.clone();
-        self.preedit_text = text;
+        self.preedit_text = text.clone();
         self.preedit_cursor = cursor;
         self.preedit_attributes.clear();
-        self.update_preedit_visual_state();
+
+        if self.typing_animation_enabled && !text.is_empty() {
+            let composition_byte_start = self.buffer.cursor;
+            let composition_byte_end = self.buffer.cursor + text.len();
+            let width = self.bounding_width();
+
+            let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                self.build_editor_layout_snapshot(width)
+            });
+
+            let virtual_text = format!("{}{}", &self.buffer.text[..composition_byte_start.min(self.buffer.text.len())], &text);
+            let new_snapshot = self.build_virtual_layout_snapshot(&virtual_text, width);
+
+            let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+
+            self.animation_coordinator.handle_composition_update(
+                self.current_typing_animation_duration_ms as u64,
+                &old_snapshot,
+                &new_snapshot,
+                composition_byte_start,
+                composition_byte_end,
+                old_cursor_rect,
+                new_cursor_rect,
+            );
+        } else {
+            self.update_preedit_visual_state();
+        }
+
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();
     }
@@ -98,10 +151,38 @@ impl EditorInputHost for SujianEditorItem {
         attributes: Vec<PreeditAttribute>,
     ) {
         self.preedit_old_text = self.preedit_text.clone();
-        self.preedit_text = text;
+        self.preedit_text = text.clone();
         self.preedit_cursor = cursor;
         self.preedit_attributes = attributes;
-        self.update_preedit_visual_state();
+
+        if self.typing_animation_enabled && !text.is_empty() {
+            let composition_byte_start = self.buffer.cursor;
+            let composition_byte_end = self.buffer.cursor + text.len();
+            let width = self.bounding_width();
+
+            let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                self.build_editor_layout_snapshot(width)
+            });
+
+            let virtual_text = format!("{}{}", &self.buffer.text[..composition_byte_start.min(self.buffer.text.len())], &text);
+            let new_snapshot = self.build_virtual_layout_snapshot(&virtual_text, width);
+
+            let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+
+            self.animation_coordinator.handle_composition_update(
+                self.current_typing_animation_duration_ms as u64,
+                &old_snapshot,
+                &new_snapshot,
+                composition_byte_start,
+                composition_byte_end,
+                old_cursor_rect,
+                new_cursor_rect,
+            );
+        } else {
+            self.update_preedit_visual_state();
+        }
+
         self.update_ime_cursor_for_preedit();
         self.request_static_repaint();
     }

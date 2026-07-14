@@ -24,6 +24,7 @@ pub(crate) mod animation_mode;
 pub(crate) mod buffer;
 pub(crate) mod cursor_animation;
 pub(crate) mod cursor_controller;
+pub(crate) mod decoration_slice;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;
 pub(crate) mod input_host;

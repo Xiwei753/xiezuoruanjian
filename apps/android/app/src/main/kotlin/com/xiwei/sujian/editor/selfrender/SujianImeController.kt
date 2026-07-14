@@ -185,9 +185,6 @@ class SujianImeController(
      * composing 开始时清除静态层跳过范围，避免动画卡住
      */
     fun onComposingChanged(composingText: String) {
-        if (composingText.isNotEmpty()) {
-            renderer.pauseAll()
-        }
         DiagnosticsLogger.d(TAG, "Composing changed: len=${composingText.length}")
     }
     
@@ -196,6 +193,7 @@ class SujianImeController(
      */
     fun onComposingFinished() {
         DiagnosticsLogger.d(TAG, "Composing finished")
+        renderer.resumeAll()
     }
     
     /**

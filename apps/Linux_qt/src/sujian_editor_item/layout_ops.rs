@@ -101,6 +101,57 @@ impl SujianEditorItem {
         snapshot
     }
 
+    pub(crate) fn build_virtual_layout_snapshot(&mut self, virtual_text: &str, width: f64) -> EditorLayoutSnapshot {
+        let scroll_y = self.current_scroll_y as f64;
+        let viewport_h = self.current_viewport_height.max(1.0) as f64;
+        let font_size = self.current_font_pixel_size as f64;
+        let font_family = &self.current_font_family.to_string();
+        let text_indent = self.current_text_indent as f64;
+        let line_spacing = self.current_line_spacing as f64;
+        let padding = self.current_padding as f64;
+        let dpr = {
+            let item_ptr = self.get_cpp_object();
+            if !item_ptr.is_null() {
+                crate::editor::renderer::sujian_item_dpr(item_ptr)
+            } else {
+                1.0
+            }
+        };
+        let text_color = &self.current_text_color.to_string();
+        let revision = LayoutRevision::next();
+
+        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
+            virtual_text,
+            self.text_revision,
+            font_size,
+            font_family,
+            line_spacing,
+            padding,
+            text_indent,
+            width,
+            dpr,
+            text_color,
+        );
+
+        let cursor_byte = self.buffer.cursor + virtual_text.len().saturating_sub(self.buffer.text.len());
+        let caret = doc_snapshot.cursor_rect(
+            cursor_byte.min(virtual_text.len()),
+            self.cursor_ctrl.affinity,
+            scroll_y,
+            viewport_h,
+        );
+
+        let mut snapshot = super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
+            revision,
+            &doc_snapshot,
+            scroll_y,
+            viewport_h,
+        );
+        snapshot.caret_rect = Some(caret);
+        snapshot.caret_affinity = self.cursor_ctrl.affinity;
+        snapshot
+    }
+
     pub(crate) fn update_current_layout_snapshot(&mut self) {
         let width = self.bounding_width();
         let new_snapshot = self.build_editor_layout_snapshot(width);

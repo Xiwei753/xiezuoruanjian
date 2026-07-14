@@ -110,12 +110,28 @@ class SujianInputConnection(
             return true
         }
 
-        // composing text 不进正文 buffer，只更新 preedit 状态
         buffer.setComposingText(text.toString(), newCursorPosition)
+
+        val editorView = view as? SujianEditorView
+        if (editorView != null) {
+            val composingStart = buffer.composingStart
+            val composingEnd = buffer.composingEnd
+            val compositionReplaceRange = if (composingStart >= 0 && composingEnd >= 0) {
+                composingStart..composingEnd
+            } else {
+                buffer.selection.head..buffer.selection.head
+            }
+            editorView.animationController.handleCompositionUpdate(
+                committedText = buffer.text,
+                compositionReplaceRange = compositionReplaceRange,
+                preeditText = text.toString(),
+                composingCursorUtf16 = buffer.composingCursor
+            )
+        }
+
         imeController.onComposingChanged(text.toString())
         imeController.updateSelection()
 
-        // 触发重绘以显示 composing 文字
         view.invalidate()
 
         return true
@@ -136,15 +152,21 @@ class SujianInputConnection(
     override fun finishComposingText(): Boolean {
         if (isClosed) return false
 
-        // finishComposingText 只清除 composing 状态，不提交文本到正文，不移动光标。
-        // composing 文本是 IME 临时状态，不应进入 undo/保存。
-        // IME 通常在 finishComposingText 之前或之后调用 commitText 来正式提交文本。
-        // 如果 IME 不调用 commitText（如用户点击取消），composing 文本应被丢弃。
+        val wasComposing = buffer.hasComposing
+
         buffer.finishComposing()
+
+        val editorView = view as? SujianEditorView
+        if (editorView != null && wasComposing) {
+            editorView.animationController.handleCompositionCommitOrCancel(
+                committedText = buffer.text,
+                wasComposing = false
+            )
+        }
+
         imeController.onComposingFinished()
         imeController.updateSelection()
 
-        // 触发重绘以清除 composing 文字
         view.invalidate()
 
         return true

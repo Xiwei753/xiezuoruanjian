@@ -101,8 +101,6 @@ impl CursorController {
             };
         }
 
-        let now = Instant::now();
-
         match &plan.transition {
             CursorTransition::Snap => {
                 self.visual_x = plan.cursor_x;
@@ -112,35 +110,33 @@ impl CursorController {
             CursorTransition::Tween {
                 old_rect,
                 new_rect,
-                duration_ms,
+                duration_ms: _,
             } => {
                 let start_x = old_rect.x;
                 let start_y = old_rect.top;
                 let target_x = new_rect.x;
                 let target_y = new_rect.top;
-                let dur = *duration_ms;
 
                 if let Some(ref anim) = self.animation {
                     if (anim.target_x - target_x).abs() > 0.01
                         || (anim.target_y - target_y).abs() > 0.01
                     {
-                        let (cur_x, cur_y) = anim.current_position(now);
+                        let (cur_x, cur_y) = anim.current_position();
                         self.animation = Some(CursorAnimationState {
                             start_x: cur_x,
                             start_y: cur_y,
                             target_x,
                             target_y,
-                            start_time: now,
-                            duration_ms: dur,
+                            progress: 0.0,
                         });
                         self.visual_x = cur_x;
                         self.visual_y = cur_y;
-                    } else if anim.is_finished(now) {
+                    } else if anim.is_finished() {
                         self.visual_x = anim.target_x;
                         self.visual_y = anim.target_y;
                         self.animation = None;
                     } else {
-                        let (cur_x, cur_y) = anim.current_position(now);
+                        let (cur_x, cur_y) = anim.current_position();
                         self.visual_x = cur_x;
                         self.visual_y = cur_y;
                     }
@@ -161,8 +157,7 @@ impl CursorController {
                             },
                             target_x,
                             target_y,
-                            start_time: now,
-                            duration_ms: dur,
+                            progress: 0.0,
                         });
                     } else {
                         self.visual_x = target_x;
@@ -197,17 +192,37 @@ impl CursorController {
         }
     }
 
-    pub fn tick_animation(&mut self) -> bool {
-        let now = Instant::now();
-        if let Some(ref anim) = self.animation {
-            if anim.is_finished(now) {
+    pub fn update_animation_progress(&mut self, progress: f64) -> bool {
+        if let Some(ref mut anim) = self.animation {
+            anim.progress = progress.clamp(0.0, 1.0);
+            if anim.is_finished() {
                 self.visual_x = anim.target_x;
                 self.visual_y = anim.target_y;
                 self.animation = None;
                 self.dirty = false;
                 false
             } else {
-                let (cx, cy) = anim.current_position(now);
+                let (cx, cy) = anim.current_position();
+                self.visual_x = cx;
+                self.visual_y = cy;
+                true
+            }
+        } else {
+            self.dirty = false;
+            false
+        }
+    }
+
+    pub fn tick_animation(&mut self) -> bool {
+        if let Some(ref anim) = self.animation {
+            if anim.is_finished() {
+                self.visual_x = anim.target_x;
+                self.visual_y = anim.target_y;
+                self.animation = None;
+                self.dirty = false;
+                false
+            } else {
+                let (cx, cy) = anim.current_position();
                 self.visual_x = cx;
                 self.visual_y = cy;
                 true
