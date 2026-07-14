@@ -138,6 +138,25 @@ class SujianEditorRenderer(
                         matchingNewSlice.rebaseFrom(frame.destinationRect, frame.alpha)
                     }
                 }
+                if (conflicting.cursorTransition.isSnap.not() && tx.cursorTransition.isSnap.not()) {
+                    val oldCursorFrame = conflicting.cursorTransition.let { ct ->
+                        val fromRect = ct.oldRect ?: RectF()
+                        val toRect = ct.newRect ?: RectF()
+                        val easedP = 1f - (1f - currentProgress) * (1f - currentProgress)
+                        RectF(
+                            fromRect.left + (toRect.left - fromRect.left) * easedP,
+                            fromRect.top + (toRect.top - fromRect.top) * easedP,
+                            fromRect.right + (toRect.right - fromRect.right) * easedP,
+                            fromRect.bottom + (toRect.bottom - fromRect.bottom) * easedP
+                        )
+                    }
+                    val newOldRect = tx.cursorTransition.oldRect ?: oldCursorFrame
+                    tx.cursorTransition = AndroidCursorTransition.tween(
+                        newOldRect,
+                        tx.cursorTransition.newRect ?: oldCursorFrame,
+                        tx.durationMs
+                    )
+                }
             }
             conflicting.cancel("rebased")
             activeTransactions.removeAll { it.key == conflicting.key }
@@ -150,15 +169,22 @@ class SujianEditorRenderer(
     }
 
     fun findConflictingTransaction(byteStart: Int, byteEnd: Int): AndroidPlatformVisualTransaction? {
-        return activeTransactions.find { tx ->
-            tx.state == AndroidVisualTransactionState.Rendering ||
-            tx.state == AndroidVisualTransactionState.Prepared ||
-            tx.state == AndroidVisualTransactionState.Paused
-        }?.let { tx ->
-            val hasOverlap = tx.slices.any { slice ->
-                !(byteEnd <= slice.documentByteStart || byteStart >= slice.documentByteEnd)
+        val tx = activeTransactions.find {
+            it.state == AndroidVisualTransactionState.Rendering ||
+            it.state == AndroidVisualTransactionState.Prepared ||
+            it.state == AndroidVisualTransactionState.Paused
+        } ?: return null
+
+        return when {
+            tx.operationKind == AndroidVisualOperationKind.Cursor -> tx
+            tx.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel ||
+            tx.operationKind == AndroidVisualOperationKind.CompositionUpdate -> tx
+            else -> {
+                val hasOverlap = tx.slices.any { slice ->
+                    !(byteEnd <= slice.documentByteStart || byteStart >= slice.documentByteEnd)
+                }
+                if (hasOverlap) tx else null
             }
-            if (hasOverlap) tx else null
         }
     }
 
@@ -332,8 +358,8 @@ class SujianEditorRenderer(
 
         drawAnimatedSlices(canvas)
 
-        if (hasCompositionTransaction && composingText.isNotEmpty()) {
-            drawCompositionDecoration(canvas, layout, text, composingStart, composingText, composingCursor)
+        if (hasCompositionTransaction) {
+            drawTransactionDecorationSlices(canvas, layout, text, composingStart, composingText, composingCursor)
         }
 
         if (cursorVisible && cursorBlinkOn && selection.isCollapsed) {
@@ -765,9 +791,106 @@ class SujianEditorRenderer(
     }
 
     /**
-     * 绘制预输入装饰（下划线和光标），用于 CompositionUpdate 事务。
+     * 从事务的 decorationSlices 绘制预输入装饰（下划线、IME cursor）。
      * 预输入文字本身已通过 AnimatedSlice 渲染，这里只画装饰。
+     * DecorationSlice 与正文切片共享 Timeline。
      */
+    private fun drawTransactionDecorationSlices(
+        canvas: Canvas,
+        layout: Layout,
+        text: String,
+        composingStart: Int,
+        composingText: String,
+        composingCursor: Int
+    ) {
+        val compositionTx = activeTransactions.find {
+            it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
+            (it.state == AndroidVisualTransactionState.Rendering ||
+             it.state == AndroidVisualTransactionState.Paused ||
+             it.state == AndroidVisualTransactionState.Prepared)
+        }
+
+        if (compositionTx == null || composingText.isEmpty()) return
+
+        val safeOffset = composingStart.coerceIn(0, text.length)
+        val startLine = if (text.isNotEmpty()) layout.getLineForOffset(safeOffset) else 0
+        val startX = if (text.isNotEmpty()) layout.getPrimaryHorizontal(safeOffset) else 0f
+        val startBaselineY = if (text.isNotEmpty()) layout.getLineBaseline(startLine).toFloat() else textPaint.textSize
+
+        val layoutWidth = layout.width.coerceAtLeast(1)
+        val composingLayout: StaticLayout
+
+        if (startX > 0f) {
+            val indentPx = Math.round(startX)
+            val spannedString = android.text.SpannableString(composingText)
+            val marginSpan = android.text.style.LeadingMarginSpan.Standard(indentPx, 0)
+            spannedString.setSpan(marginSpan, 0, composingText.length, android.text.Spannable.SPAN_INCLUSIVE_INCLUSIVE)
+
+            composingLayout = StaticLayout.Builder.obtain(
+                spannedString, 0, spannedString.length, textPaint, layoutWidth
+            ).setAlignment(Layout.Alignment.ALIGN_NORMAL)
+             .setLineSpacing(layout.spacingAdd, layout.spacingMultiplier)
+             .setIncludePad(false)
+             .build()
+        } else {
+            composingLayout = StaticLayout.Builder.obtain(
+                composingText, 0, composingText.length, textPaint, layoutWidth
+            ).setAlignment(Layout.Alignment.ALIGN_NORMAL)
+             .setLineSpacing(layout.spacingAdd, layout.spacingMultiplier)
+             .setIncludePad(false)
+             .build()
+        }
+
+        val firstLineBaseline = composingLayout.getLineBaseline(0).toFloat()
+
+        for (decSlice in compositionTx.decorationSlices) {
+            when (decSlice.kind) {
+                DecorationKind.Underline -> {
+                    val decStart = decSlice.rangeUtf16.first.coerceIn(0, composingText.length)
+                    val decEnd = decSlice.rangeUtf16.last.coerceIn(0, composingText.length)
+                    if (decStart >= decEnd) continue
+
+                    val startDecLine = composingLayout.getLineForOffset(decStart)
+                    val endDecLine = composingLayout.getLineForOffset(decEnd)
+
+                    for (line in startDecLine..endDecLine) {
+                        val lineStart = composingLayout.getLineStart(line)
+                        val lineEnd = composingLayout.getLineEnd(line)
+                        val cStart = if (line == startDecLine) decStart else lineStart
+                        val cEnd = if (line == endDecLine) decEnd else lineEnd
+                        if (cStart >= cEnd) continue
+
+                        val lineText = composingText.substring(cStart, cEnd)
+                        val drawBaselineY = startBaselineY + (composingLayout.getLineBaseline(line).toFloat() - firstLineBaseline)
+                        val lineDrawX = composingLayout.getPrimaryHorizontal(cStart)
+                        val descent = composingLayout.getLineDescent(line).toFloat()
+                        val underlineY = drawBaselineY + descent + 2f
+                        val textWidth = textPaint.measureText(lineText)
+                        if (textWidth > 0f) {
+                            canvas.drawLine(lineDrawX, underlineY, lineDrawX + textWidth, underlineY, composingUnderlinePaint)
+                        }
+                    }
+                }
+                DecorationKind.ComposingCursor -> {
+                    val cursorOffset = composingCursor.coerceIn(0, composingText.length)
+                    val cursorLine = composingLayout.getLineForOffset(cursorOffset)
+                    val cursorXInComposing = composingLayout.getPrimaryHorizontal(cursorOffset)
+                    val cursorBaselineY = startBaselineY + (composingLayout.getLineBaseline(cursorLine).toFloat() - firstLineBaseline)
+                    val cursorAscent = composingLayout.getLineAscent(cursorLine).toFloat()
+                    val cursorDescent = composingLayout.getLineDescent(cursorLine).toFloat()
+
+                    hasComposingCursor = true
+                    composingCursorX = cursorXInComposing
+                    composingCursorTop = cursorBaselineY + cursorAscent
+                    composingCursorBottom = cursorBaselineY + cursorDescent
+                }
+                DecorationKind.SegmentColor -> {
+                    // TODO: segment text color decoration
+                }
+            }
+        }
+    }
+
     private fun drawCompositionDecoration(
         canvas: Canvas,
         layout: Layout,
