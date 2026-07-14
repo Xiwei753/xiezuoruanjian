@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.graphics.Canvas
 
 import android.graphics.Paint
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.text.TextPaint
 import android.util.AttributeSet
@@ -566,23 +567,30 @@ class SujianEditorView @JvmOverloads constructor(
     private fun updateCursorAfterMove(newOffset: Int, extendSelection: Boolean) {
         val clampedOffset = newOffset.coerceIn(0, buffer.text.length)
         if (extendSelection) {
-            // Shift+方向键：扩展选区，anchor 不变，head 移动
             buffer.setSelection(buffer.selection.anchor, clampedOffset)
         } else {
-            // 无 Shift：如果有选区，先折叠到 head 方向
             if (!buffer.selection.isCollapsed) {
-                // 折叠到移动方向（左/上折叠到 start，右/下折叠到 end）
-                // 但这里统一折叠到 newOffset
                 buffer.setSelection(clampedOffset, clampedOffset)
             } else {
                 buffer.setSelection(clampedOffset, clampedOffset)
             }
         }
-        // 更新光标视觉位置
         val text = buffer.text
-        val cursorRect = layoutEngine.getCursorRect(text, buffer.selection.head)
-        cursorController.requestForceSnap()
-        cursorController.updateCursorTarget(cursorRect.x, cursorRect.top, cursorRect.bottom, false)
+        val newCursorRect = layoutEngine.getCursorRect(text, buffer.selection.head)
+        val oldCursorRect = RectF(
+            renderer.cursorVisualX,
+            renderer.cursorVisualTop,
+            renderer.cursorVisualX,
+            renderer.cursorVisualBottom
+        )
+        val newCursorRectF = RectF(newCursorRect.x, newCursorRect.top, newCursorRect.x, newCursorRect.bottom)
+
+        if (cursorController.smoothCursorEnabled && animationController.animationEnabled) {
+            animationController.handleCursorOnlyTransaction(oldCursorRect, newCursorRectF)
+        } else {
+            cursorController.requestForceSnap()
+            cursorController.updateCursorTarget(newCursorRect.x, newCursorRect.top, newCursorRect.bottom, false)
+        }
         cursorController.onSelectionChanged()
         touchController.ensureCursorVisible()
         imeController.updateSelection()
