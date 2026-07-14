@@ -76,25 +76,30 @@ impl EditorInputHost for SujianEditorItem {
             self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
 
             if self.typing_animation_enabled {
-                let was_composing = true;
                 let composition_byte_start = self.buffer.cursor;
                 let composition_byte_end = self.buffer.cursor + self.preedit_text.len();
                 let width = self.bounding_width();
                 let old_cursor_rect = self.preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
                 let new_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-                let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
-                    self.build_editor_layout_snapshot(width)
-                });
+                let old_snapshot = self.animation_coordinator
+                    .active_composition_new_snapshot()
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                            self.build_editor_layout_snapshot(width)
+                        })
+                    });
                 let new_snapshot = self.build_editor_layout_snapshot(width);
 
+                self.animation_coordinator.cancel_active_composition("clear_preedit");
                 self.animation_coordinator.handle_composition_commit_or_cancel(
                     self.current_typing_animation_duration_ms as u64,
                     &old_snapshot,
                     &new_snapshot,
                     composition_byte_start,
                     composition_byte_end,
-                    was_composing,
+                    false,
                     old_cursor_rect,
                     new_cursor_rect,
                 );

@@ -652,7 +652,7 @@ impl LinuxEditorAnimationCoordinator {
         new_snapshot: &EditorLayoutSnapshot,
         composition_byte_start: usize,
         composition_byte_end: usize,
-        was_composing: bool,
+        is_commit: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
@@ -671,9 +671,9 @@ impl LinuxEditorAnimationCoordinator {
         let mut slices = Vec::new();
         let mut static_patches = Vec::new();
 
-        if !was_composing {
-            let shrink_x = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-            let shrink_y = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+        if !is_commit {
+            let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+            let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
             for old_line in old_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
                 if let Some(source_rect) = old_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end) {
@@ -691,25 +691,127 @@ impl LinuxEditorAnimationCoordinator {
                     ));
                 }
             }
+        } else {
+            let insert_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+            let insert_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+
+            for new_line in new_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
+                if let Some(source_rect) = new_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end) {
+                    let to_doc = new_line.source_rect_to_document_rect(&source_rect);
+                    slices.push(AnimatedSlice::insert_fade_in(
+                        key,
+                        new_line.id,
+                        source_rect.clone(),
+                        to_doc,
+                        insert_cx,
+                        insert_cy,
+                        composition_byte_start,
+                        composition_byte_end,
+                        new_line.clusters.first().map(|c| c.shaping_identity.clone()),
+                    ));
+
+                    static_patches.push(StaticLinePatch::insert_patch(
+                        key,
+                        new_line.id,
+                        vec![source_rect],
+                        composition_byte_start,
+                        composition_byte_end,
+                    ));
+                }
+            }
+
+            let reflow_start = composition_byte_end;
+            for new_line in &new_snapshot.line_snapshots {
+                if new_line.byte_end <= reflow_start {
+                    continue;
+                }
+                if new_line.byte_start < reflow_start {
+                    continue;
+                }
+
+                let old_byte_start = new_line.byte_start.saturating_sub(composition_byte_end - composition_byte_start);
+                let old_line = old_snapshot.line_for_byte(old_byte_start);
+                if let Some(ol) = old_line {
+                    let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
+                    let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
+
+                    match (old_sr, new_sr) {
+                        (Some(old_src), Some(new_src)) => {
+                            let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                                && ol.clusters.iter()
+                                    .zip(new_line.clusters.iter())
+                                    .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+
+                            let old_doc = ol.source_rect_to_document_rect(&old_src);
+                            let new_doc = new_line.source_rect_to_document_rect(&new_src);
+
+                            if same_shaping {
+                                slices.push(AnimatedSlice::reflow_move(
+                                    key,
+                                    ol.id,
+                                    old_src,
+                                    old_doc,
+                                    new_line.id,
+                                    new_src.clone(),
+                                    new_doc,
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                    ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                                ));
+                            } else {
+                                slices.push(AnimatedSlice::reflow_crossfade_old(
+                                    key,
+                                    ol.id,
+                                    old_src.clone(),
+                                    old_doc.clone(),
+                                    new_doc.clone(),
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                ));
+                                slices.push(AnimatedSlice::reflow_crossfade_new(
+                                    key,
+                                    new_line.id,
+                                    new_src.clone(),
+                                    old_doc,
+                                    new_doc,
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                ));
+                            }
+
+                            static_patches.push(StaticLinePatch::reflow_patch(
+                                key,
+                                new_line.id,
+                                vec![new_src],
+                                new_line.byte_start,
+                                new_line.byte_end,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
 
-        for new_line in &new_snapshot.line_snapshots {
-            let animated_byte_ranges: Vec<(usize, usize)> = slices.iter().map(|s| (s.byte_start, s.byte_end)).collect();
-            let hidden_source_rects: Vec<SourceRect> = new_line
-                .clusters
-                .iter()
-                .filter(|c| animated_byte_ranges.iter().any(|(s, e)| !(c.byte_end <= *s || c.byte_start >= *e)))
-                .map(|c| c.source_rect.clone())
-                .collect();
+        if !is_commit {
+            for new_line in &new_snapshot.line_snapshots {
+                let animated_byte_ranges: Vec<(usize, usize)> = slices.iter().map(|s| (s.byte_start, s.byte_end)).collect();
+                let hidden_source_rects: Vec<SourceRect> = new_line
+                    .clusters
+                    .iter()
+                    .filter(|c| animated_byte_ranges.iter().any(|(s, e)| !(c.byte_end <= *s || c.byte_start >= *e)))
+                    .map(|c| c.source_rect.clone())
+                    .collect();
 
-            if !hidden_source_rects.is_empty() {
-                static_patches.push(StaticLinePatch::reflow_patch(
-                    key,
-                    new_line.id,
-                    hidden_source_rects,
-                    new_line.byte_start,
-                    new_line.byte_end,
-                ));
+                if !hidden_source_rects.is_empty() {
+                    static_patches.push(StaticLinePatch::reflow_patch(
+                        key,
+                        new_line.id,
+                        hidden_source_rects,
+                        new_line.byte_start,
+                        new_line.byte_end,
+                    ));
+                }
             }
         }
 
@@ -744,6 +846,29 @@ impl LinuxEditorAnimationCoordinator {
             .any(|t| t.is_composition()
                 && t.state != TextVisualTransactionState::Cancelled
                 && t.state != TextVisualTransactionState::Completed)
+    }
+
+    pub fn active_composition_new_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
+        self.prepared_queue.active_transactions()
+            .iter()
+            .filter(|t| t.operation_kind == TextVisualOperationKind::CompositionUpdate
+                && t.state != TextVisualTransactionState::Cancelled
+                && t.state != TextVisualTransactionState::Completed)
+            .filter_map(|t| t.new_snapshot.as_ref())
+            .last()
+    }
+
+    pub fn cancel_active_composition(&mut self, reason: &str) {
+        let keys: Vec<VisualTransactionKey> = self.prepared_queue.active_transactions()
+            .iter()
+            .filter(|t| t.operation_kind == TextVisualOperationKind::CompositionUpdate
+                && t.state != TextVisualTransactionState::Cancelled
+                && t.state != TextVisualTransactionState::Completed)
+            .map(|t| t.key)
+            .collect();
+        for key in keys {
+            self.prepared_queue.cancel(key, reason);
+        }
     }
 
     pub fn handle_cursor_only(

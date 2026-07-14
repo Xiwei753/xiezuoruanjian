@@ -175,9 +175,10 @@ pub(crate) fn commit_preedit_text<H: EditorInputHost + ?Sized>(host: &mut H, tex
     if !host.input_enabled() {
         return;
     }
-    host.input_clear_preedit();
     if !text.is_empty() {
         host.input_insert_text(text);
+    } else {
+        host.input_clear_preedit();
     }
 }
 
@@ -194,7 +195,6 @@ pub(crate) fn ime_commit<H: EditorInputHost + ?Sized>(host: &mut H, text: String
         host.input_clear_preedit();
         return;
     }
-    host.input_clear_preedit();
     host.input_insert_text(text);
 }
 
@@ -211,7 +211,6 @@ pub(crate) fn ime_replace_and_commit<H: EditorInputHost + ?Sized>(
         host.input_clear_preedit();
         return;
     }
-    host.input_clear_preedit();
     host.input_replace_and_insert(replace_start, replace_length, text);
 }
 

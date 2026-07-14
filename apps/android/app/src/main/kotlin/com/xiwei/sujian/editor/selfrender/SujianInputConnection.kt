@@ -76,11 +76,9 @@ class SujianInputConnection(
         if (wasComposing) {
             val editorView = view as? SujianEditorView
             if (editorView != null) {
-                editorView.runVisualEdit(SujianEditCauseData.TypingCommit) {
-                    val result = buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
-                    imeController.onEditResult(result)
-                    imeController.updateSelection()
-                }
+                val result = buffer.replaceSelectionOrInsert(textStr, SujianEditCause.TypingCommit)
+                imeController.onEditResult(result)
+                imeController.updateSelection()
                 editorView.animationController.handleCompositionCommitOrCancel(
                     committedText = buffer.text,
                     isCommit = true

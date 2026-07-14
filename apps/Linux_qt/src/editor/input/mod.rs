@@ -96,11 +96,19 @@ mod tests {
         }
 
         fn input_insert_text(&mut self, text: String) {
+            if !self.preedit_text.is_empty() {
+                self.preedit_text.clear();
+                self.preedit_cursor = 0;
+            }
             self.inserted.push(text);
         }
 
         fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
             self.replace_and_insert_calls.push((replace_start, replace_length, text.clone()));
+            if !self.preedit_text.is_empty() {
+                self.preedit_text.clear();
+                self.preedit_cursor = 0;
+            }
             self.inserted.push(text);
         }
 

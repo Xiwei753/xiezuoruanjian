@@ -70,6 +70,9 @@ impl SujianEditorItem {
             return;
         }
 
+        if !self.preedit_text.is_empty() && self.pending_preedit_cursor_rect.is_none() {
+            self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
+        }
         let pending_pcr = self.pending_preedit_cursor_rect.take();
         let was_composing = !self.preedit_text.is_empty();
         let composition_byte_start = self.buffer.cursor;
@@ -99,25 +102,66 @@ impl SujianEditorItem {
         if was_composing && self.current_typing_animation_enabled {
             let width = self.bounding_width();
             let old_cursor_rect = pending_pcr.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
-            let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
-                self.build_editor_layout_snapshot(width)
-            });
 
-            let _vt = self.record_transaction(old, new, cause, true);
+            let old_snapshot = self.animation_coordinator
+                .active_composition_new_snapshot()
+                .cloned()
+                .unwrap_or_else(|| {
+                    self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                        self.build_editor_layout_snapshot(width)
+                    })
+                });
+
+            let transaction = self.engine.create_transaction(
+                &old.text, &new.text,
+                EditorSelection {
+                    anchor: EditorCursor::new(&old.text, old.selection_anchor),
+                    head: EditorCursor::new(&old.text, old.cursor),
+                },
+                EditorSelection {
+                    anchor: EditorCursor::new(&new.text, new.selection_anchor),
+                    head: EditorCursor::new(&new.text, new.cursor),
+                },
+                cause,
+            );
+            let _vt = self.engine.visual_transaction(&transaction);
+
+            self.animation_coordinator.cancel_active_composition("commit_insert");
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-            self.animation_coordinator.handle_composition_commit_or_cancel(
+            let key = self.animation_coordinator.handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
                 composition_byte_start,
                 composition_byte_end,
-                was_composing,
+                true,
                 old_cursor_rect,
                 new_cursor_rect,
             );
+
+            if let Some(key) = key {
+                self.prepare_transaction_textures(key);
+            }
+            self.previous_layout_snapshot = Some(old_snapshot);
+            self.current_layout_snapshot = Some(new_snapshot);
+
+            self.last_event_count = 1;
+            self.last_summary = format!(
+                "cause={:?};changes={};vt=composition_commit;animate=true",
+                transaction.cause,
+                transaction.changes.len(),
+            ).into();
+            editor_animation_debug_log(&format!(
+                "insert_text_with_cause: composition commit, cause={:?}, changes={}",
+                transaction.cause,
+                transaction.changes.len(),
+            ));
+
+            self.transaction_created();
+            self.visual_transaction_changed();
         } else {
             let _vt = self.record_transaction(old, new, cause, true);
         }
@@ -143,7 +187,11 @@ impl SujianEditorItem {
             return;
         }
 
+        if !self.preedit_text.is_empty() && self.pending_preedit_cursor_rect.is_none() {
+            self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
+        }
         let pending_pcr = self.pending_preedit_cursor_rect.take();
+        let was_composing = !self.preedit_text.is_empty();
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -213,6 +261,9 @@ impl SujianEditorItem {
             (replace_end_byte, replace_start_byte)
         };
 
+        let composition_byte_start = del_start;
+        let composition_byte_end = del_end;
+
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
 
@@ -228,7 +279,68 @@ impl SujianEditorItem {
             EditorTransactionCause::TypingCommit
         };
         let new = self.buffer.snapshot();
-        let _vt = self.record_transaction(old, new, cause, true);
+
+        if was_composing && self.current_typing_animation_enabled {
+            let width = self.bounding_width();
+            let old_cursor_rect = pending_pcr.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+
+            let old_snapshot = self.animation_coordinator
+                .active_composition_new_snapshot()
+                .cloned()
+                .unwrap_or_else(|| {
+                    self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                        self.build_editor_layout_snapshot(width)
+                    })
+                });
+
+            let transaction = self.engine.create_transaction(
+                &old.text, &new.text,
+                EditorSelection {
+                    anchor: EditorCursor::new(&old.text, old.selection_anchor),
+                    head: EditorCursor::new(&old.text, old.cursor),
+                },
+                EditorSelection {
+                    anchor: EditorCursor::new(&new.text, new.selection_anchor),
+                    head: EditorCursor::new(&new.text, new.cursor),
+                },
+                cause,
+            );
+            let _vt = self.engine.visual_transaction(&transaction);
+
+            self.animation_coordinator.cancel_active_composition("commit_replace");
+
+            let new_snapshot = self.build_editor_layout_snapshot(width);
+            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+
+            let key = self.animation_coordinator.handle_composition_commit_or_cancel(
+                self.current_typing_animation_duration_ms as u64,
+                &old_snapshot,
+                &new_snapshot,
+                composition_byte_start,
+                composition_byte_end,
+                true,
+                old_cursor_rect,
+                new_cursor_rect,
+            );
+
+            if let Some(key) = key {
+                self.prepare_transaction_textures(key);
+            }
+            self.previous_layout_snapshot = Some(old_snapshot);
+            self.current_layout_snapshot = Some(new_snapshot);
+
+            self.last_event_count = 1;
+            self.last_summary = format!(
+                "cause={:?};changes={};vt=composition_commit_replace;animate=true",
+                transaction.cause,
+                transaction.changes.len(),
+            ).into();
+
+            self.transaction_created();
+            self.visual_transaction_changed();
+        } else {
+            let _vt = self.record_transaction(old, new, cause, true);
+        }
 
         if let Some(pcr) = pending_pcr {
             self.cursor_ctrl.visual_x = pcr.x;
