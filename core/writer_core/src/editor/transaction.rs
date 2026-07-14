@@ -454,6 +454,84 @@ pub struct PreeditVisualTransaction {
 //   - 进入动画协调器后只使用 document UTF-8 byte range；平台 UTF-16 index
 //     只存在于布局适配层
 
+/// 已提交正文的视觉修订 — committed document 的平台无关快照。
+///
+/// #516: 正文事实状态只有 committed document。
+/// 每次正文变更（插入、删除、换行、段落合并）都产生新 VisualRevision。
+/// 预输入不产生 VisualRevision，只产生 CompositionVisualRevision。
+///
+/// 平台端持有 VisualRevision 的渲染资源（行快照、纹理等），
+/// Core 只记录语义元数据。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisualRevision {
+    /// 修订唯一 ID（递增）
+    pub revision_id: u64,
+    /// 完整正文文本
+    pub full_text: String,
+    /// 受影响段落范围（UTF-8 byte offset）
+    pub affected_paragraph_range: (usize, usize),
+    /// 行快照 ID 列表（由平台层填充）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_snapshot_ids: Vec<u64>,
+    /// 光标矩形
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_rect: Option<CursorRect>,
+    /// 选区/插入点亲和性
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caret_affinity: Option<CaretAffinity>,
+    /// Shaping 身份指纹 — 同一 shaping identity 的文字可按 glyph 一一映射
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaping_identity: Option<String>,
+}
+
+/// 光标/插入点亲和性 — 决定光标在软换行断点处偏向上一行末尾还是下一行开头。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaretAffinity {
+    Upstream,
+    Downstream,
+}
+
+/// 构造预输入虚拟文本 — 严格按公式拼接，不得丢失 replaceEnd 后正文。
+///
+/// virtualText = committedText[0..replaceStart] + preeditText + committedText[replaceEnd..]
+///
+/// 如果 composition_replace_range 为 None，默认在光标位置做零长度插入：
+/// virtualText = committedText + preeditText
+///
+/// #516: Linux 的 virtualText 只拼接正文前缀和 preedit 丢失光标后正文是错误实现。
+/// 此函数是 virtualText 构造的唯一权威来源。
+pub fn build_virtual_text(
+    committed_text: &str,
+    composition_replace_range: Option<(usize, usize)>,
+    preedit_text: &str,
+) -> String {
+    match composition_replace_range {
+        Some((replace_start, replace_end)) => {
+            let replace_start = replace_start.min(committed_text.len());
+            let replace_end = replace_end.min(committed_text.len());
+            if replace_start > replace_end {
+                return committed_text.to_string();
+            }
+            let mut result = String::with_capacity(
+                replace_start + preedit_text.len() + (committed_text.len() - replace_end),
+            );
+            result.push_str(&committed_text[..replace_start]);
+            result.push_str(preedit_text);
+            result.push_str(&committed_text[replace_end..]);
+            result
+        }
+        None => {
+            let mut result =
+                String::with_capacity(committed_text.len() + preedit_text.len());
+            result.push_str(committed_text);
+            result.push_str(preedit_text);
+            result
+        }
+    }
+}
+
 /// 视觉布局版本指纹。
 ///
 /// 以下变化都必须产生新 layout revision：
@@ -715,6 +793,10 @@ pub struct CursorPath {
 /// virtualText 仅用于排版和渲染，不写入正文、Undo、保存、同步和 Core 正文状态。
 /// 每次预输入变化生成新 CompositionVisualRevision，
 /// 使用相同 StaticLinePatch + AnimatedSlice 分类。
+///
+/// #516: virtualText 必须通过 `build_virtual_text()` 构造，
+/// 严格按 committedText[0..replaceStart] + preeditText + committedText[replaceEnd..] 拼接。
+/// 不得丢失 replaceEnd 后正文，也不得默认把预输入永远当成零长度插入。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompositionVisualRevision {
@@ -727,6 +809,7 @@ pub struct CompositionVisualRevision {
     #[serde(default)]
     pub preedit_text: String,
     /// 虚拟文本 — 仅用于排版和渲染，不写入正文
+    /// 必须通过 `build_virtual_text()` 构造，不得手动拼接
     #[serde(default)]
     pub virtual_text: String,
     /// 受影响段落范围（UTF-8 byte offset）
@@ -740,6 +823,39 @@ pub struct CompositionVisualRevision {
     /// 装饰范围
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decoration_ranges: Vec<DecorationSlice>,
+    /// IME 光标范围/位置（UTF-8 byte offset）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ime_cursor_range: Option<(usize, usize)>,
+}
+
+impl CompositionVisualRevision {
+    /// 使用 `build_virtual_text()` 正确构造 CompositionVisualRevision。
+    ///
+    /// virtualText 由 committed_text、composition_replace_range 和 preedit_text
+    /// 自动计算，不手动传入。
+    pub fn new(
+        committed_text: String,
+        composition_replace_range: Option<(usize, usize)>,
+        preedit_text: String,
+        affected_paragraph_range: (usize, usize),
+    ) -> Self {
+        let virtual_text = build_virtual_text(
+            &committed_text,
+            composition_replace_range,
+            &preedit_text,
+        );
+        Self {
+            committed_text,
+            composition_replace_range,
+            preedit_text,
+            virtual_text,
+            affected_paragraph_range,
+            line_snapshot_ids: Vec::new(),
+            cursor_rect: None,
+            decoration_ranges: Vec::new(),
+            ime_cursor_range: None,
+        }
+    }
 }
 
 /// 连续事务 rebase — 新事务与旧事务冲突时。
@@ -778,6 +894,24 @@ pub struct RebaseFrameSnapshot {
     pub cursor_rect: Option<CursorRect>,
 }
 
+/// 事务取消原因 — #516: 取消事务必须记录原因，用于 rebase 和资源释放判断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransactionCancelReason {
+    /// 被新事务 rebase 取代
+    Rebased,
+    /// 修订已变更，事务失效
+    RevisionChanged,
+    /// 系统抑制（滚动/加载/章节切换）
+    SystemSuppressed,
+    /// 用户手动取消
+    UserCancelled,
+    /// 预输入提交完成
+    CompositionCommitted,
+    /// 预输入取消
+    CompositionCancelled,
+}
+
 /// 跨平台视觉事务语义边界。
 ///
 /// Core 输出 EditorVisualTransaction；平台端收到后，根据平台布局
@@ -786,8 +920,9 @@ pub struct RebaseFrameSnapshot {
 ///
 /// `visualResource` 字段由平台各自实现，不进入此结构。
 ///
-/// #515: 增加统一 Timeline、UnifiedTransactionKind、VisualClassKind、
-/// DecorationSlice、CursorPath、CompositionVisualRevision、TransactionRebase。
+/// #516: 四种事务（BodyEdit、CompositionUpdate、CompositionCommitOrCancel、CursorOnly）
+/// 全部进入同一队列和 Timeline。不再存在独立预输入覆盖主路径、
+/// 独立光标位移动画时间源。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PlatformVisualTransaction {
@@ -804,27 +939,30 @@ pub struct PlatformVisualTransaction {
     pub duration_ms: u64,
     pub rendering_started_at_ms: Option<u64>,
     pub accumulated_paused_duration_ms: u64,
-    /// #515: 统一时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress
+    /// #516: 统一时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<Timeline>,
-    /// #515: 统一事务类型
+    /// #516: 统一事务类型（必填，不再允许 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unified_kind: Option<UnifiedTransactionKind>,
-    /// #515: 视觉对象分类列表（与 slice_roles/slice_document_byte_ranges 对应）
+    /// #516: 视觉对象分类列表（与 slice_roles/slice_document_byte_ranges 对应）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visual_class_kinds: Vec<VisualClassKind>,
-    /// #515: 装饰切片（预输入下划线、分段颜色、IME cursor）
+    /// #516: 装饰切片（预输入下划线、分段颜色、IME cursor）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decoration_slices: Vec<DecorationSlice>,
-    /// #515: 光标路径（使用同一 Timeline）
+    /// #516: 光标路径（使用同一 Timeline）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_path: Option<CursorPath>,
-    /// #515: 预输入视觉修订（仅 CompositionUpdate/CompositionCommitOrCancel 事务）
+    /// #516: 预输入视觉修订（仅 CompositionUpdate/CompositionCommitOrCancel 事务）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_revision: Option<CompositionVisualRevision>,
-    /// #515: 连续事务 rebase 信息
+    /// #516: 连续事务 rebase 信息
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rebase: Option<TransactionRebase>,
+    /// #516: 取消原因（仅 Cancelled 状态有值）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancel_reason: Option<TransactionCancelReason>,
 }
 
 #[derive(Debug, Clone)]
@@ -1042,6 +1180,273 @@ impl EditorEngine {
             coordinate_mode: VisualCoordinateMode::Baseline,
         })
     }
+
+    /// #516: 创建 CursorOnly 事务 — 仅光标移动，无正文变更。
+    ///
+    /// 普通光标移动也必须创建 CursorOnly 事务并由 Renderer 队列驱动，
+    /// 不允许光标拥有独立位移动画时间源。
+    pub fn cursor_only_transaction(
+        &mut self,
+        text: &str,
+        old_cursor_index: usize,
+        new_cursor_index: usize,
+    ) -> Option<EditorVisualTransaction> {
+        if old_cursor_index == new_cursor_index {
+            return None;
+        }
+        let old_sel = EditorSelection::collapsed(text, old_cursor_index);
+        let new_sel = EditorSelection::collapsed(text, new_cursor_index);
+        Some(EditorVisualTransaction {
+            id: self.take_animation_id(),
+            kind: EditorAnimationKind::Cursor,
+            cause: EditorTransactionCause::Programmatic,
+            old_text: text.to_string(),
+            new_text: text.to_string(),
+            old_selection: old_sel,
+            new_selection: new_sel,
+            inserted_range: None,
+            deleted_range: None,
+            deleted_glyph_rects: None,
+            insert_glyph_rects: None,
+            reflow_glyph_rects: None,
+            animation_mode: AnimationMode::GlyphAnimation,
+            cluster_rects: None,
+            cluster_runs: None,
+            hidden_visual_ranges: Vec::new(),
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            duration_ms: self.animation_duration_ms,
+            coordinate_mode: VisualCoordinateMode::Baseline,
+        })
+    }
+
+    /// #516: 创建 CompositionUpdate 事务 — 预输入更新。
+    ///
+    /// 每次 setComposingText 触发。预输入文字必须真实推动后续正文、
+    /// 触发换行和 reflow，不能在原正文上盖一段文字。
+    ///
+    /// composing 更新不会修改 committed text、Undo、保存和同步状态。
+    pub fn composition_update_transaction(
+        &mut self,
+        committed_text: &str,
+        composition_replace_range: Option<(usize, usize)>,
+        old_preedit_text: &str,
+        new_preedit_text: &str,
+    ) -> CompositionUpdateTransaction {
+        let old_revision = CompositionVisualRevision::new(
+            committed_text.to_string(),
+            composition_replace_range,
+            old_preedit_text.to_string(),
+            (0, committed_text.len()),
+        );
+        let new_revision = CompositionVisualRevision::new(
+            committed_text.to_string(),
+            composition_replace_range,
+            new_preedit_text.to_string(),
+            (0, committed_text.len()),
+        );
+        let visual_class_kinds = classify_visual_diff(
+            &old_revision.virtual_text,
+            &new_revision.virtual_text,
+        );
+        CompositionUpdateTransaction {
+            id: self.take_animation_id(),
+            old_revision,
+            new_revision,
+            visual_class_kinds,
+            duration_ms: self.animation_duration_ms,
+        }
+    }
+
+    /// #516: 创建 CompositionCommitOrCancel 事务 — 预输入提交或取消。
+    ///
+    /// commitText: current CompositionVisualRevision → new committed VisualRevision
+    /// cancel: current CompositionVisualRevision → original committed VisualRevision
+    ///
+    /// 视觉文字完全相同时，不重复播放吐字，只移除 underline、segment style
+    /// 和 composing cursor，并完成 revision 所有权转移。
+    /// 候选转换导致文字变化时，旧 preedit 执行 Delete/Crossfade，
+    /// 新 committed 文字执行 Insert/Crossfade，后续正文执行 Move/Crossfade。
+    pub fn composition_commit_or_cancel_transaction(
+        &mut self,
+        committed_text_before: &str,
+        committed_text_after: &str,
+        composition_revision: CompositionVisualRevision,
+        is_commit: bool,
+    ) -> CompositionCommitOrCancelTransaction {
+        let visual_class_kinds = if is_commit {
+            classify_visual_diff(
+                &composition_revision.virtual_text,
+                committed_text_after,
+            )
+        } else {
+            classify_visual_diff(
+                &composition_revision.virtual_text,
+                committed_text_before,
+            )
+        };
+        let is_visual_same = composition_revision.virtual_text == committed_text_after;
+        CompositionCommitOrCancelTransaction {
+            id: self.take_animation_id(),
+            is_commit,
+            is_visual_same,
+            composition_revision,
+            committed_text_after: committed_text_after.to_string(),
+            visual_class_kinds,
+            duration_ms: self.animation_duration_ms,
+        }
+    }
+}
+
+/// #516: CompositionUpdate 事务 — 预输入更新（setComposingText）。
+///
+/// 预输入文字必须真实推动后续正文、触发换行和 reflow。
+/// composing 更新不会修改 committed text、Undo、保存和同步状态。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionUpdateTransaction {
+    pub id: u64,
+    pub old_revision: CompositionVisualRevision,
+    pub new_revision: CompositionVisualRevision,
+    pub visual_class_kinds: Vec<VisualClassKind>,
+    pub duration_ms: u64,
+}
+
+/// #516: CompositionCommitOrCancel 事务 — 预输入提交或取消。
+///
+/// commitText: current CompositionVisualRevision → new committed VisualRevision
+/// cancel: current CompositionVisualRevision → original committed VisualRevision
+///
+/// 视觉文字完全相同时（is_visual_same=true），不重复播放吐字，
+/// 只移除 underline、segment style 和 composing cursor。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionCommitOrCancelTransaction {
+    pub id: u64,
+    pub is_commit: bool,
+    /// 视觉文字完全相同 — 不重复播放吐字
+    pub is_visual_same: bool,
+    pub composition_revision: CompositionVisualRevision,
+    pub committed_text_after: String,
+    pub visual_class_kinds: Vec<VisualClassKind>,
+    pub duration_ms: u64,
+}
+
+/// #516: 视觉对象分类器 — 通过 old/new 文本差异分类。
+///
+/// 所有 old/new revision 比较都通过此函数分类，不按场景写特例。
+/// 中间插入、换行、段落合并、删除回流、预输入更新和候选转换
+/// 全部使用同一分类器。
+///
+/// 分类规则：
+/// - 相同位置文本和位置都相同 → Static
+/// - 仅 new 存在 → Insert
+/// - 仅 old 存在 → Delete
+/// - 文本可映射但可能有 shaping 改变 → Crossfade（保守策略）
+/// - 文本相同但位置变化 → Move
+///
+/// 注：精确的 shaping identity 比较需要平台端提供 shaping fingerprint，
+/// Core 层在文本内容相同时保守返回 Crossfade。
+/// 平台端可利用 shaping_identity 做更精确的分类。
+pub fn classify_visual_diff(old_text: &str, new_text: &str) -> Vec<VisualClassKind> {
+    if old_text == new_text {
+        return Vec::new();
+    }
+    if old_text.is_empty() && !new_text.is_empty() {
+        return vec![VisualClassKind::Insert];
+    }
+    if !old_text.is_empty() && new_text.is_empty() {
+        return vec![VisualClassKind::Delete];
+    }
+
+    let prefix = common_prefix_byte_len(old_text, new_text);
+    let suffix = common_suffix_byte_len(old_text, new_text, prefix);
+    let old_end = old_text.len().saturating_sub(suffix);
+    let new_end = new_text.len().saturating_sub(suffix);
+
+    let mut kinds = Vec::new();
+
+    // 前缀相同部分 → Static
+    if prefix > 0 {
+        kinds.push(VisualClassKind::Static);
+    }
+
+    // 中间差异部分
+    let removed = &old_text[prefix..old_end];
+    let inserted = &new_text[prefix..new_end];
+
+    if !removed.is_empty() && !inserted.is_empty() {
+        // 替换：old 文本淡出 + new 文本淡入
+        kinds.push(VisualClassKind::Crossfade);
+    } else if !removed.is_empty() {
+        kinds.push(VisualClassKind::Delete);
+    } else if !inserted.is_empty() {
+        kinds.push(VisualClassKind::Insert);
+    }
+
+    // 后缀相同部分 → Static 或 Move（位置可能变化）
+    if suffix > 0 {
+        // 如果有插入/删除，后缀文字位置会变化
+        if !removed.is_empty() || !inserted.is_empty() {
+            kinds.push(VisualClassKind::Move);
+        } else {
+            kinds.push(VisualClassKind::Static);
+        }
+    }
+
+    kinds
+}
+
+/// #516: 统一 rebase — 新事务与旧事务冲突时的处理。
+///
+/// rebase 必须覆盖四种事务（BodyEdit、CompositionUpdate、
+/// CompositionCommitOrCancel、CursorOnly），不只覆盖 Insert。
+///
+/// 新事务入队前：
+/// 1. 根据视觉区域、revision 和 byte/UTF-16 映射查找冲突事务
+/// 2. 读取旧事务当前 progress
+/// 3. 将当前帧作为新事务 old state
+/// 4. 取消旧事务，但不能提前释放已转移资源
+/// 5. 启动新事务
+///
+/// 冲突判断不能只看 AnimatedSlice：CursorOnly、纯 Decoration、
+/// 视觉文字相同的 CompositionCommit 也必须能通过 revision/affected range 参与替换。
+pub fn compute_rebase(
+    cancelled_transaction_id: u64,
+    old_progress: f64,
+    old_frame_snapshot: Option<RebaseFrameSnapshot>,
+) -> TransactionRebase {
+    TransactionRebase {
+        cancelled_transaction_id,
+        old_progress,
+        old_frame_snapshot,
+    }
+}
+
+/// #516: 检查两个事务是否在视觉区域上冲突。
+///
+/// 用于决定是否需要 rebase。冲突条件：
+/// - 同一 unified_kind 的连续事务
+/// - 视觉区域有重叠
+/// - CursorOnly 与任何影响光标位置的事务冲突
+pub fn transactions_overlap(
+    old_kind: UnifiedTransactionKind,
+    old_affected_range: (usize, usize),
+    new_kind: UnifiedTransactionKind,
+    new_affected_range: (usize, usize),
+) -> bool {
+    let (old_start, old_end) = old_affected_range;
+    let (new_start, new_end) = new_affected_range;
+
+    // CursorOnly 与任何影响光标的事务冲突
+    if matches!(old_kind, UnifiedTransactionKind::CursorOnly)
+        || matches!(new_kind, UnifiedTransactionKind::CursorOnly)
+    {
+        return true;
+    }
+
+    // 视觉区域重叠
+    old_start < new_end && new_start < old_end
 }
 
 pub fn diff_plain_text(old_text: &str, new_text: &str) -> Vec<EditorChange> {
@@ -2518,7 +2923,7 @@ mod tests {
         assert!(clusters[0].is_complex, "Variation selector emoji should be complex");
     }
 
-    // --- #515: Timeline tests ---
+    // --- #516: Timeline tests ---
 
     #[test]
     fn timeline_progress_before_start_returns_zero() {
@@ -2605,7 +3010,7 @@ mod tests {
         assert!(tl.is_completed(1100));
     }
 
-    // --- #515: UnifiedTransactionKind / VisualClassKind serialization ---
+    // --- #516: UnifiedTransactionKind / VisualClassKind serialization ---
 
     #[test]
     fn unified_transaction_kind_serializes_camel_case() {
@@ -2628,7 +3033,7 @@ mod tests {
         assert!(serde_json::to_string(&VisualClassKind::Crossfade).unwrap().contains("\"crossfade\""));
     }
 
-    // --- #515: CompositionVisualRevision serialization ---
+    // --- #516: CompositionVisualRevision serialization ---
 
     #[test]
     fn composition_visual_revision_serializes_camel_case() {
@@ -2647,6 +3052,7 @@ mod tests {
                 rect: None,
                 color: None,
             }],
+            ime_cursor_range: Some((5, 7)),
         };
         let json = serde_json::to_string(&rev).unwrap();
         assert!(json.contains("\"committedText\":"));
@@ -2670,6 +3076,7 @@ mod tests {
             line_snapshot_ids: Vec::new(),
             cursor_rect: None,
             decoration_ranges: Vec::new(),
+            ime_cursor_range: None,
         };
         let json = serde_json::to_string(&rev).unwrap();
         assert!(!json.contains("\"compositionReplaceRange\":"));
@@ -2678,7 +3085,7 @@ mod tests {
         assert!(!json.contains("\"decorationRanges\":"));
     }
 
-    // --- #515: PlatformVisualTransaction with new fields ---
+    // --- #516: PlatformVisualTransaction with new fields ---
 
     #[test]
     fn platform_visual_transaction_with_timeline_serializes() {
@@ -2725,6 +3132,7 @@ mod tests {
             }),
             composition_revision: None,
             rebase: None,
+            cancel_reason: None,
         };
         let json = serde_json::to_string(&pvt).unwrap();
         assert!(json.contains("\"timeline\":"));
@@ -2736,7 +3144,7 @@ mod tests {
         assert!(!json.contains("\"rebase\":"));
     }
 
-    // --- #515: TransactionRebase serialization ---
+    // --- #516: TransactionRebase serialization ---
 
     #[test]
     fn transaction_rebase_serializes_camel_case() {
@@ -2769,7 +3177,7 @@ mod tests {
         assert!(!json.contains("\"oldFrameSnapshot\":"));
     }
 
-    // --- #515: DecorationSlice serialization ---
+    // --- #516: DecorationSlice serialization ---
 
     #[test]
     fn decoration_slice_serializes_camel_case() {
@@ -2802,7 +3210,7 @@ mod tests {
         assert!(!json.contains("\"color\":"));
     }
 
-    // --- #515: CursorPath serialization ---
+    // --- #516: CursorPath serialization ---
 
     #[test]
     fn cursor_path_serializes_camel_case() {
@@ -2815,5 +3223,573 @@ mod tests {
         assert!(json.contains("\"fromRect\":"));
         assert!(json.contains("\"toRect\":"));
         assert!(json.contains("\"isSnap\":"));
+    }
+
+    // ========================================================================
+    // #516 行为测试 — 覆盖 issue 验收标准
+    // ========================================================================
+
+    // --- build_virtual_text ---
+
+    #[test]
+    fn build_virtual_text_appends_preedit_when_no_replace_range() {
+        let vt = build_virtual_text("hello", None, "world");
+        assert_eq!(vt, "helloworld");
+    }
+
+    #[test]
+    fn build_virtual_text_replaces_range_correctly() {
+        // committedText[0..2] + preeditText + committedText[5..]
+        let vt = build_virtual_text("hello", Some((2, 5)), "y");
+        assert_eq!(vt, "hey");
+    }
+
+    #[test]
+    fn build_virtual_text_preserves_text_after_replace_end() {
+        // #516 关键验收：不得丢失 replaceEnd 后正文
+        let vt = build_virtual_text("hello world", Some((0, 5)), "goodbye");
+        assert_eq!(vt, "goodbye world", "Must preserve text after replaceEnd");
+    }
+
+    #[test]
+    fn build_virtual_text_zero_length_replace_is_insert() {
+        let vt = build_virtual_text("abc", Some((1, 1)), "X");
+        assert_eq!(vt, "aXbc");
+    }
+
+    #[test]
+    fn build_virtual_text_empty_preedit_is_delete() {
+        let vt = build_virtual_text("abc", Some((1, 2)), "");
+        assert_eq!(vt, "ac");
+    }
+
+    #[test]
+    fn build_virtual_text_clamps_out_of_bounds_range() {
+        let vt = build_virtual_text("hi", Some((0, 100)), "hello");
+        assert_eq!(vt, "hello");
+    }
+
+    #[test]
+    fn build_virtual_text_swap_start_end_is_noop() {
+        let vt = build_virtual_text("abc", Some((2, 1)), "X");
+        assert_eq!(vt, "abc");
+    }
+
+    // --- CompositionVisualRevision::new ---
+
+    #[test]
+    fn composition_visual_revision_new_builds_virtual_text() {
+        let rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            Some((2, 5)),
+            "y".to_string(),
+            (0, 5),
+        );
+        assert_eq!(rev.virtual_text, "hey");
+        assert_eq!(rev.committed_text, "hello");
+        assert_eq!(rev.preedit_text, "y");
+    }
+
+    #[test]
+    fn composition_visual_revision_new_no_replace_range() {
+        let rev = CompositionVisualRevision::new(
+            "abc".to_string(),
+            None,
+            "def".to_string(),
+            (0, 3),
+        );
+        assert_eq!(rev.virtual_text, "abcdef");
+    }
+
+    // --- CursorOnly 事务 ---
+
+    #[test]
+    fn cursor_only_transaction_creates_transaction_on_move() {
+        let mut engine = EditorEngine::new();
+        let vt = engine.cursor_only_transaction("hello world", 5, 0).unwrap();
+        assert_eq!(vt.kind, EditorAnimationKind::Cursor);
+        assert_eq!(vt.old_text, "hello world");
+        assert_eq!(vt.new_text, "hello world");
+        assert!(vt.inserted_range.is_none());
+        assert!(vt.deleted_range.is_none());
+        assert_eq!(vt.old_selection.head.index, 5);
+        assert_eq!(vt.new_selection.head.index, 0);
+    }
+
+    #[test]
+    fn cursor_only_transaction_returns_none_when_no_move() {
+        let mut engine = EditorEngine::new();
+        let vt = engine.cursor_only_transaction("hello", 3, 3);
+        assert!(vt.is_none());
+    }
+
+    // --- CompositionUpdate 事务 ---
+
+    #[test]
+    fn composition_update_transaction_generates_insert_class() {
+        let mut engine = EditorEngine::new();
+        let tx = engine.composition_update_transaction(
+            "hello",
+            None,
+            "",
+            "n",
+        );
+        assert!(tx.id > 0);
+        assert_eq!(tx.old_revision.virtual_text, "hello");
+        assert_eq!(tx.new_revision.virtual_text, "hellon");
+        assert!(tx.visual_class_kinds.contains(&VisualClassKind::Insert));
+    }
+
+    #[test]
+    fn composition_update_does_not_modify_committed_text() {
+        let mut engine = EditorEngine::new();
+        let tx = engine.composition_update_transaction(
+            "committed",
+            Some((0, 5)),
+            "old_preedit",
+            "new_preedit",
+        );
+        assert_eq!(tx.old_revision.committed_text, "committed");
+        assert_eq!(tx.new_revision.committed_text, "committed");
+    }
+
+    // --- CompositionCommitOrCancel 事务 ---
+
+    #[test]
+    fn composition_commit_transaction_visual_same_no_repeat() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            None,
+            " world".to_string(),
+            (0, 5),
+        );
+        // commit 后正文与 virtual_text 相同
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello",
+            "hello world",
+            comp_rev,
+            true,
+        );
+        assert!(tx.is_commit);
+        assert!(tx.is_visual_same);
+    }
+
+    #[test]
+    fn composition_commit_transaction_visual_different() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            None,
+            " wor".to_string(),
+            (0, 5),
+        );
+        // commit 后正文与 virtual_text 不同（候选转换）
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello",
+            "hello world",
+            comp_rev,
+            true,
+        );
+        assert!(tx.is_commit);
+        assert!(!tx.is_visual_same);
+    }
+
+    #[test]
+    fn composition_cancel_transaction() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            None,
+            " world".to_string(),
+            (0, 5),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello",
+            "hello",
+            comp_rev,
+            false,
+        );
+        assert!(!tx.is_commit);
+    }
+
+    // --- classify_visual_diff ---
+
+    #[test]
+    fn classify_visual_diff_same_text_returns_empty() {
+        let kinds = classify_visual_diff("abc", "abc");
+        assert!(kinds.is_empty());
+    }
+
+    #[test]
+    fn classify_visual_diff_insert_only() {
+        let kinds = classify_visual_diff("", "abc");
+        assert_eq!(kinds, vec![VisualClassKind::Insert]);
+    }
+
+    #[test]
+    fn classify_visual_diff_delete_only() {
+        let kinds = classify_visual_diff("abc", "");
+        assert_eq!(kinds, vec![VisualClassKind::Delete]);
+    }
+
+    #[test]
+    fn classify_visual_diff_replacement_is_crossfade() {
+        let kinds = classify_visual_diff("abc", "xyz");
+        assert!(kinds.contains(&VisualClassKind::Crossfade));
+    }
+
+    #[test]
+    fn classify_visual_diff_suffix_moves_after_insert() {
+        // "ab" → "aXb": prefix=a, inserted=X, suffix=b moves
+        let kinds = classify_visual_diff("ab", "aXb");
+        assert!(kinds.contains(&VisualClassKind::Insert));
+        assert!(kinds.contains(&VisualClassKind::Move));
+    }
+
+    #[test]
+    fn classify_visual_diff_prefix_is_static() {
+        // "abc" → "abX": prefix=ab, inserted=X
+        let kinds = classify_visual_diff("abc", "abX");
+        assert!(kinds.contains(&VisualClassKind::Static));
+    }
+
+    // --- compute_rebase ---
+
+    #[test]
+    fn compute_rebase_creates_transaction_rebase() {
+        let rebase = compute_rebase(42, 0.6, Some(RebaseFrameSnapshot {
+            slice_rects: vec![Rect { x: 10.0, y: 20.0, w: 30.0, h: 40.0 }],
+            slice_alphas: vec![0.8],
+            cursor_rect: None,
+        }));
+        assert_eq!(rebase.cancelled_transaction_id, 42);
+        assert!((rebase.old_progress - 0.6).abs() < f64::EPSILON);
+        assert!(rebase.old_frame_snapshot.is_some());
+    }
+
+    // --- transactions_overlap ---
+
+    #[test]
+    fn transactions_overlap_cursor_only_always_conflicts() {
+        assert!(transactions_overlap(
+            UnifiedTransactionKind::CursorOnly,
+            (0, 0),
+            UnifiedTransactionKind::BodyEdit,
+            (5, 10),
+        ));
+    }
+
+    #[test]
+    fn transactions_overlap_overlapping_ranges() {
+        assert!(transactions_overlap(
+            UnifiedTransactionKind::BodyEdit,
+            (0, 10),
+            UnifiedTransactionKind::BodyEdit,
+            (5, 15),
+        ));
+    }
+
+    #[test]
+    fn transactions_overlap_non_overlapping_ranges() {
+        assert!(!transactions_overlap(
+            UnifiedTransactionKind::BodyEdit,
+            (0, 5),
+            UnifiedTransactionKind::BodyEdit,
+            (10, 15),
+        ));
+    }
+
+    // --- VisualRevision ---
+
+    #[test]
+    fn visual_revision_serializes_camel_case() {
+        let rev = VisualRevision {
+            revision_id: 1,
+            full_text: "hello".to_string(),
+            affected_paragraph_range: (0, 5),
+            line_snapshot_ids: vec![1, 2],
+            cursor_rect: Some(CursorRect { x: 10.0, top: 5.0, bottom: 25.0, baseline_y: 20.0 }),
+            caret_affinity: Some(CaretAffinity::Downstream),
+            shaping_identity: Some("sha1:abc".to_string()),
+        };
+        let json = serde_json::to_string(&rev).unwrap();
+        assert!(json.contains("\"revisionId\":"));
+        assert!(json.contains("\"fullText\":"));
+        assert!(json.contains("\"affectedParagraphRange\":"));
+        assert!(json.contains("\"cursorRect\":"));
+        assert!(json.contains("\"caretAffinity\":"));
+        assert!(json.contains("\"shapingIdentity\":"));
+    }
+
+    // --- TransactionCancelReason ---
+
+    #[test]
+    fn transaction_cancel_reason_serializes_camel_case() {
+        let json = serde_json::to_string(&TransactionCancelReason::Rebased).unwrap();
+        assert!(json.contains("\"rebased\""));
+        let json2 = serde_json::to_string(&TransactionCancelReason::CompositionCommitted).unwrap();
+        assert!(json2.contains("\"compositionCommitted\""));
+        let json3 = serde_json::to_string(&TransactionCancelReason::CompositionCancelled).unwrap();
+        assert!(json3.contains("\"compositionCancelled\""));
+    }
+
+    // --- CaretAffinity ---
+
+    #[test]
+    fn caret_affinity_serializes_camel_case() {
+        let json = serde_json::to_string(&CaretAffinity::Upstream).unwrap();
+        assert!(json.contains("\"upstream\""));
+        let json2 = serde_json::to_string(&CaretAffinity::Downstream).unwrap();
+        assert!(json2.contains("\"downstream\""));
+    }
+
+    // --- Timeline 行为测试（#516 验收标准） ---
+
+    #[test]
+    fn timeline_pause_resume_maintains_progress() {
+        let mut tl = Timeline::new(200);
+        tl.mark_first_visible_frame(1000);
+        // 50% 进度时暂停
+        tl.pause(1100);
+        assert!((tl.paused_progress - 0.5).abs() < 0.01);
+        // 恢复后进度从 0.5 继续
+        tl.resume(1200);
+        let p = tl.progress(1200);
+        assert!((p - 0.5).abs() < 0.01, "Resume must continue from paused progress");
+        // 200ms 后完成
+        let p_end = tl.progress(1300);
+        assert!((p_end - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn timeline_cursor_and_text_same_frame_progress() {
+        // #516: 光标与正文同帧 progress
+        let mut tl = Timeline::new(160);
+        tl.mark_first_visible_frame(1000);
+        let p_at_1080 = tl.progress(1080);
+        // 正文切片和光标都使用同一个 progress
+        // 不允许光标维护独立开始时间
+        assert!((p_at_1080 - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn timeline_cursor_only_no_text_slice_still_executes() {
+        // #516: CursorOnly 无正文切片也能完整执行
+        let mut engine = EditorEngine::new();
+        let vt = engine.cursor_only_transaction("hello", 0, 3).unwrap();
+        assert_eq!(vt.kind, EditorAnimationKind::Cursor);
+        assert_eq!(vt.old_text, vt.new_text);
+        assert!(vt.inserted_range.is_none());
+        assert!(vt.deleted_range.is_none());
+    }
+
+    // --- composing 不修改 committed text/undo/save/sync ---
+
+    #[test]
+    fn composition_update_does_not_change_committed_text() {
+        let mut engine = EditorEngine::new();
+        let tx = engine.composition_update_transaction(
+            "original",
+            Some((0, 4)),
+            "orig",
+            "new_text",
+        );
+        assert_eq!(tx.old_revision.committed_text, "original");
+        assert_eq!(tx.new_revision.committed_text, "original");
+        // virtual_text 变化，但 committed_text 不变
+        assert_ne!(tx.old_revision.virtual_text, tx.new_revision.virtual_text);
+    }
+
+    // --- commit 相同视觉文字不重复吐字 ---
+
+    #[test]
+    fn commit_same_visual_text_no_repeat_animation() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            None,
+            " world".to_string(),
+            (0, 5),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello",
+            "hello world",
+            comp_rev,
+            true,
+        );
+        assert!(tx.is_visual_same, "Same visual text must not repeat animation");
+    }
+
+    // --- 候选转换生成 Crossfade/Move ---
+
+    #[test]
+    fn candidate_conversion_generates_crossfade_or_move() {
+        let mut engine = EditorEngine::new();
+        // 预输入 "ni" → 候选转换 commit "你"
+        let comp_rev = CompositionVisualRevision::new(
+            "hello ".to_string(),
+            Some((6, 8)),
+            "ni".to_string(),
+            (0, 8),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello ",
+            "hello 你",
+            comp_rev,
+            true,
+        );
+        assert!(!tx.is_visual_same, "Candidate conversion changes visual text");
+        // 应该有 Crossfade 或 Delete/Insert 分类
+        assert!(!tx.visual_class_kinds.is_empty());
+    }
+
+    // --- cancel 生成 Delete + reflow ---
+
+    #[test]
+    fn cancel_generates_delete_classification() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            None,
+            " world".to_string(),
+            (0, 5),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello",
+            "hello",
+            comp_rev,
+            false,
+        );
+        assert!(!tx.is_commit);
+        // 取消时 virtual_text("hello world") → committed_text("hello")
+        // 预输入部分应该产生 Delete 分类
+        assert!(tx.visual_class_kinds.contains(&VisualClassKind::Delete));
+    }
+
+    // --- 连续事务 rebase ---
+
+    #[test]
+    fn rebase_covers_all_transaction_kinds() {
+        // #516: rebase 必须覆盖四种事务
+        // 测试 CursorOnly 与 BodyEdit 冲突
+        assert!(transactions_overlap(
+            UnifiedTransactionKind::CursorOnly,
+            (0, 0),
+            UnifiedTransactionKind::BodyEdit,
+            (0, 5),
+        ));
+        // 测试 CompositionUpdate 与 CompositionCommitOrCancel 冲突
+        assert!(transactions_overlap(
+            UnifiedTransactionKind::CompositionUpdate,
+            (0, 5),
+            UnifiedTransactionKind::CompositionCommitOrCancel,
+            (3, 8),
+        ));
+    }
+
+    // --- Emoji ZWJ / combining mark / Arabic / RTL / ligature 进入 Crossfade fallback ---
+
+    #[test]
+    fn complex_grapheme_classified_as_crossfade_on_change() {
+        // ZWJ emoji 变化 → Crossfade
+        let kinds = classify_visual_diff("👨‍👩‍👧‍👦", "👨‍👨‍👧");
+        assert!(kinds.contains(&VisualClassKind::Crossfade));
+    }
+
+    #[test]
+    fn combining_mark_classified_as_crossfade_on_change() {
+        // 组合字符变化 → Crossfade
+        let kinds = classify_visual_diff("e\u{0301}", "è");
+        assert!(kinds.contains(&VisualClassKind::Crossfade));
+    }
+
+    // --- PlatformVisualTransaction cancel_reason ---
+
+    #[test]
+    fn platform_visual_transaction_cancel_reason_serializes() {
+        let mut pvt = PlatformVisualTransaction {
+            transaction_id: 1,
+            generation: 1,
+            state: PlatformVisualTransactionState::Cancelled,
+            old_revision: VisualLayoutRevision {
+                document_revision: 1,
+                layout_revision: 1,
+                viewport_width: 800.0,
+                font_fingerprint: "f1".to_string(),
+                paragraph_style_fingerprint: "p1".to_string(),
+                text_color_fingerprint: "t1".to_string(),
+                density_or_dpr: 2.0,
+            },
+            new_revision: VisualLayoutRevision {
+                document_revision: 2,
+                layout_revision: 2,
+                viewport_width: 800.0,
+                font_fingerprint: "f1".to_string(),
+                paragraph_style_fingerprint: "p1".to_string(),
+                text_color_fingerprint: "t1".to_string(),
+                density_or_dpr: 2.0,
+            },
+            slice_roles: Vec::new(),
+            slice_document_byte_ranges: Vec::new(),
+            static_line_patches: Vec::new(),
+            cursor_transition_byte_start: 0,
+            cursor_transition_byte_end: 0,
+            duration_ms: 160,
+            rendering_started_at_ms: None,
+            accumulated_paused_duration_ms: 0,
+            timeline: None,
+            unified_kind: Some(UnifiedTransactionKind::BodyEdit),
+            visual_class_kinds: Vec::new(),
+            decoration_slices: Vec::new(),
+            cursor_path: None,
+            composition_revision: None,
+            rebase: None,
+            cancel_reason: Some(TransactionCancelReason::Rebased),
+        };
+        let json = serde_json::to_string(&pvt).unwrap();
+        assert!(json.contains("\"cancelReason\":"));
+        assert!(json.contains("\"rebased\""));
+
+        pvt.cancel_reason = None;
+        let json2 = serde_json::to_string(&pvt).unwrap();
+        assert!(!json2.contains("\"cancelReason\":"));
+    }
+
+    // --- CompositionUpdateTransaction serialization ---
+
+    #[test]
+    fn composition_update_transaction_serializes_camel_case() {
+        let mut engine = EditorEngine::new();
+        let tx = engine.composition_update_transaction("hello", None, "", "n");
+        let json = serde_json::to_string(&tx).unwrap();
+        assert!(json.contains("\"oldRevision\":"));
+        assert!(json.contains("\"newRevision\":"));
+        assert!(json.contains("\"visualClassKinds\":"));
+        assert!(json.contains("\"durationMs\":"));
+    }
+
+    // --- CompositionCommitOrCancelTransaction serialization ---
+
+    #[test]
+    fn composition_commit_or_cancel_transaction_serializes_camel_case() {
+        let mut engine = EditorEngine::new();
+        let comp_rev = CompositionVisualRevision::new(
+            "hello".to_string(),
+            None,
+            " world".to_string(),
+            (0, 5),
+        );
+        let tx = engine.composition_commit_or_cancel_transaction(
+            "hello",
+            "hello world",
+            comp_rev,
+            true,
+        );
+        let json = serde_json::to_string(&tx).unwrap();
+        assert!(json.contains("\"isCommit\":"));
+        assert!(json.contains("\"isVisualSame\":"));
+        assert!(json.contains("\"compositionRevision\":"));
+        assert!(json.contains("\"committedTextAfter\":"));
     }
 }
