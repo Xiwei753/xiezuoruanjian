@@ -1,6 +1,21 @@
 use super::*;
 
 impl SujianEditorItem {
+    pub(crate) fn current_cursor_rect_for_transaction(&self) -> Option<CursorRect> {
+        let x = self.cursor_ctrl.visual_x;
+        let y = self.cursor_ctrl.visual_y;
+        let h = self.cursor_ctrl.visual_h;
+        if h < 0.01 {
+            return None;
+        }
+        Some(CursorRect {
+            x,
+            top: y,
+            bottom: y + h,
+            baseline_y: y + h * 0.8,
+        })
+    }
+
     pub(crate) fn flush_content_height(&mut self) {
         if self.content_height_dirty.get() {
             self.content_height_dirty.set(false);
@@ -18,8 +33,13 @@ impl SujianEditorItem {
             CursorBlinkMode::Normal
         };
 
+        let active_progress = self.animation_coordinator.active_cursor_progress();
         let still_animating = if self.cursor_ctrl.animation.is_some() {
-            self.cursor_ctrl.tick_animation()
+            if let Some(progress) = active_progress {
+                self.cursor_ctrl.update_animation_progress(progress)
+            } else {
+                self.cursor_ctrl.tick_animation()
+            }
         } else {
             false
         };
@@ -51,6 +71,9 @@ impl SujianEditorItem {
         }
 
         let pending_pcr = self.pending_preedit_cursor_rect.take();
+        let was_composing = !self.preedit_text.is_empty();
+        let composition_byte_start = self.buffer.cursor;
+        let composition_byte_end = self.buffer.cursor + self.preedit_text.len();
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -72,7 +95,32 @@ impl SujianEditorItem {
             }
         });
         let new = self.buffer.snapshot();
-        let _vt = self.record_transaction(old, new, cause, true);
+
+        if was_composing && self.current_typing_animation_enabled {
+            let width = self.bounding_width();
+            let old_cursor_rect = pending_pcr.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+            let old_snapshot = self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                self.build_editor_layout_snapshot(width)
+            });
+
+            let _vt = self.record_transaction(old, new, cause, true);
+
+            let new_snapshot = self.build_editor_layout_snapshot(width);
+            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+
+            self.animation_coordinator.handle_composition_commit_or_cancel(
+                self.current_typing_animation_duration_ms as u64,
+                &old_snapshot,
+                &new_snapshot,
+                composition_byte_start,
+                composition_byte_end,
+                was_composing,
+                old_cursor_rect,
+                new_cursor_rect,
+            );
+        } else {
+            let _vt = self.record_transaction(old, new, cause, true);
+        }
 
         if let Some(pcr) = pending_pcr {
             self.cursor_ctrl.visual_x = pcr.x;
@@ -439,6 +487,10 @@ impl SujianEditorItem {
         } else {
             prev_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
         };
+        if next == self.buffer.cursor && !extend {
+            return;
+        }
+        let old_cursor_rect = self.current_cursor_rect_for_transaction();
         self.cursor_ctrl.affinity = if forward {
             CaretAffinity::Downstream
         } else {
@@ -449,6 +501,14 @@ impl SujianEditorItem {
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
+        let new_cursor_rect = self.current_cursor_rect_for_transaction();
+        if self.current_smooth_cursor_enabled && !extend {
+            self.animation_coordinator.handle_cursor_only(
+                self.current_cursor_animation_duration_ms as u64,
+                old_cursor_rect,
+                new_cursor_rect,
+            );
+        }
         self.request_static_repaint();
     }
 
@@ -466,6 +526,7 @@ impl SujianEditorItem {
         if target_idx == line_idx {
             return;
         }
+        let old_cursor_rect = self.current_cursor_rect_for_transaction();
         let index = self.index_at_line_x(&lines[target_idx], x);
         self.cursor_ctrl.affinity = self
             .editor_layout
@@ -475,6 +536,14 @@ impl SujianEditorItem {
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
+        let new_cursor_rect = self.current_cursor_rect_for_transaction();
+        if self.current_smooth_cursor_enabled && !extend {
+            self.animation_coordinator.handle_cursor_only(
+                self.current_cursor_animation_duration_ms as u64,
+                old_cursor_rect,
+                new_cursor_rect,
+            );
+        }
         self.request_static_repaint();
     }
 
@@ -490,12 +559,21 @@ impl SujianEditorItem {
         } else {
             (line.byte_start, CaretAffinity::Downstream)
         };
+        let old_cursor_rect = self.current_cursor_rect_for_transaction();
         self.cursor_ctrl.affinity = affinity;
         self.buffer.move_cursor(index, extend);
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
+        let new_cursor_rect = self.current_cursor_rect_for_transaction();
+        if self.current_smooth_cursor_enabled && !extend {
+            self.animation_coordinator.handle_cursor_only(
+                self.current_cursor_animation_duration_ms as u64,
+                old_cursor_rect,
+                new_cursor_rect,
+            );
+        }
         self.request_static_repaint();
     }
 }
