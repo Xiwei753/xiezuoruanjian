@@ -29,14 +29,17 @@ pub mod autocorrect;
 pub mod transaction;
 
 pub use transaction::{
-    choose_animation_mode, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
-    is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
-    split_text_into_runs, text_contains_complex_grapheme, AnimatedSliceRole, AnimationMode,
-    ClusterRect, ClusterRun, CompositionVisualRevision, CursorPath, CursorRect,
+    build_virtual_text, choose_animation_mode, classify_visual_diff, compute_rebase,
+    count_grapheme_clusters, diff_plain_text, is_cjk_code_point, is_combining_code_point,
+    is_complex_grapheme_code_point, split_text_into_clusters, split_text_into_runs,
+    text_contains_complex_grapheme, transactions_overlap, AnimatedSliceRole, AnimationMode,
+    CaretAffinity, ClusterRect, ClusterRun, CompositionCommitOrCancelTransaction,
+    CompositionUpdateTransaction, CompositionVisualRevision, CursorPath, CursorRect,
     DecorationSlice, DecorationSliceKind, EditorAnimationKind, EditorChange, EditorCursor,
     EditorEngine, EditorSelection, EditorTransaction, EditorTransactionCause,
     EditorVisualTransaction, GlyphRect, HiddenVisualRange, PlatformVisualTransaction,
     PlatformVisualTransactionState, PreeditTextFormat, PreeditVisualTransaction, Rect,
-    RebaseFrameSnapshot, ReflowGlyphRect, StaticLinePatch, Timeline, TransactionRebase,
-    UnifiedTransactionKind, VisualClassKind, VisualCoordinateMode, VisualLayoutRevision,
+    RebaseFrameSnapshot, ReflowGlyphRect, StaticLinePatch, Timeline,
+    TransactionCancelReason, TransactionRebase, UnifiedTransactionKind, VisualClassKind,
+    VisualCoordinateMode, VisualLayoutRevision, VisualRevision,
 };
