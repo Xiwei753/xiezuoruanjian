@@ -70,7 +70,7 @@ impl ScrollBuffer {
 
 /// 光标动画状态 — 使用事务 Timeline 的 progress 而非独立时间源。
 ///
-/// Issue #515: 光标不再维护独立 Choreographer/start_time，
+/// Issue #516: 光标不再维护独立 Choreographer/start_time，
 /// 而是消费与文字动画相同的 Timeline progress。
 #[derive(Clone, Debug)]
 pub struct CursorAnimationState {
@@ -363,11 +363,13 @@ impl SujianEditorItem {
             }
         }
 
-        // ── Layer 3: Preedit visual layer ──
-        // Preedit is a temporary visual layer — it does NOT modify the buffer
-        // text, does NOT enter undo, and the cursor within preedit is computed
-        // from preedit_cursor (not buffer.cursor).
-        if !self.preedit_text.is_empty() {
+        // ── Layer 3: Preedit visual layer (fallback only) ──
+        // When a Composition transaction is active, preedit is rendered exclusively
+        // through the transaction's RenderPlan slices — this layer is skipped.
+        // This fallback only activates when animation is disabled or no Composition
+        // transaction exists. It draws preedit on the committed layout as a last resort.
+        // Issue #516: independent preedit overlay drawing is deleted as the main path.
+        if !self.preedit_text.is_empty() && !self.animation_coordinator.has_active_composition() {
             let pc = self.buffer.cursor;
             for (idx, line) in lines.iter().enumerate() {
                 if idx < vis_start || idx >= vis_end {
@@ -390,7 +392,6 @@ impl SujianEditorItem {
                             .text_baseline_y(line, font_size, &font_family)
                             + paint_offset_y;
 
-                    // Draw preedit text
                     renderer::draw_text(
                         painter,
                         x,
@@ -404,8 +405,6 @@ impl SujianEditorItem {
                         self.editor_layout
                             .text_width(&self.preedit_text, font_size, &font_family);
 
-                    // Draw underline and format attributes based on preedit_attributes
-                    // If no attributes, draw a default underline for the full preedit
                     let has_text_format_attr = self.preedit_attributes.iter()
                         .any(|a| matches!(a.kind, super::PreeditAttributeKind::Underline
                             | super::PreeditAttributeKind::FontUnderline
@@ -413,7 +412,6 @@ impl SujianEditorItem {
                             | super::PreeditAttributeKind::BackgroundColor { .. }));
 
                     if has_text_format_attr {
-                        // Draw format attributes for each TextFormat attribute
                         for attr in &self.preedit_attributes {
                             let attr_start = attr.start.min(self.preedit_text.len());
                             let attr_end = (attr.start + attr.length).min(self.preedit_text.len());
@@ -434,7 +432,6 @@ impl SujianEditorItem {
 
                             match &attr.kind {
                                 super::PreeditAttributeKind::Underline => {
-                                    // Draw underline
                                     painter.set_pen(QPen::from_color(renderer::color_from_qstring(
                                         self.current_text_color.clone(),
                                     )));
@@ -449,7 +446,6 @@ impl SujianEditorItem {
                                     painter.draw_line(line_f);
                                 }
                                 super::PreeditAttributeKind::FontUnderline => {
-                                    // Draw font underline (thicker)
                                     #[allow(unused_mut)]
                                     let mut pen = QPen::from_color(renderer::color_from_qstring(
                                         self.current_text_color.clone(),
@@ -469,13 +465,11 @@ impl SujianEditorItem {
                                     painter.draw_line(line_f);
                                 }
                                 super::PreeditAttributeKind::TextColor { color } => {
-                                    // Draw text with overridden color
                                     let text_color = if color.is_empty() {
                                         self.current_text_color.clone()
                                     } else {
                                         QString::from(color.clone())
                                     };
-                                    // Redraw the attribute segment with the text color
                                     cpp!(unsafe [painter as "QPainter*"] {
                                         painter->save();
                                     });
@@ -501,7 +495,6 @@ impl SujianEditorItem {
                                     });
                                 }
                                 super::PreeditAttributeKind::BackgroundColor { color } => {
-                                    // Draw background highlight
                                     let bg_color = if color.is_empty() {
                                         QString::from("#33FFFFFF")
                                     } else {
@@ -516,13 +509,10 @@ impl SujianEditorItem {
                                         bg_color,
                                     );
                                 }
-                                super::PreeditAttributeKind::Cursor => {
-                                    // Cursor attribute handled separately below
-                                }
+                                super::PreeditAttributeKind::Cursor => {}
                             }
                         }
                     } else {
-                        // Default: underline the entire preedit string
                         painter.set_pen(QPen::from_color(renderer::color_from_qstring(
                             self.current_text_color.clone(),
                         )));
@@ -537,15 +527,10 @@ impl SujianEditorItem {
                         painter.draw_line(line_f);
                     }
 
-                    // Draw preedit cursor if Cursor attribute is present
-                    // The preedit cursor shows the insertion point within the
-                    // composition string (e.g. between pinyin segments)
-                    // Allow cursor at end of preedit (common case: cursor after last pinyin letter)
                     let preedit_cursor_pos = self.preedit_cursor;
                     if preedit_cursor_pos > 0 && preedit_cursor_pos <= self.preedit_text.len()
                         && self.preedit_text.is_char_boundary(preedit_cursor_pos)
                     {
-                        // Check if there's an explicit Cursor attribute
                         let has_cursor_attr = self.preedit_attributes.iter()
                             .any(|a| a.kind == super::PreeditAttributeKind::Cursor);
 
@@ -557,7 +542,6 @@ impl SujianEditorItem {
                             );
                             let cursor_x = x + before_cursor_w;
                             let cursor_top = line.y + paint_offset_y;
-                            // Draw a thin vertical line for the preedit cursor
                             renderer::draw_rect(
                                 painter,
                                 cursor_x,
