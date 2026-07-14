@@ -1,5 +1,9 @@
 use super::*;
 
+fn build_virtual_text(committed_text: &str, replace_start: usize, replace_end: usize, preedit_text: &str) -> String {
+    writer_core::editor::build_virtual_text(committed_text, Some((replace_start, replace_end)), preedit_text)
+}
+
 pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
     cpp!(unsafe [event as "const QMouseEvent*"] -> bool as "bool" {
         return event ? (event->buttons() & Qt::LeftButton) : false;
@@ -72,7 +76,7 @@ impl EditorInputHost for SujianEditorItem {
             self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
 
             if self.typing_animation_enabled {
-                let was_composing = false;
+                let was_composing = true;
                 let composition_byte_start = self.buffer.cursor;
                 let composition_byte_end = self.buffer.cursor + self.preedit_text.len();
                 let width = self.bounding_width();
@@ -121,7 +125,7 @@ impl EditorInputHost for SujianEditorItem {
                 self.build_editor_layout_snapshot(width)
             });
 
-            let virtual_text = format!("{}{}", &self.buffer.text[..composition_byte_start.min(self.buffer.text.len())], &text);
+            let virtual_text = build_virtual_text(&self.buffer.text, composition_byte_start, composition_byte_start, &text);
             let new_snapshot = self.build_virtual_layout_snapshot(&virtual_text, width);
 
             let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
@@ -164,7 +168,7 @@ impl EditorInputHost for SujianEditorItem {
                 self.build_editor_layout_snapshot(width)
             });
 
-            let virtual_text = format!("{}{}", &self.buffer.text[..composition_byte_start.min(self.buffer.text.len())], &text);
+            let virtual_text = build_virtual_text(&self.buffer.text, composition_byte_start, composition_byte_start, &text);
             let new_snapshot = self.build_virtual_layout_snapshot(&virtual_text, width);
 
             let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
