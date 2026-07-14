@@ -322,7 +322,7 @@ impl PreparedTransactionQueue {
         expired
     }
 
-    pub fn find_conflicting_insert(
+    pub fn find_conflicting_transaction(
         &self,
         byte_start: usize,
         byte_end: usize,
@@ -330,7 +330,11 @@ impl PreparedTransactionQueue {
         self.transactions
             .iter()
             .filter(|t| t.state != TextVisualTransactionState::Cancelled && t.state != TextVisualTransactionState::Completed)
-            .find(|t| t.overlaps_byte_range(byte_start, byte_end))
+            .find(|t| {
+                t.overlaps_byte_range(byte_start, byte_end)
+                    || (t.is_cursor() && byte_start == byte_end)
+                    || t.is_composition()
+            })
             .map(|t| t.key)
     }
 
