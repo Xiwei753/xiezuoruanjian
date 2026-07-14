@@ -480,6 +480,10 @@ impl SujianEditorItem {
 
     pub(crate) fn clear_active_text_animations(&mut self) {
         if self.animation_coordinator.suppress_all() {
+            self.texture_cache.clear();
+            self.current_layout_snapshot = None;
+            self.previous_layout_snapshot = None;
+            self.previous_canonical_snapshot = None;
             self.request_static_repaint();
             self.cursor_rect_changed();
         }
@@ -555,7 +559,7 @@ impl SujianEditorItem {
                     tid,
                     self.animation_coordinator.has_active_insert()
                 ));
-                self.texture_cache.clear();
+                self.texture_cache.remove_for_transaction(&ids);
                 self.request_static_repaint();
                 self.cursor_rect_changed();
             }
