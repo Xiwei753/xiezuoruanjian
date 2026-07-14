@@ -86,13 +86,41 @@ class SujianAnimationController(
         return deleteSnapshots.removeAt(idx)
     }
 
+    private fun releasePendingDeleteSnapshotForCurrentEdit() {
+        val snapshot = consumeDeleteSnapshot(lastDeleteSnapshotId)
+        snapshot?.release()
+    }
+
+    private fun mergeSnapshotsById(
+        original: List<AndroidLineSnapshot>,
+        supplemental: List<AndroidLineSnapshot>
+    ): List<AndroidLineSnapshot> {
+        val existingIds = original.map { it.id }.toSet()
+        val result = original.toMutableList()
+        for (snap in supplemental) {
+            if (snap.id in existingIds) {
+                snap.release()
+            } else {
+                result.add(snap)
+            }
+        }
+        return result
+    }
+
     fun handleVisualEdit(context: SujianVisualEditContext, view: SujianEditorView) {
-        if (!animationEnabled) return
-        if (!shouldAnimateForCause(context.cause)) return
+        if (!animationEnabled) {
+            releasePendingDeleteSnapshotForCurrentEdit()
+            return
+        }
+        if (!shouldAnimateForCause(context.cause)) {
+            releasePendingDeleteSnapshotForCurrentEdit()
+            return
+        }
 
         val vt = fetchVisualTransaction(context, view)
         if (vt == null) {
             DiagnosticsLogger.d(TAG, "No visual transaction from Core for cause=${context.cause}")
+            releasePendingDeleteSnapshotForCurrentEdit()
             return
         }
 
@@ -100,9 +128,15 @@ class SujianAnimationController(
         vt.newCursorRect = context.newCursorRect
 
         val textAnimationResult = when (vt.kind) {
-            EditorAnimationKindData.Insert -> handleInsertTransaction(vt)
+            EditorAnimationKindData.Insert -> {
+                releasePendingDeleteSnapshotForCurrentEdit()
+                handleInsertTransaction(vt)
+            }
             EditorAnimationKindData.Delete -> handleDeleteTransaction(vt)
-            EditorAnimationKindData.Cursor -> TextAnimationStartResult.Skipped
+            EditorAnimationKindData.Cursor -> {
+                releasePendingDeleteSnapshotForCurrentEdit()
+                TextAnimationStartResult.Skipped
+            }
         }
 
         if (textAnimationResult == TextAnimationStartResult.Started) {
@@ -170,19 +204,21 @@ class SujianAnimationController(
                 affectedLineRange, staticLayout, oldLayout, offsetMap, oldText, text, rangeStartUtf16, rangeEndUtf16
             )
         } else {
-            val oldRange = if (oldText.isNotEmpty()) {
+            val oldRange: IntRange? = if (oldText.isNotEmpty()) {
                 computeOldAffectedRange(affectedLineRange, staticLayout, oldLayout!!, offsetMap, oldText)
             } else {
-                0..0
+                null
             }
             Pair(oldRange, affectedLineRange)
         }
 
-        val oldLineSnapshots: List<AndroidLineSnapshot> = if (oldText.isNotEmpty()) {
-            snapshotBuilder.buildLineSnapshots(oldText, finalOldAffectedRange, oldRevision, renderer.getTextColor())
-        } else {
-            emptyList()
-        }
+        val oldLineSnapshots: List<AndroidLineSnapshot> = finalOldAffectedRange?.let {
+            if (oldText.isNotEmpty()) {
+                snapshotBuilder.buildLineSnapshots(oldText, it, oldRevision, renderer.getTextColor())
+            } else {
+                emptyList()
+            }
+        } ?: emptyList()
 
         val newLineSnapshots = snapshotBuilder.buildLineSnapshots(
             text, finalNewAffectedRange, newRevision, renderer.getTextColor()
@@ -378,7 +414,10 @@ class SujianAnimationController(
     }
 
     fun handleDeleteTransaction(vt: EditorVisualTransactionData): TextAnimationStartResult {
-        if (!animationEnabled) return TextAnimationStartResult.Skipped
+        if (!animationEnabled) {
+            releasePendingDeleteSnapshotForCurrentEdit()
+            return TextAnimationStartResult.Skipped
+        }
 
         if (renderer.isScrolling()) {
             renderer.pauseAll()
@@ -437,7 +476,7 @@ class SujianAnimationController(
         val (finalOldSnapshots, finalNewAffectedRange) = if (staticLayout != null) {
             val affectedLineIndices = computeDeleteAffectedLines(oldSnapshots, staticLayout, offsetMap)
             if (affectedLineIndices.isEmpty()) {
-                Pair(oldSnapshots, 0..0)
+                Pair(oldSnapshots, null as IntRange?)
             } else {
                 val minLine = affectedLineIndices.minOrNull()!!
                 val stableMaxLine = if (oldLayout != null) {
@@ -450,24 +489,27 @@ class SujianAnimationController(
                 val expandedOldRange = expandOldRangeWithProbe(
                     oldSnapshots, newRange, staticLayout, oldLayout, offsetMap, vt.oldText
                 )
-                val expandedOld = if (expandedOldRange != null && vt.oldText.isNotEmpty()) {
-                    snapshotBuilder.buildLineSnapshots(vt.oldText, expandedOldRange, oldRevision, renderer.getTextColor())
+                val finalOld = if (expandedOldRange != null && vt.oldText.isNotEmpty()) {
+                    val supplementalSnapshots = snapshotBuilder.buildLineSnapshots(vt.oldText, expandedOldRange, oldRevision, renderer.getTextColor())
+                    mergeSnapshotsById(oldSnapshots, supplementalSnapshots)
                 } else {
                     oldSnapshots
                 }
-                Pair(expandedOld, newRange)
+                Pair(finalOld, newRange as IntRange?)
             }
         } else {
-            Pair(oldSnapshots, 0..0)
+            Pair(oldSnapshots, null as IntRange?)
         }
 
-        val newLineSnapshots: List<AndroidLineSnapshot> = if (text.isNotEmpty() && staticLayout != null && !finalNewAffectedRange.isEmpty()) {
-            snapshotBuilder.buildLineSnapshots(
-                text, finalNewAffectedRange, newRevision, renderer.getTextColor()
-            )
-        } else {
-            emptyList()
-        }
+        val newLineSnapshots: List<AndroidLineSnapshot> = finalNewAffectedRange?.let {
+            if (text.isNotEmpty() && staticLayout != null) {
+                snapshotBuilder.buildLineSnapshots(
+                    text, it, newRevision, renderer.getTextColor()
+                )
+            } else {
+                emptyList()
+            }
+        } ?: emptyList()
 
         val slices = mutableListOf<AndroidAnimatedSlice>()
         val staticPatches = mutableListOf<AndroidStaticLinePatch>()
@@ -692,9 +734,9 @@ class SujianAnimationController(
         newText: String,
         rangeStartUtf16: Int,
         rangeEndUtf16: Int
-    ): Pair<IntRange, IntRange> {
+    ): Pair<IntRange?, IntRange> {
         val oldAffectedRange = computeOldAffectedRange(newAffectedRange, newLayout, oldLayout, offsetMap, oldText)
-        if (oldText.isEmpty()) return Pair(0..0, newAffectedRange)
+        if (oldText.isEmpty()) return Pair(null, newAffectedRange)
 
         val preliminaryOldProbes = snapshotBuilder.buildLineLayoutProbes(oldText, oldAffectedRange)
         val preliminaryNewProbes = snapshotBuilder.buildLineLayoutProbes(newText, newAffectedRange)
