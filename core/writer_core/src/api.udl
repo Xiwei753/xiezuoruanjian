@@ -1405,6 +1405,10 @@ dictionary EditorVisualTransactionDto {
     u32 new_selection_head;
     u32 inserted_range_start;
     u32 inserted_range_end;
+    boolean has_inserted_range;
+    u32 deleted_range_start;
+    u32 deleted_range_end;
+    boolean has_deleted_range;
     AnimationModeDto animation_mode;
     u64 duration_ms;
     VisualCoordinateModeDto coordinate_mode;

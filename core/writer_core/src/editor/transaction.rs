@@ -349,6 +349,10 @@ pub struct EditorVisualTransaction {
     pub new_selection: EditorSelection,
     /// 插入范围（UTF-8 byte offset），Insert 动画时平台层应跳过此范围
     pub inserted_range: Option<(usize, usize)>,
+    /// 删除范围（UTF-8 byte offset），Delete 动画时平台层使用此范围
+    /// 而非自行 diff_plain_text 计算，确保 Core 是范围语义唯一来源。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_range: Option<(usize, usize)>,
     /// 删除前 glyph 矩形快照（由平台层填充，Core 默认 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deleted_glyph_rects: Option<Vec<GlyphRect>>,
@@ -683,6 +687,10 @@ impl EditorEngine {
             EditorChange::Insert { index, text } => Some((*index, *index + text.len())),
             EditorChange::Delete { .. } => None,
         };
+        let deleted_range = match change {
+            EditorChange::Insert { .. } => None,
+            EditorChange::Delete { index, text } => Some((*index, *index + text.len())),
+        };
 
         let text = change.text();
         let cluster_count = count_grapheme_clusters(text);
@@ -737,6 +745,7 @@ impl EditorEngine {
             old_selection: transaction.old_selection,
             new_selection: transaction.new_selection,
             inserted_range,
+            deleted_range,
             deleted_glyph_rects: None,
             insert_glyph_rects: None,
             reflow_glyph_rects: None,

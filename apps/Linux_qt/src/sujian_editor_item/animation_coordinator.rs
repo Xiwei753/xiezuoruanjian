@@ -265,15 +265,20 @@ impl LinuxEditorAnimationCoordinator {
             }
             EditorAnimationKind::Delete => {
                 let key = self.alloc_key();
-                let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
-                let mut deleted_ranges: Vec<(usize, usize)> = Vec::new();
-                for change in &changes {
-                    if let writer_core::editor::EditorChange::Delete { index, text } = change {
-                        let range_start = *index;
-                        let range_end = range_start + text.len();
-                        deleted_ranges.push((range_start, range_end));
+                let deleted_ranges: Vec<(usize, usize)> = if let Some((ds, de)) = vt.deleted_range {
+                    vec![(ds, de)]
+                } else {
+                    let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                    let mut ranges = Vec::new();
+                    for change in &changes {
+                        if let writer_core::editor::EditorChange::Delete { index, text } = change {
+                            let range_start = *index;
+                            let range_end = range_start + text.len();
+                            ranges.push((range_start, range_end));
+                        }
                     }
-                }
+                    ranges
+                };
 
                 let mut slices = Vec::new();
                 let mut static_patches = Vec::new();

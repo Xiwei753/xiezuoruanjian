@@ -104,6 +104,10 @@ mod tests {
         assert_eq!(vt.new_selection_head, 3);
         assert_eq!(vt.inserted_range_start, 2);
         assert_eq!(vt.inserted_range_end, 3);
+        assert!(vt.has_inserted_range);
+        assert_eq!(vt.deleted_range_start, 0);
+        assert_eq!(vt.deleted_range_end, 0);
+        assert!(!vt.has_deleted_range);
         assert_eq!(vt.duration_ms, 120);
         assert_eq!(vt.coordinate_mode, VisualCoordinateModeDto::Baseline);
     }
@@ -120,9 +124,14 @@ mod tests {
         assert_eq!(vt.cause, EditorTransactionCauseDto::Delete);
         assert_eq!(vt.old_text, "abc");
         assert_eq!(vt.new_text, "ab");
-        // Delete has no inserted_range → (0, 0)
+        // Delete: inserted_range = None → (0, 0), has_inserted_range = false
         assert_eq!(vt.inserted_range_start, 0);
         assert_eq!(vt.inserted_range_end, 0);
+        assert!(!vt.has_inserted_range);
+        // Delete: deleted_range = Some((2, 3)), has_deleted_range = true
+        assert_eq!(vt.deleted_range_start, 2);
+        assert_eq!(vt.deleted_range_end, 3);
+        assert!(vt.has_deleted_range);
     }
 
     #[test]
@@ -167,11 +176,12 @@ mod tests {
 
         assert_eq!(vt.inserted_range_start, 2);
         assert_eq!(vt.inserted_range_end, 3);
+        assert!(vt.has_inserted_range);
         assert_eq!(vt.duration_ms, 160);
     }
 
     #[test]
-    fn visual_transaction_delete_has_zero_inserted_range() {
+    fn visual_transaction_delete_has_zero_inserted_range_and_deleted_range() {
         let api = WriterCoreApi::new("");
         let vt = api
             .editor_visual_transaction("abc", "ab", 3, 2, EditorTransactionCauseDto::Delete, 8, 160)
@@ -180,6 +190,10 @@ mod tests {
 
         assert_eq!(vt.inserted_range_start, 0);
         assert_eq!(vt.inserted_range_end, 0);
+        assert!(!vt.has_inserted_range);
+        assert_eq!(vt.deleted_range_start, 2);
+        assert_eq!(vt.deleted_range_end, 3);
+        assert!(vt.has_deleted_range);
     }
 
     #[test]
@@ -202,5 +216,7 @@ mod tests {
         assert_eq!(vt.kind, EditorAnimationKindDto::Insert);
         assert_eq!(vt.inserted_range_start, "你好".len() as u32);
         assert_eq!(vt.inserted_range_end, "你好世".len() as u32);
+        assert!(vt.has_inserted_range);
+        assert!(!vt.has_deleted_range);
     }
 }

@@ -181,6 +181,18 @@ pub struct EditorVisualTransactionDto {
     pub inserted_range_start: u32,
     /// 插入范围结束（UTF-8 byte offset），无插入时为 0
     pub inserted_range_end: u32,
+    /// 是否有插入范围 — 平台层必须先检查此标志，不能依赖 inserted_range_start/end == 0 判断
+    /// 因为 0..0 在 Kotlin IntRange 中包含一个元素（0），不是空范围。
+    /// Delete 事务此值为 false，Insert 事务此值为 true。
+    pub has_inserted_range: bool,
+    /// 删除范围起始（UTF-8 byte offset），无删除时为 0
+    pub deleted_range_start: u32,
+    /// 删除范围结束（UTF-8 byte offset），无删除时为 0
+    pub deleted_range_end: u32,
+    /// 是否有删除范围 — 平台层必须先检查此标志，不能依赖 deleted_range_start/end == 0 判断。
+    /// Insert 事务此值为 false，Delete 事务此值为 true。
+    /// 消除 Android 端用 0..0 表示空范围的歧义。
+    pub has_deleted_range: bool,
     /// Core 决定的动画模式，是平台端唯一语义来源
     pub animation_mode: AnimationModeDto,
     /// 动画时长（毫秒）
@@ -195,6 +207,12 @@ impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto
             .inserted_range
             .map(|(s, e)| (s as u32, e as u32))
             .unwrap_or((0, 0));
+        let has_inserted_range = vt.inserted_range.is_some();
+        let (deleted_range_start, deleted_range_end) = vt
+            .deleted_range
+            .map(|(s, e)| (s as u32, e as u32))
+            .unwrap_or((0, 0));
+        let has_deleted_range = vt.deleted_range.is_some();
         Self {
             id: vt.id,
             kind: vt.kind.into(),
@@ -224,6 +242,10 @@ impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto
             new_selection_head: vt.new_selection.head.index as u32,
             inserted_range_start,
             inserted_range_end,
+            has_inserted_range,
+            deleted_range_start,
+            deleted_range_end,
+            has_deleted_range,
             animation_mode: vt.animation_mode.into(),
             duration_ms: vt.duration_ms,
             coordinate_mode: vt.coordinate_mode.into(),
@@ -261,6 +283,11 @@ mod tests {
         // Insert: inserted_range = Some((2, 3))
         assert_eq!(dto.inserted_range_start, 2);
         assert_eq!(dto.inserted_range_end, 3);
+        assert!(dto.has_inserted_range);
+        // Insert: deleted_range = None → (0, 0), has_deleted_range = false
+        assert_eq!(dto.deleted_range_start, 0);
+        assert_eq!(dto.deleted_range_end, 0);
+        assert!(!dto.has_deleted_range);
         assert_eq!(dto.duration_ms, 160);
         assert_eq!(dto.coordinate_mode, VisualCoordinateModeDto::Baseline);
     }
@@ -288,14 +315,19 @@ mod tests {
         assert_eq!(dto.old_selection_head, 3);
         assert_eq!(dto.new_selection_anchor, 2);
         assert_eq!(dto.new_selection_head, 2);
-        // Delete: inserted_range = None → (0, 0)
+        // Delete: inserted_range = None → (0, 0), has_inserted_range = false
         assert_eq!(dto.inserted_range_start, 0);
         assert_eq!(dto.inserted_range_end, 0);
+        assert!(!dto.has_inserted_range);
+        // Delete: deleted_range = Some((2, 3))
+        assert_eq!(dto.deleted_range_start, 2);
+        assert_eq!(dto.deleted_range_end, 3);
+        assert!(dto.has_deleted_range);
         assert_eq!(dto.duration_ms, 120);
         assert_eq!(dto.coordinate_mode, VisualCoordinateModeDto::Baseline);
     }
 
-    /// T1.8: Verify inserted_range None → (0, 0) explicitly.
+    /// T1.8: Verify inserted_range None → (0, 0) + has_inserted_range=false explicitly.
     #[test]
     fn visual_transaction_dto_inserted_range_none_maps_to_zeros() {
         let mut engine = crate::editor::EditorEngine::with_animation_limits(8, 120);
@@ -312,9 +344,10 @@ mod tests {
         let dto: EditorVisualTransactionDto = vt.into();
         assert_eq!(dto.inserted_range_start, 0);
         assert_eq!(dto.inserted_range_end, 0);
+        assert!(!dto.has_inserted_range);
     }
 
-    /// T1.8: Verify inserted_range Some((s, e)) maps correctly.
+    /// T1.8: Verify inserted_range Some((s, e)) maps correctly + has_inserted_range=true.
     #[test]
     fn visual_transaction_dto_inserted_range_some_maps_correctly() {
         let mut engine = crate::editor::EditorEngine::with_animation_limits(8, 120);
@@ -331,6 +364,47 @@ mod tests {
         let dto: EditorVisualTransactionDto = vt.into();
         assert_eq!(dto.inserted_range_start, 2);
         assert_eq!(dto.inserted_range_end, 3);
+        assert!(dto.has_inserted_range);
+    }
+
+    /// Verify deleted_range Some((s, e)) maps correctly + has_deleted_range=true.
+    #[test]
+    fn visual_transaction_dto_deleted_range_some_maps_correctly() {
+        let mut engine = crate::editor::EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "abc",
+            "ab",
+            crate::editor::EditorSelection::collapsed("abc", 3),
+            crate::editor::EditorSelection::collapsed("ab", 2),
+            crate::editor::EditorTransactionCause::Delete,
+        );
+        let vt = engine.visual_transaction(&tx).unwrap();
+        // Core layer: Delete has deleted_range = Some((2, 3))
+        assert_eq!(vt.deleted_range, Some((2, 3)));
+        let dto: EditorVisualTransactionDto = vt.into();
+        assert_eq!(dto.deleted_range_start, 2);
+        assert_eq!(dto.deleted_range_end, 3);
+        assert!(dto.has_deleted_range);
+    }
+
+    /// Verify deleted_range None → (0, 0) + has_deleted_range=false for Insert.
+    #[test]
+    fn visual_transaction_dto_deleted_range_none_maps_to_zeros() {
+        let mut engine = crate::editor::EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "ab",
+            "abc",
+            crate::editor::EditorSelection::collapsed("ab", 2),
+            crate::editor::EditorSelection::collapsed("abc", 3),
+            crate::editor::EditorTransactionCause::Typing,
+        );
+        let vt = engine.visual_transaction(&tx).unwrap();
+        // Core layer: Insert has deleted_range = None
+        assert!(vt.deleted_range.is_none());
+        let dto: EditorVisualTransactionDto = vt.into();
+        assert_eq!(dto.deleted_range_start, 0);
+        assert_eq!(dto.deleted_range_end, 0);
+        assert!(!dto.has_deleted_range);
     }
 
     /// T1.8: Verify cause mapping for all variants.
@@ -374,6 +448,10 @@ mod tests {
         assert!(json.contains("\"newSelectionHead\":"));
         assert!(json.contains("\"insertedRangeStart\":"));
         assert!(json.contains("\"insertedRangeEnd\":"));
+        assert!(json.contains("\"hasInsertedRange\":"));
+        assert!(json.contains("\"deletedRangeStart\":"));
+        assert!(json.contains("\"deletedRangeEnd\":"));
+        assert!(json.contains("\"hasDeletedRange\":"));
         assert!(json.contains("\"durationMs\":"));
         assert!(json.contains("\"coordinateMode\":"));
         // Verify snake_case fields are NOT present
@@ -382,6 +460,10 @@ mod tests {
         assert!(!json.contains("\"old_selection_anchor\":"));
         assert!(!json.contains("\"inserted_range_start\":"));
         assert!(!json.contains("\"inserted_range_end\":"));
+        assert!(!json.contains("\"has_inserted_range\":"));
+        assert!(!json.contains("\"deleted_range_start\":"));
+        assert!(!json.contains("\"deleted_range_end\":"));
+        assert!(!json.contains("\"has_deleted_range\":"));
         assert!(!json.contains("\"duration_ms\":"));
         assert!(!json.contains("\"coordinate_mode\":"));
     }

@@ -47,6 +47,7 @@ impl SujianEditorItem {
                 let text_color = &self.current_text_color.to_string();
 
                 let (affected_byte_start, affected_byte_end) = vt.inserted_range
+                    .or(vt.deleted_range)
                     .unwrap_or_else(|| {
                         let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
                         let mut min_b = usize::MAX;
