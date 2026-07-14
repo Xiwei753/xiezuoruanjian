@@ -4,20 +4,6 @@ import android.graphics.RectF
 import com.xiwei.sujian.model.AnimationModeData
 import com.xiwei.sujian.model.SujianCursorRectData
 
-/**
- * 平台视觉事务状态机：
- *
- * ```
- * Pending → Prepared → Rendering ↔ Paused → Completed
- *    └──── 任一未终态 ────→ Cancelled
- * ```
- *
- * - [markPrepared]：前置状态必须为 Pending。
- * - [markRendering]：前置状态必须为 Prepared，同时记录 [firstRenderFrameMs]。
- * - [pause]：前置状态必须为 Rendering。
- * - [resume]：前置状态必须为 Paused，累加暂停时长后恢复。
- * - [complete]/[cancel]：释放 old/new snapshots；重复释放由 snapshot/resource 层保证安全。
- */
 enum class AndroidVisualTransactionState {
     Pending, Prepared, Rendering, Paused, Completed, Cancelled
 }
@@ -41,14 +27,6 @@ data class AndroidCursorTransition(
     }
 }
 
-/**
- * 一次平台视觉事务持有的全部资源。
- *
- * 统一时钟原则（issue #515）：
- * - [timeline] 是唯一时间源，文字切片、光标、预输入装饰全部消费同一个 progress。
- * - Paused 状态返回暂停瞬间的 progress，不返回 0。
- * - resume 后从暂停进度连续推进。
- */
 data class AndroidPlatformVisualTransaction(
     val key: ULong,
     var state: AndroidVisualTransactionState,
@@ -63,7 +41,9 @@ data class AndroidPlatformVisualTransaction(
     val staticLinePatches: MutableList<AndroidStaticLinePatch>,
     val decorationSlices: MutableList<AndroidDecorationSlice>,
     var cursorTransition: AndroidCursorTransition,
-    var cancelReason: String? = null
+    var cancelReason: String? = null,
+    val ownedOldRevision: AndroidCompositionVisualRevision? = null,
+    val ownedNewRevision: AndroidCompositionVisualRevision? = null
 ) {
     val timeline: AndroidTimeline = AndroidTimeline(durationMs)
 
@@ -109,21 +89,31 @@ data class AndroidPlatformVisualTransaction(
 
     fun complete() {
         state = AndroidVisualTransactionState.Completed
-        releaseSnapshots()
+        releaseOwnedResources()
     }
 
     fun cancel(reason: String) {
         cancelReason = reason
         state = AndroidVisualTransactionState.Cancelled
-        releaseSnapshots()
+        releaseOwnedResources()
     }
 
-    internal fun releaseSnapshots() {
-        for (snapshot in oldLineSnapshots) {
-            snapshot.release()
+    private fun releaseOwnedResources() {
+        ownedOldRevision?.let { rev ->
+            if (!rev.isReleased()) rev.release()
         }
-        for (snapshot in newLineSnapshots) {
-            snapshot.release()
+        ownedNewRevision?.let { rev ->
+            if (!rev.isReleased()) rev.release()
+        }
+        if (ownedOldRevision == null) {
+            for (snapshot in oldLineSnapshots) {
+                snapshot.release()
+            }
+        }
+        if (ownedNewRevision == null) {
+            for (snapshot in newLineSnapshots) {
+                snapshot.release()
+            }
         }
     }
 }

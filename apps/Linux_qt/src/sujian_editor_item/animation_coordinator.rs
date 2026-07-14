@@ -653,6 +653,7 @@ impl LinuxEditorAnimationCoordinator {
         composition_byte_start: usize,
         composition_byte_end: usize,
         is_commit: bool,
+        visual_text_unchanged: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
@@ -691,6 +692,8 @@ impl LinuxEditorAnimationCoordinator {
                     ));
                 }
             }
+        } else if visual_text_unchanged {
+            // 视觉文字完全相同：不重复播放吐字，只移除 underline/装饰
         } else {
             let insert_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
             let insert_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);

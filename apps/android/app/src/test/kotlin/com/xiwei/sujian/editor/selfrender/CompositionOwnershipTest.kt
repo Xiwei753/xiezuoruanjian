@@ -37,7 +37,7 @@ class CompositionOwnershipTest {
         manager.setCurrent(rev1)
         manager.setCurrent(rev2)
 
-        assertNull(manager.getPrevious())
+        assertTrue(rev1.isReleased())
     }
 
     @Test
@@ -62,19 +62,6 @@ class CompositionOwnershipTest {
     }
 
     @Test
-    fun takePreviousForTransaction_transfersOwnership() {
-        val rev1 = makeRevision(1)
-        val rev2 = makeRevision(2)
-
-        manager.setCurrent(rev1)
-        manager.setCurrent(rev2)
-
-        val taken = manager.takePreviousForTransaction()
-        assertNotNull(taken)
-        assertEquals(1L, taken!!.revisionId)
-    }
-
-    @Test
     fun clear_releasesSessionOwnedRevisions() {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
@@ -82,7 +69,7 @@ class CompositionOwnershipTest {
         manager.clear()
 
         assertNull(manager.getCurrent())
-        assertNull(manager.getPrevious())
+        assertTrue(rev1.isReleased())
     }
 
     @Test
@@ -90,10 +77,14 @@ class CompositionOwnershipTest {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
 
-        manager.takeCurrentForTransaction()
+        val taken = manager.takeCurrentForTransaction()
+        assertNotNull(taken)
+        assertFalse(taken!!.isReleased())
+
         manager.clear()
 
         assertNull(manager.getCurrent())
+        assertFalse(taken.isReleased())
     }
 
     @Test
@@ -107,6 +98,17 @@ class CompositionOwnershipTest {
         manager.clear()
 
         assertNull(manager.getCurrent())
+        assertFalse(taken!!.isReleased())
+
+        taken.release()
+        assertTrue(taken.isReleased())
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun doubleRelease_throws() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+        manager.clear()
     }
 
     @Test
@@ -115,9 +117,13 @@ class CompositionOwnershipTest {
             val rev = makeRevision(i.toLong())
             manager.setCurrent(rev)
         }
+        val lastRev = manager.getCurrent()
+        assertNotNull(lastRev)
+        assertFalse(lastRev!!.isReleased())
+
         manager.clear()
+        assertTrue(lastRev.isReleased())
         assertNull(manager.getCurrent())
-        assertNull(manager.getPrevious())
     }
 
     @Test
@@ -148,6 +154,84 @@ class CompositionOwnershipTest {
     fun buildVirtualText_preeditShorterThanReplaceRange() {
         val result = manager.buildVirtualText("你好世界", 1..3, "X")
         assertEquals("你X界", result)
+    }
+
+    @Test
+    fun revisionRelease_isIdempotentWithinRevision() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+        manager.clear()
+        assertTrue(rev1.isReleased())
+    }
+
+    @Test
+    fun takeAndRelease_revisionCannotBeDoubleReleased() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+        val taken = manager.takeCurrentForTransaction()
+        assertNotNull(taken)
+        taken!!.release()
+        assertTrue(taken.isReleased())
+    }
+
+    @Test
+    fun transactionHoldsRevisionOwnership() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+        val prevRevision = manager.takeCurrentForTransaction()
+        assertNotNull(prevRevision)
+        assertFalse(prevRevision!!.isReleased())
+
+        val tx = AndroidPlatformVisualTransaction(
+            key = 1u,
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = com.xiwei.sujian.model.AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 0,
+            newRevision = 1,
+            slices = mutableListOf(),
+            oldLineSnapshots = mutableListOf(),
+            newLineSnapshots = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = prevRevision
+        )
+
+        assertFalse(prevRevision.isReleased())
+        tx.cancel("test")
+        assertTrue(prevRevision.isReleased())
+    }
+
+    @Test
+    fun transactionComplete_releasesOwnedRevisions() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+        val prevRevision = manager.takeCurrentForTransaction()
+
+        val tx = AndroidPlatformVisualTransaction(
+            key = 1u,
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = com.xiwei.sujian.model.AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 0,
+            newRevision = 1,
+            slices = mutableListOf(),
+            oldLineSnapshots = mutableListOf(),
+            newLineSnapshots = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = prevRevision
+        )
+
+        tx.markPrepared()
+        tx.markRendering()
+        assertFalse(prevRevision!!.isReleased())
+        tx.complete()
+        assertTrue(prevRevision.isReleased())
     }
 }
 
@@ -234,19 +318,17 @@ class CompositionSessionTest {
         assertEquals(2, session.replaceStart)
         assertEquals(2, session.replaceEndExclusive)
 
-        session.preeditText = "ni"
-        session.preeditCursorOffset = 2
+        val updated = session.updatePreedit("ni", 2)
 
-        assertEquals(2, session.replaceStart)
-        assertEquals(2, session.replaceEndExclusive)
-        assertEquals("你好ni世界", session.buildVirtualText())
+        assertEquals(2, updated.replaceStart)
+        assertEquals(2, updated.replaceEndExclusive)
+        assertEquals("你好ni世界", updated.buildVirtualText())
 
-        session.preeditText = "nihao"
-        session.preeditCursorOffset = 5
+        val updated2 = updated.updatePreedit("nihao", 5)
 
-        assertEquals(2, session.replaceStart)
-        assertEquals(2, session.replaceEndExclusive)
-        assertEquals("你好nihao世界", session.buildVirtualText())
+        assertEquals(2, updated2.replaceStart)
+        assertEquals(2, updated2.replaceEndExclusive)
+        assertEquals("你好nihao世界", updated2.buildVirtualText())
     }
 
     @Test
@@ -266,5 +348,56 @@ class CompositionSessionTest {
         )
 
         assertEquals(1..3, session.replaceRange())
+    }
+
+    @Test
+    fun consecutiveUpdates_100times_noLeak() {
+        var session = CompositionSession.createNew(
+            committedRevisionId = 1,
+            committedText = "你好世界",
+            replaceStart = 2,
+            replaceEndExclusive = 2,
+            preeditText = "n",
+            preeditCursorOffset = 1
+        )
+
+        for (i in 1..100) {
+            session = session.updatePreedit("n$i", 2)
+        }
+
+        assertEquals(2, session.replaceStart)
+        assertEquals(2, session.replaceEndExclusive)
+        assertTrue(session.isActive)
+    }
+
+    @Test
+    fun commit_returnsCorrectCommittedText() {
+        val session = CompositionSession.createNew(
+            committedRevisionId = 1,
+            committedText = "你好世界",
+            replaceStart = 2,
+            replaceEndExclusive = 2,
+            preeditText = "abc",
+            preeditCursorOffset = 3
+        )
+
+        val (cleared, committedText) = session.commit("abc")
+        assertFalse(cleared.isActive)
+        assertEquals("你好abc世界", committedText)
+    }
+
+    @Test
+    fun cancel_returnsInactiveSession() {
+        val session = CompositionSession.createNew(
+            committedRevisionId = 1,
+            committedText = "你好世界",
+            replaceStart = 2,
+            replaceEndExclusive = 2,
+            preeditText = "abc",
+            preeditCursorOffset = 3
+        )
+
+        val cancelled = session.cancel()
+        assertFalse(cancelled.isActive)
     }
 }

@@ -77,6 +77,7 @@ impl SujianEditorItem {
         let was_composing = !self.preedit_text.is_empty() || self.composition_session.is_some();
 
         let (composition_byte_start, composition_byte_end) = self.preedit_byte_range_in_virtual_text();
+        let saved_virtual_text = self.composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -132,6 +133,12 @@ impl SujianEditorItem {
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
+            let virtual_text = saved_virtual_text.clone();
+            let new_snapshot = self.build_editor_layout_snapshot(width);
+            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+
+            let visual_text_unchanged = !virtual_text.is_empty() && virtual_text == new.text;
+
             let key = self.animation_coordinator.handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
@@ -139,6 +146,7 @@ impl SujianEditorItem {
                 composition_byte_start,
                 composition_byte_end,
                 true,
+                visual_text_unchanged,
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -193,6 +201,7 @@ impl SujianEditorItem {
         }
         let pending_pcr = self.pending_preedit_cursor_rect.take();
         let was_composing = !self.preedit_text.is_empty() || self.composition_session.is_some();
+        let saved_virtual_text = self.composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -321,6 +330,7 @@ impl SujianEditorItem {
                 composition_byte_start,
                 composition_byte_end,
                 true,
+                !saved_virtual_text.is_empty() && saved_virtual_text == new.text,
                 old_cursor_rect,
                 new_cursor_rect,
             );
