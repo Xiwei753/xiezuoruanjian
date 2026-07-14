@@ -120,6 +120,17 @@ pub struct CursorRectDto {
     pub baseline_y: f64,
 }
 
+impl From<crate::editor::CursorRect> for CursorRectDto {
+    fn from(r: crate::editor::CursorRect) -> Self {
+        Self {
+            x: r.x,
+            top: r.top,
+            bottom: r.bottom,
+            baseline_y: r.baseline_y,
+        }
+    }
+}
+
 /// 单个 glyph 的精确矩形信息 DTO，供平台端动画 overlay 使用。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -414,6 +425,134 @@ impl From<crate::editor::PlatformVisualTransaction> for PlatformVisualTransactio
             duration_ms: t.duration_ms,
             unified_kind: t.unified_kind.map(|k| k.into()).unwrap_or_default(),
             timeline: t.timeline.map(Into::into),
+            visual_class_kinds: t.visual_class_kinds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+// ── #516: VisualRevision DTO ──
+
+/// 已提交正文的视觉修订 DTO。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisualRevisionDto {
+    pub revision_id: u64,
+    pub full_text: String,
+    pub affected_paragraph_range_start: usize,
+    pub affected_paragraph_range_end: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_rect: Option<CursorRectDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caret_affinity: Option<CaretAffinityDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shaping_identity: Option<String>,
+}
+
+impl From<crate::editor::VisualRevision> for VisualRevisionDto {
+    fn from(r: crate::editor::VisualRevision) -> Self {
+        Self {
+            revision_id: r.revision_id,
+            full_text: r.full_text,
+            affected_paragraph_range_start: r.affected_paragraph_range.0,
+            affected_paragraph_range_end: r.affected_paragraph_range.1,
+            cursor_rect: r.cursor_rect.map(Into::into),
+            caret_affinity: r.caret_affinity.map(Into::into),
+            shaping_identity: r.shaping_identity,
+        }
+    }
+}
+
+// ── #516: CaretAffinity DTO ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaretAffinityDto {
+    Upstream,
+    Downstream,
+}
+
+impl From<crate::editor::CaretAffinity> for CaretAffinityDto {
+    fn from(a: crate::editor::CaretAffinity) -> Self {
+        match a {
+            crate::editor::CaretAffinity::Upstream => Self::Upstream,
+            crate::editor::CaretAffinity::Downstream => Self::Downstream,
+        }
+    }
+}
+
+// ── #516: TransactionCancelReason DTO ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransactionCancelReasonDto {
+    Rebased,
+    RevisionChanged,
+    SystemSuppressed,
+    UserCancelled,
+    CompositionCommitted,
+    CompositionCancelled,
+}
+
+impl From<crate::editor::TransactionCancelReason> for TransactionCancelReasonDto {
+    fn from(r: crate::editor::TransactionCancelReason) -> Self {
+        match r {
+            crate::editor::TransactionCancelReason::Rebased => Self::Rebased,
+            crate::editor::TransactionCancelReason::RevisionChanged => Self::RevisionChanged,
+            crate::editor::TransactionCancelReason::SystemSuppressed => Self::SystemSuppressed,
+            crate::editor::TransactionCancelReason::UserCancelled => Self::UserCancelled,
+            crate::editor::TransactionCancelReason::CompositionCommitted => Self::CompositionCommitted,
+            crate::editor::TransactionCancelReason::CompositionCancelled => Self::CompositionCancelled,
+        }
+    }
+}
+
+// ── #516: CompositionUpdateTransaction DTO ──
+
+/// 预输入更新事务 DTO。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionUpdateTransactionDto {
+    pub id: u64,
+    pub duration_ms: u64,
+    pub unified_kind: UnifiedTransactionKindDto,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_class_kinds: Vec<VisualClassKindDto>,
+}
+
+impl From<crate::editor::CompositionUpdateTransaction> for CompositionUpdateTransactionDto {
+    fn from(t: crate::editor::CompositionUpdateTransaction) -> Self {
+        Self {
+            id: t.id,
+            duration_ms: t.duration_ms,
+            unified_kind: UnifiedTransactionKindDto::CompositionUpdate,
+            visual_class_kinds: t.visual_class_kinds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+// ── #516: CompositionCommitOrCancelTransaction DTO ──
+
+/// 预输入提交/取消事务 DTO。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompositionCommitOrCancelTransactionDto {
+    pub id: u64,
+    pub is_commit: bool,
+    pub is_visual_same: bool,
+    pub duration_ms: u64,
+    pub unified_kind: UnifiedTransactionKindDto,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visual_class_kinds: Vec<VisualClassKindDto>,
+}
+
+impl From<crate::editor::CompositionCommitOrCancelTransaction> for CompositionCommitOrCancelTransactionDto {
+    fn from(t: crate::editor::CompositionCommitOrCancelTransaction) -> Self {
+        Self {
+            id: t.id,
+            is_commit: t.is_commit,
+            is_visual_same: t.is_visual_same,
+            duration_ms: t.duration_ms,
+            unified_kind: UnifiedTransactionKindDto::CompositionCommitOrCancel,
             visual_class_kinds: t.visual_class_kinds.into_iter().map(Into::into).collect(),
         }
     }
@@ -755,6 +894,7 @@ mod tests {
             cursor_path: None,
             composition_revision: None,
             rebase: None,
+            cancel_reason: None,
         };
         let dto: PlatformVisualTransactionDto = pvt.into();
         assert_eq!(dto.transaction_id, 1);
