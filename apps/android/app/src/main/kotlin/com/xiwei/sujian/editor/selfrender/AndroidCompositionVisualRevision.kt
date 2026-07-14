@@ -45,33 +45,68 @@ enum class DecorationKind {
 }
 
 /**
- * 预输入状态管理器
+ * 预输入状态管理器（issue #516 资源所有权修正）
+ *
+ * 所有权规则：
+ * - Manager 只持有 revision 元数据和快照所有权。
+ * - 创建新事务时通过 take 转移旧 revision 快照，不能复制引用后立即 release。
+ * - 事务完成或取消后统一释放其持有的 old/new snapshots。
+ * - clear() 只能释放仍由 manager 持有、尚未转移给事务的资源。
  */
 class AndroidCompositionManager {
     private var currentRevision: AndroidCompositionVisualRevision? = null
     private var previousRevision: AndroidCompositionVisualRevision? = null
+    private var currentTransferred: Boolean = false
+    private var previousTransferred: Boolean = false
 
     fun setCurrent(revision: AndroidCompositionVisualRevision?) {
+        val oldPrevious = previousRevision
+        val oldPreviousTransferred = previousTransferred
+
         previousRevision = currentRevision
-        currentRevision?.release()
+        previousTransferred = currentTransferred
+
+        if (oldPrevious != null && !oldPreviousTransferred) {
+            oldPrevious.release()
+        }
+
         currentRevision = revision
+        currentTransferred = false
     }
 
     fun getCurrent(): AndroidCompositionVisualRevision? = currentRevision
 
     fun getPrevious(): AndroidCompositionVisualRevision? = previousRevision
 
-    fun clear() {
-        currentRevision?.release()
-        previousRevision?.release()
-        currentRevision = null
-        previousRevision = null
+    fun takeCurrentForTransaction(): AndroidCompositionVisualRevision? {
+        val rev = currentRevision
+        if (rev != null) {
+            currentTransferred = true
+        }
+        return rev
     }
 
-    /**
-     * 构建 virtualText：将 preeditText 插入 committedText 的 compositionReplaceRange 位置。
-     * virtualText 用于排版和渲染，不修改正文 buffer。
-     */
+    fun takePreviousForTransaction(): AndroidCompositionVisualRevision? {
+        val rev = previousRevision
+        if (rev != null) {
+            previousTransferred = true
+        }
+        return rev
+    }
+
+    fun clear() {
+        if (currentRevision != null && !currentTransferred) {
+            currentRevision!!.release()
+        }
+        if (previousRevision != null && !previousTransferred) {
+            previousRevision!!.release()
+        }
+        currentRevision = null
+        previousRevision = null
+        currentTransferred = false
+        previousTransferred = false
+    }
+
     fun buildVirtualText(committedText: String, compositionReplaceRange: IntRange, preeditText: String): String {
         val start = compositionReplaceRange.first.coerceIn(0, committedText.length)
         val end = compositionReplaceRange.last.coerceIn(0, committedText.length)
