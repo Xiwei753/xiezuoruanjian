@@ -91,7 +91,6 @@ class SujianInputConnection(
                 editorView.animationController.handleCompositionCommitOrCancel(
                     committedText = buffer.text,
                     isCommit = true,
-                    committedCandidateText = textStr,
                     candidateUtf16Start = candidateUtf16Start,
                     candidateUtf16EndExclusive = candidateUtf16EndExclusive
                 )
