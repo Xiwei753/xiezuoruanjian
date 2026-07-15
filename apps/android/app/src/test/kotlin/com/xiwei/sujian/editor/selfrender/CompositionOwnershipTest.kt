@@ -337,7 +337,7 @@ class CompositionOwnershipTest {
         val prevRevision = manager.takeCurrentForTransaction(100u)
         val newRevision = makeRevision(2)
 
-        var returnedRevision: AndroidCompositionVisualRevision? = null
+        var returnedRevision: OwnedVisualRevision? = null
         val tx = AndroidPlatformVisualTransaction(
             key = 100u,
             state = AndroidVisualTransactionState.Pending,
@@ -353,7 +353,8 @@ class CompositionOwnershipTest {
             ownedOldRevision = prevRevision,
             ownedNewRevision = newRevision,
             onTransactionComplete = { rev, key ->
-                returnedRevision = rev
+                returnedRevision = rev as? AndroidCompositionVisualRevision
+                ReturnFromTransactionResult.Accepted
             }
         )
 
@@ -403,7 +404,7 @@ class CompositionOwnershipTest {
             ownedOldRevision = oldRev
         )
 
-        val detached = tx.detachOldRevisionForRebase()
+        val detached = tx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
         assertNotNull(detached)
         assertNull(tx.ownedOldRevision)
     }
@@ -429,7 +430,7 @@ class CompositionOwnershipTest {
             ownedOldRevision = oldRev
         )
 
-        val transferred = tx1.detachOldRevisionForRebase()
+        val transferred = tx1.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
         assertNotNull(transferred)
 
         tx1.cancel("rebased")
@@ -442,31 +443,31 @@ class CompositionOwnershipTest {
 
     @Test
     fun buildVirtualText_zeroLengthReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", 2..2, "abc")
+        val result = manager.buildVirtualText("你好世界", HalfOpenRange(2, 2), "abc")
         assertEquals("你好abc世界", result)
     }
 
     @Test
     fun buildVirtualText_nonZeroReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", 1..3, "abc")
+        val result = manager.buildVirtualText("你好世界", HalfOpenRange(1, 3), "abc")
         assertEquals("你abc界", result)
     }
 
     @Test
     fun buildVirtualText_emptyPreedit() {
-        val result = manager.buildVirtualText("你好世界", 2..2, "")
+        val result = manager.buildVirtualText("你好世界", HalfOpenRange(2, 2), "")
         assertEquals("你好世界", result)
     }
 
     @Test
     fun buildVirtualText_preeditLongerThanReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", 2..2, "abcdefghij")
+        val result = manager.buildVirtualText("你好世界", HalfOpenRange(2, 2), "abcdefghij")
         assertEquals("你好abcdefghij世界", result)
     }
 
     @Test
     fun buildVirtualText_preeditShorterThanReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", 1..3, "X")
+        val result = manager.buildVirtualText("你好世界", HalfOpenRange(1, 3), "X")
         assertEquals("你X界", result)
     }
 
@@ -491,7 +492,7 @@ class CompositionOwnershipTest {
             ownedOldRevision = oldRev
         )
 
-        val transferred = tx1.detachOldRevisionForRebase()
+        val transferred = tx1.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
         assertNotNull(transferred)
         assertFalse(transferred!!.isReleased())
 
@@ -525,8 +526,8 @@ class CompositionOwnershipTest {
             ownedNewRevision = newRev
         )
 
-        val detachedOld = tx1.detachOldRevisionForRebase()
-        val detachedNew = tx1.takeNewRevisionForRebase()
+        val detachedOld = tx1.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
+        val detachedNew = detachedNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
         assertNotNull(detachedNew)
         assertFalse(detachedNew!!.isReleased())
 
@@ -549,7 +550,7 @@ class CompositionOwnershipTest {
         val prevRevision = manager.takeCurrentForTransaction(100u)
         val newRevision = makeRevisionWithFakeResources(2, 2)
 
-        var returnedRevision: AndroidCompositionVisualRevision? = null
+        var returnedRevision: OwnedVisualRevision? = null
         val tx = AndroidPlatformVisualTransaction(
             key = 100u,
             state = AndroidVisualTransactionState.Pending,
@@ -565,7 +566,8 @@ class CompositionOwnershipTest {
             ownedOldRevision = prevRevision,
             ownedNewRevision = newRevision,
             onTransactionComplete = { rev, key ->
-                returnedRevision = rev
+                returnedRevision = rev as? AndroidCompositionVisualRevision
+                ReturnFromTransactionResult.Accepted
             }
         )
 
@@ -622,7 +624,7 @@ class CompositionOwnershipTest {
             val newRev = makeRevisionWithFakeResources(i, 2)
             allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
 
-            var returnedRev: AndroidCompositionVisualRevision? = null
+            var returnedRev: OwnedVisualRevision? = null
             val tx = AndroidPlatformVisualTransaction(
                 key = txKey,
                 state = AndroidVisualTransactionState.Pending,
@@ -639,13 +641,14 @@ class CompositionOwnershipTest {
                 ownedNewRevision = newRev,
                 onTransactionComplete = { rev, key ->
                     returnedRev = rev
-                }
+                    ReturnFromTransactionResult.Accepted
+            }
             )
 
             tx.complete()
             assertNotNull(returnedRev)
             assertFalse(returnedRev!!.isReleased())
-            manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
+            manager.returnFromTransaction(returnedRev!! as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
             currentRev = returnedRev
         }
 
@@ -686,8 +689,8 @@ class CompositionOwnershipTest {
             ownedNewRevision = newRev
         )
 
-        val detachedOld = tx1.detachOldRevisionForRebase()
-        val detachedNew = tx1.takeNewRevisionForRebase()
+        val detachedOld = tx1.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
+        val detachedNew = detachedNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
 
         assertNotNull(detachedOld)
         assertNotNull(detachedNew)
@@ -731,7 +734,7 @@ class CompositionOwnershipTest {
             val newRev = makeRevisionWithFakeResources(i, 2)
             allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
 
-            var returnedRev: AndroidCompositionVisualRevision? = null
+            var returnedRev: OwnedVisualRevision? = null
             val tx = AndroidPlatformVisualTransaction(
                 key = txKey,
                 state = AndroidVisualTransactionState.Rendering,
@@ -748,12 +751,13 @@ class CompositionOwnershipTest {
                 ownedNewRevision = newRev,
                 onTransactionComplete = { rev, key ->
                     returnedRev = rev
-                }
+                    ReturnFromTransactionResult.Accepted
+            }
             )
 
             if (i % 10 == 0L) {
-                val detachedOld = tx.detachOldRevisionForRebase()
-                val detachedNew = tx.takeNewRevisionForRebase()
+                val detachedOld = tx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
+                val detachedNew = detachedNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
                 assertNotNull(detachedOld)
                 assertNotNull(detachedNew)
                 detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
@@ -765,7 +769,7 @@ class CompositionOwnershipTest {
                 tx.complete()
                 assertNotNull(returnedRev)
                 assertFalse(returnedRev!!.isReleased())
-                manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
+                manager.returnFromTransaction(returnedRev!! as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
                 currentRev = returnedRev!!
             }
         }
@@ -808,7 +812,7 @@ class CompositionOwnershipTest {
             ownedNewRevision = newRev
         )
 
-        val takenNewRev = tx1.takeNewRevisionForRebase()
+        val takenNewRev = takenNewRev = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
         assertNotNull(takenNewRev)
         assertFalse(takenNewRev!!.isReleased())
 
@@ -855,8 +859,8 @@ class CompositionOwnershipTest {
                         ownedOldRevision = currentRev,
                         ownedNewRevision = currentRev
                     )
-                    val takenNew = fakeActiveTx.takeNewRevisionForRebase()
-                    val detachedOld = fakeActiveTx.detachOldRevisionForRebase()
+                    val takenNew = takenNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
+                    val detachedOld = fakeActiveTx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
                     fakeActiveTx.onTransactionComplete = null
                     fakeActiveTx.cancel("superseded")
                     if (detachedOld != null) {
@@ -873,7 +877,7 @@ class CompositionOwnershipTest {
             val newRev = makeRevisionWithFakeResources(i, 2)
             allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
 
-            var returnedRev: AndroidCompositionVisualRevision? = null
+            var returnedRev: OwnedVisualRevision? = null
             val tx = AndroidPlatformVisualTransaction(
                 key = txKey,
                 state = AndroidVisualTransactionState.Rendering,
@@ -890,12 +894,13 @@ class CompositionOwnershipTest {
                 ownedNewRevision = newRev,
                 onTransactionComplete = { rev, key ->
                     returnedRev = rev
-                }
+                    ReturnFromTransactionResult.Accepted
+            }
             )
 
             if (i % 7 == 0L) {
-                val detachedOld = tx.detachOldRevisionForRebase()
-                val detachedNew = tx.takeNewRevisionForRebase()
+                val detachedOld = tx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
+                val detachedNew = detachedNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
                 assertNotNull(detachedOld)
                 assertNotNull(detachedNew)
                 detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
@@ -907,7 +912,7 @@ class CompositionOwnershipTest {
                 tx.complete()
                 assertNotNull(returnedRev)
                 assertFalse(returnedRev!!.isReleased())
-                manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
+                manager.returnFromTransaction(returnedRev!! as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
                 currentRev = returnedRev!!
             }
         }
@@ -949,8 +954,8 @@ class CompositionOwnershipTest {
             ownedNewRevision = newRev
         )
 
-        val takenNewRev = activeTx.takeNewRevisionForRebase()
-        val detachedOldRev = activeTx.detachOldRevisionForRebase()
+        val takenNewRev = takenNewRev = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
+        val detachedOldRev = activeTx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
         activeTx.onTransactionComplete = null
         activeTx.cancel("superseded_by_commit_cancel")
 
@@ -1079,8 +1084,8 @@ class CompositionOwnershipTest {
                         ownedOldRevision = currentRev,
                         ownedNewRevision = currentRev
                     )
-                    val takenNew = fakeActiveTx.takeNewRevisionForRebase()
-                    val detachedOld = fakeActiveTx.detachOldRevisionForRebase()
+                    val takenNew = takenNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
+                    val detachedOld = fakeActiveTx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
                     fakeActiveTx.onTransactionComplete = null
                     fakeActiveTx.cancel("superseded")
                     if (detachedOld != null) {
@@ -1119,7 +1124,7 @@ class CompositionOwnershipTest {
                 manager.setCurrent(nextRev)
                 currentRev = nextRev
             } else {
-                var returnedRev: AndroidCompositionVisualRevision? = null
+                var returnedRev: OwnedVisualRevision? = null
                 val tx = AndroidPlatformVisualTransaction(
                     key = txKey,
                     state = AndroidVisualTransactionState.Rendering,
@@ -1136,12 +1141,13 @@ class CompositionOwnershipTest {
                     ownedNewRevision = newRev,
                     onTransactionComplete = { rev, key ->
                         returnedRev = rev
-                    }
+                        ReturnFromTransactionResult.Accepted
+            }
                 )
 
                 if (i % 7 == 0L) {
-                    val detachedOld = tx.detachOldRevisionForRebase()
-                    val detachedNew = tx.takeNewRevisionForRebase()
+                    val detachedOld = tx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
+                    val detachedNew = detachedNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
                     assertNotNull(detachedOld)
                     assertNotNull(detachedNew)
                     detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
@@ -1153,7 +1159,7 @@ class CompositionOwnershipTest {
                     tx.complete()
                     assertNotNull(returnedRev)
                     assertFalse(returnedRev!!.isReleased())
-                    manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
+                    manager.returnFromTransaction(returnedRev!! as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
                     currentRev = returnedRev!!
                 }
             }
@@ -1190,8 +1196,8 @@ class CompositionOwnershipTest {
             ownedNewRevision = newRev
         )
 
-        val detachedNew = tx1.takeNewRevisionForRebase()
-        val detachedOld = tx1.detachOldRevisionForRebase()
+        val detachedNew = detachedNew = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
+        val detachedOld = tx1.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
         tx1.onTransactionComplete = null
         tx1.cancel("rebased")
 
@@ -1269,7 +1275,7 @@ class CompositionOwnershipTest {
             val newRev = makeRevisionWithFakeResources(i, 2)
             allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
 
-            var returnedRev: AndroidCompositionVisualRevision? = null
+            var returnedRev: OwnedVisualRevision? = null
             val tx = AndroidPlatformVisualTransaction(
                 key = txKey,
                 state = AndroidVisualTransactionState.Rendering,
@@ -1286,13 +1292,14 @@ class CompositionOwnershipTest {
                 ownedNewRevision = newRev,
                 onTransactionComplete = { rev, key ->
                     returnedRev = rev
-                }
+                    ReturnFromTransactionResult.Accepted
+            }
             )
 
             tx.complete()
             assertNotNull(returnedRev)
             assertFalse(returnedRev!!.isReleased())
-            manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
+            manager.returnFromTransaction(returnedRev!! as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
             currentRev = returnedRev
         }
 
@@ -1350,7 +1357,7 @@ class CompositionOwnershipTest {
         val newRev = makeRevisionWithFakeResources(2, 2)
         val genBeforeReturn = manager.getGeneration()
 
-        var returnedRev: AndroidCompositionVisualRevision? = null
+        var returnedRev: OwnedVisualRevision? = null
         val tx = AndroidPlatformVisualTransaction(
             key = 200u,
             state = AndroidVisualTransactionState.Rendering,
@@ -1366,7 +1373,7 @@ class CompositionOwnershipTest {
             ownedOldRevision = takenRev,
             ownedNewRevision = newRev,
             onTransactionComplete = { rev, _ ->
-                returnedRev = rev as? AndroidCompositionVisualRevision
+                returnedRev = rev as? AndroidCompositionVisualRevision as? AndroidCompositionVisualRevision
                 ReturnFromTransactionResult.Accepted
             }
         )
@@ -1375,7 +1382,7 @@ class CompositionOwnershipTest {
         assertNotNull(returnedRev)
         assertFalse(returnedRev!!.isReleased())
 
-        manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, 200u, genBeforeReturn)
+        val lr = returnedRev!!; manager.returnFromTransaction(lr, 200u, genBeforeReturn)
         val currentRev = manager.getCurrent()
         assertNotNull(currentRev)
         assertEquals(2L, currentRev!!.revisionId)
@@ -1477,6 +1484,7 @@ class CompositionOwnershipTest {
             ownedNewRevision = newRev,
             onTransactionComplete = { rev, _ ->
                 completedRev = rev
+                ReturnFromTransactionResult.Accepted
             }
         )
 
