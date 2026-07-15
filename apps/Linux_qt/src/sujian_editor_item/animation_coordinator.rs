@@ -254,10 +254,6 @@ impl LinuxEditorAnimationCoordinator {
                                     new_slice.rebase_from(*fx, *fy, *fo);
                                 }
                             }
-                        } else if let Some(ref sid) = shaping {
-                            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
-                                new_slice.rebase_from(*fx, *fy, *fo);
-                            }
                         }
                     }
 
@@ -448,10 +444,6 @@ impl LinuxEditorAnimationCoordinator {
                             }) {
                                 new_slice.rebase_from(*fx, *fy, *fo);
                             }
-                        }
-                    } else if let Some(ref sid) = shaping {
-                        if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
-                            new_slice.rebase_from(*fx, *fy, *fo);
                         }
                     }
                 }
@@ -703,10 +695,6 @@ impl LinuxEditorAnimationCoordinator {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
                 }
-            } else if let Some(ref sid) = shaping {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
-                }
             }
         }
 
@@ -953,10 +941,6 @@ impl LinuxEditorAnimationCoordinator {
                     }) {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
-                }
-            } else if let Some(ref sid) = shaping {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
@@ -1479,7 +1463,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rebase_uses_shaping_identity_not_distance() {
+    fn test_rebase_uses_offset_map_and_shaping_identity() {
         let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
         let sid_b = ShapingIdentity { text_content_hash: 2, raw_font_fingerprint: "font_b".to_string(), glyph_indexes_hash: 20, cluster_glyph_count: 2, direction_rtl: false, format_fingerprint: 200 };
 
@@ -1507,15 +1491,25 @@ mod tests {
             ),
         ];
 
-        for (_bs, _be, fx, fy, fo, ref shaping) in &rebase_frames {
-            if let Some(ref sid) = shaping {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
+        let offset_map = OffsetMap::build("old_text_with_padding", "new_text_with_padding");
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
+            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                new_slice.rebase_from(*fx, *fy, *fo);
+            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
+                } else if let Some(ref sid) = shaping {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                        ns.shaping_identity.as_ref() == Some(sid) &&
+                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
+                    }) {
+                        new_slice.rebase_from(*fx, *fy, *fo);
+                    }
                 }
             }
         }
 
-        assert!((slices[0].from_document_rect.x - 100.0).abs() < 0.01);
-        assert!((slices[1].from_document_rect.x - 150.0).abs() < 0.01);
+        assert!((slices[0].from_document_rect.x - 0.0).abs() < 0.01);
+        assert!((slices[1].from_document_rect.x - 0.0).abs() < 0.01);
     }
 }
