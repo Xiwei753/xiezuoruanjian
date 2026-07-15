@@ -19,14 +19,14 @@ data class AndroidCompositionVisualRevision(
     override val revisionId: Long = 0,
     override val sessionId: CompositionSessionId = CompositionSessionId(0),
     val committedText: String,
-    val compositionReplaceRange: HalfOpenRange,
-    val preeditRangeInVirtualText: HalfOpenRange,
+    val compositionReplaceRange: Utf16Range,
+    val preeditRangeInVirtualText: Utf16Range,
     val preeditText: String,
     val virtualText: String,
     val affectedParagraphRange: HalfOpenRange,
     override val lineSnapshots: List<AndroidLineSnapshot>,
     val cursorRect: RectF,
-    val decorationRanges: List<HalfOpenRange>
+    val decorationRanges: List<Utf16Range>
 ) : OwnedVisualRevision {
     override var owner: SnapshotOwner = SnapshotOwner.OwnedBySession(sessionId)
         private set
@@ -123,7 +123,7 @@ data class CommittedVisualRevision(
 }
 
 data class AndroidDecorationSlice(
-    val rangeUtf16: HalfOpenRange,
+    val rangeUtf16: Utf16Range,
     val kind: DecorationKind
 )
 
@@ -257,9 +257,9 @@ class AndroidCompositionManager {
         generation++
     }
 
-    fun buildVirtualText(committedText: String, compositionReplaceRange: HalfOpenRange, preeditText: String): String {
+    fun buildVirtualText(committedText: String, compositionReplaceRange: Utf16Range, preeditText: String): String {
         val start = compositionReplaceRange.start.coerceIn(0, committedText.length)
-        val end = compositionReplaceRange.end.coerceIn(0, committedText.length)
+        val end = compositionReplaceRange.endExclusive.coerceIn(0, committedText.length)
         return committedText.substring(0, start) + preeditText + committedText.substring(end)
     }
 }
