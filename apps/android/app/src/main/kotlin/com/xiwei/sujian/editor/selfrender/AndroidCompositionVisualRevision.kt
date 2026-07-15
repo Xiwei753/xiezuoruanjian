@@ -146,6 +146,13 @@ class AndroidCompositionManager {
         return TakeCurrentResult.Success(rev)
     }
 
+    fun reassignActiveTransactionKey(newTransactionKey: ULong) {
+        check(takenByTransactionKey != null) {
+            "reassignActiveTransactionKey: no active transaction to reassign"
+        }
+        takenByTransactionKey = newTransactionKey
+    }
+
     fun returnFromTransaction(revision: AndroidCompositionVisualRevision, transactionKey: ULong, expectedGeneration: Long) {
         if (expectedGeneration != generation) {
             return

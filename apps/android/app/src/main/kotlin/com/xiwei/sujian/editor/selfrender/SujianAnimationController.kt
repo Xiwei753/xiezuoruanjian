@@ -1365,6 +1365,7 @@ class SujianAnimationController(
                     activeTx.onTransactionComplete = null
                     activeTx.cancel("superseded_by_composition_update")
                 }
+                compositionManager.reassignActiveTransactionKey(txKey)
             }
             is TakeCurrentResult.NoRevisionAvailable -> {
             }

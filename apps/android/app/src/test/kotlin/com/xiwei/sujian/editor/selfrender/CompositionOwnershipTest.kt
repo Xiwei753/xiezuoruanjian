@@ -1376,6 +1376,97 @@ class CompositionOwnershipTest {
         val takeResult = manager.takeCurrentForTransactionTyped(100u)
         assertTrue(takeResult is TakeCurrentResult.NoRevisionAvailable)
     }
+
+    @Test
+    fun reassignActiveTransactionKey_allowsReturnFromTransactionAfterTakeover() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+
+        val firstTake = manager.takeCurrentForTransactionTyped(100u)
+        assertTrue(firstTake is TakeCurrentResult.Success)
+        val takenRev = (firstTake as TakeCurrentResult.Success).revision
+
+        val secondTake = manager.takeCurrentForTransactionTyped(200u)
+        assertTrue(secondTake is TakeCurrentResult.RevisionWithActiveTransaction)
+
+        manager.reassignActiveTransactionKey(200u)
+
+        val newRev = makeRevisionWithFakeResources(2, 2)
+        val genBeforeReturn = manager.getGeneration()
+
+        var returnedRev: AndroidCompositionVisualRevision? = null
+        val tx = AndroidPlatformVisualTransaction(
+            key = 200u,
+            state = AndroidVisualTransactionState.Rendering,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 1,
+            newRevision = 2,
+            slices = mutableListOf(),
+            oldLineSnapshots = mutableListOf(),
+            newLineSnapshots = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = takenRev,
+            ownedNewRevision = newRev,
+            onTransactionComplete = { rev, _ ->
+                returnedRev = rev
+            }
+        )
+
+        tx.complete()
+        assertNotNull(returnedRev)
+        assertFalse(returnedRev!!.isReleased())
+
+        manager.returnFromTransaction(returnedRev, 200u, genBeforeReturn)
+        val currentRev = manager.getCurrent()
+        assertNotNull(currentRev)
+        assertEquals(2L, currentRev!!.revisionId)
+        assertFalse(currentRev.isReleased())
+    }
+
+    @Test
+    fun reassignActiveTransactionKey_withoutReassign_returnFromTransactionFails() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+
+        val firstTake = manager.takeCurrentForTransactionTyped(100u)
+        assertTrue(firstTake is TakeCurrentResult.Success)
+
+        val secondTake = manager.takeCurrentForTransactionTyped(200u)
+        assertTrue(secondTake is TakeCurrentResult.RevisionWithActiveTransaction)
+
+        val genBeforeReturn = manager.getGeneration()
+        val newRev = makeRevisionWithFakeResources(2, 2)
+
+        manager.returnFromTransaction(newRev, 200u, genBeforeReturn)
+
+        assertNull(manager.getCurrent())
+        assertEquals(100u, manager.getActiveTransactionKey())
+    }
+
+    @Test
+    fun reassignActiveTransactionKey_staleTransactionKeyCleared() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+
+        val firstTake = manager.takeCurrentForTransactionTyped(100u)
+        assertTrue(firstTake is TakeCurrentResult.Success)
+
+        val secondTake = manager.takeCurrentForTransactionTyped(200u)
+        assertTrue(secondTake is TakeCurrentResult.RevisionWithActiveTransaction)
+
+        manager.reassignActiveTransactionKey(200u)
+        assertEquals(200u, manager.getActiveTransactionKey())
+
+        val newRev = makeRevisionWithFakeResources(2, 2)
+        manager.returnFromTransaction(newRev, 200u, manager.getGeneration())
+
+        assertNull(manager.getActiveTransactionKey())
+        assertNotNull(manager.getCurrent())
+    }
 }
 
 class CompositionSessionTest {
