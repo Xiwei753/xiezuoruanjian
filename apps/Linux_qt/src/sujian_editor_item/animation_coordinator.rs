@@ -81,7 +81,8 @@ fn match_rebase_frames(
                     .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
                     .min_by_key(|(idx, ns)| {
                         let candidate_center = (ns.byte_start + ns.byte_end) as i64 / 2;
-                        (candidate_center - mapped_center).abs()
+                        let abs_dist = (candidate_center - mapped_center).abs();
+                        (abs_dist, ns.byte_start, *idx)
                     });
                 if let Some((idx, new_slice)) = best {
                     new_slice.rebase_from(*fx, *fy, *fo);
@@ -1711,5 +1712,106 @@ mod tests {
 
         assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
             "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}", slices[0].from_document_rect.x);
+    }
+
+    #[test]
+    fn test_rebase_tier3_consumed_prevents_reuse() {
+        use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
+        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
+            (10, 30, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 11, 15,
+                Some(sid_dup.clone()),
+            ),
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 2),
+                LineSnapshotId::new(1, 0, 1),
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 18, 22,
+                Some(sid_dup.clone()),
+            ),
+        ];
+
+        let offset_map = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                length: 200,
+                kind: OffsetMapKind::Identity,
+            }],
+        };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+
+        let mapped_center = 20i64;
+        let center_0 = (11 + 15) as i64 / 2;
+        let center_1 = (18 + 22) as i64 / 2;
+        let dist_0 = (center_0 - mapped_center).abs();
+        let dist_1 = (center_1 - mapped_center).abs();
+        assert!(dist_1 < dist_0, "test setup: slice 1 should be closer");
+        assert!((slices[1].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 1 should get first rebase frame (x=10.0), got x={}", slices[1].from_document_rect.x);
+        assert!((slices[0].from_document_rect.x - 20.0).abs() < 0.01,
+            "slice 0 should get second rebase frame (x=20.0), not reuse slice 1's frame, got x={}", slices[0].from_document_rect.x);
+    }
+
+    #[test]
+    fn test_rebase_tier3_tiebreak_by_byte_start_then_index() {
+        use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
+        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 11, 15,
+                Some(sid_dup.clone()),
+            ),
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 2),
+                LineSnapshotId::new(1, 0, 1),
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 25, 29,
+                Some(sid_dup.clone()),
+            ),
+        ];
+
+        let offset_map = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                length: 200,
+                kind: OffsetMapKind::Identity,
+            }],
+        };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+
+        let mapped_center = 20i64;
+        let center_0 = (11 + 15) as i64 / 2;
+        let center_1 = (25 + 29) as i64 / 2;
+        let dist_0 = (center_0 - mapped_center).abs();
+        let dist_1 = (center_1 - mapped_center).abs();
+        assert_eq!(dist_0, dist_1, "test setup: both slices should have equal distance");
+        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 (lower byte_start) should win tiebreak, got x={}", slices[0].from_document_rect.x);
+        assert!((slices[1].from_document_rect.x - 0.0).abs() < 0.01,
+            "slice 1 should not be matched, got x={}", slices[1].from_document_rect.x);
     }
 }
