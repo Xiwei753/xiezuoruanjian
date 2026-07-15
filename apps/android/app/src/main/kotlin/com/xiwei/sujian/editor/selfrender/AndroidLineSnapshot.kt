@@ -53,6 +53,8 @@ data class AndroidLineSnapshot(
     val visualResource: AndroidLineVisualResource?
 ) {
     private var released = false
+    var ownerRevisionId: Long = revision
+        private set
 
     fun release() {
         check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
@@ -61,4 +63,9 @@ data class AndroidLineSnapshot(
     }
 
     fun isReleased(): Boolean = released
+
+    fun transferToRevision(newRevisionId: Long) {
+        check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        ownerRevisionId = newRevisionId
+    }
 }

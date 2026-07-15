@@ -129,14 +129,14 @@ class CompositionOwnershipTest {
         assertEquals(100u, manager.getActiveTransactionKey())
     }
 
-    @Test(expected = IllegalStateException::class)
-    fun takeCurrentForTransaction_throwsOnIllegalDoubleTake() {
+    @Test
+    fun takeCurrentForTransaction_consecutivePreeditReturnsNullWhenRevisionWithActiveTransaction() {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
         manager.takeCurrentForTransaction(100u)
-        val rev2 = makeRevision(2)
-        manager.setCurrent(rev2)
-        manager.takeCurrentForTransaction(101u)
+
+        val result = manager.takeCurrentForTransaction(101u)
+        assertNull(result)
     }
 
     @Test
@@ -692,17 +692,16 @@ class CompositionOwnershipTest {
     }
 
     @Test
-    fun returnFromTransaction_wrongTransactionKey_throws() {
+    fun returnFromTransaction_wrongTransactionKey_ignored() {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
         manager.takeCurrentForTransaction(100u)
 
         val rev2 = makeRevision(2)
-        try {
-            manager.returnFromTransaction(rev2, 999u)
-            fail("Expected IllegalStateException for wrong transactionKey")
-        } catch (_: IllegalStateException) {
-        }
+        manager.returnFromTransaction(rev2, 999u)
+
+        assertNull(manager.getCurrent())
+        assertEquals(100u, manager.getActiveTransactionKey())
     }
 
     @Test

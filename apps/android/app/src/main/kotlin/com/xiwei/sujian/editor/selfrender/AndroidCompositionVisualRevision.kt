@@ -30,6 +30,7 @@ data class AndroidCompositionVisualRevision(
             "transferToTransaction: revision $revisionId owner is $owner, expected OwnedBySession"
         }
         owner = SnapshotOwner.OwnedByTransaction(transactionKey)
+        lineSnapshots.forEach { it.transferToRevision(revisionId) }
     }
 
     fun reassignToTransaction(newTransactionKey: ULong) {
@@ -37,6 +38,7 @@ data class AndroidCompositionVisualRevision(
             "reassignToTransaction: revision $revisionId owner is $owner, expected OwnedByTransaction"
         }
         owner = SnapshotOwner.OwnedByTransaction(newTransactionKey)
+        lineSnapshots.forEach { it.transferToRevision(revisionId) }
     }
 
     fun transferToSession(sessionId: CompositionSessionId) {
@@ -44,6 +46,7 @@ data class AndroidCompositionVisualRevision(
             "transferToSession: revision $revisionId owner is $owner, expected OwnedByTransaction"
         }
         owner = SnapshotOwner.OwnedBySession(sessionId)
+        lineSnapshots.forEach { it.transferToRevision(revisionId) }
     }
 
     fun isReleased(): Boolean = owner is SnapshotOwner.Released

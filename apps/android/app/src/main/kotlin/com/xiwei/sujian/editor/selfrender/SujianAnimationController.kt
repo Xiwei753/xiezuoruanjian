@@ -1721,7 +1721,7 @@ class SujianAnimationController(
                         if (effectiveOldClusters == null || effectiveNewClusters == null) {
                             false
                         } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
-                            lineStart < lineEnd
+                            false
                         } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
                             false
                         } else {
@@ -2164,7 +2164,7 @@ class SujianAnimationController(
                         if (effectiveOldClusters == null || effectiveNewClusters == null) {
                             false
                         } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
-                            lineStart < lineEnd
+                            false
                         } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
                             false
                         } else {

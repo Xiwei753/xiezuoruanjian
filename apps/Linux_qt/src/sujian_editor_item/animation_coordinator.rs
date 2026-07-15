@@ -148,6 +148,7 @@ impl LinuxEditorAnimationCoordinator {
                     }
 
                     let reflow_start = range_end;
+                    let insert_reflow_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                     for new_line in &new_snapshot.line_snapshots {
                         if new_line.byte_end <= range_end {
                             continue;
@@ -156,7 +157,17 @@ impl LinuxEditorAnimationCoordinator {
                             continue;
                         }
 
-                        let old_line = old_snapshot.line_for_byte(new_line.byte_start.saturating_sub(range_end - range_start));
+                        let old_line = {
+                            let mapped_old_byte_start = insert_reflow_offset_map.map_new_to_old(new_line.byte_start);
+                            let mapped_old_byte_end = insert_reflow_offset_map.map_new_to_old(new_line.byte_end);
+                            if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                                old_snapshot.line_for_byte_range(mobs, mobe).cloned()
+                            } else if let Some(mobs) = mapped_old_byte_start {
+                                old_snapshot.line_for_byte(mobs).cloned()
+                            } else {
+                                None
+                            }
+                        };
                         if let Some(ol) = old_line {
                             let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                             let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
@@ -228,22 +239,13 @@ impl LinuxEditorAnimationCoordinator {
                         CursorTransition::Snap
                     };
 
-                    for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
+                    let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                    for (bs, be, fx, fy, fo, _) in &rebase_frames {
                         if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                             new_slice.rebase_from(*fx, *fy, *fo);
-                        } else if let Some(range_start) = vt.inserted_range.map(|(s, _)| s) {
-                            let byte_shift = range_start as i64 - *bs as i64;
-                            let mapped_bs = (*bs as i64 + byte_shift) as usize;
-                            let mapped_be = (*be as i64 + byte_shift) as usize;
-                            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mapped_bs && ns.byte_end == mapped_be) {
+                        } else if let (Some(mbs), Some(mbe)) = (insert_offset_map.map_old_to_new(*bs), insert_offset_map.map_old_to_new(*be)) {
+                            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                                 new_slice.rebase_from(*fx, *fy, *fo);
-                            } else if let Some(ref old_shaping) = shaping {
-                                if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                                    ns.byte_start >= mapped_bs && ns.byte_end <= mapped_be &&
-                                    ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
-                                }) {
-                                    new_slice.rebase_from(*fx, *fy, *fo);
-                                }
                             }
                         }
                     }
@@ -337,23 +339,19 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                let sorted_deleted_ranges: Vec<(usize, usize)> = {
-                    let mut r = deleted_ranges.clone();
-                    r.sort_by_key(|(s, _)| *s);
-                    r
-                };
-                let deleted_len_before = |new_byte: usize| -> usize {
-                    let mut offset = 0usize;
-                    for (ds, de) in &sorted_deleted_ranges {
-                        if *ds <= new_byte + offset {
-                            offset += de - ds;
-                        }
-                    }
-                    offset
-                };
+                let delete_reflow_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                 for new_line in &new_snapshot.line_snapshots {
-                    let old_byte_start = new_line.byte_start + deleted_len_before(new_line.byte_start);
-                    let old_line = old_snapshot.line_for_byte(old_byte_start);
+                    let old_line = {
+                        let mapped_old_byte_start = delete_reflow_offset_map.map_new_to_old(new_line.byte_start);
+                        let mapped_old_byte_end = delete_reflow_offset_map.map_new_to_old(new_line.byte_end);
+                        if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                            old_snapshot.line_for_byte_range(mobs, mobe).cloned()
+                        } else if let Some(mobs) = mapped_old_byte_start {
+                            old_snapshot.line_for_byte(mobs).cloned()
+                        } else {
+                            None
+                        }
+                    };
                     if let Some(ol) = old_line {
                         let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                         let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
@@ -425,22 +423,13 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Snap
                 };
 
-                for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
+                let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                for (bs, be, fx, fy, fo, _) in &rebase_frames {
                     if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                         new_slice.rebase_from(*fx, *fy, *fo);
-                    } else {
-                        let del_len = deleted_ranges.iter().filter(|(ds, de)| *de <= *bs).map(|(ds, de)| de - ds).sum::<usize>();
-                        let mapped_bs = *bs - del_len;
-                        let mapped_be = *be - del_len;
-                        if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mapped_bs && ns.byte_end == mapped_be) {
+                    } else if let (Some(mbs), Some(mbe)) = (delete_offset_map.map_old_to_new(*bs), delete_offset_map.map_old_to_new(*be)) {
+                        if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                             new_slice.rebase_from(*fx, *fy, *fo);
-                        } else if let Some(ref old_shaping) = shaping {
-                            if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                                ns.byte_start >= mapped_bs && ns.byte_end <= mapped_be &&
-                                ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
-                            }) {
-                                new_slice.rebase_from(*fx, *fy, *fo);
-                            }
                         }
                     }
                 }
@@ -615,15 +604,7 @@ impl LinuxEditorAnimationCoordinator {
                 } else {
                     None
                 };
-                offset_matched.or_else(|| {
-                    let old_comp_end = old_snapshot.line_snapshots.iter()
-                        .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
-                        .next()
-                        .unwrap_or(composition_byte_end as i64);
-                    let byte_shift = old_comp_end - composition_byte_end as i64;
-                    let mapped_byte = new_line.byte_start as i64 + byte_shift;
-                    if mapped_byte >= 0 { old_snapshot.line_for_byte(mapped_byte as usize).cloned() } else { None }
-                })
+                offset_matched
             };
             if let Some(ol) = old_line {
                 let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
@@ -686,23 +667,12 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
+        for (bs, be, fx, fy, fo, _) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
-            } else {
-                let mapped_bs = offset_map.map_old_to_new(*bs);
-                let mapped_be = offset_map.map_old_to_new(*be);
-                if let (Some(mbs), Some(mbe)) = (mapped_bs, mapped_be) {
-                    if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                        new_slice.rebase_from(*fx, *fy, *fo);
-                    } else if let Some(ref old_shaping) = shaping {
-                        if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                            ns.byte_start >= mbs && ns.byte_end <= mbe &&
-                            ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
-                        }) {
-                            new_slice.rebase_from(*fx, *fy, *fo);
-                        }
-                    }
+            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
@@ -850,15 +820,7 @@ impl LinuxEditorAnimationCoordinator {
                     } else {
                         None
                     };
-                    offset_matched.or_else(|| {
-                        let old_comp_end = old_snapshot.line_snapshots.iter()
-                            .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
-                            .next()
-                            .unwrap_or(composition_byte_end as i64);
-                        let byte_shift = old_comp_end - composition_byte_end as i64;
-                        let mapped_byte = new_line.byte_start as i64 + byte_shift;
-                        if mapped_byte >= 0 { old_snapshot.line_for_byte(mapped_byte as usize).cloned() } else { None }
-                    })
+                    offset_matched
                 };
                 if let Some(ol) = old_line {
                     let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
@@ -945,23 +907,12 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
+        for (bs, be, fx, fy, fo, _) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
-            } else {
-                let mapped_bs = offset_map.map_old_to_new(*bs);
-                let mapped_be = offset_map.map_old_to_new(*be);
-                if let (Some(mbs), Some(mbe)) = (mapped_bs, mapped_be) {
-                    if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                        new_slice.rebase_from(*fx, *fy, *fo);
-                    } else if let Some(ref old_shaping) = shaping {
-                        if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                            ns.byte_start >= mbs && ns.byte_end <= mbe &&
-                            ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
-                        }) {
-                            new_slice.rebase_from(*fx, *fy, *fo);
-                        }
-                    }
+            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
