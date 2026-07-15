@@ -162,6 +162,7 @@ class SujianEditorRenderer(
             }
             if (detachedNewRevision != null && (tx.operationKind == AndroidVisualOperationKind.CompositionUpdate || tx.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel)) {
                 val previousOldRevision = tx.ownedOldRevision
+                detachedNewRevision.reassignToTransaction(tx.key)
                 tx.ownedOldRevision = detachedNewRevision
                 if (previousOldRevision != null) {
                     previousOldRevision.release(previousOldRevision.owner)

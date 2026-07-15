@@ -104,10 +104,10 @@ data class AndroidPlatformVisualTransaction(
             operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel
         if (!isComposition) {
             for (snap in oldLineSnapshots) {
-                snap.release()
+                if (!snap.isReleased()) snap.release()
             }
             for (snap in newLineSnapshots) {
-                snap.release()
+                if (!snap.isReleased()) snap.release()
             }
         }
         oldLineSnapshots.clear()
@@ -137,10 +137,10 @@ data class AndroidPlatformVisualTransaction(
             operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel
         if (!isComposition) {
             for (snap in oldLineSnapshots) {
-                snap.release()
+                if (!snap.isReleased()) snap.release()
             }
             for (snap in newLineSnapshots) {
-                snap.release()
+                if (!snap.isReleased()) snap.release()
             }
         }
         oldLineSnapshots.clear()

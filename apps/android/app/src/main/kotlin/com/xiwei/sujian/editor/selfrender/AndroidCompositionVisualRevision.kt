@@ -22,7 +22,7 @@ data class AndroidCompositionVisualRevision(
         check(owner !is SnapshotOwner.Released) { "Double release of revision $revisionId by $releaser, already Released" }
         check(owner == releaser) { "Illegal release of revision $revisionId by $releaser, owner is $owner" }
         owner = SnapshotOwner.Released
-        lineSnapshots.forEach { it.release() }
+        lineSnapshots.forEach { it.release(releaser) }
     }
 
     fun transferToTransaction(transactionKey: ULong) {
@@ -30,7 +30,10 @@ data class AndroidCompositionVisualRevision(
             "transferToTransaction: revision $revisionId owner is $owner, expected OwnedBySession"
         }
         owner = SnapshotOwner.OwnedByTransaction(transactionKey)
-        lineSnapshots.forEach { it.transferToRevision(revisionId) }
+        lineSnapshots.forEach {
+            it.transferToRevision(revisionId)
+            it.transferToTransaction(transactionKey)
+        }
     }
 
     fun reassignToTransaction(newTransactionKey: ULong) {
@@ -38,7 +41,10 @@ data class AndroidCompositionVisualRevision(
             "reassignToTransaction: revision $revisionId owner is $owner, expected OwnedByTransaction"
         }
         owner = SnapshotOwner.OwnedByTransaction(newTransactionKey)
-        lineSnapshots.forEach { it.transferToRevision(revisionId) }
+        lineSnapshots.forEach {
+            it.transferToRevision(revisionId)
+            it.transferToTransaction(newTransactionKey)
+        }
     }
 
     fun transferToSession(sessionId: CompositionSessionId) {
@@ -46,7 +52,10 @@ data class AndroidCompositionVisualRevision(
             "transferToSession: revision $revisionId owner is $owner, expected OwnedByTransaction"
         }
         owner = SnapshotOwner.OwnedBySession(sessionId)
-        lineSnapshots.forEach { it.transferToRevision(revisionId) }
+        lineSnapshots.forEach {
+            it.transferToRevision(revisionId)
+            it.transferToSession()
+        }
     }
 
     fun isReleased(): Boolean = owner is SnapshotOwner.Released
@@ -67,18 +76,27 @@ sealed class SnapshotOwner {
     object Released : SnapshotOwner()
 }
 
+sealed class TakeCurrentResult {
+    data class Success(val revision: AndroidCompositionVisualRevision) : TakeCurrentResult()
+    object NoRevisionAvailable : TakeCurrentResult()
+    data class RevisionWithActiveTransaction(val activeTransactionKey: ULong) : TakeCurrentResult()
+}
+
 class AndroidCompositionManager {
     private val TAG = "CompositionManager"
     private var currentRevision: AndroidCompositionVisualRevision? = null
     private var takenByTransactionKey: ULong? = null
+    private var generation: Long = 0
 
     fun setCurrent(revision: AndroidCompositionVisualRevision?) {
         val oldCurrent = currentRevision
         currentRevision = if (revision != null) {
             takenByTransactionKey = null
+            generation++
             revision
         } else {
             takenByTransactionKey = null
+            generation++
             null
         }
 
@@ -89,7 +107,14 @@ class AndroidCompositionManager {
 
     fun getCurrent(): AndroidCompositionVisualRevision? = currentRevision
 
+    fun getActiveTransactionKey(): ULong? = takenByTransactionKey
+
+    fun getGeneration(): Long = generation
+
     fun takeCurrentForTransaction(transactionKey: ULong): AndroidCompositionVisualRevision? {
+        if (currentRevision == null && takenByTransactionKey != null) {
+            return null
+        }
         if (currentRevision != null && takenByTransactionKey != null) {
             throw IllegalStateException("takeCurrentForTransaction: illegal double take, already taken by $takenByTransactionKey, new request $transactionKey")
         }
@@ -103,9 +128,27 @@ class AndroidCompositionManager {
         return rev
     }
 
-    fun getActiveTransactionKey(): ULong? = takenByTransactionKey
+    fun takeCurrentForTransactionTyped(transactionKey: ULong): TakeCurrentResult {
+        if (currentRevision == null && takenByTransactionKey != null) {
+            return TakeCurrentResult.RevisionWithActiveTransaction(takenByTransactionKey!!)
+        }
+        if (currentRevision != null && takenByTransactionKey != null) {
+            throw IllegalStateException("takeCurrentForTransaction: illegal double take, already taken by $takenByTransactionKey, new request $transactionKey")
+        }
+        val rev = currentRevision ?: return TakeCurrentResult.NoRevisionAvailable
+        check(rev.owner is SnapshotOwner.OwnedBySession) {
+            "takeCurrentForTransaction: current revision ${rev.revisionId} owner is ${rev.owner}, expected OwnedBySession"
+        }
+        rev.transferToTransaction(transactionKey)
+        takenByTransactionKey = transactionKey
+        currentRevision = null
+        return TakeCurrentResult.Success(rev)
+    }
 
-    fun returnFromTransaction(revision: AndroidCompositionVisualRevision, transactionKey: ULong) {
+    fun returnFromTransaction(revision: AndroidCompositionVisualRevision, transactionKey: ULong, expectedGeneration: Long) {
+        if (expectedGeneration != generation) {
+            return
+        }
         if (takenByTransactionKey != transactionKey) {
             return
         }
@@ -115,6 +158,7 @@ class AndroidCompositionManager {
         revision.transferToSession(revision.sessionId)
         currentRevision = revision
         takenByTransactionKey = null
+        generation++
     }
 
     fun clear() {
@@ -123,6 +167,7 @@ class AndroidCompositionManager {
         }
         currentRevision = null
         takenByTransactionKey = null
+        generation++
     }
 
     fun buildVirtualText(committedText: String, compositionReplaceRange: IntRange, preeditText: String): String {

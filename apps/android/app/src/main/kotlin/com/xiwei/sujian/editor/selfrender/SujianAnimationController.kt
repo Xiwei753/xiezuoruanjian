@@ -1344,6 +1344,7 @@ class SujianAnimationController(
         }
 
         val txKey = nextAnimationId()
+        val managerGeneration = compositionManager.getGeneration()
 
         var prevCompositionRevision = compositionManager.takeCurrentForTransaction(txKey)
         var prevRevisionFromActiveTransaction = false
@@ -1591,7 +1592,7 @@ class SujianAnimationController(
             ownedOldRevision = prevCompositionRevision,
             ownedNewRevision = compositionRevision,
             onTransactionComplete = { newRev, completedTxKey ->
-                compositionManager.returnFromTransaction(newRev, completedTxKey)
+                compositionManager.returnFromTransaction(newRev, completedTxKey, managerGeneration)
             }
         )
 
@@ -1707,45 +1708,45 @@ class SujianAnimationController(
                                 c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                             }
                         } else null
-                        val probeNewClusters: List<ClusterStabilityInfo>? = if (newLineSnap == null) {
-                            snapshotBuilder.buildLineLayoutProbes(virtualText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
-                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
-                            }
-                        } else null
-                        val effectiveOldClusters: List<ClusterStabilityInfo>? = oldLineSnap?.clusters?.filter { c ->
-                            c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
-                        } ?: probeOldClusters
-                        val effectiveNewClusters: List<ClusterStabilityInfo>? = newLineSnap?.clusters?.filter { c ->
-                            c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
-                        } ?: probeNewClusters
-                        if (effectiveOldClusters == null || effectiveNewClusters == null) {
-                            false
-                        } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
-                            false
-                        } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
-                            false
-                        } else {
-                            effectiveNewClusters.zip(effectiveOldClusters).all { (nc, oc) ->
-                                nc.shapingIdentity == oc.shapingIdentity &&
-                                nc.textDirection == oc.textDirection &&
-                                nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
-                            }
-                        }
-                    }
-                }
-            } else {
-                false
-            }
+                         val probeNewClusters: List<ClusterStabilityInfo>? = if (newLineSnap == null) {
+                             snapshotBuilder.buildLineLayoutProbes(virtualText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
+                                 c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                             }
+                         } else null
+                         val effectiveOldClusters: List<ClusterStabilityInfo>? = oldLineSnap?.clusters?.filter { c ->
+                             c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
+                         } ?: probeOldClusters
+                         val effectiveNewClusters: List<ClusterStabilityInfo>? = newLineSnap?.clusters?.filter { c ->
+                             c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                         } ?: probeNewClusters
+                         if (effectiveOldClusters == null || effectiveNewClusters == null) {
+                             false
+                         } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
+                             true
+                         } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
+                             false
+                         } else {
+                             effectiveNewClusters.zip(effectiveOldClusters).all { (nc, oc) ->
+                                 nc.shapingIdentity == oc.shapingIdentity &&
+                                 nc.textDirection == oc.textDirection &&
+                                 nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
+                             }
+                         }
+                     }
+                 }
+             } else {
+                 false
+             }
 
-            if (isStable) {
-                stableConsecutive++
-            } else {
-                stableConsecutive = 0
-            }
-            candidateEnd++
-        }
+             if (isStable) {
+                 stableConsecutive++
+             } else {
+                 stableConsecutive = 0
+             }
+             candidateEnd++
+         }
 
-        if (stableConsecutive >= stableConsecutiveNeeded) {
+         if (stableConsecutive >= stableConsecutiveNeeded) {
             return (candidateEnd - stableConsecutiveNeeded + 1).coerceAtLeast(affectedStartLine)
         }
         return affectedParagraphEndLine.coerceAtMost(lastLine).coerceAtLeast(affectedStartLine)
@@ -1759,6 +1760,7 @@ class SujianAnimationController(
         candidateUtf16EndExclusive: Int = 0
     ): TextAnimationStartResult {
         val txKey = nextAnimationId()
+        val managerGeneration = compositionManager.getGeneration()
         var prevRevision = compositionManager.takeCurrentForTransaction(txKey)
         var prevRevisionFromActiveTransaction = false
         var activeCompositionTx: AndroidPlatformVisualTransaction? = null
@@ -2150,46 +2152,46 @@ class SujianAnimationController(
                                 c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                             }
                         } else null
-                        val probeNewClusters: List<ClusterStabilityInfo>? = if (newLineSnap == null) {
-                            snapshotBuilder.buildLineLayoutProbes(newText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
-                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
-                            }
-                        } else null
-                        val effectiveOldClusters: List<ClusterStabilityInfo>? = oldLineSnap?.clusters?.filter { c ->
-                            c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
-                        } ?: probeOldClusters
-                        val effectiveNewClusters: List<ClusterStabilityInfo>? = newLineSnap?.clusters?.filter { c ->
-                            c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
-                        } ?: probeNewClusters
-                        if (effectiveOldClusters == null || effectiveNewClusters == null) {
-                            false
-                        } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
-                            false
-                        } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
-                            false
-                        } else {
-                            effectiveNewClusters.zip(effectiveOldClusters).all { (nc, oc) ->
-                                nc.shapingIdentity == oc.shapingIdentity &&
-                                nc.textDirection == oc.textDirection &&
-                                nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
-                            }
-                        }
-                    }
-                }
-            } else {
-                false
-            }
+                         val probeNewClusters: List<ClusterStabilityInfo>? = if (newLineSnap == null) {
+                             snapshotBuilder.buildLineLayoutProbes(newText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
+                                 c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                             }
+                         } else null
+                         val effectiveOldClusters: List<ClusterStabilityInfo>? = oldLineSnap?.clusters?.filter { c ->
+                             c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
+                         } ?: probeOldClusters
+                         val effectiveNewClusters: List<ClusterStabilityInfo>? = newLineSnap?.clusters?.filter { c ->
+                             c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                         } ?: probeNewClusters
+                         if (effectiveOldClusters == null || effectiveNewClusters == null) {
+                             false
+                         } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
+                             true
+                         } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
+                             false
+                         } else {
+                             effectiveNewClusters.zip(effectiveOldClusters).all { (nc, oc) ->
+                                 nc.shapingIdentity == oc.shapingIdentity &&
+                                 nc.textDirection == oc.textDirection &&
+                                 nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
+                             }
+                         }
+                     }
+                 }
+             } else {
+                 false
+             }
 
-            if (isStable) {
-                stableConsecutive++
-            } else {
-                stableConsecutive = 0
-            }
-            candidateEnd++
-        }
+             if (isStable) {
+                 stableConsecutive++
+             } else {
+                 stableConsecutive = 0
+             }
+             candidateEnd++
+         }
 
-        if (stableConsecutive >= stableConsecutiveNeeded) {
-            return (candidateEnd - stableConsecutiveNeeded + 1).coerceAtLeast(preeditEndLine)
+         if (stableConsecutive >= stableConsecutiveNeeded) {
+             return (candidateEnd - stableConsecutiveNeeded + 1).coerceAtLeast(preeditEndLine)
         }
         return affectedParagraphEndLine.coerceAtMost(lastLine).coerceAtLeast(preeditEndLine)
     }

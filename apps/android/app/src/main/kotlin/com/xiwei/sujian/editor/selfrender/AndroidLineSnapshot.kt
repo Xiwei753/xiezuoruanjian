@@ -55,6 +55,29 @@ data class AndroidLineSnapshot(
     private var released = false
     var ownerRevisionId: Long = revision
         private set
+    var ownerTransactionKey: ULong? = null
+        private set
+
+    fun release(releaser: SnapshotOwner) {
+        check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        when (releaser) {
+            is SnapshotOwner.OwnedBySession -> {
+                check(ownerRevisionId == revision && ownerTransactionKey == null) {
+                    "Illegal release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by session ${releaser.sessionId}, owner is revision=$ownerRevisionId tx=$ownerTransactionKey"
+                }
+            }
+            is SnapshotOwner.OwnedByTransaction -> {
+                check(ownerTransactionKey == releaser.transactionKey || ownerRevisionId == revision) {
+                    "Illegal release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by tx ${releaser.transactionKey}, owner is revision=$ownerRevisionId tx=$ownerTransactionKey"
+                }
+            }
+            is SnapshotOwner.Released -> {
+                throw IllegalStateException("Cannot release AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} with Released owner")
+            }
+        }
+        released = true
+        visualResource?.release()
+    }
 
     fun release() {
         check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
@@ -67,5 +90,15 @@ data class AndroidLineSnapshot(
     fun transferToRevision(newRevisionId: Long) {
         check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
         ownerRevisionId = newRevisionId
+    }
+
+    fun transferToTransaction(transactionKey: ULong) {
+        check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        ownerTransactionKey = transactionKey
+    }
+
+    fun transferToSession() {
+        check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        ownerTransactionKey = null
     }
 }

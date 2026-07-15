@@ -130,6 +130,33 @@ class CompositionOwnershipTest {
     }
 
     @Test
+    fun takeCurrentForTransactionTyped_returnsRevisionWithActiveTransaction() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+        manager.takeCurrentForTransaction(100u)
+
+        val result = manager.takeCurrentForTransactionTyped(101u)
+        assertTrue(result is TakeCurrentResult.RevisionWithActiveTransaction)
+        assertEquals(100u, (result as TakeCurrentResult.RevisionWithActiveTransaction).activeTransactionKey)
+    }
+
+    @Test
+    fun takeCurrentForTransactionTyped_returnsNoRevisionWhenEmpty() {
+        val result = manager.takeCurrentForTransactionTyped(100u)
+        assertTrue(result is TakeCurrentResult.NoRevisionAvailable)
+    }
+
+    @Test
+    fun takeCurrentForTransactionTyped_returnsSuccessWhenAvailable() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+
+        val result = manager.takeCurrentForTransactionTyped(100u)
+        assertTrue(result is TakeCurrentResult.Success)
+        assertEquals(1L, (result as TakeCurrentResult.Success).revision.revisionId)
+    }
+
+    @Test
     fun takeCurrentForTransaction_consecutivePreeditReturnsNullWhenRevisionWithActiveTransaction() {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
@@ -237,7 +264,8 @@ class CompositionOwnershipTest {
         assertNotNull(taken)
 
         val rev2 = makeRevision(2)
-        manager.returnFromTransaction(rev2, 100u)
+        val gen = manager.getGeneration()
+        manager.returnFromTransaction(rev2, 100u, gen)
 
         assertNotNull(manager.getCurrent())
         assertEquals(2L, manager.getCurrent()!!.revisionId)
@@ -250,7 +278,8 @@ class CompositionOwnershipTest {
 
         val taken = manager.takeCurrentForTransaction(100u)
         val rev2 = makeRevision(2)
-        manager.returnFromTransaction(rev2, 100u)
+        val gen = manager.getGeneration()
+        manager.returnFromTransaction(rev2, 100u, gen)
 
         val takenAgain = manager.takeCurrentForTransaction(101u)
         assertNotNull(takenAgain)
@@ -633,7 +662,7 @@ class CompositionOwnershipTest {
             tx.complete()
             assertNotNull(returnedRev)
             assertFalse(returnedRev!!.isReleased())
-            manager.returnFromTransaction(returnedRev, txKey)
+            manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
             currentRev = returnedRev
         }
 
@@ -698,7 +727,7 @@ class CompositionOwnershipTest {
         manager.takeCurrentForTransaction(100u)
 
         val rev2 = makeRevision(2)
-        manager.returnFromTransaction(rev2, 999u)
+        manager.returnFromTransaction(rev2, 999u, manager.getGeneration())
 
         assertNull(manager.getCurrent())
         assertEquals(100u, manager.getActiveTransactionKey())
@@ -750,14 +779,14 @@ class CompositionOwnershipTest {
                 assertNotNull(detachedNew)
                 detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
                 detachedNew!!.transferToSession(sessionId)
-                manager.returnFromTransaction(detachedNew, txKey)
+                manager.returnFromTransaction(detachedNew, txKey, manager.getGeneration())
                 currentRev = detachedNew
                 tx.cancel("rebased")
             } else {
                 tx.complete()
                 assertNotNull(returnedRev)
                 assertFalse(returnedRev!!.isReleased())
-                manager.returnFromTransaction(returnedRev, txKey)
+                manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
                 currentRev = returnedRev!!
             }
         }
@@ -898,14 +927,14 @@ class CompositionOwnershipTest {
                 assertNotNull(detachedNew)
                 detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
                 detachedNew!!.transferToSession(sessionId)
-                manager.returnFromTransaction(detachedNew, txKey)
+                manager.returnFromTransaction(detachedNew, txKey, manager.getGeneration())
                 currentRev = detachedNew
                 tx.cancel("rebased")
             } else {
                 tx.complete()
                 assertNotNull(returnedRev)
                 assertFalse(returnedRev!!.isReleased())
-                manager.returnFromTransaction(returnedRev, txKey)
+                manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
                 currentRev = returnedRev!!
             }
         }
@@ -995,9 +1024,42 @@ class CompositionOwnershipTest {
         val rev2 = makeRevisionWithFakeResources(2, 2)
         rev2.transferToTransaction(999u)
 
-        manager.returnFromTransaction(rev2, 999u)
+        manager.returnFromTransaction(rev2, 999u, manager.getGeneration())
 
         assertNull(manager.getCurrent())
+    }
+
+    @Test
+    fun returnFromTransaction_staleGeneration_ignored() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        manager.takeCurrentForTransaction(100u)
+        val staleGen = manager.getGeneration()
+
+        manager.clear()
+
+        val rev2 = makeRevisionWithFakeResources(2, 2)
+        manager.returnFromTransaction(rev2, 100u, staleGen)
+
+        assertNull(manager.getCurrent())
+    }
+
+    @Test
+    fun returnFromTransaction_afterManagerCleared_doesNotCorruptState() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        manager.takeCurrentForTransaction(100u)
+        val staleGen = manager.getGeneration()
+
+        manager.clear()
+
+        val rev2 = makeRevisionWithFakeResources(2, 2)
+        manager.setCurrent(rev2)
+
+        val staleRev = makeRevisionWithFakeResources(3, 2)
+        manager.returnFromTransaction(staleRev, 100u, staleGen)
+
+        assertEquals(2L, manager.getCurrent()!!.revisionId)
     }
 
     @Test
@@ -1121,14 +1183,14 @@ class CompositionOwnershipTest {
                     assertNotNull(detachedNew)
                     detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
                     detachedNew!!.transferToSession(sessionId)
-                    manager.returnFromTransaction(detachedNew, txKey)
+                    manager.returnFromTransaction(detachedNew, txKey, manager.getGeneration())
                     currentRev = detachedNew
                     tx.cancel("rebased")
                 } else {
                     tx.complete()
                     assertNotNull(returnedRev)
                     assertFalse(returnedRev!!.isReleased())
-                    manager.returnFromTransaction(returnedRev, txKey)
+                    manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
                     currentRev = returnedRev!!
                 }
             }
