@@ -195,7 +195,7 @@ class SujianEditorView @JvmOverloads constructor(
             val paragraphEndLine = findParagraphEndLine(oldText, staticLayout, endLine)
             val snapshotEndLine = (endLine + paragraphEndLine).coerceAtMost(staticLayout.lineCount - 1)
             val snapshotStartLine = (startLine - 1).coerceAtLeast(0)
-            snapshotBuilder.buildLineSnapshots(oldText, snapshotStartLine..snapshotEndLine, snapshotBuilder.currentCommittedRevision(), renderer.getTextColor())
+            snapshotBuilder.buildLineSnapshots(oldText, HalfOpenRange(snapshotStartLine, snapshotEndLine + 1), snapshotBuilder.currentCommittedRevision(), renderer.getTextColor())
         } else {
             emptyList()
         }

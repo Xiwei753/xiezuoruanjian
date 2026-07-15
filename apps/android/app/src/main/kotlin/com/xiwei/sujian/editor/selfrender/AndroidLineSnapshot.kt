@@ -68,12 +68,12 @@ data class AndroidLineSnapshot(
 
     fun isReleased(): Boolean = owner is SnapshotOwner.Released
 
-    fun releaseBySessionOwner() {
+    fun releaseBySessionOwner(expectedSessionId: CompositionSessionId = CompositionSessionId(revision)) {
         check(owner !is SnapshotOwner.Released) {
             "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}"
         }
-        check(owner is SnapshotOwner.OwnedBySession) {
-            "releaseBySessionOwner: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession"
+        check(owner == SnapshotOwner.OwnedBySession(expectedSessionId)) {
+            "releaseBySessionOwner: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession($expectedSessionId)"
         }
         owner = SnapshotOwner.Released
         visualResource?.release()
