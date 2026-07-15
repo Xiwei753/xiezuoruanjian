@@ -128,6 +128,8 @@ class SujianEditorRenderer(
         )
         if (conflicting != null) {
             val currentProgress = conflicting.progress
+            val detachedOldRevision = conflicting.detachOldRevisionForRebase()
+            val detachedNewRevision = conflicting.takeNewRevisionForRebase()
             if (currentProgress in 0.01f..0.99f) {
                 for (slice in conflicting.slices) {
                     val frame = slice.computeFrame(currentProgress, 1f - (1f - currentProgress) * (1f - currentProgress))
@@ -157,6 +159,12 @@ class SujianEditorRenderer(
                         tx.durationMs
                     )
                 }
+            }
+            if (detachedNewRevision != null && tx.operationKind == AndroidVisualOperationKind.CompositionUpdate) {
+                tx.ownedOldRevision = detachedNewRevision
+            } else {
+                detachedOldRevision?.release()
+                detachedNewRevision?.release()
             }
             conflicting.cancel("rebased")
             activeTransactions.removeAll { it.key == conflicting.key }

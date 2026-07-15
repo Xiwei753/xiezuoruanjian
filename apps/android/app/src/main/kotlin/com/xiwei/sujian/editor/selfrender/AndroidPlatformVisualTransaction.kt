@@ -42,8 +42,9 @@ data class AndroidPlatformVisualTransaction(
     val decorationSlices: MutableList<AndroidDecorationSlice>,
     var cursorTransition: AndroidCursorTransition,
     var cancelReason: String? = null,
-    val ownedOldRevision: AndroidCompositionVisualRevision? = null,
-    val ownedNewRevision: AndroidCompositionVisualRevision? = null
+    var ownedOldRevision: AndroidCompositionVisualRevision? = null,
+    var ownedNewRevision: AndroidCompositionVisualRevision? = null,
+    var onTransactionComplete: ((AndroidCompositionVisualRevision, ULong) -> Unit)? = null
 ) {
     val timeline: AndroidTimeline = AndroidTimeline(durationMs)
 
@@ -88,32 +89,69 @@ data class AndroidPlatformVisualTransaction(
     }
 
     fun complete() {
+        check(state != AndroidVisualTransactionState.Completed && state != AndroidVisualTransactionState.Cancelled) {
+            "Transaction $key already in terminal state $state"
+        }
         state = AndroidVisualTransactionState.Completed
-        releaseOwnedResources()
+        releaseOldSnapshots()
+        val newRev = ownedNewRevision
+        ownedOldRevision = null
+        ownedNewRevision = null
+        if (newRev != null) {
+            onTransactionComplete?.invoke(newRev, key)
+        } else {
+            releaseNewSnapshots()
+        }
     }
 
     fun cancel(reason: String) {
+        check(state != AndroidVisualTransactionState.Completed && state != AndroidVisualTransactionState.Cancelled) {
+            "Transaction $key already in terminal state $state"
+        }
         cancelReason = reason
         state = AndroidVisualTransactionState.Cancelled
-        releaseOwnedResources()
+        releaseOldSnapshots()
+        releaseNewSnapshots()
+        ownedOldRevision = null
+        ownedNewRevision = null
     }
 
-    private fun releaseOwnedResources() {
-        ownedOldRevision?.let { rev ->
-            if (!rev.isReleased()) rev.release()
-        }
-        ownedNewRevision?.let { rev ->
-            if (!rev.isReleased()) rev.release()
-        }
-        if (ownedOldRevision == null) {
+    private fun releaseOldSnapshots() {
+        val oldRev = ownedOldRevision
+        if (oldRev != null) {
+            oldRev.release()
+        } else {
             for (snapshot in oldLineSnapshots) {
                 snapshot.release()
             }
         }
-        if (ownedNewRevision == null) {
+    }
+
+    private fun releaseNewSnapshots() {
+        val newRev = ownedNewRevision
+        if (newRev != null) {
+            newRev.release()
+        } else {
             for (snapshot in newLineSnapshots) {
                 snapshot.release()
             }
         }
+    }
+
+    internal fun releaseSnapshots() {
+        releaseOldSnapshots()
+        releaseNewSnapshots()
+    }
+
+    fun detachOldRevisionForRebase(): AndroidCompositionVisualRevision? {
+        val rev = ownedOldRevision
+        ownedOldRevision = null
+        return rev
+    }
+
+    fun takeNewRevisionForRebase(): AndroidCompositionVisualRevision? {
+        val rev = ownedNewRevision
+        ownedNewRevision = null
+        return rev
     }
 }

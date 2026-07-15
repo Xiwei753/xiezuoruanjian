@@ -493,6 +493,24 @@ impl LinuxEditorAnimationCoordinator {
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
+        let conflicting = self.prepared_queue.find_conflicting_transaction(composition_byte_start, composition_byte_end);
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+            let mut frames = Vec::new();
+            if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
+                let old_progress = old_tx.progress(Instant::now());
+                if old_progress > 0.0 && old_progress < 1.0 {
+                    for old_slice in &old_tx.slices {
+                        let frame = old_slice.compute_frame(old_progress);
+                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                    }
+                }
+            }
+            self.prepared_queue.cancel(old_key, "rebased");
+            frames
+        } else {
+            Vec::new()
+        };
+
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
 
@@ -620,6 +638,12 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
+        for (bs, be, fx, fy, fo) in &rebase_frames {
+            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                new_slice.rebase_from(*fx, *fy, *fo);
+            }
+        }
+
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -657,6 +681,24 @@ impl LinuxEditorAnimationCoordinator {
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
+        let conflicting = self.prepared_queue.find_conflicting_transaction(composition_byte_start, composition_byte_end);
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+            let mut frames = Vec::new();
+            if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
+                let old_progress = old_tx.progress(Instant::now());
+                if old_progress > 0.0 && old_progress < 1.0 {
+                    for old_slice in &old_tx.slices {
+                        let frame = old_slice.compute_frame(old_progress);
+                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                    }
+                }
+            }
+            self.prepared_queue.cancel(old_key, "rebased");
+            frames
+        } else {
+            Vec::new()
+        };
+
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
 
@@ -692,13 +734,14 @@ impl LinuxEditorAnimationCoordinator {
                     ));
                 }
             }
-        } else if visual_text_unchanged {
-            // 视觉文字完全相同：不重复播放吐字，只移除 underline/装饰
         } else {
-            let insert_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-            let insert_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+            if visual_text_unchanged {
+                // 视觉文字完全相同：不重复播放吐字，只移除 underline/装饰
+            } else {
+                let insert_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+                let insert_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-            for new_line in new_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
+                for new_line in new_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
                 if let Some(source_rect) = new_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end) {
                     let to_doc = new_line.source_rect_to_document_rect(&source_rect);
                     slices.push(AnimatedSlice::insert_fade_in(
@@ -794,6 +837,7 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
             }
+            }
         }
 
         if !is_commit {
@@ -815,6 +859,12 @@ impl LinuxEditorAnimationCoordinator {
                         new_line.byte_end,
                     ));
                 }
+            }
+        }
+
+        for (bs, be, fx, fy, fo) in &rebase_frames {
+            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                new_slice.rebase_from(*fx, *fy, *fo);
             }
         }
 
