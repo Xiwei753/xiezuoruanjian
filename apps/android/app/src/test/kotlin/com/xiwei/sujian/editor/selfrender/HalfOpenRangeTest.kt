@@ -70,4 +70,68 @@ class HalfOpenRangeTest {
     fun invalidRange_throws() {
         HalfOpenRange(5, 3) // start > end
     }
+
+    @Test
+    fun utf16Range_isDistinctType() {
+        val utf16 = Utf16Range(1, 5)
+        val byte = ByteRange(1, 5)
+        val half = HalfOpenRange(1, 5)
+        assertNotEquals(utf16, half)
+        assertNotEquals(byte, half)
+        assertNotEquals(utf16, byte)
+    }
+
+    @Test
+    fun utf16Range_properties() {
+        val range = Utf16Range(2, 6)
+        assertEquals(2, range.start)
+        assertEquals(6, range.endExclusive)
+        assertEquals(4, range.length)
+        assertFalse(range.isEmpty)
+        assertTrue(range.contains(3))
+        assertFalse(range.contains(6))
+    }
+
+    @Test
+    fun byteRange_properties() {
+        val range = ByteRange(10, 30)
+        assertEquals(10, range.start)
+        assertEquals(30, range.endExclusive)
+        assertEquals(20, range.length)
+        assertFalse(range.isEmpty)
+        assertTrue(range.contains(15))
+        assertFalse(range.contains(30))
+    }
+
+    @Test
+    fun utf16Range_toHalfOpenRange() {
+        val utf16 = Utf16Range(1, 5)
+        val half = utf16.toHalfOpenRange()
+        assertEquals(HalfOpenRange(1, 5), half)
+    }
+
+    @Test
+    fun byteRange_toHalfOpenRange() {
+        val byte = ByteRange(10, 30)
+        val half = byte.toHalfOpenRange()
+        assertEquals(HalfOpenRange(10, 30), half)
+    }
+
+    @Test
+    fun utf16Range_emoji() {
+        val text = "a😀b"
+        assertEquals(4, text.length)
+        val emojiRange = Utf16Range(1, 3)
+        assertEquals(2, emojiRange.length)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun utf16Range_invalid_throws() {
+        Utf16Range(5, 3)
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun byteRange_invalid_throws() {
+        ByteRange(5, 3)
+    }
 }

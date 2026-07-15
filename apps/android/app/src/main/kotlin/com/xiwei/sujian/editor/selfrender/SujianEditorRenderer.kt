@@ -945,7 +945,7 @@ class SujianEditorRenderer(
             when (decSlice.kind) {
                 DecorationKind.Underline -> {
                     val decStart = decSlice.rangeUtf16.start.coerceIn(0, composingText.length)
-                    val decEnd = decSlice.rangeUtf16.end.coerceIn(0, composingText.length)
+                    val decEnd = decSlice.rangeUtf16.endExclusive.coerceIn(0, composingText.length)
                     if (decStart >= decEnd) continue
 
                     val startDecLine = composingLayout.getLineForOffset(decStart)

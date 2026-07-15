@@ -38,8 +38,8 @@ class CompositionOwnershipTest {
     private fun makeRevision(id: Long): AndroidCompositionVisualRevision {
         return AndroidCompositionVisualRevision(
             committedText = "test",
-            compositionReplaceRange = HalfOpenRange(0, 0),
-            preeditRangeInVirtualText = HalfOpenRange(0, 4),
+            compositionReplaceRange = Utf16Range(0, 0),
+            preeditRangeInVirtualText = Utf16Range(0, 4),
             preeditText = "test",
             virtualText = "test",
             affectedParagraphRange = HalfOpenRange(0, 1),
@@ -81,8 +81,8 @@ class CompositionOwnershipTest {
         }
         return AndroidCompositionVisualRevision(
             committedText = "test",
-            compositionReplaceRange = HalfOpenRange(0, 0),
-            preeditRangeInVirtualText = HalfOpenRange(0, 4),
+            compositionReplaceRange = Utf16Range(0, 0),
+            preeditRangeInVirtualText = Utf16Range(0, 4),
             preeditText = "test",
             virtualText = "test",
             affectedParagraphRange = HalfOpenRange(0, 0 + 1),
@@ -446,31 +446,31 @@ class CompositionOwnershipTest {
 
     @Test
     fun buildVirtualText_zeroLengthReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", HalfOpenRange(2, 2), "abc")
+        val result = manager.buildVirtualText("你好世界", Utf16Range(2, 2), "abc")
         assertEquals("你好abc世界", result)
     }
 
     @Test
     fun buildVirtualText_nonZeroReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", HalfOpenRange(1, 3), "abc")
+        val result = manager.buildVirtualText("你好世界", Utf16Range(1, 3), "abc")
         assertEquals("你abc界", result)
     }
 
     @Test
     fun buildVirtualText_emptyPreedit() {
-        val result = manager.buildVirtualText("你好世界", HalfOpenRange(2, 2), "")
+        val result = manager.buildVirtualText("你好世界", Utf16Range(2, 2), "")
         assertEquals("你好世界", result)
     }
 
     @Test
     fun buildVirtualText_preeditLongerThanReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", HalfOpenRange(2, 2), "abcdefghij")
+        val result = manager.buildVirtualText("你好世界", Utf16Range(2, 2), "abcdefghij")
         assertEquals("你好abcdefghij世界", result)
     }
 
     @Test
     fun buildVirtualText_preeditShorterThanReplaceRange() {
-        val result = manager.buildVirtualText("你好世界", HalfOpenRange(1, 3), "X")
+        val result = manager.buildVirtualText("你好世界", Utf16Range(1, 3), "X")
         assertEquals("你X界", result)
     }
 
@@ -1759,7 +1759,7 @@ class CompositionSessionTest {
 
         val range = session.preeditRangeInVirtualText()
         assertEquals(2, range.start)
-        assertEquals(5, range.end)
+        assertEquals(5, range.endExclusive)
     }
 
     @Test
@@ -1775,7 +1775,7 @@ class CompositionSessionTest {
 
         val range = session.preeditRangeInVirtualText()
         assertEquals(1, range.start)
-        assertEquals(4, range.end)
+        assertEquals(4, range.endExclusive)
     }
 
     @Test
@@ -1821,7 +1821,7 @@ class CompositionSessionTest {
             preeditCursorOffset = 3
         )
 
-        assertEquals(HalfOpenRange(1, 3), session.replaceRange())
+        assertEquals(Utf16Range(1, 3), session.replaceRange())
     }
 
     @Test

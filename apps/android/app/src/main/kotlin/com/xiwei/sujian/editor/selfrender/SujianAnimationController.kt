@@ -1322,7 +1322,7 @@ class SujianAnimationController(
 
     fun handleCompositionUpdate(
         committedText: String,
-        compositionReplaceRange: HalfOpenRange,
+        compositionReplaceRange: Utf16Range,
         preeditText: String,
         composingCursorUtf16: Int,
         sessionId: CompositionSessionId = CompositionSessionId(0)
@@ -1429,7 +1429,7 @@ class SujianAnimationController(
         val offsetMap = if (prevCompositionRevision != null) {
             val oldVirtualText = prevCompositionRevision.virtualText
             val oldReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(oldVirtualText, prevCompositionRevision.preeditRangeInVirtualText.start)
-            val oldReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(oldVirtualText, prevCompositionRevision.preeditRangeInVirtualText.end)
+            val oldReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(oldVirtualText, prevCompositionRevision.preeditRangeInVirtualText.endExclusive)
             val newReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start)
             val newReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start + preeditText.length)
             EditOffsetMap.fromReplacement(
@@ -1442,7 +1442,7 @@ class SujianAnimationController(
             )
         } else {
             val committedReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(committedText, compositionReplaceRange.start)
-            val committedReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(committedText, compositionReplaceRange.end)
+            val committedReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(committedText, compositionReplaceRange.endExclusive)
             val newReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start)
             val newReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start + preeditText.length)
             EditOffsetMap.fromReplacement(
@@ -1553,13 +1553,13 @@ class SujianAnimationController(
             sessionId = sessionId,
             committedText = committedText,
             compositionReplaceRange = compositionReplaceRange,
-            preeditRangeInVirtualText = HalfOpenRange(composingStartUtf16, composingEndUtf16),
+            preeditRangeInVirtualText = Utf16Range(composingStartUtf16, composingEndUtf16),
             preeditText = preeditText,
             virtualText = virtualText,
             affectedParagraphRange = HalfOpenRange(affectedStartLine, affectedEndLine + 1),
             lineSnapshots = newLineSnapshots,
             cursorRect = cursorRect,
-            decorationRanges = listOf(HalfOpenRange(composingStartUtf16, composingEndUtf16))
+            decorationRanges = listOf(Utf16Range(composingStartUtf16, composingEndUtf16))
         )
         compositionRevision.transferToTransaction(txKey)
 
@@ -1620,7 +1620,7 @@ class SujianAnimationController(
         committedText: String,
         virtualText: String,
         virtualLayout: android.text.Layout,
-        compositionReplaceRange: HalfOpenRange,
+        compositionReplaceRange: Utf16Range,
         preeditText: String,
         affectedStartLine: Int,
         preeditEndLine: Int,
@@ -1632,7 +1632,7 @@ class SujianAnimationController(
 
         val offsetMap = if (prevCompositionRevision != null) {
             val oldReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(oldText, prevCompositionRevision.preeditRangeInVirtualText.start)
-            val oldReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(oldText, prevCompositionRevision.preeditRangeInVirtualText.end)
+            val oldReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(oldText, prevCompositionRevision.preeditRangeInVirtualText.endExclusive)
             val newReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start)
             val newReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start + preeditText.length)
             EditOffsetMap.fromReplacement(
@@ -1645,7 +1645,7 @@ class SujianAnimationController(
             )
         } else {
             val committedReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(committedText, compositionReplaceRange.start)
-            val committedReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(committedText, compositionReplaceRange.end)
+            val committedReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(committedText, compositionReplaceRange.endExclusive)
             val newReplaceStartUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start)
             val newReplaceEndUtf8 = SujianEditorBuffer.utf16ToUtf8(virtualText, compositionReplaceRange.start + preeditText.length)
             EditOffsetMap.fromReplacement(
@@ -1849,7 +1849,7 @@ class SujianAnimationController(
 
         val offsetMap = if (isCommit) {
             val oldPreeditByteStart = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.start)
-            val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.end)
+            val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.endExclusive)
             val newCommittedByteStart = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16Start.coerceIn(0, newText.length))
             val newCommittedByteEnd = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16EndExclusive.coerceIn(0, newText.length))
             EditOffsetMap.fromReplacement(
@@ -1862,7 +1862,7 @@ class SujianAnimationController(
             )
         } else {
             val oldPreeditByteStart = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.start)
-            val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.end)
+            val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.endExclusive)
             val candidateUtf16Start = prevRevision.compositionReplaceRange.start
             val newCommittedByteStart = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16Start)
             EditOffsetMap.fromReplacement(
@@ -1885,7 +1885,7 @@ class SujianAnimationController(
                         val utf16Start = cluster.platformTextStart
                         val utf16End = cluster.platformTextEnd
                         val wasPreedit = prevRevision.preeditRangeInVirtualText.let { r ->
-                            utf16Start < r.end && utf16End > r.start
+                            utf16Start < r.endExclusive && utf16End > r.start
                         }
                         if (wasPreedit) {
                             val mappedNew = offsetMap.mapOldRangeToNew(cluster.documentByteStart, cluster.documentByteEnd)
@@ -1941,7 +1941,7 @@ class SujianAnimationController(
                         }
                         if (!foundInOld) {
                             val composingStartUtf16 = prevRevision.preeditRangeInVirtualText.start
-                            val composingEndUtf16 = prevRevision.preeditRangeInVirtualText.end
+                            val composingEndUtf16 = prevRevision.preeditRangeInVirtualText.endExclusive
                             val isComposing = cluster.platformTextStart < composingEndUtf16 && cluster.platformTextEnd > composingStartUtf16
                             if (isComposing) {
                                 slices.add(AndroidAnimatedSlice.insertFadeIn(
@@ -1982,7 +1982,7 @@ class SujianAnimationController(
                     val utf16Start = cluster.platformTextStart
                     val utf16End = cluster.platformTextEnd
                     val wasPreedit = prevRevision.preeditRangeInVirtualText.let { r ->
-                        utf16Start < r.end && utf16End > r.start
+                        utf16Start < r.endExclusive && utf16End > r.start
                     }
                     if (wasPreedit) {
                         slices.add(AndroidAnimatedSlice.deleteFadeOut(
@@ -2100,7 +2100,7 @@ class SujianAnimationController(
         val oldLayout = if (oldText.isNotEmpty()) layout.getLayout(oldText) else null
 
         val oldPreeditByteStart = SujianEditorBuffer.utf16ToUtf8(oldText, prevRevision.preeditRangeInVirtualText.start)
-        val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(oldText, prevRevision.preeditRangeInVirtualText.end)
+        val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(oldText, prevRevision.preeditRangeInVirtualText.endExclusive)
         val newCommittedByteStart = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16Start.coerceIn(0, newText.length))
         val newCommittedByteEnd = if (isCommit) {
             SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16EndExclusive.coerceIn(0, newText.length))
