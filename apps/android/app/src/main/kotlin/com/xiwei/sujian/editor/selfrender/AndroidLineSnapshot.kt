@@ -67,7 +67,7 @@ data class AndroidLineSnapshot(
                 }
             }
             is SnapshotOwner.OwnedByTransaction -> {
-                check(ownerTransactionKey == releaser.transactionKey || ownerRevisionId == revision) {
+                check(ownerTransactionKey == releaser.transactionKey && ownerRevisionId == revision) {
                     "Illegal release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by tx ${releaser.transactionKey}, owner is revision=$ownerRevisionId tx=$ownerTransactionKey"
                 }
             }
@@ -79,7 +79,7 @@ data class AndroidLineSnapshot(
         visualResource?.release()
     }
 
-    fun release() {
+    fun releaseUnowned() {
         check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
         released = true
         visualResource?.release()

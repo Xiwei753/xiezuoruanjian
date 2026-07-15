@@ -144,9 +144,9 @@ class SujianInputConnection(
         val editorView = view as? SujianEditorView
         if (editorView != null) {
             val compositionReplaceRange = if (buffer.hasActiveCompositionSession) {
-                buffer.compositionReplaceStart..buffer.compositionReplaceEndExclusive
+                HalfOpenRange(buffer.compositionReplaceStart, buffer.compositionReplaceEndExclusive)
             } else {
-                buffer.selection.head..buffer.selection.head
+                HalfOpenRange(buffer.selection.head, buffer.selection.head)
             }
             editorView.animationController.handleCompositionUpdate(
                 committedText = buffer.text,
@@ -174,7 +174,7 @@ class SujianInputConnection(
         if (editorView != null) {
             editorView.animationController.handleCompositionUpdate(
                 committedText = buffer.text,
-                compositionReplaceRange = buffer.compositionReplaceStart..buffer.compositionReplaceEndExclusive,
+                compositionReplaceRange = HalfOpenRange(buffer.compositionReplaceStart, buffer.compositionReplaceEndExclusive),
                 preeditText = buffer.composingText,
                 composingCursorUtf16 = buffer.composingCursor,
                 sessionId = buffer.compositionSession.sessionId

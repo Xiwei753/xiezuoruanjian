@@ -36,17 +36,21 @@ data class AndroidPlatformVisualTransaction(
     val oldRevision: Long,
     val newRevision: Long,
     val slices: MutableList<AndroidAnimatedSlice>,
-    val oldLineSnapshots: MutableList<AndroidLineSnapshot>,
-    val newLineSnapshots: MutableList<AndroidLineSnapshot>,
     val staticLinePatches: MutableList<AndroidStaticLinePatch>,
     val decorationSlices: MutableList<AndroidDecorationSlice>,
     var cursorTransition: AndroidCursorTransition,
     var cancelReason: String? = null,
-    var ownedOldRevision: AndroidCompositionVisualRevision? = null,
-    var ownedNewRevision: AndroidCompositionVisualRevision? = null,
-    var onTransactionComplete: ((AndroidCompositionVisualRevision, ULong) -> Unit)? = null
+    var ownedOldRevision: OwnedVisualRevision? = null,
+    var ownedNewRevision: OwnedVisualRevision? = null,
+    var onTransactionComplete: ((OwnedVisualRevision, ULong) -> ReturnFromTransactionResult)? = null
 ) {
     val timeline: AndroidTimeline = AndroidTimeline(durationMs)
+
+    val oldLineSnapshots: List<AndroidLineSnapshot>
+        get() = ownedOldRevision?.lineSnapshots ?: emptyList()
+
+    val newLineSnapshots: List<AndroidLineSnapshot>
+        get() = ownedNewRevision?.lineSnapshots ?: emptyList()
 
     val progress: Float
         get() {
@@ -100,20 +104,11 @@ data class AndroidPlatformVisualTransaction(
         val newRev = ownedNewRevision
         ownedOldRevision = null
         ownedNewRevision = null
-        val isComposition = operationKind == AndroidVisualOperationKind.CompositionUpdate ||
-            operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel
-        if (!isComposition) {
-            for (snap in oldLineSnapshots) {
-                if (!snap.isReleased()) snap.release()
-            }
-            for (snap in newLineSnapshots) {
-                if (!snap.isReleased()) snap.release()
-            }
-        }
-        oldLineSnapshots.clear()
-        newLineSnapshots.clear()
         if (newRev != null) {
-            onTransactionComplete?.invoke(newRev, key)
+            val result = onTransactionComplete?.invoke(newRev, key)
+            if (result is ReturnFromTransactionResult.RejectedStale) {
+                result.revision.release(result.revision.owner)
+            }
         }
     }
 
@@ -133,37 +128,17 @@ data class AndroidPlatformVisualTransaction(
             newRev.release(SnapshotOwner.OwnedByTransaction(key))
             ownedNewRevision = null
         }
-        val isComposition = operationKind == AndroidVisualOperationKind.CompositionUpdate ||
-            operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel
-        if (!isComposition) {
-            for (snap in oldLineSnapshots) {
-                if (!snap.isReleased()) snap.release()
-            }
-            for (snap in newLineSnapshots) {
-                if (!snap.isReleased()) snap.release()
-            }
-        }
-        oldLineSnapshots.clear()
-        newLineSnapshots.clear()
     }
 
-    fun detachOldRevisionForRebase(): AndroidCompositionVisualRevision? {
+    fun detachOldRevisionForRebase(): OwnedVisualRevision? {
         val rev = ownedOldRevision
         ownedOldRevision = null
-        if (rev != null) {
-            val revId = rev.revisionId
-            oldLineSnapshots.removeAll { it.revision == revId }
-        }
         return rev
     }
 
-    fun takeNewRevisionForRebase(): AndroidCompositionVisualRevision? {
+    fun takeNewRevisionForRebase(): OwnedVisualRevision? {
         val rev = ownedNewRevision
         ownedNewRevision = null
-        if (rev != null) {
-            val revId = rev.revisionId
-            newLineSnapshots.removeAll { it.revision == revId }
-        }
         return rev
     }
 }

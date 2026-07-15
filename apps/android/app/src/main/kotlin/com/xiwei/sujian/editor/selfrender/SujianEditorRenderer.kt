@@ -302,6 +302,56 @@ class SujianEditorRenderer(
     fun getActiveTransactions(): List<AndroidPlatformVisualTransaction> =
         activeTransactions.toList()
 
+    data class CompositionSource(
+        val newRevision: OwnedVisualRevision?,
+        val oldRevision: OwnedVisualRevision?,
+        val progress: Float,
+        val activeTransactionKey: ULong
+    )
+
+    fun takeCompositionSource(expectedOldKey: ULong, newKey: ULong): CompositionSource? {
+        val activeTx = activeTransactions.find {
+            it.key == expectedOldKey &&
+            (it.operationKind == AndroidVisualOperationKind.CompositionUpdate ||
+             it.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel) &&
+            (it.state == AndroidVisualTransactionState.Rendering ||
+             it.state == AndroidVisualTransactionState.Prepared ||
+             it.state == AndroidVisualTransactionState.Paused)
+        }
+        if (activeTx != null) {
+            val currentProgress = activeTx.progress
+            val detachedNew = activeTx.takeNewRevisionForRebase()
+            val detachedOld = activeTx.detachOldRevisionForRebase()
+            activeTx.onTransactionComplete = null
+            activeTx.cancel("superseded_by_take_composition_source")
+            activeTransactions.removeAll { it.key == expectedOldKey }
+            return CompositionSource(
+                newRevision = detachedNew,
+                oldRevision = detachedOld,
+                progress = currentProgress,
+                activeTransactionKey = expectedOldKey
+            )
+        }
+        val pendingTx = pendingQueue.find {
+            it.key == expectedOldKey &&
+            (it.operationKind == AndroidVisualOperationKind.CompositionUpdate ||
+             it.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel)
+        }
+        if (pendingTx != null) {
+            val detachedNew = pendingTx.takeNewRevisionForRebase()
+            val detachedOld = pendingTx.detachOldRevisionForRebase()
+            pendingTx.cancel("superseded_by_take_composition_source_pending")
+            pendingQueue.removeAll { it.key == expectedOldKey }
+            return CompositionSource(
+                newRevision = detachedNew,
+                oldRevision = detachedOld,
+                progress = 0f,
+                activeTransactionKey = expectedOldKey
+            )
+        }
+        return null
+    }
+
     fun getAffectedLineIndices(layout: Layout): Set<Int> {
         val affectedLines = mutableSetOf<Int>()
         for (tx in activeTransactions) {
@@ -866,8 +916,8 @@ class SujianEditorRenderer(
         for (decSlice in compositionTx.decorationSlices) {
             when (decSlice.kind) {
                 DecorationKind.Underline -> {
-                    val decStart = decSlice.rangeUtf16.first.coerceIn(0, composingText.length)
-                    val decEnd = decSlice.rangeUtf16.last.coerceIn(0, composingText.length)
+                    val decStart = decSlice.rangeUtf16.start.coerceIn(0, composingText.length)
+                    val decEnd = decSlice.rangeUtf16.end.coerceIn(0, composingText.length)
                     if (decStart >= decEnd) continue
 
                     val startDecLine = composingLayout.getLineForOffset(decStart)

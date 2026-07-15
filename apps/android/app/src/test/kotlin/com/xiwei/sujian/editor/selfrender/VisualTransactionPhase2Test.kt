@@ -106,7 +106,11 @@ class VisualTransactionPhase2Test {
             newSelectionAnchor = 2,
             newSelectionHead = 2,
             insertedRangeStart = 1,
-            insertedRangeEnd = 2,
+            insertedRangeEnd = 1,
+            hasInsertedRange = true,
+            hasDeletedRange = false,
+            deletedRangeStart = 0,
+            deletedRangeEnd = 0,
             durationMs = 160L,
             coordinateMode = VisualCoordinateModeData.Baseline
         )
@@ -135,7 +139,11 @@ class VisualTransactionPhase2Test {
             newSelectionAnchor = 3,
             newSelectionHead = 3,
             insertedRangeStart = 2,
-            insertedRangeEnd = 3,
+            insertedRangeEnd = 2,
+            hasInsertedRange = true,
+            hasDeletedRange = false,
+            deletedRangeStart = 0,
+            deletedRangeEnd = 0,
             durationMs = 160L,
             coordinateMode = VisualCoordinateModeData.Baseline
         )
@@ -262,7 +270,11 @@ class VisualTransactionPhase2Test {
             newSelectionAnchor = 3,
             newSelectionHead = 3,
             insertedRangeStart = 2,
-            insertedRangeEnd = 3,
+            insertedRangeEnd = 2,
+            hasInsertedRange = true,
+            hasDeletedRange = false,
+            deletedRangeStart = 0,
+            deletedRangeEnd = 0,
             durationMs = 160L,
             coordinateMode = VisualCoordinateModeData.Baseline
         )
@@ -295,7 +307,11 @@ class VisualTransactionPhase2Test {
             newSelectionAnchor = 1,
             newSelectionHead = 1,
             insertedRangeStart = 0,
-            insertedRangeEnd = 1,
+            insertedRangeEnd = 0,
+            hasInsertedRange = true,
+            hasDeletedRange = false,
+            deletedRangeStart = 0,
+            deletedRangeEnd = 0,
             durationMs = 160L,
             coordinateMode = VisualCoordinateModeData.Baseline
         )
@@ -321,7 +337,11 @@ class VisualTransactionPhase2Test {
             newSelectionAnchor = 1,
             newSelectionHead = 1,
             insertedRangeStart = 0,
-            insertedRangeEnd = 1,
+            insertedRangeEnd = 0,
+            hasInsertedRange = true,
+            hasDeletedRange = false,
+            deletedRangeStart = 0,
+            deletedRangeEnd = 0,
             durationMs = 160L,
             coordinateMode = VisualCoordinateModeData.Baseline
         )
@@ -462,6 +482,10 @@ class VisualTransactionPhase2Test {
             newSelectionHead = 1,
             insertedRangeStart = 0,
             insertedRangeEnd = 0,
+            hasInsertedRange = true,
+            hasDeletedRange = false,
+            deletedRangeStart = 0,
+            deletedRangeEnd = 0,
             durationMs = 160L,
             coordinateMode = VisualCoordinateModeData.Baseline
         )
