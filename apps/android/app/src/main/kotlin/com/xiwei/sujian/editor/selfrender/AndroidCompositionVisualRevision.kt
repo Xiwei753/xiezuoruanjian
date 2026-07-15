@@ -145,7 +145,7 @@ sealed class TakeCurrentResult {
 
 sealed class ReturnFromTransactionResult {
     object Accepted : ReturnFromTransactionResult()
-    data class RejectedStale(val revision: OwnedVisualRevision) : ReturnFromTransactionResult()
+    object RejectedStale : ReturnFromTransactionResult()
 }
 
 class AndroidCompositionManager {
@@ -221,10 +221,12 @@ class AndroidCompositionManager {
 
     fun returnFromTransaction(revision: OwnedVisualRevision, transactionKey: ULong, expectedGeneration: Long): ReturnFromTransactionResult {
         if (expectedGeneration != generation) {
-            return ReturnFromTransactionResult.RejectedStale(revision)
+            revision.release(revision.owner)
+            return ReturnFromTransactionResult.RejectedStale
         }
         if (takenByTransactionKey != transactionKey) {
-            return ReturnFromTransactionResult.RejectedStale(revision)
+            revision.release(revision.owner)
+            return ReturnFromTransactionResult.RejectedStale
         }
         check(revision.owner is SnapshotOwner.OwnedByTransaction && (revision.owner as SnapshotOwner.OwnedByTransaction).transactionKey == transactionKey) {
             "returnFromTransaction: revision ${revision.revisionId} owner is ${revision.owner}, expected OwnedByTransaction($transactionKey)"
@@ -232,6 +234,8 @@ class AndroidCompositionManager {
         if (revision is AndroidCompositionVisualRevision) {
             revision.transferToSession(revision.sessionId)
             currentRevision = revision
+        } else if (revision is CommittedVisualRevision) {
+            revision.transferToSession(revision.sessionId)
         }
         takenByTransactionKey = null
         generation++

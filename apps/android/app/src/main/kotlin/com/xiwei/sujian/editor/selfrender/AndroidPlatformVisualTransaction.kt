@@ -107,10 +107,7 @@ data class AndroidPlatformVisualTransaction(
         if (newRev != null) {
             val callback = onTransactionComplete
             if (callback != null) {
-                val result = callback.invoke(newRev, key)
-                if (result is ReturnFromTransactionResult.RejectedStale) {
-                    result.revision.release(result.revision.owner)
-                }
+                callback.invoke(newRev, key)
             } else {
                 newRev.release(SnapshotOwner.OwnedByTransaction(key))
             }
