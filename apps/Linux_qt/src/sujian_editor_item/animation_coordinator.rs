@@ -689,23 +689,23 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo, _) in &rebase_frames {
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
                 if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
-                } else {
-                    let best_match = slices.iter_mut()
-                        .filter(|ns| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|ns| {
-                            let start_dist = (ns.byte_start as i64 - mbs as i64).unsigned_abs();
-                            let end_dist = (ns.byte_end as i64 - mbe as i64).unsigned_abs();
-                            start_dist + end_dist
-                        });
-                    if let Some(new_slice) = best_match {
+                } else if let Some(ref sid) = shaping {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                        ns.shaping_identity.as_ref() == Some(sid) &&
+                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
+                    }) {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
+                }
+            } else if let Some(ref sid) = shaping {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
@@ -940,23 +940,23 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo, _) in &rebase_frames {
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
                 if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
-                } else {
-                    let best_match = slices.iter_mut()
-                        .filter(|ns| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|ns| {
-                            let start_dist = (ns.byte_start as i64 - mbs as i64).unsigned_abs();
-                            let end_dist = (ns.byte_end as i64 - mbe as i64).unsigned_abs();
-                            start_dist + end_dist
-                        });
-                    if let Some(new_slice) = best_match {
+                } else if let Some(ref sid) = shaping {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                        ns.shaping_identity.as_ref() == Some(sid) &&
+                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
+                    }) {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
+                }
+            } else if let Some(ref sid) = shaping {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
@@ -1476,5 +1476,46 @@ mod tests {
     fn test_animation_mode_glyph_creates_transaction() {
         let mode = AnimationMode::GlyphAnimation;
         assert!(mode.should_create_transaction());
+    }
+
+    #[test]
+    fn test_rebase_uses_shaping_identity_not_distance() {
+        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
+        let sid_b = ShapingIdentity { text_content_hash: 2, raw_font_fingerprint: "font_b".to_string(), glyph_indexes_hash: 20, cluster_glyph_count: 2, direction_rtl: false, format_fingerprint: 200 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (10, 20, 100.0, 200.0, 0.5, Some(sid_a.clone())),
+            (30, 40, 150.0, 250.0, 0.7, Some(sid_b.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 50, 60,
+                Some(sid_a.clone()),
+            ),
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 2),
+                LineSnapshotId::new(1, 0, 1),
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 70, 80,
+                Some(sid_b.clone()),
+            ),
+        ];
+
+        for (_bs, _be, fx, fy, fo, ref shaping) in &rebase_frames {
+            if let Some(ref sid) = shaping {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
+                }
+            }
+        }
+
+        assert!((slices[0].from_document_rect.x - 100.0).abs() < 0.01);
+        assert!((slices[1].from_document_rect.x - 150.0).abs() < 0.01);
     }
 }

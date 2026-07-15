@@ -43,7 +43,8 @@ class AndroidLayoutSnapshotBuilder(
         text: String,
         affectedLineRange: HalfOpenRange,
         revision: Long,
-        textColor: Int
+        textColor: Int,
+        sessionId: CompositionSessionId = CompositionSessionId(revision)
     ): List<AndroidLineSnapshot> {
         val staticLayout = layout.getLayout(text)
         val result = mutableListOf<AndroidLineSnapshot>()
@@ -52,7 +53,7 @@ class AndroidLayoutSnapshotBuilder(
         val endLine = (affectedLineRange.end - 1).coerceIn(0, staticLayout.lineCount - 1)
 
         for (lineIdx in startLine..endLine) {
-            val snapshot = buildLineSnapshot(text, staticLayout, lineIdx, revision, textColor)
+            val snapshot = buildLineSnapshot(text, staticLayout, lineIdx, revision, textColor, sessionId)
             if (snapshot != null) {
                 result.add(snapshot)
             }
@@ -63,13 +64,14 @@ class AndroidLayoutSnapshotBuilder(
     fun buildAllLineSnapshots(
         text: String,
         revision: Long,
-        textColor: Int
+        textColor: Int,
+        sessionId: CompositionSessionId = CompositionSessionId(revision)
     ): List<AndroidLineSnapshot> {
         val staticLayout = layout.getLayout(text)
         val result = mutableListOf<AndroidLineSnapshot>()
 
         for (lineIdx in 0 until staticLayout.lineCount) {
-            val snapshot = buildLineSnapshot(text, staticLayout, lineIdx, revision, textColor)
+            val snapshot = buildLineSnapshot(text, staticLayout, lineIdx, revision, textColor, sessionId)
             if (snapshot != null) {
                 result.add(snapshot)
             }
@@ -82,7 +84,8 @@ class AndroidLayoutSnapshotBuilder(
         staticLayout: Layout,
         lineIdx: Int,
         revision: Long,
-        textColor: Int
+        textColor: Int,
+        sessionId: CompositionSessionId = CompositionSessionId(revision)
     ): AndroidLineSnapshot? {
         if (lineIdx < 0 || lineIdx >= staticLayout.lineCount) return null
 
@@ -129,7 +132,8 @@ class AndroidLayoutSnapshotBuilder(
             baseline = baseline.toFloat(),
             lineImageLocalSize = lineImageLocalSize,
             clusters = clusters,
-            visualResource = visualResource
+            visualResource = visualResource,
+            initialSessionId = sessionId
         )
     }
 
