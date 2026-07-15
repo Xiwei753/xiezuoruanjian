@@ -76,9 +76,12 @@ class AnimationModeTest {
 
     @Test
     fun imeComposingDoesNotClearAnimations() {
-        val source = File("src/main/kotlin/com/xiwei/sujian/editor/selfrender/SujianImeController.kt").readText()
+        val imeSource = File("src/main/kotlin/com/xiwei/sujian/editor/selfrender/SujianImeController.kt").readText()
+        assertFalse("IME controller must not clearAnimations",
+            imeSource.contains("renderer.clearAnimations()"))
+        val viewSource = File("src/main/kotlin/com/xiwei/sujian/editor/selfrender/SujianEditorView.kt").readText()
         assertFalse("IME composing must not clearAnimations, should pauseAll instead",
-            source.contains("renderer.clearAnimations()"))
-        assertTrue("IME composing should pauseAll", source.contains("renderer.pauseAll()"))
+            viewSource.contains("renderer.clearAnimations()") && viewSource.contains("composing"))
+        assertTrue("IME composing should pauseAll", viewSource.contains("renderer.pauseAll()"))
     }
 }

@@ -270,7 +270,7 @@ class VisualTransactionPhase2Test {
             newSelectionAnchor = 3,
             newSelectionHead = 3,
             insertedRangeStart = 2,
-            insertedRangeEnd = 2,
+            insertedRangeEnd = 3,
             hasInsertedRange = true,
             hasDeletedRange = false,
             deletedRangeStart = 0,
