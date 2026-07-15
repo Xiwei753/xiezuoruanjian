@@ -63,7 +63,7 @@ class SujianAnimationController(
         val animationId: ULong
     ) {
         fun release() {
-            oldLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
+            oldLineSnapshots.forEach { it.release(it.owner) }
         }
     }
     private val deleteSnapshots = mutableListOf<DeleteSnapshot>()
@@ -99,7 +99,7 @@ class SujianAnimationController(
         val result = original.toMutableList()
         for (snap in supplemental) {
             if (snap.id in existingIds) {
-                snap.release(SnapshotOwner.OwnedBySession(CompositionSessionId(snap.revision)))
+                snap.release(snap.owner)
             } else {
                 result.add(snap)
             }
