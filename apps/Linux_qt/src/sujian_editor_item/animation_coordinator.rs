@@ -231,6 +231,14 @@ impl LinuxEditorAnimationCoordinator {
                     for (bs, be, fx, fy, fo) in &rebase_frames {
                         if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                             new_slice.rebase_from(*fx, *fy, *fo);
+                        } else if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                            ns.shaping_identity.as_ref().map_or(false, |si| {
+                                old_snapshot.clusters_in_byte_range(*bs, *be).iter().any(|oc| {
+                                    oc.shaping_identity.is_same_shaping(si)
+                                })
+                            })
+                        }) {
+                            new_slice.rebase_from(*fx, *fy, *fo);
                         }
                     }
 
@@ -414,6 +422,14 @@ impl LinuxEditorAnimationCoordinator {
                 for (bs, be, fx, fy, fo) in &rebase_frames {
                     if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                         new_slice.rebase_from(*fx, *fy, *fo);
+                    } else if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                        ns.shaping_identity.as_ref().map_or(false, |si| {
+                            old_snapshot.clusters_in_byte_range(*bs, *be).iter().any(|oc| {
+                                oc.shaping_identity.is_same_shaping(si)
+                            })
+                        })
+                    }) {
+                        new_slice.rebase_from(*fx, *fy, *fo);
                     }
                 }
 
@@ -575,8 +591,31 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
 
-            let old_byte_start = new_line.byte_start.saturating_sub(composition_byte_end - composition_byte_start);
-            let old_line = old_snapshot.line_for_byte(old_byte_start);
+            let old_line = {
+                let by_byte = old_snapshot.line_for_byte(new_line.byte_start);
+                if by_byte.is_some() {
+                    by_byte
+                } else {
+                    let by_shaping = new_line.clusters.first().and_then(|first_cluster| {
+                        old_snapshot.line_snapshots.iter().find(|ol| {
+                            ol.clusters.iter().any(|oc| {
+                                oc.shaping_identity.is_same_shaping(&first_cluster.shaping_identity)
+                            })
+                        })
+                    });
+                    if by_shaping.is_some() {
+                        by_shaping
+                    } else {
+                        let old_comp_end = old_snapshot.line_snapshots.iter()
+                            .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
+                            .next()
+                            .unwrap_or(composition_byte_end as i64);
+                        let byte_shift = old_comp_end - composition_byte_end as i64;
+                        let mapped = new_line.byte_start as i64 + byte_shift;
+                        if mapped >= 0 { old_snapshot.line_for_byte(mapped as usize) } else { None }
+                    }
+                }
+            };
             if let Some(ol) = old_line {
                 let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                 let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
@@ -640,6 +679,14 @@ impl LinuxEditorAnimationCoordinator {
 
         for (bs, be, fx, fy, fo) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                new_slice.rebase_from(*fx, *fy, *fo);
+            } else if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                ns.shaping_identity.as_ref().map_or(false, |si| {
+                    old_snapshot.clusters_in_byte_range(*bs, *be).iter().any(|oc| {
+                        oc.shaping_identity.is_same_shaping(si)
+                    })
+                })
+            }) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             }
         }
@@ -775,8 +822,31 @@ impl LinuxEditorAnimationCoordinator {
                     continue;
                 }
 
-                let old_byte_start = new_line.byte_start.saturating_sub(composition_byte_end - composition_byte_start);
-                let old_line = old_snapshot.line_for_byte(old_byte_start);
+                let old_line = {
+                    let by_byte = old_snapshot.line_for_byte(new_line.byte_start);
+                    if by_byte.is_some() {
+                        by_byte
+                    } else {
+                        let by_shaping = new_line.clusters.first().and_then(|first_cluster| {
+                            old_snapshot.line_snapshots.iter().find(|ol| {
+                                ol.clusters.iter().any(|oc| {
+                                    oc.shaping_identity.is_same_shaping(&first_cluster.shaping_identity)
+                                })
+                            })
+                        });
+                        if by_shaping.is_some() {
+                            by_shaping
+                        } else {
+                            let old_comp_end = old_snapshot.line_snapshots.iter()
+                                .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
+                                .next()
+                                .unwrap_or(composition_byte_end as i64);
+                            let byte_shift = old_comp_end - composition_byte_end as i64;
+                            let mapped = new_line.byte_start as i64 + byte_shift;
+                            if mapped >= 0 { old_snapshot.line_for_byte(mapped as usize) } else { None }
+                        }
+                    }
+                };
                 if let Some(ol) = old_line {
                     let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                     let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
@@ -864,6 +934,14 @@ impl LinuxEditorAnimationCoordinator {
 
         for (bs, be, fx, fy, fo) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                new_slice.rebase_from(*fx, *fy, *fo);
+            } else if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                ns.shaping_identity.as_ref().map_or(false, |si| {
+                    old_snapshot.clusters_in_byte_range(*bs, *be).iter().any(|oc| {
+                        oc.shaping_identity.is_same_shaping(si)
+                    })
+                })
+            }) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             }
         }
