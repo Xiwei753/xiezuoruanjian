@@ -25,6 +25,7 @@ class FakeVisualResource : AndroidLineVisualResource {
     }
 }
 
+@Suppress("DEPRECATION")
 class CompositionOwnershipTest {
 
     private lateinit var manager: AndroidCompositionManager
@@ -1265,6 +1266,115 @@ class CompositionOwnershipTest {
         for (snap in detachedNew.lineSnapshots) {
             assertTrue(snap.isReleased())
         }
+    }
+
+    @Test
+    fun productionPath_typedTakeResult_handlesAllVariants() {
+        val allResources = mutableListOf<FakeVisualResource>()
+        val sessionId = CompositionSessionId(1)
+
+        var currentRev = makeRevisionWithFakeResources(1, 2)
+        allResources.addAll(currentRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
+        manager.setCurrent(currentRev)
+
+        for (i in 2..20L) {
+            val txKey = i.toULong()
+
+            val takeResult = manager.takeCurrentForTransactionTyped(txKey)
+            var prevRevision: AndroidCompositionVisualRevision? = null
+            var prevRevisionFromActiveTransaction = false
+
+            when (takeResult) {
+                is TakeCurrentResult.Success -> {
+                    prevRevision = takeResult.revision
+                }
+                is TakeCurrentResult.RevisionWithActiveTransaction -> {
+                    prevRevisionFromActiveTransaction = true
+                }
+                is TakeCurrentResult.NoRevisionAvailable -> {
+                }
+            }
+
+            if (prevRevision == null && !prevRevisionFromActiveTransaction) {
+                val newRev = makeRevisionWithFakeResources(i, 2)
+                allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
+                manager.setCurrent(newRev)
+                currentRev = newRev
+                continue
+            }
+
+            if (prevRevision == null && prevRevisionFromActiveTransaction) {
+                currentRev.reassignToTransaction(txKey)
+                prevRevision = currentRev
+            }
+
+            val newRev = makeRevisionWithFakeResources(i, 2)
+            allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
+
+            var returnedRev: AndroidCompositionVisualRevision? = null
+            val tx = AndroidPlatformVisualTransaction(
+                key = txKey,
+                state = AndroidVisualTransactionState.Rendering,
+                operationKind = AndroidVisualOperationKind.CompositionUpdate,
+                animationMode = AnimationModeData.GlyphAnimation,
+                durationMs = 160,
+                oldRevision = i - 1,
+                newRevision = i,
+                slices = mutableListOf(),
+                oldLineSnapshots = mutableListOf(),
+                newLineSnapshots = mutableListOf(),
+                staticLinePatches = mutableListOf(),
+                decorationSlices = mutableListOf(),
+                cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+                ownedOldRevision = prevRevision,
+                ownedNewRevision = newRev,
+                onTransactionComplete = { rev, key ->
+                    returnedRev = rev
+                }
+            )
+
+            tx.complete()
+            assertNotNull(returnedRev)
+            assertFalse(returnedRev!!.isReleased())
+            manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
+            currentRev = returnedRev
+        }
+
+        val finalRev = manager.getCurrent()
+        assertNotNull(finalRev)
+        assertEquals(20L, finalRev!!.revisionId)
+        assertFalse(finalRev.isReleased())
+
+        val unreleasedCount = allResources.count { !it.released }
+        assertEquals(2, unreleasedCount)
+
+        manager.clear()
+        assertTrue(finalRev.isReleased())
+        assertEquals(allResources.size, allResources.count { it.released })
+    }
+
+    @Test
+    fun productionPath_typedTakeResult_consecutivePreeditUsesRevisionWithActiveTransaction() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+
+        val firstTake = manager.takeCurrentForTransactionTyped(100u)
+        assertTrue(firstTake is TakeCurrentResult.Success)
+        val takenRev = (firstTake as TakeCurrentResult.Success).revision
+
+        val secondTake = manager.takeCurrentForTransactionTyped(101u)
+        assertTrue(secondTake is TakeCurrentResult.RevisionWithActiveTransaction)
+        assertEquals(100u, (secondTake as TakeCurrentResult.RevisionWithActiveTransaction).activeTransactionKey)
+
+        assertFalse(takenRev.isReleased())
+        takenRev.release(SnapshotOwner.OwnedByTransaction(100u))
+        assertTrue(takenRev.isReleased())
+    }
+
+    @Test
+    fun productionPath_typedTakeResult_noRevisionReturnsNoRevisionAvailable() {
+        val takeResult = manager.takeCurrentForTransactionTyped(100u)
+        assertTrue(takeResult is TakeCurrentResult.NoRevisionAvailable)
     }
 }
 

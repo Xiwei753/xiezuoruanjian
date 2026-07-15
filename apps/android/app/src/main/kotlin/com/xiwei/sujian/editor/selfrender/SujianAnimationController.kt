@@ -1346,20 +1346,27 @@ class SujianAnimationController(
         val txKey = nextAnimationId()
         val managerGeneration = compositionManager.getGeneration()
 
-        var prevCompositionRevision = compositionManager.takeCurrentForTransaction(txKey)
+        var prevCompositionRevision: AndroidCompositionVisualRevision? = null
         var prevRevisionFromActiveTransaction = false
         var detachedOldFromActive: AndroidCompositionVisualRevision? = null
-        if (prevCompositionRevision == null) {
-            val activeTx = renderer.getActiveTransactions().find {
-                it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
-                (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
+        when (val takeResult = compositionManager.takeCurrentForTransactionTyped(txKey)) {
+            is TakeCurrentResult.Success -> {
+                prevCompositionRevision = takeResult.revision
             }
-            if (activeTx != null) {
-                prevCompositionRevision = activeTx.takeNewRevisionForRebase()
-                detachedOldFromActive = activeTx.detachOldRevisionForRebase()
-                prevRevisionFromActiveTransaction = true
-                activeTx.onTransactionComplete = null
-                activeTx.cancel("superseded_by_composition_update")
+            is TakeCurrentResult.RevisionWithActiveTransaction -> {
+                val activeTx = renderer.getActiveTransactions().find {
+                    it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
+                    (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
+                }
+                if (activeTx != null) {
+                    prevCompositionRevision = activeTx.takeNewRevisionForRebase()
+                    detachedOldFromActive = activeTx.detachOldRevisionForRebase()
+                    prevRevisionFromActiveTransaction = true
+                    activeTx.onTransactionComplete = null
+                    activeTx.cancel("superseded_by_composition_update")
+                }
+            }
+            is TakeCurrentResult.NoRevisionAvailable -> {
             }
         }
 
@@ -1761,20 +1768,27 @@ class SujianAnimationController(
     ): TextAnimationStartResult {
         val txKey = nextAnimationId()
         val managerGeneration = compositionManager.getGeneration()
-        var prevRevision = compositionManager.takeCurrentForTransaction(txKey)
+        var prevRevision: AndroidCompositionVisualRevision? = null
         var prevRevisionFromActiveTransaction = false
         var activeCompositionTx: AndroidPlatformVisualTransaction? = null
         var detachedOldFromActive: AndroidCompositionVisualRevision? = null
 
-        if (prevRevision == null) {
-            activeCompositionTx = renderer.getActiveTransactions().find {
-                it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
-                (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
+        when (val takeResult = compositionManager.takeCurrentForTransactionTyped(txKey)) {
+            is TakeCurrentResult.Success -> {
+                prevRevision = takeResult.revision
             }
-            if (activeCompositionTx != null) {
-                prevRevision = activeCompositionTx.takeNewRevisionForRebase()
-                detachedOldFromActive = activeCompositionTx.detachOldRevisionForRebase()
-                prevRevisionFromActiveTransaction = true
+            is TakeCurrentResult.RevisionWithActiveTransaction -> {
+                activeCompositionTx = renderer.getActiveTransactions().find {
+                    it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
+                    (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
+                }
+                if (activeCompositionTx != null) {
+                    prevRevision = activeCompositionTx.takeNewRevisionForRebase()
+                    detachedOldFromActive = activeCompositionTx.detachOldRevisionForRebase()
+                    prevRevisionFromActiveTransaction = true
+                }
+            }
+            is TakeCurrentResult.NoRevisionAvailable -> {
             }
         }
 

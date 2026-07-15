@@ -111,6 +111,7 @@ class AndroidCompositionManager {
 
     fun getGeneration(): Long = generation
 
+    @Deprecated("Use takeCurrentForTransactionTyped() instead. Returning null for both 'no revision' and 'revision with active transaction' is ambiguous.", ReplaceWith("takeCurrentForTransactionTyped(transactionKey)"))
     fun takeCurrentForTransaction(transactionKey: ULong): AndroidCompositionVisualRevision? {
         if (currentRevision == null && takenByTransactionKey != null) {
             return null
