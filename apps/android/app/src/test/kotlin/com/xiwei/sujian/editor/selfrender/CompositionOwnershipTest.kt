@@ -81,11 +81,11 @@ class CompositionOwnershipTest {
         }
         return AndroidCompositionVisualRevision(
             committedText = "test",
-            compositionReplaceRange = 0..0,
-            preeditRangeInVirtualText = 0..4,
+            compositionReplaceRange = HalfOpenRange(0, 0),
+            preeditRangeInVirtualText = HalfOpenRange(0, 4),
             preeditText = "test",
             virtualText = "test",
-            affectedParagraphRange = 0..0,
+            affectedParagraphRange = HalfOpenRange(0, 0 + 1),
             lineSnapshots = snapshots,
             cursorRect = android.graphics.RectF(),
             decorationRanges = emptyList(),
@@ -645,7 +645,7 @@ class CompositionOwnershipTest {
             tx.complete()
             assertNotNull(returnedRev)
             assertFalse(returnedRev!!.isReleased())
-            manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
+            manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
             currentRev = returnedRev
         }
 
@@ -765,7 +765,7 @@ class CompositionOwnershipTest {
                 tx.complete()
                 assertNotNull(returnedRev)
                 assertFalse(returnedRev!!.isReleased())
-                manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
+                manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
                 currentRev = returnedRev!!
             }
         }
@@ -907,7 +907,7 @@ class CompositionOwnershipTest {
                 tx.complete()
                 assertNotNull(returnedRev)
                 assertFalse(returnedRev!!.isReleased())
-                manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
+                manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
                 currentRev = returnedRev!!
             }
         }
@@ -1153,7 +1153,7 @@ class CompositionOwnershipTest {
                     tx.complete()
                     assertNotNull(returnedRev)
                     assertFalse(returnedRev!!.isReleased())
-                    manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
+                    manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
                     currentRev = returnedRev!!
                 }
             }
@@ -1292,7 +1292,7 @@ class CompositionOwnershipTest {
             tx.complete()
             assertNotNull(returnedRev)
             assertFalse(returnedRev!!.isReleased())
-            manager.returnFromTransaction(returnedRev, txKey, manager.getGeneration())
+            manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, txKey, manager.getGeneration())
             currentRev = returnedRev
         }
 
@@ -1366,7 +1366,8 @@ class CompositionOwnershipTest {
             ownedOldRevision = takenRev,
             ownedNewRevision = newRev,
             onTransactionComplete = { rev, _ ->
-                returnedRev = rev
+                returnedRev = rev as? AndroidCompositionVisualRevision
+                ReturnFromTransactionResult.Accepted
             }
         )
 
@@ -1374,7 +1375,7 @@ class CompositionOwnershipTest {
         assertNotNull(returnedRev)
         assertFalse(returnedRev!!.isReleased())
 
-        manager.returnFromTransaction(returnedRev, 200u, genBeforeReturn)
+        manager.returnFromTransaction(returnedRev as AndroidCompositionVisualRevision, 200u, genBeforeReturn)
         val currentRev = manager.getCurrent()
         assertNotNull(currentRev)
         assertEquals(2L, currentRev!!.revisionId)
