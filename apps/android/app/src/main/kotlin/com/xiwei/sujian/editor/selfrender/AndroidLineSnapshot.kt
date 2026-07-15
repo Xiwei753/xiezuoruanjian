@@ -88,8 +88,8 @@ data class AndroidLineSnapshot(
 
     fun transferToTransaction(transactionKey: ULong) {
         check(owner !is SnapshotOwner.Released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
-        check(owner is SnapshotOwner.OwnedBySession || owner is SnapshotOwner.OwnedByTransaction) {
-            "transferToTransaction: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession or OwnedByTransaction"
+        check(owner is SnapshotOwner.OwnedBySession) {
+            "transferToTransaction: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession. Use reassignToTransaction for Transaction->Transaction transfer."
         }
         owner = SnapshotOwner.OwnedByTransaction(transactionKey)
     }
