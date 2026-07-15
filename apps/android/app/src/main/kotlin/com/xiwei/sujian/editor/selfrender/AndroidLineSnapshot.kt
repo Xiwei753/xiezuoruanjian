@@ -52,36 +52,25 @@ data class AndroidLineSnapshot(
     val clusters: List<AndroidClusterSnapshot>,
     val visualResource: AndroidLineVisualResource?
 ) {
+    var owner: SnapshotOwner = SnapshotOwner.OwnedBySession(CompositionSessionId(revision))
+        private set
+
     private var released = false
-    var ownerRevisionId: Long = revision
-        private set
-    var ownerTransactionKey: ULong? = null
-        private set
 
     fun release(releaser: SnapshotOwner) {
         check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
-        when (releaser) {
-            is SnapshotOwner.OwnedBySession -> {
-                check(ownerRevisionId == revision && ownerTransactionKey == null) {
-                    "Illegal release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by session ${releaser.sessionId}, owner is revision=$ownerRevisionId tx=$ownerTransactionKey"
-                }
-            }
-            is SnapshotOwner.OwnedByTransaction -> {
-                check(ownerTransactionKey == releaser.transactionKey && ownerRevisionId == revision) {
-                    "Illegal release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by tx ${releaser.transactionKey}, owner is revision=$ownerRevisionId tx=$ownerTransactionKey"
-                }
-            }
-            is SnapshotOwner.Released -> {
-                throw IllegalStateException("Cannot release AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} with Released owner")
-            }
+        check(owner == releaser) {
+            "Illegal release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by $releaser, owner is $owner"
         }
         released = true
+        owner = SnapshotOwner.Released
         visualResource?.release()
     }
 
     fun releaseUnowned() {
         check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
         released = true
+        owner = SnapshotOwner.Released
         visualResource?.release()
     }
 
@@ -89,16 +78,29 @@ data class AndroidLineSnapshot(
 
     fun transferToRevision(newRevisionId: Long) {
         check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
-        ownerRevisionId = newRevisionId
     }
 
     fun transferToTransaction(transactionKey: ULong) {
         check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
-        ownerTransactionKey = transactionKey
+        check(owner is SnapshotOwner.OwnedBySession || owner is SnapshotOwner.OwnedByTransaction) {
+            "transferToTransaction: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession or OwnedByTransaction"
+        }
+        owner = SnapshotOwner.OwnedByTransaction(transactionKey)
     }
 
-    fun transferToSession() {
+    fun reassignToTransaction(newTransactionKey: ULong) {
+        check(!released) { "Cannot reassign released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        check(owner is SnapshotOwner.OwnedByTransaction) {
+            "reassignToTransaction: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedByTransaction"
+        }
+        owner = SnapshotOwner.OwnedByTransaction(newTransactionKey)
+    }
+
+    fun transferToSession(sessionId: CompositionSessionId = CompositionSessionId(revision)) {
         check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
-        ownerTransactionKey = null
+        check(owner is SnapshotOwner.OwnedByTransaction) {
+            "transferToSession: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedByTransaction"
+        }
+        owner = SnapshotOwner.OwnedBySession(sessionId)
     }
 }

@@ -44,7 +44,6 @@ data class AndroidCompositionVisualRevision(
         }
         owner = SnapshotOwner.OwnedByTransaction(transactionKey)
         lineSnapshots.forEach {
-            it.transferToRevision(revisionId)
             it.transferToTransaction(transactionKey)
         }
     }
@@ -55,8 +54,7 @@ data class AndroidCompositionVisualRevision(
         }
         owner = SnapshotOwner.OwnedByTransaction(newTransactionKey)
         lineSnapshots.forEach {
-            it.transferToRevision(revisionId)
-            it.transferToTransaction(newTransactionKey)
+            it.reassignToTransaction(newTransactionKey)
         }
     }
 
@@ -66,8 +64,7 @@ data class AndroidCompositionVisualRevision(
         }
         owner = SnapshotOwner.OwnedBySession(sid)
         lineSnapshots.forEach {
-            it.transferToRevision(revisionId)
-            it.transferToSession()
+            it.transferToSession(sid)
         }
     }
 
@@ -98,7 +95,6 @@ data class CommittedVisualRevision(
         }
         owner = SnapshotOwner.OwnedByTransaction(transactionKey)
         lineSnapshots.forEach {
-            it.transferToRevision(revisionId)
             it.transferToTransaction(transactionKey)
         }
     }
@@ -109,8 +105,7 @@ data class CommittedVisualRevision(
         }
         owner = SnapshotOwner.OwnedByTransaction(newTransactionKey)
         lineSnapshots.forEach {
-            it.transferToRevision(revisionId)
-            it.transferToTransaction(newTransactionKey)
+            it.reassignToTransaction(newTransactionKey)
         }
     }
 
@@ -120,8 +115,7 @@ data class CommittedVisualRevision(
         }
         owner = SnapshotOwner.OwnedBySession(sid)
         lineSnapshots.forEach {
-            it.transferToRevision(revisionId)
-            it.transferToSession()
+            it.transferToSession(sid)
         }
     }
 
