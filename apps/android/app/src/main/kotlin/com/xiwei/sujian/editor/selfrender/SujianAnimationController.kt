@@ -1385,6 +1385,9 @@ class SujianAnimationController(
         val preeditEndLine = virtualLayout.getLineForOffset(
             (compositionReplaceRange.start + preeditText.length).coerceIn(0, virtualText.length)
         )
+        val affectedParagraphEndLine = findAffectedParagraphEndLine(virtualLayout, preeditEndLine)
+        val snapshotEndLine = affectedParagraphEndLine.coerceAtMost(virtualLayout.lineCount - 1)
+
         val preliminaryEndLine = computeStableSuffixEndLine(
             prevCompositionRevision, committedText, virtualText, virtualLayout,
             compositionReplaceRange, preeditText, affectedStartLine, preeditEndLine
@@ -1396,7 +1399,7 @@ class SujianAnimationController(
             val committedLayout = if (committedText.isNotEmpty()) layout.getLayout(committedText) else null
             val oldRevision = snapshotBuilder.currentCommittedRevision()
             if (committedLayout != null && committedText.isNotEmpty()) {
-                val endLine = preliminaryEndLine.coerceAtMost(committedLayout.lineCount - 1)
+                val endLine = snapshotEndLine.coerceAtMost(committedLayout.lineCount - 1)
                 snapshotBuilder.buildLineSnapshots(committedText, affectedStartLine..endLine, oldRevision, renderer.getTextColor())
             } else {
                 emptyList()
@@ -1404,7 +1407,7 @@ class SujianAnimationController(
         }
 
         val newLineSnapshots = snapshotBuilder.buildLineSnapshots(
-            virtualText, affectedStartLine..preliminaryEndLine, newRevision, renderer.getTextColor()
+            virtualText, affectedStartLine..snapshotEndLine, newRevision, renderer.getTextColor()
         )
 
         val affectedEndLine = computeStableSuffixEndLine(
@@ -1590,13 +1593,7 @@ class SujianAnimationController(
             ownedOldRevision = prevCompositionRevision,
             ownedNewRevision = compositionRevision,
             onTransactionComplete = { newRev, completedTxKey ->
-                when (val result = compositionManager.returnFromTransaction(newRev, completedTxKey, managerGeneration)) {
-                    is ReturnFromTransactionResult.Accepted -> result
-                    is ReturnFromTransactionResult.RejectedStale -> {
-                        result.revision.release(result.revision.owner)
-                        result
-                    }
-                }
+                compositionManager.returnFromTransaction(newRev, completedTxKey, managerGeneration)
             }
         )
 
@@ -1818,6 +1815,7 @@ class SujianAnimationController(
             val preeditEndLine = newLayout.getLineForOffset(
                 prevRevision.compositionReplaceRange.start.coerceIn(0, newText.length)
             )
+            val commitCancelSnapshotEndLine = findAffectedParagraphEndLine(newLayout, preeditEndLine).coerceAtMost(newLayout.lineCount - 1)
             val preliminaryEndLine = computeCommitCancelStableSuffixEndLine(
                 prevRevision, newText, newLayout, preeditEndLine,
                 isCommit = isCommit,
@@ -1825,7 +1823,7 @@ class SujianAnimationController(
                 candidateUtf16EndExclusive = candidateUtf16EndExclusive
             )
             val preliminaryNewLineSnapshots = snapshotBuilder.buildLineSnapshots(
-                newText, preeditStartLine.coerceAtMost(preliminaryEndLine)..preliminaryEndLine, newRevision, renderer.getTextColor()
+                newText, preeditStartLine.coerceAtMost(commitCancelSnapshotEndLine)..commitCancelSnapshotEndLine, newRevision, renderer.getTextColor()
             )
             val endLine = computeCommitCancelStableSuffixEndLine(
                 prevRevision, newText, newLayout, preeditEndLine,
