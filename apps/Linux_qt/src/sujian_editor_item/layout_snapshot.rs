@@ -211,6 +211,13 @@ impl EditorLayoutSnapshot {
             .collect()
     }
 
+    pub fn clusters_in_byte_range(&self, byte_start: usize, byte_end: usize) -> Vec<&LineClusterSnapshot> {
+        self.line_snapshots
+            .iter()
+            .flat_map(|l| l.clusters_in_byte_range(byte_start, byte_end))
+            .collect()
+    }
+
     pub fn content_height(&self) -> f32 {
         self.layout_snapshot.content_height
     }
