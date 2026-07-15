@@ -160,16 +160,16 @@ class SujianEditorRenderer(
                     )
                 }
             }
-            if (detachedNewRevision != null && tx.operationKind == AndroidVisualOperationKind.CompositionUpdate) {
+            if (detachedNewRevision != null && (tx.operationKind == AndroidVisualOperationKind.CompositionUpdate || tx.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel)) {
                 tx.ownedOldRevision = detachedNewRevision
-                if (detachedOldRevision != null && !detachedOldRevision.isReleased()) {
+                if (detachedOldRevision != null) {
                     detachedOldRevision.release(SnapshotOwner.OwnedByTransaction(conflicting.key))
                 }
             } else {
-                if (detachedOldRevision != null && !detachedOldRevision.isReleased()) {
+                if (detachedOldRevision != null) {
                     detachedOldRevision.release(SnapshotOwner.OwnedByTransaction(conflicting.key))
                 }
-                if (detachedNewRevision != null && !detachedNewRevision.isReleased()) {
+                if (detachedNewRevision != null) {
                     detachedNewRevision.release(SnapshotOwner.OwnedByTransaction(conflicting.key))
                 }
             }

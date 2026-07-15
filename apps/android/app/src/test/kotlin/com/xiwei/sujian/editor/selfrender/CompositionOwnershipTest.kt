@@ -118,15 +118,19 @@ class CompositionOwnershipTest {
         assertNull(manager.getCurrent())
     }
 
-    @Test
-    fun takeCurrentForTransaction_returnsNullWhenRevisionWithActiveTransaction() {
+    @Test(expected = IllegalStateException::class)
+    fun takeCurrentForTransaction_throwsOnDoubleTake() {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
         manager.takeCurrentForTransaction(100u)
 
-        val result = manager.takeCurrentForTransaction(101u)
+        manager.takeCurrentForTransaction(101u)
+    }
+
+    @Test
+    fun takeCurrentForTransaction_returnsNullWhenNoRevision() {
+        val result = manager.takeCurrentForTransaction(100u)
         assertNull(result)
-        assertEquals(100u, manager.getActiveTransactionKey())
     }
 
     @Test
@@ -178,6 +182,16 @@ class CompositionOwnershipTest {
         manager.setCurrent(rev1)
         manager.clear()
         rev1.release(SnapshotOwner.OwnedBySession(CompositionSessionId(1)))
+    }
+
+    @Test(expected = IllegalStateException::class)
+    fun doubleReleaseViaTransaction_throws() {
+        val rev1 = makeRevision(1)
+        manager.setCurrent(rev1)
+        val taken = manager.takeCurrentForTransaction(100u)
+        assertNotNull(taken)
+        taken!!.release(SnapshotOwner.OwnedByTransaction(100u))
+        taken.release(SnapshotOwner.OwnedByTransaction(100u))
     }
 
     @Test(expected = IllegalStateException::class)
@@ -677,6 +691,120 @@ class CompositionOwnershipTest {
             fail("Expected IllegalStateException for wrong transactionKey")
         } catch (_: IllegalStateException) {
         }
+    }
+
+    @Test
+    fun rebaseTransactionChain_withFakeResources_noLeakOrUseAfterRelease() {
+        val allResources = mutableListOf<FakeVisualResource>()
+        val sessionId = CompositionSessionId(1)
+
+        var currentRev = makeRevisionWithFakeResources(1, 2)
+        allResources.addAll(currentRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
+        manager.setCurrent(currentRev)
+
+        for (i in 2..100L) {
+            val txKey = i.toULong()
+            val prevRev = manager.takeCurrentForTransaction(txKey)
+            assertNotNull(prevRev)
+
+            val newRev = makeRevisionWithFakeResources(i, 2)
+            allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
+
+            var returnedRev: AndroidCompositionVisualRevision? = null
+            val tx = AndroidPlatformVisualTransaction(
+                key = txKey,
+                state = AndroidVisualTransactionState.Rendering,
+                operationKind = AndroidVisualOperationKind.CompositionUpdate,
+                animationMode = AnimationModeData.GlyphAnimation,
+                durationMs = 160,
+                oldRevision = i - 1,
+                newRevision = i,
+                slices = mutableListOf(),
+                oldLineSnapshots = mutableListOf(),
+                newLineSnapshots = mutableListOf(),
+                staticLinePatches = mutableListOf(),
+                decorationSlices = mutableListOf(),
+                cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+                ownedOldRevision = prevRev,
+                ownedNewRevision = newRev,
+                onTransactionComplete = { rev, key ->
+                    returnedRev = rev
+                }
+            )
+
+            if (i % 10 == 0L) {
+                val detachedOld = tx.detachOldRevisionForRebase()
+                val detachedNew = tx.takeNewRevisionForRebase()
+                assertNotNull(detachedOld)
+                assertNotNull(detachedNew)
+                detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
+                detachedNew!!.transferToSession(sessionId)
+                manager.returnFromTransaction(detachedNew, txKey)
+                currentRev = detachedNew
+                tx.cancel("rebased")
+            } else {
+                tx.complete()
+                assertNotNull(returnedRev)
+                assertFalse(returnedRev!!.isReleased())
+                manager.returnFromTransaction(returnedRev, txKey)
+                currentRev = returnedRev!!
+            }
+        }
+
+        val finalRev = manager.getCurrent()
+        assertNotNull(finalRev)
+        assertEquals(100L, finalRev!!.revisionId)
+        assertFalse(finalRev.isReleased())
+
+        val releasedCount = allResources.count { it.released }
+        val unreleasedCount = allResources.count { !it.released }
+        assertEquals(2, unreleasedCount)
+
+        manager.clear()
+        assertTrue(finalRev.isReleased())
+        assertEquals(allResources.size, allResources.count { it.released })
+    }
+
+    @Test
+    fun commitOrCancel_takesOverActiveCompositionUpdate() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        val prevRev = manager.takeCurrentForTransaction(100u)
+        assertNotNull(prevRev)
+
+        val newRev = makeRevisionWithFakeResources(2, 2)
+        val tx1 = AndroidPlatformVisualTransaction(
+            key = 100u,
+            state = AndroidVisualTransactionState.Rendering,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 1,
+            newRevision = 2,
+            slices = mutableListOf(),
+            oldLineSnapshots = mutableListOf(),
+            newLineSnapshots = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = prevRev,
+            ownedNewRevision = newRev
+        )
+
+        val takenNewRev = tx1.takeNewRevisionForRebase()
+        assertNotNull(takenNewRev)
+        assertFalse(takenNewRev!!.isReleased())
+
+        tx1.onTransactionComplete = null
+        tx1.cancel("superseded_by_commit_cancel")
+
+        assertFalse(takenNewRev.isReleased())
+        for (snap in takenNewRev.lineSnapshots) {
+            assertFalse(snap.isReleased())
+        }
+
+        takenNewRev.release(SnapshotOwner.OwnedByTransaction(100u))
+        assertTrue(takenNewRev.isReleased())
     }
 }
 

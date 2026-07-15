@@ -590,13 +590,26 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             let old_line = {
-                let old_comp_end = old_snapshot.line_snapshots.iter()
-                    .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
+                let best_match = new_line.clusters.iter()
+                    .filter_map(|nc| {
+                        old_snapshot.line_snapshots.iter().find_map(|ol| {
+                            ol.clusters.iter().find(|oc| {
+                                oc.shaping_identity.is_same_shaping(&nc.shaping_identity)
+                                    && oc.byte_end - oc.byte_start == nc.byte_end - nc.byte_start
+                            }).map(|_| ol)
+                        })
+                    })
                     .next()
-                    .unwrap_or(composition_byte_end as i64);
-                let byte_shift = old_comp_end - composition_byte_end as i64;
-                let mapped_byte = new_line.byte_start as i64 + byte_shift;
-                if mapped_byte >= 0 { old_snapshot.line_for_byte(mapped_byte as usize) } else { None }
+                    .cloned();
+                best_match.or_else(|| {
+                    let old_comp_end = old_snapshot.line_snapshots.iter()
+                        .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
+                        .next()
+                        .unwrap_or(composition_byte_end as i64);
+                    let byte_shift = old_comp_end - composition_byte_end as i64;
+                    let mapped_byte = new_line.byte_start as i64 + byte_shift;
+                    if mapped_byte >= 0 { old_snapshot.line_for_byte(mapped_byte as usize).cloned() } else { None }
+                })
             };
             if let Some(ol) = old_line {
                 let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
@@ -808,13 +821,26 @@ impl LinuxEditorAnimationCoordinator {
                 }
 
                 let old_line = {
-                    let old_comp_end = old_snapshot.line_snapshots.iter()
-                        .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
+                    let best_match = new_line.clusters.iter()
+                        .filter_map(|nc| {
+                            old_snapshot.line_snapshots.iter().find_map(|ol| {
+                                ol.clusters.iter().find(|oc| {
+                                    oc.shaping_identity.is_same_shaping(&nc.shaping_identity)
+                                        && oc.byte_end - oc.byte_start == nc.byte_end - nc.byte_start
+                                }).map(|_| ol)
+                            })
+                        })
                         .next()
-                        .unwrap_or(composition_byte_end as i64);
-                    let byte_shift = old_comp_end - composition_byte_end as i64;
-                    let mapped_byte = new_line.byte_start as i64 + byte_shift;
-                    if mapped_byte >= 0 { old_snapshot.line_for_byte(mapped_byte as usize) } else { None }
+                        .cloned();
+                    best_match.or_else(|| {
+                        let old_comp_end = old_snapshot.line_snapshots.iter()
+                            .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
+                            .next()
+                            .unwrap_or(composition_byte_end as i64);
+                        let byte_shift = old_comp_end - composition_byte_end as i64;
+                        let mapped_byte = new_line.byte_start as i64 + byte_shift;
+                        if mapped_byte >= 0 { old_snapshot.line_for_byte(mapped_byte as usize).cloned() } else { None }
+                    })
                 };
                 if let Some(ol) = old_line {
                     let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);

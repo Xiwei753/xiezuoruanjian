@@ -1688,24 +1688,34 @@ class SujianAnimationController(
                         val oldLineSnap = oldLineSnapshots.find { os ->
                             os.documentByteStart == oldRange.start || (os.documentByteStart <= oldRange.start && os.documentByteEnd >= oldRange.end)
                         }
-                        if (newLineSnap != null && oldLineSnap != null) {
-                            val newClusters = newLineSnap.clusters.filter { c ->
-                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
-                            }
-                            val oldClusters = oldLineSnap.clusters.filter { c ->
+                        val probeOldClusters = if (oldLineSnap == null && oldLayout != null && oldText.isNotEmpty()) {
+                            val pOldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, oldRange.start).coerceIn(0, oldText.length)
+                            val pOldLineIdx = oldLayout.getLineForOffset(pOldUtf16Start)
+                            snapshotBuilder.buildLineLayoutProbes(oldText, pOldLineIdx..pOldLineIdx).firstOrNull()?.clusters?.filter { c ->
                                 c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                             }
-                            if (newClusters.size != oldClusters.size) {
-                                false
-                            } else {
-                                newClusters.zip(oldClusters).all { (nc, oc) ->
-                                    nc.shapingIdentity == oc.shapingIdentity &&
-                                    nc.textDirection == oc.textDirection &&
-                                    nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
-                                }
+                        } else null
+                        val probeNewClusters = if (newLineSnap == null) {
+                            snapshotBuilder.buildLineLayoutProbes(virtualText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
+                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
                             }
-                        } else {
+                        } else null
+                        val effectiveOldClusters = oldLineSnap?.clusters?.filter { c ->
+                            c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
+                        } ?: probeOldClusters
+                        val effectiveNewClusters = newLineSnap?.clusters?.filter { c ->
+                            c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                        } ?: probeNewClusters
+                        if (effectiveOldClusters == null || effectiveNewClusters == null) {
                             false
+                        } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
+                            false
+                        } else {
+                            effectiveNewClusters.zip(effectiveOldClusters).all { (nc, oc) ->
+                                nc.shapingIdentity == oc.shapingIdentity &&
+                                nc.textDirection == oc.textDirection &&
+                                nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
+                            }
                         }
                     }
                 }
@@ -1737,16 +1747,22 @@ class SujianAnimationController(
         val txKey = nextAnimationId()
         var prevRevision = compositionManager.takeCurrentForTransaction(txKey)
         var prevRevisionFromActiveTransaction = false
+        var activeCompositionTx: AndroidPlatformVisualTransaction? = null
 
         if (prevRevision == null && compositionManager.getActiveTransactionKey() != null) {
-            val activeTx = renderer.getActiveTransactions().find {
+            activeCompositionTx = renderer.getActiveTransactions().find {
                 it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
                 (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
             }
-            if (activeTx != null) {
-                prevRevision = activeTx.takeNewRevisionForRebase()
+            if (activeCompositionTx != null) {
+                prevRevision = activeCompositionTx!!.takeNewRevisionForRebase()
                 prevRevisionFromActiveTransaction = true
             }
+        }
+
+        if (activeCompositionTx != null && prevRevisionFromActiveTransaction) {
+            activeCompositionTx!!.onTransactionComplete = null
+            activeCompositionTx!!.cancel("superseded_by_commit_cancel")
         }
 
         compositionManager.clear()
@@ -2103,24 +2119,34 @@ class SujianAnimationController(
                         val oldLineSnap = oldLineSnapshots.find { os ->
                             os.documentByteStart == oldRange.start || (os.documentByteStart <= oldRange.start && os.documentByteEnd >= oldRange.end)
                         }
-                        if (newLineSnap != null && oldLineSnap != null) {
-                            val newClusters = newLineSnap.clusters.filter { c ->
-                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
-                            }
-                            val oldClusters = oldLineSnap.clusters.filter { c ->
+                        val probeOldClusters = if (oldLineSnap == null && oldLayout != null && oldText.isNotEmpty()) {
+                            val pOldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, oldRange.start).coerceIn(0, oldText.length)
+                            val pOldLineIdx = oldLayout.getLineForOffset(pOldUtf16Start)
+                            snapshotBuilder.buildLineLayoutProbes(oldText, pOldLineIdx..pOldLineIdx).firstOrNull()?.clusters?.filter { c ->
                                 c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                             }
-                            if (newClusters.size != oldClusters.size) {
-                                false
-                            } else {
-                                newClusters.zip(oldClusters).all { (nc, oc) ->
-                                    nc.shapingIdentity == oc.shapingIdentity &&
-                                    nc.textDirection == oc.textDirection &&
-                                    nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
-                                }
+                        } else null
+                        val probeNewClusters = if (newLineSnap == null) {
+                            snapshotBuilder.buildLineLayoutProbes(newText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
+                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
                             }
-                        } else {
+                        } else null
+                        val effectiveOldClusters = oldLineSnap?.clusters?.filter { c ->
+                            c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
+                        } ?: probeOldClusters
+                        val effectiveNewClusters = newLineSnap?.clusters?.filter { c ->
+                            c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                        } ?: probeNewClusters
+                        if (effectiveOldClusters == null || effectiveNewClusters == null) {
                             false
+                        } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
+                            false
+                        } else {
+                            effectiveNewClusters.zip(effectiveOldClusters).all { (nc, oc) ->
+                                nc.shapingIdentity == oc.shapingIdentity &&
+                                nc.textDirection == oc.textDirection &&
+                                nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
+                            }
                         }
                     }
                 }

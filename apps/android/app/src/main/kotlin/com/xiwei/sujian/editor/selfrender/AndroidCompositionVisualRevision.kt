@@ -83,6 +83,9 @@ class AndroidCompositionManager {
         if (currentRevision == null && takenByTransactionKey != null) {
             return null
         }
+        if (currentRevision != null && takenByTransactionKey != null) {
+            throw IllegalStateException("takeCurrentForTransaction: illegal double take, already taken by $takenByTransactionKey, new request $transactionKey")
+        }
         val rev = currentRevision ?: return null
         check(rev.owner is SnapshotOwner.OwnedBySession) {
             "takeCurrentForTransaction: current revision ${rev.revisionId} owner is ${rev.owner}, expected OwnedBySession"
@@ -98,6 +101,9 @@ class AndroidCompositionManager {
     fun returnFromTransaction(revision: AndroidCompositionVisualRevision, transactionKey: ULong) {
         check(revision.owner is SnapshotOwner.OwnedByTransaction && (revision.owner as SnapshotOwner.OwnedByTransaction).transactionKey == transactionKey) {
             "returnFromTransaction: revision ${revision.revisionId} owner is ${revision.owner}, expected OwnedByTransaction($transactionKey)"
+        }
+        check(takenByTransactionKey == transactionKey) {
+            "returnFromTransaction: manager expected transactionKey $takenByTransactionKey, got $transactionKey"
         }
         revision.transferToSession(revision.sessionId)
         currentRevision = revision

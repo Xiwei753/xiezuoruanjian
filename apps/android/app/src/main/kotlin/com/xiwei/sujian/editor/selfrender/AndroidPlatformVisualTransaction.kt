@@ -100,6 +100,18 @@ data class AndroidPlatformVisualTransaction(
         val newRev = ownedNewRevision
         ownedOldRevision = null
         ownedNewRevision = null
+        val isComposition = operationKind == AndroidVisualOperationKind.CompositionUpdate ||
+            operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel
+        if (!isComposition) {
+            for (snap in oldLineSnapshots) {
+                snap.release()
+            }
+            for (snap in newLineSnapshots) {
+                snap.release()
+            }
+        }
+        oldLineSnapshots.clear()
+        newLineSnapshots.clear()
         if (newRev != null) {
             onTransactionComplete?.invoke(newRev, key)
         }
@@ -114,24 +126,44 @@ data class AndroidPlatformVisualTransaction(
         val oldRev = ownedOldRevision
         if (oldRev != null) {
             oldRev.release(SnapshotOwner.OwnedByTransaction(key))
+            ownedOldRevision = null
         }
         val newRev = ownedNewRevision
         if (newRev != null) {
             newRev.release(SnapshotOwner.OwnedByTransaction(key))
+            ownedNewRevision = null
         }
-        ownedOldRevision = null
-        ownedNewRevision = null
+        val isComposition = operationKind == AndroidVisualOperationKind.CompositionUpdate ||
+            operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel
+        if (!isComposition) {
+            for (snap in oldLineSnapshots) {
+                snap.release()
+            }
+            for (snap in newLineSnapshots) {
+                snap.release()
+            }
+        }
+        oldLineSnapshots.clear()
+        newLineSnapshots.clear()
     }
 
     fun detachOldRevisionForRebase(): AndroidCompositionVisualRevision? {
         val rev = ownedOldRevision
         ownedOldRevision = null
+        if (rev != null) {
+            val revId = rev.revisionId
+            oldLineSnapshots.removeAll { it.revision == revId }
+        }
         return rev
     }
 
     fun takeNewRevisionForRebase(): AndroidCompositionVisualRevision? {
         val rev = ownedNewRevision
         ownedNewRevision = null
+        if (rev != null) {
+            val revId = rev.revisionId
+            newLineSnapshots.removeAll { it.revision == revId }
+        }
         return rev
     }
 }
