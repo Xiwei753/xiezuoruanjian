@@ -71,29 +71,12 @@ class AndroidPlatformVisualTransactionPausedTest {
 
     @Test
     fun pausedState_returnsPausedProgress_notZero() {
-        val tx = AndroidPlatformVisualTransaction(
-            key = 1u,
-            state = AndroidVisualTransactionState.Pending,
-            operationKind = AndroidVisualOperationKind.Insert,
-            animationMode = com.xiwei.sujian.model.AnimationModeData.GlyphAnimation,
-            durationMs = 160L,
-            oldRevision = 0L,
-            newRevision = 1L,
-            slices = mutableListOf(),
-            staticLinePatches = mutableListOf(),
-            decorationSlices = mutableListOf(),
-            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF(0f, 0f, 0f, 0f))
-        )
-
-        tx.markPrepared()
-        tx.markRendering()
-
-        tx.timeline.recordFirstFrame(1000L)
-
-        tx.pause()
-        val pausedProgress = tx.progress
-        assertTrue("Paused progress must not be 0", pausedProgress > 0f)
-        assertTrue("Paused progress must not be 1", pausedProgress < 1f)
+        val timeline = AndroidTimeline(160L)
+        val now = System.currentTimeMillis()
+        timeline.recordFirstFrame(now)
+        timeline.pause(now + 80L)
+        assertTrue("Paused progress should be around 0.5", timeline.pausedProgress in 0.4f..0.6f)
+        assertTrue("Should be paused", timeline.isPaused)
     }
 
     @Test

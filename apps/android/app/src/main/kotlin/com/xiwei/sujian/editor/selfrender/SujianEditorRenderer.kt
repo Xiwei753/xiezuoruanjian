@@ -118,6 +118,33 @@ class SujianEditorRenderer(
 
     fun addTransaction(tx: AndroidPlatformVisualTransaction): Boolean {
         if (isScrolling) {
+            if (tx.operationKind == AndroidVisualOperationKind.CompositionUpdate ||
+                tx.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel) {
+                val conflictingPending = pendingQueue.find {
+                    it.operationKind == AndroidVisualOperationKind.CompositionUpdate ||
+                    it.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel
+                }
+                if (conflictingPending != null) {
+                    val detachedOld = conflictingPending.detachOldRevisionForRebase()
+                    val detachedNew = conflictingPending.takeNewRevisionForRebase()
+                    conflictingPending.cancel("superseded_by_pending_composition")
+                    pendingQueue.removeAll { it.key == conflictingPending.key }
+                    if (tx.operationKind == AndroidVisualOperationKind.CompositionUpdate ||
+                        tx.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel) {
+                        if (detachedNew != null) {
+                            detachedNew.reassignToTransaction(tx.key)
+                            val previousOldRevision = tx.ownedOldRevision
+                            tx.ownedOldRevision = detachedNew
+                            if (previousOldRevision != null) {
+                                previousOldRevision.release(previousOldRevision.owner)
+                            }
+                        }
+                    }
+                    if (detachedOld != null) {
+                        detachedOld.release(detachedOld.owner)
+                    }
+                }
+            }
             pendingQueue.removeAll { it.key == tx.key }
             pendingQueue.add(tx)
             return true

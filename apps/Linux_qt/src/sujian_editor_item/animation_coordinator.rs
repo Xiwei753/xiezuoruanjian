@@ -703,10 +703,6 @@ impl LinuxEditorAnimationCoordinator {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
                 }
-            } else if let Some(ref sid) = shaping {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
-                }
             }
         }
 
@@ -953,10 +949,6 @@ impl LinuxEditorAnimationCoordinator {
                     }) {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
-                }
-            } else if let Some(ref sid) = shaping {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
