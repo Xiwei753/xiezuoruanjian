@@ -50,9 +50,10 @@ data class AndroidLineSnapshot(
     val baseline: Float,
     val lineImageLocalSize: RectF,
     val clusters: List<AndroidClusterSnapshot>,
-    val visualResource: AndroidLineVisualResource?
+    val visualResource: AndroidLineVisualResource?,
+    val initialSessionId: CompositionSessionId = CompositionSessionId(revision)
 ) {
-    var owner: SnapshotOwner = SnapshotOwner.OwnedBySession(CompositionSessionId(revision))
+    var owner: SnapshotOwner = SnapshotOwner.OwnedBySession(initialSessionId)
         private set
 
     fun release(releaser: SnapshotOwner) {

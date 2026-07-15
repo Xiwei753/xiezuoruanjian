@@ -52,6 +52,7 @@ class CompositionOwnershipTest {
     }
 
     private fun makeRevisionWithFakeResources(id: Long, resourceCount: Int): AndroidCompositionVisualRevision {
+        val sessionId = CompositionSessionId(id)
         val snapshots = (0 until resourceCount).map { i ->
             val fakeResource = FakeVisualResource(id * 100 + i)
             AndroidLineSnapshot(
@@ -76,7 +77,8 @@ class CompositionOwnershipTest {
                     textDirection = 0,
                     shapingIdentity = "shape_$i"
                 )),
-                visualResource = fakeResource
+                visualResource = fakeResource,
+                initialSessionId = sessionId
             )
         }
         return AndroidCompositionVisualRevision(
@@ -90,7 +92,7 @@ class CompositionOwnershipTest {
             cursorRect = android.graphics.RectF(),
             decorationRanges = emptyList(),
             revisionId = id,
-            sessionId = CompositionSessionId(id)
+            sessionId = sessionId
         )
     }
 
@@ -1706,6 +1708,53 @@ class CompositionOwnershipTest {
         tx.complete()
         assertTrue(prevRev!!.isReleased())
         assertTrue(newRev.isReleased())
+    }
+
+    @Test
+    fun lineSnapshot_initialSessionId_matchesRevisionSessionId() {
+        val sessionId = CompositionSessionId(42)
+        val snapshots = (0 until 2).map { i ->
+            AndroidLineSnapshot(
+                id = AndroidLineSnapshotId(1, i),
+                revision = 1,
+                paragraphId = 0,
+                visualLineOrdinal = i,
+                documentByteStart = i * 10,
+                documentByteEnd = (i + 1) * 10,
+                platformTextStart = i * 4,
+                platformTextEnd = (i + 1) * 4,
+                documentRect = RectF(0f, i * 20f, 200f, (i + 1) * 20f),
+                baseline = (i + 1) * 20f - 4f,
+                lineImageLocalSize = RectF(0f, 0f, 200f, 20f),
+                clusters = emptyList(),
+                visualResource = null,
+                initialSessionId = sessionId
+            )
+        }
+        val rev = AndroidCompositionVisualRevision(
+            committedText = "test",
+            compositionReplaceRange = Utf16Range(0, 0),
+            preeditRangeInVirtualText = Utf16Range(0, 4),
+            preeditText = "test",
+            virtualText = "test",
+            affectedParagraphRange = HalfOpenRange(0, 1),
+            lineSnapshots = snapshots,
+            cursorRect = RectF(),
+            decorationRanges = emptyList(),
+            revisionId = 1,
+            sessionId = sessionId
+        )
+
+        for (snap in rev.lineSnapshots) {
+            assertTrue(snap.owner is SnapshotOwner.OwnedBySession)
+            assertEquals(42, (snap.owner as SnapshotOwner.OwnedBySession).sessionId.value)
+        }
+
+        rev.release(SnapshotOwner.OwnedBySession(sessionId))
+        assertTrue(rev.isReleased())
+        for (snap in rev.lineSnapshots) {
+            assertTrue(snap.isReleased())
+        }
     }
 }
 
