@@ -1565,6 +1565,7 @@ class SujianAnimationController(
             revisionId = newRevision,
             sessionId = sessionId
         )
+        compositionRevision.transferToTransaction(txKey)
 
         val cursorTransition = AndroidCursorTransition.tween(
             cursorRect,
@@ -1787,15 +1788,13 @@ class SujianAnimationController(
                     prevRevision = activeCompositionTx.takeNewRevisionForRebase()
                     detachedOldFromActive = activeCompositionTx.detachOldRevisionForRebase()
                     prevRevisionFromActiveTransaction = true
+                    activeCompositionTx.onTransactionComplete = null
+                    activeCompositionTx.cancel("superseded_by_commit_cancel")
                 }
+                compositionManager.reassignActiveTransactionKey(txKey)
             }
             is TakeCurrentResult.NoRevisionAvailable -> {
             }
-        }
-
-        if (activeCompositionTx != null && prevRevisionFromActiveTransaction) {
-            activeCompositionTx.onTransactionComplete = null
-            activeCompositionTx.cancel("superseded_by_commit_cancel")
         }
 
         if (detachedOldFromActive != null) {
@@ -2048,6 +2047,25 @@ class SujianAnimationController(
             animationDurationMs
         )
 
+        val commitCancelRevision = if (newLineSnapshots.isNotEmpty()) {
+            AndroidCompositionVisualRevision(
+                committedText = newText,
+                compositionReplaceRange = prevRevision.compositionReplaceRange,
+                preeditRangeInVirtualText = prevRevision.preeditRangeInVirtualText,
+                preeditText = prevRevision.preeditText,
+                virtualText = prevRevision.virtualText,
+                affectedParagraphRange = prevRevision.affectedParagraphRange,
+                lineSnapshots = newLineSnapshots,
+                cursorRect = cursorRect,
+                decorationRanges = prevRevision.decorationRanges,
+                revisionId = newRevision,
+                sessionId = prevRevision.sessionId
+            )
+        } else {
+            null
+        }
+        commitCancelRevision?.transferToTransaction(txKey)
+
         val tx = AndroidPlatformVisualTransaction(
             key = txKey,
             state = AndroidVisualTransactionState.Pending,
@@ -2063,7 +2081,10 @@ class SujianAnimationController(
             decorationSlices = mutableListOf(),
             cursorTransition = cursorTransition,
             ownedOldRevision = prevRevision,
-            ownedNewRevision = null
+            ownedNewRevision = commitCancelRevision,
+            onTransactionComplete = { rev, _ ->
+                rev.release(rev.owner)
+            }
         )
 
         if (!renderer.addTransaction(tx)) {
