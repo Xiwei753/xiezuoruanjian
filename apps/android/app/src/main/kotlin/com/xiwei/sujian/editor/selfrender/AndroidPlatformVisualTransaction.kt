@@ -122,7 +122,7 @@ data class AndroidPlatformVisualTransaction(
             oldRev.release()
         } else {
             for (snapshot in oldLineSnapshots) {
-                snapshot.release()
+                if (!snapshot.isReleased()) snapshot.release()
             }
         }
     }
@@ -133,7 +133,7 @@ data class AndroidPlatformVisualTransaction(
             newRev.release()
         } else {
             for (snapshot in newLineSnapshots) {
-                snapshot.release()
+                if (!snapshot.isReleased()) snapshot.release()
             }
         }
     }
@@ -146,12 +146,18 @@ data class AndroidPlatformVisualTransaction(
     fun detachOldRevisionForRebase(): AndroidCompositionVisualRevision? {
         val rev = ownedOldRevision
         ownedOldRevision = null
+        if (rev != null) {
+            oldLineSnapshots.clear()
+        }
         return rev
     }
 
     fun takeNewRevisionForRebase(): AndroidCompositionVisualRevision? {
         val rev = ownedNewRevision
         ownedNewRevision = null
+        if (rev != null) {
+            newLineSnapshots.clear()
+        }
         return rev
     }
 }
