@@ -31,3 +31,7 @@ data class HalfOpenRange(val start: Int, val end: Int) : Comparable<HalfOpenRang
         val EMPTY = HalfOpenRange(0, 0)
     }
 }
+
+typealias Utf16Range = HalfOpenRange
+
+typealias ByteRange = HalfOpenRange

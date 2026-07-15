@@ -55,33 +55,39 @@ data class AndroidLineSnapshot(
     var owner: SnapshotOwner = SnapshotOwner.OwnedBySession(CompositionSessionId(revision))
         private set
 
-    private var released = false
-
     fun release(releaser: SnapshotOwner) {
-        check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        check(owner !is SnapshotOwner.Released) {
+            "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by $releaser, already Released"
+        }
         check(owner == releaser) {
             "Illegal release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} by $releaser, owner is $owner"
         }
-        released = true
         owner = SnapshotOwner.Released
         visualResource?.release()
     }
 
-    fun releaseUnowned() {
-        check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
-        released = true
+    fun isReleased(): Boolean = owner is SnapshotOwner.Released
+
+    fun releaseBySessionOwner() {
+        check(owner !is SnapshotOwner.Released) {
+            "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}"
+        }
+        check(owner is SnapshotOwner.OwnedBySession) {
+            "releaseBySessionOwner: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession"
+        }
         owner = SnapshotOwner.Released
         visualResource?.release()
     }
-
-    fun isReleased(): Boolean = released
 
     fun transferToRevision(newRevisionId: Long) {
-        check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        check(owner !is SnapshotOwner.Released) {
+            "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}"
+        }
+        owner = SnapshotOwner.OwnedBySession(CompositionSessionId(newRevisionId))
     }
 
     fun transferToTransaction(transactionKey: ULong) {
-        check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        check(owner !is SnapshotOwner.Released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
         check(owner is SnapshotOwner.OwnedBySession || owner is SnapshotOwner.OwnedByTransaction) {
             "transferToTransaction: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession or OwnedByTransaction"
         }
@@ -89,7 +95,7 @@ data class AndroidLineSnapshot(
     }
 
     fun reassignToTransaction(newTransactionKey: ULong) {
-        check(!released) { "Cannot reassign released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        check(owner !is SnapshotOwner.Released) { "Cannot reassign released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
         check(owner is SnapshotOwner.OwnedByTransaction) {
             "reassignToTransaction: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedByTransaction"
         }
@@ -97,7 +103,7 @@ data class AndroidLineSnapshot(
     }
 
     fun transferToSession(sessionId: CompositionSessionId = CompositionSessionId(revision)) {
-        check(!released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
+        check(owner !is SnapshotOwner.Released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
         check(owner is SnapshotOwner.OwnedByTransaction) {
             "transferToSession: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedByTransaction"
         }

@@ -184,8 +184,8 @@ class CompositionReplaceRangeTest {
         buffer.setComposingText("abc", 1)
 
         val range = buffer.compositionSession.preeditRangeInVirtualText()
-        assertEquals(2, range.first)
-        assertEquals(5, range.last)
+        assertEquals(2, range.start)
+        assertEquals(5, range.end)
     }
 
     @Test
@@ -195,8 +195,8 @@ class CompositionReplaceRangeTest {
         buffer.setComposingText("abc", 1)
 
         val range = buffer.compositionSession.preeditRangeInVirtualText()
-        assertEquals(1, range.first)
-        assertEquals(4, range.last)
+        assertEquals(1, range.start)
+        assertEquals(4, range.end)
     }
 
     @Test

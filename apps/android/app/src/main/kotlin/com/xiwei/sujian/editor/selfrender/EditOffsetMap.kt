@@ -86,8 +86,12 @@ class EditOffsetMap private constructor(
         return false
     }
 
-    data class OldRange(val start: Int, val end: Int)
-    data class NewRange(val start: Int, val end: Int)
+    data class OldRange(val start: Int, val end: Int) {
+        fun toByteRange(): ByteRange = ByteRange(start, end)
+    }
+    data class NewRange(val start: Int, val end: Int) {
+        fun toByteRange(): ByteRange = ByteRange(start, end)
+    }
 
     companion object {
         fun fromReplacement(
