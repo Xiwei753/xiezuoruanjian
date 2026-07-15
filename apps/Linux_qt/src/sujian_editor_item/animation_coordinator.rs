@@ -689,23 +689,23 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo, _) in &rebase_frames {
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
                 if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
-                } else {
-                    let best_match = slices.iter_mut()
-                        .filter(|ns| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|ns| {
-                            let start_dist = (ns.byte_start as i64 - mbs as i64).unsigned_abs();
-                            let end_dist = (ns.byte_end as i64 - mbe as i64).unsigned_abs();
-                            start_dist + end_dist
-                        });
-                    if let Some(new_slice) = best_match {
+                } else if let Some(ref sid) = shaping {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                        ns.shaping_identity.as_ref() == Some(sid) &&
+                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
+                    }) {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
+                }
+            } else if let Some(ref sid) = shaping {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
@@ -940,23 +940,23 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo, _) in &rebase_frames {
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
                 if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
-                } else {
-                    let best_match = slices.iter_mut()
-                        .filter(|ns| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|ns| {
-                            let start_dist = (ns.byte_start as i64 - mbs as i64).unsigned_abs();
-                            let end_dist = (ns.byte_end as i64 - mbe as i64).unsigned_abs();
-                            start_dist + end_dist
-                        });
-                    if let Some(new_slice) = best_match {
+                } else if let Some(ref sid) = shaping {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                        ns.shaping_identity.as_ref() == Some(sid) &&
+                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
+                    }) {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     }
+                }
+            } else if let Some(ref sid) = shaping {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.shaping_identity.as_ref() == Some(sid)) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
                 }
             }
         }
