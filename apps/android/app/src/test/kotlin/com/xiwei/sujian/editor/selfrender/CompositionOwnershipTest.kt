@@ -712,14 +712,16 @@ class CompositionOwnershipTest {
     }
 
     @Test
-    fun returnFromTransaction_wrongTransactionKey_ignored() {
+    fun returnFromTransaction_wrongTransactionKey_rejectedAndReleased() {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
         manager.takeCurrentForTransaction(100uL)
 
         val rev2 = makeRevision(2)
-        manager.returnFromTransaction(rev2, 999uL, manager.getGeneration())
+        val result = manager.returnFromTransaction(rev2, 999uL, manager.getGeneration())
 
+        assertTrue(result is ReturnFromTransactionResult.RejectedStale)
+        assertTrue(rev2.isReleased())
         assertNull(manager.getCurrent())
         assertEquals(100uL, manager.getActiveTransactionKey())
     }
@@ -1016,7 +1018,7 @@ class CompositionOwnershipTest {
     }
 
     @Test
-    fun returnFromTransaction_staleGeneration_ignored() {
+    fun returnFromTransaction_staleGeneration_rejectedAndReleased() {
         val rev1 = makeRevisionWithFakeResources(1, 2)
         manager.setCurrent(rev1)
         manager.takeCurrentForTransaction(100uL)
@@ -1025,13 +1027,15 @@ class CompositionOwnershipTest {
         manager.clear()
 
         val rev2 = makeRevisionWithFakeResources(2, 2)
-        manager.returnFromTransaction(rev2, 100uL, staleGen)
+        val result = manager.returnFromTransaction(rev2, 100uL, staleGen)
 
+        assertTrue(result is ReturnFromTransactionResult.RejectedStale)
+        assertTrue(rev2.isReleased())
         assertNull(manager.getCurrent())
     }
 
     @Test
-    fun returnFromTransaction_afterManagerCleared_doesNotCorruptState() {
+    fun returnFromTransaction_afterManagerCleared_staleRevisionReleased() {
         val rev1 = makeRevisionWithFakeResources(1, 2)
         manager.setCurrent(rev1)
         manager.takeCurrentForTransaction(100uL)
@@ -1043,8 +1047,10 @@ class CompositionOwnershipTest {
         manager.setCurrent(rev2)
 
         val staleRev = makeRevisionWithFakeResources(3, 2)
-        manager.returnFromTransaction(staleRev, 100uL, staleGen)
+        val result = manager.returnFromTransaction(staleRev, 100uL, staleGen)
 
+        assertTrue(result is ReturnFromTransactionResult.RejectedStale)
+        assertTrue(staleRev.isReleased())
         assertEquals(2L, manager.getCurrent()!!.revisionId)
     }
 
@@ -1576,6 +1582,130 @@ class CompositionOwnershipTest {
 
         manager.clear()
         assertNull(manager.getActiveTransactionKey())
+    }
+
+    @Test
+    fun commitCancel_usesCommittedVisualRevision() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        val prevRev = manager.takeCurrentForTransaction(100uL)
+        assertNotNull(prevRev)
+
+        val newRev = makeRevisionWithFakeResources(2, 2)
+        newRev.transferToTransaction(100uL)
+        val activeTx = AndroidPlatformVisualTransaction(
+            key = 100uL,
+            state = AndroidVisualTransactionState.Rendering,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 1,
+            newRevision = 2,
+            slices = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = prevRev,
+            ownedNewRevision = newRev
+        )
+
+        val takenNewRev = activeTx.takeNewRevisionForRebase() as? AndroidCompositionVisualRevision
+        val detachedOldRev = activeTx.detachOldRevisionForRebase() as? AndroidCompositionVisualRevision
+        activeTx.onTransactionComplete = null
+        activeTx.cancel("superseded_by_commit_cancel")
+
+        if (detachedOldRev != null) {
+            detachedOldRev.release(detachedOldRev.owner)
+        }
+
+        assertNotNull(takenNewRev)
+        takenNewRev!!.reassignToTransaction(200uL)
+
+        val committedRev = CommittedVisualRevision(
+            revisionId = 3,
+            sessionId = takenNewRev.sessionId,
+            fullText = "committed text",
+            affectedParagraphRange = HalfOpenRange(0, 1),
+            lineSnapshots = emptyList(),
+            cursorRect = RectF()
+        )
+        committedRev.transferToTransaction(200uL)
+
+        val commitTx = AndroidPlatformVisualTransaction(
+            key = 200uL,
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.CompositionCommitOrCancel,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 2,
+            newRevision = 3,
+            slices = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = takenNewRev,
+            ownedNewRevision = committedRev,
+            onTransactionComplete = { rev, _ ->
+                rev.release(rev.owner)
+                ReturnFromTransactionResult.Accepted
+            }
+        )
+
+        commitTx.complete()
+        assertTrue(takenNewRev.isReleased())
+        assertTrue(committedRev.isReleased())
+    }
+
+    @Test
+    fun returnFromTransaction_rejectedStale_releasesRevisionWithFakeResources() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        manager.takeCurrentForTransaction(100uL)
+        val staleGen = manager.getGeneration()
+
+        manager.clear()
+
+        val staleRev = makeRevisionWithFakeResources(2, 2)
+        val result = manager.returnFromTransaction(staleRev, 100uL, staleGen)
+
+        assertTrue(result is ReturnFromTransactionResult.RejectedStale)
+        assertTrue(staleRev.isReleased())
+        for (snap in staleRev.lineSnapshots) {
+            assertTrue(snap.isReleased())
+        }
+    }
+
+    @Test
+    fun transactionComplete_callbackRejectedStale_noDoubleRelease() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        val prevRev = manager.takeCurrentForTransaction(100uL)
+        val newRev = makeRevisionWithFakeResources(2, 2)
+        newRev.transferToTransaction(100uL)
+        val staleGen = manager.getGeneration() + 1
+
+        val tx = AndroidPlatformVisualTransaction(
+            key = 100uL,
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 1,
+            newRevision = 2,
+            slices = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = prevRev,
+            ownedNewRevision = newRev,
+            onTransactionComplete = { rev, _ ->
+                manager.returnFromTransaction(rev, 100uL, staleGen)
+            }
+        )
+
+        tx.complete()
+        assertTrue(prevRev!!.isReleased())
+        assertTrue(newRev.isReleased())
     }
 }
 
