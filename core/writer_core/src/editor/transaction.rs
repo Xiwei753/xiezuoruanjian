@@ -1041,6 +1041,18 @@ impl OffsetMap {
         }
         None
     }
+
+    pub fn map_new_to_old(&self, new_byte_offset: usize) -> Option<usize> {
+        for entry in &self.entries {
+            if new_byte_offset >= entry.new_byte_offset
+                && new_byte_offset < entry.new_byte_offset + entry.length
+            {
+                let offset_within = new_byte_offset - entry.new_byte_offset;
+                return Some(entry.old_byte_offset + offset_within);
+            }
+        }
+        None
+    }
 }
 
 /// #517: 预输入会话 — 跨平台 composition 状态模型。
