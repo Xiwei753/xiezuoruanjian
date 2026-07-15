@@ -52,7 +52,13 @@ data class AndroidLineSnapshot(
     val clusters: List<AndroidClusterSnapshot>,
     val visualResource: AndroidLineVisualResource?
 ) {
+    private var released = false
+
     fun release() {
+        if (released) return
+        released = true
         visualResource?.release()
     }
+
+    fun isReleased(): Boolean = released
 }
