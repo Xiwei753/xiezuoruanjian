@@ -1309,7 +1309,7 @@ impl CompositionSession {
 #[serde(rename_all = "camelCase")]
 pub enum SnapshotOwner {
     /// 由 CompositionSession 持有
-    OwnedBySession,
+    OwnedBySession { session_id: u64 },
     /// 由指定事务持有
     OwnedByTransaction { transaction_id: u64 },
     /// 已释放
@@ -4547,7 +4547,7 @@ mod tests {
 
     #[test]
     fn snapshot_owner_serializes_camel_case() {
-        let json = serde_json::to_string(&SnapshotOwner::OwnedBySession).unwrap();
+        let json = serde_json::to_string(&SnapshotOwner::OwnedBySession { session_id: 0 }).unwrap();
         assert!(json.contains("\"ownedBySession\""));
         let json2 = serde_json::to_string(&SnapshotOwner::OwnedByTransaction { transaction_id: 42 }).unwrap();
         assert!(json2.contains("\"ownedByTransaction\""));
@@ -4557,7 +4557,7 @@ mod tests {
 
     #[test]
     fn snapshot_owner_equality() {
-        assert_eq!(SnapshotOwner::OwnedBySession, SnapshotOwner::OwnedBySession);
+        assert_eq!(SnapshotOwner::OwnedBySession { session_id: 1 }, SnapshotOwner::OwnedBySession { session_id: 1 });
         assert_eq!(
             SnapshotOwner::OwnedByTransaction { transaction_id: 1 },
             SnapshotOwner::OwnedByTransaction { transaction_id: 1 },
@@ -4567,7 +4567,7 @@ mod tests {
             SnapshotOwner::OwnedByTransaction { transaction_id: 2 },
         );
         assert_eq!(SnapshotOwner::Released, SnapshotOwner::Released);
-        assert_ne!(SnapshotOwner::OwnedBySession, SnapshotOwner::Released);
+        assert_ne!(SnapshotOwner::OwnedBySession { session_id: 1 }, SnapshotOwner::Released);
     }
 
     // --- #517: revision 接续测试 ---

@@ -34,8 +34,8 @@ data class AndroidClusterSnapshot(
 /**
  * 一次平台排版后的不可变行视觉快照。
  *
- * [visualResource] 在事务结束前由 snapshot 持有，[release] 必须可重复调用且
- * 不能提前释放仍被 slice 引用的资源。
+ * [visualResource] 在事务结束前由 snapshot 持有，[release] 必须通过严格
+ * [SnapshotOwner] 相等比较校验，重复释放和错误 owner 释放立即抛异常。
  */
 data class AndroidLineSnapshot(
     val id: AndroidLineSnapshotId,
@@ -68,23 +68,7 @@ data class AndroidLineSnapshot(
 
     fun isReleased(): Boolean = owner is SnapshotOwner.Released
 
-    fun releaseBySessionOwner(expectedSessionId: CompositionSessionId = CompositionSessionId(revision)) {
-        check(owner !is SnapshotOwner.Released) {
-            "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}"
-        }
-        check(owner == SnapshotOwner.OwnedBySession(expectedSessionId)) {
-            "releaseBySessionOwner: AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal} owner is $owner, expected OwnedBySession($expectedSessionId)"
-        }
-        owner = SnapshotOwner.Released
-        visualResource?.release()
-    }
 
-    fun transferToRevision(newRevisionId: Long) {
-        check(owner !is SnapshotOwner.Released) {
-            "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}"
-        }
-        owner = SnapshotOwner.OwnedBySession(CompositionSessionId(newRevisionId))
-    }
 
     fun transferToTransaction(transactionKey: ULong) {
         check(owner !is SnapshotOwner.Released) { "Cannot transfer released AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }

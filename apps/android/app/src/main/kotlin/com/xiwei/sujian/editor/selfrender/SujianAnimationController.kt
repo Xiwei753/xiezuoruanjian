@@ -63,7 +63,7 @@ class SujianAnimationController(
         val animationId: ULong
     ) {
         fun release() {
-            oldLineSnapshots.forEach { it.releaseBySessionOwner() }
+            oldLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
         }
     }
     private val deleteSnapshots = mutableListOf<DeleteSnapshot>()
@@ -99,7 +99,7 @@ class SujianAnimationController(
         val result = original.toMutableList()
         for (snap in supplemental) {
             if (snap.id in existingIds) {
-                snap.releaseBySessionOwner()
+                snap.release(SnapshotOwner.OwnedBySession(CompositionSessionId(snap.revision)))
             } else {
                 result.add(snap)
             }
@@ -230,7 +230,7 @@ class SujianAnimationController(
         )
 
         if (newLineSnapshots.isEmpty()) {
-            oldLineSnapshots.forEach { it.releaseBySessionOwner() }
+            oldLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -375,8 +375,8 @@ class SujianAnimationController(
         }
 
         if (slices.isEmpty()) {
-            oldLineSnapshots.forEach { it.releaseBySessionOwner() }
-            newLineSnapshots.forEach { it.releaseBySessionOwner() }
+            oldLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
+            newLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -661,8 +661,8 @@ class SujianAnimationController(
         }
 
         if (slices.isEmpty()) {
-            finalOldSnapshots.forEach { it.releaseBySessionOwner() }
-            newLineSnapshots.forEach { it.releaseBySessionOwner() }
+            finalOldSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
+            newLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
