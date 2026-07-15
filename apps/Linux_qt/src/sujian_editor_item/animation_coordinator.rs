@@ -49,6 +49,49 @@ use super::static_line_patch::StaticLinePatch;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect, ShapingIdentity};
 
+fn match_rebase_frames(
+    rebase_frames: &[(usize, usize, f64, f64, f64, Option<ShapingIdentity>)],
+    slices: &mut [AnimatedSlice],
+    offset_map: &OffsetMap,
+) {
+    let mut consumed_indices: Vec<usize> = Vec::new();
+    for (bs, be, fx, fy, fo, ref shaping) in rebase_frames {
+        let tier1 = slices.iter_mut().enumerate()
+            .filter(|(idx, _)| !consumed_indices.contains(idx))
+            .find(|(_, ns)| ns.byte_start == *bs && ns.byte_end == *be);
+        if let Some((idx, new_slice)) = tier1 {
+            new_slice.rebase_from(*fx, *fy, *fo);
+            consumed_indices.push(idx);
+            continue;
+        }
+        if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
+            let tier2 = slices.iter_mut().enumerate()
+                .filter(|(idx, _)| !consumed_indices.contains(idx))
+                .find(|(_, ns)| ns.byte_start == mbs && ns.byte_end == mbe);
+            if let Some((idx, new_slice)) = tier2 {
+                new_slice.rebase_from(*fx, *fy, *fo);
+                consumed_indices.push(idx);
+                continue;
+            }
+            if let Some(ref sid) = shaping {
+                let mapped_center = (mbs + mbe) as i64 / 2;
+                let best = slices.iter_mut().enumerate()
+                    .filter(|(idx, _)| !consumed_indices.contains(idx))
+                    .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
+                    .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
+                    .min_by_key(|(idx, ns)| {
+                        let candidate_center = (ns.byte_start + ns.byte_end) as i64 / 2;
+                        (candidate_center - mapped_center).abs()
+                    });
+                if let Some((idx, new_slice)) = best {
+                    new_slice.rebase_from(*fx, *fy, *fo);
+                    consumed_indices.push(idx);
+                }
+            }
+        }
+    }
+}
+
 pub(crate) struct LinuxEditorAnimationCoordinator {
     next_key_id: u64,
     pub(crate) prepared_queue: PreparedTransactionQueue,
@@ -240,27 +283,7 @@ impl LinuxEditorAnimationCoordinator {
                     };
 
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-                    let mut consumed_indices: Vec<usize> = Vec::new();
-                    for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
-                        if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
-                            new_slice.rebase_from(*fx, *fy, *fo);
-                        } else if let (Some(mbs), Some(mbe)) = (insert_offset_map.map_old_to_new(*bs), insert_offset_map.map_old_to_new(*be)) {
-                            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                                new_slice.rebase_from(*fx, *fy, *fo);
-                            } else if let Some(ref sid) = shaping {
-                                let mapped_center = (mbs + mbe) / 2;
-                                let best = slices.iter_mut().enumerate()
-                                    .filter(|(idx, ns)| !consumed_indices.contains(idx))
-                                    .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
-                                    .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                                    .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
-                                if let Some((idx, new_slice)) = best {
-                                    new_slice.rebase_from(*fx, *fy, *fo);
-                                    consumed_indices.push(idx);
-                                }
-                            }
-                        }
-                    }
+                    match_rebase_frames(&rebase_frames, &mut slices, &insert_offset_map);
 
                     let prepared = PreparedTextVisualTransaction {
                         key,
@@ -436,27 +459,7 @@ impl LinuxEditorAnimationCoordinator {
                 };
 
                 let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-                let mut consumed_indices: Vec<usize> = Vec::new();
-                for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
-                    if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
-                        new_slice.rebase_from(*fx, *fy, *fo);
-                    } else if let (Some(mbs), Some(mbe)) = (delete_offset_map.map_old_to_new(*bs), delete_offset_map.map_old_to_new(*be)) {
-                        if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                            new_slice.rebase_from(*fx, *fy, *fo);
-                        } else if let Some(ref sid) = shaping {
-                            let mapped_center = (mbs + mbe) / 2;
-                            let best = slices.iter_mut().enumerate()
-                                .filter(|(idx, ns)| !consumed_indices.contains(idx))
-                                .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
-                                .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                                .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
-                            if let Some((idx, new_slice)) = best {
-                                new_slice.rebase_from(*fx, *fy, *fo);
-                                consumed_indices.push(idx);
-                            }
-                        }
-                    }
-                }
+                match_rebase_frames(&rebase_frames, &mut slices, &delete_offset_map);
 
                 let prepared = PreparedTextVisualTransaction {
                     key,
@@ -691,27 +694,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        let mut consumed_indices: Vec<usize> = Vec::new();
-        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
-            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
-                new_slice.rebase_from(*fx, *fy, *fo);
-            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
-                } else if let Some(ref sid) = shaping {
-                    let mapped_center = (mbs + mbe) / 2;
-                    let best = slices.iter_mut().enumerate()
-                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
-                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
-                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
-                    if let Some((idx, new_slice)) = best {
-                        new_slice.rebase_from(*fx, *fy, *fo);
-                        consumed_indices.push(idx);
-                    }
-                }
-            }
-        }
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         let prepared = PreparedTextVisualTransaction {
             key,
@@ -1038,27 +1021,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        let mut consumed_indices: Vec<usize> = Vec::new();
-        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
-            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
-                new_slice.rebase_from(*fx, *fy, *fo);
-            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
-                } else if let Some(ref sid) = shaping {
-                    let mapped_center = (mbs + mbe) / 2;
-                    let best = slices.iter_mut().enumerate()
-                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
-                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
-                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
-                    if let Some((idx, new_slice)) = best {
-                        new_slice.rebase_from(*fx, *fy, *fo);
-                        consumed_indices.push(idx);
-                    }
-                }
-            }
-        }
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         let prepared = PreparedTextVisualTransaction {
             key,
@@ -1579,6 +1542,7 @@ mod tests {
 
     #[test]
     fn test_rebase_uses_offset_map_and_shaping_identity() {
+        use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
         let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
         let sid_b = ShapingIdentity { text_content_hash: 2, raw_font_fingerprint: "font_b".to_string(), glyph_indexes_hash: 20, cluster_glyph_count: 2, direction_rtl: false, format_fingerprint: 200 };
 
@@ -1606,28 +1570,15 @@ mod tests {
             ),
         ];
 
-        let offset_map = OffsetMap::build("old_text_with_padding", "new_text_with_padding");
-        let mut consumed_indices: Vec<usize> = Vec::new();
-        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
-            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
-                new_slice.rebase_from(*fx, *fy, *fo);
-            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
-                } else if let Some(ref sid) = shaping {
-                    let mapped_center = (mbs + mbe) / 2;
-                    let best = slices.iter_mut().enumerate()
-                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
-                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
-                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
-                    if let Some((idx, new_slice)) = best {
-                        new_slice.rebase_from(*fx, *fy, *fo);
-                        consumed_indices.push(idx);
-                    }
-                }
-            }
-        }
+        let offset_map = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                length: 200,
+                kind: OffsetMapKind::Identity,
+            }],
+        };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!((slices[0].from_document_rect.x - 0.0).abs() < 0.01);
         assert!((slices[1].from_document_rect.x - 0.0).abs() < 0.01);
@@ -1635,12 +1586,11 @@ mod tests {
 
     #[test]
     fn test_rebase_tier3_closest_position_match_with_duplicate_shaping() {
+        use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
         let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
 
         let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (5, 10, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
-            (15, 20, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
-            (25, 30, 30.0, 300.0, 0.7, Some(sid_dup.clone())),
+            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
         ];
 
         let mut slices = vec![
@@ -1649,7 +1599,7 @@ mod tests {
                 LineSnapshotId::new(1, 0, 0),
                 SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
                 SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 5, 10,
+                0.0, 0.0, 11, 15,
                 Some(sid_dup.clone()),
             ),
             AnimatedSlice::insert_fade_in(
@@ -1657,44 +1607,109 @@ mod tests {
                 LineSnapshotId::new(1, 0, 1),
                 SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
                 SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 15, 20,
-                Some(sid_dup.clone()),
-            ),
-            AnimatedSlice::insert_fade_in(
-                VisualTransactionKey::new(1, 3),
-                LineSnapshotId::new(1, 0, 2),
-                SourceRect { x: 0.0, y: 40.0, w: 100.0, h: 20.0 },
-                SourceRect { x: 0.0, y: 40.0, w: 100.0, h: 20.0 },
-                0.0, 0.0, 25, 30,
+                0.0, 0.0, 18, 22,
                 Some(sid_dup.clone()),
             ),
         ];
 
-        let offset_map = OffsetMap::build("same_text_for_identity", "same_text_for_identity");
-        let mut consumed_indices: Vec<usize> = Vec::new();
-        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
-            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
-                new_slice.rebase_from(*fx, *fy, *fo);
-            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
-                } else if let Some(ref sid) = shaping {
-                    let mapped_center = (mbs + mbe) / 2;
-                    let best = slices.iter_mut().enumerate()
-                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
-                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
-                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
-                    if let Some((idx, new_slice)) = best {
-                        new_slice.rebase_from(*fx, *fy, *fo);
-                        consumed_indices.push(idx);
-                    }
-                }
-            }
-        }
+        let offset_map = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                length: 200,
+                kind: OffsetMapKind::Identity,
+            }],
+        };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
-        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01, "slice 0 should get rebase frame 10.0, got {}", slices[0].from_document_rect.x);
-        assert!((slices[1].from_document_rect.x - 20.0).abs() < 0.01, "slice 1 should get rebase frame 20.0, got {}", slices[1].from_document_rect.x);
-        assert!((slices[2].from_document_rect.x - 30.0).abs() < 0.01, "slice 2 should get rebase frame 30.0, got {}", slices[2].from_document_rect.x);
+        let mapped_center = 20i64;
+        let center_0 = (11 + 15) as i64 / 2;
+        let center_1 = (18 + 22) as i64 / 2;
+        let dist_0 = (center_0 - mapped_center).abs();
+        let dist_1 = (center_1 - mapped_center).abs();
+        assert!(dist_1 < dist_0, "test setup: slice 1 (dist={}) should be closer than slice 0 (dist={})", dist_1, dist_0);
+        assert!((slices[1].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 1 (center={}, abs dist={}) should match rebase frame, got x={}", center_1, dist_1, slices[1].from_document_rect.x);
+        assert!((slices[0].from_document_rect.x - 0.0).abs() < 0.01,
+            "slice 0 (center={}, abs dist={}) should NOT be matched, got x={}", center_0, dist_0, slices[0].from_document_rect.x);
+    }
+
+    #[test]
+    fn test_rebase_tier3_absolute_distance_not_signed() {
+        use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
+        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 11, 15,
+                Some(sid_dup.clone()),
+            ),
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 2),
+                LineSnapshotId::new(1, 0, 1),
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 22, 26,
+                Some(sid_dup.clone()),
+            ),
+        ];
+
+        let offset_map = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                length: 200,
+                kind: OffsetMapKind::Identity,
+            }],
+        };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+
+        let mapped_center = 20i64;
+        let center_0 = (11 + 15) as i64 / 2;
+        let center_1 = (22 + 26) as i64 / 2;
+        let signed_0 = center_0 - mapped_center;
+        let signed_1 = center_1 - mapped_center;
+        let abs_0 = (center_0 - mapped_center).abs();
+        let abs_1 = (center_1 - mapped_center).abs();
+        assert!(signed_0 < signed_1, "test setup: slice 0 signed diff ({}) should be more negative than slice 1 ({})", signed_0, signed_1);
+        assert!(abs_1 < abs_0, "test setup: slice 1 abs dist ({}) should be less than slice 0 ({})", abs_1, abs_0);
+        assert!((slices[1].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 1 (abs dist={}) should be chosen over slice 0 (abs dist={}, signed={}), got x={}",
+            abs_1, abs_0, signed_0, slices[1].from_document_rect.x);
+    }
+
+    #[test]
+    fn test_rebase_tier1_consumed_prevents_reuse() {
+        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (50, 60, 10.0, 100.0, 0.3, Some(sid_a.clone())),
+            (50, 60, 20.0, 200.0, 0.5, Some(sid_a.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 50, 60,
+                Some(sid_a.clone()),
+            ),
+        ];
+
+        let offset_map = OffsetMap { entries: Vec::new() };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+
+        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}", slices[0].from_document_rect.x);
     }
 }
