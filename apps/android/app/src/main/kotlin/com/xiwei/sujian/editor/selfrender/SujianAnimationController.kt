@@ -1406,8 +1406,8 @@ class SujianAnimationController(
         )
 
         if (newLineSnapshots.isEmpty()) {
-            if (prevCompositionRevision != null && !prevRevisionFromActiveTransaction) {
-                prevCompositionRevision.release()
+            if (prevCompositionRevision != null && !prevCompositionRevision.isReleased()) {
+                prevCompositionRevision.release(prevCompositionRevision.owner)
             }
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
@@ -1705,7 +1705,7 @@ class SujianAnimationController(
                                 }
                             }
                         } else {
-                            lineBoundaryStable
+                            false
                         }
                     }
                 }
@@ -1735,11 +1735,26 @@ class SujianAnimationController(
         candidateUtf16EndExclusive: Int = 0
     ): TextAnimationStartResult {
         val txKey = nextAnimationId()
-        val prevRevision = compositionManager.takeCurrentForTransaction(txKey)
+        var prevRevision = compositionManager.takeCurrentForTransaction(txKey)
+        var prevRevisionFromActiveTransaction = false
+
+        if (prevRevision == null && compositionManager.getActiveTransactionKey() != null) {
+            val activeTx = renderer.getActiveTransactions().find {
+                it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
+                (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
+            }
+            if (activeTx != null) {
+                prevRevision = activeTx.takeNewRevisionForRebase()
+                prevRevisionFromActiveTransaction = true
+            }
+        }
+
         compositionManager.clear()
 
         if (!animationEnabled || prevRevision == null) {
-            if (prevRevision != null) prevRevision.release()
+            if (prevRevision != null && !prevRevision.isReleased()) {
+                prevRevision.release(prevRevision.owner)
+            }
             return TextAnimationStartResult.Skipped
         }
 
@@ -1990,7 +2005,8 @@ class SujianAnimationController(
             staticLinePatches = staticPatches.toMutableList(),
             decorationSlices = mutableListOf(),
             cursorTransition = cursorTransition,
-            ownedOldRevision = prevRevision
+            ownedOldRevision = prevRevision,
+            ownedNewRevision = null
         )
 
         if (!renderer.addTransaction(tx)) {
@@ -2104,7 +2120,7 @@ class SujianAnimationController(
                                 }
                             }
                         } else {
-                            lineBoundaryStable
+                            false
                         }
                     }
                 }

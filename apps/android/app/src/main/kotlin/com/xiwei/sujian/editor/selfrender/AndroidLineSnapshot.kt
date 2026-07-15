@@ -55,7 +55,7 @@ data class AndroidLineSnapshot(
     private var released = false
 
     fun release() {
-        if (released) return
+        check(!released) { "Double release of AndroidLineSnapshot ${id.revision}/${id.visualLineOrdinal}" }
         released = true
         visualResource?.release()
     }

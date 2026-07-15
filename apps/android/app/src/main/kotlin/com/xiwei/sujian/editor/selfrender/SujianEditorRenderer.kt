@@ -162,9 +162,16 @@ class SujianEditorRenderer(
             }
             if (detachedNewRevision != null && tx.operationKind == AndroidVisualOperationKind.CompositionUpdate) {
                 tx.ownedOldRevision = detachedNewRevision
+                if (detachedOldRevision != null && !detachedOldRevision.isReleased()) {
+                    detachedOldRevision.release(SnapshotOwner.OwnedByTransaction(conflicting.key))
+                }
             } else {
-                detachedOldRevision?.release()
-                detachedNewRevision?.release()
+                if (detachedOldRevision != null && !detachedOldRevision.isReleased()) {
+                    detachedOldRevision.release(SnapshotOwner.OwnedByTransaction(conflicting.key))
+                }
+                if (detachedNewRevision != null && !detachedNewRevision.isReleased()) {
+                    detachedNewRevision.release(SnapshotOwner.OwnedByTransaction(conflicting.key))
+                }
             }
             conflicting.cancel("rebased")
             activeTransactions.removeAll { it.key == conflicting.key }

@@ -15,15 +15,31 @@ data class AndroidCompositionVisualRevision(
     val revisionId: Long = 0,
     val sessionId: CompositionSessionId = CompositionSessionId(0)
 ) {
-    private var released = false
+    var owner: SnapshotOwner = SnapshotOwner.OwnedBySession(sessionId)
+        private set
 
-    fun release() {
-        check(!released) { "Double release of revision $revisionId" }
-        released = true
+    fun release(releaser: SnapshotOwner) {
+        check(owner !is SnapshotOwner.Released) { "Double release of revision $revisionId by $releaser, already Released" }
+        check(owner == releaser) { "Illegal release of revision $revisionId by $releaser, owner is $owner" }
+        owner = SnapshotOwner.Released
         lineSnapshots.forEach { it.release() }
     }
 
-    fun isReleased(): Boolean = released
+    fun transferToTransaction(transactionKey: ULong) {
+        check(owner is SnapshotOwner.OwnedBySession) {
+            "transferToTransaction: revision $revisionId owner is $owner, expected OwnedBySession"
+        }
+        owner = SnapshotOwner.OwnedByTransaction(transactionKey)
+    }
+
+    fun transferToSession(sessionId: CompositionSessionId) {
+        check(owner is SnapshotOwner.OwnedByTransaction) {
+            "transferToSession: revision $revisionId owner is $owner, expected OwnedByTransaction"
+        }
+        owner = SnapshotOwner.OwnedBySession(sessionId)
+    }
+
+    fun isReleased(): Boolean = owner is SnapshotOwner.Released
 }
 
 data class AndroidDecorationSlice(
@@ -41,81 +57,58 @@ sealed class SnapshotOwner {
     object Released : SnapshotOwner()
 }
 
-data class OwnedRevision(
-    val revision: AndroidCompositionVisualRevision,
-    var owner: SnapshotOwner = SnapshotOwner.OwnedBySession(CompositionSessionId(0))
-) {
-    fun release() {
-        check(owner !is SnapshotOwner.Released) { "Double release of revision ${revision.revisionId}" }
-        owner = SnapshotOwner.Released
-        revision.release()
-    }
-
-    fun transferToTransaction(transactionKey: ULong) {
-        check(owner is SnapshotOwner.OwnedBySession) {
-            "transferToTransaction: revision ${revision.revisionId} owner is $owner, expected OwnedBySession"
-        }
-        owner = SnapshotOwner.OwnedByTransaction(transactionKey)
-    }
-
-    fun transferToSession(sessionId: CompositionSessionId) {
-        check(owner is SnapshotOwner.OwnedByTransaction) {
-            "transferToSession: revision ${revision.revisionId} owner is $owner, expected OwnedByTransaction"
-        }
-        owner = SnapshotOwner.OwnedBySession(sessionId)
-    }
-}
-
 class AndroidCompositionManager {
     private val TAG = "CompositionManager"
-    private var currentOwned: OwnedRevision? = null
+    private var currentRevision: AndroidCompositionVisualRevision? = null
     private var takenByTransactionKey: ULong? = null
 
     fun setCurrent(revision: AndroidCompositionVisualRevision?) {
-        val oldCurrent = currentOwned
-        currentOwned = if (revision != null) {
+        val oldCurrent = currentRevision
+        currentRevision = if (revision != null) {
             takenByTransactionKey = null
-            OwnedRevision(revision, SnapshotOwner.OwnedBySession(revision.sessionId))
+            revision
         } else {
             takenByTransactionKey = null
             null
         }
 
         if (oldCurrent != null && oldCurrent.owner is SnapshotOwner.OwnedBySession) {
-            oldCurrent.release()
+            oldCurrent.release(SnapshotOwner.OwnedBySession(oldCurrent.sessionId))
         }
     }
 
-    fun getCurrent(): AndroidCompositionVisualRevision? = currentOwned?.revision
+    fun getCurrent(): AndroidCompositionVisualRevision? = currentRevision
 
     fun takeCurrentForTransaction(transactionKey: ULong): AndroidCompositionVisualRevision? {
-        if (currentOwned == null && takenByTransactionKey != null) {
+        if (currentRevision == null && takenByTransactionKey != null) {
             return null
         }
-        val owned = currentOwned ?: return null
-        check(owned.owner is SnapshotOwner.OwnedBySession) {
-            "takeCurrentForTransaction: current revision ${owned.revision.revisionId} owner is ${owned.owner}, expected OwnedBySession"
+        val rev = currentRevision ?: return null
+        check(rev.owner is SnapshotOwner.OwnedBySession) {
+            "takeCurrentForTransaction: current revision ${rev.revisionId} owner is ${rev.owner}, expected OwnedBySession"
         }
-        owned.transferToTransaction(transactionKey)
+        rev.transferToTransaction(transactionKey)
         takenByTransactionKey = transactionKey
-        currentOwned = null
-        return owned.revision
+        currentRevision = null
+        return rev
     }
 
     fun getActiveTransactionKey(): ULong? = takenByTransactionKey
 
     fun returnFromTransaction(revision: AndroidCompositionVisualRevision, transactionKey: ULong) {
-        val owned = OwnedRevision(revision, SnapshotOwner.OwnedByTransaction(transactionKey))
-        owned.transferToSession(revision.sessionId)
-        currentOwned = owned
+        check(revision.owner is SnapshotOwner.OwnedByTransaction && (revision.owner as SnapshotOwner.OwnedByTransaction).transactionKey == transactionKey) {
+            "returnFromTransaction: revision ${revision.revisionId} owner is ${revision.owner}, expected OwnedByTransaction($transactionKey)"
+        }
+        revision.transferToSession(revision.sessionId)
+        currentRevision = revision
         takenByTransactionKey = null
     }
 
     fun clear() {
-        if (currentOwned != null && currentOwned!!.owner is SnapshotOwner.OwnedBySession) {
-            currentOwned!!.release()
+        if (currentRevision != null && currentRevision!!.owner is SnapshotOwner.OwnedBySession) {
+            currentRevision!!.release(SnapshotOwner.OwnedBySession(currentRevision!!.sessionId))
         }
-        currentOwned = null
+        currentRevision = null
         takenByTransactionKey = null
     }
 
