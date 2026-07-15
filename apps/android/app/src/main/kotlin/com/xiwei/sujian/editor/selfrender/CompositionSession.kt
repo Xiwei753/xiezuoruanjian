@@ -14,7 +14,7 @@ data class CompositionSession(
 ) {
     val isActive: Boolean get() = sessionId.value > 0
 
-    fun replaceRange(): IntRange = replaceStart..replaceEndExclusive
+    fun replaceRange(): HalfOpenRange = HalfOpenRange(replaceStart, replaceEndExclusive)
 
     fun replaceRangeLength(): Int = replaceEndExclusive - replaceStart
 
@@ -24,8 +24,8 @@ data class CompositionSession(
         return committedTextAtStart.substring(0, start) + preeditText + committedTextAtStart.substring(end)
     }
 
-    fun preeditRangeInVirtualText(): IntRange {
-        return replaceStart..(replaceStart + preeditText.length)
+    fun preeditRangeInVirtualText(): HalfOpenRange {
+        return HalfOpenRange(replaceStart, replaceStart + preeditText.length)
     }
 
     fun updatePreedit(newPreeditText: String, newCursorOffset: Int): CompositionSession {

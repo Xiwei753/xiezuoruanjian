@@ -151,6 +151,7 @@ sealed class ReturnFromTransactionResult {
 class AndroidCompositionManager {
     private val TAG = "CompositionManager"
     private var currentRevision: AndroidCompositionVisualRevision? = null
+    private var committedRevision: CommittedVisualRevision? = null
     private var takenByTransactionKey: ULong? = null
     private var generation: Long = 0
 
@@ -236,6 +237,7 @@ class AndroidCompositionManager {
             currentRevision = revision
         } else if (revision is CommittedVisualRevision) {
             revision.transferToSession(revision.sessionId)
+            committedRevision = revision
         }
         takenByTransactionKey = null
         generation++
@@ -247,6 +249,10 @@ class AndroidCompositionManager {
             currentRevision!!.release(SnapshotOwner.OwnedBySession(currentRevision!!.sessionId))
         }
         currentRevision = null
+        if (committedRevision != null && committedRevision!!.owner is SnapshotOwner.OwnedBySession) {
+            committedRevision!!.release(SnapshotOwner.OwnedBySession(committedRevision!!.sessionId))
+        }
+        committedRevision = null
         takenByTransactionKey = null
         generation++
     }

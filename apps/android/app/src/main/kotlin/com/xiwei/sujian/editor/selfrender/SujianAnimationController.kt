@@ -63,7 +63,7 @@ class SujianAnimationController(
         val animationId: ULong
     ) {
         fun release() {
-            oldLineSnapshots.forEach { it.releaseUnowned() }
+            oldLineSnapshots.forEach { it.releaseBySessionOwner() }
         }
     }
     private val deleteSnapshots = mutableListOf<DeleteSnapshot>()
@@ -99,7 +99,7 @@ class SujianAnimationController(
         val result = original.toMutableList()
         for (snap in supplemental) {
             if (snap.id in existingIds) {
-                snap.releaseUnowned()
+                snap.releaseBySessionOwner()
             } else {
                 result.add(snap)
             }
@@ -230,7 +230,7 @@ class SujianAnimationController(
         )
 
         if (newLineSnapshots.isEmpty()) {
-            oldLineSnapshots.forEach { it.releaseUnowned() }
+            oldLineSnapshots.forEach { it.releaseBySessionOwner() }
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -375,8 +375,8 @@ class SujianAnimationController(
         }
 
         if (slices.isEmpty()) {
-            oldLineSnapshots.forEach { it.releaseUnowned() }
-            newLineSnapshots.forEach { it.releaseUnowned() }
+            oldLineSnapshots.forEach { it.releaseBySessionOwner() }
+            newLineSnapshots.forEach { it.releaseBySessionOwner() }
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -661,8 +661,8 @@ class SujianAnimationController(
         }
 
         if (slices.isEmpty()) {
-            finalOldSnapshots.forEach { it.releaseUnowned() }
-            newLineSnapshots.forEach { it.releaseUnowned() }
+            finalOldSnapshots.forEach { it.releaseBySessionOwner() }
+            newLineSnapshots.forEach { it.releaseBySessionOwner() }
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -2062,9 +2062,8 @@ class SujianAnimationController(
             cursorTransition = cursorTransition,
             ownedOldRevision = prevRevision,
             ownedNewRevision = commitCancelRevision,
-            onTransactionComplete = { rev, _ ->
-                rev.release(rev.owner)
-                ReturnFromTransactionResult.Accepted
+            onTransactionComplete = { rev, completedTxKey ->
+                compositionManager.returnFromTransaction(rev, completedTxKey, managerGeneration)
             }
         )
 
