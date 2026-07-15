@@ -78,6 +78,8 @@ class SujianInputConnection(
             val replaceStart = buffer.compositionReplaceStart
             val replaceEndExclusive = buffer.compositionReplaceEndExclusive
             val hasNonTrivialReplaceRange = replaceStart != replaceEndExclusive
+            val candidateUtf16Start = replaceStart
+            val candidateUtf16EndExclusive = replaceStart + textStr.length
             if (editorView != null) {
                 val result = if (hasNonTrivialReplaceRange) {
                     buffer.replaceRange(replaceStart, replaceEndExclusive, textStr, SujianEditCause.TypingCommit)
@@ -88,7 +90,10 @@ class SujianInputConnection(
                 imeController.updateSelection()
                 editorView.animationController.handleCompositionCommitOrCancel(
                     committedText = buffer.text,
-                    isCommit = true
+                    isCommit = true,
+                    committedCandidateText = textStr,
+                    candidateUtf16Start = candidateUtf16Start,
+                    candidateUtf16EndExclusive = candidateUtf16EndExclusive
                 )
             } else {
                 val result = if (hasNonTrivialReplaceRange) {
