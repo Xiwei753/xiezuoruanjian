@@ -78,6 +78,8 @@ impl SujianEditorItem {
 
         let (composition_byte_start, composition_byte_end) = self.preedit_byte_range_in_virtual_text();
         let saved_virtual_text = self.composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
+        let candidate_byte_start = self.composition_session.as_ref().map(|s| s.replace_start).unwrap_or(composition_byte_start);
+        let candidate_byte_end = candidate_byte_start + inserted.len();
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -143,6 +145,8 @@ impl SujianEditorItem {
                 composition_byte_end,
                 true,
                 visual_text_unchanged,
+                candidate_byte_start,
+                candidate_byte_end,
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -327,6 +331,8 @@ impl SujianEditorItem {
                 composition_byte_end,
                 true,
                 !saved_virtual_text.is_empty() && saved_virtual_text == new.text,
+                del_start,
+                del_start + inserted.len(),
                 old_cursor_rect,
                 new_cursor_rect,
             );

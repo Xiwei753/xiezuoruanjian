@@ -148,6 +148,8 @@ impl EditorInputHost for SujianEditorItem {
                     composition_byte_end,
                     false,
                     false,
+                    composition_byte_start,
+                    composition_byte_start,
                     old_cursor_rect,
                     new_cursor_rect,
                 );

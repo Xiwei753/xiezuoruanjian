@@ -747,6 +747,8 @@ impl LinuxEditorAnimationCoordinator {
         composition_byte_end: usize,
         is_commit: bool,
         visual_text_unchanged: bool,
+        candidate_byte_start: usize,
+        candidate_byte_end: usize,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
@@ -807,117 +809,210 @@ impl LinuxEditorAnimationCoordinator {
             }
         } else {
             if visual_text_unchanged {
-                // 视觉文字完全相同：不重复播放吐字，只移除 underline/装饰
             } else {
                 let insert_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
                 let insert_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+                let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+                let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-                for new_line in new_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
-                if let Some(source_rect) = new_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end) {
-                    let to_doc = new_line.source_rect_to_document_rect(&source_rect);
-                    slices.push(AnimatedSlice::insert_fade_in(
-                        key,
-                        new_line.id,
-                        source_rect.clone(),
-                        to_doc,
-                        insert_cx,
-                        insert_cy,
-                        composition_byte_start,
-                        composition_byte_end,
-                        new_line.clusters.first().map(|c| c.shaping_identity.clone()),
-                    ));
-
-                    static_patches.push(StaticLinePatch::insert_patch(
-                        key,
-                        new_line.id,
-                        vec![source_rect],
-                        composition_byte_start,
-                        composition_byte_end,
-                    ));
+                for old_line in old_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
+                    for old_cluster in old_line.clusters_in_byte_range(composition_byte_start, composition_byte_end) {
+                        let mapped_new_bs = offset_map.map_old_to_new(old_cluster.byte_start);
+                        let mapped_new_be = offset_map.map_old_to_new(old_cluster.byte_end);
+                        let matched_in_new = if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
+                            new_snapshot.line_snapshots.iter().any(|nl| {
+                                nl.clusters.iter().any(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
+                            })
+                        } else {
+                            false
+                        };
+                        if !matched_in_new {
+                            if let Some(old_sr) = old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end) {
+                                let from_doc = old_line.source_rect_to_document_rect(&old_sr);
+                                slices.push(AnimatedSlice::delete_fade_out(
+                                    key,
+                                    old_line.id,
+                                    old_sr,
+                                    from_doc,
+                                    shrink_x,
+                                    shrink_y,
+                                    old_cluster.byte_start,
+                                    old_cluster.byte_end,
+                                    Some(old_cluster.shaping_identity.clone()),
+                                ));
+                            }
+                        } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
+                            if let Some((new_line, new_cluster)) = new_snapshot.line_snapshots.iter()
+                                .filter_map(|nl| nl.clusters.iter()
+                                    .find(|nc| nc.byte_start == mbs && nc.byte_end == mbe)
+                                    .map(|nc| (nl, nc)))
+                                .next()
+                            {
+                                if !old_cluster.shaping_identity.is_same_shaping(&new_cluster.shaping_identity) {
+                                    if let Some(old_sr) = old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end) {
+                                        let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+                                        if let Some(new_sr) = new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end) {
+                                            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                            slices.push(AnimatedSlice::reflow_crossfade_old(
+                                                key,
+                                                old_line.id,
+                                                old_sr,
+                                                old_doc,
+                                                new_doc,
+                                                old_cluster.byte_start,
+                                                old_cluster.byte_end,
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-            }
 
-            let reflow_start = composition_byte_end;
-            for new_line in &new_snapshot.line_snapshots {
-                if new_line.byte_end <= reflow_start {
-                    continue;
-                }
-                if new_line.byte_start < reflow_start {
-                    continue;
+                for new_line in new_snapshot.lines_in_byte_range(candidate_byte_start, candidate_byte_end) {
+                    for new_cluster in new_line.clusters_in_byte_range(candidate_byte_start, candidate_byte_end) {
+                        let mapped_old_bs = offset_map.map_new_to_old(new_cluster.byte_start);
+                        let mapped_old_be = offset_map.map_new_to_old(new_cluster.byte_end);
+                        let found_in_old = if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
+                            old_snapshot.line_snapshots.iter().any(|ol| {
+                                ol.clusters.iter().any(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
+                            })
+                        } else {
+                            false
+                        };
+                        if !found_in_old {
+                            if let Some(new_sr) = new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end) {
+                                let to_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                slices.push(AnimatedSlice::insert_fade_in(
+                                    key,
+                                    new_line.id,
+                                    new_sr.clone(),
+                                    to_doc,
+                                    insert_cx,
+                                    insert_cy,
+                                    new_cluster.byte_start,
+                                    new_cluster.byte_end,
+                                    Some(new_cluster.shaping_identity.clone()),
+                                ));
+                                static_patches.push(StaticLinePatch::insert_patch(
+                                    key,
+                                    new_line.id,
+                                    vec![new_sr],
+                                    new_cluster.byte_start,
+                                    new_cluster.byte_end,
+                                ));
+                            }
+                        } else if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
+                            if let Some((old_line, old_cluster)) = old_snapshot.line_snapshots.iter()
+                                .filter_map(|ol| ol.clusters.iter()
+                                    .find(|oc| oc.byte_start == mbs && oc.byte_end == mbe)
+                                    .map(|oc| (ol, oc)))
+                                .next()
+                            {
+                                if !old_cluster.shaping_identity.is_same_shaping(&new_cluster.shaping_identity) {
+                                    if let Some(new_sr) = new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end) {
+                                        let old_doc = old_line.source_rect_to_document_rect(
+                                            &old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end).unwrap_or(SourceRect::zero())
+                                        );
+                                        let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                        slices.push(AnimatedSlice::reflow_crossfade_new(
+                                            key,
+                                            new_line.id,
+                                            new_sr,
+                                            old_doc,
+                                            new_doc,
+                                            new_cluster.byte_start,
+                                            new_cluster.byte_end,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
-                let old_line = {
-                    let mapped_old_byte_start = offset_map.map_new_to_old(new_line.byte_start);
-                    let mapped_old_byte_end = offset_map.map_new_to_old(new_line.byte_end);
-                    let offset_matched = if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
-                        old_snapshot.line_for_byte_range(mobs, mobe).cloned()
-                    } else if let Some(mobs) = mapped_old_byte_start {
-                        old_snapshot.line_for_byte(mobs).cloned()
-                    } else {
-                        None
+                let reflow_start = candidate_byte_end;
+                for new_line in &new_snapshot.line_snapshots {
+                    if new_line.byte_end <= reflow_start {
+                        continue;
+                    }
+                    if new_line.byte_start < reflow_start {
+                        continue;
+                    }
+
+                    let old_line = {
+                        let mapped_old_byte_start = offset_map.map_new_to_old(new_line.byte_start);
+                        let mapped_old_byte_end = offset_map.map_new_to_old(new_line.byte_end);
+                        let offset_matched = if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                            old_snapshot.line_for_byte_range(mobs, mobe).cloned()
+                        } else if let Some(mobs) = mapped_old_byte_start {
+                            old_snapshot.line_for_byte(mobs).cloned()
+                        } else {
+                            None
+                        };
+                        offset_matched
                     };
-                    offset_matched
-                };
-                if let Some(ol) = old_line {
-                    let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
-                    let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
+                    if let Some(ol) = old_line {
+                        let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
+                        let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
-                    match (old_sr, new_sr) {
-                        (Some(old_src), Some(new_src)) => {
-                            let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                                && ol.clusters.iter()
-                                    .zip(new_line.clusters.iter())
-                                    .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                        match (old_sr, new_sr) {
+                            (Some(old_src), Some(new_src)) => {
+                                let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                                    && ol.clusters.iter()
+                                        .zip(new_line.clusters.iter())
+                                        .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
 
-                            let old_doc = ol.source_rect_to_document_rect(&old_src);
-                            let new_doc = new_line.source_rect_to_document_rect(&new_src);
+                                let old_doc = ol.source_rect_to_document_rect(&old_src);
+                                let new_doc = new_line.source_rect_to_document_rect(&new_src);
 
-                            if same_shaping {
-                                slices.push(AnimatedSlice::reflow_move(
+                                if same_shaping {
+                                    slices.push(AnimatedSlice::reflow_move(
+                                        key,
+                                        ol.id,
+                                        old_src,
+                                        old_doc,
+                                        new_line.id,
+                                        new_src.clone(),
+                                        new_doc,
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                        ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                                    ));
+                                } else {
+                                    slices.push(AnimatedSlice::reflow_crossfade_old(
+                                        key,
+                                        ol.id,
+                                        old_src.clone(),
+                                        old_doc.clone(),
+                                        new_doc.clone(),
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                    ));
+                                    slices.push(AnimatedSlice::reflow_crossfade_new(
+                                        key,
+                                        new_line.id,
+                                        new_src.clone(),
+                                        old_doc,
+                                        new_doc,
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                    ));
+                                }
+
+                                static_patches.push(StaticLinePatch::reflow_patch(
                                     key,
-                                    ol.id,
-                                    old_src,
-                                    old_doc,
                                     new_line.id,
-                                    new_src.clone(),
-                                    new_doc,
-                                    new_line.byte_start,
-                                    new_line.byte_end,
-                                    ol.clusters.first().map(|c| c.shaping_identity.clone()),
-                                ));
-                            } else {
-                                slices.push(AnimatedSlice::reflow_crossfade_old(
-                                    key,
-                                    ol.id,
-                                    old_src.clone(),
-                                    old_doc.clone(),
-                                    new_doc.clone(),
-                                    new_line.byte_start,
-                                    new_line.byte_end,
-                                ));
-                                slices.push(AnimatedSlice::reflow_crossfade_new(
-                                    key,
-                                    new_line.id,
-                                    new_src.clone(),
-                                    old_doc,
-                                    new_doc,
+                                    vec![new_src],
                                     new_line.byte_start,
                                     new_line.byte_end,
                                 ));
                             }
-
-                            static_patches.push(StaticLinePatch::reflow_patch(
-                                key,
-                                new_line.id,
-                                vec![new_src],
-                                new_line.byte_start,
-                                new_line.byte_end,
-                            ));
+                            _ => {}
                         }
-                        _ => {}
                     }
                 }
-            }
             }
         }
 
