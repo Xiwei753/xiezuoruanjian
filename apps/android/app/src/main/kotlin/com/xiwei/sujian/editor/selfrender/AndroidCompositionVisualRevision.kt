@@ -32,6 +32,13 @@ data class AndroidCompositionVisualRevision(
         owner = SnapshotOwner.OwnedByTransaction(transactionKey)
     }
 
+    fun reassignToTransaction(newTransactionKey: ULong) {
+        check(owner is SnapshotOwner.OwnedByTransaction) {
+            "reassignToTransaction: revision $revisionId owner is $owner, expected OwnedByTransaction"
+        }
+        owner = SnapshotOwner.OwnedByTransaction(newTransactionKey)
+    }
+
     fun transferToSession(sessionId: CompositionSessionId) {
         check(owner is SnapshotOwner.OwnedByTransaction) {
             "transferToSession: revision $revisionId owner is $owner, expected OwnedByTransaction"

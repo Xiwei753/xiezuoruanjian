@@ -1414,7 +1414,7 @@ class SujianAnimationController(
         )
 
         if (newLineSnapshots.isEmpty()) {
-            if (prevCompositionRevision != null && prevCompositionRevision.owner !is SnapshotOwner.Released) {
+            if (prevCompositionRevision != null) {
                 prevCompositionRevision.release(prevCompositionRevision.owner)
             }
             snapshotBuilder.commitRevision(newRevision)
@@ -1570,6 +1570,10 @@ class SujianAnimationController(
 
         val oldRevisionId = if (prevCompositionRevision != null) prevCompositionRevision.revisionId else snapshotBuilder.currentCommittedRevision()
 
+        if (prevCompositionRevision != null && prevRevisionFromActiveTransaction) {
+            prevCompositionRevision.reassignToTransaction(txKey)
+        }
+
         val tx = AndroidPlatformVisualTransaction(
             key = txKey,
             state = AndroidVisualTransactionState.Pending,
@@ -1584,7 +1588,7 @@ class SujianAnimationController(
             staticLinePatches = staticPatches.toMutableList(),
             decorationSlices = decorationSlices,
             cursorTransition = cursorTransition,
-            ownedOldRevision = if (prevRevisionFromActiveTransaction) null else prevCompositionRevision,
+            ownedOldRevision = prevCompositionRevision,
             ownedNewRevision = compositionRevision,
             onTransactionComplete = { newRev, completedTxKey ->
                 compositionManager.returnFromTransaction(newRev, completedTxKey)
@@ -1716,6 +1720,8 @@ class SujianAnimationController(
                         } ?: probeNewClusters
                         if (effectiveOldClusters == null || effectiveNewClusters == null) {
                             false
+                        } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
+                            lineStart < lineEnd
                         } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
                             false
                         } else {
@@ -1782,7 +1788,7 @@ class SujianAnimationController(
         compositionManager.clear()
 
         if (!animationEnabled || prevRevision == null) {
-            if (prevRevision != null && prevRevision.owner !is SnapshotOwner.Released) {
+            if (prevRevision != null) {
                 prevRevision.release(prevRevision.owner)
             }
             return TextAnimationStartResult.Skipped
@@ -1790,6 +1796,10 @@ class SujianAnimationController(
 
         val oldRevision = snapshotBuilder.currentCommittedRevision()
         val newRevision = snapshotBuilder.allocateNextRevision()
+
+        if (prevRevisionFromActiveTransaction) {
+            prevRevision?.reassignToTransaction(txKey)
+        }
 
         val oldLineSnapshots = prevRevision.lineSnapshots.toMutableList()
         val newText = committedText
@@ -2153,6 +2163,8 @@ class SujianAnimationController(
                         } ?: probeNewClusters
                         if (effectiveOldClusters == null || effectiveNewClusters == null) {
                             false
+                        } else if (effectiveOldClusters.isEmpty() && effectiveNewClusters.isEmpty()) {
+                            lineStart < lineEnd
                         } else if (effectiveNewClusters.size != effectiveOldClusters.size) {
                             false
                         } else {

@@ -161,7 +161,11 @@ class SujianEditorRenderer(
                 }
             }
             if (detachedNewRevision != null && (tx.operationKind == AndroidVisualOperationKind.CompositionUpdate || tx.operationKind == AndroidVisualOperationKind.CompositionCommitOrCancel)) {
+                val previousOldRevision = tx.ownedOldRevision
                 tx.ownedOldRevision = detachedNewRevision
+                if (previousOldRevision != null) {
+                    previousOldRevision.release(previousOldRevision.owner)
+                }
                 if (detachedOldRevision != null) {
                     detachedOldRevision.release(SnapshotOwner.OwnedByTransaction(conflicting.key))
                 }

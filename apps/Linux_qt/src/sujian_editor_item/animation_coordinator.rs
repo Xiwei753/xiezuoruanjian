@@ -47,7 +47,7 @@ use super::text_visual_transaction::{
 use super::decoration_slice::DecorationSlice;
 use super::static_line_patch::StaticLinePatch;
 use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
+use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect, ShapingIdentity};
 
 pub(crate) struct LinuxEditorAnimationCoordinator {
     next_key_id: u64,
@@ -98,14 +98,14 @@ impl LinuxEditorAnimationCoordinator {
             EditorAnimationKind::Insert => {
                 if let Some((range_start, range_end)) = vt.inserted_range {
                     let conflicting = self.prepared_queue.find_conflicting_transaction(range_start, range_end);
-                    let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+                    let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
                         let mut frames = Vec::new();
                         if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
                             let old_progress = old_tx.progress(Instant::now());
                             if old_progress > 0.0 && old_progress < 1.0 {
                                 for old_slice in &old_tx.slices {
                                     let frame = old_slice.compute_frame(old_progress);
-                                    frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                                    frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
                                 }
                             }
                         }
@@ -228,7 +228,7 @@ impl LinuxEditorAnimationCoordinator {
                         CursorTransition::Snap
                     };
 
-                    for (bs, be, fx, fy, fo) in &rebase_frames {
+                    for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
                         if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                             new_slice.rebase_from(*fx, *fy, *fo);
                         } else if let Some(range_start) = vt.inserted_range.map(|(s, _)| s) {
@@ -237,6 +237,13 @@ impl LinuxEditorAnimationCoordinator {
                             let mapped_be = (*be as i64 + byte_shift) as usize;
                             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mapped_bs && ns.byte_end == mapped_be) {
                                 new_slice.rebase_from(*fx, *fy, *fo);
+                            } else if let Some(ref old_shaping) = shaping {
+                                if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                                    ns.byte_start >= mapped_bs && ns.byte_end <= mapped_be &&
+                                    ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
+                                }) {
+                                    new_slice.rebase_from(*fx, *fy, *fo);
+                                }
                             }
                         }
                     }
@@ -286,14 +293,14 @@ impl LinuxEditorAnimationCoordinator {
                 let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
                 let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
                 let conflicting = self.prepared_queue.find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
-                let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+                let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
                     let mut frames = Vec::new();
                     if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
                         let old_progress = old_tx.progress(Instant::now());
                         if old_progress > 0.0 && old_progress < 1.0 {
                             for old_slice in &old_tx.slices {
                                 let frame = old_slice.compute_frame(old_progress);
-                                frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                                frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
                             }
                         }
                     }
@@ -418,7 +425,7 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Snap
                 };
 
-                for (bs, be, fx, fy, fo) in &rebase_frames {
+                for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
                     if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                         new_slice.rebase_from(*fx, *fy, *fo);
                     } else {
@@ -427,6 +434,13 @@ impl LinuxEditorAnimationCoordinator {
                         let mapped_be = *be - del_len;
                         if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mapped_bs && ns.byte_end == mapped_be) {
                             new_slice.rebase_from(*fx, *fy, *fo);
+                        } else if let Some(ref old_shaping) = shaping {
+                            if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                                ns.byte_start >= mapped_bs && ns.byte_end <= mapped_be &&
+                                ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
+                            }) {
+                                new_slice.rebase_from(*fx, *fy, *fo);
+                            }
                         }
                     }
                 }
@@ -508,14 +522,14 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
         let conflicting = self.prepared_queue.find_conflicting_transaction(composition_byte_start, composition_byte_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
             let mut frames = Vec::new();
             if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
                 let old_progress = old_tx.progress(Instant::now());
                 if old_progress > 0.0 && old_progress < 1.0 {
                     for old_slice in &old_tx.slices {
                         let frame = old_slice.compute_frame(old_progress);
-                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
                     }
                 }
             }
@@ -672,7 +686,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo) in &rebase_frames {
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else {
@@ -681,6 +695,13 @@ impl LinuxEditorAnimationCoordinator {
                 if let (Some(mbs), Some(mbe)) = (mapped_bs, mapped_be) {
                     if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                         new_slice.rebase_from(*fx, *fy, *fo);
+                    } else if let Some(ref old_shaping) = shaping {
+                        if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                            ns.byte_start >= mbs && ns.byte_end <= mbe &&
+                            ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
+                        }) {
+                            new_slice.rebase_from(*fx, *fy, *fo);
+                        }
                     }
                 }
             }
@@ -724,14 +745,14 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
         let conflicting = self.prepared_queue.find_conflicting_transaction(composition_byte_start, composition_byte_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64)> = if let Some(old_key) = conflicting {
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
             let mut frames = Vec::new();
             if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
                 let old_progress = old_tx.progress(Instant::now());
                 if old_progress > 0.0 && old_progress < 1.0 {
                     for old_slice in &old_tx.slices {
                         let frame = old_slice.compute_frame(old_progress);
-                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity));
+                        frames.push((old_slice.byte_start, old_slice.byte_end, frame.x, frame.y, frame.opacity, old_slice.shaping_identity.clone()));
                     }
                 }
             }
@@ -924,7 +945,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        for (bs, be, fx, fy, fo) in &rebase_frames {
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else {
@@ -933,6 +954,13 @@ impl LinuxEditorAnimationCoordinator {
                 if let (Some(mbs), Some(mbe)) = (mapped_bs, mapped_be) {
                     if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                         new_slice.rebase_from(*fx, *fy, *fo);
+                    } else if let Some(ref old_shaping) = shaping {
+                        if let Some(new_slice) = slices.iter_mut().find(|ns| {
+                            ns.byte_start >= mbs && ns.byte_end <= mbe &&
+                            ns.shaping_identity.as_ref().map_or(false, |ns_s| ns_s.is_same_shaping(old_shaping))
+                        }) {
+                            new_slice.rebase_from(*fx, *fy, *fo);
+                        }
                     }
                 }
             }
