@@ -41,15 +41,15 @@ class AndroidLayoutSnapshotBuilder(
 
     fun buildLineSnapshots(
         text: String,
-        affectedLineRange: IntRange,
+        affectedLineRange: HalfOpenRange,
         revision: Long,
         textColor: Int
     ): List<AndroidLineSnapshot> {
         val staticLayout = layout.getLayout(text)
         val result = mutableListOf<AndroidLineSnapshot>()
 
-        val startLine = affectedLineRange.first.coerceIn(0, staticLayout.lineCount - 1)
-        val endLine = affectedLineRange.last.coerceIn(0, staticLayout.lineCount - 1)
+        val startLine = affectedLineRange.start.coerceIn(0, staticLayout.lineCount - 1)
+        val endLine = (affectedLineRange.end - 1).coerceIn(0, staticLayout.lineCount - 1)
 
         for (lineIdx in startLine..endLine) {
             val snapshot = buildLineSnapshot(text, staticLayout, lineIdx, revision, textColor)
@@ -361,13 +361,13 @@ class AndroidLayoutSnapshotBuilder(
 
     fun buildLineLayoutProbes(
         text: String,
-        affectedLineRange: IntRange
+        affectedLineRange: HalfOpenRange
     ): List<AndroidLineLayoutProbe> {
         val staticLayout = layout.getLayout(text)
         val result = mutableListOf<AndroidLineLayoutProbe>()
 
-        val startLine = affectedLineRange.first.coerceIn(0, staticLayout.lineCount - 1)
-        val endLine = affectedLineRange.last.coerceIn(0, staticLayout.lineCount - 1)
+        val startLine = affectedLineRange.start.coerceIn(0, staticLayout.lineCount - 1)
+        val endLine = (affectedLineRange.end - 1).coerceIn(0, staticLayout.lineCount - 1)
 
         for (lineIdx in startLine..endLine) {
             val probe = buildLineLayoutProbe(text, staticLayout, lineIdx)
