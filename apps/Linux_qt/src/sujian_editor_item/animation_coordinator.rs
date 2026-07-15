@@ -240,6 +240,7 @@ impl LinuxEditorAnimationCoordinator {
                     };
 
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                    let mut consumed_indices: Vec<usize> = Vec::new();
                     for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
                         if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                             new_slice.rebase_from(*fx, *fy, *fo);
@@ -247,11 +248,15 @@ impl LinuxEditorAnimationCoordinator {
                             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                                 new_slice.rebase_from(*fx, *fy, *fo);
                             } else if let Some(ref sid) = shaping {
-                                if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                                    ns.shaping_identity.as_ref() == Some(sid) &&
-                                    ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
-                                }) {
+                                let mapped_center = (mbs + mbe) / 2;
+                                let best = slices.iter_mut().enumerate()
+                                    .filter(|(idx, ns)| !consumed_indices.contains(idx))
+                                    .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
+                                    .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
+                                    .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
+                                if let Some((idx, new_slice)) = best {
                                     new_slice.rebase_from(*fx, *fy, *fo);
+                                    consumed_indices.push(idx);
                                 }
                             }
                         }
@@ -431,6 +436,7 @@ impl LinuxEditorAnimationCoordinator {
                 };
 
                 let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                let mut consumed_indices: Vec<usize> = Vec::new();
                 for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
                     if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                         new_slice.rebase_from(*fx, *fy, *fo);
@@ -438,11 +444,15 @@ impl LinuxEditorAnimationCoordinator {
                         if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                             new_slice.rebase_from(*fx, *fy, *fo);
                         } else if let Some(ref sid) = shaping {
-                            if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                                ns.shaping_identity.as_ref() == Some(sid) &&
-                                ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
-                            }) {
+                            let mapped_center = (mbs + mbe) / 2;
+                            let best = slices.iter_mut().enumerate()
+                                .filter(|(idx, ns)| !consumed_indices.contains(idx))
+                                .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
+                                .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
+                                .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
+                            if let Some((idx, new_slice)) = best {
                                 new_slice.rebase_from(*fx, *fy, *fo);
+                                consumed_indices.push(idx);
                             }
                         }
                     }
@@ -681,6 +691,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
+        let mut consumed_indices: Vec<usize> = Vec::new();
         for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
@@ -688,11 +699,15 @@ impl LinuxEditorAnimationCoordinator {
                 if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
                 } else if let Some(ref sid) = shaping {
-                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                        ns.shaping_identity.as_ref() == Some(sid) &&
-                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
-                    }) {
+                    let mapped_center = (mbs + mbe) / 2;
+                    let best = slices.iter_mut().enumerate()
+                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
+                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
+                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
+                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
+                    if let Some((idx, new_slice)) = best {
                         new_slice.rebase_from(*fx, *fy, *fo);
+                        consumed_indices.push(idx);
                     }
                 }
             }
@@ -928,6 +943,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
+        let mut consumed_indices: Vec<usize> = Vec::new();
         for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
@@ -935,11 +951,15 @@ impl LinuxEditorAnimationCoordinator {
                 if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
                 } else if let Some(ref sid) = shaping {
-                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                        ns.shaping_identity.as_ref() == Some(sid) &&
-                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
-                    }) {
+                    let mapped_center = (mbs + mbe) / 2;
+                    let best = slices.iter_mut().enumerate()
+                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
+                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
+                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
+                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
+                    if let Some((idx, new_slice)) = best {
                         new_slice.rebase_from(*fx, *fy, *fo);
+                        consumed_indices.push(idx);
                     }
                 }
             }
@@ -1492,6 +1512,7 @@ mod tests {
         ];
 
         let offset_map = OffsetMap::build("old_text_with_padding", "new_text_with_padding");
+        let mut consumed_indices: Vec<usize> = Vec::new();
         for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
@@ -1499,11 +1520,15 @@ mod tests {
                 if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
                     new_slice.rebase_from(*fx, *fy, *fo);
                 } else if let Some(ref sid) = shaping {
-                    if let Some(new_slice) = slices.iter_mut().find(|ns| {
-                        ns.shaping_identity.as_ref() == Some(sid) &&
-                        ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1)
-                    }) {
+                    let mapped_center = (mbs + mbe) / 2;
+                    let best = slices.iter_mut().enumerate()
+                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
+                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
+                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
+                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
+                    if let Some((idx, new_slice)) = best {
                         new_slice.rebase_from(*fx, *fy, *fo);
+                        consumed_indices.push(idx);
                     }
                 }
             }
@@ -1511,5 +1536,70 @@ mod tests {
 
         assert!((slices[0].from_document_rect.x - 0.0).abs() < 0.01);
         assert!((slices[1].from_document_rect.x - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_rebase_tier3_closest_position_match_with_duplicate_shaping() {
+        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (5, 10, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
+            (15, 20, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
+            (25, 30, 30.0, 300.0, 0.7, Some(sid_dup.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 5, 10,
+                Some(sid_dup.clone()),
+            ),
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 2),
+                LineSnapshotId::new(1, 0, 1),
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 20.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 15, 20,
+                Some(sid_dup.clone()),
+            ),
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 3),
+                LineSnapshotId::new(1, 0, 2),
+                SourceRect { x: 0.0, y: 40.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 40.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 25, 30,
+                Some(sid_dup.clone()),
+            ),
+        ];
+
+        let offset_map = OffsetMap::build("same_text_for_identity", "same_text_for_identity");
+        let mut consumed_indices: Vec<usize> = Vec::new();
+        for (bs, be, fx, fy, fo, ref shaping) in &rebase_frames {
+            if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
+                new_slice.rebase_from(*fx, *fy, *fo);
+            } else if let (Some(mbs), Some(mbe)) = (offset_map.map_old_to_new(*bs), offset_map.map_old_to_new(*be)) {
+                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
+                    new_slice.rebase_from(*fx, *fy, *fo);
+                } else if let Some(ref sid) = shaping {
+                    let mapped_center = (mbs + mbe) / 2;
+                    let best = slices.iter_mut().enumerate()
+                        .filter(|(idx, ns)| !consumed_indices.contains(idx))
+                        .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
+                        .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
+                        .min_by_key(|(_, ns)| (ns.byte_start + ns.byte_end) as i64 / 2 - mapped_center as i64);
+                    if let Some((idx, new_slice)) = best {
+                        new_slice.rebase_from(*fx, *fy, *fo);
+                        consumed_indices.push(idx);
+                    }
+                }
+            }
+        }
+
+        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01, "slice 0 should get rebase frame 10.0, got {}", slices[0].from_document_rect.x);
+        assert!((slices[1].from_document_rect.x - 20.0).abs() < 0.01, "slice 1 should get rebase frame 20.0, got {}", slices[1].from_document_rect.x);
+        assert!((slices[2].from_document_rect.x - 30.0).abs() < 0.01, "slice 2 should get rebase frame 30.0, got {}", slices[2].from_document_rect.x);
     }
 }
