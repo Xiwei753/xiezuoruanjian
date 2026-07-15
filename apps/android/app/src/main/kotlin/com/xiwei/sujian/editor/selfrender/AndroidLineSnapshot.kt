@@ -21,15 +21,15 @@ data class AndroidLineSnapshotId(
  * - [shapingIdentity]：用于判断 old/new cluster 是否可复用同一视觉资源（Move vs Crossfade）。
  */
 data class AndroidClusterSnapshot(
-    val documentByteStart: Int,
-    val documentByteEnd: Int,
+    override val documentByteStart: Int,
+    override val documentByteEnd: Int,
     val platformTextStart: Int,
     val platformTextEnd: Int,
     val sourceRectInLineSnapshot: RectF,
     val visualRectInDocument: RectF,
-    val textDirection: Int,
-    val shapingIdentity: String
-)
+    override val textDirection: Int,
+    override val shapingIdentity: String
+) : ClusterStabilityInfo
 
 /**
  * 一次平台排版后的不可变行视觉快照。

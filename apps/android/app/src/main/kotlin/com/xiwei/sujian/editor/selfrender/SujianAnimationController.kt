@@ -1347,15 +1347,23 @@ class SujianAnimationController(
 
         var prevCompositionRevision = compositionManager.takeCurrentForTransaction(txKey)
         var prevRevisionFromActiveTransaction = false
-        if (prevCompositionRevision == null && compositionManager.getActiveTransactionKey() != null) {
+        var detachedOldFromActive: AndroidCompositionVisualRevision? = null
+        if (prevCompositionRevision == null) {
             val activeTx = renderer.getActiveTransactions().find {
                 it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
                 (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
             }
             if (activeTx != null) {
-                prevCompositionRevision = activeTx.ownedNewRevision
+                prevCompositionRevision = activeTx.takeNewRevisionForRebase()
+                detachedOldFromActive = activeTx.detachOldRevisionForRebase()
                 prevRevisionFromActiveTransaction = true
+                activeTx.onTransactionComplete = null
+                activeTx.cancel("superseded_by_composition_update")
             }
+        }
+
+        if (detachedOldFromActive != null) {
+            detachedOldFromActive.release(detachedOldFromActive.owner)
         }
 
         val affectedStartLine = if (prevCompositionRevision != null) {
@@ -1406,7 +1414,7 @@ class SujianAnimationController(
         )
 
         if (newLineSnapshots.isEmpty()) {
-            if (prevCompositionRevision != null && !prevCompositionRevision.isReleased()) {
+            if (prevCompositionRevision != null && prevCompositionRevision.owner !is SnapshotOwner.Released) {
                 prevCompositionRevision.release(prevCompositionRevision.owner)
             }
             snapshotBuilder.commitRevision(newRevision)
@@ -1688,22 +1696,22 @@ class SujianAnimationController(
                         val oldLineSnap = oldLineSnapshots.find { os ->
                             os.documentByteStart == oldRange.start || (os.documentByteStart <= oldRange.start && os.documentByteEnd >= oldRange.end)
                         }
-                        val probeOldClusters = if (oldLineSnap == null && oldLayout != null && oldText.isNotEmpty()) {
+                        val probeOldClusters: List<ClusterStabilityInfo>? = if (oldLineSnap == null && oldLayout != null && oldText.isNotEmpty()) {
                             val pOldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, oldRange.start).coerceIn(0, oldText.length)
                             val pOldLineIdx = oldLayout.getLineForOffset(pOldUtf16Start)
                             snapshotBuilder.buildLineLayoutProbes(oldText, pOldLineIdx..pOldLineIdx).firstOrNull()?.clusters?.filter { c ->
                                 c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                             }
                         } else null
-                        val probeNewClusters = if (newLineSnap == null) {
+                        val probeNewClusters: List<ClusterStabilityInfo>? = if (newLineSnap == null) {
                             snapshotBuilder.buildLineLayoutProbes(virtualText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
                                 c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
                             }
                         } else null
-                        val effectiveOldClusters = oldLineSnap?.clusters?.filter { c ->
+                        val effectiveOldClusters: List<ClusterStabilityInfo>? = oldLineSnap?.clusters?.filter { c ->
                             c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                         } ?: probeOldClusters
-                        val effectiveNewClusters = newLineSnap?.clusters?.filter { c ->
+                        val effectiveNewClusters: List<ClusterStabilityInfo>? = newLineSnap?.clusters?.filter { c ->
                             c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
                         } ?: probeNewClusters
                         if (effectiveOldClusters == null || effectiveNewClusters == null) {
@@ -1748,27 +1756,33 @@ class SujianAnimationController(
         var prevRevision = compositionManager.takeCurrentForTransaction(txKey)
         var prevRevisionFromActiveTransaction = false
         var activeCompositionTx: AndroidPlatformVisualTransaction? = null
+        var detachedOldFromActive: AndroidCompositionVisualRevision? = null
 
-        if (prevRevision == null && compositionManager.getActiveTransactionKey() != null) {
+        if (prevRevision == null) {
             activeCompositionTx = renderer.getActiveTransactions().find {
                 it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
                 (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
             }
             if (activeCompositionTx != null) {
-                prevRevision = activeCompositionTx!!.takeNewRevisionForRebase()
+                prevRevision = activeCompositionTx.takeNewRevisionForRebase()
+                detachedOldFromActive = activeCompositionTx.detachOldRevisionForRebase()
                 prevRevisionFromActiveTransaction = true
             }
         }
 
         if (activeCompositionTx != null && prevRevisionFromActiveTransaction) {
-            activeCompositionTx!!.onTransactionComplete = null
-            activeCompositionTx!!.cancel("superseded_by_commit_cancel")
+            activeCompositionTx.onTransactionComplete = null
+            activeCompositionTx.cancel("superseded_by_commit_cancel")
+        }
+
+        if (detachedOldFromActive != null) {
+            detachedOldFromActive.release(detachedOldFromActive.owner)
         }
 
         compositionManager.clear()
 
         if (!animationEnabled || prevRevision == null) {
-            if (prevRevision != null && !prevRevision.isReleased()) {
+            if (prevRevision != null && prevRevision.owner !is SnapshotOwner.Released) {
                 prevRevision.release(prevRevision.owner)
             }
             return TextAnimationStartResult.Skipped
@@ -2119,22 +2133,22 @@ class SujianAnimationController(
                         val oldLineSnap = oldLineSnapshots.find { os ->
                             os.documentByteStart == oldRange.start || (os.documentByteStart <= oldRange.start && os.documentByteEnd >= oldRange.end)
                         }
-                        val probeOldClusters = if (oldLineSnap == null && oldLayout != null && oldText.isNotEmpty()) {
+                        val probeOldClusters: List<ClusterStabilityInfo>? = if (oldLineSnap == null && oldLayout != null && oldText.isNotEmpty()) {
                             val pOldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, oldRange.start).coerceIn(0, oldText.length)
                             val pOldLineIdx = oldLayout.getLineForOffset(pOldUtf16Start)
                             snapshotBuilder.buildLineLayoutProbes(oldText, pOldLineIdx..pOldLineIdx).firstOrNull()?.clusters?.filter { c ->
                                 c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                             }
                         } else null
-                        val probeNewClusters = if (newLineSnap == null) {
+                        val probeNewClusters: List<ClusterStabilityInfo>? = if (newLineSnap == null) {
                             snapshotBuilder.buildLineLayoutProbes(newText, candidateEnd..candidateEnd).firstOrNull()?.clusters?.filter { c ->
                                 c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
                             }
                         } else null
-                        val effectiveOldClusters = oldLineSnap?.clusters?.filter { c ->
+                        val effectiveOldClusters: List<ClusterStabilityInfo>? = oldLineSnap?.clusters?.filter { c ->
                             c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
                         } ?: probeOldClusters
-                        val effectiveNewClusters = newLineSnap?.clusters?.filter { c ->
+                        val effectiveNewClusters: List<ClusterStabilityInfo>? = newLineSnap?.clusters?.filter { c ->
                             c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
                         } ?: probeNewClusters
                         if (effectiveOldClusters == null || effectiveNewClusters == null) {

@@ -143,6 +143,7 @@ impl LineSnapshotBuilder {
             line_snapshots,
             caret_rect: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
+            virtual_text: String::new(),
         }
     }
 

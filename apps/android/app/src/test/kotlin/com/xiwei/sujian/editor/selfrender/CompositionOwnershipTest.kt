@@ -118,13 +118,14 @@ class CompositionOwnershipTest {
         assertNull(manager.getCurrent())
     }
 
-    @Test(expected = IllegalStateException::class)
-    fun takeCurrentForTransaction_throwsOnDoubleTake() {
+    @Test
+    fun takeCurrentForTransaction_returnsNullWhenAlreadyTaken() {
         val rev1 = makeRevision(1)
         manager.setCurrent(rev1)
         manager.takeCurrentForTransaction(100u)
 
-        manager.takeCurrentForTransaction(101u)
+        val result = manager.takeCurrentForTransaction(101u)
+        assertNull(result)
     }
 
     @Test
@@ -805,6 +806,188 @@ class CompositionOwnershipTest {
 
         takenNewRev.release(SnapshotOwner.OwnedByTransaction(100u))
         assertTrue(takenNewRev.isReleased())
+    }
+
+    @Test
+    fun consecutiveCompositionUpdateChain_withFakeResources_100times_noLeak() {
+        val allResources = mutableListOf<FakeVisualResource>()
+        val sessionId = CompositionSessionId(1)
+
+        var currentRev = makeRevisionWithFakeResources(1, 2)
+        allResources.addAll(currentRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
+        manager.setCurrent(currentRev)
+
+        for (i in 2..100L) {
+            val txKey = i.toULong()
+
+            val prevRev = manager.takeCurrentForTransaction(txKey)
+            if (prevRev == null) {
+                val activeTxKey = manager.getActiveTransactionKey()
+                if (activeTxKey != null) {
+                    val fakeActiveTx = AndroidPlatformVisualTransaction(
+                        key = activeTxKey,
+                        state = AndroidVisualTransactionState.Rendering,
+                        operationKind = AndroidVisualOperationKind.CompositionUpdate,
+                        animationMode = AnimationModeData.GlyphAnimation,
+                        durationMs = 160,
+                        oldRevision = i - 1,
+                        newRevision = i,
+                        slices = mutableListOf(),
+                        oldLineSnapshots = mutableListOf(),
+                        newLineSnapshots = mutableListOf(),
+                        staticLinePatches = mutableListOf(),
+                        decorationSlices = mutableListOf(),
+                        cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+                        ownedOldRevision = currentRev,
+                        ownedNewRevision = currentRev
+                    )
+                    val takenNew = fakeActiveTx.takeNewRevisionForRebase()
+                    val detachedOld = fakeActiveTx.detachOldRevisionForRebase()
+                    fakeActiveTx.onTransactionComplete = null
+                    fakeActiveTx.cancel("superseded")
+                    if (detachedOld != null) {
+                        detachedOld.release(detachedOld.owner)
+                    }
+                    currentRev = takenNew ?: continue
+                } else {
+                    continue
+                }
+            } else {
+                currentRev = prevRev
+            }
+
+            val newRev = makeRevisionWithFakeResources(i, 2)
+            allResources.addAll(newRev.lineSnapshots.mapNotNull { it.visualResource as? FakeVisualResource })
+
+            var returnedRev: AndroidCompositionVisualRevision? = null
+            val tx = AndroidPlatformVisualTransaction(
+                key = txKey,
+                state = AndroidVisualTransactionState.Rendering,
+                operationKind = AndroidVisualOperationKind.CompositionUpdate,
+                animationMode = AnimationModeData.GlyphAnimation,
+                durationMs = 160,
+                oldRevision = i - 1,
+                newRevision = i,
+                slices = mutableListOf(),
+                oldLineSnapshots = mutableListOf(),
+                newLineSnapshots = mutableListOf(),
+                staticLinePatches = mutableListOf(),
+                decorationSlices = mutableListOf(),
+                cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+                ownedOldRevision = currentRev,
+                ownedNewRevision = newRev,
+                onTransactionComplete = { rev, key ->
+                    returnedRev = rev
+                }
+            )
+
+            if (i % 7 == 0L) {
+                val detachedOld = tx.detachOldRevisionForRebase()
+                val detachedNew = tx.takeNewRevisionForRebase()
+                assertNotNull(detachedOld)
+                assertNotNull(detachedNew)
+                detachedOld!!.release(SnapshotOwner.OwnedByTransaction(txKey))
+                detachedNew!!.transferToSession(sessionId)
+                manager.returnFromTransaction(detachedNew, txKey)
+                currentRev = detachedNew
+                tx.cancel("rebased")
+            } else {
+                tx.complete()
+                assertNotNull(returnedRev)
+                assertFalse(returnedRev!!.isReleased())
+                manager.returnFromTransaction(returnedRev, txKey)
+                currentRev = returnedRev!!
+            }
+        }
+
+        val finalRev = manager.getCurrent()
+        assertNotNull(finalRev)
+        assertEquals(100L, finalRev!!.revisionId)
+        assertFalse(finalRev.isReleased())
+
+        val unreleasedCount = allResources.count { !it.released }
+        assertEquals(2, unreleasedCount)
+
+        manager.clear()
+        assertTrue(finalRev.isReleased())
+        assertEquals(allResources.size, allResources.count { it.released })
+    }
+
+    @Test
+    fun commitCancel_takesOverActiveTransaction_withFakeResources() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        val prevRev = manager.takeCurrentForTransaction(100u)
+        assertNotNull(prevRev)
+
+        val newRev = makeRevisionWithFakeResources(2, 2)
+        val activeTx = AndroidPlatformVisualTransaction(
+            key = 100u,
+            state = AndroidVisualTransactionState.Rendering,
+            operationKind = AndroidVisualOperationKind.CompositionUpdate,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 1,
+            newRevision = 2,
+            slices = mutableListOf(),
+            oldLineSnapshots = mutableListOf(),
+            newLineSnapshots = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = prevRev,
+            ownedNewRevision = newRev
+        )
+
+        val takenNewRev = activeTx.takeNewRevisionForRebase()
+        val detachedOldRev = activeTx.detachOldRevisionForRebase()
+        activeTx.onTransactionComplete = null
+        activeTx.cancel("superseded_by_commit_cancel")
+
+        if (detachedOldRev != null) {
+            detachedOldRev.release(detachedOldRev.owner)
+        }
+
+        assertNotNull(takenNewRev)
+        assertFalse(takenNewRev!!.isReleased())
+        for (snap in takenNewRev.lineSnapshots) {
+            assertFalse(snap.isReleased())
+        }
+
+        val commitTx = AndroidPlatformVisualTransaction(
+            key = 200u,
+            state = AndroidVisualTransactionState.Pending,
+            operationKind = AndroidVisualOperationKind.CompositionCommitOrCancel,
+            animationMode = AnimationModeData.GlyphAnimation,
+            durationMs = 160,
+            oldRevision = 2,
+            newRevision = 3,
+            slices = mutableListOf(),
+            oldLineSnapshots = mutableListOf(),
+            newLineSnapshots = mutableListOf(),
+            staticLinePatches = mutableListOf(),
+            decorationSlices = mutableListOf(),
+            cursorTransition = AndroidCursorTransition.snap(android.graphics.RectF()),
+            ownedOldRevision = takenNewRev,
+            ownedNewRevision = null
+        )
+
+        commitTx.complete()
+        assertTrue(takenNewRev.isReleased())
+    }
+
+    @Test
+    fun returnFromTransaction_staleTransactionKey_ignored() {
+        val rev1 = makeRevisionWithFakeResources(1, 2)
+        manager.setCurrent(rev1)
+        manager.takeCurrentForTransaction(100u)
+
+        val rev2 = makeRevisionWithFakeResources(2, 2)
+        rev2.transferToTransaction(999u)
+
+        manager.returnFromTransaction(rev2, 999u)
+
+        assertNull(manager.getCurrent())
     }
 }
 

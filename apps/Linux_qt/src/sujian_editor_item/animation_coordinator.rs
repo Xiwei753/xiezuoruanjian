@@ -27,7 +27,7 @@
 use std::time::Instant;
 
 use writer_core::editor::{
-    CursorRect, EditorAnimationKind, EditorVisualTransaction,
+    CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap,
 };
 
 pub(crate) use super::transaction_key::VisualTransactionKey;
@@ -525,6 +525,8 @@ impl LinuxEditorAnimationCoordinator {
             Vec::new()
         };
 
+        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
 
@@ -590,18 +592,16 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             let old_line = {
-                let best_match = new_line.clusters.iter()
-                    .filter_map(|nc| {
-                        old_snapshot.line_snapshots.iter().find_map(|ol| {
-                            ol.clusters.iter().find(|oc| {
-                                oc.shaping_identity.is_same_shaping(&nc.shaping_identity)
-                                    && oc.byte_end - oc.byte_start == nc.byte_end - nc.byte_start
-                            }).map(|_| ol)
-                        })
-                    })
-                    .next()
-                    .cloned();
-                best_match.or_else(|| {
+                let mapped_old_byte_start = offset_map.map_new_to_old(new_line.byte_start);
+                let mapped_old_byte_end = offset_map.map_new_to_old(new_line.byte_end);
+                let offset_matched = if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                    old_snapshot.line_for_byte_range(mobs, mobe).cloned()
+                } else if let Some(mobs) = mapped_old_byte_start {
+                    old_snapshot.line_for_byte(mobs).cloned()
+                } else {
+                    None
+                };
+                offset_matched.or_else(|| {
                     let old_comp_end = old_snapshot.line_snapshots.iter()
                         .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
                         .next()
@@ -676,15 +676,12 @@ impl LinuxEditorAnimationCoordinator {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else {
-                let old_comp_end = old_snapshot.line_snapshots.iter()
-                    .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
-                    .next()
-                    .unwrap_or(composition_byte_end as i64);
-                let byte_shift = composition_byte_end as i64 - old_comp_end;
-                let mapped_bs = (*bs as i64 + byte_shift) as usize;
-                let mapped_be = (*be as i64 + byte_shift) as usize;
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mapped_bs && ns.byte_end == mapped_be) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
+                let mapped_bs = offset_map.map_old_to_new(*bs);
+                let mapped_be = offset_map.map_old_to_new(*be);
+                if let (Some(mbs), Some(mbe)) = (mapped_bs, mapped_be) {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
+                        new_slice.rebase_from(*fx, *fy, *fo);
+                    }
                 }
             }
         }
@@ -743,6 +740,8 @@ impl LinuxEditorAnimationCoordinator {
         } else {
             Vec::new()
         };
+
+        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
@@ -821,18 +820,16 @@ impl LinuxEditorAnimationCoordinator {
                 }
 
                 let old_line = {
-                    let best_match = new_line.clusters.iter()
-                        .filter_map(|nc| {
-                            old_snapshot.line_snapshots.iter().find_map(|ol| {
-                                ol.clusters.iter().find(|oc| {
-                                    oc.shaping_identity.is_same_shaping(&nc.shaping_identity)
-                                        && oc.byte_end - oc.byte_start == nc.byte_end - nc.byte_start
-                                }).map(|_| ol)
-                            })
-                        })
-                        .next()
-                        .cloned();
-                    best_match.or_else(|| {
+                    let mapped_old_byte_start = offset_map.map_new_to_old(new_line.byte_start);
+                    let mapped_old_byte_end = offset_map.map_new_to_old(new_line.byte_end);
+                    let offset_matched = if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
+                        old_snapshot.line_for_byte_range(mobs, mobe).cloned()
+                    } else if let Some(mobs) = mapped_old_byte_start {
+                        old_snapshot.line_for_byte(mobs).cloned()
+                    } else {
+                        None
+                    };
+                    offset_matched.or_else(|| {
                         let old_comp_end = old_snapshot.line_snapshots.iter()
                             .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
                             .next()
@@ -931,15 +928,12 @@ impl LinuxEditorAnimationCoordinator {
             if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == *bs && ns.byte_end == *be) {
                 new_slice.rebase_from(*fx, *fy, *fo);
             } else {
-                let old_comp_end = old_snapshot.line_snapshots.iter()
-                    .filter_map(|l| if l.byte_start <= composition_byte_start && l.byte_end >= composition_byte_start { Some(l.byte_end as i64) } else { None })
-                    .next()
-                    .unwrap_or(composition_byte_end as i64);
-                let byte_shift = composition_byte_end as i64 - old_comp_end;
-                let mapped_bs = (*bs as i64 + byte_shift) as usize;
-                let mapped_be = (*be as i64 + byte_shift) as usize;
-                if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mapped_bs && ns.byte_end == mapped_be) {
-                    new_slice.rebase_from(*fx, *fy, *fo);
+                let mapped_bs = offset_map.map_old_to_new(*bs);
+                let mapped_be = offset_map.map_old_to_new(*be);
+                if let (Some(mbs), Some(mbe)) = (mapped_bs, mapped_be) {
+                    if let Some(new_slice) = slices.iter_mut().find(|ns| ns.byte_start == mbs && ns.byte_end == mbe) {
+                        new_slice.rebase_from(*fx, *fy, *fo);
+                    }
                 }
             }
         }

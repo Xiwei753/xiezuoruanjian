@@ -170,6 +170,7 @@ pub(crate) struct EditorLayoutSnapshot {
     pub line_snapshots: Vec<PreparedLineSnapshot>,
     pub caret_rect: Option<CaretRect>,
     pub caret_affinity: CaretAffinity,
+    pub virtual_text: String,
 }
 
 impl std::fmt::Debug for EditorLayoutSnapshot {
@@ -195,13 +196,26 @@ impl EditorLayoutSnapshot {
             line_snapshots,
             caret_rect,
             caret_affinity,
+            virtual_text: String::new(),
         }
+    }
+
+    pub fn with_virtual_text(mut self, virtual_text: String) -> Self {
+        self.virtual_text = virtual_text;
+        self
     }
 
     pub fn line_for_byte(&self, byte_offset: usize) -> Option<&PreparedLineSnapshot> {
         self.line_snapshots
             .iter()
             .find(|l| l.byte_end >= byte_offset && l.byte_start <= byte_offset)
+    }
+
+    pub fn line_for_byte_range(&self, byte_start: usize, byte_end: usize) -> Option<&PreparedLineSnapshot> {
+        self.line_snapshots
+            .iter()
+            .find(|l| l.byte_start <= byte_start && l.byte_end >= byte_end)
+            .or_else(|| self.line_for_byte(byte_start))
     }
 
     pub fn lines_in_byte_range(&self, byte_start: usize, byte_end: usize) -> Vec<&PreparedLineSnapshot> {

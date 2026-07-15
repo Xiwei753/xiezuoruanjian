@@ -1,12 +1,21 @@
 package com.xiwei.sujian.editor.selfrender
 
+interface ClusterStabilityInfo {
+    val documentByteStart: Int
+    val documentByteEnd: Int
+    val textDirection: Int
+    val shapingIdentity: String
+}
+
 data class AndroidClusterLayoutProbe(
-    val documentByteStart: Int,
-    val documentByteEnd: Int,
+    override val documentByteStart: Int,
+    override val documentByteEnd: Int,
     val visualWidth: Float,
     val isRtl: Boolean,
-    val shapingIdentity: String
-)
+    override val shapingIdentity: String
+) : ClusterStabilityInfo {
+    override val textDirection: Int get() = if (isRtl) 1 else 0
+}
 
 data class AndroidLineLayoutProbe(
     val visualLineOrdinal: Int,

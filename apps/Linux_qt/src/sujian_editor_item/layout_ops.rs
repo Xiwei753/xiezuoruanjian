@@ -153,6 +153,7 @@ impl SujianEditorItem {
         );
         snapshot.caret_rect = Some(caret);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
+        snapshot.virtual_text = virtual_text.to_string();
         snapshot
     }
 
