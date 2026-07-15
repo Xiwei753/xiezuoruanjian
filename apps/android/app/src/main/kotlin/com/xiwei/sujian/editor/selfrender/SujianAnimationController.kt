@@ -1345,7 +1345,18 @@ class SujianAnimationController(
 
         val txKey = nextAnimationId()
 
-        val prevCompositionRevision = compositionManager.takeCurrentForTransaction(txKey)
+        var prevCompositionRevision = compositionManager.takeCurrentForTransaction(txKey)
+        var prevRevisionFromActiveTransaction = false
+        if (prevCompositionRevision == null && compositionManager.getActiveTransactionKey() != null) {
+            val activeTx = renderer.getActiveTransactions().find {
+                it.operationKind == AndroidVisualOperationKind.CompositionUpdate &&
+                (it.state == AndroidVisualTransactionState.Rendering || it.state == AndroidVisualTransactionState.Prepared || it.state == AndroidVisualTransactionState.Paused)
+            }
+            if (activeTx != null) {
+                prevCompositionRevision = activeTx.ownedNewRevision
+                prevRevisionFromActiveTransaction = true
+            }
+        }
 
         val affectedStartLine = if (prevCompositionRevision != null) {
             val prevVirtualLayout = if (prevCompositionRevision.virtualText.isNotEmpty()) layout.getLayout(prevCompositionRevision.virtualText) else null
@@ -1366,7 +1377,7 @@ class SujianAnimationController(
         val preeditEndLine = virtualLayout.getLineForOffset(
             (compositionReplaceRange.first + preeditText.length).coerceIn(0, virtualText.length)
         )
-        val affectedEndLine = computeStableSuffixEndLine(
+        val preliminaryEndLine = computeStableSuffixEndLine(
             prevCompositionRevision, committedText, virtualText, virtualLayout,
             compositionReplaceRange, preeditText, affectedStartLine, preeditEndLine
         )
@@ -1377,7 +1388,7 @@ class SujianAnimationController(
             val committedLayout = if (committedText.isNotEmpty()) layout.getLayout(committedText) else null
             val oldRevision = snapshotBuilder.currentCommittedRevision()
             if (committedLayout != null && committedText.isNotEmpty()) {
-                val endLine = affectedEndLine.coerceAtMost(committedLayout.lineCount - 1)
+                val endLine = preliminaryEndLine.coerceAtMost(committedLayout.lineCount - 1)
                 snapshotBuilder.buildLineSnapshots(committedText, affectedStartLine..endLine, oldRevision, renderer.getTextColor())
             } else {
                 emptyList()
@@ -1385,11 +1396,17 @@ class SujianAnimationController(
         }
 
         val newLineSnapshots = snapshotBuilder.buildLineSnapshots(
-            virtualText, affectedStartLine..affectedEndLine, newRevision, renderer.getTextColor()
+            virtualText, affectedStartLine..preliminaryEndLine, newRevision, renderer.getTextColor()
+        )
+
+        val affectedEndLine = computeStableSuffixEndLine(
+            prevCompositionRevision, committedText, virtualText, virtualLayout,
+            compositionReplaceRange, preeditText, affectedStartLine, preeditEndLine,
+            oldLineSnapshots, newLineSnapshots
         )
 
         if (newLineSnapshots.isEmpty()) {
-            if (prevCompositionRevision != null) {
+            if (prevCompositionRevision != null && !prevRevisionFromActiveTransaction) {
                 prevCompositionRevision.release()
             }
             snapshotBuilder.commitRevision(newRevision)
@@ -1559,7 +1576,7 @@ class SujianAnimationController(
             staticLinePatches = staticPatches.toMutableList(),
             decorationSlices = decorationSlices,
             cursorTransition = cursorTransition,
-            ownedOldRevision = prevCompositionRevision,
+            ownedOldRevision = if (prevRevisionFromActiveTransaction) null else prevCompositionRevision,
             ownedNewRevision = compositionRevision,
             onTransactionComplete = { newRev, completedTxKey ->
                 compositionManager.returnFromTransaction(newRev, completedTxKey)
@@ -1590,7 +1607,9 @@ class SujianAnimationController(
         compositionReplaceRange: IntRange,
         preeditText: String,
         affectedStartLine: Int,
-        preeditEndLine: Int
+        preeditEndLine: Int,
+        oldLineSnapshots: List<AndroidLineSnapshot> = emptyList(),
+        newLineSnapshots: List<AndroidLineSnapshot> = emptyList()
     ): Int {
         val oldText = prevCompositionRevision?.virtualText ?: committedText
         val oldLayout = if (oldText.isNotEmpty()) layout.getLayout(oldText) else null
@@ -1659,7 +1678,36 @@ class SujianAnimationController(
                     val newLineEnd = lineEnd
                     val newByteLineEnd = SujianEditorBuffer.utf16ToUtf8(virtualText, newLineEnd.coerceAtMost(virtualText.length))
                     val mappedOldLineEnd = offsetMap.mapNewRangeToOld(newByteLineEnd - 1, newByteLineEnd)
-                    mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
+                    val lineBoundaryStable = mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
+                    if (!lineBoundaryStable) {
+                        false
+                    } else {
+                        val newLineSnap = newLineSnapshots.find { ns ->
+                            ns.documentByteStart == byteStart || (ns.documentByteStart <= byteStart && ns.documentByteEnd >= byteEnd)
+                        }
+                        val oldLineSnap = oldLineSnapshots.find { os ->
+                            os.documentByteStart == oldRange.start || (os.documentByteStart <= oldRange.start && os.documentByteEnd >= oldRange.end)
+                        }
+                        if (newLineSnap != null && oldLineSnap != null) {
+                            val newClusters = newLineSnap.clusters.filter { c ->
+                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                            }
+                            val oldClusters = oldLineSnap.clusters.filter { c ->
+                                c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
+                            }
+                            if (newClusters.size != oldClusters.size) {
+                                false
+                            } else {
+                                newClusters.zip(oldClusters).all { (nc, oc) ->
+                                    nc.shapingIdentity == oc.shapingIdentity &&
+                                    nc.textDirection == oc.textDirection &&
+                                    nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
+                                }
+                            }
+                        } else {
+                            lineBoundaryStable
+                        }
+                    }
                 }
             } else {
                 false
@@ -1681,7 +1729,10 @@ class SujianAnimationController(
 
     fun handleCompositionCommitOrCancel(
         committedText: String,
-        isCommit: Boolean
+        isCommit: Boolean,
+        committedCandidateText: String = "",
+        candidateUtf16Start: Int = 0,
+        candidateUtf16EndExclusive: Int = 0
     ): TextAnimationStartResult {
         val txKey = nextAnimationId()
         val prevRevision = compositionManager.takeCurrentForTransaction(txKey)
@@ -1707,8 +1758,22 @@ class SujianAnimationController(
             val preeditEndLine = newLayout.getLineForOffset(
                 prevRevision.compositionReplaceRange.first.coerceIn(0, newText.length)
             )
+            val preliminaryEndLine = computeCommitCancelStableSuffixEndLine(
+                prevRevision, newText, newLayout, preeditEndLine,
+                isCommit = isCommit,
+                candidateUtf16Start = candidateUtf16Start,
+                candidateUtf16EndExclusive = candidateUtf16EndExclusive
+            )
+            val preliminaryNewLineSnapshots = snapshotBuilder.buildLineSnapshots(
+                newText, preeditStartLine.coerceAtMost(preliminaryEndLine)..preliminaryEndLine, newRevision, renderer.getTextColor()
+            )
             val endLine = computeCommitCancelStableSuffixEndLine(
-                prevRevision, newText, newLayout, preeditEndLine
+                prevRevision, newText, newLayout, preeditEndLine,
+                isCommit = isCommit,
+                candidateUtf16Start = candidateUtf16Start,
+                candidateUtf16EndExclusive = candidateUtf16EndExclusive,
+                oldLineSnapshots = oldLineSnapshots,
+                newLineSnapshots = preliminaryNewLineSnapshots
             )
             preeditStartLine.coerceAtMost(endLine)..endLine
         } else {
@@ -1725,10 +1790,8 @@ class SujianAnimationController(
         val offsetMap = if (isCommit) {
             val oldPreeditByteStart = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.first)
             val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(prevRevision.virtualText, prevRevision.preeditRangeInVirtualText.last)
-            val candidateUtf16Start = prevRevision.compositionReplaceRange.first
-            val candidateUtf16End = (prevRevision.compositionReplaceRange.first + prevRevision.compositionReplaceRange.count()).coerceAtMost(newText.length)
-            val newCommittedByteStart = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16Start)
-            val newCommittedByteEnd = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16End)
+            val newCommittedByteStart = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16Start.coerceIn(0, newText.length))
+            val newCommittedByteEnd = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16EndExclusive.coerceIn(0, newText.length))
             EditOffsetMap.fromReplacement(
                 oldText = prevRevision.virtualText,
                 newText = newText,
@@ -1950,15 +2013,24 @@ class SujianAnimationController(
         prevRevision: AndroidCompositionVisualRevision,
         newText: String,
         newLayout: android.text.Layout,
-        preeditEndLine: Int
+        preeditEndLine: Int,
+        isCommit: Boolean = false,
+        candidateUtf16Start: Int = 0,
+        candidateUtf16EndExclusive: Int = 0,
+        oldLineSnapshots: List<AndroidLineSnapshot> = emptyList(),
+        newLineSnapshots: List<AndroidLineSnapshot> = emptyList()
     ): Int {
         val oldText = prevRevision.virtualText
         val oldLayout = if (oldText.isNotEmpty()) layout.getLayout(oldText) else null
 
         val oldPreeditByteStart = SujianEditorBuffer.utf16ToUtf8(oldText, prevRevision.preeditRangeInVirtualText.first)
         val oldPreeditByteEnd = SujianEditorBuffer.utf16ToUtf8(oldText, prevRevision.preeditRangeInVirtualText.last)
-        val candidateUtf16Start = prevRevision.compositionReplaceRange.first
-        val newCommittedByteStart = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16Start)
+        val newCommittedByteStart = SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16Start.coerceIn(0, newText.length))
+        val newCommittedByteEnd = if (isCommit) {
+            SujianEditorBuffer.utf16ToUtf8(newText, candidateUtf16EndExclusive.coerceIn(0, newText.length))
+        } else {
+            newCommittedByteStart
+        }
 
         val offsetMap = EditOffsetMap.fromReplacement(
             oldText = oldText,
@@ -1966,7 +2038,7 @@ class SujianAnimationController(
             oldReplaceStart = oldPreeditByteStart,
             oldReplaceEnd = oldPreeditByteEnd,
             newReplaceStart = newCommittedByteStart,
-            newReplaceEnd = newCommittedByteStart
+            newReplaceEnd = newCommittedByteEnd
         )
 
         val affectedParagraphEndLine = findAffectedParagraphEndLine(newLayout, preeditEndLine)
@@ -2005,7 +2077,36 @@ class SujianAnimationController(
                     val newLineEnd = lineEnd
                     val newByteLineEnd = SujianEditorBuffer.utf16ToUtf8(newText, newLineEnd.coerceAtMost(newText.length))
                     val mappedOldLineEnd = offsetMap.mapNewRangeToOld(newByteLineEnd - 1, newByteLineEnd)
-                    mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
+                    val lineBoundaryStable = mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
+                    if (!lineBoundaryStable) {
+                        false
+                    } else {
+                        val newLineSnap = newLineSnapshots.find { ns ->
+                            ns.documentByteStart == byteStart || (ns.documentByteStart <= byteStart && ns.documentByteEnd >= byteEnd)
+                        }
+                        val oldLineSnap = oldLineSnapshots.find { os ->
+                            os.documentByteStart == oldRange.start || (os.documentByteStart <= oldRange.start && os.documentByteEnd >= oldRange.end)
+                        }
+                        if (newLineSnap != null && oldLineSnap != null) {
+                            val newClusters = newLineSnap.clusters.filter { c ->
+                                c.documentByteStart >= byteStart && c.documentByteEnd <= byteEnd
+                            }
+                            val oldClusters = oldLineSnap.clusters.filter { c ->
+                                c.documentByteStart >= oldRange.start && c.documentByteEnd <= oldRange.end
+                            }
+                            if (newClusters.size != oldClusters.size) {
+                                false
+                            } else {
+                                newClusters.zip(oldClusters).all { (nc, oc) ->
+                                    nc.shapingIdentity == oc.shapingIdentity &&
+                                    nc.textDirection == oc.textDirection &&
+                                    nc.documentByteEnd - nc.documentByteStart == oc.documentByteEnd - oc.documentByteStart
+                                }
+                            }
+                        } else {
+                            lineBoundaryStable
+                        }
+                    }
                 }
             } else {
                 false
