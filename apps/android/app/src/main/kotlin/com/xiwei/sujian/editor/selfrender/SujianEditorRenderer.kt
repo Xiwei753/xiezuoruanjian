@@ -367,6 +367,7 @@ class SujianEditorRenderer(
         if (pendingTx != null) {
             val detachedNew = pendingTx.takeNewRevisionForRebase()
             val detachedOld = pendingTx.detachOldRevisionForRebase()
+            pendingTx.onTransactionComplete = null
             pendingTx.cancel("superseded_by_take_composition_source_pending")
             pendingQueue.removeAll { it.key == expectedOldKey }
             return CompositionSource(
