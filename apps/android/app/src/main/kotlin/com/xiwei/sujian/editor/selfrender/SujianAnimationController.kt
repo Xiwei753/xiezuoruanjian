@@ -1402,14 +1402,14 @@ class SujianAnimationController(
             val oldRevision = snapshotBuilder.currentCommittedRevision()
             if (committedLayout != null && committedText.isNotEmpty()) {
                 val endLine = snapshotEndLine.coerceAtMost(committedLayout.lineCount - 1)
-                snapshotBuilder.buildLineSnapshots(committedText, HalfOpenRange(affectedStartLine, endLine + 1), oldRevision, renderer.getTextColor(), sessionId)
+                snapshotBuilder.buildLineSnapshots(committedText, HalfOpenRange(affectedStartLine, endLine + 1), oldRevision, renderer.getTextColor())
             } else {
                 emptyList()
             }
         }
 
         val newLineSnapshots = snapshotBuilder.buildLineSnapshots(
-            virtualText, HalfOpenRange(affectedStartLine, snapshotEndLine + 1), newRevision, renderer.getTextColor(), sessionId
+            virtualText, HalfOpenRange(affectedStartLine, snapshotEndLine + 1), newRevision, renderer.getTextColor()
         )
 
         val affectedEndLine = computeStableSuffixEndLine(
@@ -1825,7 +1825,7 @@ class SujianAnimationController(
                 candidateUtf16EndExclusive = candidateUtf16EndExclusive
             )
             val preliminaryNewLineSnapshots = snapshotBuilder.buildLineSnapshots(
-                newText, HalfOpenRange(preeditStartLine.coerceAtMost(commitCancelSnapshotEndLine), commitCancelSnapshotEndLine + 1), newRevision, renderer.getTextColor(), prevRevision.sessionId
+                newText, HalfOpenRange(preeditStartLine.coerceAtMost(commitCancelSnapshotEndLine), commitCancelSnapshotEndLine + 1), newRevision, renderer.getTextColor()
             )
             val endLine = computeCommitCancelStableSuffixEndLine(
                 prevRevision, newText, newLayout, preeditEndLine,
@@ -1841,7 +1841,7 @@ class SujianAnimationController(
         }
 
         val newLineSnapshots: List<AndroidLineSnapshot> = newAffectedRange?.let {
-            snapshotBuilder.buildLineSnapshots(newText, it, newRevision, renderer.getTextColor(), prevRevision.sessionId)
+            snapshotBuilder.buildLineSnapshots(newText, it, newRevision, renderer.getTextColor())
         } ?: emptyList()
 
         val slices = mutableListOf<AndroidAnimatedSlice>()
