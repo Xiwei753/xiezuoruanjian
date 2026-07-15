@@ -133,11 +133,7 @@ impl SujianEditorItem {
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-            let virtual_text = saved_virtual_text.clone();
-            let new_snapshot = self.build_editor_layout_snapshot(width);
-            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
-
-            let visual_text_unchanged = !virtual_text.is_empty() && virtual_text == new.text;
+            let visual_text_unchanged = !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
 
             let key = self.animation_coordinator.handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,

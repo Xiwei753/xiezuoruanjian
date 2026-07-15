@@ -228,10 +228,14 @@ class SujianEditorView @JvmOverloads constructor(
                 } else {
                     SujianCursorRect(0f, 0f, textPaint.textSize, textPaint.textSize)
                 }
+                val ownerSessionId = oldLineSnapshots.firstOrNull()?.owner?.let {
+                    (it as? SnapshotOwner.OwnedBySession)?.sessionId ?: CompositionSessionId(0)
+                } ?: CompositionSessionId(0)
                 animationController.recordDeleteSnapshot(
                     deletedText = oldText,
                     oldLineSnapshots = oldLineSnapshots,
-                    oldCursorRect = oldCR
+                    oldCursorRect = oldCR,
+                    ownerSessionId = ownerSessionId
                 )
             }
 

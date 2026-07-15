@@ -60,10 +60,12 @@ class SujianAnimationController(
         val deletedText: String,
         val oldLineSnapshots: List<AndroidLineSnapshot>,
         val oldCursorRect: SujianCursorRect,
-        val animationId: ULong
+        val animationId: ULong,
+        val ownerSessionId: CompositionSessionId
     ) {
         fun release() {
-            oldLineSnapshots.forEach { it.release(it.owner) }
+            val releaser = SnapshotOwner.OwnedBySession(ownerSessionId)
+            oldLineSnapshots.forEach { it.release(releaser) }
         }
     }
     private val deleteSnapshots = mutableListOf<DeleteSnapshot>()
@@ -72,10 +74,11 @@ class SujianAnimationController(
     fun recordDeleteSnapshot(
         deletedText: String,
         oldLineSnapshots: List<AndroidLineSnapshot>,
-        oldCursorRect: SujianCursorRect
+        oldCursorRect: SujianCursorRect,
+        ownerSessionId: CompositionSessionId = CompositionSessionId(0)
     ): ULong {
         val id = nextAnimationId()
-        deleteSnapshots.add(DeleteSnapshot(deletedText, oldLineSnapshots, oldCursorRect, id))
+        deleteSnapshots.add(DeleteSnapshot(deletedText, oldLineSnapshots, oldCursorRect, id, ownerSessionId))
         lastDeleteSnapshotId = id
         return id
     }
@@ -99,7 +102,11 @@ class SujianAnimationController(
         val result = original.toMutableList()
         for (snap in supplemental) {
             if (snap.id in existingIds) {
-                snap.release(snap.owner)
+                val releaser = snap.owner
+                check(releaser is SnapshotOwner.OwnedBySession) {
+                    "mergeSnapshotsById: duplicate snapshot ${snap.id} owner is $releaser, expected OwnedBySession"
+                }
+                snap.release(releaser)
             } else {
                 result.add(snap)
             }
@@ -1741,12 +1748,16 @@ class SujianAnimationController(
                 } else {
                     val oldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, oldRange.start).coerceIn(0, oldText.length)
                     val oldLineIdx = oldLayout.getLineForOffset(oldUtf16Start)
+                    val oldLineStart = oldLayout.getLineStart(oldLineIdx)
                     val oldLineEnd = oldLayout.getLineEnd(oldLineIdx)
+                    val oldByteLineStart = SujianEditorBuffer.utf16ToUtf8(oldText, oldLineStart.coerceAtMost(oldText.length))
                     val oldByteLineEnd = SujianEditorBuffer.utf16ToUtf8(oldText, oldLineEnd.coerceAtMost(oldText.length))
-                    val newLineEnd = lineEnd
-                    val newByteLineEnd = SujianEditorBuffer.utf16ToUtf8(virtualText, newLineEnd.coerceAtMost(virtualText.length))
+                    val newByteLineStart = byteStart
+                    val newByteLineEnd = SujianEditorBuffer.utf16ToUtf8(virtualText, lineEnd.coerceAtMost(virtualText.length))
+                    val mappedOldLineStart = offsetMap.mapNewRangeToOld(newByteLineStart, newByteLineStart + 1)
                     val mappedOldLineEnd = offsetMap.mapNewRangeToOld(newByteLineEnd - 1, newByteLineEnd)
-                    val lineBoundaryStable = mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
+                    val lineBoundaryStable = mappedOldLineStart != null && mappedOldLineStart.start == oldByteLineStart
+                        && mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
                     if (!lineBoundaryStable) {
                         false
                     } else {
@@ -2200,12 +2211,16 @@ class SujianAnimationController(
                 } else {
                     val oldUtf16Start = SujianEditorBuffer.utf8ToUtf16(oldText, oldRange.start).coerceIn(0, oldText.length)
                     val oldLineIdx = oldLayout.getLineForOffset(oldUtf16Start)
+                    val oldLineStart = oldLayout.getLineStart(oldLineIdx)
                     val oldLineEnd = oldLayout.getLineEnd(oldLineIdx)
+                    val oldByteLineStart = SujianEditorBuffer.utf16ToUtf8(oldText, oldLineStart.coerceAtMost(oldText.length))
                     val oldByteLineEnd = SujianEditorBuffer.utf16ToUtf8(oldText, oldLineEnd.coerceAtMost(oldText.length))
-                    val newLineEnd = lineEnd
-                    val newByteLineEnd = SujianEditorBuffer.utf16ToUtf8(newText, newLineEnd.coerceAtMost(newText.length))
+                    val newByteLineStart = byteStart
+                    val newByteLineEnd = SujianEditorBuffer.utf16ToUtf8(newText, lineEnd.coerceAtMost(newText.length))
+                    val mappedOldLineStart = offsetMap.mapNewRangeToOld(newByteLineStart, newByteLineStart + 1)
                     val mappedOldLineEnd = offsetMap.mapNewRangeToOld(newByteLineEnd - 1, newByteLineEnd)
-                    val lineBoundaryStable = mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
+                    val lineBoundaryStable = mappedOldLineStart != null && mappedOldLineStart.start == oldByteLineStart
+                        && mappedOldLineEnd != null && mappedOldLineEnd.end == oldByteLineEnd
                     if (!lineBoundaryStable) {
                         false
                     } else {
