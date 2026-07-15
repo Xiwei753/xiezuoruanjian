@@ -229,8 +229,30 @@ class SujianAnimationController(
             text, finalNewAffectedRange, newRevision, renderer.getTextColor()
         )
 
+        val oldRevisionObj: CommittedVisualRevision? = if (oldLineSnapshots.isNotEmpty()) {
+            CommittedVisualRevision(
+                revisionId = oldRevision,
+                sessionId = CompositionSessionId(oldRevision),
+                fullText = oldText,
+                affectedParagraphRange = finalOldAffectedRange ?: HalfOpenRange.EMPTY,
+                lineSnapshots = oldLineSnapshots,
+                cursorRect = RectF(0f, 0f, 0f, 0f)
+            )
+        } else null
+
+        val newRevisionObj: CommittedVisualRevision? = if (newLineSnapshots.isNotEmpty()) {
+            CommittedVisualRevision(
+                revisionId = newRevision,
+                sessionId = CompositionSessionId(newRevision),
+                fullText = text,
+                affectedParagraphRange = finalNewAffectedRange,
+                lineSnapshots = newLineSnapshots,
+                cursorRect = RectF(0f, 0f, 0f, 0f)
+            )
+        } else null
+
         if (newLineSnapshots.isEmpty()) {
-            oldLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
+            oldRevisionObj?.release(oldRevisionObj.owner)
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -375,8 +397,8 @@ class SujianAnimationController(
         }
 
         if (slices.isEmpty()) {
-            oldLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
-            newLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
+            oldRevisionObj?.release(oldRevisionObj.owner)
+            newRevisionObj?.release(newRevisionObj.owner)
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -393,6 +415,9 @@ class SujianAnimationController(
             AndroidCursorTransition.snap(RectF(0f, 0f, 0f, 0f))
         }
 
+        oldRevisionObj?.transferToTransaction(vt.id)
+        newRevisionObj?.transferToTransaction(vt.id)
+
         val tx = AndroidPlatformVisualTransaction(
             key = vt.id,
             state = AndroidVisualTransactionState.Pending,
@@ -404,7 +429,9 @@ class SujianAnimationController(
             slices = slices,
             staticLinePatches = staticPatches.toMutableList(),
             decorationSlices = mutableListOf(),
-            cursorTransition = cursorTransition
+            cursorTransition = cursorTransition,
+            ownedOldRevision = oldRevisionObj,
+            ownedNewRevision = newRevisionObj
         )
 
         if (!renderer.addTransaction(tx)) {
@@ -660,9 +687,33 @@ class SujianAnimationController(
             ))
         }
 
+        val oldRevisionObj: CommittedVisualRevision? = if (finalOldSnapshots.isNotEmpty()) {
+            val oldSessionId = (finalOldSnapshots.first().owner as? SnapshotOwner.OwnedBySession)?.sessionId
+                ?: CompositionSessionId(oldRevision)
+            CommittedVisualRevision(
+                revisionId = oldRevision,
+                sessionId = oldSessionId,
+                fullText = vt.oldText,
+                affectedParagraphRange = HalfOpenRange.EMPTY,
+                lineSnapshots = finalOldSnapshots,
+                cursorRect = RectF(oldCursorRect.x, oldCursorRect.top, oldCursorRect.x, oldCursorRect.bottom)
+            )
+        } else null
+
+        val newRevisionObj: CommittedVisualRevision? = if (newLineSnapshots.isNotEmpty()) {
+            CommittedVisualRevision(
+                revisionId = newRevision,
+                sessionId = CompositionSessionId(newRevision),
+                fullText = text,
+                affectedParagraphRange = finalNewAffectedRange ?: HalfOpenRange.EMPTY,
+                lineSnapshots = newLineSnapshots,
+                cursorRect = RectF(0f, 0f, 0f, 0f)
+            )
+        } else null
+
         if (slices.isEmpty()) {
-            finalOldSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
-            newLineSnapshots.forEach { it.release(SnapshotOwner.OwnedBySession(CompositionSessionId(it.revision))) }
+            oldRevisionObj?.release(oldRevisionObj.owner)
+            newRevisionObj?.release(newRevisionObj.owner)
             snapshotBuilder.commitRevision(newRevision)
             return TextAnimationStartResult.Skipped
         }
@@ -678,6 +729,9 @@ class SujianAnimationController(
             AndroidCursorTransition.snap(RectF(oldCursorRect.x, oldCursorRect.top, oldCursorRect.x, oldCursorRect.bottom))
         }
 
+        oldRevisionObj?.transferToTransaction(vt.id)
+        newRevisionObj?.transferToTransaction(vt.id)
+
         val tx = AndroidPlatformVisualTransaction(
             key = vt.id,
             state = AndroidVisualTransactionState.Pending,
@@ -689,7 +743,9 @@ class SujianAnimationController(
             slices = slices,
             staticLinePatches = staticPatches.toMutableList(),
             decorationSlices = mutableListOf(),
-            cursorTransition = cursorTransition
+            cursorTransition = cursorTransition,
+            ownedOldRevision = oldRevisionObj,
+            ownedNewRevision = newRevisionObj
         )
 
         if (!renderer.addTransaction(tx)) {
