@@ -87,6 +87,8 @@ class AndroidVisualPlanner {
             newRevision = newRev,
             staticPatches = staticPatches,
             animatedSlices = animatedSlices,
+            selectionDecoration = null,
+            preeditDecoration = null,
             cursorTransition = cursorTransition,
             durationMs = durationMs
         )
