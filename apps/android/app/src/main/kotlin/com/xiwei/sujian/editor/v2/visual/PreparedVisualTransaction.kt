@@ -25,7 +25,8 @@ class PreparedVisualTransaction(
         val sourceRect: android.graphics.Rect,
         val destinationRect: android.graphics.RectF,
         val startAlpha: Float,
-        val endAlpha: Float
+        val endAlpha: Float,
+        val fromDestinationRect: android.graphics.RectF? = null
     )
 
     class CursorTransition(

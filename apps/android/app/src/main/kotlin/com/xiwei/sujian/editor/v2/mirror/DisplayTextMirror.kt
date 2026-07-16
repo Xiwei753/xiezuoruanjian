@@ -3,8 +3,14 @@ package com.xiwei.sujian.editor.v2.mirror
 import android.text.SpannableStringBuilder
 import android.text.style.UnderlineSpan
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
-import org.json.JSONArray
-import org.json.JSONObject
+import uniffi.writer_core.EditorEditResultDto
+import uniffi.writer_core.DisplayPatchDto
+import uniffi.writer_core.EditorVisualIntentDto
+import uniffi.writer_core.CoordinatedCursorDto
+import uniffi.writer_core.EditorByteRangeDto
+import uniffi.writer_core.AnimationModeDto
+import uniffi.writer_core.EditorTransactionCauseDto
+import uniffi.writer_core.EditorOperationKindDto
 
 data class DisplayPatch(
     val baseRevision: Long,
@@ -16,22 +22,18 @@ data class DisplayPatch(
     val resultingSelectionEnd: Int
 ) {
     companion object {
-        fun fromJsonArray(jsonArray: JSONArray): List<DisplayPatch> {
-            val patches = mutableListOf<DisplayPatch>()
-            for (i in 0 until jsonArray.length()) {
-                val obj = jsonArray.getJSONObject(i)
-                patches.add(DisplayPatch(
-                    baseRevision = obj.getLong("baseRevision"),
-                    newRevision = obj.getLong("newRevision"),
-                    replaceByteStart = obj.getInt("replaceByteStart"),
-                    replaceByteEndExclusive = obj.getInt("replaceByteEndExclusive"),
-                    insertedText = obj.getString("insertedText"),
-                    resultingSelectionStart = obj.getInt("resultingSelectionStart"),
-                    resultingSelectionEnd = obj.getInt("resultingSelectionEnd")
-                ))
-            }
-            return patches
-        }
+        fun fromDto(dto: DisplayPatchDto): DisplayPatch = DisplayPatch(
+            baseRevision = dto.baseRevision,
+            newRevision = dto.newRevision,
+            replaceByteStart = dto.replaceByteStart.toInt(),
+            replaceByteEndExclusive = dto.replaceByteEndExclusive.toInt(),
+            insertedText = dto.insertedText,
+            resultingSelectionStart = dto.resultingSelectionStart.toInt(),
+            resultingSelectionEnd = dto.resultingSelectionEnd.toInt()
+        )
+
+        fun fromDtoList(dtos: List<DisplayPatchDto>): List<DisplayPatch> =
+            dtos.map { fromDto(it) }
     }
 }
 
@@ -45,36 +47,15 @@ data class VisualIntent(
     val coordinatedCursor: CoordinatedCursor
 ) {
     companion object {
-        fun fromJson(json: JSONObject): VisualIntent {
-            val cursorObj = json.getJSONObject("coordinatedCursor")
-            val oldRanges = parseByteRanges(json.optJSONArray("oldAffectedByteRanges"))
-            val newRanges = parseByteRanges(json.optJSONArray("newAffectedByteRanges"))
-            return VisualIntent(
-                cause = json.getString("cause"),
-                operationKind = json.getString("operationKind"),
-                oldAffectedByteRanges = oldRanges,
-                newAffectedByteRanges = newRanges,
-                animationMode = json.getString("animationMode"),
-                durationMs = json.getLong("durationMs"),
-                coordinatedCursor = CoordinatedCursor(
-                    oldByteOffset = cursorObj.getInt("oldByteOffset"),
-                    newByteOffset = cursorObj.getInt("newByteOffset"),
-                    shouldAnimate = cursorObj.getBoolean("shouldAnimate")
-                )
-            )
-        }
-
-        private fun parseByteRanges(arr: JSONArray?): List<Pair<Int, Int>> {
-            if (arr == null) return emptyList()
-            val ranges = mutableListOf<Pair<Int, Int>>()
-            for (i in 0 until arr.length()) {
-                val obj = arr.getJSONObject(i)
-                val start = obj.getInt("start")
-                val endExclusive = obj.getInt("endExclusive")
-                ranges.add(Pair(start, endExclusive))
-            }
-            return ranges
-        }
+        fun fromDto(dto: EditorVisualIntentDto): VisualIntent = VisualIntent(
+            cause = dto.cause.name.lowercase().replace("_", ""),
+            operationKind = dto.operationKind.name.lowercase().replace("_", ""),
+            oldAffectedByteRanges = dto.oldAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
+            newAffectedByteRanges = dto.newAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
+            animationMode = dto.animationMode.name.replace("_", ""),
+            durationMs = dto.durationMs,
+            coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor)
+        )
     }
 }
 
@@ -82,7 +63,15 @@ data class CoordinatedCursor(
     val oldByteOffset: Int,
     val newByteOffset: Int,
     val shouldAnimate: Boolean
-)
+) {
+    companion object {
+        fun fromDto(dto: CoordinatedCursorDto): CoordinatedCursor = CoordinatedCursor(
+            oldByteOffset = dto.oldByteOffset.toInt(),
+            newByteOffset = dto.newByteOffset.toInt(),
+            shouldAnimate = dto.shouldAnimate
+        )
+    }
+}
 
 data class EditResult(
     val transactionId: Long,
@@ -96,23 +85,17 @@ data class EditResult(
     val visualIntent: VisualIntent
 ) {
     companion object {
-        fun fromJson(json: String): EditResult {
-            val obj = JSONObject(json)
-            val patchesArray = obj.getJSONArray("displayPatches")
-            val intentObj = obj.getJSONObject("visualIntent")
-
-            return EditResult(
-                transactionId = obj.getLong("transactionId"),
-                baseRevision = obj.getLong("baseRevision"),
-                newRevision = obj.getLong("newRevision"),
-                displayPatches = DisplayPatch.fromJsonArray(patchesArray),
-                oldSelectionStart = obj.getInt("oldSelectionStart"),
-                oldSelectionEnd = obj.getInt("oldSelectionEnd"),
-                newSelectionStart = obj.getInt("newSelectionStart"),
-                newSelectionEnd = obj.getInt("newSelectionEnd"),
-                visualIntent = VisualIntent.fromJson(intentObj)
-            )
-        }
+        fun fromDto(dto: EditorEditResultDto): EditResult = EditResult(
+            transactionId = dto.transactionId,
+            baseRevision = dto.baseRevision,
+            newRevision = dto.newRevision,
+            displayPatches = DisplayPatch.fromDtoList(dto.displayPatches),
+            oldSelectionStart = dto.oldSelectionStart.toInt(),
+            oldSelectionEnd = dto.oldSelectionEnd.toInt(),
+            newSelectionStart = dto.newSelectionStart.toInt(),
+            newSelectionEnd = dto.newSelectionEnd.toInt(),
+            visualIntent = VisualIntent.fromDto(dto.visualIntent)
+        )
     }
 }
 
@@ -164,6 +147,10 @@ class DisplayTextMirror {
             cursorUtf8 = patch.resultingSelectionEnd
             cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
         }
+    }
+
+    fun applyDtoPatches(patches: List<DisplayPatchDto>) {
+        applyPatches(DisplayPatch.fromDtoList(patches))
     }
 
     fun updateComposition(replaceStartUtf8: Int, replaceEndUtf8: Int, preeditText: String) {
