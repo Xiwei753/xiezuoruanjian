@@ -17,13 +17,11 @@
 use serde::{Deserialize, Serialize};
 
 use super::transaction::{
-    choose_animation_mode, classify_visual_diff, count_grapheme_clusters,
-    diff_plain_text, is_complex_grapheme_code_point, text_contains_complex_grapheme,
-    AnimationMode, CompositionSession, CompositionUpdateTransaction,
+    choose_animation_mode, count_grapheme_clusters,
+    diff_plain_text, text_contains_complex_grapheme,
+    AnimationMode, CompositionUpdateTransaction,
     CompositionCommitOrCancelTransaction, CompositionVisualRevision,
-    EditorChange, EditorSelection, EditorTransactionCause, EditorVisualTransaction,
-    EditorAnimationKind, VisualCoordinateMode, HiddenVisualRange, ClusterRect, ClusterRun,
-    split_text_into_clusters, split_text_into_runs,
+    EditorChange, EditorTransactionCause,
 };
 
 /// #535: 编辑命令 — 平台输入适配器翻译系统事件后的标准化命令。

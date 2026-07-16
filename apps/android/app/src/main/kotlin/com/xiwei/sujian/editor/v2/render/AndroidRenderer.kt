@@ -7,6 +7,7 @@ import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.visual.AnimationTimeline
+import com.xiwei.sujian.editor.v2.visual.SliceRole
 import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
 import com.xiwei.sujian.editor.v2.visual.TransactionState
 
@@ -84,7 +85,7 @@ class AndroidRenderer(
     ) {
         val affectedLines = mutableSetOf<Int>()
         for (slice in transaction.animatedSlices) {
-            affectedLines.add(slice.snapshot?.lineIndex ?: continue)
+            slice.snapshot?.lineIndex?.let { affectedLines.add(it) }
         }
 
         canvas.save()
@@ -110,12 +111,20 @@ class AndroidRenderer(
                 isAntiAlias = true
             }
 
-            canvas.drawBitmap(
-                bitmap,
-                slice.sourceRect,
-                slice.destinationRect,
-                paint
-            )
+            when (slice.role) {
+                SliceRole.Move -> {
+                    val fromRect = slice.fromDestinationRect ?: slice.destinationRect
+                    val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
+                    val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
+                    val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * progress
+                    val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
+                    val currentDest = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
+                    canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, paint)
+                }
+                else -> {
+                    canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, paint)
+                }
+            }
         }
     }
 

@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.View
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.editor.v2.mirror.EditResult
 
 class AndroidInputAdapter(
     context: Context,
@@ -59,6 +60,17 @@ class AndroidInputAdapter(
         compositionReplaceEndUtf8 = 0
 
         mirror.clearComposition()
+
+        val bridge = editorView.kernelBridge
+        if (bridge != null) {
+            val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, originalText)
+            if (dto != null) {
+                val result = EditResult.fromDto(dto)
+                mirror.applyPatches(result.displayPatches)
+                editorView.onCompositionUpdated()
+                return
+            }
+        }
 
         val commandJson = """{"kind":"Replace","byte_start":$replaceStart,"byte_end_exclusive":$replaceEnd,"replacement_text":${escapeJson(committedText)},"original_text":${escapeJson(originalText)},"cause":"TypingCommit"}"""
         sendCommandToKernel(commandJson)

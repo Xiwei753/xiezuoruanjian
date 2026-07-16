@@ -25,58 +25,45 @@ class AndroidVisualPlanner {
 
         if (oldRev != null && newRev != null && layout != null) {
             val affectedLines = computeAffectedLines(visualIntent, oldRev, newRev)
+            val mode = parseAnimationMode(visualIntent.animationMode)
 
-            for (lineIndex in affectedLines) {
-                val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
-                val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
-
-                if (oldLineRange != null && newLineRange != null) {
-                    val oldSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, oldRev)
-                    if (oldSnapshot != null) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeOld,
-                            snapshot = oldSnapshot,
-                            sourceRect = oldSnapshot.sourceRect,
-                            destinationRect = android.graphics.RectF(
-                                oldLineRange.left, oldLineRange.top,
-                                oldLineRange.right, oldLineRange.bottom
-                            ),
-                            startAlpha = 1f,
-                            endAlpha = 0f
-                        ))
-                    }
-                } else if (newLineRange != null) {
-                    val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
-                    if (newSnapshot != null) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Insert,
-                            snapshot = newSnapshot,
-                            sourceRect = newSnapshot.sourceRect,
-                            destinationRect = android.graphics.RectF(
-                                newLineRange.left, newLineRange.top,
-                                newLineRange.right, newLineRange.bottom
-                            ),
-                            startAlpha = 0f,
-                            endAlpha = 1f
-                        ))
-                    }
+            when (mode) {
+                AnimationMode.GlyphAnimation -> {
+                    planGlyphAnimation(
+                        visualIntent, oldRev, newRev, layout,
+                        affectedLines, animatedSlices, staticPatches
+                    )
+                }
+                AnimationMode.ClusterAnimation -> {
+                    planClusterAnimation(
+                        visualIntent, oldRev, newRev, layout,
+                        affectedLines, animatedSlices, staticPatches
+                    )
+                }
+                AnimationMode.RunAnimation -> {
+                    planRunAnimation(
+                        visualIntent, oldRev, newRev, layout,
+                        affectedLines, animatedSlices, staticPatches
+                    )
+                }
+                AnimationMode.LineReflowAnimation -> {
+                    planLineReflowAnimation(
+                        visualIntent, oldRev, newRev, layout,
+                        affectedLines, animatedSlices, staticPatches
+                    )
+                }
+                AnimationMode.SystemSuppressed -> {
+                    planNoAnimation(newRev, staticPatches)
+                }
+                else -> {
+                    planCrossfadeAnimation(
+                        visualIntent, oldRev, newRev, layout,
+                        affectedLines, animatedSlices, staticPatches
+                    )
                 }
             }
-
-            for (i in 0 until newRev.lineCount) {
-                if (i !in affectedLines) {
-                    val newLineRange = newRev.lineRanges.getOrNull(i) ?: continue
-                    staticPatches.add(PreparedVisualTransaction.StaticPatch(
-                        newSnapshotId = System.nanoTime() + i,
-                        lineIndex = i,
-                        destinationRect = android.graphics.RectF(
-                            newLineRange.left, newLineRange.top,
-                            newLineRange.right, newLineRange.bottom
-                        ),
-                        visibleSourceRects = emptyList()
-                    ))
-                }
-            }
+        } else if (newRev != null) {
+            planNoAnimation(newRev, staticPatches)
         }
 
         if (visualIntent.coordinatedCursor.shouldAnimate && newRev != null) {
@@ -114,6 +101,321 @@ class AndroidVisualPlanner {
         return result
     }
 
+    private fun planGlyphAnimation(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        layout: android.text.Layout,
+        affectedLines: Set<Int>,
+        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        val isInsert = visualIntent.operationKind == "insert"
+        for (lineIndex in affectedLines) {
+            val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
+            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
+
+            if (isInsert && newLineRange != null) {
+                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
+                if (newSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
+            } else if (!isInsert && oldLineRange != null) {
+                val oldSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, oldRev)
+                if (oldSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            oldLineRange.left, oldLineRange.top,
+                            oldLineRange.right, oldLineRange.bottom
+                        ),
+                        startAlpha = 1f,
+                        endAlpha = 0f
+                    ))
+                }
+            }
+        }
+        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
+    }
+
+    private fun planClusterAnimation(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        layout: android.text.Layout,
+        affectedLines: Set<Int>,
+        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        val isInsert = visualIntent.operationKind == "insert"
+        for (lineIndex in affectedLines) {
+            val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
+            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
+
+            if (isInsert && newLineRange != null) {
+                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
+                if (newSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
+            } else if (!isInsert && oldLineRange != null) {
+                val oldSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, oldRev)
+                if (oldSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            oldLineRange.left, oldLineRange.top,
+                            oldLineRange.right, oldLineRange.bottom
+                        ),
+                        startAlpha = 1f,
+                        endAlpha = 0f
+                    ))
+                }
+            }
+        }
+        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
+    }
+
+    private fun planRunAnimation(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        layout: android.text.Layout,
+        affectedLines: Set<Int>,
+        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        for (lineIndex in affectedLines) {
+            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
+            val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
+
+            if (oldLineRange != null && newLineRange != null) {
+                val oldSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, oldRev)
+                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
+
+                if (oldSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            oldLineRange.left, oldLineRange.top,
+                            oldLineRange.right, oldLineRange.bottom
+                        ),
+                        startAlpha = 1f,
+                        endAlpha = 0f
+                    ))
+                }
+                if (newSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeNew,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
+            } else if (newLineRange != null) {
+                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
+                if (newSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
+            }
+        }
+        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
+    }
+
+    private fun planLineReflowAnimation(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        layout: android.text.Layout,
+        affectedLines: Set<Int>,
+        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        for (lineIndex in affectedLines) {
+            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
+            val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
+
+            if (oldLineRange != null && newLineRange != null) {
+                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
+                if (newSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        fromDestinationRect = android.graphics.RectF(
+                            oldLineRange.left, oldLineRange.top,
+                            oldLineRange.right, oldLineRange.bottom
+                        )
+                    ))
+                }
+            } else if (newLineRange != null) {
+                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
+                if (newSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
+            } else if (oldLineRange != null) {
+                val oldSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, oldRev)
+                if (oldSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            oldLineRange.left, oldLineRange.top,
+                            oldLineRange.right, oldLineRange.bottom
+                        ),
+                        startAlpha = 1f,
+                        endAlpha = 0f
+                    ))
+                }
+            }
+        }
+        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
+    }
+
+    private fun planCrossfadeAnimation(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        layout: android.text.Layout,
+        affectedLines: Set<Int>,
+        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        for (lineIndex in affectedLines) {
+            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
+            val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
+
+            if (oldLineRange != null && newLineRange != null) {
+                val oldSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, oldRev)
+                if (oldSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.CrossfadeOld,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            oldLineRange.left, oldLineRange.top,
+                            oldLineRange.right, oldLineRange.bottom
+                        ),
+                        startAlpha = 1f,
+                        endAlpha = 0f
+                    ))
+                }
+            } else if (newLineRange != null) {
+                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
+                if (newSnapshot != null) {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
+            }
+        }
+        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
+    }
+
+    private fun planNoAnimation(
+        newRev: AndroidLayoutRevision,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        for (i in 0 until newRev.lineCount) {
+            val newLineRange = newRev.lineRanges.getOrNull(i) ?: continue
+            staticPatches.add(PreparedVisualTransaction.StaticPatch(
+                newSnapshotId = System.nanoTime() + i,
+                lineIndex = i,
+                destinationRect = android.graphics.RectF(
+                    newLineRange.left, newLineRange.top,
+                    newLineRange.right, newLineRange.bottom
+                ),
+                visibleSourceRects = emptyList()
+            ))
+        }
+    }
+
+    private fun addUnaffectedStaticPatches(
+        newRev: AndroidLayoutRevision,
+        affectedLines: Set<Int>,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        for (i in 0 until newRev.lineCount) {
+            if (i !in affectedLines) {
+                val newLineRange = newRev.lineRanges.getOrNull(i) ?: continue
+                staticPatches.add(PreparedVisualTransaction.StaticPatch(
+                    newSnapshotId = System.nanoTime() + i,
+                    lineIndex = i,
+                    destinationRect = android.graphics.RectF(
+                        newLineRange.left, newLineRange.top,
+                        newLineRange.right, newLineRange.bottom
+                    ),
+                    visibleSourceRects = emptyList()
+                ))
+            }
+        }
+    }
+
     private fun computeAffectedLines(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -142,7 +444,22 @@ class AndroidVisualPlanner {
         return affectedLines
     }
 
+    private fun parseAnimationMode(mode: String): AnimationMode {
+        return when (mode) {
+            "GlyphAnimation" -> AnimationMode.GlyphAnimation
+            "ClusterAnimation" -> AnimationMode.ClusterAnimation
+            "RunAnimation" -> AnimationMode.RunAnimation
+            "LineReflowAnimation" -> AnimationMode.LineReflowAnimation
+            "SystemSuppressed" -> AnimationMode.SystemSuppressed
+            else -> AnimationMode.ClusterAnimation
+        }
+    }
+
     fun resetOldRevision() {
         oldRevision = null
+    }
+
+    private enum class AnimationMode {
+        GlyphAnimation, ClusterAnimation, RunAnimation, LineReflowAnimation, SystemSuppressed
     }
 }
