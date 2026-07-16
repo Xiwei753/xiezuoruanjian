@@ -402,3 +402,5 @@ jobs:
           git add -A
           git commit -m "refactor: remove legacy animation event API"
           git push origin HEAD:manual/extract-pr522-value
+
+# second push triggers the one-time job
