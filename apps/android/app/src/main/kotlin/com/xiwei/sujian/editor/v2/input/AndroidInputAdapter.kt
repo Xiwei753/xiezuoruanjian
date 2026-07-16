@@ -59,19 +59,19 @@ class AndroidInputAdapter(
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
 
-        mirror.clearComposition()
-
         val bridge = editorView.kernelBridge
         if (bridge != null) {
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, originalText)
             if (dto != null) {
                 val result = EditResult.fromDto(dto)
+                mirror.clearComposition()
                 mirror.applyPatches(result.displayPatches)
-                editorView.onCompositionUpdated()
+                editorView.applyCommandResult(result)
                 return
             }
         }
 
+        mirror.clearComposition()
         val commandJson = """{"kind":"Replace","byte_start":$replaceStart,"byte_end_exclusive":$replaceEnd,"replacement_text":${escapeJson(committedText)},"original_text":${escapeJson(originalText)},"cause":"TypingCommit"}"""
         sendCommandToKernel(commandJson)
     }
@@ -85,7 +85,8 @@ class AndroidInputAdapter(
         compositionReplaceEndUtf8 = 0
 
         mirror.clearComposition()
-        editorView.onCompositionUpdated()
+        layoutEngine.requestLayout()
+        editorView.invalidate()
     }
 
     fun isComposing(): Boolean = isComposing
