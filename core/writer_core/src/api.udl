@@ -1143,6 +1143,7 @@ interface WriterAppService {
     string editor_kernel_get_text();
     u64 editor_kernel_get_revision();
     u32 editor_kernel_get_cursor();
+    u32 editor_kernel_get_selection_anchor();
 };
 
 // ── Layout Policy DTOs ──
