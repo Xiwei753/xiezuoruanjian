@@ -923,4 +923,18 @@ impl WriterAppService {
             kernel.cursor() as u32
         })
     }
+
+    pub fn editor_kernel_get_selection_anchor(&self) -> u32 {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let kernel = k.lock().unwrap();
+            kernel.selection_anchor() as u32
+        })
+    }
 }
