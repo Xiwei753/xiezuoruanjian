@@ -64,6 +64,10 @@ class SujianEditorView(
         val dto = bridge.apply(commandJson) ?: return
         val result = EditResult.fromDto(dto)
         mirror.applyPatches(result.displayPatches)
+        applyCommandResult(result)
+    }
+
+    fun applyCommandResult(result: EditResult) {
         layoutEngine.requestLayout()
         val transaction = visualPlanner.prepare(result.visualIntent, layoutEngine)
         renderer.submitTransaction(transaction)
