@@ -540,23 +540,27 @@ pub fn reorder_chapters(
         ));
     }
 
+    let now_str = Utc::now().to_rfc3339();
+    let base_chapters_dir = workspace_path
+        .join("projects")
+        .join(project_id)
+        .join("volumes")
+        .join(volume_id)
+        .join("chapters");
+
     for (index, id) in ordered_ids.iter().enumerate() {
-        let chapter_dir = workspace_path
-            .join("projects")
-            .join(project_id)
-            .join("volumes")
-            .join(volume_id)
-            .join("chapters")
-            .join(id);
-        let meta_path = chapter_dir.join("chapter.meta.json");
+        let meta_path = base_chapters_dir.join(id).join("chapter.meta.json");
 
         if meta_path.exists() {
             let meta_str = fs::read_to_string(&meta_path)?;
             let mut meta = serde_json::from_str::<Chapter>(&meta_str)?;
-            meta.order = index as i32;
-            meta.updated_at = Utc::now().to_rfc3339();
-            let updated_meta_str = serde_json::to_string_pretty(&meta)?;
-            crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+
+            if meta.order != index as i32 {
+                meta.order = index as i32;
+                meta.updated_at = now_str.clone();
+                let updated_meta_str = serde_json::to_string_pretty(&meta)?;
+                crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+            }
         } else {
             return Err(crate::error::Error::ChapterNotFound);
         }
