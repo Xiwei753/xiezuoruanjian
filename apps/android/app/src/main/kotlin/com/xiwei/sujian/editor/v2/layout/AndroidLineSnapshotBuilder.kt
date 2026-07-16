@@ -2,16 +2,7 @@ package com.xiwei.sujian.editor.v2.layout
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Paint
 import android.text.Layout
-
-class AndroidLineSnapshot(
-    val snapshotId: Long,
-    val bitmap: Bitmap?,
-    val lineIndex: Int,
-    val sourceRect: android.graphics.Rect,
-    val destinationRect: android.graphics.RectF
-)
 
 class AndroidLineSnapshotBuilder {
     fun buildSnapshots(
