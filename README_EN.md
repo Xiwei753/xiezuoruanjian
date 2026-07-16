@@ -29,7 +29,7 @@ A cross-platform writing tool for novel creators, built with a Rust core + nativ
 ```
 core/writer_core/     Rust core library (sole business logic layer)
 apps/android/         Kotlin Android client
-apps/Linux_qt/         Rust + Qt6/QML Linux Desktop client
+apps/Linux_qt/         Rust + Qt6/QML Linux client
 apps/windows/         WinUI 3 / Windows App SDK native client
 apps/harmony/         ArkTS HarmonyOS NEXT client
 bindings/             Cross-platform binding code
@@ -37,7 +37,7 @@ bindings/             Cross-platform binding code
 
 - `core/writer_core`: The **sole** business logic core library written in Rust. Handles all file I/O, project management, sync, formatting, and settings rules. Strictly excludes UI logic.
 - `apps/android`: Native Kotlin Android client. Main business entry point is `AppServiceBridge + UniFFI`. `BridgeProvider` only exposes domain Bridges to Repository/ViewModel/UI for platform adaptation.
-- `apps/Linux_qt`: Native Rust + Qt6/QML Linux desktop client. UI calls Rust Core through the QObject backend adapter layer. Implementing workspace, save, or sync rules in QML is not allowed. Current priorities are Linux IME, rendering, animation, AppImage, log export, and runtime profile stability.
+- `apps/Linux_qt`: Native Rust + Qt6/QML Linux client. UI calls Rust Core through the QObject backend adapter layer. Implementing workspace, save, or sync rules in QML is not allowed. Current priorities are Linux IME, rendering, animation, AppImage, log export, and runtime profile stability.
 - `apps/windows`: Windows native client route. The official route is WinUI 3 / Windows App SDK app shell + custom `SujianEditor` + DirectWrite/Direct2D + Windows IME + Rust `writer_core`. It does not reuse `apps/Linux_qt` Qt/QML. `RichEditBox` / `TextBox` cannot be the official writing area.
 - `apps/harmony`: Native ArkTS HarmonyOS NEXT client. Calls Rust Core FFI through the NAPI C++ bridge layer. The ArkTS side is decoupled via the `IWriterCoreBridge` interface.
 - `bindings`: Code for connecting the Rust core with native clients.
