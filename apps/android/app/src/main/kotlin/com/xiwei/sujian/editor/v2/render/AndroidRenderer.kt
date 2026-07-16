@@ -88,16 +88,18 @@ class AndroidRenderer(
             slice.snapshot?.lineIndex?.let { affectedLines.add(it) }
         }
 
-        canvas.save()
         for (i in 0 until layout.lineCount) {
             if (i in affectedLines) continue
-            val lineRange = transaction.newRevision?.lineRanges?.getOrNull(i) ?: continue
+            val lineTop = layout.getLineTop(i)
+            val lineBottom = layout.getLineBottom(i)
             canvas.save()
-            canvas.translate(0f, lineRange.top)
+            canvas.clipRect(
+                layout.getLineLeft(i), lineTop.toFloat(),
+                layout.getLineRight(i), lineBottom.toFloat()
+            )
             layout.draw(canvas)
             canvas.restore()
         }
-        canvas.restore()
     }
 
     private fun renderAnimatedSlices(canvas: Canvas, transaction: PreparedVisualTransaction, progress: Float) {
