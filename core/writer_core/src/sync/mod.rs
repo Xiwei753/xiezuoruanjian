@@ -38,6 +38,7 @@ pub mod service;
 pub mod tests;
 pub mod types;
 pub mod url;
+pub mod mocks;
 pub mod utils;
 
 pub use backends::*;
