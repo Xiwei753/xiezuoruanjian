@@ -983,7 +983,6 @@ class SujianEditorRenderer(
                     composingCursorBottom = cursorBaselineY + cursorDescent
                 }
                 DecorationKind.SegmentColor -> {
-                    // TODO: segment text color decoration
                 }
             }
         }
