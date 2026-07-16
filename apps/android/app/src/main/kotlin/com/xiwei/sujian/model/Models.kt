@@ -148,20 +148,29 @@ data class SyncConfig(
     @SerializedName("android_has_internet_permission") val androidHasInternetPermission: Boolean? = null,
     @SerializedName("android_has_access_network_state_permission") val androidHasAccessNetworkStatePermission: Boolean? = null
 ) {
-    fun normalize(): SyncConfig {
-        return copy(
-            enabled = enabled ?: false,
-            backendType = backendType ?: BackendType.GithubApi,
-            remoteUrl = remoteUrl ?: "",
-            transport = transport ?: SyncTransport.HttpsToken,
-            branch = if (branch.isNullOrEmpty()) "main" else branch,
-            autoSync = autoSync ?: false,
-            syncIntervalSeconds = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds,
-            username = username ?: "",
-            androidHasInternetPermission = androidHasInternetPermission ?: true,
-            androidHasAccessNetworkStatePermission = androidHasAccessNetworkStatePermission ?: true
-        )
-    }
+    fun normalize(): SyncConfig = copy(
+        enabled = normalizedEnabled,
+        backendType = normalizedBackendType,
+        remoteUrl = normalizedRemoteUrl,
+        transport = normalizedTransport,
+        branch = normalizedBranch,
+        autoSync = normalizedAutoSync,
+        syncIntervalSeconds = normalizedSyncInterval,
+        username = normalizedUsername,
+        androidHasInternetPermission = normalizedInternetPermission,
+        androidHasAccessNetworkStatePermission = normalizedAccessNetworkStatePermission
+    )
+
+    private val normalizedEnabled get() = enabled ?: false
+    private val normalizedBackendType get() = backendType ?: BackendType.GithubApi
+    private val normalizedRemoteUrl get() = remoteUrl ?: ""
+    private val normalizedTransport get() = transport ?: SyncTransport.HttpsToken
+    private val normalizedBranch get() = if (branch.isNullOrEmpty()) "main" else branch
+    private val normalizedAutoSync get() = autoSync ?: false
+    private val normalizedSyncInterval get() = if (syncIntervalSeconds == null || syncIntervalSeconds <= 0) 300 else syncIntervalSeconds
+    private val normalizedUsername get() = username ?: ""
+    private val normalizedInternetPermission get() = androidHasInternetPermission ?: true
+    private val normalizedAccessNetworkStatePermission get() = androidHasAccessNetworkStatePermission ?: true
 }
 
 data class SyncSecrets(
