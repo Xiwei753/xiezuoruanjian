@@ -4,51 +4,68 @@ import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
 class AndroidInputConnection(
-    private val view: AndroidInputAdapter,
+    private val adapter: AndroidInputAdapter,
     private val mirror: DisplayTextMirror
-) : BaseInputConnection(view, true) {
+) : BaseInputConnection(adapter, true) {
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text.isNullOrEmpty()) return true
+        if (adapter.isComposing()) {
+            adapter.handleCompositionFinish()
+        }
         val commandJson = buildInsertCommand(text.toString())
-        view.sendCommandToKernel(commandJson)
+        adapter.sendCommandToKernel(commandJson)
         return true
     }
 
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
         if (beforeLength == 0 && afterLength == 0) return true
+        if (adapter.isComposing()) {
+            adapter.handleCompositionFinish()
+        }
         val commandJson = buildDeleteCommand(beforeLength, afterLength)
-        view.sendCommandToKernel(commandJson)
+        adapter.sendCommandToKernel(commandJson)
         return true
+    }
+
+    override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+        return deleteSurroundingText(beforeLength, afterLength)
     }
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text == null) return true
-        view.handleCompositionUpdate(text.toString(), newCursorPosition)
+        adapter.handleCompositionUpdate(text.toString(), newCursorPosition)
         return true
     }
 
     override fun finishComposingText(): Boolean {
-        view.handleCompositionFinish()
+        adapter.handleCompositionFinish()
         return true
     }
 
     override fun setSelection(start: Int, end: Int): Boolean {
         val commandJson = buildSetSelectionCommand(start, end)
-        view.sendCommandToKernel(commandJson)
+        adapter.sendCommandToKernel(commandJson)
         return true
     }
 
     override fun getTextBeforeCursor(n: Int, flags: Int): CharSequence {
         val cursorUtf16 = mirror.getCursorUtf16()
         val start = (cursorUtf16 - n).coerceAtLeast(0)
-        return mirror.getText().substring(start, cursorUtf16.coerceAtMost(mirror.getText().length))
+        val text = mirror.getText()
+        return text.substring(start, cursorUtf16.coerceAtMost(text.length))
     }
 
     override fun getTextAfterCursor(n: Int, flags: Int): CharSequence {
         val cursorUtf16 = mirror.getCursorUtf16()
-        val end = (cursorUtf16 + n).coerceAtMost(mirror.getText().length)
-        return mirror.getText().substring(cursorUtf16.coerceAtMost(mirror.getText().length), end)
+        val text = mirror.getText()
+        val end = (cursorUtf16 + n).coerceAtMost(text.length)
+        return text.substring(cursorUtf16.coerceAtMost(text.length), end)
+    }
+
+    override fun getSelectedText(flags: Int): CharSequence? {
+        val text = mirror.getText()
+        return text
     }
 
     private fun buildInsertCommand(text: String): String {
@@ -64,7 +81,8 @@ class AndroidInputConnection(
         val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
         val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
         val deletedText = mirror.getText().substring(deleteStartUtf16, deleteEndUtf16)
-        return """{"kind":"Delete","byte_start":$byteStart,"byte_end_exclusive":$byteEnd,"deleted_text":${escapeJson(deletedText)},"cause":"Delete"}"""
+        val commandJson = """{"kind":"Delete","byte_start":$byteStart,"byte_end_exclusive":$byteEnd,"deleted_text":${escapeJson(deletedText)},"cause":"Delete"}"""
+        return commandJson
     }
 
     private fun buildSetSelectionCommand(anchorUtf16: Int, headUtf16: Int): String {

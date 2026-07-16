@@ -9,10 +9,11 @@ class AnimationTimeline(
     private var pauseStartedAtMs: Long? = null
     private var accumulatedPausedDurationMs: Long = 0
     private var pausedProgress: Float = 0f
+    private var state: TransactionState = TransactionState.Pending
 
     fun progress(frameTimeMs: Long): Float {
         val start = firstVisibleFrameTimeMs ?: return 0f
-        if (pauseStartedAtMs != null) return pausedProgress
+        if (state == TransactionState.Paused) return pausedProgress
         if (durationMs == 0L) return 1f
 
         val effectiveElapsed = frameTimeMs - start - accumulatedPausedDurationMs
@@ -23,20 +24,23 @@ class AnimationTimeline(
     fun markFirstVisibleFrame(frameTimeMs: Long) {
         if (firstVisibleFrameTimeMs == null) {
             firstVisibleFrameTimeMs = frameTimeMs
+            state = TransactionState.Rendering
         }
     }
 
     fun pause(frameTimeMs: Long) {
-        if (pauseStartedAtMs != null) return
+        if (state == TransactionState.Paused) return
         pausedProgress = progress(frameTimeMs)
         pauseStartedAtMs = frameTimeMs
+        state = TransactionState.Paused
     }
 
     fun resume(frameTimeMs: Long) {
-        if (pauseStartedAtMs == null) return
+        if (state != TransactionState.Paused) return
         if (firstVisibleFrameTimeMs == null) {
             pauseStartedAtMs = null
             pausedProgress = 0f
+            state = TransactionState.Pending
             return
         }
         val newStart = frameTimeMs - (pausedProgress * durationMs).toLong()
@@ -44,11 +48,22 @@ class AnimationTimeline(
         accumulatedPausedDurationMs = 0
         pauseStartedAtMs = null
         pausedProgress = 0f
+        state = TransactionState.Rendering
     }
 
-    fun isPaused(): Boolean = pauseStartedAtMs != null
+    fun complete() {
+        state = TransactionState.Completed
+    }
+
+    fun cancel() {
+        state = TransactionState.Cancelled
+    }
+
+    fun isPaused(): Boolean = state == TransactionState.Paused
 
     fun isCompleted(frameTimeMs: Long): Boolean = progress(frameTimeMs) >= 1f
+
+    fun getState(): TransactionState = state
 }
 
 class VisualResourceStore {
@@ -68,5 +83,11 @@ class VisualResourceStore {
     fun releaseAll() {
         snapshots.values.forEach { it.bitmap?.recycle() }
         snapshots.clear()
+    }
+
+    fun transferOwnership(fromSnapshotId: Long, toSnapshotId: Long): Boolean {
+        val snapshot = snapshots.remove(fromSnapshotId) ?: return false
+        snapshots[toSnapshotId] = snapshot
+        return true
     }
 }

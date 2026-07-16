@@ -935,4 +935,46 @@ mod tests {
         assert_eq!(kernel.text(), "abd");
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CursorOnly);
     }
+
+    #[test]
+    fn edit_result_serializes_camel_case() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let result = kernel.apply(EditorCommand::Insert {
+            byte_offset: 2,
+            text: "c".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"transactionId\":"), "JSON should use camelCase for transactionId, got: {}", json);
+        assert!(json.contains("\"baseRevision\":"), "JSON should use camelCase for baseRevision, got: {}", json);
+        assert!(json.contains("\"newRevision\":"), "JSON should use camelCase for newRevision, got: {}", json);
+        assert!(json.contains("\"displayPatches\":"), "JSON should use camelCase for displayPatches, got: {}", json);
+        assert!(json.contains("\"visualIntent\":"), "JSON should use camelCase for visualIntent, got: {}", json);
+        assert!(json.contains("\"operationKind\":"), "JSON should use camelCase for operationKind, got: {}", json);
+        assert!(json.contains("\"animationMode\":"), "JSON should use camelCase for animationMode, got: {}", json);
+        assert!(json.contains("\"durationMs\":"), "JSON should use camelCase for durationMs, got: {}", json);
+        assert!(json.contains("\"coordinatedCursor\":"), "JSON should use camelCase for coordinatedCursor, got: {}", json);
+        assert!(json.contains("\"oldByteOffset\":"), "JSON should use camelCase for oldByteOffset, got: {}", json);
+        assert!(json.contains("\"newByteOffset\":"), "JSON should use camelCase for newByteOffset, got: {}", json);
+        assert!(json.contains("\"shouldAnimate\":"), "JSON should use camelCase for shouldAnimate, got: {}", json);
+        assert!(json.contains("\"replaceByteRange\":"), "JSON should use camelCase for replaceByteRange, got: {}", json);
+        assert!(json.contains("\"insertedText\":"), "JSON should use camelCase for insertedText, got: {}", json);
+        assert!(json.contains("\"resultingSelectionByteRange\":"), "JSON should use camelCase for resultingSelectionByteRange, got: {}", json);
+    }
+
+    #[test]
+    fn display_patch_serializes_camel_case() {
+        let patch = DisplayPatch {
+            base_revision: 0,
+            new_revision: 1,
+            replace_byte_range: (2, 3),
+            inserted_text: "c".to_string(),
+            resulting_selection_byte_range: (3, 3),
+        };
+        let json = serde_json::to_string(&patch).unwrap();
+        assert!(json.contains("\"replaceByteRange\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
+        assert!(json.contains("\"insertedText\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
+        assert!(json.contains("\"resultingSelectionByteRange\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
+    }
 }

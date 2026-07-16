@@ -1,8 +1,10 @@
 package com.xiwei.sujian.editor.v2.mirror
 
 import android.text.SpannableStringBuilder
+import android.text.style.UnderlineSpan
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import org.json.JSONArray
+import org.json.JSONObject
 
 data class DisplayPatch(
     val baseRevision: Long,
@@ -19,13 +21,13 @@ data class DisplayPatch(
             for (i in 0 until jsonArray.length()) {
                 val obj = jsonArray.getJSONObject(i)
                 patches.add(DisplayPatch(
-                    baseRevision = obj.getLong("base_revision"),
-                    newRevision = obj.getLong("new_revision"),
-                    replaceByteStart = obj.getInt("replace_byte_start"),
-                    replaceByteEndExclusive = obj.getInt("replace_byte_end_exclusive"),
-                    insertedText = obj.getString("inserted_text"),
-                    resultingSelectionStart = obj.getInt("resulting_selection_start"),
-                    resultingSelectionEnd = obj.getInt("resulting_selection_end")
+                    baseRevision = obj.getLong("baseRevision"),
+                    newRevision = obj.getLong("newRevision"),
+                    replaceByteStart = obj.getInt("replaceByteStart"),
+                    replaceByteEndExclusive = obj.getInt("replaceByteEndExclusive"),
+                    insertedText = obj.getString("insertedText"),
+                    resultingSelectionStart = obj.getInt("resultingSelectionStart"),
+                    resultingSelectionEnd = obj.getInt("resultingSelectionEnd")
                 ))
             }
             return patches
@@ -36,24 +38,42 @@ data class DisplayPatch(
 data class VisualIntent(
     val cause: String,
     val operationKind: String,
+    val oldAffectedByteRanges: List<Pair<Int, Int>>,
+    val newAffectedByteRanges: List<Pair<Int, Int>>,
     val animationMode: String,
     val durationMs: Long,
     val coordinatedCursor: CoordinatedCursor
 ) {
     companion object {
-        fun fromJson(json: org.json.JSONObject): VisualIntent {
-            val cursorObj = json.getJSONObject("coordinated_cursor")
+        fun fromJson(json: JSONObject): VisualIntent {
+            val cursorObj = json.getJSONObject("coordinatedCursor")
+            val oldRanges = parseByteRanges(json.optJSONArray("oldAffectedByteRanges"))
+            val newRanges = parseByteRanges(json.optJSONArray("newAffectedByteRanges"))
             return VisualIntent(
                 cause = json.getString("cause"),
-                operationKind = json.getString("operation_kind"),
-                animationMode = json.getString("animation_mode"),
-                durationMs = json.getLong("duration_ms"),
+                operationKind = json.getString("operationKind"),
+                oldAffectedByteRanges = oldRanges,
+                newAffectedByteRanges = newRanges,
+                animationMode = json.getString("animationMode"),
+                durationMs = json.getLong("durationMs"),
                 coordinatedCursor = CoordinatedCursor(
-                    oldByteOffset = cursorObj.getInt("old_byte_offset"),
-                    newByteOffset = cursorObj.getInt("new_byte_offset"),
-                    shouldAnimate = cursorObj.getBoolean("should_animate")
+                    oldByteOffset = cursorObj.getInt("oldByteOffset"),
+                    newByteOffset = cursorObj.getInt("newByteOffset"),
+                    shouldAnimate = cursorObj.getBoolean("shouldAnimate")
                 )
             )
+        }
+
+        private fun parseByteRanges(arr: JSONArray?): List<Pair<Int, Int>> {
+            if (arr == null) return emptyList()
+            val ranges = mutableListOf<Pair<Int, Int>>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val start = obj.getInt("start")
+                val endExclusive = obj.getInt("endExclusive")
+                ranges.add(Pair(start, endExclusive))
+            }
+            return ranges
         }
     }
 }
@@ -77,19 +97,19 @@ data class EditResult(
 ) {
     companion object {
         fun fromJson(json: String): EditResult {
-            val obj = org.json.JSONObject(json)
-            val patchesArray = obj.getJSONArray("display_patches")
-            val intentObj = obj.getJSONObject("visual_intent")
+            val obj = JSONObject(json)
+            val patchesArray = obj.getJSONArray("displayPatches")
+            val intentObj = obj.getJSONObject("visualIntent")
 
             return EditResult(
-                transactionId = obj.getLong("transaction_id"),
-                baseRevision = obj.getLong("base_revision"),
-                newRevision = obj.getLong("new_revision"),
+                transactionId = obj.getLong("transactionId"),
+                baseRevision = obj.getLong("baseRevision"),
+                newRevision = obj.getLong("newRevision"),
                 displayPatches = DisplayPatch.fromJsonArray(patchesArray),
-                oldSelectionStart = obj.getInt("old_selection_start"),
-                oldSelectionEnd = obj.getInt("old_selection_end"),
-                newSelectionStart = obj.getInt("new_selection_start"),
-                newSelectionEnd = obj.getInt("new_selection_end"),
+                oldSelectionStart = obj.getInt("oldSelectionStart"),
+                oldSelectionEnd = obj.getInt("oldSelectionEnd"),
+                newSelectionStart = obj.getInt("newSelectionStart"),
+                newSelectionEnd = obj.getInt("newSelectionEnd"),
                 visualIntent = VisualIntent.fromJson(intentObj)
             )
         }
@@ -113,6 +133,8 @@ class DisplayTextMirror {
     fun getRevision(): Long = currentRevision
 
     fun getSpannable(): SpannableStringBuilder = buffer
+
+    fun getLengthUtf16(): Int = buffer.length
 
     fun applyPatches(patches: List<DisplayPatch>) {
         val indexMap = AndroidTextIndexMap(this)
@@ -144,7 +166,7 @@ class DisplayTextMirror {
         compositionEndUtf16 = compositionStartUtf16 + preeditText.length
 
         buffer.setSpan(
-            android.text.style.UnderlineSpan(),
+            UnderlineSpan(),
             compositionStartUtf16,
             compositionEndUtf16,
             SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
@@ -157,8 +179,13 @@ class DisplayTextMirror {
         compositionEndUtf16 = -1
     }
 
+    fun getCompositionRangeUtf16(): Pair<Int, Int>? {
+        if (compositionStartUtf16 < 0) return null
+        return Pair(compositionStartUtf16, compositionEndUtf16)
+    }
+
     private fun clearCompositionSpans() {
-        val spans = buffer.getSpans(0, buffer.length, android.text.style.UnderlineSpan::class.java)
+        val spans = buffer.getSpans(0, buffer.length, UnderlineSpan::class.java)
         for (span in spans) {
             buffer.removeSpan(span)
         }

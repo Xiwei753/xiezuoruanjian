@@ -26,7 +26,7 @@ class SujianEditorView(
     private val visualPlanner = AndroidVisualPlanner()
     private val resourceStore = VisualResourceStore()
     private val renderer = AndroidRenderer(mirror, layoutEngine, resourceStore)
-    private val inputAdapter = AndroidInputAdapter(context, mirror, layoutEngine, visualPlanner, renderer, this)
+    private val inputAdapter = AndroidInputAdapter(context, mirror, this)
 
     var kernelBridge: EditorKernelBridge? = null
 
@@ -36,6 +36,7 @@ class SujianEditorView(
         val result = EditResult.fromJson(resultJson)
         mirror.applyPatches(result.displayPatches)
         layoutEngine.setWidth(width.toFloat())
+        visualPlanner.resetOldRevision()
         invalidate()
     }
 
@@ -50,6 +51,11 @@ class SujianEditorView(
         invalidate()
     }
 
+    fun onCompositionUpdated() {
+        layoutEngine.requestLayout()
+        invalidate()
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         layoutEngine.setWidth(w.toFloat())
@@ -59,6 +65,9 @@ class SujianEditorView(
         super.onDraw(canvas)
         val frameTimeMs = System.nanoTime() / 1_000_000
         renderer.renderFrame(canvas, frameTimeMs)
+        if (renderer.hasActiveAnimation()) {
+            invalidate()
+        }
     }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {

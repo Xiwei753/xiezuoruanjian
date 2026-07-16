@@ -1153,4 +1153,40 @@ mod tests {
         assert!(dto.coordinated_cursor.should_animate);
         assert_eq!(dto.new_affected_byte_ranges.len(), 1);
     }
+
+    #[test]
+    fn editor_edit_result_dto_json_camel_case() {
+        let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2);
+        let result = kernel.apply(crate::editor::EditorCommand::Insert {
+            byte_offset: 2,
+            text: "c".to_string(),
+            cause: crate::editor::EditorTransactionCause::Typing,
+        });
+        let dto: EditorEditResultDto = result.into();
+        let json = serde_json::to_string(&dto).unwrap();
+
+        assert!(json.contains("\"transactionId\":"), "DTO JSON should use camelCase for transactionId, got: {}", json);
+        assert!(json.contains("\"baseRevision\":"), "DTO JSON should use camelCase for baseRevision, got: {}", json);
+        assert!(json.contains("\"newRevision\":"), "DTO JSON should use camelCase for newRevision, got: {}", json);
+        assert!(json.contains("\"displayPatches\":"), "DTO JSON should use camelCase for displayPatches, got: {}", json);
+        assert!(json.contains("\"oldSelectionStart\":"), "DTO JSON should use camelCase for oldSelectionStart, got: {}", json);
+        assert!(json.contains("\"oldSelectionEnd\":"), "DTO JSON should use camelCase for oldSelectionEnd, got: {}", json);
+        assert!(json.contains("\"newSelectionStart\":"), "DTO JSON should use camelCase for newSelectionStart, got: {}", json);
+        assert!(json.contains("\"newSelectionEnd\":"), "DTO JSON should use camelCase for newSelectionEnd, got: {}", json);
+        assert!(json.contains("\"visualIntent\":"), "DTO JSON should use camelCase for visualIntent, got: {}", json);
+        assert!(json.contains("\"replaceByteStart\":"), "DTO JSON should use camelCase for replaceByteStart, got: {}", json);
+        assert!(json.contains("\"replaceByteEndExclusive\":"), "DTO JSON should use camelCase for replaceByteEndExclusive, got: {}", json);
+        assert!(json.contains("\"insertedText\":"), "DTO JSON should use camelCase for insertedText, got: {}", json);
+        assert!(json.contains("\"resultingSelectionStart\":"), "DTO JSON should use camelCase for resultingSelectionStart, got: {}", json);
+        assert!(json.contains("\"resultingSelectionEnd\":"), "DTO JSON should use camelCase for resultingSelectionEnd, got: {}", json);
+        assert!(json.contains("\"operationKind\":"), "DTO JSON should use camelCase for operationKind, got: {}", json);
+        assert!(json.contains("\"animationMode\":"), "DTO JSON should use camelCase for animationMode, got: {}", json);
+        assert!(json.contains("\"durationMs\":"), "DTO JSON should use camelCase for durationMs, got: {}", json);
+        assert!(json.contains("\"coordinatedCursor\":"), "DTO JSON should use camelCase for coordinatedCursor, got: {}", json);
+        assert!(json.contains("\"oldByteOffset\":"), "DTO JSON should use camelCase for oldByteOffset, got: {}", json);
+        assert!(json.contains("\"newByteOffset\":"), "DTO JSON should use camelCase for newByteOffset, got: {}", json);
+        assert!(json.contains("\"shouldAnimate\":"), "DTO JSON should use camelCase for shouldAnimate, got: {}", json);
+        assert!(json.contains("\"oldAffectedByteRanges\":"), "DTO JSON should use camelCase for oldAffectedByteRanges, got: {}", json);
+        assert!(json.contains("\"newAffectedByteRanges\":"), "DTO JSON should use camelCase for newAffectedByteRanges, got: {}", json);
+    }
 }

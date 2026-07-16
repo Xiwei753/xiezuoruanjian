@@ -1,12 +1,14 @@
 package com.xiwei.sujian.editor.v2.render
 
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.visual.AnimationTimeline
 import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
+import com.xiwei.sujian.editor.v2.visual.TransactionState
 
 class AndroidRenderFrame(
     val transaction: PreparedVisualTransaction?,
@@ -24,6 +26,16 @@ class AndroidRenderer(
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
+    private val cursorPaint = Paint().apply {
+        color = Color.BLACK
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+    private val selectionPaint = Paint().apply {
+        color = Color.argb(51, 0, 0, 255)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
 
     fun submitTransaction(transaction: PreparedVisualTransaction?) {
         if (transaction == null) return
@@ -41,27 +53,49 @@ class AndroidRenderer(
         val transaction = activeTransaction
         val tl = timeline
 
-        canvas.save()
+        canvas.drawColor(Color.WHITE)
 
         val layout = layoutEngine.getLayout()
         if (layout != null) {
-            layout.draw(canvas)
-        }
+            if (transaction != null && tl != null && transaction.animatedSlices.isNotEmpty()) {
+                tl.markFirstVisibleFrame(frameTimeMs)
+                val progress = tl.progress(frameTimeMs)
 
-        if (transaction != null && tl != null) {
-            tl.markFirstVisibleFrame(frameTimeMs)
-            val progress = tl.progress(frameTimeMs)
+                renderStaticBackground(canvas, layout, transaction)
+                renderAnimatedSlices(canvas, transaction, progress)
+                renderCursorTransition(canvas, transaction, progress)
 
-            renderAnimatedSlices(canvas, transaction, progress)
-            renderCursorTransition(canvas, transaction, progress)
-
-            if (tl.isCompleted(frameTimeMs)) {
-                completeTransaction(transaction)
-                activeTransaction = null
-                timeline = null
+                if (tl.isCompleted(frameTimeMs)) {
+                    completeTransaction(transaction)
+                    activeTransaction = null
+                    timeline = null
+                }
+            } else {
+                layout.draw(canvas)
+                renderCursor(canvas, layout)
             }
         }
+    }
 
+    private fun renderStaticBackground(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        transaction: PreparedVisualTransaction
+    ) {
+        val affectedLines = mutableSetOf<Int>()
+        for (slice in transaction.animatedSlices) {
+            affectedLines.add(slice.snapshot?.lineIndex ?: continue)
+        }
+
+        canvas.save()
+        for (i in 0 until layout.lineCount) {
+            if (i in affectedLines) continue
+            val lineRange = transaction.newRevision?.lineRanges?.getOrNull(i) ?: continue
+            canvas.save()
+            canvas.translate(0f, lineRange.top)
+            layout.draw(canvas)
+            canvas.restore()
+        }
         canvas.restore()
     }
 
@@ -69,10 +103,11 @@ class AndroidRenderer(
         for (slice in transaction.animatedSlices) {
             val snapshot = slice.snapshot ?: continue
             val bitmap = snapshot.bitmap ?: continue
-            val alpha = (slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress)
+            val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
 
             val paint = Paint().apply {
                 this.alpha = (alpha * 255).toInt().coerceIn(0, 255)
+                isAntiAlias = true
             }
 
             canvas.drawBitmap(
@@ -92,22 +127,34 @@ class AndroidRenderer(
         val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
         val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
 
-        val cursorPaint = Paint().apply {
-            color = android.graphics.Color.BLACK
-            strokeWidth = 2f
-        }
         canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
     }
 
+    private fun renderCursor(canvas: Canvas, layout: android.text.Layout) {
+        val cursorUtf16 = mirror.getCursorUtf16()
+        if (cursorUtf16 < 0 || cursorUtf16 > mirror.getLengthUtf16()) return
+
+        val line = layout.getLineForOffset(cursorUtf16)
+        val x = layout.getPrimaryHorizontal(cursorUtf16)
+        val top = layout.getLineTop(line).toFloat()
+        val bottom = layout.getLineBottom(line).toFloat()
+
+        canvas.drawRect(x, top, x + 2f, bottom, cursorPaint)
+    }
+
     private fun completeTransaction(transaction: PreparedVisualTransaction) {
-        for (patch in transaction.staticPatches) {
-            resourceStore.release(patch.newSnapshotId)
+        for (slice in transaction.animatedSlices) {
+            slice.snapshot?.let { resourceStore.release(it.snapshotId) }
         }
+        timeline?.complete()
     }
 
     private fun cancelTransaction(transaction: PreparedVisualTransaction) {
         for (slice in transaction.animatedSlices) {
             slice.snapshot?.let { resourceStore.release(it.snapshotId) }
         }
+        timeline?.cancel()
     }
+
+    fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
 }
