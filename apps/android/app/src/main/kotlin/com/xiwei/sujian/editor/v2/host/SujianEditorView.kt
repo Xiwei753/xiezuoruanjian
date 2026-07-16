@@ -170,6 +170,12 @@ class SujianEditorView(
 
     override fun onCheckIsTextEditor(): Boolean = true
 
+    override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo?) {
+        super.onInitializeAccessibilityNodeInfo(info)
+        info?.isEditable = true
+        info?.text = mirror.getText()
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -322,6 +328,24 @@ class SujianEditorView(
     private fun showSoftInput() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.showSoftInput(this, 0)
+    }
+
+    fun notifyCursorAnchorInfo() {
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
+        val layout = layoutEngine.getLayout() ?: return
+        val cursorUtf16 = mirror.getCursorUtf16()
+        if (cursorUtf16 < 0 || cursorUtf16 > mirror.getLengthUtf16()) return
+
+        val line = layout.getLineForOffset(cursorUtf16)
+        val x = layout.getPrimaryHorizontal(cursorUtf16)
+        val lineTop = layout.getLineTop(line)
+        val lineBottom = layout.getLineBottom(line)
+
+        val info = android.view.inputmethod.CursorAnchorInfo.Builder()
+            .setSelectionRange(cursorUtf16, cursorUtf16)
+            .setInsertionMarkerLocation(x, lineTop.toFloat(), lineBottom.toFloat(), lineBottom.toFloat(), true)
+            .build()
+        imm.updateCursorAnchorInfo(info)
     }
 }
 
