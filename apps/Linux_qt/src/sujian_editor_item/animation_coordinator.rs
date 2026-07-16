@@ -727,16 +727,20 @@ impl LinuxEditorAnimationCoordinator {
         duration_ms: u64,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
-        composition_byte_start: usize,
-        composition_byte_end: usize,
+        preedit_byte_start: usize,
+        preedit_byte_end: usize,
         is_commit: bool,
         visual_text_unchanged: bool,
         candidate_byte_start: usize,
         candidate_byte_end: usize,
+        committed_replace_start: usize,
+        committed_replace_end: usize,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
-        let conflicting = self.prepared_queue.find_conflicting_transaction(composition_byte_start, composition_byte_end);
+        let conflict_start = committed_replace_start.min(preedit_byte_start);
+        let conflict_end = committed_replace_end.max(preedit_byte_end);
+        let conflicting = self.prepared_queue.find_conflicting_transaction(conflict_start, conflict_end);
         let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = if let Some(old_key) = conflicting {
             let mut frames = Vec::new();
             if let Some(old_tx) = self.prepared_queue.active_transactions().iter().find(|t| t.key == old_key) {
@@ -775,8 +779,8 @@ impl LinuxEditorAnimationCoordinator {
             let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
             let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-            for old_line in old_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
-                if let Some(source_rect) = old_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end) {
+            for old_line in old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end) {
+                if let Some(source_rect) = old_line.source_rect_for_byte_range(preedit_byte_start, preedit_byte_end) {
                     let from_doc = old_line.source_rect_to_document_rect(&source_rect);
                     slices.push(AnimatedSlice::delete_fade_out(
                         key,
@@ -785,8 +789,8 @@ impl LinuxEditorAnimationCoordinator {
                         from_doc,
                         shrink_x,
                         shrink_y,
-                        composition_byte_start,
-                        composition_byte_end,
+                        preedit_byte_start,
+                        preedit_byte_end,
                         old_line.clusters.first().map(|c| c.shaping_identity.clone()),
                     ));
                 }
@@ -799,8 +803,8 @@ impl LinuxEditorAnimationCoordinator {
                 let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
                 let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-                for old_line in old_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end) {
-                    for old_cluster in old_line.clusters_in_byte_range(composition_byte_start, composition_byte_end) {
+                for old_line in old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end) {
+                    for old_cluster in old_line.clusters_in_byte_range(preedit_byte_start, preedit_byte_end) {
                         let mapped_new_bs = offset_map.map_old_to_new(old_cluster.byte_start);
                         let mapped_new_be = offset_map.map_old_to_new(old_cluster.byte_end);
                         let matched_in_new = if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -2022,6 +2026,7 @@ mod tests {
             true,
             false,
             0, 12,
+            0, 12,
             None,
             None,
         );
@@ -2060,6 +2065,7 @@ mod tests {
             true,
             false,
             0, 12,
+            0, 12,
             None,
             None,
         );
@@ -2097,6 +2103,7 @@ mod tests {
             true,
             false,
             0, 12,
+            0, 12,
             None,
             None,
         );
@@ -2104,5 +2111,80 @@ mod tests {
         let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
         let first_cluster_slices: Vec<&AnimatedSlice> = tx.slices.iter().filter(|s| s.byte_start == 0 && s.byte_end == 3).collect();
         assert!(first_cluster_slices.is_empty(), "same shaping + same geometry should be Static (no slice), got {} slices", first_cluster_slices.len());
+    }
+
+    #[test]
+    fn test_commit_separate_preedit_and_committed_replace_ranges() {
+        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 10, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_b = ShapingIdentity { text_content_hash: 2, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 20, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_c = ShapingIdentity { text_content_hash: 3, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 30, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_preedit = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 99, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let old_snapshot = make_test_snapshot("abc_preedit_xyz", vec![
+            (0, 3, 10.0, 0.0, sid_a.clone()),
+            (3, 10, 50.0, 0.0, sid_preedit.clone()),
+            (10, 13, 120.0, 0.0, sid_c.clone()),
+        ]);
+        let new_snapshot = make_test_snapshot("abc_QQ_xyz", vec![
+            (0, 3, 10.0, 0.0, sid_a.clone()),
+            (3, 5, 50.0, 0.0, sid_b.clone()),
+            (5, 8, 120.0, 0.0, sid_c.clone()),
+        ]);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = coord.handle_composition_commit_or_cancel(
+            300,
+            &old_snapshot,
+            &new_snapshot,
+            3, 10,
+            true,
+            false,
+            3, 5,
+            3, 10,
+            None,
+            None,
+        );
+        assert!(key.is_some());
+        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
+        let old_preedit_slices: Vec<&AnimatedSlice> = tx.slices.iter()
+            .filter(|s| s.byte_start >= 3 && s.byte_end <= 10)
+            .collect();
+        assert!(!old_preedit_slices.is_empty(), "preedit range should have animated slices");
+        let new_candidate_slices: Vec<&AnimatedSlice> = tx.slices.iter()
+            .filter(|s| s.byte_start >= 3 && s.byte_end <= 5)
+            .collect();
+        assert!(!new_candidate_slices.is_empty(), "candidate range should have animated slices");
+    }
+
+    #[test]
+    fn test_commit_cancel_uses_preedit_range_for_old_clusters() {
+        let sid_preedit = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 99, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_after = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let old_snapshot = make_test_snapshot("abc_preedit_after", vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 10, 50.0, 0.0, sid_preedit.clone()),
+            (10, 15, 120.0, 0.0, sid_after.clone()),
+        ]);
+        let new_snapshot = make_test_snapshot("abc_after", vec![
+            (0, 3, 10.0, 0.0, sid_after.clone()),
+            (3, 8, 120.0, 0.0, sid_after.clone()),
+        ]);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = coord.handle_composition_commit_or_cancel(
+            300,
+            &old_snapshot,
+            &new_snapshot,
+            3, 10,
+            false,
+            false,
+            3, 3,
+            3, 3,
+            None,
+            None,
+        );
+        assert!(key.is_some());
+        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
+        let delete_slices: Vec<&AnimatedSlice> = tx.slices.iter()
+            .filter(|s| s.kind == AnimatedSliceKind::DeleteFadeOut)
+            .collect();
+        assert!(!delete_slices.is_empty(), "cancel should create DeleteFadeOut for preedit range");
     }
 }

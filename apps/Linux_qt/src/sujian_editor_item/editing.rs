@@ -76,10 +76,14 @@ impl SujianEditorItem {
         let pending_pcr = self.pending_preedit_cursor_rect.take();
         let was_composing = !self.preedit_text.is_empty() || self.composition_session.is_some();
 
-        let (composition_byte_start, composition_byte_end) = self.preedit_byte_range_in_virtual_text();
+        let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
         let saved_virtual_text = self.composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
-        let candidate_byte_start = self.composition_session.as_ref().map(|s| s.replace_start).unwrap_or(composition_byte_start);
-        let candidate_byte_end = candidate_byte_start + inserted.len();
+        let session_replace_start = self.composition_session.as_ref().map(|s| s.replace_start).unwrap_or(self.buffer.cursor);
+        let session_replace_end = self.composition_session.as_ref().map(|s| s.replace_end_exclusive).unwrap_or(self.buffer.cursor);
+        let candidate_byte_start = session_replace_start;
+        let candidate_byte_end = session_replace_start + inserted.len();
+        let committed_replace_start = session_replace_start;
+        let committed_replace_end = session_replace_end;
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -88,11 +92,18 @@ impl SujianEditorItem {
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
-        self.composition_session = None;
 
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
-        self.buffer.replace_selection_or_insert(&inserted);
+
+        if was_composing && session_replace_start != session_replace_end {
+            self.buffer.text.replace_range(session_replace_start..session_replace_end, &inserted);
+            self.buffer.cursor = session_replace_start + inserted.len();
+            self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, self.buffer.cursor);
+            self.buffer.selection_anchor = self.buffer.cursor;
+        } else {
+            self.buffer.replace_selection_or_insert(&inserted);
+        }
         self.adjust_affinity_at_wrap_boundary();
         let cause = explicit_cause.unwrap_or_else(|| {
             if inserted.chars().count() == 1 {
@@ -139,12 +150,14 @@ impl SujianEditorItem {
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
-                composition_byte_start,
-                composition_byte_end,
+                preedit_byte_start,
+                preedit_byte_end,
                 true,
                 visual_text_unchanged,
                 candidate_byte_start,
                 candidate_byte_end,
+                committed_replace_start,
+                committed_replace_end,
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -172,6 +185,8 @@ impl SujianEditorItem {
         } else {
             let _vt = self.record_transaction(old, new, cause, true);
         }
+
+        self.composition_session = None;
 
         if let Some(pcr) = pending_pcr {
             self.cursor_ctrl.visual_x = pcr.x;
@@ -202,6 +217,15 @@ impl SujianEditorItem {
         let saved_virtual_text = self.composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
 
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
+
+        let session_replace_start = self.composition_session
+            .as_ref()
+            .map(|s| s.replace_start)
+            .unwrap_or(self.buffer.cursor);
+        let session_replace_end = self.composition_session
+            .as_ref()
+            .map(|s| s.replace_end_exclusive)
+            .unwrap_or(self.buffer.cursor);
 
         let text_str = &self.buffer.text;
 
@@ -237,18 +261,15 @@ impl SujianEditorItem {
             }
         }
 
-        let anchor_byte = self.composition_session
-            .as_ref()
-            .map(|s| s.replace_start)
-            .unwrap_or(self.buffer.cursor);
+        let anchor_byte = session_replace_start;
 
-        let replace_start_byte = utf16_offset_to_utf8_byte(text_str, anchor_byte, replace_start);
-        let replace_start_byte = replace_start_byte.min(text_str.len());
+        let qt_replace_start_byte = utf16_offset_to_utf8_byte(text_str, anchor_byte, replace_start);
+        let qt_replace_start_byte = qt_replace_start_byte.min(text_str.len());
 
-        let replace_end_byte = if replace_length > 0 {
+        let qt_replace_end_byte = if replace_length > 0 {
             let mut utf16_count = 0i32;
-            let mut byte_pos = replace_start_byte;
-            for ch in text_str[replace_start_byte..].chars() {
+            let mut byte_pos = qt_replace_start_byte;
+            for ch in text_str[qt_replace_start_byte..].chars() {
                 if utf16_count >= replace_length {
                     break;
                 }
@@ -257,15 +278,18 @@ impl SujianEditorItem {
             }
             byte_pos
         } else {
-            replace_start_byte
+            qt_replace_start_byte
         };
-        let replace_end_byte = replace_end_byte.min(text_str.len());
+        let qt_replace_end_byte = qt_replace_end_byte.min(text_str.len());
 
-        let (del_start, del_end) = if replace_start_byte <= replace_end_byte {
-            (replace_start_byte, replace_end_byte)
+        let (qt_rs, qt_re) = if qt_replace_start_byte <= qt_replace_end_byte {
+            (qt_replace_start_byte, qt_replace_end_byte)
         } else {
-            (replace_end_byte, replace_start_byte)
+            (qt_replace_end_byte, qt_replace_start_byte)
         };
+
+        let del_start = session_replace_start.min(qt_rs);
+        let del_end = session_replace_end.max(qt_re);
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -274,7 +298,6 @@ impl SujianEditorItem {
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
         self.last_preedit_visual_transaction_json = "".into();
-        self.composition_session = None;
 
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
@@ -325,6 +348,9 @@ impl SujianEditorItem {
             let candidate_byte_start = del_start;
             let candidate_byte_end = del_start + inserted.len();
 
+            let committed_replace_start = del_start;
+            let committed_replace_end = del_end;
+
             let key = self.animation_coordinator.handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
@@ -335,6 +361,8 @@ impl SujianEditorItem {
                 !saved_virtual_text.is_empty() && saved_virtual_text == new.text,
                 candidate_byte_start,
                 candidate_byte_end,
+                committed_replace_start,
+                committed_replace_end,
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -357,6 +385,8 @@ impl SujianEditorItem {
         } else {
             let _vt = self.record_transaction(old, new, cause, true);
         }
+
+        self.composition_session = None;
 
         if let Some(pcr) = pending_pcr {
             self.cursor_ctrl.visual_x = pcr.x;
