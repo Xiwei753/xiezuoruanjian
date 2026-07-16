@@ -290,23 +290,22 @@ impl SujianEditorItem {
         let new_text = new_base;
         let new_cursor = cursor_in_new_base;
 
-        let committed_replace_start = if del_start <= session_replace_start {
+        let preedit_len = preedit_byte_end - preedit_byte_start;
+        let del_start_in_vt = if del_start < session_replace_start {
             del_start
         } else {
-            session_replace_start + (del_start - session_replace_start)
+            del_start + preedit_len
         };
-        let committed_replace_end = if del_end <= session_replace_start {
+        let del_end_in_vt = if del_end < session_replace_start {
             del_end
         } else {
-            session_replace_end + (del_end - session_replace_start)
+            del_end + preedit_len
         };
+        let committed_replace_start = del_start_in_vt.min(preedit_byte_start);
+        let committed_replace_end = del_end_in_vt.max(preedit_byte_end);
 
-        let candidate_byte_start = if rs_byte <= session_replace_start {
-            rs_byte
-        } else {
-            session_replace_end + (rs_byte - session_replace_start)
-        };
-        let candidate_byte_end = candidate_byte_start + inserted.len();
+        let candidate_byte_start = del_start;
+        let candidate_byte_end = del_start + inserted.len();
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;

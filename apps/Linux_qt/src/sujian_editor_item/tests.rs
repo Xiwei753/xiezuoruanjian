@@ -711,4 +711,131 @@ mod tests {
         let result = simulate_qt_commit("你好世界", 6, 6, -1, 1, "新");
         assert_eq!(result, "你新世界");
     }
+
+    struct QtCommitResult {
+        new_text: String,
+        candidate_byte_start: usize,
+        candidate_byte_end: usize,
+    }
+
+    fn simulate_qt_commit_full(
+        committed_text: &str,
+        session_replace_start: usize,
+        session_replace_end: usize,
+        replace_start: i32,
+        replace_length: i32,
+        inserted: &str,
+    ) -> QtCommitResult {
+        let base_text = format!(
+            "{}{}",
+            &committed_text[..session_replace_start],
+            &committed_text[session_replace_end..]
+        );
+        let anchor_in_base = session_replace_start;
+        let rs_byte = if replace_start < 0 {
+            utf16_backward(&base_text, anchor_in_base, -replace_start)
+        } else if replace_start == 0 {
+            anchor_in_base
+        } else {
+            utf16_forward(&base_text, anchor_in_base, replace_start)
+        };
+        let re_byte = if replace_length > 0 {
+            utf16_forward(&base_text, rs_byte, replace_length)
+        } else {
+            rs_byte
+        };
+        let (del_start, del_end) = if rs_byte <= re_byte {
+            (rs_byte, re_byte)
+        } else {
+            (re_byte, rs_byte)
+        };
+        let new_text = format!(
+            "{}{}{}",
+            &base_text[..del_start],
+            &inserted,
+            &base_text[del_end..]
+        );
+        let candidate_byte_start = del_start;
+        let candidate_byte_end = del_start + inserted.len();
+        QtCommitResult {
+            new_text,
+            candidate_byte_start,
+            candidate_byte_end,
+        }
+    }
+
+    #[test]
+    fn test_qt_commit_ranges_zero_session_zero_replacement() {
+        let r = simulate_qt_commit_full("ABCDE", 2, 2, 0, 0, "你好");
+        assert_eq!(r.new_text, "AB你好CDE");
+        assert_eq!(r.candidate_byte_start, 2);
+        assert_eq!(r.candidate_byte_end, 2 + "你好".len());
+    }
+
+    #[test]
+    fn test_qt_commit_ranges_zero_session_nonzero_start() {
+        let r = simulate_qt_commit_full("ABCDE", 2, 2, 2, 0, "你好");
+        assert_eq!(r.new_text, "ABCD你好E");
+        assert_eq!(r.candidate_byte_start, 4);
+        assert_eq!(r.candidate_byte_end, 4 + "你好".len());
+    }
+
+    #[test]
+    fn test_qt_commit_ranges_session_replace_zero_replacement() {
+        let r = simulate_qt_commit_full("ABCDE", 1, 3, 0, 0, "你好");
+        assert_eq!(r.new_text, "A你好DE");
+        assert_eq!(r.candidate_byte_start, 1);
+        assert_eq!(r.candidate_byte_end, 1 + "你好".len());
+    }
+
+    #[test]
+    fn test_qt_commit_ranges_session_replace_positive_replacement() {
+        let r = simulate_qt_commit_full("ABCDE", 1, 3, 1, 0, "你好");
+        assert_eq!(r.new_text, "AD你好E");
+        assert_eq!(r.candidate_byte_start, 2);
+        assert_eq!(r.candidate_byte_end, 2 + "你好".len());
+    }
+
+    #[test]
+    fn test_qt_commit_ranges_session_replace_negative_replacement() {
+        let r = simulate_qt_commit_full("ABCDE", 1, 3, -1, 2, "你好");
+        assert_eq!(r.new_text, "你好E");
+        assert_eq!(r.candidate_byte_start, 0);
+        assert_eq!(r.candidate_byte_end, 0 + "你好".len());
+    }
+
+    #[test]
+    fn test_qt_commit_ranges_negative_start_cross_preedit() {
+        let r = simulate_qt_commit_full("ABCDE", 2, 4, -1, 2, "你好");
+        assert_eq!(r.new_text, "A你好");
+        assert_eq!(r.candidate_byte_start, 1);
+        assert_eq!(r.candidate_byte_end, 1 + "你好".len());
+    }
+
+    #[test]
+    fn test_qt_commit_commit_then_preedit_preserves_text() {
+        let committed = "你好世界";
+        let r = simulate_qt_commit_full(committed, 6, 6, 0, 0, "朋友");
+        assert_eq!(r.new_text, "你好朋友世界");
+        let new_preedit = "abc";
+        let new_text_with_preedit = format!(
+            "{}{}{}",
+            &r.new_text[..r.candidate_byte_end],
+            &new_preedit,
+            &r.new_text[r.candidate_byte_end..]
+        );
+        assert_eq!(new_text_with_preedit, "你好朋友abc世界");
+    }
+
+    #[test]
+    fn test_qt_commit_zero_length_session_replacement_start_plus2_no_deletion() {
+        let r = simulate_qt_commit_full("你好世界", 6, 6, 2, 0, "朋友");
+        assert_eq!(r.new_text, "你好世界朋友");
+    }
+
+    #[test]
+    fn test_qt_commit_negative_start_replacement_length_2() {
+        let r = simulate_qt_commit_full("你好世界", 6, 6, -1, 2, "新");
+        assert_eq!(r.new_text, "你新界");
+    }
 }
