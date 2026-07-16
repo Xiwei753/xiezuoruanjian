@@ -816,4 +816,80 @@ impl WriterAppService {
             result.into()
         })
     }
+
+    pub fn editor_kernel_set_animation_enabled(
+        &self,
+        enabled: u8,
+    ) {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            kernel.set_animation_enabled(enabled != 0);
+        })
+    }
+
+    pub fn editor_kernel_set_animation_duration_ms(
+        &self,
+        duration_ms: u64,
+    ) {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            kernel.set_animation_duration_ms(duration_ms);
+        })
+    }
+
+    pub fn editor_kernel_get_text(&self) -> String {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let kernel = k.lock().unwrap();
+            kernel.text().to_string()
+        })
+    }
+
+    pub fn editor_kernel_get_revision(&self) -> u64 {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let kernel = k.lock().unwrap();
+            kernel.revision()
+        })
+    }
+
+    pub fn editor_kernel_get_cursor(&self) -> u32 {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let kernel = k.lock().unwrap();
+            kernel.cursor() as u32
+        })
+    }
 }
