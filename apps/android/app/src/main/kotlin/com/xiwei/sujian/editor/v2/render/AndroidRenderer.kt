@@ -134,13 +134,18 @@ class AndroidRenderer(
         layout: android.text.Layout,
         transaction: PreparedVisualTransaction
     ) {
-        val affectedLines = mutableSetOf<Int>()
+        val hiddenLines = mutableSetOf<Int>()
+        for (patch in transaction.staticPatches) {
+            if (patch.visibleSourceRects.isEmpty()) {
+                hiddenLines.add(patch.lineIndex)
+            }
+        }
         for (slice in transaction.animatedSlices) {
-            slice.snapshot?.lineIndex?.let { affectedLines.add(it) }
+            slice.snapshot?.lineIndex?.let { hiddenLines.add(it) }
         }
 
         for (i in 0 until layout.lineCount) {
-            if (i in affectedLines) continue
+            if (i in hiddenLines) continue
             val lineTop = layout.getLineTop(i)
             val lineBottom = layout.getLineBottom(i)
             canvas.save()
