@@ -47,4 +47,22 @@ class UniFFIEditorKernelBridge(
     override fun setAnimationDurationMs(durationMs: Long) {
         appServiceBridge.editorKernelSetAnimationDurationMs(durationMs.toULong())
     }
+
+    override fun compositionUpdateVisualIntent(
+        compositionReplaceStart: UInt,
+        compositionReplaceEndExclusive: UInt,
+        oldPreeditText: String,
+        newPreeditText: String
+    ): uniffi.writer_core.EditorVisualIntentDto? {
+        return try {
+            appServiceBridge.editorKernelCompositionUpdateVisualIntent(
+                compositionReplaceStart,
+                compositionReplaceEndExclusive,
+                oldPreeditText,
+                newPreeditText,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
 }
