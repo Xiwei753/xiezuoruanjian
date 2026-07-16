@@ -1766,6 +1766,76 @@ mod tests {
     }
 
     #[test]
+    fn test_rebase_tier2_consumed_prevents_reuse() {
+        use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
+        let sid_a = ShapingIdentity { text_content_hash: 1, raw_font_fingerprint: "font_a".to_string(), glyph_indexes_hash: 10, cluster_glyph_count: 3, direction_rtl: false, format_fingerprint: 100 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (50, 70, 10.0, 100.0, 0.3, Some(sid_a.clone())),
+            (50, 70, 20.0, 200.0, 0.5, Some(sid_a.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 150, 170,
+                Some(sid_a.clone()),
+            ),
+        ];
+
+        let offset_map = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 100,
+                length: 200,
+                kind: OffsetMapKind::Identity,
+            }],
+        };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+
+        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 should get first rebase frame via tier2 (x=10.0), got x={}", slices[0].from_document_rect.x);
+    }
+
+    #[test]
+    fn test_rebase_tier1_consumed_prevents_tier3_reuse() {
+        use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
+        let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
+
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
+            (50, 60, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
+            (40, 80, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
+        ];
+
+        let mut slices = vec![
+            AnimatedSlice::insert_fade_in(
+                VisualTransactionKey::new(1, 1),
+                LineSnapshotId::new(1, 0, 0),
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                SourceRect { x: 0.0, y: 0.0, w: 100.0, h: 20.0 },
+                0.0, 0.0, 50, 60,
+                Some(sid_dup.clone()),
+            ),
+        ];
+
+        let offset_map = OffsetMap {
+            entries: vec![OffsetMapEntry {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                length: 200,
+                kind: OffsetMapKind::Identity,
+            }],
+        };
+        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+
+        assert!((slices[0].from_document_rect.x - 10.0).abs() < 0.01,
+            "slice 0 should get first rebase frame via tier1 (x=10.0), not second frame via tier3, got x={}", slices[0].from_document_rect.x);
+    }
+
+    #[test]
     fn test_rebase_tier3_tiebreak_by_byte_start_then_index() {
         use writer_core::editor::{OffsetMapEntry, OffsetMapKind};
         let sid_dup = ShapingIdentity { text_content_hash: 99, raw_font_fingerprint: "font_x".to_string(), glyph_indexes_hash: 50, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 500 };
