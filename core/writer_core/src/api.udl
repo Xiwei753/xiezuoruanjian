@@ -1130,6 +1130,11 @@ interface WriterAppService {
     // ── Editor Visual Transaction ──
 
     EditorVisualTransactionDto? editor_visual_transaction(string old_text, string new_text, u32 old_cursor_index, u32 new_cursor_index, EditorTransactionCauseDto cause, u32 max_animated_chars, u64 animation_duration_ms);
+
+    // ── #535: Editor V2 Kernel ──
+
+    EditorEditResultDto editor_kernel_apply(string command_json);
+    EditorEditResultDto editor_kernel_load_text(string text, u32 cursor_byte_offset);
 };
 
 // ── Layout Policy DTOs ──
@@ -1412,4 +1417,61 @@ dictionary EditorVisualTransactionDto {
     AnimationModeDto animation_mode;
     u64 duration_ms;
     VisualCoordinateModeDto coordinate_mode;
+};
+
+// ── #535: Editor V2 Kernel DTOs ──
+
+enum EditorOperationKindDto {
+    "Insert",
+    "Delete",
+    "Replace",
+    "CursorOnly",
+    "CompositionUpdate",
+    "CompositionCommit",
+    "CompositionCancel",
+    "Load",
+    "Format",
+};
+
+dictionary CoordinatedCursorDto {
+    u32 old_byte_offset;
+    u32 new_byte_offset;
+    boolean should_animate;
+};
+
+dictionary EditorVisualIntentDto {
+    EditorTransactionCauseDto cause;
+    EditorOperationKindDto operation_kind;
+    sequence<EditorByteRangeDto> old_affected_byte_ranges;
+    sequence<EditorByteRangeDto> new_affected_byte_ranges;
+    AnimationModeDto animation_mode;
+    u64 duration_ms;
+    CoordinatedCursorDto coordinated_cursor;
+};
+
+dictionary EditorByteRangeDto {
+    u32 start;
+    u32 end_exclusive;
+};
+
+dictionary DisplayPatchDto {
+    u64 base_revision;
+    u64 new_revision;
+    u32 replace_byte_start;
+    u32 replace_byte_end_exclusive;
+    string inserted_text;
+    u32 resulting_selection_start;
+    u32 resulting_selection_end;
+};
+
+dictionary EditorEditResultDto {
+    u64 transaction_id;
+    u64 base_revision;
+    u64 new_revision;
+    sequence<DisplayPatchDto> display_patches;
+    u32 old_selection_start;
+    u32 old_selection_end;
+    u32 new_selection_start;
+    u32 new_selection_end;
+    EditorVisualIntentDto visual_intent;
 };

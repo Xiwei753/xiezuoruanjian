@@ -709,4 +709,53 @@ impl WriterAppService {
             .ok()
             .flatten()
     }
+
+    pub fn editor_kernel_apply(
+        &self,
+        command_json: String,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::{EditorCommand, EditorKernel};
+        use std::sync::Mutex;
+        
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+        
+        let command: EditorCommand = match serde_json::from_str(&command_json) {
+            Ok(c) => c,
+            Err(_) => {
+                let mut kernel = EditorKernel::new();
+                let result = kernel.apply(EditorCommand::SetSelection {
+                    anchor_byte_offset: 0,
+                    head_byte_offset: 0,
+                });
+                return result.into();
+            }
+        };
+        
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.apply(command);
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_load_text(
+        &self,
+        text: String,
+        cursor_byte_offset: u32,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+        
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+        
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.load_text(text, cursor_byte_offset as usize);
+            result.into()
+        })
+    }
 }

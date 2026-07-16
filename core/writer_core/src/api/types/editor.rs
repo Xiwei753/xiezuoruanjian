@@ -430,6 +430,166 @@ impl From<crate::editor::PlatformVisualTransaction> for PlatformVisualTransactio
     }
 }
 
+// ── #535: Editor V2 Kernel DTOs ──
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorOperationKindDto {
+    #[default]
+    Insert,
+    Delete,
+    Replace,
+    CursorOnly,
+    CompositionUpdate,
+    CompositionCommit,
+    CompositionCancel,
+    Load,
+    Format,
+}
+
+impl From<crate::editor::EditorOperationKind> for EditorOperationKindDto {
+    fn from(k: crate::editor::EditorOperationKind) -> Self {
+        match k {
+            crate::editor::EditorOperationKind::Insert => Self::Insert,
+            crate::editor::EditorOperationKind::Delete => Self::Delete,
+            crate::editor::EditorOperationKind::Replace => Self::Replace,
+            crate::editor::EditorOperationKind::CursorOnly => Self::CursorOnly,
+            crate::editor::EditorOperationKind::CompositionUpdate => Self::CompositionUpdate,
+            crate::editor::EditorOperationKind::CompositionCommit => Self::CompositionCommit,
+            crate::editor::EditorOperationKind::CompositionCancel => Self::CompositionCancel,
+            crate::editor::EditorOperationKind::Load => Self::Load,
+            crate::editor::EditorOperationKind::Format => Self::Format,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoordinatedCursorDto {
+    pub old_byte_offset: u32,
+    pub new_byte_offset: u32,
+    pub should_animate: bool,
+}
+
+impl From<crate::editor::CoordinatedCursor> for CoordinatedCursorDto {
+    fn from(c: crate::editor::CoordinatedCursor) -> Self {
+        Self {
+            old_byte_offset: c.old_byte_offset as u32,
+            new_byte_offset: c.new_byte_offset as u32,
+            should_animate: c.should_animate,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorByteRangeDto {
+    pub start: u32,
+    pub end_exclusive: u32,
+}
+
+impl From<(usize, usize)> for EditorByteRangeDto {
+    fn from((start, end): (usize, usize)) -> Self {
+        Self {
+            start: start as u32,
+            end_exclusive: end as u32,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorVisualIntentDto {
+    pub cause: EditorTransactionCauseDto,
+    pub operation_kind: EditorOperationKindDto,
+    pub old_affected_byte_ranges: Vec<EditorByteRangeDto>,
+    pub new_affected_byte_ranges: Vec<EditorByteRangeDto>,
+    pub animation_mode: AnimationModeDto,
+    pub duration_ms: u64,
+    pub coordinated_cursor: CoordinatedCursorDto,
+}
+
+impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {
+    fn from(vi: crate::editor::EditorVisualIntent) -> Self {
+        Self {
+            cause: match vi.cause {
+                crate::editor::EditorTransactionCause::Typing => EditorTransactionCauseDto::Typing,
+                crate::editor::EditorTransactionCause::Delete => EditorTransactionCauseDto::Delete,
+                crate::editor::EditorTransactionCause::Paste => EditorTransactionCauseDto::Paste,
+                crate::editor::EditorTransactionCause::Undo => EditorTransactionCauseDto::Undo,
+                crate::editor::EditorTransactionCause::Redo => EditorTransactionCauseDto::Redo,
+                crate::editor::EditorTransactionCause::Load => EditorTransactionCauseDto::Load,
+                crate::editor::EditorTransactionCause::Format => EditorTransactionCauseDto::Format,
+                crate::editor::EditorTransactionCause::ImeComposition => EditorTransactionCauseDto::ImeComposition,
+                crate::editor::EditorTransactionCause::TypingCommit => EditorTransactionCauseDto::TypingCommit,
+                crate::editor::EditorTransactionCause::Programmatic => EditorTransactionCauseDto::Programmatic,
+            },
+            operation_kind: vi.operation_kind.into(),
+            old_affected_byte_ranges: vi.old_affected_byte_ranges.into_iter().map(Into::into).collect(),
+            new_affected_byte_ranges: vi.new_affected_byte_ranges.into_iter().map(Into::into).collect(),
+            animation_mode: vi.animation_mode.into(),
+            duration_ms: vi.duration_ms,
+            coordinated_cursor: vi.coordinated_cursor.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DisplayPatchDto {
+    pub base_revision: u64,
+    pub new_revision: u64,
+    pub replace_byte_start: u32,
+    pub replace_byte_end_exclusive: u32,
+    pub inserted_text: String,
+    pub resulting_selection_start: u32,
+    pub resulting_selection_end: u32,
+}
+
+impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
+    fn from(p: crate::editor::DisplayPatch) -> Self {
+        Self {
+            base_revision: p.base_revision,
+            new_revision: p.new_revision,
+            replace_byte_start: p.replace_byte_range.0 as u32,
+            replace_byte_end_exclusive: p.replace_byte_range.1 as u32,
+            inserted_text: p.inserted_text,
+            resulting_selection_start: p.resulting_selection_byte_range.0 as u32,
+            resulting_selection_end: p.resulting_selection_byte_range.1 as u32,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorEditResultDto {
+    pub transaction_id: u64,
+    pub base_revision: u64,
+    pub new_revision: u64,
+    pub display_patches: Vec<DisplayPatchDto>,
+    pub old_selection_start: u32,
+    pub old_selection_end: u32,
+    pub new_selection_start: u32,
+    pub new_selection_end: u32,
+    pub visual_intent: EditorVisualIntentDto,
+}
+
+impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
+    fn from(r: crate::editor::EditorEditResult) -> Self {
+        Self {
+            transaction_id: r.transaction_id,
+            base_revision: r.base_revision,
+            new_revision: r.new_revision,
+            display_patches: r.display_patches.into_iter().map(Into::into).collect(),
+            old_selection_start: r.old_selection_byte_range.0 as u32,
+            old_selection_end: r.old_selection_byte_range.1 as u32,
+            new_selection_start: r.new_selection_byte_range.0 as u32,
+            new_selection_end: r.new_selection_byte_range.1 as u32,
+            visual_intent: r.visual_intent.into(),
+        }
+    }
+}
+
 // ── #516: VisualRevision DTO ──
 
 /// 已提交正文的视觉修订 DTO。
@@ -922,5 +1082,75 @@ mod tests {
         assert!(json.contains("\"bodyEdit\""));
         assert!(json.contains("\"visualClassKinds\":"));
         assert!(!json.contains("\"timeline\":"));
+    }
+
+    // --- #535: EditorKernel V2 DTO tests ---
+
+    #[test]
+    fn editor_operation_kind_dto_from_core() {
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Insert), EditorOperationKindDto::Insert);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Delete), EditorOperationKindDto::Delete);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Replace), EditorOperationKindDto::Replace);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CursorOnly), EditorOperationKindDto::CursorOnly);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionUpdate), EditorOperationKindDto::CompositionUpdate);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionCommit), EditorOperationKindDto::CompositionCommit);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::CompositionCancel), EditorOperationKindDto::CompositionCancel);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Load), EditorOperationKindDto::Load);
+        assert_eq!(EditorOperationKindDto::from(crate::editor::EditorOperationKind::Format), EditorOperationKindDto::Format);
+    }
+
+    #[test]
+    fn editor_edit_result_dto_from_kernel() {
+        let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2);
+        let result = kernel.apply(crate::editor::EditorCommand::Insert {
+            byte_offset: 2,
+            text: "c".to_string(),
+            cause: crate::editor::EditorTransactionCause::Typing,
+        });
+        let dto: EditorEditResultDto = result.into();
+        assert!(dto.transaction_id > 0);
+        assert_eq!(dto.base_revision, 0);
+        assert_eq!(dto.new_revision, 1);
+        assert!(!dto.display_patches.is_empty());
+        assert_eq!(dto.visual_intent.operation_kind, EditorOperationKindDto::Insert);
+    }
+
+    #[test]
+    fn display_patch_dto_from_core() {
+        let patch = crate::editor::DisplayPatch {
+            base_revision: 0,
+            new_revision: 1,
+            replace_byte_range: (2, 2),
+            inserted_text: "c".to_string(),
+            resulting_selection_byte_range: (3, 3),
+        };
+        let dto: DisplayPatchDto = patch.into();
+        assert_eq!(dto.base_revision, 0);
+        assert_eq!(dto.new_revision, 1);
+        assert_eq!(dto.replace_byte_start, 2);
+        assert_eq!(dto.replace_byte_end_exclusive, 2);
+        assert_eq!(dto.inserted_text, "c");
+    }
+
+    #[test]
+    fn editor_visual_intent_dto_from_core() {
+        let intent = crate::editor::EditorVisualIntent {
+            cause: crate::editor::EditorTransactionCause::Typing,
+            operation_kind: crate::editor::EditorOperationKind::Insert,
+            old_affected_byte_ranges: vec![],
+            new_affected_byte_ranges: vec![(2, 5)],
+            animation_mode: crate::editor::AnimationMode::GlyphAnimation,
+            duration_ms: 160,
+            coordinated_cursor: crate::editor::CoordinatedCursor {
+                old_byte_offset: 2,
+                new_byte_offset: 5,
+                should_animate: true,
+            },
+        };
+        let dto: EditorVisualIntentDto = intent.into();
+        assert_eq!(dto.operation_kind, EditorOperationKindDto::Insert);
+        assert_eq!(dto.duration_ms, 160);
+        assert!(dto.coordinated_cursor.should_animate);
+        assert_eq!(dto.new_affected_byte_ranges.len(), 1);
     }
 }

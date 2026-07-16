@@ -26,7 +26,13 @@
 //! - 提高写作效率和质量
 
 pub mod autocorrect;
+pub mod editor_kernel;
 pub mod transaction;
+
+pub use editor_kernel::{
+    CoordinatedCursor, DisplayPatch, EditorCommand, EditorEditResult, EditorKernel,
+    EditorOperationKind, EditorVisualIntent,
+};
 
 pub use transaction::{
     build_virtual_text, choose_animation_mode, classify_visual_diff, compute_rebase,

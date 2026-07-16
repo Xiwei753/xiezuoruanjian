@@ -66,6 +66,51 @@ impl WriterCoreApi {
         let caps = kind.default_capabilities();
         Ok(caps.into())
     }
+
+    /// #535: Apply an EditorCommand to the thread-local EditorKernel.
+    ///
+    /// The command is passed as JSON (serde-serialized EditorCommand).
+    /// Returns EditorEditResultDto containing display_patches and visual_intent.
+    pub fn editor_kernel_apply(
+        &self,
+        command_json: &str,
+    ) -> ApiResult<EditorEditResultDto> {
+        use crate::editor::{EditorCommand, EditorKernel};
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        let command: EditorCommand = serde_json::from_str(command_json)
+            .map_err(|e| crate::error::Error::Json(e))?;
+
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.apply(command);
+            Ok(result.into())
+        })
+    }
+
+    /// #535: Load text into the thread-local EditorKernel.
+    pub fn editor_kernel_load_text(
+        &self,
+        text: &str,
+        cursor_byte_offset: u32,
+    ) -> ApiResult<EditorEditResultDto> {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.load_text(text.to_string(), cursor_byte_offset as usize);
+            Ok(result.into())
+        })
+    }
 }
 
 impl From<PlatformKindDto> for PlatformKind {
