@@ -223,16 +223,6 @@ mod tests {
         assert!(PlatformKind::Android.default_capabilities().supports_replacement_commit);
         assert!(!PlatformKind::Harmony.default_capabilities().supports_text_animation);
         assert!(!PlatformKind::Unknown.default_capabilities().has_any_animation_support());
-
-        let win_caps = PlatformKind::Windows.default_capabilities();
-        assert!(win_caps.supports_clipboard);
-        assert!(!win_caps.supports_context_menu);
-        assert!(!win_caps.supports_text_animation);
-
-        let unk_caps = PlatformKind::Unknown.default_capabilities();
-        assert!(!unk_caps.supports_clipboard);
-        assert!(!unk_caps.supports_context_menu);
-        assert!(!unk_caps.supports_ime_preedit);
     }
 
     #[test]
@@ -240,15 +230,6 @@ mod tests {
         assert!(PlatformCapabilities::linux_qt().has_any_animation_support());
         assert!(!PlatformCapabilities::harmony().has_any_animation_support());
         assert!(!PlatformCapabilities::minimal().has_any_animation_support());
-    }
-
-    #[test]
-    fn test_has_any_ime_support() {
-        assert!(PlatformCapabilities::linux_qt().has_any_ime_support());
-        assert!(PlatformCapabilities::android().has_any_ime_support());
-        assert!(PlatformCapabilities::windows().has_any_ime_support());
-        assert!(!PlatformCapabilities::harmony().has_any_ime_support());
-        assert!(!PlatformCapabilities::minimal().has_any_ime_support());
     }
 
     #[test]

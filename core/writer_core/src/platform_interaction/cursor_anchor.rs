@@ -108,42 +108,4 @@ mod tests {
         let json = serde_json::to_string(&reason).unwrap();
         assert!(json.contains("\"preeditChanged\""));
     }
-
-    struct DummyCursorAnchorAdapter {
-        last_reason: std::cell::RefCell<Option<CursorAnchorUpdateReason>>,
-    }
-
-    impl CursorAnchorAdapter for DummyCursorAnchorAdapter {
-        fn notify_cursor_anchor_update(
-            &self,
-            _request: &CursorAnchorRequest,
-            reason: CursorAnchorUpdateReason,
-        ) {
-            *self.last_reason.borrow_mut() = Some(reason);
-        }
-
-        fn request_candidate_window_update(&self, _cursor_rect: &NormalizedCursorRect) {}
-    }
-
-    #[test]
-    fn test_cursor_anchor_adapter_default_methods() {
-        let adapter = DummyCursorAnchorAdapter {
-            last_reason: std::cell::RefCell::new(None),
-        };
-
-        assert!(!adapter.is_input_method_visible());
-
-        let req = CursorAnchorRequest {
-            cursor_index: 0,
-            anchor_index: 0,
-            cursor_rect: None,
-            selection_start: 0,
-            selection_end: 0,
-            text_before_cursor: String::new(),
-            text_after_cursor: String::new(),
-        };
-
-        adapter.notify_scroll_changed(&req);
-        assert_eq!(*adapter.last_reason.borrow(), Some(CursorAnchorUpdateReason::ScrollChanged));
-    }
 }

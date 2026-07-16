@@ -25,7 +25,7 @@ Supersedes: None
 | 分类 | 匹配规则 | 同步策略 |
 |------|---------|---------|
 | `UserTextDocument` | `/chapters/*.md`、`note.md`、`outline.md`、`scene.md`、`character_notes.md`、`timeline_notes.md`、`draft.md` | 三路合并，绝不 LWW |
-| `Metadata` | `project.json`、`volume.json`、`chapter.meta.json`、`settings.sync.json`、`starmap_index.sqlite`、`starmaps/`、`writing_stats.json` | LWW 或语义合并 |
+| `Metadata` | `project.json`、`volume.json`、`chapter.meta.json`、`settings.sync.json`、`starmap.json`、`writing_stats.json` | LWW 或语义合并 |
 | `LocalOnly` | `app-meta/*`（旧工作区残留 `backups/` 也不同步） | 不同步 |
 | `GeneratedCache` | 其他所有文件 | LWW |
 

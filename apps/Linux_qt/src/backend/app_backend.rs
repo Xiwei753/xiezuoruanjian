@@ -208,6 +208,7 @@ pub struct AppBackend {
     system_color_scheme_changed: qt_signal!(),
 
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
+    #[allow(dead_code)]
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),

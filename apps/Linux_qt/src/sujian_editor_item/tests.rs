@@ -600,4 +600,115 @@ mod tests {
         queue.cancel_all("test");
         assert!(queue.is_empty());
     }
+
+    fn utf16_forward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
+        if utf16_count <= 0 { return byte_start; }
+        let mut remaining = utf16_count;
+        let mut pos = byte_start;
+        for ch in text[byte_start..].chars() {
+            if remaining <= 0 { break; }
+            remaining -= ch.len_utf16() as i32;
+            pos += ch.len_utf8();
+        }
+        pos.min(text.len())
+    }
+
+    fn utf16_backward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
+        if utf16_count <= 0 { return byte_start; }
+        let mut remaining = utf16_count;
+        let mut pos = byte_start;
+        for ch in text[..byte_start].chars().rev() {
+            if remaining <= 0 { break; }
+            remaining -= ch.len_utf16() as i32;
+            pos -= ch.len_utf8();
+        }
+        pos
+    }
+
+    fn simulate_qt_commit(
+        committed_text: &str,
+        session_replace_start: usize,
+        session_replace_end: usize,
+        replace_start: i32,
+        replace_length: i32,
+        inserted: &str,
+    ) -> String {
+        let base_text = format!(
+            "{}{}",
+            &committed_text[..session_replace_start],
+            &committed_text[session_replace_end..]
+        );
+        let anchor_in_base = session_replace_start;
+        let rs_byte = if replace_start < 0 {
+            utf16_backward(&base_text, anchor_in_base, -replace_start)
+        } else if replace_start == 0 {
+            anchor_in_base
+        } else {
+            utf16_forward(&base_text, anchor_in_base, replace_start)
+        };
+        let re_byte = if replace_length > 0 {
+            utf16_forward(&base_text, rs_byte, replace_length)
+        } else {
+            rs_byte
+        };
+        let (del_start, del_end) = if rs_byte <= re_byte {
+            (rs_byte, re_byte)
+        } else {
+            (re_byte, rs_byte)
+        };
+        format!(
+            "{}{}{}",
+            &base_text[..del_start],
+            &inserted,
+            &base_text[del_end..]
+        )
+    }
+
+    #[test]
+    fn test_qt_commit_zero_session_zero_replacement() {
+        let result = simulate_qt_commit("ABCDE", 2, 2, 0, 0, "你好");
+        assert_eq!(result, "AB你好CDE");
+    }
+
+    #[test]
+    fn test_qt_commit_zero_session_nonzero_replacement_start() {
+        let result = simulate_qt_commit("ABCDE", 2, 2, 2, 0, "你好");
+        assert_eq!(result, "ABCD你好E");
+    }
+
+    #[test]
+    fn test_qt_commit_negative_replacement_start_delete_two() {
+        let result = simulate_qt_commit("ABCDE", 2, 2, -1, 2, "你好");
+        assert_eq!(result, "A你好DE");
+    }
+
+    #[test]
+    fn test_qt_commit_session_replace_with_negative_replacement() {
+        let result = simulate_qt_commit("ABCDE", 1, 3, -1, 2, "你好");
+        assert_eq!(result, "你好E");
+    }
+
+    #[test]
+    fn test_qt_commit_session_replace_zero_replacement() {
+        let result = simulate_qt_commit("ABCDE", 1, 3, 0, 0, "你好");
+        assert_eq!(result, "A你好DE");
+    }
+
+    #[test]
+    fn test_qt_commit_session_replace_positive_replacement() {
+        let result = simulate_qt_commit("ABCDE", 1, 3, 1, 0, "你好");
+        assert_eq!(result, "AD你好E");
+    }
+
+    #[test]
+    fn test_qt_commit_chinese_text_nonzero_replacement_start() {
+        let result = simulate_qt_commit("你好世界", 6, 6, 2, 0, "新");
+        assert_eq!(result, "你好世界新");
+    }
+
+    #[test]
+    fn test_qt_commit_chinese_text_negative_replacement() {
+        let result = simulate_qt_commit("你好世界", 6, 6, -1, 1, "新");
+        assert_eq!(result, "你新世界");
+    }
 }

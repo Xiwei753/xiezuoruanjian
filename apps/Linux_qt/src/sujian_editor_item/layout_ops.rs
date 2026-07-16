@@ -98,6 +98,7 @@ impl SujianEditorItem {
         );
         snapshot.caret_rect = Some(caret);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
+        snapshot.virtual_text = self.buffer.text.clone();
         snapshot
     }
 

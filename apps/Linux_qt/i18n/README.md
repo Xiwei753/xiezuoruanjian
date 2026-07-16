@@ -1,8 +1,8 @@
-# Linux Qt 多语言 (i18n) 路线说明
+# Desktop 多语言 (i18n) 路线说明
 
 ## 当前状态
 
-Linux Qt 客户端采用 **中文 source + zh_CN catalog** 模式：
+Desktop 客户端采用 **中文 source + zh_CN catalog** 模式：
 
 - QML 中所有用户可见中文文本必须用 `qsTr("中文")` 包裹
 - `lupdate` 扫描 QML 源码生成 `zh_CN.ts`（XML 翻译源文件）

@@ -59,7 +59,7 @@ Windows 和 Linux 是两个独立客户端，不再追求同一份 UI/编辑器�
 
 ## 迁移来源
 
-当前 `apps/Linux_qt` 是 Linux 客户端。Windows 客户端在 `apps/windows/` 独立建设，不复用 Qt 代码。
+当前 `apps/Linux_qt` 已是独立 Linux 客户端。旧 `apps/desktop`（如果存在）是迁移来源，不再承载新路线。Windows 客户端在 `apps/windows/` 从零建设，不复用 Qt 代码。
 
 ## Bridge 对比
 

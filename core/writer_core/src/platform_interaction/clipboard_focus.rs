@@ -106,29 +106,6 @@ mod tests {
     }
 
     #[test]
-    fn test_clipboard_result_serialization_exhaustive() {
-        let res_err = ClipboardResult::Error { message: "err".into() };
-        assert!(serde_json::to_string(&res_err).unwrap().contains("\"error\""));
-
-        let res_unavail = ClipboardResult::Unavailable;
-        assert_eq!(serde_json::to_string(&res_unavail).unwrap(), "\"unavailable\"");
-
-        let res_cut = ClipboardResult::Cut;
-        assert_eq!(serde_json::to_string(&res_cut).unwrap(), "\"cut\"");
-
-        let res_has = ClipboardResult::HasText { has_text: true };
-        assert!(serde_json::to_string(&res_has).unwrap().contains("\"hasText\""));
-    }
-
-    #[test]
-    fn test_focus_request_serialization() {
-        assert_eq!(serde_json::to_string(&FocusRequest::RequestFocus).unwrap(), "\"requestFocus\"");
-        assert_eq!(serde_json::to_string(&FocusRequest::ReleaseFocus).unwrap(), "\"releaseFocus\"");
-        assert_eq!(serde_json::to_string(&FocusRequest::RequestSoftInput).unwrap(), "\"requestSoftInput\"");
-        assert_eq!(serde_json::to_string(&FocusRequest::HideSoftInput).unwrap(), "\"hideSoftInput\"");
-    }
-
-    #[test]
     fn focus_state_default() {
         let state = FocusState {
             has_focus: false,

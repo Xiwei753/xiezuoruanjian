@@ -227,69 +227,86 @@ impl SujianEditorItem {
             .map(|s| s.replace_end_exclusive)
             .unwrap_or(self.buffer.cursor);
 
-        let text_str = &self.buffer.text;
+        let committed_text = self.buffer.text.clone();
 
-        fn utf16_offset_to_utf8_byte(text: &str, base: usize, utf16_offset: i32) -> usize {
-            if utf16_offset == 0 {
-                return base;
+        let base_text = format!(
+            "{}{}",
+            &committed_text[..session_replace_start],
+            &committed_text[session_replace_end..]
+        );
+
+        fn utf16_forward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
+            if utf16_count <= 0 { return byte_start; }
+            let mut remaining = utf16_count;
+            let mut pos = byte_start;
+            for ch in text[byte_start..].chars() {
+                if remaining <= 0 { break; }
+                remaining -= ch.len_utf16() as i32;
+                pos += ch.len_utf8();
             }
-            let start = base;
-            if utf16_offset > 0 {
-                let mut utf16_count = 0i32;
-                let mut byte_pos = start;
-                for ch in text[start..].chars() {
-                    if utf16_count >= utf16_offset {
-                        break;
-                    }
-                    utf16_count += ch.len_utf16() as i32;
-                    byte_pos += ch.len_utf8();
-                }
-                byte_pos
-            } else {
-                let abs_offset = (-utf16_offset) as usize;
-                let mut utf16_count = 0usize;
-                let mut byte_pos = start;
-                let before_cursor: Vec<char> = text[..start].chars().collect();
-                for &ch in before_cursor.iter().rev() {
-                    if utf16_count >= abs_offset {
-                        break;
-                    }
-                    utf16_count += ch.len_utf16();
-                    byte_pos -= ch.len_utf8();
-                }
-                byte_pos
-            }
+            pos.min(text.len())
         }
 
-        let anchor_byte = session_replace_start;
-
-        let qt_replace_start_byte = utf16_offset_to_utf8_byte(text_str, anchor_byte, replace_start);
-        let qt_replace_start_byte = qt_replace_start_byte.min(text_str.len());
-
-        let qt_replace_end_byte = if replace_length > 0 {
-            let mut utf16_count = 0i32;
-            let mut byte_pos = qt_replace_start_byte;
-            for ch in text_str[qt_replace_start_byte..].chars() {
-                if utf16_count >= replace_length {
-                    break;
-                }
-                utf16_count += ch.len_utf16() as i32;
-                byte_pos += ch.len_utf8();
+        fn utf16_backward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
+            if utf16_count <= 0 { return byte_start; }
+            let mut remaining = utf16_count;
+            let mut pos = byte_start;
+            for ch in text[..byte_start].chars().rev() {
+                if remaining <= 0 { break; }
+                remaining -= ch.len_utf16() as i32;
+                pos -= ch.len_utf8();
             }
-            byte_pos
-        } else {
-            qt_replace_start_byte
-        };
-        let qt_replace_end_byte = qt_replace_end_byte.min(text_str.len());
+            pos
+        }
 
-        let (qt_rs, qt_re) = if qt_replace_start_byte <= qt_replace_end_byte {
-            (qt_replace_start_byte, qt_replace_end_byte)
+        let anchor_in_base = session_replace_start;
+        let rs_byte = if replace_start < 0 {
+            utf16_backward(&base_text, anchor_in_base, -replace_start)
+        } else if replace_start == 0 {
+            anchor_in_base
         } else {
-            (qt_replace_end_byte, qt_replace_start_byte)
+            utf16_forward(&base_text, anchor_in_base, replace_start)
+        };
+        let re_byte = if replace_length > 0 {
+            utf16_forward(&base_text, rs_byte, replace_length)
+        } else {
+            rs_byte
+        };
+        let (del_start, del_end) = if rs_byte <= re_byte {
+            (rs_byte, re_byte)
+        } else {
+            (re_byte, rs_byte)
         };
 
-        let del_start = session_replace_start.min(qt_rs);
-        let del_end = session_replace_end.max(qt_re);
+        let new_base = format!(
+            "{}{}{}",
+            &base_text[..del_start],
+            &inserted,
+            &base_text[del_end..]
+        );
+
+        let cursor_in_new_base = del_start + inserted.len();
+
+        let new_text = new_base;
+        let new_cursor = cursor_in_new_base;
+
+        let committed_replace_start = if del_start <= session_replace_start {
+            del_start
+        } else {
+            session_replace_start + (del_start - session_replace_start)
+        };
+        let committed_replace_end = if del_end <= session_replace_start {
+            del_end
+        } else {
+            session_replace_end + (del_end - session_replace_start)
+        };
+
+        let candidate_byte_start = if rs_byte <= session_replace_start {
+            rs_byte
+        } else {
+            session_replace_end + (rs_byte - session_replace_start)
+        };
+        let candidate_byte_end = candidate_byte_start + inserted.len();
 
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -302,9 +319,8 @@ impl SujianEditorItem {
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
 
-        self.buffer.text.replace_range(del_start..del_end, &inserted);
-        self.buffer.cursor = del_start + inserted.len();
-        self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, self.buffer.cursor);
+        self.buffer.text = new_text;
+        self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, new_cursor);
         self.buffer.selection_anchor = self.buffer.cursor;
 
         self.adjust_affinity_at_wrap_boundary();
@@ -344,12 +360,6 @@ impl SujianEditorItem {
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
-
-            let candidate_byte_start = del_start;
-            let candidate_byte_end = del_start + inserted.len();
-
-            let committed_replace_start = del_start;
-            let committed_replace_end = del_end;
 
             let key = self.animation_coordinator.handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,

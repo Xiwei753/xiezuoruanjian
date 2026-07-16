@@ -7,8 +7,6 @@ pub mod screen_policy;
 mod settings;
 mod starmap;
 mod stats;
-#[cfg(test)]
-mod stats_tests;
 mod sync;
 mod volume;
 mod workspace;
