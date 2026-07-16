@@ -54,6 +54,7 @@ import com.google.android.material.color.MaterialColors
  *   └── SujianClipboardController(剪贴板控制器)
  * ```
  */
+@Deprecated("Legacy editor path — #535 Editor V2 replaces this. Use com.xiwei.sujian.editor.v2.host.SujianEditorView instead.")
 class SujianEditorView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
