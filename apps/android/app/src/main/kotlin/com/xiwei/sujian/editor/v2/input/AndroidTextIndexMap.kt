@@ -8,7 +8,7 @@ class AndroidTextIndexMap(
     private val text: String = mirror.getText()
     private val utf8ToUtf16Cache: IntArray by lazy { buildUtf8ToUtf16Map() }
     private val utf16ToUtf8Cache: IntArray by lazy { buildUtf16ToUtf8Map() }
-    private val utf16Length: Int by lazy { countUtf16CodeUnits() }
+    private val _utf16Length: Int by lazy { countUtf16CodeUnits() }
 
     fun utf8ToUtf16(byteOffset: Int): Int {
         if (byteOffset <= 0) return 0
@@ -32,7 +32,7 @@ class AndroidTextIndexMap(
         return Pair(utf16ToUtf8(startUtf16), utf16ToUtf8(endUtf16))
     }
 
-    fun getUtf16Length(): Int = utf16Length
+    fun getUtf16Length(): Int = _utf16Length
 
     private fun countUtf16CodeUnits(): Int {
         var count = 0
