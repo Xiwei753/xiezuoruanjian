@@ -71,7 +71,6 @@ pub(crate) trait EditorInputHost {
     fn input_preedit_text(&self) -> String { String::new() }
     fn input_preedit_cursor(&self) -> usize { 0 }
     fn input_preedit_attributes(&self) -> Vec<PreeditAttribute> { Vec::new() }
-    fn input_preedit_transaction_created(&self, _old_text: &str, _new_text: &str) {}
 }
 
 pub(crate) fn handle_key<H: EditorInputHost + ?Sized>(
