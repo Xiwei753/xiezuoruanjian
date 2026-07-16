@@ -838,4 +838,37 @@ mod tests {
         let r = simulate_qt_commit_full("你好世界", 6, 6, -1, 2, "新");
         assert_eq!(r.new_text, "你新界");
     }
+
+    #[test]
+    fn test_qt_commit_session_replace_negative_start_cross_preedit() {
+        let r = simulate_qt_commit_full("ABCDE", 1, 3, -1, 2, "你好");
+        assert_eq!(r.new_text, "你好E");
+    }
+
+    #[test]
+    fn test_qt_commit_session_replace_nonzero_replacement_start_no_mid_deletion() {
+        let r = simulate_qt_commit_full("ABCDEFGHIJ", 3, 5, 2, 0, "你好");
+        assert_eq!(r.new_text, "ABCFG你好HIJ");
+    }
+
+    #[test]
+    fn test_qt_commit_commit_then_new_preedit_no_overlap() {
+        let committed = "你好世界";
+        let r = simulate_qt_commit_full(committed, 6, 6, 0, 0, "朋友");
+        assert_eq!(r.new_text, "你好朋友世界");
+        let new_preedit = "abc";
+        let new_text_with_preedit = format!(
+            "{}{}{}",
+            &r.new_text[..r.candidate_byte_end],
+            &new_preedit,
+            &r.new_text[r.candidate_byte_end..]
+        );
+        assert_eq!(new_text_with_preedit, "你好朋友abc世界");
+    }
+
+    #[test]
+    fn test_qt_commit_zero_replacement_length_preserves_text_between_session_and_insertion() {
+        let r = simulate_qt_commit_full("ABCDEFGHIJ", 3, 3, 2, 0, "你好");
+        assert_eq!(r.new_text, "ABCDE你好FGHIJ");
+    }
 }

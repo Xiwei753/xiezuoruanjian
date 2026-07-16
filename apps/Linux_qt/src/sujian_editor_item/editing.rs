@@ -291,18 +291,19 @@ impl SujianEditorItem {
         let new_cursor = cursor_in_new_base;
 
         let preedit_len = preedit_byte_end - preedit_byte_start;
-        let del_start_in_vt = if del_start < session_replace_start {
+        let qt_replace_start_in_vt = if del_start <= session_replace_start {
             del_start
         } else {
             del_start + preedit_len
         };
-        let del_end_in_vt = if del_end < session_replace_start {
+        let qt_replace_end_in_vt = if del_end <= session_replace_start {
             del_end
         } else {
             del_end + preedit_len
         };
-        let committed_replace_start = del_start_in_vt.min(preedit_byte_start);
-        let committed_replace_end = del_end_in_vt.max(preedit_byte_end);
+
+        let committed_replace_start = qt_replace_start_in_vt;
+        let committed_replace_end = qt_replace_end_in_vt;
 
         let candidate_byte_start = del_start;
         let candidate_byte_end = del_start + inserted.len();
