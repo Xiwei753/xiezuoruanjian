@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.text.TextPaint
+import android.util.AttributeSet
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -19,9 +20,11 @@ import com.xiwei.sujian.editor.v2.visual.TransactionState
 import com.xiwei.sujian.editor.v2.render.AndroidRenderer
 import uniffi.writer_core.EditorEditResultDto
 
-class SujianEditorView(
-    context: Context
-) : View(context) {
+class SujianEditorView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null,
+    defStyleAttr: Int = 0
+) : View(context, attrs, defStyleAttr) {
 
     private val mirror = DisplayTextMirror()
     private val textPaint = TextPaint().apply {
@@ -43,6 +46,7 @@ class SujianEditorView(
     private var touchDownX: Float = 0f
     private var touchDownY: Float = 0f
     private var isDragging: Boolean = false
+    private var searchHighlights: List<Pair<Int, Int>> = emptyList()
 
     var kernelBridge: EditorKernelBridge? = null
 
@@ -144,6 +148,25 @@ class SujianEditorView(
             .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
         val commandJson = """{"kind":"Replace","byte_start":$start,"byte_end_exclusive":$end,"replacement_text":"$escapedText","original_text":"","cause":"Programmatic"}"""
         applyCommand(commandJson)
+    }
+
+    fun replaceAll(searchStr: String, replaceStr: String) {
+        val text = mirror.getText()
+        val newText = text.replace(searchStr, replaceStr)
+        if (newText != text) {
+            loadText(newText, mirror.getCursorUtf8())
+            onContentChanged?.invoke(newText)
+        }
+    }
+
+    fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
+        searchHighlights = highlights
+        invalidate()
+    }
+
+    fun clearSearchHighlights() {
+        searchHighlights = emptyList()
+        invalidate()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -334,7 +357,18 @@ class SujianEditorView(
     }
 
     fun setVisualTransactionProvider(provider: ((String, String, Int, Int, String, Int, Long) -> uniffi.writer_core.EditorVisualTransactionDto?)?) {
-        // V2 不使用旧版 VisualTransactionProvider，视觉事务由 AndroidVisualPlanner 生成
+    }
+
+    fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
+        setBackgroundColor(colors.background)
+        textPaint.color = colors.text
+        renderer.setThemeColors(
+            textColor = colors.text,
+            cursorColor = colors.cursor,
+            selectionColor = colors.selection,
+            preeditColor = colors.composing
+        )
+        invalidate()
     }
 
     private fun showSoftInput() {
