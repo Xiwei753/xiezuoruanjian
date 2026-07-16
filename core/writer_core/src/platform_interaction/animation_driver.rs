@@ -67,16 +67,16 @@ pub trait AnimationDriver {
     }
 
     /// 通知动画暂停（滚动/加载/字号变化等）
-    fn notify_animation_suppressed(&mut self, reason: AnimationSuppressReason);
+    fn notify_animation_suppressed(&mut self, _reason: AnimationSuppressReason) {}
 
     /// 通知动画恢复
-    fn notify_animation_resumed(&mut self);
+    fn notify_animation_resumed(&mut self) {}
 
     /// 取消所有进行中的动画
-    fn cancel_all_animations(&mut self);
+    fn cancel_all_animations(&mut self) {}
 
     /// 请求立即完成所有动画（跳过动画但保留最终状态）
-    fn finish_all_animations(&mut self);
+    fn finish_all_animations(&mut self) {}
 
     /// 根据抑制原因计算动画模式
     ///
@@ -151,10 +151,6 @@ mod tests {
             fn current_suppress_reason(&self) -> Option<AnimationSuppressReason> {
                 Some(AnimationSuppressReason::Scrolling)
             }
-            fn notify_animation_suppressed(&mut self, _reason: AnimationSuppressReason) {}
-            fn notify_animation_resumed(&mut self) {}
-            fn cancel_all_animations(&mut self) {}
-            fn finish_all_animations(&mut self) {}
         }
         let driver = SuppressedDriver;
         assert_eq!(
@@ -170,10 +166,6 @@ mod tests {
             fn drive_animation(&mut self, _request: AnimationDriveRequest) {}
             fn should_suppress_animation(&self) -> bool { false }
             fn current_suppress_reason(&self) -> Option<AnimationSuppressReason> { None }
-            fn notify_animation_suppressed(&mut self, _reason: AnimationSuppressReason) {}
-            fn notify_animation_resumed(&mut self) {}
-            fn cancel_all_animations(&mut self) {}
-            fn finish_all_animations(&mut self) {}
         }
         let driver = ActiveDriver;
         assert_eq!(
