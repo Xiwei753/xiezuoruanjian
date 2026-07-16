@@ -2,7 +2,7 @@ package com.xiwei.sujian.editor.v2.layout
 
 import android.graphics.Bitmap
 
-class AndroidLineSnapshot(
+data class AndroidLineSnapshot(
     val snapshotId: Long,
     val bitmap: Bitmap?,
     val lineIndex: Int,
