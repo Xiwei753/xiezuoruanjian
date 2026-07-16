@@ -758,4 +758,62 @@ impl WriterAppService {
             result.into()
         })
     }
+
+    pub fn editor_kernel_composition_update(
+        &self,
+        composition_replace_start: u32,
+        composition_replace_end_exclusive: u32,
+        old_preedit_text: String,
+        new_preedit_text: String,
+    ) -> String {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            let replace_range = if composition_replace_start < composition_replace_end_exclusive {
+                Some((composition_replace_start as usize, composition_replace_end_exclusive as usize))
+            } else {
+                None
+            };
+            let tx = kernel.composition_update(
+                replace_range,
+                &old_preedit_text,
+                &new_preedit_text,
+            );
+            serde_json::to_string(&tx).unwrap_or_default()
+        })
+    }
+
+    pub fn editor_kernel_composition_commit(
+        &self,
+        composition_replace_start: u32,
+        composition_replace_end_exclusive: u32,
+        committed_text: String,
+        original_text: String,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::{EditorCommand, EditorKernel, EditorTransactionCause};
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let mut kernel = k.lock().unwrap();
+            let command = EditorCommand::Replace {
+                byte_start: composition_replace_start as usize,
+                byte_end_exclusive: composition_replace_end_exclusive as usize,
+                replacement_text: committed_text,
+                original_text,
+                cause: EditorTransactionCause::TypingCommit,
+            };
+            let result = kernel.apply(command);
+            result.into()
+        })
+    }
 }
