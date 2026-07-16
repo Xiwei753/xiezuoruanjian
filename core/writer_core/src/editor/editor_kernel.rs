@@ -265,6 +265,14 @@ impl EditorKernel {
         self.cursor
     }
 
+    pub fn selection_anchor(&self) -> usize {
+        self.selection_anchor
+    }
+
+    pub fn selection(&self) -> (usize, usize) {
+        (self.selection_anchor, self.cursor)
+    }
+
     /// #535: 应用编辑命令 — 唯一正文修改入口。
     ///
     /// 平台输入适配器只调用此方法，不能直接修改正文。
