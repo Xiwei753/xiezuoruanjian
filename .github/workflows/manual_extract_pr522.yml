@@ -1,0 +1,404 @@
+name: Manual extract PR 522 value
+
+on:
+  push:
+    branches:
+      - manual/extract-pr522-value
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: manual/extract-pr522-value
+          fetch-depth: 0
+
+      - name: Remove legacy animation API and migrate coverage
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          transaction_path = Path("core/writer_core/src/editor/transaction.rs")
+          text = transaction_path.read_text(encoding="utf-8")
+
+          def remove_between(source: str, start_marker: str, end_marker: str, label: str) -> str:
+              start = source.find(start_marker)
+              if start < 0:
+                  raise RuntimeError(f"missing start marker for {label}")
+              end = source.find(end_marker, start)
+              if end < 0:
+                  raise RuntimeError(f"missing end marker for {label}")
+              return source[:start] + "\n" + source[end:]
+
+          text = remove_between(
+              text,
+              "\n/// **DEPRECATED**: 已被 `EditorVisualTransaction` + `visual_transaction()` 替代。",
+              "\n/// 视觉坐标模式。",
+              "EditorAnimationEvent",
+          )
+          text = remove_between(
+              text,
+              "\n    /// **DEPRECATED**: 已被 `visual_transaction()` 替代。",
+              "\n    fn take_animation_id",
+              "animation_events",
+          )
+
+          text = text.replace(
+              "#[cfg(test)]\n#[allow(deprecated)]\nmod tests {",
+              "#[cfg(test)]\nmod tests {",
+          )
+          text = text.replace(
+              "/// Core 层不负责绘制，只负责在 animation event 中暴露每个字符的\n",
+              "/// Core 层不负责绘制，只负责在统一视觉事务中暴露每个字符的\n",
+          )
+          text = text.replace(
+              "/// 这是 `EditorAnimationEvent` 的替代方案。\n"
+              "/// 旧 API `animation_events()` 返回多个事件（Insert + Cursor 等），\n"
+              "/// 新 API `visual_transaction()` 返回单个统一事务，平台层自行决定\n"
+              "/// 如何渲染动画和光标移动。\n",
+              "/// `visual_transaction()` 返回单个统一事务，平台层自行决定\n"
+              "/// 如何渲染文字动画和光标移动。\n",
+          )
+
+          def matching_brace(source: str, open_index: int) -> int:
+              depth = 0
+              i = open_index
+              state = "normal"
+              block_depth = 0
+              raw_end = ""
+              while i < len(source):
+                  if state == "normal":
+                      if source.startswith("//", i):
+                          state = "line_comment"
+                          i += 2
+                          continue
+                      if source.startswith("/*", i):
+                          state = "block_comment"
+                          block_depth = 1
+                          i += 2
+                          continue
+                      raw = re.match(r'r(#+)?"', source[i:])
+                      if raw:
+                          hashes = raw.group(1) or ""
+                          raw_end = '"' + hashes
+                          state = "raw_string"
+                          i += len(raw.group(0))
+                          continue
+                      ch = source[i]
+                      if ch == '"':
+                          state = "string"
+                      elif ch == "'":
+                          state = "char"
+                      elif ch == "{":
+                          depth += 1
+                      elif ch == "}":
+                          depth -= 1
+                          if depth == 0:
+                              return i
+                      i += 1
+                      continue
+                  if state == "line_comment":
+                      if source[i] == "\n":
+                          state = "normal"
+                      i += 1
+                      continue
+                  if state == "block_comment":
+                      if source.startswith("/*", i):
+                          block_depth += 1
+                          i += 2
+                      elif source.startswith("*/", i):
+                          block_depth -= 1
+                          i += 2
+                          if block_depth == 0:
+                              state = "normal"
+                      else:
+                          i += 1
+                      continue
+                  if state == "string":
+                      if source[i] == "\\":
+                          i += 2
+                      elif source[i] == '"':
+                          state = "normal"
+                          i += 1
+                      else:
+                          i += 1
+                      continue
+                  if state == "char":
+                      if source[i] == "\\":
+                          i += 2
+                      elif source[i] == "'":
+                          state = "normal"
+                          i += 1
+                      else:
+                          i += 1
+                      continue
+                  if state == "raw_string":
+                      if source.startswith(raw_end, i):
+                          i += len(raw_end)
+                          state = "normal"
+                      else:
+                          i += 1
+                      continue
+              raise RuntimeError("unmatched Rust function brace")
+
+          test_pattern = re.compile(r"(?m)^    #\[test\]\n    fn ([A-Za-z0-9_]+)\(")
+          removed_tests = []
+          search_from = 0
+          while True:
+              match = test_pattern.search(text, search_from)
+              if not match:
+                  break
+              open_brace = text.find("{", match.end())
+              if open_brace < 0:
+                  raise RuntimeError(f"missing opening brace for {match.group(1)}")
+              close_brace = matching_brace(text, open_brace)
+              block = text[match.start():close_brace + 1]
+              if "animation_events(" in block or "EditorAnimationEvent" in block:
+                  end = close_brace + 1
+                  while end < len(text) and text[end] in " \t":
+                      end += 1
+                  if end < len(text) and text[end] == "\n":
+                      end += 1
+                  if end < len(text) and text[end] == "\n":
+                      end += 1
+                  removed_tests.append(match.group(1))
+                  text = text[:match.start()] + text[end:]
+                  search_from = match.start()
+              else:
+                  search_from = close_brace + 1
+
+          if len(removed_tests) < 10:
+              raise RuntimeError(f"unexpectedly removed too few legacy tests: {removed_tests}")
+
+          replacement_tests = r'''
+    #[test]
+    fn unified_visual_transaction_replaces_legacy_insert_and_cursor_events() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "ab",
+            "abc",
+            EditorSelection::collapsed("ab", 2),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Typing,
+        );
+
+        assert!(tx.should_animate);
+        let visual = engine.visual_transaction(&tx).unwrap();
+        assert_eq!(visual.kind, EditorAnimationKind::Insert);
+        assert_eq!(visual.inserted_range, Some((2, 3)));
+        assert_eq!(visual.deleted_range, None);
+        assert_eq!(visual.duration_ms, 120);
+        assert_eq!(visual.coordinate_mode, VisualCoordinateMode::Baseline);
+        assert!(visual.old_cursor_rect.is_none());
+        assert!(visual.new_cursor_rect.is_none());
+
+        let cursor = engine.cursor_only_transaction("abc", 2, 3).unwrap();
+        assert_eq!(cursor.kind, EditorAnimationKind::Cursor);
+        assert_eq!(cursor.inserted_range, None);
+        assert_eq!(cursor.deleted_range, None);
+        assert_eq!(cursor.duration_ms, 120);
+    }
+
+    #[test]
+    fn unified_visual_transaction_uses_utf8_byte_ranges() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let insert_tx = engine.create_transaction(
+            "你好",
+            "你好世",
+            EditorSelection::collapsed("你好", "你好".len()),
+            EditorSelection::collapsed("你好世", "你好世".len()),
+            EditorTransactionCause::Typing,
+        );
+        let insert = engine.visual_transaction(&insert_tx).unwrap();
+        assert_eq!(insert.inserted_range, Some(("你好".len(), "你好世".len())));
+        assert_eq!(insert.hidden_visual_ranges.len(), 1);
+        assert_eq!(insert.hidden_visual_ranges[0].range_start, "你好".len());
+        assert_eq!(insert.hidden_visual_ranges[0].range_end, "你好世".len());
+
+        let delete_tx = engine.create_transaction(
+            "你好世",
+            "你好",
+            EditorSelection::collapsed("你好世", "你好世".len()),
+            EditorSelection::collapsed("你好", "你好".len()),
+            EditorTransactionCause::Delete,
+        );
+        let delete = engine.visual_transaction(&delete_tx).unwrap();
+        assert_eq!(delete.kind, EditorAnimationKind::Delete);
+        assert_eq!(delete.deleted_range, Some(("你好".len(), "你好世".len())));
+        assert_eq!(delete.inserted_range, None);
+    }
+
+    #[test]
+    fn unified_visual_transaction_propagates_animation_duration() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let first_tx = engine.create_transaction(
+            "a",
+            "ab",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("ab", 2),
+            EditorTransactionCause::Typing,
+        );
+        assert_eq!(engine.visual_transaction(&first_tx).unwrap().duration_ms, 120);
+
+        engine.set_animation_duration_ms(500);
+        let second_tx = engine.create_transaction(
+            "ab",
+            "abc",
+            EditorSelection::collapsed("ab", 2),
+            EditorSelection::collapsed("abc", 3),
+            EditorTransactionCause::Typing,
+        );
+        assert_eq!(engine.visual_transaction(&second_tx).unwrap().duration_ms, 500);
+        assert_eq!(engine.cursor_only_transaction("abc", 2, 3).unwrap().duration_ms, 500);
+    }
+
+    #[test]
+    fn unified_visual_transaction_skips_load_and_ime_preedit() {
+        let mut engine = EditorEngine::new();
+        let load = engine.create_transaction(
+            "",
+            "loaded",
+            EditorSelection::collapsed("", 0),
+            EditorSelection::collapsed("loaded", 6),
+            EditorTransactionCause::Load,
+        );
+        assert!(!load.should_animate);
+        assert!(engine.visual_transaction(&load).is_none());
+
+        let preedit = engine.create_transaction(
+            "ni",
+            "nihao",
+            EditorSelection::collapsed("ni", 2),
+            EditorSelection::collapsed("nihao", 5),
+            EditorTransactionCause::ImeComposition,
+        );
+        assert!(!preedit.should_animate);
+        assert!(engine.visual_transaction(&preedit).is_none());
+    }
+
+    #[test]
+    fn unified_visual_transaction_preserves_layout_serde_contract() {
+        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let tx = engine.create_transaction(
+            "a",
+            "ab",
+            EditorSelection::collapsed("a", 1),
+            EditorSelection::collapsed("ab", 2),
+            EditorTransactionCause::Typing,
+        );
+        let mut visual = engine.visual_transaction(&tx).unwrap();
+        let empty_json = serde_json::to_value(&visual).unwrap();
+        assert!(empty_json.get("insertGlyphRects").is_none());
+        assert!(empty_json.get("deletedGlyphRects").is_none());
+        assert!(empty_json.get("oldCursorRect").is_none());
+        assert!(empty_json.get("newCursorRect").is_none());
+
+        visual.insert_glyph_rects = Some(vec![GlyphRect {
+            x: 10.0,
+            y: 5.0,
+            w: 8.0,
+            h: 16.0,
+            char_: "b".to_string(),
+            baseline_y: 18.0,
+            byte_start: 1,
+            byte_end: 2,
+        }]);
+        visual.old_cursor_rect = Some(CursorRect {
+            x: 10.0,
+            top: 5.0,
+            bottom: 21.0,
+            baseline_y: 18.0,
+        });
+        visual.new_cursor_rect = Some(CursorRect {
+            x: 18.0,
+            top: 5.0,
+            bottom: 21.0,
+            baseline_y: 18.0,
+        });
+        let populated_json = serde_json::to_value(&visual).unwrap();
+        assert_eq!(populated_json["insertGlyphRects"][0]["char"], "b");
+        assert_eq!(populated_json["insertGlyphRects"][0]["baselineY"], 18.0);
+        assert!(populated_json.get("oldCursorRect").is_some());
+        assert!(populated_json.get("newCursorRect").is_some());
+    }
+
+    #[test]
+    fn unified_visual_transaction_complex_grapheme_uses_cluster_mode() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "ab",
+            "ab😀",
+            EditorSelection::collapsed("ab", 2),
+            EditorSelection::collapsed("ab😀", "ab😀".len()),
+            EditorTransactionCause::Typing,
+        );
+        let visual = engine.visual_transaction(&tx).unwrap();
+        assert_eq!(visual.kind, EditorAnimationKind::Insert);
+        assert_eq!(visual.animation_mode, AnimationMode::ClusterAnimation);
+        let clusters = visual.cluster_rects.unwrap();
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0].text, "😀");
+        assert!(clusters[0].is_complex);
+    }
+
+    #[test]
+    fn replacement_with_multiple_changes_has_no_single_visual_transaction() {
+        let mut engine = EditorEngine::with_animation_limits(8, 120);
+        let tx = engine.create_transaction(
+            "alpha beta",
+            "alpha gamma",
+            EditorSelection::collapsed("alpha beta", "alpha beta".len()),
+            EditorSelection::collapsed("alpha gamma", "alpha gamma".len()),
+            EditorTransactionCause::Typing,
+        );
+        assert_eq!(tx.changes.len(), 2);
+        assert!(engine.visual_transaction(&tx).is_none());
+    }
+
+'''
+          marker = "    #[test]\n    fn visual_transaction_insert_has_inserted_range()"
+          if marker not in text:
+              raise RuntimeError("missing visual transaction test insertion marker")
+          text = text.replace(marker, replacement_tests + marker, 1)
+
+          if "EditorAnimationEvent" in text or "animation_events(" in text:
+              raise RuntimeError("legacy animation API references remain in transaction.rs")
+
+          transaction_path.write_text(text, encoding="utf-8")
+
+          mod_path = Path("core/writer_core/src/editor/mod.rs")
+          mod_text = mod_path.read_text(encoding="utf-8")
+          mod_text = mod_text.replace(
+              "- `transaction`: 编辑事务、选区、变更和动画事件描述",
+              "- `transaction`: 编辑事务、选区、变更和统一视觉事务描述",
+          )
+          mod_text = mod_text.replace(
+              "4. 动画事件：为平台自绘 renderer 提供输入动画事件，不在 Core 内绘制",
+              "4. 视觉事务：为平台自绘 renderer 提供统一动画语义，不在 Core 内绘制",
+          )
+          mod_path.write_text(mod_text, encoding="utf-8")
+
+          print("Removed legacy tests:")
+          for name in removed_tests:
+              print(f"  - {name}")
+          PY
+
+          cargo fmt --manifest-path core/writer_core/Cargo.toml
+          cargo test --manifest-path core/writer_core/Cargo.toml
+
+      - name: Commit verified cleanup
+        shell: bash
+        run: |
+          rm .github/workflows/manual_extract_pr522.yml
+          git config user.name "Xiwei753"
+          git config user.email "188466272+Xiwei753@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor: remove legacy animation event API"
+          git push origin HEAD:manual/extract-pr522-value
