@@ -69,7 +69,7 @@ class SujianEditorView(
 
     fun applyCommandResult(result: EditResult) {
         layoutEngine.requestLayout()
-        val transaction = visualPlanner.prepare(result.visualIntent, layoutEngine)
+        val transaction = visualPlanner.prepare(result.visualIntent, layoutEngine, resourceStore)
         renderer.submitTransaction(transaction)
         selectionStartUtf8 = result.newSelectionStart
         selectionEndUtf8 = result.newSelectionEnd
