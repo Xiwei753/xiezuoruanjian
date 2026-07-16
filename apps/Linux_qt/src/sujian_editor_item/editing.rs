@@ -128,8 +128,6 @@ impl SujianEditorItem {
                 },
                 cause,
             );
-            let _vt = self.engine.visual_transaction(&transaction);
-
             self.animation_coordinator.cancel_active_composition("commit_insert");
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
@@ -316,8 +314,6 @@ impl SujianEditorItem {
                 },
                 cause,
             );
-            let _vt = self.engine.visual_transaction(&transaction);
-
             self.animation_coordinator.cancel_active_composition("commit_replace");
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
