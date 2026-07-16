@@ -1925,4 +1925,184 @@ mod tests {
         assert!((slices[1].from_document_rect.x - 0.0).abs() < 0.01,
             "slice 1 should not be matched, got x={}", slices[1].from_document_rect.x);
     }
+
+    fn make_test_snapshot(virtual_text: &str, line_clusters: Vec<(usize, usize, f64, f64, ShapingIdentity)>) -> EditorLayoutSnapshot {
+        use crate::sujian_editor_item::layout_snapshot::{PreparedLineSnapshot, LineClusterSnapshot};
+        use crate::editor::layout::{LayoutSnapshot, VisualLine, CaretAffinity};
+        let clusters: Vec<LineClusterSnapshot> = line_clusters.iter().enumerate().map(|(i, (bs, be, x, _y, sid))| {
+            LineClusterSnapshot {
+                byte_start: *bs,
+                byte_end: *be,
+                source_rect: SourceRect { x: *x, y: 0.0, w: (*be - *bs) as f64 * 10.0, h: 20.0 },
+                shaping_identity: sid.clone(),
+                visual_line_id: 0,
+            }
+        }).collect();
+        let line = PreparedLineSnapshot {
+            id: LineSnapshotId::new(1, 0, 0),
+            image: None,
+            clusters,
+            document_origin_y: 0.0,
+            baseline_y: 16.0,
+            dpr: 1.0,
+            line_height: 20.0,
+            line_width: 800.0,
+            byte_start: line_clusters.first().map(|c| c.0).unwrap_or(0),
+            byte_end: line_clusters.last().map(|c| c.1).unwrap_or(0),
+            para_text: virtual_text.to_string(),
+            para_start: 0,
+            qtextline_idx: 0,
+            paragraph_wrap_w: 800.0,
+            para_indent: 0.0,
+            visual_x: 0.0,
+            scroll_y: 0.0,
+        };
+        let layout_snapshot = LayoutSnapshot {
+            text_revision: 0,
+            text_ptr: 0,
+            text_len: virtual_text.len(),
+            width: 800.0,
+            font_size: 16.0,
+            font_family: "sans-serif".to_string(),
+            line_spacing: 1.5,
+            text_indent: 0.0,
+            padding: 0.0,
+            lines: vec![VisualLine {
+                id: 0,
+                byte_start: line.byte_start,
+                byte_end: line.byte_end,
+                qchar_start: 0,
+                qchar_end: 0,
+                hard_break: false,
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 20.0,
+                para_text: virtual_text.to_string(),
+                para_start: 0,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: 800.0,
+                line_indent_x: 0.0,
+                para_indent: 0.0,
+                x_end_trailing: 800.0,
+                qt_ascent: 16.0,
+                qt_descent: 4.0,
+            }],
+            content_height: 20.0,
+        };
+        EditorLayoutSnapshot::new(layout_snapshot, vec![line], None, CaretAffinity::Downstream)
+            .with_virtual_text(virtual_text.to_string())
+    }
+
+    #[test]
+    fn test_commit_same_shaping_different_geometry_creates_move() {
+        let sid_common = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_old_preedit = ShapingIdentity { text_content_hash: 10, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 200, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_new_commit = ShapingIdentity { text_content_hash: 20, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 300, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let old_snapshot = make_test_snapshot("世界好abc", vec![
+            (0, 3, 10.0, 0.0, sid_common.clone()),
+            (3, 6, 40.0, 0.0, sid_common.clone()),
+            (6, 9, 70.0, 0.0, sid_common.clone()),
+            (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
+        ]);
+        let new_snapshot = make_test_snapshot("世界好xyz", vec![
+            (0, 3, 50.0, 0.0, sid_common.clone()),
+            (3, 6, 80.0, 0.0, sid_common.clone()),
+            (6, 9, 110.0, 0.0, sid_common.clone()),
+            (9, 12, 140.0, 0.0, sid_new_commit.clone()),
+        ]);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = coord.handle_composition_commit_or_cancel(
+            300,
+            &old_snapshot,
+            &new_snapshot,
+            0, 12,
+            true,
+            false,
+            0, 12,
+            None,
+            None,
+        );
+        assert!(key.is_some());
+        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
+        let has_move = tx.slices.iter().any(|s| s.kind == AnimatedSliceKind::ReflowMove);
+        assert!(has_move, "commit with same shaping but different geometry should create ReflowMove slice");
+        let move_patches: Vec<&StaticLinePatch> = tx.static_patches.iter().filter(|p| p.is_insert).collect();
+        assert!(!move_patches.is_empty(), "Move slices should have corresponding StaticLinePatch::insert_patch");
+    }
+
+    #[test]
+    fn test_commit_different_shaping_creates_crossfade_with_static_patch() {
+        let sid_common = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_common_diff = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font_other".into(), glyph_indexes_hash: 999, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_old_preedit = ShapingIdentity { text_content_hash: 10, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 200, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_new_commit = ShapingIdentity { text_content_hash: 20, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 300, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let old_snapshot = make_test_snapshot("世界好abc", vec![
+            (0, 3, 10.0, 0.0, sid_common.clone()),
+            (3, 6, 40.0, 0.0, sid_common.clone()),
+            (6, 9, 70.0, 0.0, sid_common.clone()),
+            (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
+        ]);
+        let new_snapshot = make_test_snapshot("世界好xyz", vec![
+            (0, 3, 10.0, 0.0, sid_common.clone()),
+            (3, 6, 40.0, 0.0, sid_common_diff.clone()),
+            (6, 9, 70.0, 0.0, sid_common.clone()),
+            (9, 12, 140.0, 0.0, sid_new_commit.clone()),
+        ]);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = coord.handle_composition_commit_or_cancel(
+            300,
+            &old_snapshot,
+            &new_snapshot,
+            0, 12,
+            true,
+            false,
+            0, 12,
+            None,
+            None,
+        );
+        assert!(key.is_some());
+        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
+        let crossfade_count = tx.slices.iter().filter(|s| s.kind == AnimatedSliceKind::ReflowCrossFade).count();
+        assert!(crossfade_count >= 2, "commit with different shaping should create paired Crossfade slices (old+new), got {}", crossfade_count);
+        let insert_patches: Vec<&StaticLinePatch> = tx.static_patches.iter().filter(|p| p.is_insert).collect();
+        assert!(!insert_patches.is_empty(), "Crossfade new should have StaticLinePatch::insert_patch to prevent double-draw");
+    }
+
+    #[test]
+    fn test_commit_same_shaping_same_geometry_is_static() {
+        let sid_common = ShapingIdentity { text_content_hash: 42, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 100, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_old_preedit = ShapingIdentity { text_content_hash: 10, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 200, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let sid_new_commit = ShapingIdentity { text_content_hash: 20, raw_font_fingerprint: "font".into(), glyph_indexes_hash: 300, cluster_glyph_count: 1, direction_rtl: false, format_fingerprint: 0 };
+        let old_snapshot = make_test_snapshot("世界好abc", vec![
+            (0, 3, 10.0, 0.0, sid_common.clone()),
+            (3, 6, 40.0, 0.0, sid_common.clone()),
+            (6, 9, 70.0, 0.0, sid_common.clone()),
+            (9, 12, 100.0, 0.0, sid_old_preedit.clone()),
+        ]);
+        let new_snapshot = make_test_snapshot("世界好xyz", vec![
+            (0, 3, 10.0, 0.0, sid_common.clone()),
+            (3, 6, 40.0, 0.0, sid_common.clone()),
+            (6, 9, 70.0, 0.0, sid_common.clone()),
+            (9, 12, 100.0, 0.0, sid_new_commit.clone()),
+        ]);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = coord.handle_composition_commit_or_cancel(
+            300,
+            &old_snapshot,
+            &new_snapshot,
+            0, 12,
+            true,
+            false,
+            0, 12,
+            None,
+            None,
+        );
+        assert!(key.is_some());
+        let tx = coord.prepared_queue.active_transactions().iter().find(|t| t.key == key.unwrap()).unwrap();
+        let first_cluster_slices: Vec<&AnimatedSlice> = tx.slices.iter().filter(|s| s.byte_start == 0 && s.byte_end == 3).collect();
+        assert!(first_cluster_slices.is_empty(), "same shaping + same geometry should be Static (no slice), got {} slices", first_cluster_slices.len());
+    }
 }

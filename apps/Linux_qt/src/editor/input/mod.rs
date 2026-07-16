@@ -690,4 +690,39 @@ mod tests {
         ime_preedit(&mut host2, "abc".to_string(), 0);
         assert_eq!(host2.preedit_cursor, 0);
     }
+
+    #[test]
+    fn test_ime_replace_and_commit_zero_length_nonzero_start() {
+        let mut host = FakeHost::enabled();
+        ime_replace_and_commit(&mut host, "你好".to_string(), 3, 0);
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 3);
+        assert_eq!(*len, 0);
+        assert_eq!(text, "你好");
+    }
+
+    #[test]
+    fn test_ime_replace_and_commit_negative_start_zero_length() {
+        let mut host = FakeHost::enabled();
+        ime_replace_and_commit(&mut host, "好".to_string(), -1, 0);
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, -1);
+        assert_eq!(*len, 0);
+        assert_eq!(text, "好");
+    }
+
+    #[test]
+    fn dispatch_ime_replacement_commit_zero_length() {
+        let mut host = FakeHost::enabled();
+        EditorInputController::dispatch(&mut host, EditorInputEvent::ImeReplacementCommit {
+            text: "你好".to_string(), replace_start: 5, replace_length: 0,
+        });
+        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let (start, len, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 5);
+        assert_eq!(*len, 0);
+        assert_eq!(text, "你好");
+    }
 }
