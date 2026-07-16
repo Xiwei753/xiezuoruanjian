@@ -28,14 +28,8 @@ class AndroidVisualPlanner {
             val mode = parseAnimationMode(visualIntent.animationMode)
 
             when (mode) {
-                AnimationMode.GlyphAnimation -> {
-                    planGlyphAnimation(
-                        visualIntent, oldRev, newRev, layout,
-                        affectedLines, animatedSlices, staticPatches
-                    )
-                }
-                AnimationMode.ClusterAnimation -> {
-                    planClusterAnimation(
+                AnimationMode.GlyphAnimation, AnimationMode.ClusterAnimation -> {
+                    planGlyphOrClusterAnimation(
                         visualIntent, oldRev, newRev, layout,
                         affectedLines, animatedSlices, staticPatches
                     )
@@ -101,7 +95,7 @@ class AndroidVisualPlanner {
         return result
     }
 
-    private fun planGlyphAnimation(
+    private fun planGlyphOrClusterAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision,
@@ -110,56 +104,7 @@ class AndroidVisualPlanner {
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
     ) {
-        val isInsert = visualIntent.operationKind == "insert"
-        for (lineIndex in affectedLines) {
-            val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
-            val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
-
-            if (isInsert && newLineRange != null) {
-                val newSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, newRev)
-                if (newSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = newSnapshot,
-                        sourceRect = newSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            newLineRange.left, newLineRange.top,
-                            newLineRange.right, newLineRange.bottom
-                        ),
-                        startAlpha = 0f,
-                        endAlpha = 1f
-                    ))
-                }
-            } else if (!isInsert && oldLineRange != null) {
-                val oldSnapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, oldRev)
-                if (oldSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            oldLineRange.left, oldLineRange.top,
-                            oldLineRange.right, oldLineRange.bottom
-                        ),
-                        startAlpha = 1f,
-                        endAlpha = 0f
-                    ))
-                }
-            }
-        }
-        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
-    }
-
-    private fun planClusterAnimation(
-        visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
-        layout: android.text.Layout,
-        affectedLines: Set<Int>,
-        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
-        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
-    ) {
-        val isInsert = visualIntent.operationKind == "insert"
+        val isInsert = visualIntent.isInsert()
         for (lineIndex in affectedLines) {
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)

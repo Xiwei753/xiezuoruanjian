@@ -18,28 +18,10 @@ class AndroidLineSnapshotBuilder {
         val safeEnd = endIndex.coerceAtMost(layout.lineCount)
 
         for (i in safeStart until safeEnd) {
-            val lineRange = revision.lineRanges.getOrNull(i) ?: continue
-
-            val left = lineRange.left
-            val right = lineRange.right
-            val top = lineRange.top
-            val bottom = lineRange.bottom
-
-            val width = (right - left).toInt().coerceAtLeast(1)
-            val height = (bottom - top).toInt().coerceAtLeast(1)
-
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            canvas.translate(-left, -top)
-            layout.draw(canvas)
-
-            snapshots.add(AndroidLineSnapshot(
-                snapshotId = System.nanoTime() + i,
-                bitmap = bitmap,
-                lineIndex = i,
-                sourceRect = android.graphics.Rect(0, 0, width, height),
-                destinationRect = android.graphics.RectF(left, top, right, bottom)
-            ))
+            val snapshot = buildSnapshotForLine(layout, i, revision)
+            if (snapshot != null) {
+                snapshots.add(snapshot)
+            }
         }
         return snapshots
     }
@@ -51,6 +33,29 @@ class AndroidLineSnapshotBuilder {
     ): AndroidLineSnapshot? {
         if (layout == null || revision == null) return null
         if (lineIndex < 0 || lineIndex >= layout.lineCount) return null
-        return buildSnapshots(layout, revision, lineIndex, lineIndex + 1).firstOrNull()
+
+        val lineRange = revision.lineRanges.getOrNull(lineIndex) ?: return null
+
+        val left = lineRange.left
+        val right = lineRange.right
+        val top = lineRange.top
+        val bottom = lineRange.bottom
+
+        val width = (right - left).toInt().coerceAtLeast(1)
+        val height = (bottom - top).toInt().coerceAtLeast(1)
+
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.translate(-left, -top)
+        canvas.clipRect(left, top, right, bottom)
+        layout.draw(canvas)
+
+        return AndroidLineSnapshot(
+            snapshotId = System.nanoTime() + lineIndex,
+            bitmap = bitmap,
+            lineIndex = lineIndex,
+            sourceRect = android.graphics.Rect(0, 0, width, height),
+            destinationRect = android.graphics.RectF(left, top, right, bottom)
+        )
     }
 }

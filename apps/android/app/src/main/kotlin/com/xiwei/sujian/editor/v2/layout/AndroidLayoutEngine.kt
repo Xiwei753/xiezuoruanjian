@@ -13,6 +13,7 @@ class AndroidLayoutEngine(
     private var layout: Layout? = null
     private var currentRevision: AndroidLayoutRevision? = null
     private var width: Float = 0f
+    private var lineSpacingMultiplier: Float = 1.0f
     private var revisionCounter: Long = 0
 
     fun setWidth(width: Float) {
@@ -22,13 +23,17 @@ class AndroidLayoutEngine(
         }
     }
 
+    fun setLineSpacingMultiplier(multiplier: Float) {
+        lineSpacingMultiplier = multiplier
+    }
+
     fun requestLayout() {
         val text = mirror.getSpannable()
         if (width <= 0f) return
 
         layout = DynamicLayout.Builder.obtain(text, textPaint, width)
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(0f, 1.0f)
+            .setLineSpacing(0f, lineSpacingMultiplier)
             .setIncludePad(false)
             .build()
 

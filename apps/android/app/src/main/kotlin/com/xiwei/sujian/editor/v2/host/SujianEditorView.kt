@@ -87,9 +87,11 @@ class SujianEditorView(
         invalidate()
     }
 
+    private var lineSpacingMultiplier: Float = 1.0f
+
     fun setLineSpacingMultiplier(multiplier: Float) {
-        textPaint.textSize = textPaint.textSize
-        layoutEngine.setWidth(width.toFloat())
+        lineSpacingMultiplier = multiplier
+        layoutEngine.setLineSpacingMultiplier(multiplier)
         layoutEngine.requestLayout()
         invalidate()
     }
@@ -207,7 +209,8 @@ class SujianEditorView(
                 if (isSelectionActive) {
                     replaceRange(selectionStartUtf8, selectionEndUtf8, "")
                 } else if (selectionEndUtf8 > 0) {
-                    replaceRange(selectionEndUtf8 - 1, selectionEndUtf8, "")
+                    val prevCharLen = previousCharByteLen(selectionEndUtf8)
+                    replaceRange(selectionEndUtf8 - prevCharLen, selectionEndUtf8, "")
                 }
                 return true
             }
@@ -217,13 +220,40 @@ class SujianEditorView(
                 } else {
                     val textLen = mirror.getText().toByteArray(Charsets.UTF_8).size
                     if (selectionEndUtf8 < textLen) {
-                        replaceRange(selectionEndUtf8, selectionEndUtf8 + 1, "")
+                        val nextCharLen = nextCharByteLen(selectionEndUtf8)
+                        replaceRange(selectionEndUtf8, selectionEndUtf8 + nextCharLen, "")
                     }
                 }
                 return true
             }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    private fun previousCharByteLen(offset: Int): Int {
+        val text = mirror.getText()
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        if (offset <= 0 || offset > bytes.size) return 0
+        var pos = 0
+        var charStart = 0
+        for (char in text) {
+            val charLen = char.toString().toByteArray(Charsets.UTF_8).size
+            if (pos + charLen == offset) return charLen
+            pos += charLen
+        }
+        val remaining = offset
+        var p = remaining - 1
+        while (p > 0 && (bytes[p] and 0xC0.toByte()) == 0x80.toByte()) p--
+        return remaining - p
+    }
+
+    private fun nextCharByteLen(offset: Int): Int {
+        val text = mirror.getText()
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        if (offset >= bytes.size) return 0
+        var len = 1
+        while (offset + len < bytes.size && (bytes[offset + len] and 0xC0.toByte()) == 0x80.toByte()) len++
+        return len
     }
 
     override fun onFocusChanged(gained: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {

@@ -48,15 +48,23 @@ data class VisualIntent(
 ) {
     companion object {
         fun fromDto(dto: EditorVisualIntentDto): VisualIntent = VisualIntent(
-            cause = dto.cause.name.lowercase().replace("_", ""),
-            operationKind = dto.operationKind.name.lowercase().replace("_", ""),
+            cause = dto.cause.name,
+            operationKind = dto.operationKind.name,
             oldAffectedByteRanges = dto.oldAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
             newAffectedByteRanges = dto.newAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
-            animationMode = dto.animationMode.name.replace("_", ""),
+            animationMode = dto.animationMode.name,
             durationMs = dto.durationMs,
             coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor)
         )
     }
+
+    fun isInsert(): Boolean = operationKind == "Insert"
+    fun isDelete(): Boolean = operationKind == "Delete"
+    fun isReplace(): Boolean = operationKind == "Replace"
+    fun isCompositionUpdate(): Boolean = operationKind == "CompositionUpdate"
+    fun isCompositionCommit(): Boolean = operationKind == "CompositionCommit"
+    fun isCompositionCancel(): Boolean = operationKind == "CompositionCancel"
+    fun isCursorOnly(): Boolean = operationKind == "CursorOnly"
 }
 
 data class CoordinatedCursor(
@@ -123,21 +131,16 @@ class DisplayTextMirror {
         if (patches.isEmpty()) return
 
         val hadComposition = compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16
-        val savedCompositionText = if (hadComposition) {
-            buffer.substring(compositionStartUtf16, compositionEndUtf16)
-        } else ""
-        val savedCompositionStartUtf8 = cursorUtf8
-
         if (hadComposition) {
             buffer.replace(compositionStartUtf16, compositionEndUtf16, "")
             compositionStartUtf16 = -1
             compositionEndUtf16 = -1
         }
 
-        val indexMap = AndroidTextIndexMap(this)
         for (patch in patches) {
             if (patch.newRevision <= currentRevision) continue
 
+            val indexMap = AndroidTextIndexMap(this)
             val replaceStartUtf16 = indexMap.utf8ToUtf16(patch.replaceByteStart)
             val replaceEndUtf16 = indexMap.utf8ToUtf16(patch.replaceByteEndExclusive)
 
@@ -145,7 +148,8 @@ class DisplayTextMirror {
 
             currentRevision = patch.newRevision
             cursorUtf8 = patch.resultingSelectionEnd
-            cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
+            val postMap = AndroidTextIndexMap(this)
+            cursorUtf16 = postMap.utf8ToUtf16(cursorUtf8)
         }
     }
 

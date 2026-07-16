@@ -975,4 +975,164 @@ mod tests {
         assert!(json.contains("\"insertedText\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
         assert!(json.contains("\"resultingSelectionByteRange\":"), "DisplayPatch JSON should use camelCase, got: {}", json);
     }
+
+    #[test]
+    fn composition_update_does_not_modify_text() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6);
+        let tx = kernel.composition_update(
+            None,
+            "",
+            "nihao",
+        );
+        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.cursor(), 6);
+        assert_eq!(tx.new_revision.preedit_text, "nihao");
+    }
+
+    #[test]
+    fn composition_commit_modifies_text_via_replace() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6);
+        let result = kernel.apply(EditorCommand::Replace {
+            byte_start: 6,
+            byte_end_exclusive: 6,
+            replacement_text: "你好".to_string(),
+            original_text: String::new(),
+            cause: EditorTransactionCause::TypingCommit,
+        });
+        assert_eq!(kernel.text(), "你好你好");
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Replace);
+        assert_eq!(result.visual_intent.cause, EditorTransactionCause::TypingCommit);
+    }
+
+    #[test]
+    fn delete_empty_range_is_noop() {
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let result = kernel.apply(EditorCommand::Delete {
+            byte_start: 2,
+            byte_end_exclusive: 2,
+            deleted_text: String::new(),
+            cause: EditorTransactionCause::Delete,
+        });
+        assert_eq!(kernel.text(), "abc");
+        assert_eq!(result.display_patches.len(), 0);
+    }
+
+    #[test]
+    fn insert_at_boundary_clamps() {
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let result = kernel.apply(EditorCommand::Insert {
+            byte_offset: 100,
+            text: "c".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        assert_eq!(kernel.text(), "abc");
+        assert_eq!(kernel.cursor(), 3);
+    }
+
+    #[test]
+    fn replace_same_text_produces_patch() {
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let result = kernel.apply(EditorCommand::Replace {
+            byte_start: 1,
+            byte_end_exclusive: 2,
+            replacement_text: "X".to_string(),
+            original_text: "b".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        assert_eq!(kernel.text(), "aXc");
+        assert!(!result.display_patches.is_empty());
+    }
+
+    #[test]
+    fn undo_after_multiple_edits_restores_correctly() {
+        let mut kernel = EditorKernel::new();
+        kernel.apply(EditorCommand::Insert {
+            byte_offset: 0,
+            text: "a".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        kernel.apply(EditorCommand::Insert {
+            byte_offset: 1,
+            text: "b".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        kernel.apply(EditorCommand::Insert {
+            byte_offset: 2,
+            text: "c".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        assert_eq!(kernel.text(), "abc");
+
+        kernel.apply(EditorCommand::Undo);
+        assert_eq!(kernel.text(), "ab");
+
+        kernel.apply(EditorCommand::Undo);
+        assert_eq!(kernel.text(), "a");
+
+        kernel.apply(EditorCommand::Undo);
+        assert_eq!(kernel.text(), "");
+    }
+
+    #[test]
+    fn cjk_insert_and_delete() {
+        let mut kernel = EditorKernel::new();
+        let result = kernel.apply(EditorCommand::Insert {
+            byte_offset: 0,
+            text: "你好世界".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.cursor(), 12);
+
+        let result = kernel.apply(EditorCommand::Delete {
+            byte_start: 6,
+            byte_end_exclusive: 12,
+            deleted_text: "世界".to_string(),
+            cause: EditorTransactionCause::Delete,
+        });
+        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.cursor(), 6);
+        assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
+    }
+
+    #[test]
+    fn set_selection_with_same_position_no_cursor_animation() {
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 1);
+        let result = kernel.apply(EditorCommand::SetSelection {
+            anchor_byte_offset: 1,
+            head_byte_offset: 1,
+        });
+        assert!(!result.visual_intent.coordinated_cursor.should_animate);
+    }
+
+    #[test]
+    fn load_text_clears_undo_stack() {
+        let mut kernel = EditorKernel::with_text("old".to_string(), 3);
+        kernel.apply(EditorCommand::Insert {
+            byte_offset: 3,
+            text: " text".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        kernel.load_text("new".to_string(), 3);
+        let result = kernel.apply(EditorCommand::Undo);
+        assert_eq!(kernel.text(), "new");
+    }
+
+    #[test]
+    fn multiple_display_patches_for_replace() {
+        let mut kernel = EditorKernel::with_text("hello world".to_string(), 11);
+        let result = kernel.apply(EditorCommand::Replace {
+            byte_start: 6,
+            byte_end_exclusive: 11,
+            replacement_text: "rust".to_string(),
+            original_text: "world".to_string(),
+            cause: EditorTransactionCause::Typing,
+        });
+        assert!(result.display_patches.len() >= 1);
+        let total_deleted: usize = result.display_patches.iter()
+            .filter(|p| p.inserted_text.is_empty())
+            .map(|p| p.replace_byte_range.1 - p.replace_byte_range.0)
+            .sum();
+        assert_eq!(total_deleted, 5);
+    }
 }

@@ -11,21 +11,15 @@ class AndroidTextIndexMap(
 
     fun utf8ToUtf16(byteOffset: Int): Int {
         if (byteOffset <= 0) return 0
-        val safeOffset = byteOffset.coerceAtMost(text.toByteArray(Charsets.UTF_8).size)
-        var utf16Index = 0
-        var byteCount = 0
-        for (char in text) {
-            if (byteCount >= safeOffset) break
-            byteCount += char.toString().toByteArray(Charsets.UTF_8).size
-            utf16Index++
-        }
-        return utf16Index
+        val safeOffset = byteOffset.coerceAtMost(utf8ToUtf16Cache.lastOrNull() ?: 0)
+        val idx = utf8ToUtf16Cache.binarySearch(safeOffset)
+        return if (idx >= 0) idx else -(idx + 1) - 1
     }
 
     fun utf16ToUtf8(utf16Offset: Int): Int {
         if (utf16Offset <= 0) return 0
-        val safeOffset = utf16Offset.coerceAtMost(text.length)
-        return text.substring(0, safeOffset).toByteArray(Charsets.UTF_8).size
+        val safeOffset = utf16Offset.coerceAtMost(utf16ToUtf8Cache.lastIndex)
+        return utf16ToUtf8Cache[safeOffset]
     }
 
     fun utf8RangeToUtf16(startByte: Int, endByte: Int): IntRange {
