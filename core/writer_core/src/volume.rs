@@ -202,6 +202,9 @@ pub fn reorder_volumes(
         ));
     }
 
+    let mut updates = Vec::with_capacity(ordered_ids.len());
+    let now = Utc::now().to_rfc3339();
+
     for (index, id) in ordered_ids.iter().enumerate() {
         let volume_dir = workspace_path
             .join("projects")
@@ -214,12 +217,17 @@ pub fn reorder_volumes(
             let meta_str = fs::read_to_string(&meta_path)?;
             let mut meta = serde_json::from_str::<Volume>(&meta_str)?;
             meta.order = index as i32;
-            meta.updated_at = Utc::now().to_rfc3339();
+            meta.updated_at = now.clone();
             let updated_meta_str = serde_json::to_string_pretty(&meta)?;
-            crate::storage::atomic_write_string(&meta_path, &updated_meta_str)?;
+            updates.push((meta_path, updated_meta_str));
         } else {
             return Err(crate::error::Error::VolumeNotFound);
         }
     }
+
+    updates.into_par_iter().try_for_each(|(meta_path, updated_meta_str)| {
+        crate::storage::atomic_write_string(&meta_path, &updated_meta_str)
+    })?;
+
     Ok(())
 }
