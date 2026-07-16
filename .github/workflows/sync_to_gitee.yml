@@ -9,10 +9,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sync-to-gitee
+  cancel-in-progress: true
+
 jobs:
   sync:
     name: Mirror current snapshot to Gitee
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - name: Checkout current source snapshot
         uses: actions/checkout@v4
@@ -33,41 +38,26 @@ jobs:
           rm -rf writer_app_workspace/ workspace/ backups/ trash/ sqlite_cache/ logs/ tmp/
           rm -f *.db *.sqlite *.sqlite3 *.jks *.keystore *.p12 *.pem *.p7b *.cer
 
-      - name: Validate Gitee credentials
-        id: validate_gitee
+      - name: Validate Gitee token
         env:
-          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
         run: |
-          MISSING=""
-          if [ -z "${GITEE_USERNAME:-}" ]; then MISSING="GITEE_USERNAME"; fi
-          if [ -z "${GITEE_REPO:-}" ]; then
-            if [ -n "$MISSING" ]; then MISSING="$MISSING, "; fi
-            MISSING="${MISSING}GITEE_REPO"
-          fi
+          set -euo pipefail
           if [ -z "${GITEE_TOKEN:-}" ]; then
-            if [ -n "$MISSING" ]; then MISSING="$MISSING, "; fi
-            MISSING="${MISSING}GITEE_TOKEN"
-          fi
-          if [ -n "$MISSING" ]; then
-            echo "## ⚠️ Gitee 同步未执行" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Gitee 同步未执行" >> "$GITHUB_STEP_SUMMARY"
             echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "缺少必需的 secret(s): **${MISSING}**" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "请在仓库 Settings → Secrets and variables → Actions 中配置以上 secret。" >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::Gitee sync aborted: missing required secret(s): ${MISSING}"
+            echo "缺少仓库 Actions secret：**GITEE_TOKEN**。" >> "$GITHUB_STEP_SUMMARY"
+            echo "请在 Settings → Secrets and variables → Actions 中重新配置有效的 Gitee 私人令牌。" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::Gitee sync aborted: GITEE_TOKEN is missing"
             exit 1
           fi
-          echo "Gitee credentials validated: username=${GITEE_USERNAME}, repo=${GITEE_REPO}"
-          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "::add-mask::${GITEE_TOKEN}"
 
       - name: Build orphan snapshot and push to Gitee
-        if: steps.validate_gitee.outputs.skip != 'true'
         env:
-          GITEE_USERNAME: ${{ secrets.GITEE_USERNAME }}
-          GITEE_REPO: ${{ secrets.GITEE_REPO }}
+          GITEE_USERNAME: wei-xi753
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITEE_REMOTE_URL: https://gitee.com/wei-xi753/xiezuoruanjian.git
         run: |
           set -euo pipefail
 
@@ -76,39 +66,52 @@ jobs:
 
           git checkout --orphan gitee-snapshot
           git rm -r --cached . >/dev/null 2>&1 || true
-          git add -A
 
           HEADER="> **本仓库是 [源仓库](https://github.com/Xiwei753/xiezuoruanjian) 当前源码快照的镜像备份。**\n>\n> Gitee 镜像不保留 GitHub 历史、tags 或构建产物；反馈、议题、拉取等操作请前往源仓库。这里也会看，但是不建议在这里。\n"
           FOOTER="\n---\n更多赞助方式请见[源仓库](https://github.com/Xiwei753/xiezuoruanjian)"
-
-          { echo -e "$HEADER"; cat README.md; } > README.tmp && mv README.tmp README.md
+          { echo -e "$HEADER"; cat README.md; } > README.tmp
+          mv README.tmp README.md
           echo -e "$FOOTER" >> README.md
+
+          git add -A
 
           SNAPSHOT_SIZE=$(git ls-files -z | xargs -0 du -ch 2>/dev/null | tail -1 | cut -f1)
           echo "Snapshot size: ${SNAPSHOT_SIZE}"
-          SNAPSHOT_MB=$(du -sm . 2>/dev/null | cut -f1)
+          SNAPSHOT_MB=$(du -sm --exclude=.git . 2>/dev/null | cut -f1)
           if [ "${SNAPSHOT_MB:-0}" -gt 500 ]; then
-            echo "ERROR: Snapshot exceeds 500 MB (${SNAPSHOT_MB} MB). Aborting push to prevent Gitee quota overflow."
+            echo "::error::Snapshot exceeds 500 MB (${SNAPSHOT_MB} MB)."
             exit 1
           fi
 
-          git add -A
           git commit -m "同步 GitHub 当前源码快照"
 
-          ENCODED_TOKEN=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${GITEE_TOKEN}', safe=''))")
-          GITEE_REMOTE="https://${GITEE_USERNAME}:${ENCODED_TOKEN}@gitee.com/${GITEE_REPO}.git"
+          ASKPASS_DIR="${RUNNER_TEMP}/gitee-auth"
+          ASKPASS_SCRIPT="${ASKPASS_DIR}/askpass.sh"
+          mkdir -p "$ASKPASS_DIR"
+          cat > "$ASKPASS_SCRIPT" <<'EOF'
+          #!/usr/bin/env bash
+          case "$1" in
+            *Username*) printf '%s\n' "$GITEE_USERNAME" ;;
+            *Password*) printf '%s\n' "$GITEE_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          EOF
+          chmod 700 "$ASKPASS_SCRIPT"
+          trap 'rm -rf "$ASKPASS_DIR"' EXIT
+          export GIT_ASKPASS="$ASKPASS_SCRIPT"
+          export GIT_TERMINAL_PROMPT=0
 
-          echo "Verifying Gitee remote access..."
-          if ! git ls-remote "${GITEE_REMOTE}" HEAD >/dev/null 2>&1; then
-            echo "::error::Failed to access Gitee repository. Possible causes:"
-            echo "  1. GITEE_TOKEN lacks 'projects' read permission"
-            echo "  2. GITEE_REPO path is incorrect (current: ${GITEE_REPO})"
-            echo "  3. GITEE_USERNAME does not match the token owner (current: ${GITEE_USERNAME})"
-            echo "  4. The repository does not exist on Gitee"
-            echo "  5. Token contains special characters that were not properly URL-encoded"
+          git remote remove gitee >/dev/null 2>&1 || true
+          git remote add gitee "$GITEE_REMOTE_URL"
+
+          if ! git push gitee HEAD:main --force; then
+            echo "## Gitee 同步失败" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "远端地址：\`${GITEE_REMOTE_URL}\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "请确认 GITEE_TOKEN 尚未过期，并具有目标仓库的写入权限。" >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "Gitee remote access verified."
 
-          git remote add gitee "${GITEE_REMOTE}" || true
-          git push gitee HEAD:main --force
+          echo "## Gitee 同步成功" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "已将 GitHub main 的当前源码快照强制更新到 Gitee main。" >> "$GITHUB_STEP_SUMMARY"
