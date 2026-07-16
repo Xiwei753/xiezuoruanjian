@@ -6,12 +6,14 @@ class AndroidTextIndexMap(
     private val mirror: DisplayTextMirror
 ) {
     private val text: String = mirror.getText()
-    private val utf8ToUtf16Cache: MutableList<Int> by lazy { buildUtf8ToUtf16Map() }
+    private val utf8ToUtf16Cache: IntArray by lazy { buildUtf8ToUtf16Map() }
     private val utf16ToUtf8Cache: IntArray by lazy { buildUtf16ToUtf8Map() }
+    private val utf16Length: Int by lazy { countUtf16CodeUnits() }
 
     fun utf8ToUtf16(byteOffset: Int): Int {
         if (byteOffset <= 0) return 0
-        val safeOffset = byteOffset.coerceAtMost(utf8ToUtf16Cache.lastOrNull() ?: 0)
+        val maxByte = utf8ToUtf16Cache.lastOrNull() ?: 0
+        val safeOffset = byteOffset.coerceAtMost(maxByte)
         val idx = utf8ToUtf16Cache.binarySearch(safeOffset)
         return if (idx >= 0) idx else -(idx + 1) - 1
     }
@@ -30,24 +32,68 @@ class AndroidTextIndexMap(
         return Pair(utf16ToUtf8(startUtf16), utf16ToUtf8(endUtf16))
     }
 
-    private fun buildUtf8ToUtf16Map(): MutableList<Int> {
-        val map = mutableListOf(0)
-        var byteCount = 0
+    fun getUtf16Length(): Int = utf16Length
+
+    private fun countUtf16CodeUnits(): Int {
+        var count = 0
         for (char in text) {
-            byteCount += char.toString().toByteArray(Charsets.UTF_8).size
-            map.add(byteCount)
+            count += if (char.isSurrogate()) {
+                if (char.isHighSurrogate()) 2 else 0
+            } else {
+                1
+            }
         }
-        return map
+        return count
+    }
+
+    private fun buildUtf8ToUtf16Map(): IntArray {
+        val byteBoundaryToUtf16 = mutableListOf(0)
+        var byteCount = 0
+        var utf16Count = 0
+        var i = 0
+        while (i < text.length) {
+            val char = text[i]
+            val utf8Len = char.toString().toByteArray(Charsets.UTF_8).size
+            val utf16Len = if (char.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) {
+                2
+            } else if (char.isLowSurrogate()) {
+                0
+            } else {
+                1
+            }
+            byteCount += utf8Len
+            utf16Count += utf16Len
+            byteBoundaryToUtf16.add(byteCount)
+            i++
+        }
+        return byteBoundaryToUtf16.toIntArray()
     }
 
     private fun buildUtf16ToUtf8Map(): IntArray {
-        val map = IntArray(text.length + 1)
+        val utf16Boundaries = mutableListOf(0)
         var byteCount = 0
-        map[0] = 0
-        for (i in text.indices) {
-            byteCount += text[i].toString().toByteArray(Charsets.UTF_8).size
-            map[i + 1] = byteCount
+        var utf16Count = 0
+        var i = 0
+        while (i < text.length) {
+            val char = text[i]
+            val utf8Len = char.toString().toByteArray(Charsets.UTF_8).size
+            val utf16Len = if (char.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) {
+                2
+            } else if (char.isLowSurrogate()) {
+                0
+            } else {
+                1
+            }
+            byteCount += utf8Len
+            utf16Count += utf16Len
+            if (utf16Len == 2) {
+                utf16Boundaries.add(byteCount)
+                utf16Boundaries.add(byteCount)
+            } else if (utf16Len == 1) {
+                utf16Boundaries.add(byteCount)
+            }
+            i++
         }
-        return map
+        return utf16Boundaries.toIntArray()
     }
 }
