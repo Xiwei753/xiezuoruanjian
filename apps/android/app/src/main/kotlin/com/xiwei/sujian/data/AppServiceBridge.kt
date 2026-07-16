@@ -177,4 +177,56 @@ class AppServiceBridge(workspacePath: String) {
             else -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
         }
     }
+
+    fun editorKernelApply(commandJson: String): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelApply(commandJson)
+    }
+
+    fun editorKernelLoadText(text: String, cursorByteOffset: UInt): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelLoadText(text, cursorByteOffset)
+    }
+
+    fun editorKernelCompositionUpdate(
+        compositionReplaceStart: UInt,
+        compositionReplaceEndExclusive: UInt,
+        oldPreeditText: String,
+        newPreeditText: String
+    ): BridgeResult<String> = holder.wrapResult {
+        holder.service.editorKernelCompositionUpdate(
+            compositionReplaceStart, compositionReplaceEndExclusive,
+            oldPreeditText, newPreeditText
+        )
+    }
+
+    fun editorKernelCompositionCommit(
+        compositionReplaceStart: UInt,
+        compositionReplaceEndExclusive: UInt,
+        committedText: String,
+        originalText: String
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelCompositionCommit(
+            compositionReplaceStart, compositionReplaceEndExclusive,
+            committedText, originalText
+        )
+    }
+
+    fun editorKernelSetAnimationEnabled(enabled: Boolean): BridgeResult<Unit> = holder.wrapResult {
+        holder.service.editorKernelSetAnimationEnabled(if (enabled) 1u else 0u)
+    }
+
+    fun editorKernelSetAnimationDurationMs(durationMs: ULong): BridgeResult<Unit> = holder.wrapResult {
+        holder.service.editorKernelSetAnimationDurationMs(durationMs)
+    }
+
+    fun editorKernelGetText(): BridgeResult<String> = holder.wrapResult {
+        holder.service.editorKernelGetText()
+    }
+
+    fun editorKernelGetRevision(): BridgeResult<ULong> = holder.wrapResult {
+        holder.service.editorKernelGetRevision()
+    }
+
+    fun editorKernelGetCursor(): BridgeResult<UInt> = holder.wrapResult {
+        holder.service.editorKernelGetCursor()
+    }
 }
