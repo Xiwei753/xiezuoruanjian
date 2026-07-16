@@ -62,11 +62,6 @@ class AndroidInputAdapter(
 
         editorView.onCompositionUpdated()
     }
-        previousCompositionText = currentCompositionText
-        currentCompositionText = preeditText
-        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
-        editorView.onCompositionUpdated()
-    }
 
     fun handleCompositionFinish() {
         if (!isComposing) return
@@ -106,8 +101,7 @@ class AndroidInputAdapter(
         compositionReplaceEndUtf8 = 0
 
         mirror.clearComposition()
-        layoutEngine.requestLayout()
-        editorView.invalidate()
+        editorView.onCompositionUpdated()
     }
 
     fun isComposing(): Boolean = isComposing

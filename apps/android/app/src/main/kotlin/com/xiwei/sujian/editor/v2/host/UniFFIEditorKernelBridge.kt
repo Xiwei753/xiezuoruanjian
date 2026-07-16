@@ -41,7 +41,7 @@ class UniFFIEditorKernelBridge(
     }
 
     override fun setAnimationEnabled(enabled: Boolean) {
-        appServiceBridge.editorKernelSetAnimationEnabled(if (enabled) 1u else 0u)
+        appServiceBridge.editorKernelSetAnimationEnabled(enabled)
     }
 
     override fun setAnimationDurationMs(durationMs: Long) {
@@ -54,15 +54,14 @@ class UniFFIEditorKernelBridge(
         oldPreeditText: String,
         newPreeditText: String
     ): uniffi.writer_core.EditorVisualIntentDto? {
-        return try {
-            appServiceBridge.editorKernelCompositionUpdateVisualIntent(
-                compositionReplaceStart,
-                compositionReplaceEndExclusive,
-                oldPreeditText,
-                newPreeditText,
-            )
-        } catch (_: Exception) {
-            null
+        return when (val result = appServiceBridge.editorKernelCompositionUpdateVisualIntent(
+            compositionReplaceStart,
+            compositionReplaceEndExclusive,
+            oldPreeditText,
+            newPreeditText,
+        )) {
+            is BridgeResult.Success -> result.data
+            else -> null
         }
     }
 }

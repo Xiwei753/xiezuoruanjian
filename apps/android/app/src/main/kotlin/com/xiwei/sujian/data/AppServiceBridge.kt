@@ -229,4 +229,16 @@ class AppServiceBridge(workspacePath: String) {
     fun editorKernelGetCursor(): BridgeResult<UInt> = holder.wrapResult {
         holder.service.editorKernelGetCursor()
     }
+
+    fun editorKernelCompositionUpdateVisualIntent(
+        compositionReplaceStart: UInt,
+        compositionReplaceEndExclusive: UInt,
+        oldPreeditText: String,
+        newPreeditText: String
+    ): BridgeResult<uniffi.writer_core.EditorVisualIntentDto> = holder.wrapResult {
+        holder.service.editorKernelCompositionUpdateVisualIntent(
+            compositionReplaceStart, compositionReplaceEndExclusive,
+            oldPreeditText, newPreeditText
+        )
+    }
 }

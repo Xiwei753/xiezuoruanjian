@@ -31,7 +31,7 @@ class AndroidLayoutEngine(
         val text = mirror.getSpannable()
         if (width <= 0f) return
 
-        layout = DynamicLayout.Builder.obtain(text, textPaint, width)
+        layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
             .setLineSpacing(0f, lineSpacingMultiplier)
             .setIncludePad(false)
@@ -46,6 +46,8 @@ class AndroidLayoutEngine(
     fun getCurrentRevision(): AndroidLayoutRevision? = currentRevision
 
     fun getWidth(): Float = width
+
+    fun getMirror(): DisplayTextMirror = mirror
 
     fun getLineForUtf8(byteOffset: Int): Int {
         val rev = currentRevision ?: return 0
@@ -63,8 +65,7 @@ class AndroidLayoutEngine(
         val indexMap = AndroidTextIndexMap(mirror)
         val utf16 = indexMap.utf8ToUtf16(byteOffset)
         val l = layout ?: return 0f
-        val line = l.getLineForOffset(utf16)
-        return l.getPrimaryHorizontal(utf16, line)
+        return l.getPrimaryHorizontal(utf16)
     }
 
     private fun buildRevision(): AndroidLayoutRevision {
