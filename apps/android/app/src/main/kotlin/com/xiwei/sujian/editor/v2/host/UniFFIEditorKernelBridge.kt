@@ -39,4 +39,12 @@ class UniFFIEditorKernelBridge(
             else -> null
         }
     }
+
+    override fun setAnimationEnabled(enabled: Boolean) {
+        appServiceBridge.editorKernelSetAnimationEnabled(if (enabled) 1u else 0u)
+    }
+
+    override fun setAnimationDurationMs(durationMs: Long) {
+        appServiceBridge.editorKernelSetAnimationDurationMs(durationMs.toULong())
+    }
 }

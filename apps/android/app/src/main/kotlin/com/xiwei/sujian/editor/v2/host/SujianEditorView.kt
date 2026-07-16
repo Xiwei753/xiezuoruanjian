@@ -70,6 +70,9 @@ class SujianEditorView(
         selectionStartUtf8 = result.newSelectionStart
         selectionEndUtf8 = result.newSelectionEnd
         isSelectionActive = selectionStartUtf8 != selectionEndUtf8
+        if (result.displayPatches.isNotEmpty()) {
+            onContentChanged?.invoke(mirror.getText())
+        }
         invalidate()
     }
 
@@ -135,6 +138,14 @@ class SujianEditorView(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         layoutEngine.setWidth(w.toFloat())
+        updateMaxScroll()
+    }
+
+    private fun updateMaxScroll() {
+        val layout = layoutEngine.getLayout()
+        if (layout != null) {
+            maxScrollY = (layout.height - height).coerceAtLeast(0).toFloat()
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -279,6 +290,31 @@ class SujianEditorView(
     fun getRenderer(): AndroidRenderer = renderer
     fun getInputAdapter(): AndroidInputAdapter = inputAdapter
 
+    var onContentChanged: ((String) -> Unit)? = null
+
+    fun setText(text: String) {
+        loadText(text, 0)
+        onContentChanged?.invoke(text)
+    }
+
+    fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long) {
+        val bridge = kernelBridge ?: return
+        bridge.setAnimationEnabled(enabled)
+        bridge.setAnimationDurationMs(durationMs)
+    }
+
+    fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long) {
+    }
+
+    fun setAutoIndent(enabled: Boolean, widthSp: Float) {
+    }
+
+    fun setCoordinatedAnimationEnabled(enabled: Boolean) {
+    }
+
+    fun setVisualTransactionProvider(provider: ((String, String, Int, Int, String, Int, Long) -> uniffi.writer_core.EditorVisualTransactionDto?)?) {
+    }
+
     private fun showSoftInput() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.showSoftInput(this, 0)
@@ -294,4 +330,6 @@ interface EditorKernelBridge {
         committedText: String,
         originalText: String
     ): EditorEditResultDto?
+    fun setAnimationEnabled(enabled: Boolean)
+    fun setAnimationDurationMs(durationMs: Long)
 }
