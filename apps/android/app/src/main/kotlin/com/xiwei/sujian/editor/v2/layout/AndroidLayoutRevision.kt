@@ -1,6 +1,6 @@
 package com.xiwei.sujian.editor.v2.layout
 
-class AndroidLayoutRevision(
+data class AndroidLayoutRevision(
     val revisionId: Long,
     val editorRevision: Long,
     val widthFingerprint: Float,
@@ -11,7 +11,7 @@ class AndroidLayoutRevision(
     val cursorUtf16: Int,
     val snapshotHandles: List<Long>
 ) {
-    class LineRange(
+    data class LineRange(
         val startUtf8: Int,
         val endUtf8: Int,
         val startUtf16: Int,
