@@ -711,6 +711,48 @@ impl EditorKernel {
         )
     }
 
+    /// #535: 获取 CompositionUpdate 的 VisualIntent。
+    ///
+    /// 平台端在 composition update 时调用此方法获取动画意图，
+    /// 然后交给 VisualPlanner 生成视觉事务。
+    /// committed text 不变，displayPatches 为空。
+    pub fn composition_update_visual_intent(
+        &self,
+        composition_replace_range: Option<(usize, usize)>,
+        old_preedit_text: &str,
+        new_preedit_text: &str,
+    ) -> EditorVisualIntent {
+        let replace_start = composition_replace_range
+            .map(|(s, _)| s)
+            .unwrap_or(self.cursor);
+        let replace_end = composition_replace_range
+            .map(|(_, e)| e)
+            .unwrap_or(self.cursor);
+        let new_end = replace_start + new_preedit_text.len();
+
+        EditorVisualIntent {
+            cause: EditorTransactionCause::ImeComposition,
+            operation_kind: EditorOperationKind::CompositionUpdate,
+            old_affected_byte_ranges: if old_preedit_text.is_empty() {
+                vec![]
+            } else {
+                vec![(replace_start, replace_start + old_preedit_text.len())]
+            },
+            new_affected_byte_ranges: if new_preedit_text.is_empty() {
+                vec![]
+            } else {
+                vec![(replace_start, new_end)]
+            },
+            animation_mode: AnimationMode::SystemSuppressed,
+            duration_ms: 0,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: self.cursor,
+                new_byte_offset: new_end,
+                should_animate: false,
+            },
+        }
+    }
+
     /// 创建 CompositionCommitOrCancel 事务。
     pub fn composition_commit_or_cancel(
         &mut self,
@@ -1134,5 +1176,34 @@ mod tests {
             .map(|p| p.replace_byte_range.1 - p.replace_byte_range.0)
             .sum();
         assert_eq!(total_deleted, 5);
+    }
+
+    #[test]
+    fn composition_update_visual_intent_returns_correct_intent() {
+        let kernel = EditorKernel::with_text("你好".to_string(), 6);
+        let intent = kernel.composition_update_visual_intent(
+            None,
+            "",
+            "nihao",
+        );
+        assert_eq!(intent.cause, EditorTransactionCause::ImeComposition);
+        assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
+        assert_eq!(intent.animation_mode, AnimationMode::SystemSuppressed);
+        assert_eq!(intent.duration_ms, 0);
+        assert!(!intent.coordinated_cursor.should_animate);
+        assert!(!intent.new_affected_byte_ranges.is_empty());
+    }
+
+    #[test]
+    fn composition_update_visual_intent_with_replace_range() {
+        let kernel = EditorKernel::with_text("你好世界".to_string(), 12);
+        let intent = kernel.composition_update_visual_intent(
+            Some((6, 12)),
+            "世界",
+            "朋友",
+        );
+        assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
+        assert_eq!(intent.old_affected_byte_ranges, vec![(6, 12)]);
+        assert_eq!(intent.new_affected_byte_ranges, vec![(6, 12)]);
     }
 }

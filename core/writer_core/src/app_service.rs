@@ -789,6 +789,37 @@ impl WriterAppService {
         })
     }
 
+    /// #535: 获取 CompositionUpdate 的 VisualIntent。
+    pub fn editor_kernel_composition_update_visual_intent(
+        &self,
+        composition_replace_start: u32,
+        composition_replace_end_exclusive: u32,
+        old_preedit_text: String,
+        new_preedit_text: String,
+    ) -> crate::api::EditorVisualIntentDto {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(|k| {
+            let kernel = k.lock().unwrap();
+            let replace_range = if composition_replace_start < composition_replace_end_exclusive {
+                Some((composition_replace_start as usize, composition_replace_end_exclusive as usize))
+            } else {
+                None
+            };
+            let intent = kernel.composition_update_visual_intent(
+                replace_range,
+                &old_preedit_text,
+                &new_preedit_text,
+            );
+            intent.into()
+        })
+    }
+
     pub fn editor_kernel_composition_commit(
         &self,
         composition_replace_start: u32,
