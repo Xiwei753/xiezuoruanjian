@@ -201,16 +201,8 @@ impl SujianEditorItem {
         let was_composing = !self.preedit_text.is_empty() || self.composition_session.is_some();
         let saved_virtual_text = self.composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
 
-        self.preedit_text.clear();
-        self.preedit_cursor = 0;
-        self.preedit_attributes.clear();
-        self.preedit_old_text.clear();
-        self.preedit_visual_transaction = None;
-        self.preedit_cursor_rect = None;
-        self.last_preedit_visual_transaction_json = "".into();
-        self.composition_session = None;
+        let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
 
-        let cursor_byte = self.buffer.cursor;
         let text_str = &self.buffer.text;
 
         fn utf16_offset_to_utf8_byte(text: &str, base: usize, utf16_offset: i32) -> usize {
@@ -245,7 +237,12 @@ impl SujianEditorItem {
             }
         }
 
-        let replace_start_byte = utf16_offset_to_utf8_byte(text_str, cursor_byte, replace_start);
+        let anchor_byte = self.composition_session
+            .as_ref()
+            .map(|s| s.replace_start)
+            .unwrap_or(self.buffer.cursor);
+
+        let replace_start_byte = utf16_offset_to_utf8_byte(text_str, anchor_byte, replace_start);
         let replace_start_byte = replace_start_byte.min(text_str.len());
 
         let replace_end_byte = if replace_length > 0 {
@@ -270,8 +267,14 @@ impl SujianEditorItem {
             (replace_end_byte, replace_start_byte)
         };
 
-        let composition_byte_start = del_start;
-        let composition_byte_end = del_end;
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
+        self.last_preedit_visual_transaction_json = "".into();
+        self.composition_session = None;
 
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
@@ -319,16 +322,19 @@ impl SujianEditorItem {
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
+            let candidate_byte_start = del_start;
+            let candidate_byte_end = del_start + inserted.len();
+
             let key = self.animation_coordinator.handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
-                composition_byte_start,
-                composition_byte_end,
+                preedit_byte_start,
+                preedit_byte_end,
                 true,
                 !saved_virtual_text.is_empty() && saved_virtual_text == new.text,
-                del_start,
-                del_start + inserted.len(),
+                candidate_byte_start,
+                candidate_byte_end,
                 old_cursor_rect,
                 new_cursor_rect,
             );

@@ -189,21 +189,13 @@ cpp! {{
             if (!commit.isEmpty()) {
                 int replace_start = ime->replacementStart();
                 int replace_length = ime->replacementLength();
-                if (replace_length != 0) {
-                    sujian_ime_replace_and_commit(
-                        rust_item,
-                        reinterpret_cast<const ushort*>(commit.utf16()),
-                        static_cast<int>(commit.size()),
-                        replace_start,
-                        replace_length
-                    );
-                } else {
-                    sujian_ime_commit(
-                        rust_item,
-                        reinterpret_cast<const ushort*>(commit.utf16()),
-                        static_cast<int>(commit.size())
-                    );
-                }
+                sujian_ime_replace_and_commit(
+                    rust_item,
+                    reinterpret_cast<const ushort*>(commit.utf16()),
+                    static_cast<int>(commit.size()),
+                    replace_start,
+                    replace_length
+                );
                 ime_adapter.ime_composing = false;
             }
             if (!preedit.isEmpty()) {

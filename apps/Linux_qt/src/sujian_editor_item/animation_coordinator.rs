@@ -894,7 +894,8 @@ impl LinuxEditorAnimationCoordinator {
                                     .map(|oc| (ol, oc)))
                                 .next()
                             {
-                                if !old_cluster.shaping_identity.is_same_shaping(&new_cluster.shaping_identity) {
+                                let same_shaping = old_cluster.shaping_identity.is_same_shaping(&new_cluster.shaping_identity);
+                                if !same_shaping {
                                     if let Some(new_sr) = new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end) {
                                         let old_doc = old_line.source_rect_to_document_rect(
                                             &old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end).unwrap_or(SourceRect::zero())
@@ -903,12 +904,52 @@ impl LinuxEditorAnimationCoordinator {
                                         slices.push(AnimatedSlice::reflow_crossfade_new(
                                             key,
                                             new_line.id,
-                                            new_sr,
+                                            new_sr.clone(),
                                             old_doc,
                                             new_doc,
                                             new_cluster.byte_start,
                                             new_cluster.byte_end,
                                         ));
+                                        static_patches.push(StaticLinePatch::insert_patch(
+                                            key,
+                                            new_line.id,
+                                            vec![new_sr],
+                                            new_cluster.byte_start,
+                                            new_cluster.byte_end,
+                                        ));
+                                    }
+                                } else {
+                                    if let (Some(old_sr), Some(new_sr)) = (
+                                        old_line.source_rect_for_byte_range(old_cluster.byte_start, old_cluster.byte_end),
+                                        new_line.source_rect_for_byte_range(new_cluster.byte_start, new_cluster.byte_end),
+                                    ) {
+                                        let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+                                        let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                                        let geometry_same = (old_doc.x - new_doc.x).abs() < 0.5
+                                            && (old_doc.y - new_doc.y).abs() < 0.5
+                                            && (old_doc.w - new_doc.w).abs() < 0.5
+                                            && (old_doc.h - new_doc.h).abs() < 0.5;
+                                        if !geometry_same {
+                                            slices.push(AnimatedSlice::reflow_move(
+                                                key,
+                                                old_line.id,
+                                                old_sr,
+                                                old_doc,
+                                                new_line.id,
+                                                new_sr.clone(),
+                                                new_doc,
+                                                new_cluster.byte_start,
+                                                new_cluster.byte_end,
+                                                Some(new_cluster.shaping_identity.clone()),
+                                            ));
+                                            static_patches.push(StaticLinePatch::insert_patch(
+                                                key,
+                                                new_line.id,
+                                                vec![new_sr],
+                                                new_cluster.byte_start,
+                                                new_cluster.byte_end,
+                                            ));
+                                        }
                                     }
                                 }
                             }
