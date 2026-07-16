@@ -85,6 +85,13 @@ class SujianEditorView(
         invalidate()
     }
 
+    fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent) {
+        layoutEngine.requestLayout()
+        val transaction = visualPlanner.prepare(visualIntent, layoutEngine, resourceStore)
+        renderer.submitTransaction(transaction)
+        invalidate()
+    }
+
     fun getText(): String = mirror.getText()
 
     fun setFontSize(sizeSp: Float) {
@@ -358,6 +365,12 @@ interface EditorKernelBridge {
         committedText: String,
         originalText: String
     ): EditorEditResultDto?
+    fun compositionUpdateVisualIntent(
+        compositionReplaceStart: UInt,
+        compositionReplaceEndExclusive: UInt,
+        oldPreeditText: String,
+        newPreeditText: String
+    ): uniffi.writer_core.EditorVisualIntentDto?
     fun setAnimationEnabled(enabled: Boolean)
     fun setAnimationDurationMs(durationMs: Long)
 }
