@@ -12,6 +12,7 @@ class AndroidInputAdapter(
 ) : View(context) {
 
     private var currentCompositionText: String = ""
+    private var previousCompositionText: String = ""
     private var compositionReplaceStartUtf8: Int = 0
     private var compositionReplaceEndUtf8: Int = 0
     private var isComposing: Boolean = false
@@ -39,6 +40,7 @@ class AndroidInputAdapter(
             compositionReplaceEndUtf8 = compositionReplaceStartUtf8
             isComposing = true
         }
+        previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
         mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
         editorView.onCompositionUpdated()
@@ -49,37 +51,39 @@ class AndroidInputAdapter(
         val committedText = currentCompositionText
         val replaceStart = compositionReplaceStartUtf8
         val replaceEnd = compositionReplaceEndUtf8
+        val originalText = previousCompositionText
         currentCompositionText = ""
+        previousCompositionText = ""
         isComposing = false
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
 
         mirror.clearComposition()
 
-        val commandJson = """{"kind":"Replace","byte_start":$replaceStart,"byte_end_exclusive":$replaceEnd,"replacement_text":${escapeJson(committedText)},"original_text":"","cause":"TypingCommit"}"""
+        val commandJson = """{"kind":"Replace","byte_start":$replaceStart,"byte_end_exclusive":$replaceEnd,"replacement_text":${escapeJson(committedText)},"original_text":${escapeJson(originalText)},"cause":"TypingCommit"}"""
         sendCommandToKernel(commandJson)
     }
 
     fun handleCompositionCancel() {
         if (!isComposing) return
-        val replaceStart = compositionReplaceStartUtf8
-        val replaceEnd = compositionReplaceEndUtf8
         currentCompositionText = ""
+        previousCompositionText = ""
         isComposing = false
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
 
         mirror.clearComposition()
-
-        if (replaceStart < replaceEnd) {
-            val commandJson = """{"kind":"Delete","byte_start":$replaceStart,"byte_end_exclusive":$replaceEnd,"deleted_text":"","cause":"Delete"}"""
-            sendCommandToKernel(commandJson)
-        }
+        editorView.onCompositionUpdated()
     }
 
     fun isComposing(): Boolean = isComposing
 
     fun getCompositionText(): String = currentCompositionText
+
+    fun getCompositionRangeUtf8(): Pair<Int, Int>? {
+        if (!isComposing) return null
+        return Pair(compositionReplaceStartUtf8, compositionReplaceEndUtf8)
+    }
 
     private fun escapeJson(s: String): String {
         val escaped = s.replace("\\", "\\\\")

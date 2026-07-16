@@ -137,6 +137,20 @@ class DisplayTextMirror {
     fun getLengthUtf16(): Int = buffer.length
 
     fun applyPatches(patches: List<DisplayPatch>) {
+        if (patches.isEmpty()) return
+
+        val hadComposition = compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16
+        val savedCompositionText = if (hadComposition) {
+            buffer.substring(compositionStartUtf16, compositionEndUtf16)
+        } else ""
+        val savedCompositionStartUtf8 = cursorUtf8
+
+        if (hadComposition) {
+            buffer.replace(compositionStartUtf16, compositionEndUtf16, "")
+            compositionStartUtf16 = -1
+            compositionEndUtf16 = -1
+        }
+
         val indexMap = AndroidTextIndexMap(this)
         for (patch in patches) {
             if (patch.newRevision <= currentRevision) continue
