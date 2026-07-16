@@ -179,6 +179,9 @@ class DisplayTextMirror {
     }
 
     fun clearComposition() {
+        if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
+            buffer.delete(compositionStartUtf16, compositionEndUtf16)
+        }
         clearCompositionSpans()
         compositionStartUtf16 = -1
         compositionEndUtf16 = -1
