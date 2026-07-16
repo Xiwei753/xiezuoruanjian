@@ -259,20 +259,11 @@ class SujianEditorView(
     }
 
     private fun previousCharByteLen(offset: Int): Int {
-        val text = mirror.getText()
-        val bytes = text.toByteArray(Charsets.UTF_8)
+        val bytes = mirror.getText().toByteArray(Charsets.UTF_8)
         if (offset <= 0 || offset > bytes.size) return 0
-        var pos = 0
-        var charStart = 0
-        for (char in text) {
-            val charLen = char.toString().toByteArray(Charsets.UTF_8).size
-            if (pos + charLen == offset) return charLen
-            pos += charLen
-        }
-        val remaining = offset
-        var p = remaining - 1
-        while (p > 0 && (bytes[p] and 0xC0.toByte()) == 0x80.toByte()) p--
-        return remaining - p
+        var p = offset - 1
+        while (p > 0 && (bytes[p].toInt() and 0xC0) == 0x80) p--
+        return offset - p
     }
 
     private fun nextCharByteLen(offset: Int): Int {
@@ -280,7 +271,7 @@ class SujianEditorView(
         val bytes = text.toByteArray(Charsets.UTF_8)
         if (offset >= bytes.size) return 0
         var len = 1
-        while (offset + len < bytes.size && (bytes[offset + len] and 0xC0.toByte()) == 0x80.toByte()) len++
+        while (offset + len < bytes.size && (bytes[offset + len].toInt() and 0xC0) == 0x80) len++
         return len
     }
 
@@ -320,16 +311,30 @@ class SujianEditorView(
         bridge.setAnimationDurationMs(durationMs)
     }
 
+    private var smoothCursorEnabled: Boolean = true
+    private var smoothCursorDurationMs: Long = 160
+
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long) {
+        smoothCursorEnabled = enabled
+        smoothCursorDurationMs = durationMs
     }
+
+    private var autoIndentEnabled: Boolean = false
+    private var autoIndentWidthSp: Float = 2f
 
     fun setAutoIndent(enabled: Boolean, widthSp: Float) {
+        autoIndentEnabled = enabled
+        autoIndentWidthSp = widthSp
     }
 
+    private var coordinatedAnimationEnabled: Boolean = true
+
     fun setCoordinatedAnimationEnabled(enabled: Boolean) {
+        coordinatedAnimationEnabled = enabled
     }
 
     fun setVisualTransactionProvider(provider: ((String, String, Int, Int, String, Int, Long) -> uniffi.writer_core.EditorVisualTransactionDto?)?) {
+        // V2 不使用旧版 VisualTransactionProvider，视觉事务由 AndroidVisualPlanner 生成
     }
 
     private fun showSoftInput() {
@@ -350,9 +355,9 @@ class SujianEditorView(
 
         val info = android.view.inputmethod.CursorAnchorInfo.Builder()
             .setSelectionRange(cursorUtf16, cursorUtf16)
-            .setInsertionMarkerLocation(x, lineTop.toFloat(), lineBottom.toFloat(), lineBottom.toFloat(), true)
+            .setInsertionMarkerLocation(x, lineTop.toFloat(), lineBottom.toFloat(), lineBottom.toFloat(), android.view.inputmethod.CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION)
             .build()
-        imm.updateCursorAnchorInfo(info)
+        imm.updateCursorAnchorInfo(this, info)
     }
 }
 

@@ -64,8 +64,13 @@ class AndroidInputConnection(
     }
 
     override fun getSelectedText(flags: Int): CharSequence? {
+        val selStart = mirror.getSelectionStartUtf16()
+        val selEnd = mirror.getSelectionEndUtf16()
+        if (selStart < 0 || selEnd < 0 || selStart == selEnd) return null
         val text = mirror.getText()
-        return text
+        val start = selStart.coerceAtMost(text.length)
+        val end = selEnd.coerceAtMost(text.length)
+        return text.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
     }
 
     private fun buildInsertCommand(text: String): String {

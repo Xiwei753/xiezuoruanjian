@@ -37,6 +37,14 @@ class AndroidRenderer(
         style = Paint.Style.FILL
         isAntiAlias = true
     }
+    private val preeditUnderlinePaint = Paint().apply {
+        color = Color.BLACK
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+    private val slicePaint = Paint().apply {
+        isAntiAlias = true
+    }
 
     fun submitTransaction(transaction: PreparedVisualTransaction?) {
         if (transaction == null) return
@@ -63,7 +71,9 @@ class AndroidRenderer(
                 val progress = tl.progress(frameTimeMs)
 
                 renderStaticBackground(canvas, layout, transaction)
+                renderSelectionDecoration(canvas, layout, transaction)
                 renderAnimatedSlices(canvas, transaction, progress)
+                renderPreeditDecoration(canvas, layout, transaction)
                 renderCursorTransition(canvas, transaction, progress)
 
                 if (tl.isCompleted(frameTimeMs)) {
@@ -72,7 +82,9 @@ class AndroidRenderer(
                     timeline = null
                 }
             } else {
+                renderSelectionHighlight(canvas, layout)
                 layout.draw(canvas)
+                renderPreeditUnderline(canvas, layout)
                 renderCursor(canvas, layout)
             }
         }
@@ -108,10 +120,7 @@ class AndroidRenderer(
             val bitmap = snapshot.bitmap ?: continue
             val alpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
 
-            val paint = Paint().apply {
-                this.alpha = (alpha * 255).toInt().coerceIn(0, 255)
-                isAntiAlias = true
-            }
+            slicePaint.alpha = (alpha * 255).toInt().coerceIn(0, 255)
 
             when (slice.role) {
                 SliceRole.Move -> {
@@ -121,10 +130,10 @@ class AndroidRenderer(
                     val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * progress
                     val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
                     val currentDest = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
-                    canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, paint)
+                    canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, slicePaint)
                 }
                 else -> {
-                    canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, paint)
+                    canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
                 }
             }
         }
@@ -151,6 +160,71 @@ class AndroidRenderer(
         val bottom = layout.getLineBottom(line).toFloat()
 
         canvas.drawRect(x, top, x + 2f, bottom, cursorPaint)
+    }
+
+    private fun renderSelectionDecoration(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        transaction: PreparedVisualTransaction
+    ) {
+        val sel = transaction.selectionDecoration ?: return
+        for (rect in sel.rects) {
+            canvas.drawRect(rect, selectionPaint)
+        }
+    }
+
+    private fun renderPreeditDecoration(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        transaction: PreparedVisualTransaction
+    ) {
+        val preedit = transaction.preeditDecoration ?: return
+        val startLine = layout.getLineForOffset(preedit.startUtf16)
+        val endLine = layout.getLineForOffset(preedit.endUtf16)
+        for (line in startLine..endLine) {
+            val lineStart = if (line == startLine) preedit.startUtf16 else layout.getLineStart(line)
+            val lineEnd = if (line == endLine) preedit.endUtf16 else layout.getLineEnd(line)
+            val startX = layout.getPrimaryHorizontal(lineStart)
+            val endX = layout.getPrimaryHorizontal(lineEnd - 1)
+            val bottom = layout.getLineBottom(line).toFloat()
+            canvas.drawLine(startX, bottom, endX, bottom, preeditUnderlinePaint)
+        }
+    }
+
+    private fun renderSelectionHighlight(canvas: Canvas, layout: android.text.Layout) {
+        val selStart = mirror.getSelectionStartUtf16()
+        val selEnd = mirror.getSelectionEndUtf16()
+        if (selStart == selEnd) return
+
+        val startLine = layout.getLineForOffset(selStart)
+        val endLine = layout.getLineForOffset(selEnd)
+        for (line in startLine..endLine) {
+            val lineStart = if (line == startLine) selStart else layout.getLineStart(line)
+            val lineEnd = if (line == endLine) selEnd else layout.getLineEnd(line)
+            val top = layout.getLineTop(line).toFloat()
+            val bottom = layout.getLineBottom(line).toFloat()
+            val left = layout.getPrimaryHorizontal(lineStart)
+            val right = layout.getPrimaryHorizontal(lineEnd - 1) + layout.getLineWidth(line)
+            canvas.drawRect(
+                layout.getLineLeft(line), top,
+                layout.getLineRight(line), bottom,
+                selectionPaint
+            )
+        }
+    }
+
+    private fun renderPreeditUnderline(canvas: Canvas, layout: android.text.Layout) {
+        val compRange = mirror.getCompositionRangeUtf16() ?: return
+        val startLine = layout.getLineForOffset(compRange.first)
+        val endLine = layout.getLineForOffset(compRange.second)
+        for (line in startLine..endLine) {
+            val lineStart = if (line == startLine) compRange.first else layout.getLineStart(line)
+            val lineEnd = if (line == endLine) compRange.second else layout.getLineEnd(line)
+            val startX = layout.getPrimaryHorizontal(lineStart)
+            val endX = layout.getPrimaryHorizontal(lineEnd - 1)
+            val bottom = layout.getLineBottom(line).toFloat()
+            canvas.drawLine(startX, bottom, endX, bottom, preeditUnderlinePaint)
+        }
     }
 
     private fun completeTransaction(transaction: PreparedVisualTransaction) {

@@ -23,8 +23,8 @@ data class DisplayPatch(
 ) {
     companion object {
         fun fromDto(dto: DisplayPatchDto): DisplayPatch = DisplayPatch(
-            baseRevision = dto.baseRevision,
-            newRevision = dto.newRevision,
+            baseRevision = dto.baseRevision.toLong(),
+            newRevision = dto.newRevision.toLong(),
             replaceByteStart = dto.replaceByteStart.toInt(),
             replaceByteEndExclusive = dto.replaceByteEndExclusive.toInt(),
             insertedText = dto.insertedText,
@@ -53,7 +53,7 @@ data class VisualIntent(
             oldAffectedByteRanges = dto.oldAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
             newAffectedByteRanges = dto.newAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
             animationMode = dto.animationMode.name,
-            durationMs = dto.durationMs,
+            durationMs = dto.durationMs.toLong(),
             coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor)
         )
     }
@@ -94,9 +94,9 @@ data class EditResult(
 ) {
     companion object {
         fun fromDto(dto: EditorEditResultDto): EditResult = EditResult(
-            transactionId = dto.transactionId,
-            baseRevision = dto.baseRevision,
-            newRevision = dto.newRevision,
+            transactionId = dto.transactionId.toLong(),
+            baseRevision = dto.baseRevision.toLong(),
+            newRevision = dto.newRevision.toLong(),
             displayPatches = DisplayPatch.fromDtoList(dto.displayPatches),
             oldSelectionStart = dto.oldSelectionStart.toInt(),
             oldSelectionEnd = dto.oldSelectionEnd.toInt(),
@@ -114,6 +114,8 @@ class DisplayTextMirror {
     private var cursorUtf16: Int = 0
     private var compositionStartUtf16: Int = -1
     private var compositionEndUtf16: Int = -1
+    private var selectionStartUtf16: Int = 0
+    private var selectionEndUtf16: Int = 0
 
     fun getText(): String = buffer.toString()
 
@@ -127,6 +129,10 @@ class DisplayTextMirror {
 
     fun getLengthUtf16(): Int = buffer.length
 
+    fun getSelectionStartUtf16(): Int = selectionStartUtf16
+
+    fun getSelectionEndUtf16(): Int = selectionEndUtf16
+
     fun applyPatches(patches: List<DisplayPatch>) {
         if (patches.isEmpty()) return
 
@@ -137,10 +143,10 @@ class DisplayTextMirror {
             compositionEndUtf16 = -1
         }
 
+        var indexMap = AndroidTextIndexMap(this)
         for (patch in patches) {
             if (patch.newRevision <= currentRevision) continue
 
-            val indexMap = AndroidTextIndexMap(this)
             val replaceStartUtf16 = indexMap.utf8ToUtf16(patch.replaceByteStart)
             val replaceEndUtf16 = indexMap.utf8ToUtf16(patch.replaceByteEndExclusive)
 
@@ -148,8 +154,10 @@ class DisplayTextMirror {
 
             currentRevision = patch.newRevision
             cursorUtf8 = patch.resultingSelectionEnd
-            val postMap = AndroidTextIndexMap(this)
-            cursorUtf16 = postMap.utf8ToUtf16(cursorUtf8)
+            indexMap = AndroidTextIndexMap(this)
+            cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
+            selectionStartUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionStart)
+            selectionEndUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionEnd)
         }
     }
 
@@ -208,5 +216,7 @@ class DisplayTextMirror {
         this.compositionEndUtf16 = -1
         val indexMap = AndroidTextIndexMap(this)
         this.cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
+        this.selectionStartUtf16 = this.cursorUtf16
+        this.selectionEndUtf16 = this.cursorUtf16
     }
 }
