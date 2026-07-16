@@ -699,3 +699,108 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+
+#[test]
+fn device_stats_summary_dto_fields_match_harmony() {
+    let summary = crate::api::types::DeviceStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-07".to_string(),
+        },
+        devices: vec![
+            crate::api::types::DeviceStatsRecordDto {
+                device_id: "dev1".to_string(),
+                platform: crate::api::types::PlatformDto::Desktop,
+                device_class: "Desktop".to_string(),
+                human_typed_chars: 100,
+                pasted_chars: 50,
+                deleted_chars: 20,
+                ai_inserted_chars: 10,
+                net_delta_chars: 140,
+                active_seconds: 600,
+                sessions_count: 2,
+            }
+        ],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec![
+        "devices",
+        "range",
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(
+        actual_keys, expected_keys,
+        "DeviceStatsSummaryDto field names must match Harmony CoreDtos.ets"
+    );
+}
+
+#[test]
+fn project_stats_summary_dto_fields_match_harmony() {
+    let summary = crate::api::types::ProjectStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-07".to_string(),
+        },
+        projects: vec![
+            crate::api::types::ProjectStatsRecordDto {
+                project_id: "proj1".to_string(),
+                human_typed_chars: 100,
+                pasted_chars: 50,
+                deleted_chars: 20,
+                ai_inserted_chars: 10,
+                net_delta_chars: 140,
+                active_seconds: 600,
+            }
+        ],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec![
+        "projects",
+        "range",
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(
+        actual_keys, expected_keys,
+        "ProjectStatsSummaryDto field names must match Harmony CoreDtos.ets"
+    );
+}
+
+#[test]
+fn chapter_stats_summary_dto_fields_match_harmony() {
+    let summary = crate::api::types::ChapterStatsSummaryDto {
+        range: crate::api::types::DateRangeDto {
+            start_date: "2024-01-01".to_string(),
+            end_date: "2024-01-07".to_string(),
+        },
+        chapters: vec![
+            crate::api::types::ChapterStatsRecordDto {
+                chapter_id: "chap1".to_string(),
+                human_typed_chars: 100,
+                pasted_chars: 50,
+                deleted_chars: 20,
+                ai_inserted_chars: 10,
+                net_delta_chars: 140,
+                active_seconds: 600,
+            }
+        ],
+    };
+
+    let json = serde_json::to_value(&summary).unwrap();
+    let mut expected_keys = vec![
+        "chapters",
+        "range",
+    ].into_iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    expected_keys.sort();
+
+    let actual_keys = sorted_keys(&json);
+    assert_eq!(
+        actual_keys, expected_keys,
+        "ChapterStatsSummaryDto field names must match Harmony CoreDtos.ets"
+    );
+}
