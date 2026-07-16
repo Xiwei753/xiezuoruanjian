@@ -146,7 +146,9 @@ mod tests {
     fn effective_mode_returns_system_suppressed_when_suppressed() {
         struct SuppressedDriver;
         impl AnimationDriver for SuppressedDriver {
-            fn drive_animation(&mut self, _request: AnimationDriveRequest) {}
+            fn drive_animation(&mut self, _request: AnimationDriveRequest) {
+                unimplemented!()
+            }
             fn should_suppress_animation(&self) -> bool { true }
             fn current_suppress_reason(&self) -> Option<AnimationSuppressReason> {
                 Some(AnimationSuppressReason::Scrolling)
@@ -167,7 +169,9 @@ mod tests {
     fn effective_mode_returns_core_mode_when_not_suppressed() {
         struct ActiveDriver;
         impl AnimationDriver for ActiveDriver {
-            fn drive_animation(&mut self, _request: AnimationDriveRequest) {}
+            fn drive_animation(&mut self, _request: AnimationDriveRequest) {
+                unimplemented!()
+            }
             fn should_suppress_animation(&self) -> bool { false }
             fn current_suppress_reason(&self) -> Option<AnimationSuppressReason> { None }
             fn notify_animation_suppressed(&mut self, _reason: AnimationSuppressReason) {}
