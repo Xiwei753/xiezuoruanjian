@@ -62,4 +62,15 @@ class AnimationTimeline(
     fun isCompleted(frameTimeMs: Long): Boolean = progress(frameTimeMs) >= 1f
 
     fun getState(): TransactionState = state
+
+    fun currentVisualFrame(frameTimeMs: Long): VisualFrameSnapshot? {
+        if (state != TransactionState.Rendering && state != TransactionState.Paused) return null
+        val p = progress(frameTimeMs)
+        return VisualFrameSnapshot(progress = p, state = state)
+    }
 }
+
+data class VisualFrameSnapshot(
+    val progress: Float,
+    val state: TransactionState
+)

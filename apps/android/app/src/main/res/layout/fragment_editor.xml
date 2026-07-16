@@ -107,8 +107,8 @@
             app:cardElevation="0dp"
             app:cardCornerRadius="0dp">
 
-            <!-- Self-render editor (SujianEditorView) — 唯一主路径 -->
-            <com.xiwei.sujian.editor.selfrender.SujianEditorView
+            <!-- V2 Editor (SujianEditorView) — #535 Editor V2 唯一主路径 -->
+            <com.xiwei.sujian.editor.v2.host.SujianEditorView
                 android:id="@+id/sujianEditorView"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"

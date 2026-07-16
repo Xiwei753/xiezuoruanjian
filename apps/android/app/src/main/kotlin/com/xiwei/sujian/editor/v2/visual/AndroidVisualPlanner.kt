@@ -17,6 +17,7 @@ class AndroidVisualPlanner {
         val newRevision = layoutEngine.getCurrentRevision()
         val layout = layoutEngine.getLayout()
         val durationMs = visualIntent.durationMs
+        val transactionKey = System.nanoTime()
 
         val staticPatches = mutableListOf<PreparedVisualTransaction.StaticPatch>()
         val animatedSlices = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()
@@ -25,6 +26,7 @@ class AndroidVisualPlanner {
         val oldRev = oldRevision
         val savedOldLayout = oldLayout
         val newRev = newRevision
+        val snapshotOwner = SnapshotOwner.OwnedByTransaction(transactionKey)
 
         if (oldRev != null && newRev != null && layout != null) {
             val affectedLines = computeAffectedLines(visualIntent, oldRev, newRev)
@@ -34,19 +36,19 @@ class AndroidVisualPlanner {
                 AnimationMode.GlyphAnimation, AnimationMode.ClusterAnimation -> {
                     planGlyphOrClusterAnimation(
                         visualIntent, oldRev, newRev, savedOldLayout, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner
                     )
                 }
                 AnimationMode.RunAnimation -> {
                     planRunAnimation(
                         visualIntent, oldRev, newRev, savedOldLayout, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner
                     )
                 }
                 AnimationMode.LineReflowAnimation -> {
                     planLineReflowAnimation(
                         visualIntent, oldRev, newRev, savedOldLayout, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner
                     )
                 }
                 AnimationMode.SystemSuppressed -> {
@@ -55,7 +57,7 @@ class AndroidVisualPlanner {
                 else -> {
                     planCrossfadeAnimation(
                         visualIntent, oldRev, newRev, savedOldLayout, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner
                     )
                 }
             }
@@ -84,7 +86,7 @@ class AndroidVisualPlanner {
         }
 
         val result = PreparedVisualTransaction(
-            transactionId = System.nanoTime(),
+            transactionId = transactionKey,
             oldRevision = oldRev,
             newRevision = newRev,
             staticPatches = staticPatches,
@@ -110,7 +112,8 @@ class AndroidVisualPlanner {
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore
+        resourceStore: VisualResourceStore,
+        snapshotOwner: SnapshotOwner
     ) {
         val isInsert = visualIntent.isInsert()
         for (lineIndex in affectedLines) {
@@ -118,7 +121,7 @@ class AndroidVisualPlanner {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
 
             if (isInsert && newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore)
+                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -134,7 +137,7 @@ class AndroidVisualPlanner {
                 }
             } else if (!isInsert && oldLineRange != null) {
                 val layoutForOldSnapshot = oldLayout ?: newLayout
-                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore)
+                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore, snapshotOwner)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -162,7 +165,8 @@ class AndroidVisualPlanner {
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore
+        resourceStore: VisualResourceStore,
+        snapshotOwner: SnapshotOwner
     ) {
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
@@ -170,8 +174,8 @@ class AndroidVisualPlanner {
 
             if (oldLineRange != null && newLineRange != null) {
                 val layoutForOldSnapshot = oldLayout ?: newLayout
-                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore)
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore)
+                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore, snapshotOwner)
+                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
 
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
@@ -200,7 +204,7 @@ class AndroidVisualPlanner {
                     ))
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore)
+                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -228,14 +232,15 @@ class AndroidVisualPlanner {
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore
+        resourceStore: VisualResourceStore,
+        snapshotOwner: SnapshotOwner
     ) {
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
             if (oldLineRange != null && newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore)
+                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Move,
@@ -254,7 +259,7 @@ class AndroidVisualPlanner {
                     ))
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore)
+                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -270,7 +275,7 @@ class AndroidVisualPlanner {
                 }
             } else if (oldLineRange != null) {
                 val layoutForOldSnapshot = oldLayout ?: newLayout
-                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore)
+                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore, snapshotOwner)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -298,7 +303,8 @@ class AndroidVisualPlanner {
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore
+        resourceStore: VisualResourceStore,
+        snapshotOwner: SnapshotOwner
     ) {
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
@@ -306,7 +312,7 @@ class AndroidVisualPlanner {
 
             if (oldLineRange != null && newLineRange != null) {
                 val layoutForOldSnapshot = oldLayout ?: newLayout
-                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore)
+                val oldSnapshot = createSnapshot(layoutForOldSnapshot, lineIndex, oldRev, resourceStore, snapshotOwner)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeOld,
@@ -321,7 +327,7 @@ class AndroidVisualPlanner {
                     ))
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore)
+                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -407,6 +413,44 @@ class AndroidVisualPlanner {
         return affectedLines
     }
 
+    private fun computeStableSuffixEndLine(
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision,
+        affectedLines: Set<Int>,
+        oldText: String,
+        newText: String
+    ): Int {
+        val maxCheckLines = minOf(oldRev.lineCount, newRev.lineCount)
+        val maxAffected = affectedLines.maxOrNull() ?: -1
+        var stableStart = maxAffected + 1
+        if (stableStart >= maxCheckLines) return maxCheckLines
+
+        var consecutiveStable = 0
+        for (i in stableStart until maxCheckLines) {
+            val oldRange = oldRev.lineRanges.getOrNull(i)
+            val newRange = newRev.lineRanges.getOrNull(i)
+            if (oldRange == null || newRange == null) break
+
+            val oldLineText = if (oldRange.startUtf8 <= oldRange.endUtf8 && oldRange.endUtf8 <= oldText.length) {
+                oldText.substring(oldRange.startUtf8, oldRange.endUtf8)
+            } else ""
+            val newLineText = if (newRange.startUtf8 <= newRange.endUtf8 && newRange.endUtf8 <= newText.length) {
+                newText.substring(newRange.startUtf8, newRange.endUtf8)
+            } else ""
+
+            if (oldLineText == newLineText &&
+                oldRange.startUtf16 == newRange.startUtf16 &&
+                oldRange.endUtf16 == newRange.endUtf16) {
+                consecutiveStable++
+                if (consecutiveStable >= 3) return i + 1
+            } else {
+                consecutiveStable = 0
+            }
+        }
+
+        return maxCheckLines
+    }
+
     private fun parseAnimationMode(mode: String): AnimationMode {
         return when (mode) {
             "GlyphAnimation" -> AnimationMode.GlyphAnimation
@@ -465,10 +509,11 @@ class AndroidVisualPlanner {
         layout: android.text.Layout,
         lineIndex: Int,
         revision: AndroidLayoutRevision,
-        resourceStore: VisualResourceStore
+        resourceStore: VisualResourceStore,
+        owner: SnapshotOwner = SnapshotOwner.OwnedByTransaction(System.nanoTime())
     ): com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot? {
         val snapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, revision) ?: return null
-        resourceStore.put(snapshot)
+        resourceStore.put(snapshot, owner)
         return snapshot
     }
 

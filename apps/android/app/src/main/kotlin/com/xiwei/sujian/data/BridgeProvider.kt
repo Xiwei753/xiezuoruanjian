@@ -6,7 +6,7 @@ object BridgeProvider {
     @Volatile
     private var appServiceInstance: AppServiceBridge? = null
 
-    private fun getAppServiceBridge(context: Context): AppServiceBridge {
+    fun getAppServiceBridge(context: Context): AppServiceBridge {
         return appServiceInstance ?: synchronized(this) {
             appServiceInstance ?: AppServiceBridge(
                 WorkspaceManager.getWorkspaceDir(context.applicationContext).absolutePath

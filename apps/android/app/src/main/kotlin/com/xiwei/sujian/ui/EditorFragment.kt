@@ -27,7 +27,8 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.data.CoreSettingsEvents
 import com.xiwei.sujian.data.SyncChangeBus
 import com.xiwei.sujian.data.WorkspaceRepository
-import com.xiwei.sujian.editor.selfrender.SujianEditorView
+import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.editor.v2.host.UniFFIEditorKernelBridge
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
@@ -215,29 +216,16 @@ class EditorFragment : Fragment() {
      * 设置自研写作区 SujianEditorView
      */
     private fun setupSelfRenderEditor() {
-        DiagnosticsLogger.d("SujianEditor", "Setting up self-render editor (SujianEditorView)")
+        DiagnosticsLogger.d("SujianEditor", "Setting up V2 editor (SujianEditorView)")
 
-        // 注入 Core 视觉事务提供者
         try {
-            val animBridge = com.xiwei.sujian.data.BridgeProvider.getEditorAnimationBridge(requireContext())
-
-            // 注入 Core 视觉事务提供者（唯一主路径）
-            sujianEditorView.setVisualTransactionProvider(VisualTransactionProvider { oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs ->
-                try {
-                    when (val result = animBridge.editorVisualTransaction(oldText, newText, oldCursorIndex, newCursorIndex, cause, maxAnimatedChars, animationDurationMs)) {
-                        is com.xiwei.sujian.data.BridgeResult.Success -> result.data
-                        else -> null
-                    }
-                } catch (_: Exception) {
-                    null
-                }
-            })
-            DiagnosticsLogger.d("SujianEditor", "VisualTransactionProvider injected for SujianEditorView")
+            val appServiceBridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
+            sujianEditorView.kernelBridge = UniFFIEditorKernelBridge(appServiceBridge)
+            DiagnosticsLogger.d("SujianEditor", "EditorKernelBridge injected for V2 SujianEditorView")
         } catch (e: Exception) {
-            DiagnosticsLogger.w("SujianEditor", "Failed to inject VisualTransactionProvider for SujianEditorView", e)
+            DiagnosticsLogger.w("SujianEditor", "Failed to inject EditorKernelBridge for V2 SujianEditorView", e)
         }
 
-        // 内容变更监听
         sujianEditorView.onContentChanged = { newText ->
             if (projectId != null && volumeId != null && chapterId != null) {
                 viewModel.onContentChanged(newText)

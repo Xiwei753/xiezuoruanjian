@@ -8,8 +8,10 @@ import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.visual.AnimationTimeline
 import com.xiwei.sujian.editor.v2.visual.SliceRole
+import com.xiwei.sujian.editor.v2.visual.SnapshotOwner
 import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
 import com.xiwei.sujian.editor.v2.visual.TransactionState
+import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
 
 class AndroidRenderFrame(
     val transaction: PreparedVisualTransaction?,
@@ -27,6 +29,7 @@ class AndroidRenderer(
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
+    private var currentTransactionKey: Long = 0
     private val cursorPaint = Paint().apply {
         color = Color.BLACK
         strokeWidth = 2f
@@ -50,12 +53,48 @@ class AndroidRenderer(
         if (transaction == null) return
 
         val oldTransaction = activeTransaction
-        if (oldTransaction != null) {
-            cancelTransaction(oldTransaction)
+        val oldTimeline = timeline
+
+        if (oldTransaction != null && oldTimeline != null) {
+            val frameTimeMs = System.nanoTime() / 1_000_000
+            val frameSnapshot = oldTimeline.currentVisualFrame(frameTimeMs)
+
+            if (frameSnapshot != null && frameSnapshot.state == TransactionState.Rendering) {
+                rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction)
+            } else {
+                cancelTransaction(oldTransaction)
+            }
         }
 
+        currentTransactionKey = transaction.transactionId
         activeTransaction = transaction
         timeline = AnimationTimeline(transaction.durationMs)
+    }
+
+    private fun rebaseFromOldTransaction(
+        oldTransaction: PreparedVisualTransaction,
+        frameSnapshot: VisualFrameSnapshot,
+        newTransaction: PreparedVisualTransaction
+    ) {
+        val newOwner = SnapshotOwner.OwnedByTransaction(newTransaction.transactionId)
+        val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
+
+        for (slice in oldTransaction.animatedSlices) {
+            val snapshot = slice.snapshot ?: continue
+            val currentOwner = resourceStore.getOwner(snapshot.snapshotId)
+            if (currentOwner == oldOwner) {
+                resourceStore.transferOwnership(snapshot.snapshotId, newOwner)
+            }
+        }
+
+        for (slice in oldTransaction.animatedSlices) {
+            val snapshot = slice.snapshot ?: continue
+            if (!newTransaction.animatedSlices.any { it.snapshot?.snapshotId == snapshot.snapshotId }) {
+                resourceStore.release(snapshot.snapshotId, newOwner)
+            }
+        }
+
+        oldTimeline?.cancel()
     }
 
     fun renderFrame(canvas: Canvas, frameTimeMs: Long) {
@@ -228,18 +267,26 @@ class AndroidRenderer(
     }
 
     private fun completeTransaction(transaction: PreparedVisualTransaction) {
+        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
         for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId) }
+            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
         }
         timeline?.complete()
     }
 
     private fun cancelTransaction(transaction: PreparedVisualTransaction) {
+        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
         for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId) }
+            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
         }
         timeline?.cancel()
     }
 
     fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
+
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int) {
+        cursorPaint.color = cursorColor
+        selectionPaint.color = selectionColor
+        preeditUnderlinePaint.color = preeditColor
+    }
 }
