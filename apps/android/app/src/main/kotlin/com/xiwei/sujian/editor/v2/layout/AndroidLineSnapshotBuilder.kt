@@ -130,10 +130,10 @@ class AndroidLineSnapshotBuilder {
             val top = layout.getLineTop(lineIndex).toFloat()
             val bottom = layout.getLineBottom(lineIndex).toFloat()
 
-            val sourceLeft = (x0 - lineRange.left).coerceAtLeast(0f).toInt()
-            val sourceRight = (x1 - lineRange.left).coerceAtLeast(sourceLeft).toInt()
-            val sourceTop = 0
-            val sourceBottom = (bottom - top).toInt()
+            val sourceLeft = (x0 - lineRange.left).coerceAtLeast(0f)
+            val sourceRight = (x1 - lineRange.left).coerceAtLeast(sourceLeft)
+            val sourceTop = 0f
+            val sourceBottom = bottom - top
 
             val shapingFp = buildShapingFingerprint(lineText, i, isSurrogatePair)
 
@@ -143,7 +143,7 @@ class AndroidLineSnapshotBuilder {
                 documentByteEndExclusive = clusterEndUtf8,
                 documentUtf16Start = clusterStartUtf16,
                 documentUtf16EndExclusive = clusterEndUtf16,
-                sourceRectInLineImage = android.graphics.Rect(sourceLeft, sourceTop, sourceRight, sourceBottom),
+                sourceRectInLineImage = android.graphics.Rect(sourceLeft.toInt(), sourceTop.toInt(), sourceRight.toInt(), sourceBottom.toInt()),
                 visualRectInDocument = android.graphics.RectF(x0, top, x1, bottom),
                 shapingFingerprint = shapingFp
             ))

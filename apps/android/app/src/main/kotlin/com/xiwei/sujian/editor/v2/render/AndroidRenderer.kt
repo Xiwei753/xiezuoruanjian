@@ -60,7 +60,7 @@ class AndroidRenderer(
             val frameSnapshot = oldTimeline.currentVisualFrame(frameTimeMs)
 
             if (frameSnapshot != null && frameSnapshot.state == TransactionState.Rendering) {
-                rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction)
+                rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction, oldTimeline)
             } else {
                 cancelTransaction(oldTransaction)
             }
@@ -74,7 +74,8 @@ class AndroidRenderer(
     private fun rebaseFromOldTransaction(
         oldTransaction: PreparedVisualTransaction,
         frameSnapshot: VisualFrameSnapshot,
-        newTransaction: PreparedVisualTransaction
+        newTransaction: PreparedVisualTransaction,
+        oldTimeline: AnimationTimeline?
     ) {
         val newOwner = SnapshotOwner.OwnedByTransaction(newTransaction.transactionId)
         val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
