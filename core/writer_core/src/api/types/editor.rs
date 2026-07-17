@@ -666,30 +666,6 @@ impl From<crate::editor::TransactionCancelReason> for TransactionCancelReasonDto
     }
 }
 
-// ── #516: CompositionUpdateTransaction DTO ──
-
-/// 预输入更新事务 DTO。
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CompositionUpdateTransactionDto {
-    pub id: u64,
-    pub duration_ms: u64,
-    pub unified_kind: UnifiedTransactionKindDto,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub visual_class_kinds: Vec<VisualClassKindDto>,
-}
-
-impl From<crate::editor::CompositionUpdateTransaction> for CompositionUpdateTransactionDto {
-    fn from(t: crate::editor::CompositionUpdateTransaction) -> Self {
-        Self {
-            id: t.id,
-            duration_ms: t.duration_ms,
-            unified_kind: UnifiedTransactionKindDto::CompositionUpdate,
-            visual_class_kinds: t.visual_class_kinds.into_iter().map(Into::into).collect(),
-        }
-    }
-}
-
 // ── #516: CompositionCommitOrCancelTransaction DTO ──
 
 /// 预输入提交/取消事务 DTO。
