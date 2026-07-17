@@ -63,7 +63,6 @@ class AndroidInputAdapter(
         }
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
-        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
 
         val bridge = editorView.kernelBridge
         if (bridge != null) {
@@ -75,11 +74,14 @@ class AndroidInputAdapter(
             )
             if (intentDto != null) {
                 val visualIntent = com.xiwei.sujian.editor.v2.mirror.VisualIntent.fromDto(intentDto)
-                editorView.applyCompositionUpdate(visualIntent)
+                editorView.applyCompositionUpdate(visualIntent) {
+                    mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
+                }
                 return
             }
         }
 
+        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
         editorView.onCompositionUpdated()
     }
 

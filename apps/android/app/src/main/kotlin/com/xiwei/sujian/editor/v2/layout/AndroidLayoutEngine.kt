@@ -124,6 +124,12 @@ class AndroidLayoutEngine(
 
         val fontFingerprint = "${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}"
 
+        val cursorUtf16 = mirror.getCursorUtf16()
+        val cursorLine = if (cursorUtf16 in 0..mirror.getLengthUtf16()) l.getLineForOffset(cursorUtf16) else 0
+        val cursorX = if (cursorUtf16 in 0..mirror.getLengthUtf16()) l.getPrimaryHorizontal(cursorUtf16) else 0f
+        val cursorY = l.getLineTop(cursorLine).toFloat()
+        val cursorHeight = (l.getLineBottom(cursorLine) - l.getLineTop(cursorLine)).toFloat()
+
         return AndroidLayoutRevision(
             revisionCounter,
             mirror.getRevision(),
@@ -132,7 +138,10 @@ class AndroidLayoutEngine(
             l.lineCount,
             lineRanges.toList(),
             mirror.getCursorUtf8(),
-            mirror.getCursorUtf16(),
+            cursorUtf16,
+            cursorX,
+            cursorY,
+            cursorHeight,
             emptyList()
         )
     }

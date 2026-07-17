@@ -62,13 +62,16 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun insertText(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
         val bridge = kernelBridge ?: return
-        var actualText = text
         if (autoIndentEnabled && text == "\n") {
-            actualText = text + computeAutoIndentPrefix()
+            val indentPrefix = computeAutoIndentPrefix()
+            val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return
+            val result = EditResult.fromDto(dto)
+            applyEditResultFull(result)
+        } else {
+            val dto = bridge.insert(byteOffset, text, cause, mirror.getRevision()) ?: return
+            val result = EditResult.fromDto(dto)
+            applyEditResultFull(result)
         }
-        val dto = bridge.insert(byteOffset, actualText, cause, mirror.getRevision()) ?: return
-        val result = EditResult.fromDto(dto)
-        applyEditResultFull(result)
     }
 
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.DELETE) {
@@ -113,7 +116,9 @@ class SujianEditorView @JvmOverloads constructor(
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots)
+        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
+        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
         if (result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
@@ -127,7 +132,9 @@ class SujianEditorView @JvmOverloads constructor(
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots)
+        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
+        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
         if (result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
@@ -140,13 +147,16 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent) {
+    fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
+        mirrorUpdate?.invoke()
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots)
+        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
+        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
         invalidate()
     }
@@ -199,11 +209,12 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun replaceAll(searchStr: String, replaceStr: String) {
-        val text = mirror.getText()
-        val newText = text.replace(searchStr, replaceStr)
-        if (newText != text) {
-            loadText(newText, mirror.getCursorUtf8())
-            onContentChanged?.invoke(newText)
+        val bridge = kernelBridge ?: return
+        val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return
+        val result = EditResult.fromDto(dto)
+        if (result.displayPatches.isNotEmpty()) {
+            applyEditResultFull(result)
+            onContentChanged?.invoke(mirror.getText())
         }
     }
 
@@ -314,8 +325,8 @@ class SujianEditorView @JvmOverloads constructor(
                 if (selStart != selEnd) {
                     replaceRange(selStart, selEnd, "")
                 } else if (selEnd > 0) {
-                    val prevCharLen = previousCharByteLen(selEnd)
-                    replaceRange(selEnd - prevCharLen, selEnd, "")
+                    val prevGraphemeLen = previousGraphemeByteLen(selEnd)
+                    replaceRange(selEnd - prevGraphemeLen, selEnd, "")
                 }
                 return true
             }
@@ -327,8 +338,8 @@ class SujianEditorView @JvmOverloads constructor(
                 } else {
                     val textLen = mirror.getText().toByteArray(Charsets.UTF_8).size
                     if (selEnd < textLen) {
-                        val nextCharLen = nextCharByteLen(selEnd)
-                        replaceRange(selEnd, selEnd + nextCharLen, "")
+                        val nextGraphemeLen = nextGraphemeByteLen(selEnd)
+                        replaceRange(selEnd, selEnd + nextGraphemeLen, "")
                     }
                 }
                 return true
@@ -337,21 +348,66 @@ class SujianEditorView @JvmOverloads constructor(
         return super.onKeyDown(keyCode, event)
     }
 
-    private fun previousCharByteLen(offset: Int): Int {
-        val bytes = mirror.getText().toByteArray(Charsets.UTF_8)
-        if (offset <= 0 || offset > bytes.size) return 0
-        var p = offset - 1
-        while (p > 0 && (bytes[p].toInt() and 0xC0) == 0x80) p--
-        return offset - p
+    private fun previousGraphemeByteLen(offset: Int): Int {
+        val text = mirror.getText()
+        val utf16Offset = text.byteOffsetToUtf16(offset)
+        if (utf16Offset <= 0) return 0
+        val iter = android.icu.text.BreakIterator.getCharacterInstance()
+        iter.setText(text)
+        val prev = iter.preceding(utf16Offset)
+        if (prev == android.icu.text.BreakIterator.DONE) return 0
+        val prevUtf8 = text.utf16OffsetToByte(prev)
+        return offset - prevUtf8
     }
 
-    private fun nextCharByteLen(offset: Int): Int {
+    private fun nextGraphemeByteLen(offset: Int): Int {
         val text = mirror.getText()
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        if (offset >= bytes.size) return 0
-        var len = 1
-        while (offset + len < bytes.size && (bytes[offset + len].toInt() and 0xC0) == 0x80) len++
-        return len
+        val utf16Offset = text.byteOffsetToUtf16(offset)
+        if (utf16Offset >= text.length) return 0
+        val iter = android.icu.text.BreakIterator.getCharacterInstance()
+        iter.setText(text)
+        val next = iter.following(utf16Offset)
+        if (next == android.icu.text.BreakIterator.DONE) return 0
+        val nextUtf8 = text.utf16OffsetToByte(next)
+        return nextUtf8 - offset
+    }
+
+    private fun String.byteOffsetToUtf16(byteOffset: Int): Int {
+        val bytes = this.toByteArray(Charsets.UTF_8)
+        var utf16Index = 0
+        var byteIndex = 0
+        while (byteIndex < byteOffset.coerceAtMost(bytes.size)) {
+            val b = bytes[byteIndex]
+            val charLen = when {
+                (b.toInt() and 0x80) == 0 -> 1
+                (b.toInt() and 0xE0) == 0xC0 -> 2
+                (b.toInt() and 0xF0) == 0xE0 -> 3
+                else -> 4
+            }
+            val codePoint = String(bytes, byteIndex, charLen.coerceAtMost(bytes.size - byteIndex), Charsets.UTF_8)
+            utf16Index += codePoint.length
+            byteIndex += charLen
+        }
+        return utf16Index
+    }
+
+    private fun String.utf16OffsetToByte(utf16Offset: Int): Int {
+        val bytes = this.toByteArray(Charsets.UTF_8)
+        var utf16Index = 0
+        var byteIndex = 0
+        while (utf16Index < utf16Offset.coerceAtMost(this.length) && byteIndex < bytes.size) {
+            val b = bytes[byteIndex]
+            val charLen = when {
+                (b.toInt() and 0x80) == 0 -> 1
+                (b.toInt() and 0xE0) == 0xC0 -> 2
+                (b.toInt() and 0xF0) == 0xE0 -> 3
+                else -> 4
+            }
+            val codePoint = String(bytes, byteIndex, charLen.coerceAtMost(bytes.size - byteIndex), Charsets.UTF_8)
+            utf16Index += codePoint.length
+            byteIndex += charLen
+        }
+        return byteIndex
     }
 
     override fun onFocusChanged(gained: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
@@ -492,4 +548,6 @@ interface EditorKernelBridge {
     ): uniffi.writer_core.EditorVisualIntentDto?
     fun setAnimationEnabled(enabled: Boolean)
     fun setAnimationDurationMs(durationMs: Long)
+    fun replaceAll(search: String, replacement: String, expectedRevision: Long): EditorEditResultDto?
+    fun insertLineBreak(byteOffset: Int, autoIndentPrefix: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
 }

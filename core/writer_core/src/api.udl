@@ -1145,6 +1145,8 @@ interface WriterAppService {
     u32 editor_kernel_get_cursor();
     u32 editor_kernel_get_selection_anchor();
     EditorSessionSnapshotDto editor_kernel_session_snapshot();
+    EditorEditResultDto editor_kernel_replace_all(string search, string replacement, u64 expected_revision);
+    EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, string auto_indent_prefix, EditorTransactionCauseDto cause, u64 expected_revision);
 };
 
 // ── Layout Policy DTOs ──

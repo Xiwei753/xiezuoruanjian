@@ -38,33 +38,33 @@ data class DisplayPatch(
 }
 
 data class VisualIntent(
-    val cause: String,
-    val operationKind: String,
+    val cause: EditorTransactionCauseDto,
+    val operationKind: EditorOperationKindDto,
     val oldAffectedByteRanges: List<Pair<Int, Int>>,
     val newAffectedByteRanges: List<Pair<Int, Int>>,
-    val animationMode: String,
+    val animationMode: AnimationModeDto,
     val durationMs: Long,
     val coordinatedCursor: CoordinatedCursor
 ) {
     companion object {
         fun fromDto(dto: EditorVisualIntentDto): VisualIntent = VisualIntent(
-            cause = dto.cause.name,
-            operationKind = dto.operationKind.name,
+            cause = dto.cause,
+            operationKind = dto.operationKind,
             oldAffectedByteRanges = dto.oldAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
             newAffectedByteRanges = dto.newAffectedByteRanges.map { Pair(it.start.toInt(), it.endExclusive.toInt()) },
-            animationMode = dto.animationMode.name,
+            animationMode = dto.animationMode,
             durationMs = dto.durationMs.toLong(),
             coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor)
         )
     }
 
-    fun isInsert(): Boolean = operationKind == "Insert"
-    fun isDelete(): Boolean = operationKind == "Delete"
-    fun isReplace(): Boolean = operationKind == "Replace"
-    fun isCompositionUpdate(): Boolean = operationKind == "CompositionUpdate"
-    fun isCompositionCommit(): Boolean = operationKind == "CompositionCommit"
-    fun isCompositionCancel(): Boolean = operationKind == "CompositionCancel"
-    fun isCursorOnly(): Boolean = operationKind == "CursorOnly"
+    fun isInsert(): Boolean = operationKind == EditorOperationKindDto.INSERT
+    fun isDelete(): Boolean = operationKind == EditorOperationKindDto.DELETE
+    fun isReplace(): Boolean = operationKind == EditorOperationKindDto.REPLACE
+    fun isCompositionUpdate(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_UPDATE
+    fun isCompositionCommit(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_COMMIT
+    fun isCompositionCancel(): Boolean = operationKind == EditorOperationKindDto.COMPOSITION_CANCEL
+    fun isCursorOnly(): Boolean = operationKind == EditorOperationKindDto.CURSOR_ONLY
 }
 
 data class CoordinatedCursor(

@@ -34,58 +34,45 @@ use super::transaction::{
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum EditorCommand {
-    /// 在指定位置插入文本
     Insert {
-        /// 插入位置（UTF-8 byte offset）
         byte_offset: usize,
-        /// 插入的文本
         text: String,
-        /// 编辑原因
         cause: EditorTransactionCause,
-        /// 期望的基础 revision，0 表示不检查
         expected_revision: u64,
     },
-    /// 删除指定范围的文本
     Delete {
-        /// 删除范围起始（UTF-8 byte offset）
         byte_start: usize,
-        /// 删除范围结束（UTF-8 byte offset，不含）
         byte_end_exclusive: usize,
-        /// 被删除的文本（用于 undo）
         deleted_text: String,
-        /// 编辑原因
         cause: EditorTransactionCause,
-        /// 期望的基础 revision，0 表示不检查
         expected_revision: u64,
     },
-    /// 替换指定范围的文本
     Replace {
-        /// 替换范围起始（UTF-8 byte offset）
         byte_start: usize,
-        /// 替换范围结束（UTF-8 byte offset，不含）
         byte_end_exclusive: usize,
-        /// 替换后的文本
         replacement_text: String,
-        /// 被替换的原文（用于 undo）
         original_text: String,
-        /// 编辑原因
         cause: EditorTransactionCause,
-        /// 期望的基础 revision，0 表示不检查
         expected_revision: u64,
     },
-    /// 设置选区
     SetSelection {
-        /// 选区锚点（UTF-8 byte offset）
         anchor_byte_offset: usize,
-        /// 选区头部（UTF-8 byte offset）
         head_byte_offset: usize,
-        /// 期望的基础 revision，0 表示不检查
         expected_revision: u64,
     },
-    /// 撤销
     Undo,
-    /// 重做
     Redo,
+    ReplaceAll {
+        search: String,
+        replacement: String,
+        expected_revision: u64,
+    },
+    InsertLineBreak {
+        byte_offset: usize,
+        auto_indent_prefix: String,
+        cause: EditorTransactionCause,
+        expected_revision: u64,
+    },
 }
 
 /// #535: 显示补丁 — 平台显示镜像唯一允许消费的正文变化。
@@ -292,7 +279,9 @@ impl EditorKernel {
             EditorCommand::Insert { expected_revision, .. }
             | EditorCommand::Delete { expected_revision, .. }
             | EditorCommand::Replace { expected_revision, .. }
-            | EditorCommand::SetSelection { expected_revision, .. } => {
+            | EditorCommand::SetSelection { expected_revision, .. }
+            | EditorCommand::ReplaceAll { expected_revision, .. }
+            | EditorCommand::InsertLineBreak { expected_revision, .. } => {
                 if *expected_revision != 0 && *expected_revision != base_revision {
                     return self.noop_result(base_revision, self.cursor, (self.selection_anchor, self.cursor));
                 }
@@ -322,6 +311,12 @@ impl EditorKernel {
             EditorCommand::Redo => {
                 self.apply_redo(base_revision, old_cursor, old_selection)
             }
+            EditorCommand::ReplaceAll { search, replacement, .. } => {
+                self.apply_replace_all(&search, &replacement, base_revision, old_cursor, old_selection)
+            }
+            EditorCommand::InsertLineBreak { byte_offset, auto_indent_prefix, cause, .. } => {
+                self.apply_insert_line_break(byte_offset, auto_indent_prefix, cause, base_revision, old_cursor, old_selection)
+            }
         }
     }
 
@@ -335,7 +330,6 @@ impl EditorKernel {
         old_selection: (usize, usize),
     ) -> EditorEditResult {
         let byte_offset = byte_offset.min(self.text.len());
-        let old_text = self.text.clone();
 
         self.text.insert_str(byte_offset, text);
         self.revision = self.revision.saturating_add(1);
@@ -343,7 +337,7 @@ impl EditorKernel {
         self.selection_anchor = self.cursor;
 
         self.undo_stack.push(UndoEntry {
-            old_text: old_text.clone(),
+            old_text: self.text[..byte_offset].to_string() + &self.text[byte_offset + text.len()..],
             new_text: self.text.clone(),
             old_cursor,
             new_cursor: self.cursor,
@@ -351,17 +345,63 @@ impl EditorKernel {
         });
         self.redo_stack.clear();
 
+        let new_revision = self.revision;
         let new_selection = (self.cursor, self.cursor);
-        let (operation_kind, old_affected, new_affected) = (
-            EditorOperationKind::Insert,
-            vec![],
-            vec![(byte_offset, byte_offset + text.len())],
-        );
+        let new_affected = vec![(byte_offset, byte_offset + text.len())];
 
-        self.build_edit_result(
-            base_revision, &old_text, cause, old_selection, new_selection,
-            operation_kind, old_affected, new_affected, old_cursor,
-        )
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: (byte_offset, byte_offset),
+            inserted_text: text.to_string(),
+            resulting_selection_byte_range: new_selection,
+        }];
+
+        let is_loading = cause == EditorTransactionCause::Load;
+        let is_format = cause == EditorTransactionCause::Format;
+        let is_ime = cause == EditorTransactionCause::ImeComposition;
+
+        let animation_mode = if !self.animation_enabled || is_loading || is_format || is_ime {
+            AnimationMode::SystemSuppressed
+        } else {
+            let cluster_count = count_grapheme_clusters(text);
+            let contains_newline = text.contains('\n');
+            let contains_complex = text_contains_complex_grapheme(text);
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false,
+                is_loading,
+                is_format,
+                false,
+                self.animation_enabled,
+            )
+        };
+
+        let visual_intent = EditorVisualIntent {
+            cause,
+            operation_kind: EditorOperationKind::Insert,
+            old_affected_byte_ranges: vec![],
+            new_affected_byte_ranges: new_affected,
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: self.animation_enabled && old_cursor != self.cursor && !is_loading && !is_format,
+            },
+        };
+
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        }
     }
 
     fn apply_delete(
@@ -380,7 +420,6 @@ impl EditorKernel {
         }
 
         let old_text = self.text.clone();
-        let _deleted = self.text[byte_start..byte_end_exclusive].to_string();
 
         self.text.replace_range(byte_start..byte_end_exclusive, "");
         self.revision = self.revision.saturating_add(1);
@@ -396,17 +435,64 @@ impl EditorKernel {
         });
         self.redo_stack.clear();
 
+        let new_revision = self.revision;
         let new_selection = (self.cursor, self.cursor);
-        let (operation_kind, old_affected, new_affected) = (
-            EditorOperationKind::Delete,
-            vec![(byte_start, byte_end_exclusive)],
-            vec![],
-        );
+        let old_affected = vec![(byte_start, byte_end_exclusive)];
 
-        self.build_edit_result(
-            base_revision, &old_text, cause, old_selection, new_selection,
-            operation_kind, old_affected, new_affected, old_cursor,
-        )
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: (byte_start, byte_end_exclusive),
+            inserted_text: String::new(),
+            resulting_selection_byte_range: new_selection,
+        }];
+
+        let is_loading = cause == EditorTransactionCause::Load;
+        let is_format = cause == EditorTransactionCause::Format;
+        let is_ime = cause == EditorTransactionCause::ImeComposition;
+
+        let animation_mode = if !self.animation_enabled || is_loading || is_format || is_ime {
+            AnimationMode::SystemSuppressed
+        } else {
+            let deleted_text = &old_text[byte_start..byte_end_exclusive];
+            let cluster_count = count_grapheme_clusters(deleted_text);
+            let contains_newline = deleted_text.contains('\n');
+            let contains_complex = text_contains_complex_grapheme(deleted_text);
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false,
+                is_loading,
+                is_format,
+                false,
+                self.animation_enabled,
+            )
+        };
+
+        let visual_intent = EditorVisualIntent {
+            cause,
+            operation_kind: EditorOperationKind::Delete,
+            old_affected_byte_ranges: old_affected,
+            new_affected_byte_ranges: vec![],
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: self.animation_enabled && old_cursor != self.cursor && !is_loading && !is_format,
+            },
+        };
+
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        }
     }
 
     fn apply_replace(
@@ -438,17 +524,69 @@ impl EditorKernel {
         });
         self.redo_stack.clear();
 
+        let new_revision = self.revision;
         let new_selection = (self.cursor, self.cursor);
-        let (operation_kind, old_affected, new_affected) = (
-            EditorOperationKind::Replace,
-            vec![(byte_start, byte_end_exclusive)],
-            vec![(byte_start, byte_start + replacement_text.len())],
-        );
+        let old_affected = vec![(byte_start, byte_end_exclusive)];
+        let new_affected = vec![(byte_start, byte_start + replacement_text.len())];
 
-        self.build_edit_result(
-            base_revision, &old_text, cause, old_selection, new_selection,
-            operation_kind, old_affected, new_affected, old_cursor,
-        )
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: (byte_start, byte_end_exclusive),
+            inserted_text: replacement_text.to_string(),
+            resulting_selection_byte_range: new_selection,
+        }];
+
+        let is_loading = cause == EditorTransactionCause::Load;
+        let is_format = cause == EditorTransactionCause::Format;
+        let is_ime = cause == EditorTransactionCause::ImeComposition;
+
+        let animation_mode = if !self.animation_enabled || is_loading || is_format || is_ime {
+            AnimationMode::SystemSuppressed
+        } else {
+            let diff_text = if !replacement_text.is_empty() {
+                replacement_text
+            } else {
+                &old_text[byte_start..byte_end_exclusive]
+            };
+            let cluster_count = count_grapheme_clusters(diff_text);
+            let contains_newline = diff_text.contains('\n');
+            let contains_complex = text_contains_complex_grapheme(diff_text);
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false,
+                is_loading,
+                is_format,
+                false,
+                self.animation_enabled,
+            )
+        };
+
+        let visual_intent = EditorVisualIntent {
+            cause,
+            operation_kind: EditorOperationKind::Replace,
+            old_affected_byte_ranges: old_affected,
+            new_affected_byte_ranges: new_affected,
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: self.animation_enabled && old_cursor != self.cursor && !is_loading && !is_format,
+            },
+        };
+
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        }
     }
 
     fn apply_set_selection(
@@ -512,16 +650,55 @@ impl EditorKernel {
 
         self.redo_stack.push(entry);
 
+        let new_revision = self.revision;
         let new_selection = (self.cursor, self.cursor);
+
+        let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
+
+        let display_patches = if replace_range.0 < replace_range.1 || !inserted_text.is_empty() {
+            vec![DisplayPatch {
+                base_revision,
+                new_revision,
+                replace_byte_range: replace_range,
+                inserted_text,
+                resulting_selection_byte_range: new_selection,
+            }]
+        } else {
+            vec![]
+        };
 
         let changes = diff_plain_text(&old_text, &self.text);
         let (old_affected, new_affected) = Self::affected_ranges_from_changes(&changes);
 
-        self.build_edit_result(
-            base_revision, &old_text, EditorTransactionCause::Undo,
-            old_selection, new_selection, EditorOperationKind::Replace,
-            old_affected, new_affected, old_cursor,
-        )
+        let animation_mode = if !self.animation_enabled {
+            AnimationMode::SystemSuppressed
+        } else {
+            AnimationMode::SnapshotAnimation
+        };
+
+        let visual_intent = EditorVisualIntent {
+            cause: EditorTransactionCause::Undo,
+            operation_kind: EditorOperationKind::Replace,
+            old_affected_byte_ranges: old_affected,
+            new_affected_byte_ranges: new_affected,
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: self.animation_enabled && old_cursor != self.cursor,
+            },
+        };
+
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        }
     }
 
     fn apply_redo(
@@ -543,96 +720,35 @@ impl EditorKernel {
 
         self.undo_stack.push(entry);
 
+        let new_revision = self.revision;
         let new_selection = (self.cursor, self.cursor);
 
-        let changes = diff_plain_text(&old_text, &self.text);
-        let (old_affected, new_affected) = Self::affected_ranges_from_changes(&changes);
+        let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
 
-        self.build_edit_result(
-            base_revision, &old_text, EditorTransactionCause::Redo,
-            old_selection, new_selection, EditorOperationKind::Replace,
-            old_affected, new_affected, old_cursor,
-        )
-    }
-
-    fn build_edit_result(
-        &mut self,
-        base_revision: u64,
-        old_text: &str,
-        cause: EditorTransactionCause,
-        old_selection: (usize, usize),
-        new_selection: (usize, usize),
-        operation_kind: EditorOperationKind,
-        old_affected: Vec<(usize, usize)>,
-        new_affected: Vec<(usize, usize)>,
-        old_cursor: usize,
-    ) -> EditorEditResult {
-        let new_revision = self.revision;
-
-        let display_patches = if old_text != self.text {
-            let changes = diff_plain_text(old_text, &self.text);
-            if changes.is_empty() {
-                vec![]
-            } else {
-                let mut min_start = usize::MAX;
-                let mut max_end = 0;
-                for c in &changes {
-                    match c {
-                        EditorChange::Delete { index, text } => {
-                            min_start = min_start.min(*index);
-                            max_end = max_end.max(*index + text.len());
-                        }
-                        EditorChange::Insert { index, text } => {
-                            min_start = min_start.min(*index);
-                            max_end = max_end.max(*index + text.len());
-                        }
-                    }
-                }
-                let inserted_text = self.text[min_start..max_end.min(self.text.len())].to_string();
-                vec![DisplayPatch {
-                    base_revision,
-                    new_revision,
-                    replace_byte_range: (min_start, max_end.min(old_text.len())),
-                    inserted_text,
-                    resulting_selection_byte_range: new_selection,
-                }]
-            }
+        let display_patches = if replace_range.0 < replace_range.1 || !inserted_text.is_empty() {
+            vec![DisplayPatch {
+                base_revision,
+                new_revision,
+                replace_byte_range: replace_range,
+                inserted_text,
+                resulting_selection_byte_range: new_selection,
+            }]
         } else {
             vec![]
         };
 
-        let is_loading = cause == EditorTransactionCause::Load;
-        let is_format = cause == EditorTransactionCause::Format;
-        let is_ime = cause == EditorTransactionCause::ImeComposition;
+        let changes = diff_plain_text(&old_text, &self.text);
+        let (old_affected, new_affected) = Self::affected_ranges_from_changes(&changes);
 
-        let animation_mode = if !self.animation_enabled || is_loading || is_format || is_ime {
+        let animation_mode = if !self.animation_enabled {
             AnimationMode::SystemSuppressed
         } else {
-            let diff_text = if !new_affected.is_empty() {
-                &self.text[new_affected[0].0..new_affected.last().map(|r| r.1).unwrap_or(new_affected[0].1)]
-            } else if !old_affected.is_empty() {
-                ""
-            } else {
-                ""
-            };
-            let cluster_count = count_grapheme_clusters(diff_text);
-            let contains_newline = diff_text.contains('\n');
-            let contains_complex = text_contains_complex_grapheme(diff_text);
-            choose_animation_mode(
-                cluster_count,
-                contains_newline,
-                contains_complex,
-                false,
-                is_loading,
-                is_format,
-                false,
-                self.animation_enabled,
-            )
+            AnimationMode::SnapshotAnimation
         };
 
         let visual_intent = EditorVisualIntent {
-            cause,
-            operation_kind,
+            cause: EditorTransactionCause::Redo,
+            operation_kind: EditorOperationKind::Replace,
             old_affected_byte_ranges: old_affected,
             new_affected_byte_ranges: new_affected,
             animation_mode,
@@ -640,7 +756,185 @@ impl EditorKernel {
             coordinated_cursor: CoordinatedCursor {
                 old_byte_offset: old_cursor,
                 new_byte_offset: self.cursor,
-                should_animate: self.animation_enabled && old_cursor != self.cursor && !is_loading && !is_format,
+                should_animate: self.animation_enabled && old_cursor != self.cursor,
+            },
+        };
+
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        }
+    }
+
+    fn compute_single_patch(old_text: &str, new_text: &str) -> ((usize, usize), String) {
+        if old_text == new_text {
+            return ((0, 0), String::new());
+        }
+
+        let old_bytes = old_text.as_bytes();
+        let new_bytes = new_text.as_bytes();
+
+        let mut prefix_len = 0;
+        while prefix_len < old_bytes.len() && prefix_len < new_bytes.len() && old_bytes[prefix_len] == new_bytes[prefix_len] {
+            prefix_len += 1;
+        }
+
+        let mut suffix_len = 0;
+        while suffix_len < old_bytes.len() - prefix_len && suffix_len < new_bytes.len() - prefix_len
+            && old_bytes[old_bytes.len() - 1 - suffix_len] == new_bytes[new_bytes.len() - 1 - suffix_len]
+        {
+            suffix_len += 1;
+        }
+
+        let replace_start = prefix_len;
+        let replace_end = old_bytes.len() - suffix_len;
+        let inserted_text = new_text[prefix_len..new_bytes.len() - suffix_len].to_string();
+
+        ((replace_start, replace_end), inserted_text)
+    }
+
+    fn apply_replace_all(
+        &mut self,
+        search: &str,
+        replacement: &str,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditResult {
+        let old_text = self.text.clone();
+        let new_text = old_text.replace(search, replacement);
+
+        if new_text == old_text {
+            return self.noop_result(base_revision, old_cursor, old_selection);
+        }
+
+        self.text = new_text;
+        self.revision = self.revision.saturating_add(1);
+        self.cursor = self.cursor.min(self.text.len());
+        self.selection_anchor = self.cursor;
+
+        self.undo_stack.push(UndoEntry {
+            old_text: old_text.clone(),
+            new_text: self.text.clone(),
+            old_cursor,
+            new_cursor: self.cursor,
+            cause: EditorTransactionCause::Format,
+        });
+        self.redo_stack.clear();
+
+        let new_revision = self.revision;
+        let new_selection = (self.cursor, self.cursor);
+
+        let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
+
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: replace_range,
+            inserted_text,
+            resulting_selection_byte_range: new_selection,
+        }];
+
+        let changes = diff_plain_text(&old_text, &self.text);
+        let (old_affected, new_affected) = Self::affected_ranges_from_changes(&changes);
+
+        let visual_intent = EditorVisualIntent {
+            cause: EditorTransactionCause::Format,
+            operation_kind: EditorOperationKind::Format,
+            old_affected_byte_ranges: old_affected,
+            new_affected_byte_ranges: new_affected,
+            animation_mode: AnimationMode::SystemSuppressed,
+            duration_ms: 0,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: false,
+            },
+        };
+
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        }
+    }
+
+    fn apply_insert_line_break(
+        &mut self,
+        byte_offset: usize,
+        auto_indent_prefix: String,
+        cause: EditorTransactionCause,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditResult {
+        let byte_offset = byte_offset.min(self.text.len());
+        let text = format!("\n{}", auto_indent_prefix);
+
+        self.text.insert_str(byte_offset, &text);
+        self.revision = self.revision.saturating_add(1);
+        self.cursor = byte_offset + text.len();
+        self.selection_anchor = self.cursor;
+
+        self.undo_stack.push(UndoEntry {
+            old_text: self.text[..byte_offset].to_string() + &self.text[byte_offset + text.len()..],
+            new_text: self.text.clone(),
+            old_cursor,
+            new_cursor: self.cursor,
+            cause: cause.clone(),
+        });
+        self.redo_stack.clear();
+
+        let new_revision = self.revision;
+        let new_selection = (self.cursor, self.cursor);
+        let new_affected = vec![(byte_offset, byte_offset + text.len())];
+
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: (byte_offset, byte_offset),
+            inserted_text: text.clone(),
+            resulting_selection_byte_range: new_selection,
+        }];
+
+        let animation_mode = if !self.animation_enabled {
+            AnimationMode::SystemSuppressed
+        } else {
+            let cluster_count = count_grapheme_clusters(&text);
+            let contains_newline = text.contains('\n');
+            let contains_complex = text_contains_complex_grapheme(&text);
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false,
+                false,
+                false,
+                false,
+                self.animation_enabled,
+            )
+        };
+
+        let visual_intent = EditorVisualIntent {
+            cause,
+            operation_kind: EditorOperationKind::Insert,
+            old_affected_byte_ranges: vec![],
+            new_affected_byte_ranges: new_affected,
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: self.animation_enabled && old_cursor != self.cursor,
             },
         };
 

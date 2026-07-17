@@ -106,4 +106,18 @@ class UniFFIEditorKernelBridge(
             else -> null
         }
     }
+
+    override fun replaceAll(search: String, replacement: String, expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelReplaceAll(search, replacement, expectedRevision.toULong())) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun insertLineBreak(byteOffset: Int, autoIndentPrefix: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelInsertLineBreak(byteOffset.toUInt(), autoIndentPrefix, cause, expectedRevision.toULong())) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
 }
