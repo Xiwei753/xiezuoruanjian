@@ -26,8 +26,8 @@ class RustSafetyPatternTests(unittest.TestCase):
 
     def test_detects_known_compiler_bypass_patterns(self) -> None:
         source = r'''
-#![allow(deprecated)]
-#[allow(dead_code)]
+#![allow(non_snake_case, deprecated)]
+#[allow(non_snake_case, dead_code)]
 struct Adapter(*mut std::ffi::c_void);
 unsafe impl Send for Adapter {}
 unsafe impl Sync for Adapter {}
@@ -67,6 +67,7 @@ fn read_c_string(ptr: *const std::ffi::c_char) -> String {
         source = r'''
 // unsafe impl Send for Fake {}
 const MESSAGE: &str = "Box::leak and expected_revision == 0";
+const RAW: &str = r#"#[allow(dead_code)] and AssertUnwindSafe"#;
 '''
         self.assertEqual(self.rule_names(source), set())
 
