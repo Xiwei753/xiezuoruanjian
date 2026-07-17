@@ -44,13 +44,17 @@ RULES: tuple[PatternRule, ...] = (
     PatternRule(
         "crate-wide-allow",
         re.compile(
-            r"#!\s*\[\s*allow\s*\(\s*(?:warnings|deprecated|dead_code|unused(?:_[a-z_]+)?)\s*\)\s*\]"
+            r"#!\s*\[\s*allow\s*\([^)]*\b"
+            r"(?:warnings|deprecated|dead_code|unused(?:_[a-z_]+)?)\b"
+            r"[^)]*\)\s*\]"
         ),
         "禁止 crate/module 级关闭过期、死代码或全部警告",
     ),
     PatternRule(
         "broad-dead-code-allow",
-        re.compile(r"#\s*\[\s*allow\s*\(\s*dead_code\s*\)\s*\]"),
+        re.compile(
+            r"#(?!\!)\s*\[\s*allow\s*\([^)]*\bdead_code\b[^)]*\)\s*\]"
+        ),
         "dead_code 只能精确标注到确有宏误报的最小成员",
     ),
     PatternRule(
@@ -86,11 +90,13 @@ SKIP_DIRS = {
 }
 
 _STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+_RAW_STRING_RE = re.compile(r'r(?P<hashes>#{0,16})".*?"(?P=hashes)')
 
 
 def _code_part(line: str) -> str:
-    """去掉普通字符串和行注释，避免文案/注释触发规则。"""
-    without_strings = _STRING_RE.sub('""', line)
+    """去掉单行字符串和行注释，避免文案/注释触发规则。"""
+    without_raw_strings = _RAW_STRING_RE.sub('""', line)
+    without_strings = _STRING_RE.sub('""', without_raw_strings)
     return without_strings.split("//", 1)[0]
 
 
@@ -112,7 +118,7 @@ def scan_text(path: Path, text: str) -> list[Finding]:
             if rule.pattern.search(code):
                 findings.append(Finding(path, index + 1, rule.name, rule.message))
 
-        # 正常 FFI/Qt 边界允许 unsafe，但必须在紧邻位置写清安全前提。
+        # 正常 FFI/平台边界允许 unsafe，但必须在紧邻位置写清安全前提。
         if re.search(r"\bunsafe\s*\{", code) and not _has_safety_comment(lines, index):
             findings.append(
                 Finding(
