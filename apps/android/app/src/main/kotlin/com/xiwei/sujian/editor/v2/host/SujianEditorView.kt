@@ -19,7 +19,6 @@ import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
 import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
 import com.xiwei.sujian.editor.v2.visual.VisualTransactionCoordinator
 import com.xiwei.sujian.editor.v2.render.AndroidRenderer
-import com.xiwei.sujian.editor.v2.render.AndroidRenderFrame
 import uniffi.writer_core.EditorEditResultDto
 
 class SujianEditorView @JvmOverloads constructor(
@@ -110,6 +109,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun applyEditResultFull(result: EditResult) {
+        val rebaseSnapshot = coordinator.takeRebaseSnapshot()
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
@@ -118,7 +118,7 @@ class SujianEditorView @JvmOverloads constructor(
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
         val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
+        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
         coordinator.submitTransaction(transaction)
         if (result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
@@ -127,19 +127,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun applyCommandResult(result: EditResult) {
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
-        coordinator.submitTransaction(transaction)
-        if (result.displayPatches.isNotEmpty()) {
-            onContentChanged?.invoke(mirror.getText())
-        }
-        invalidate()
+        applyEditResultFull(result)
     }
 
     fun onCompositionUpdated() {
@@ -148,6 +136,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
+        val rebaseSnapshot = coordinator.takeRebaseSnapshot()
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
@@ -156,7 +145,7 @@ class SujianEditorView @JvmOverloads constructor(
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
         val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
-        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
+        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
         coordinator.submitTransaction(transaction)
         invalidate()
     }
@@ -246,7 +235,6 @@ class SujianEditorView @JvmOverloads constructor(
         canvas.save()
         canvas.translate(-scrollX, -scrollY)
         val frameTimeMs = System.nanoTime() / 1_000_000
-        val frame = coordinator.computeFrame(frameTimeMs, width, height, scrollX, scrollY)
         val layout = layoutEngine.getLayout()
         if (layout != null) {
             val rev = layoutEngine.getCurrentRevision()
@@ -254,13 +242,8 @@ class SujianEditorView @JvmOverloads constructor(
                 val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
                 Pair(indexMap.utf8ToUtf16(startUtf8), indexMap.utf8ToUtf16(endUtf8))
             }
-            val renderFrame = AndroidRenderFrame(
-                transaction = frame.transaction,
-                progress = frame.progress,
-                viewportWidth = frame.viewportWidth,
-                viewportHeight = frame.viewportHeight,
-                scrollX = frame.scrollX,
-                scrollY = frame.scrollY,
+            val frame = coordinator.computeFrame(
+                frameTimeMs,
                 cursorUtf16 = rev?.cursorUtf16 ?: mirror.getCursorUtf16(),
                 cursorX = rev?.cursorX ?: 0f,
                 cursorY = rev?.cursorY ?: 0f,
@@ -269,9 +252,13 @@ class SujianEditorView @JvmOverloads constructor(
                 selectionEndUtf16 = rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16(),
                 compositionStartUtf16 = rev?.compositionStartUtf16 ?: -1,
                 compositionEndUtf16 = rev?.compositionEndUtf16 ?: -1,
-                searchHighlightsUtf16 = searchHighlightsUtf16
+                searchHighlightsUtf16 = searchHighlightsUtf16,
+                viewportWidth = width,
+                viewportHeight = height,
+                scrollX = scrollX,
+                scrollY = scrollY
             )
-            renderer.draw(canvas, layout, renderFrame)
+            renderer.draw(canvas, layout, frame)
         }
         canvas.restore()
         if (coordinator.hasActiveAnimation()) {

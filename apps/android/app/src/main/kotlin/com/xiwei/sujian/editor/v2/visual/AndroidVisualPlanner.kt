@@ -36,7 +36,8 @@ class AndroidVisualPlanner(
         newRevision: AndroidLayoutRevision?,
         resourceStore: VisualResourceStore,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
-        preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
+        preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
+        rebaseSnapshot: VisualFrameSnapshot? = null
     ): PreparedVisualTransaction {
         val durationMs = visualIntent.durationMs
         val transactionKey = System.nanoTime()
@@ -102,12 +103,18 @@ class AndroidVisualPlanner(
             )
         }
 
+        val finalSlices = if (rebaseSnapshot != null && rebaseSnapshot.sliceVisualStates.isNotEmpty()) {
+            applyRebaseToSlices(animatedSlices, rebaseSnapshot)
+        } else {
+            animatedSlices
+        }
+
         return PreparedVisualTransaction(
             transactionId = transactionKey,
             oldRevision = oldRev,
             newRevision = newRev,
             staticPatches = staticPatches,
-            animatedSlices = animatedSlices,
+            animatedSlices = finalSlices,
             selectionDecoration = buildSelectionDecoration(newRev),
             preeditDecoration = buildPreeditDecoration(newRev),
             cursorTransition = cursorTransition,
@@ -567,6 +574,42 @@ class AndroidVisualPlanner(
     }
 
     fun resetOldRevision() {
+    }
+
+    private fun applyRebaseToSlices(
+        slices: List<PreparedVisualTransaction.AnimatedSlice>,
+        rebaseSnapshot: VisualFrameSnapshot
+    ): List<PreparedVisualTransaction.AnimatedSlice> {
+        val rebaseById = rebaseSnapshot.sliceVisualStates.associateBy { it.snapshotId }
+        return slices.map { slice ->
+            val snapshotId = slice.snapshot?.snapshotId ?: return@map slice
+            val rebaseState = rebaseById[snapshotId] ?: return@map slice
+            when (slice.role) {
+                SliceRole.Move -> {
+                    slice.copy(
+                        fromDestinationRect = android.graphics.RectF(
+                            rebaseState.currentLeft,
+                            rebaseState.currentTop,
+                            rebaseState.currentRight,
+                            rebaseState.currentBottom
+                        )
+                    )
+                }
+                SliceRole.Insert -> {
+                    slice.copy(startAlpha = rebaseState.currentAlpha)
+                }
+                SliceRole.Delete -> {
+                    slice.copy(endAlpha = rebaseState.currentAlpha)
+                }
+                SliceRole.CrossfadeOld -> {
+                    slice.copy(endAlpha = rebaseState.currentAlpha)
+                }
+                SliceRole.CrossfadeNew -> {
+                    slice.copy(startAlpha = rebaseState.currentAlpha)
+                }
+                SliceRole.Static -> slice
+            }
+        }
     }
 
     private fun createSnapshotFromRevision(

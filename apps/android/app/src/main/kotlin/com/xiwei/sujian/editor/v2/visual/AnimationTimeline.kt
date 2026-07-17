@@ -72,5 +72,16 @@ class AnimationTimeline(
 
 data class VisualFrameSnapshot(
     val progress: Float,
-    val state: TransactionState
+    val state: TransactionState,
+    val sliceVisualStates: List<SliceVisualState> = emptyList()
+)
+
+data class SliceVisualState(
+    val snapshotId: Long,
+    val role: SliceRole,
+    val currentLeft: Float,
+    val currentTop: Float,
+    val currentRight: Float,
+    val currentBottom: Float,
+    val currentAlpha: Float
 )
