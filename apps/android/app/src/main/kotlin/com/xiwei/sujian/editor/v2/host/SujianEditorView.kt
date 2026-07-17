@@ -53,7 +53,7 @@ class SujianEditorView @JvmOverloads constructor(
         val bridge = kernelBridge ?: return
         val dto = bridge.loadText(text, cursorUtf8) ?: return
         val result = EditResult.fromDto(dto)
-        mirror.loadFromSnapshot(text, cursorUtf8, 0)
+        mirror.loadFromSnapshot(text, cursorUtf8, result.newRevision)
         layoutEngine.setWidth(width.toFloat())
         layoutEngine.requestLayout()
         visualPlanner.resetOldRevision()
@@ -112,8 +112,8 @@ class SujianEditorView @JvmOverloads constructor(
         val bridge = kernelBridge ?: return
         val dto = bridge.setSelection(anchorByteOffset, headByteOffset) ?: return
         val result = EditResult.fromDto(dto)
-        mirror.applyEditResult(result)
         val oldRevision = layoutEngine.getCurrentRevision()
+        mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, layoutEngine, resourceStore)
@@ -264,7 +264,7 @@ class SujianEditorView @JvmOverloads constructor(
         canvas.save()
         canvas.translate(-scrollX, -scrollY)
         val frameTimeMs = System.nanoTime() / 1_000_000
-        val frame = coordinator.computeFrame(frameTimeMs)
+        val frame = coordinator.computeFrame(frameTimeMs, width, height, scrollX, scrollY)
         val layout = layoutEngine.getLayout()
         if (layout != null) {
             renderer.draw(canvas, layout, frame, searchHighlights)
@@ -435,11 +435,17 @@ class SujianEditorView @JvmOverloads constructor(
         autoIndentWidthSp = widthSp
     }
 
+    fun isAutoIndentEnabled(): Boolean = autoIndentEnabled
+
+    fun getAutoIndentWidthSp(): Float = autoIndentWidthSp
+
     private var coordinatedAnimationEnabled: Boolean = true
 
     fun setCoordinatedAnimationEnabled(enabled: Boolean) {
         coordinatedAnimationEnabled = enabled
     }
+
+    fun isCoordinatedAnimationEnabled(): Boolean = coordinatedAnimationEnabled
 
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         themeBackgroundColor = colors.background
