@@ -53,8 +53,10 @@ class SujianEditorView @JvmOverloads constructor(
         val dto = bridge.loadText(text, cursorUtf8) ?: return
         val result = EditResult.fromDto(dto)
         mirror.loadFromSnapshot(text, cursorUtf8, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
-        updateLayoutConfig()
+        coordinator.cancelActiveTransaction()
+        resourceStore.releaseAll()
         visualPlanner.resetOldRevision()
+        updateLayoutConfig()
     }
 
     fun insertText(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
@@ -199,6 +201,12 @@ class SujianEditorView @JvmOverloads constructor(
         applyEditResultFull(result)
     }
 
+    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
+        val result = EditResult.fromDto(dto)
+        mirror.clearComposition()
+        applyEditResultFull(result)
+    }
+
     fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto) {
         mirror.clearComposition()
         replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
@@ -217,10 +225,10 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
-            layoutEngine.setWidth(w.toFloat())
-            layoutEngine.requestLayout()
+            updateLayoutConfig()
+        } else {
+            updateMaxScroll()
         }
-        updateMaxScroll()
         invalidate()
     }
 
@@ -344,7 +352,9 @@ class SujianEditorView @JvmOverloads constructor(
                     replaceRange(selStart, selEnd, "")
                 } else if (selEnd > 0) {
                     val prevGraphemeLen = previousGraphemeByteLen(selEnd)
-                    replaceRange(selEnd - prevGraphemeLen, selEnd, "")
+                    if (prevGraphemeLen > 0) {
+                        replaceRange(selEnd - prevGraphemeLen, selEnd, "")
+                    }
                 }
                 return true
             }
@@ -357,7 +367,9 @@ class SujianEditorView @JvmOverloads constructor(
                     val textLen = mirror.getText().toByteArray(Charsets.UTF_8).size
                     if (selEnd < textLen) {
                         val nextGraphemeLen = nextGraphemeByteLen(selEnd)
-                        replaceRange(selEnd, selEnd + nextGraphemeLen, "")
+                        if (nextGraphemeLen > 0) {
+                            replaceRange(selEnd, selEnd + nextGraphemeLen, "")
+                        }
                     }
                 }
                 return true
@@ -504,8 +516,9 @@ class SujianEditorView @JvmOverloads constructor(
         val cursorUtf8 = mirror.getCursorUtf8()
         val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
         val text = mirror.getText()
-        val lineStartUtf16 = text.lastIndexOf('\n', (cursorUtf16 - 1).coerceAtLeast(0)) + 1
-        val linePrefix = text.substring(lineStartUtf16, cursorUtf16.coerceAtMost(text.length))
+        val safeCursorUtf16 = cursorUtf16.coerceIn(0, text.length)
+        val lineStartUtf16 = text.lastIndexOf('\n', (safeCursorUtf16 - 1).coerceAtLeast(0)) + 1
+        val linePrefix = text.substring(lineStartUtf16, safeCursorUtf16)
         val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
         return indent
     }

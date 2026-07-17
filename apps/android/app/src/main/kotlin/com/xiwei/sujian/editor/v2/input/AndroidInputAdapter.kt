@@ -105,8 +105,7 @@ class AndroidInputAdapter(
         if (bridge != null) {
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, originalText)
             if (dto != null) {
-                val result = EditResult.fromDto(dto)
-                editorView.applyEditResultFull(result)
+                editorView.applyCompositionCommit(dto)
                 return
             }
         }
@@ -128,8 +127,7 @@ class AndroidInputAdapter(
         if (bridge != null) {
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, finalText, "")
             if (dto != null) {
-                val result = EditResult.fromDto(dto)
-                editorView.applyEditResultFull(result)
+                editorView.applyCompositionCommit(dto)
                 return
             }
         }

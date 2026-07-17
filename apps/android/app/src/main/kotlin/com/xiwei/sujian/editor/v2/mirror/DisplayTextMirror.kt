@@ -177,10 +177,13 @@ class DisplayTextMirror {
                 )
             }
 
-            val replaceStartUtf16 = indexMap.utf8ToUtf16(patch.replaceByteStart)
-            val replaceEndUtf16 = indexMap.utf8ToUtf16(patch.replaceByteEndExclusive)
+            val normReplaceStart = minOf(patch.replaceByteStart, patch.replaceByteEndExclusive)
+            val normReplaceEnd = maxOf(patch.replaceByteStart, patch.replaceByteEndExclusive)
 
-            buffer.replace(replaceStartUtf16, replaceEndUtf16, patch.insertedText)
+            val replaceStartUtf16 = indexMap.utf8ToUtf16(normReplaceStart)
+            val replaceEndUtf16 = indexMap.utf8ToUtf16(normReplaceEnd)
+
+            buffer.replace(replaceStartUtf16, replaceEndUtf16, patch.insertedText as CharSequence)
 
             currentRevision = patch.newRevision
             cursorUtf8 = patch.resultingSelectionEnd
@@ -214,7 +217,7 @@ class DisplayTextMirror {
         clearCompositionSpans()
 
         if (hasActiveComposition && compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
-            buffer.replace(compositionStartUtf16, compositionEndUtf16, preeditText)
+            buffer.replace(compositionStartUtf16, compositionEndUtf16, preeditText as CharSequence)
         } else {
             compositionReplaceStartUtf8 = replaceStartUtf8
             compositionReplaceEndUtf8 = replaceEndUtf8
@@ -222,10 +225,10 @@ class DisplayTextMirror {
             val insertEndUtf16 = indexMap.utf8ToUtf16(replaceEndUtf8)
             if (insertStartUtf16 < insertEndUtf16) {
                 compositionOriginalText = buffer.substring(insertStartUtf16, insertEndUtf16)
-                buffer.replace(insertStartUtf16, insertEndUtf16, preeditText)
+                buffer.replace(insertStartUtf16, insertEndUtf16, preeditText as CharSequence)
             } else {
                 compositionOriginalText = ""
-                buffer.insert(insertStartUtf16, preeditText)
+                buffer.insert(insertStartUtf16, preeditText as CharSequence)
             }
             compositionStartUtf16 = insertStartUtf16
             hasActiveComposition = true

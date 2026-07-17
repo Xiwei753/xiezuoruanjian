@@ -59,12 +59,12 @@ class AndroidRenderer {
         val transaction = frame.transaction
         if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
-            val animatedLineRegions = computeAnimatedLineRegions(layout, transaction)
-            renderLayoutWithAnimatedHoles(canvas, layout, animatedLineRegions)
+            val animatedRegions = computeAnimatedSliceRegions(transaction)
+            renderLayoutWithAnimatedHoles(canvas, layout, animatedRegions)
             renderSelectionDecoration(canvas, layout, transaction)
             renderAnimatedSlices(canvas, layout, transaction, frame.progress)
             renderPreeditDecoration(canvas, layout, transaction)
-            renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+            renderCursorWithTransition(canvas, layout, frame, transaction)
         } else {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             renderSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
@@ -95,21 +95,12 @@ class AndroidRenderer {
         }
     }
 
-    private fun computeAnimatedLineRegions(
-        layout: android.text.Layout,
+    private fun computeAnimatedSliceRegions(
         transaction: PreparedVisualTransaction
     ): List<android.graphics.RectF> {
-        val animatedLines = mutableSetOf<Int>()
-        for (slice in transaction.animatedSlices) {
-            slice.snapshot?.lineIndex?.let { animatedLines.add(it) }
-        }
         val regions = mutableListOf<android.graphics.RectF>()
-        for (lineIndex in animatedLines) {
-            if (lineIndex < 0 || lineIndex >= layout.lineCount) continue
-            regions.add(android.graphics.RectF(
-                layout.getLineLeft(lineIndex), layout.getLineTop(lineIndex).toFloat(),
-                layout.getLineRight(lineIndex), layout.getLineBottom(lineIndex).toFloat()
-            ))
+        for (slice in transaction.animatedSlices) {
+            regions.add(slice.destinationRect)
         }
         return regions
     }
@@ -165,6 +156,24 @@ class AndroidRenderer {
         val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
 
         canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
+    }
+
+    private fun renderCursorWithTransition(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        frame: AndroidRenderFrame,
+        transaction: PreparedVisualTransaction
+    ) {
+        val ct = transaction.cursorTransition
+        if (ct != null && ct.shouldAnimate) {
+            val progress = frame.progress
+            val currentX = ct.fromX + (ct.toX - ct.fromX) * progress
+            val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
+            val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
+            canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
+        } else {
+            renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+        }
     }
 
     private fun renderCursor(canvas: Canvas, layout: android.text.Layout, cursorUtf16: Int, cursorX: Float, cursorY: Float, cursorHeight: Float) {

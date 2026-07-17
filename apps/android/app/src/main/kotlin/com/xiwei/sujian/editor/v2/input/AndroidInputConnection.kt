@@ -33,16 +33,13 @@ class AndroidInputConnection(
 
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
         if (beforeLength == 0 && afterLength == 0) return true
-        if (adapter.isComposing()) {
-            adapter.handleCompositionFinish()
-            return true
-        }
         val indexMap = AndroidTextIndexMap(mirror)
         val cursorUtf16 = mirror.getCursorUtf16()
         val deleteStartUtf16 = (cursorUtf16 - beforeLength).coerceAtLeast(0)
         val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(mirror.getText().length)
         val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
         val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
+        if (byteStart > byteEnd) return false
         adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
         notifySelectionChanged()
         return true
@@ -50,10 +47,6 @@ class AndroidInputConnection(
 
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
         if (beforeLength == 0 && afterLength == 0) return true
-        if (adapter.isComposing()) {
-            adapter.handleCompositionFinish()
-            return true
-        }
         val text = mirror.getText()
         val cursorUtf16 = mirror.getCursorUtf16()
 
@@ -74,6 +67,7 @@ class AndroidInputConnection(
         val indexMap = AndroidTextIndexMap(mirror)
         val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
         val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
+        if (byteStart > byteEnd) return false
         adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
         notifySelectionChanged()
         return true

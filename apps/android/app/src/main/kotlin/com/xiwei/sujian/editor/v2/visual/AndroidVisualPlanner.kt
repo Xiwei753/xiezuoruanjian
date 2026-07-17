@@ -601,6 +601,7 @@ class AndroidVisualPlanner(
             AnimationModeDto.LINE_REFLOW_ANIMATION -> AnimationMode.LineReflowAnimation
             AnimationModeDto.SNAPSHOT_ANIMATION -> AnimationMode.SnapshotAnimation
             AnimationModeDto.SYSTEM_SUPPRESSED -> AnimationMode.SystemSuppressed
+            else -> AnimationMode.SystemSuppressed
         }
     }
 
@@ -618,32 +619,69 @@ class AndroidVisualPlanner(
             val docStart = slice.snapshot?.documentByteStart ?: -1
             val docEnd = slice.snapshot?.documentByteEndExclusive ?: -1
             val key = "${slice.role}_${docStart}_${docEnd}"
-            val candidates = rebaseByDocRange[key] ?: return@map slice
-            val rebaseState = candidates.firstOrNull() ?: return@map slice
-            when (slice.role) {
-                SliceRole.Move -> {
-                    slice.copy(
-                        fromDestinationRect = android.graphics.RectF(
-                            rebaseState.currentLeft,
-                            rebaseState.currentTop,
-                            rebaseState.currentRight,
-                            rebaseState.currentBottom
+            val candidates = rebaseByDocRange[key]
+            val rebaseState = candidates?.firstOrNull()
+            if (rebaseState != null) {
+                when (slice.role) {
+                    SliceRole.Move -> {
+                        slice.copy(
+                            fromDestinationRect = android.graphics.RectF(
+                                rebaseState.currentLeft,
+                                rebaseState.currentTop,
+                                rebaseState.currentRight,
+                                rebaseState.currentBottom
+                            )
                         )
-                    )
+                    }
+                    SliceRole.Insert -> {
+                        slice.copy(startAlpha = rebaseState.currentAlpha)
+                    }
+                    SliceRole.Delete -> {
+                        slice.copy(endAlpha = rebaseState.currentAlpha)
+                    }
+                    SliceRole.CrossfadeOld -> {
+                        slice.copy(endAlpha = rebaseState.currentAlpha)
+                    }
+                    SliceRole.CrossfadeNew -> {
+                        slice.copy(startAlpha = rebaseState.currentAlpha)
+                    }
+                    SliceRole.Static -> slice
                 }
-                SliceRole.Insert -> {
-                    slice.copy(startAlpha = rebaseState.currentAlpha)
+            } else {
+                val lineIndex = slice.snapshot?.lineIndex ?: -1
+                val lineRebaseStates = rebaseSnapshot.sliceVisualStates.filter {
+                    it.lineIndex == lineIndex && it.role == slice.role
                 }
-                SliceRole.Delete -> {
-                    slice.copy(endAlpha = rebaseState.currentAlpha)
+                val lineRebase = lineRebaseStates.firstOrNull()
+                if (lineRebase != null) {
+                    when (slice.role) {
+                        SliceRole.Move -> {
+                            slice.copy(
+                                fromDestinationRect = android.graphics.RectF(
+                                    lineRebase.currentLeft,
+                                    lineRebase.currentTop,
+                                    lineRebase.currentRight,
+                                    lineRebase.currentBottom
+                                )
+                            )
+                        }
+                        SliceRole.Insert -> {
+                            slice.copy(startAlpha = lineRebase.currentAlpha)
+                        }
+                        SliceRole.Delete -> {
+                            slice.copy(endAlpha = lineRebase.currentAlpha)
+                        }
+                        SliceRole.CrossfadeOld -> {
+                            slice.copy(endAlpha = lineRebase.currentAlpha)
+                        }
+                        SliceRole.CrossfadeNew -> {
+                            slice.copy(startAlpha = lineRebase.currentAlpha)
+                        }
+                        SliceRole.Static -> slice
+                    }
+                } else {
+                    slice
                 }
-                SliceRole.CrossfadeOld -> {
-                    slice.copy(endAlpha = rebaseState.currentAlpha)
-                }
-                SliceRole.CrossfadeNew -> {
-                    slice.copy(startAlpha = rebaseState.currentAlpha)
-                }
-                SliceRole.Static -> slice
             }
         }
     }
