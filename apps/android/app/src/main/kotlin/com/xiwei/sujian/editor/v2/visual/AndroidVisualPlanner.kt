@@ -714,19 +714,14 @@ class AndroidVisualPlanner(
         slices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot
     ): List<PreparedVisualTransaction.AnimatedSlice> {
-        val rebaseBySemanticKey = rebaseSnapshot.sliceVisualStates.groupBy {
-            semanticRebaseKey(it.role, it.lineIndex, it.documentByteStart, it.documentByteEndExclusive)
-        }
         val rebaseByLineAndRole = rebaseSnapshot.sliceVisualStates.groupBy {
             "${it.role}_${it.lineIndex}"
         }
         return slices.map { slice ->
             val lineIndex = slice.snapshot?.lineIndex ?: -1
-            val docStart = slice.snapshot?.documentByteStart ?: -1
-            val docEnd = slice.snapshot?.documentByteEndExclusive ?: -1
-            val exactKey = semanticRebaseKey(slice.role, lineIndex, docStart, docEnd)
-            val exactCandidates = rebaseBySemanticKey[exactKey]
-            val rebaseState = exactCandidates?.firstOrNull()
+            val lineKey = "${slice.role}_${lineIndex}"
+            val lineCandidates = rebaseByLineAndRole[lineKey]
+            val rebaseState = lineCandidates?.firstOrNull()
                 ?: findClosestRebaseState(slice, rebaseByLineAndRole)
             if (rebaseState != null) {
                 applyRebaseState(slice, rebaseState)
@@ -734,10 +729,6 @@ class AndroidVisualPlanner(
                 slice
             }
         }
-    }
-
-    private fun semanticRebaseKey(role: SliceRole, lineIndex: Int, docStart: Int, docEnd: Int): String {
-        return "${role}_${lineIndex}_${docStart}_${docEnd}"
     }
 
     private fun findClosestRebaseState(

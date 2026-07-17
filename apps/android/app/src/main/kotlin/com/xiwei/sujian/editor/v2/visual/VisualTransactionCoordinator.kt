@@ -15,7 +15,7 @@ class VisualTransactionCoordinator(
         val oldTimeline = timeline
 
         if (oldTransaction != null && oldTimeline != null) {
-            cancelTransaction(oldTransaction)
+            completeTransaction(oldTransaction)
         }
 
         activeTransaction = transaction

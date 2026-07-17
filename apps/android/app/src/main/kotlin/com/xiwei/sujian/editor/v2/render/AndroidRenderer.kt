@@ -74,6 +74,29 @@ class AndroidRenderer {
         }
     }
 
+    private fun computeAnimatedSliceRects(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
+        val rects = mutableListOf<android.graphics.RectF>()
+        for (slice in transaction.animatedSlices) {
+            val snapshot = slice.snapshot ?: continue
+            val srcRect = slice.sourceRect
+            if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
+            val destRect = if (slice.role == SliceRole.Move && slice.fromDestinationRect != null) {
+                val progress = 0f
+                val fromRect = slice.fromDestinationRect
+                android.graphics.RectF(
+                    fromRect.left + (slice.destinationRect.left - fromRect.left) * progress,
+                    fromRect.top + (slice.destinationRect.top - fromRect.top) * progress,
+                    fromRect.right + (slice.destinationRect.right - fromRect.right) * progress,
+                    fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
+                )
+            } else {
+                slice.destinationRect
+            }
+            rects.add(destRect)
+        }
+        return rects
+    }
+
     private fun renderSearchHighlights(
         canvas: Canvas,
         layout: android.text.Layout,
@@ -115,16 +138,10 @@ class AndroidRenderer {
             return
         }
         canvas.save()
-        val bgPaint = Paint().apply { color = backgroundColor; style = Paint.Style.FILL }
-        for (region in animatedLineRegions) {
-            canvas.drawRect(region, bgPaint)
-        }
-        canvas.save()
         for (region in animatedLineRegions) {
             canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
         }
         layout.draw(canvas)
-        canvas.restore()
         canvas.restore()
     }
 

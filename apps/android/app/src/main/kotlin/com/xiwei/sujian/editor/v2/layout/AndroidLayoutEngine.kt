@@ -60,7 +60,7 @@ class AndroidLayoutEngine(
         val rev = currentRevision ?: return emptyMap()
         val result = mutableMapOf<Int, AndroidLineSnapshot>()
         for (idx in lineIndices) {
-            val snapshot = snapshotBuilder.buildSnapshotForLine(l, idx, rev)
+            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror)
             if (snapshot != null) {
                 result[idx] = snapshot
             }

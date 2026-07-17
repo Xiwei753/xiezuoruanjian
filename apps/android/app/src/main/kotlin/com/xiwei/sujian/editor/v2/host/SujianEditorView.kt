@@ -108,9 +108,15 @@ class SujianEditorView @JvmOverloads constructor(
         applyEditResultFull(result)
     }
 
-    private fun applyEditResultFull(result: EditResult, beforePatch: (() -> Unit)? = null) {
+    private fun applyEditResultFull(result: EditResult, beforePatch: (() -> Unit)? = null, suppressContentCallback: Boolean = false) {
         val frameTimeMs = System.nanoTime() / 1_000_000
         val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
+
+        if (result.displayPatches.isEmpty() && result.baseRevision != result.newRevision) {
+            reloadFromKernel()
+            return
+        }
+
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
@@ -128,10 +134,28 @@ class SujianEditorView @JvmOverloads constructor(
         coordinator.submitTransaction(transaction)
         updateMaxScroll()
         scrollY = scrollY.coerceIn(0f, maxScrollY)
-        if (result.displayPatches.isNotEmpty()) {
+        if (!suppressContentCallback && result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
         }
         invalidate()
+    }
+
+    private fun reloadFromKernel() {
+        val bridge = kernelBridge ?: return
+        val snapshot = bridge.sessionSnapshot() ?: return
+        val cursorUtf8 = snapshot.cursor.toInt()
+        val selAnchorUtf8 = snapshot.selectionAnchor.toInt()
+        mirror.loadFromSnapshot(
+            snapshot.text,
+            cursorUtf8,
+            snapshot.revision.toLong(),
+            selAnchorUtf8,
+            cursorUtf8
+        )
+        coordinator.cancelActiveTransaction()
+        resourceStore.releaseAll()
+        updateLayoutConfig()
+        onContentChanged?.invoke(mirror.getText())
     }
 
     fun onCompositionUpdated() {
@@ -207,7 +231,8 @@ class SujianEditorView @JvmOverloads constructor(
         val bridge = kernelBridge ?: return
         val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
-        applyEditResultFull(result)
+        applyEditResultFull(result, suppressContentCallback = true)
+        onContentChanged?.invoke(mirror.getText())
     }
 
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
@@ -234,7 +259,11 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
-            updateLayoutConfig()
+            layoutEngine.setWidth(w.toFloat())
+            layoutEngine.requestLayout()
+            updateMaxScroll()
+            scrollY = scrollY.coerceIn(0f, maxScrollY)
+            invalidate()
         }
     }
 
@@ -420,7 +449,6 @@ class SujianEditorView @JvmOverloads constructor(
         if (!hasWindowFocus) {
             coordinator.cancelActiveTransaction()
             resourceStore.releaseAll()
-            visualPlanner.resetOldRevision()
         }
     }
 
@@ -552,4 +580,5 @@ interface EditorKernelBridge {
     fun setAnimationDurationMs(durationMs: Long)
     fun replaceAll(search: String, replacement: String, expectedRevision: Long): EditorEditResultDto?
     fun insertLineBreak(byteOffset: Int, autoIndentPrefix: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto?
 }

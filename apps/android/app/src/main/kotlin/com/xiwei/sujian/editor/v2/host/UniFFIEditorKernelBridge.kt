@@ -100,7 +100,7 @@ class UniFFIEditorKernelBridge(
         }
     }
 
-    fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto? {
+    override fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto? {
         return when (val result = appServiceBridge.editorKernelSessionSnapshot()) {
             is BridgeResult.Success -> result.data
             else -> null
