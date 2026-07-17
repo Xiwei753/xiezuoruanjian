@@ -2,7 +2,7 @@ use super::*;
 use crate::backend::SafeAppPtr;
 
 #[allow(non_snake_case)] // Qt QML naming convention
-#[allow(dead_code)] // qmetaobject macro fields used by Qt meta-object system
+#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct LinuxThemeController {
     base: qt_base_class!(trait QObject),

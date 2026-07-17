@@ -26,7 +26,7 @@ mod chapter_operations;
 mod writing_stats;
 
 #[allow(non_snake_case)] // Qt QML naming convention (e.g. projectsReloaded)
-#[allow(dead_code)] // qmetaobject macro fields used by Qt meta-object system
+#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct EditorBackend {
     base: qt_base_class!(trait QObject),

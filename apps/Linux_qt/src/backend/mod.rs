@@ -63,7 +63,12 @@ impl SafeAppPtr {
         // SAFETY: QObjectPinned is #[repr(transparent)] over &RefCell<T>;
         // transmuting to *const RefCell<T> preserves the address.
         // The caller must ensure the QObjectBox outlives all SafeAppPtr clones.
-        let cell_ptr: *const std::cell::RefCell<AppBackend> = unsafe { std::mem::transmute(pinned) };
+        // as *mut AppBackend pattern: this transmute extracts the heap address
+        // from QObjectPinned; no actual mutability is gained — the pointer
+        // is stored as *const and only dereferenced through RefCell guards.
+        let cell_ptr: *const std::cell::RefCell<AppBackend> =
+            // SAFETY: see comment block above; transmute extracts &RefCell address from repr(transparent) QObjectPinned.
+            unsafe { std::mem::transmute(pinned) };
         self.cell.set(cell_ptr);
     }
 
@@ -77,9 +82,9 @@ impl SafeAppPtr {
             );
             return default;
         }
-        // SAFETY: cell_ptr came from QObjectPinned which wraps &RefCell<AppBackend>;
-        // QObjectBox pins the RefCell on the heap; Rc<Cell<>> is !Send/!Sync;
-        // app_backend is the last field in BackendRuntime so it outlives all domain backends.
+        // SAFETY: cell_ptr from QObjectPinned(&RefCell<AppBackend>); QObjectBox pins on heap;
+        // Rc<Cell<>> is !Send/!Sync; app_backend is last field so outlives domain backends;
+        // RefCell::try_borrow provides runtime borrow checking; no aliasing violation.
         let cell_ref: &std::cell::RefCell<AppBackend> = unsafe { &*cell_ptr };
         match cell_ref.try_borrow() {
             Ok(guard) => f(&*guard),
@@ -104,9 +109,8 @@ impl SafeAppPtr {
             );
             return default;
         }
-        // SAFETY: same as with_app; &mut self prevents two domain backends from
-        // calling with_app_mut simultaneously through normal Rust control flow.
-        // RefCell::try_borrow_mut catches Qt signal re-entry at runtime.
+        // SAFETY: same as with_app; &mut self prevents concurrent with_app_mut;
+        // RefCell::try_borrow_mut catches Qt signal re-entry; no aliasing violation.
         let cell_ref: &std::cell::RefCell<AppBackend> = unsafe { &*cell_ptr };
         match cell_ref.try_borrow_mut() {
             Ok(mut guard) => f(&mut *guard),

@@ -7,7 +7,7 @@ use crate::sujian_editor_item::PreeditAttribute;
 
 /// 归一化输入事件 — Layer 2 → Layer 3 的唯一数据流
 #[derive(Clone, Debug)]
-#[allow(dead_code)] // enum variants used by EditorInputController dispatch
+#[allow(dead_code)] // SAFETY: enum variants used by EditorInputController dispatch
 pub(crate) enum EditorInputEvent {
     /// 普通文本插入（键盘直接输入、Linux 符号）
     PlainText { text: String },
