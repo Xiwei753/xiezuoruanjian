@@ -644,7 +644,7 @@ impl AppBackend {
             }
 
             let config_result = api.save_sync_config(c);
-            let config_json = match config_result {
+            let config_envelope = match config_result {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
                     vec!["sync_config.json".to_string()],
@@ -654,13 +654,10 @@ impl AppBackend {
                     }],
                 ),
                 Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-            }
-            .to_json_string();
-            let config_envelope: serde_json::Value = serde_json::from_str(&config_json)
-                .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
-            if config_envelope["success"] != true {
-                let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-                let message_key = config_envelope["messageKey"].as_str().unwrap_or("");
+            };
+            if !config_envelope.success {
+                let error_code = config_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+                let message_key = config_envelope.message_key.as_deref().unwrap_or("");
                 let resolved_key = if !message_key.is_empty() {
                     crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                 } else {
@@ -678,7 +675,7 @@ impl AppBackend {
                 });
             } else {
                 let secrets_result = api.save_sync_secrets(s);
-                let secrets_json = match secrets_result {
+                let secrets_envelope = match secrets_result {
                     Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                         data,
                         vec!["sync_secrets.local.json".to_string()],
@@ -688,13 +685,10 @@ impl AppBackend {
                         }],
                     ),
                     Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-                }
-                .to_json_string();
-                let secrets_envelope: serde_json::Value = serde_json::from_str(&secrets_json)
-                    .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
-                if secrets_envelope["success"] != true {
-                    let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-                    let message_key = secrets_envelope["messageKey"].as_str().unwrap_or("");
+                };
+                if !secrets_envelope.success {
+                    let error_code = secrets_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+                    let message_key = secrets_envelope.message_key.as_deref().unwrap_or("");
                     let resolved_key = if !message_key.is_empty() {
                         crate::backend::message_key_mapper::resolve_message_key(message_key)
                             .to_string()

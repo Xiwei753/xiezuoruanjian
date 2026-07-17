@@ -46,19 +46,22 @@ fn classify_error(e_str: &str) -> SyncStatus {
         SyncStatus::RecoverableError(e_str.replace("recoverable_error:", "").trim().to_string())
     } else if lower.contains("fatal_error") {
         SyncStatus::FatalError(e_str.replace("fatal_error:", "").trim().to_string())
-    } else if lower.contains("auth")
-        || lower.contains("token")
-        || lower.contains("credential")
-        || lower.contains("resolve")
-        || lower.contains("network")
-        || lower.contains("unborn")
-        || lower.contains("timeout")
-        || lower.contains("connect")
-        || lower.contains("could not resolve")
-    {
-        SyncStatus::RecoverableError(e_str.to_string())
     } else {
-        SyncStatus::FatalError(e_str.to_string())
+        let category = crate::sync::types::SyncErrorCategory::from_error_string(e_str);
+        match category {
+            crate::sync::types::SyncErrorCategory::AuthError
+            | crate::sync::types::SyncErrorCategory::TokenMissing
+            | crate::sync::types::SyncErrorCategory::TokenInvalid
+            | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
+            | crate::sync::types::SyncErrorCategory::GithubNetworkFailed
+            | crate::sync::types::SyncErrorCategory::DnsFailed
+            | crate::sync::types::SyncErrorCategory::TlsFailed
+            | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
+            | crate::sync::types::SyncErrorCategory::UnrelatedHistories => {
+                SyncStatus::RecoverableError(e_str.to_string())
+            }
+            _ => SyncStatus::FatalError(e_str.to_string()),
+        }
     }
 }
 

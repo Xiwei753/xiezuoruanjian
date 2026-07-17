@@ -899,7 +899,7 @@ impl AppBackend {
             local.selected_builtin_theme_id = self.current_setting_selected_builtin_theme_id.clone();
 
             let local_result = core.save_local_settings(local.clone());
-            let local_json = match local_result {
+            let local_envelope = match local_result {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
                     vec!["settings.local.json".to_string()],
@@ -909,18 +909,15 @@ impl AppBackend {
                     }],
                 ),
                 Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-            }
-            .to_json_string();
-            let local_envelope: serde_json::Value = serde_json::from_str(&local_json)
-                .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+            };
             self.debug_log(
                 "settings",
                 "save_local_settings_result",
-                &format!("success={}", local_envelope["success"]),
+                &format!("success={}", local_envelope.success),
             );
-            if local_envelope["success"] != true {
-                let error_code = local_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-                let message_key = local_envelope["messageKey"].as_str().unwrap_or("");
+            if !local_envelope.success {
+                let error_code = local_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+                let message_key = local_envelope.message_key.as_deref().unwrap_or("");
                 let resolved_key = if !message_key.is_empty() {
                     crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                 } else {
@@ -937,7 +934,7 @@ impl AppBackend {
             syncable.font_size = self.current_setting_font_size as f64;
 
             let syncable_result = core.save_syncable_settings(syncable.clone());
-            let syncable_json = match syncable_result {
+            let syncable_envelope = match syncable_result {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
                     vec!["settings.sync.json".to_string()],
@@ -947,18 +944,15 @@ impl AppBackend {
                     }],
                 ),
                 Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-            }
-            .to_json_string();
-            let syncable_envelope: serde_json::Value = serde_json::from_str(&syncable_json)
-                .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+            };
             self.debug_log(
                 "settings",
                 "save_syncable_settings_result",
-                &format!("success={}", syncable_envelope["success"]),
+                &format!("success={}", syncable_envelope.success),
             );
-            if syncable_envelope["success"] != true {
-                let error_code = syncable_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-                let message_key = syncable_envelope["messageKey"].as_str().unwrap_or("");
+            if !syncable_envelope.success {
+                let error_code = syncable_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+                let message_key = syncable_envelope.message_key.as_deref().unwrap_or("");
                 let resolved_key = if !message_key.is_empty() {
                     crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                 } else {

@@ -265,42 +265,25 @@ impl AppBackend {
     // -------------------------------------------------------------------------
     // Envelope 消费辅助函数
     // -------------------------------------------------------------------------
-    fn core_envelope_to_result(
+    fn typed_envelope_to_result(
         &mut self,
-        envelope_str: &str,
+        envelope: writer_core::api::ResultEnvelope<serde_json::Value>,
         on_success: impl FnOnce(&mut Self, &serde_json::Value),
     ) -> QString {
-        match serde_json::from_str::<serde_json::Value>(envelope_str) {
-            Ok(mut envelope) => {
-                if envelope.get("success").and_then(|v| v.as_bool()).unwrap_or(false) {
-                    on_success(self, &envelope);
-                    envelope["state"] = self.current_app_state_value();
-                    envelope.to_string().into()
-                } else {
-                    // 优先使用 messageKey 做本地化映射
-                    let message_key = envelope
-                        .get("messageKey")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let resolved_key = if !message_key.is_empty() {
-                        crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
-                    } else {
-                        "error.other".to_string()
-                    };
-                    let raw_error = envelope
-                        .get("rawError")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    // 保留 messageKey 到 envelope 中，供 QML 侧做进一步分支
-                    envelope["messageKey"] = serde_json::Value::String(message_key.to_string());
-                    self.mutation_error_json(resolved_key, raw_error)
-                }
-            }
-            Err(e) => {
-                let msg = format!("解析 envelope 失败: {}", e);
-                self.mutation_error_json("error.json_parse".to_string(), msg)
-            }
+        if envelope.success {
+            let mut value = serde_json::to_value(&envelope).unwrap_or_default();
+            on_success(self, &envelope.data.unwrap_or_default());
+            value["state"] = self.current_app_state_value();
+            value.to_string().into()
+        } else {
+            let message_key = envelope.message_key.as_deref().unwrap_or("");
+            let resolved_key = if !message_key.is_empty() {
+                crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
+            } else {
+                "error.other".to_string()
+            };
+            let raw_error = envelope.raw_error.as_deref().unwrap_or("").to_string();
+            self.mutation_error_json(resolved_key, raw_error)
         }
     }
 
@@ -327,13 +310,9 @@ impl AppBackend {
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::ProjectDto>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, value| {
-                if let Some(proj_id) = value
-                    .get("data")
-                    .and_then(|d| d.get("id"))
-                    .and_then(|v| v.as_str())
-                {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
+                if let Some(proj_id) = data.get("id").and_then(|v| v.as_str()) {
                     app.selected_project_id = Some(proj_id.to_string());
                     app.selected_item_changed();
                     app.selected_volume_id = None;
@@ -388,13 +367,9 @@ impl AppBackend {
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::VolumeDto>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, value| {
-                if let Some(vol_id) = value
-                    .get("data")
-                    .and_then(|d| d.get("id"))
-                    .and_then(|v| v.as_str())
-                {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
+                if let Some(vol_id) = data.get("id").and_then(|v| v.as_str()) {
                     app.selected_project_id = Some(project_id.to_string());
                     app.selected_volume_id = Some(vol_id.to_string());
                     app.selected_item_changed();
@@ -444,12 +419,9 @@ impl AppBackend {
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::ChapterMetaDto>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, value| {
-                if let Some(chap_id) = value
-                    .get("data")
-                    .and_then(|d| d.get("id"))
-                    .and_then(|v| v.as_str())
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
+                if let Some(chap_id) = data.get("id").and_then(|v| v.as_str())
                 {
                     app.selected_project_id = Some(project_id.to_string());
                     app.selected_volume_id = Some(volume_id.to_string());
@@ -490,8 +462,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ProjectDeleted".to_string(), entity_id: Some(project_id_str.clone()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, _value| {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
                 if app.selected_project_id.as_deref() == Some(&project_id_str) {
                     app.selected_project_id = None;
                     app.selected_volume_id = None;
@@ -536,8 +508,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "VolumeDeleted".to_string(), entity_id: Some(volume_id_str.clone()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, _value| {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
                 if app.selected_volume_id.as_deref() == Some(&volume_id_str) {
                     app.selected_volume_id = None;
                     app.clear_editor_state();
@@ -583,8 +555,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ChapterDeleted".to_string(), entity_id: Some(chapter_id_str.clone()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, _value| {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
                 if app.selected_chapter_id.as_deref() == Some(&chapter_id_str) {
                     app.clear_editor_state();
                 }
@@ -681,8 +653,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project_id.to_string()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, _value| {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
             })
@@ -742,8 +714,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume_id.to_string()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, _value| {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
             })
@@ -808,8 +780,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter_id.to_string()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.to_json_string();
-            self.core_envelope_to_result(&envelope, |app, _value| {
+            }.into_value_envelope();
+            self.typed_envelope_to_result(envelope, |app, data| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
             })

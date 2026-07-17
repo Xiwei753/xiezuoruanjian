@@ -37,104 +37,18 @@ pub fn mask_sync_error(msg: &str) -> String {
 
 /// 将 core 返回的强类型错误分类映射为 UI 状态码。
 pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str) -> String {
-    match category.unwrap_or("") {
-        "none" | "" => sync_error_category(fallback_msg),
-        "token_missing" => "token_missing".to_string(),
-        "token_invalid" => "token_invalid".to_string(),
-        "token_permission_denied" => "token_permission_denied".to_string(),
-        "auth_error" => "auth_failed".to_string(),
-        "repo_not_found_or_no_permission" => "repo_not_found_or_no_permission".to_string(),
-        "github_unauthorized" | "github_forbidden" => "auth_failed".to_string(),
-        "empty_url" => "not_configured".to_string(),
-        "missing_permission" => "permission_missing".to_string(),
-        "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => {
-            "network_failed".to_string()
-        }
-        "branch_missing" | "remote_branch_missing" => "branch_missing".to_string(),
-        "not_found" | "file_not_found" => {
-            // 404 含义需结合 fallback 消息判断：可能是仓库/权限问题，也可能是分支不存在
-            let lower = fallback_msg.to_lowercase();
-            if lower.contains("branch") || lower.contains("ref") {
-                "branch_missing".to_string()
-            } else {
-                "auth_failed".to_string()
-            }
-        }
-        "non_fast_forward" => "non_fast_forward".to_string(),
-        "conflict" | "checkout_conflict" | "local_blocking_file" => "conflict".to_string(),
-        "unrelated_histories" => "unrelated_histories".to_string(),
-        _ => "error".to_string(),
-    }
+    let cat = writer_core::sync::SyncErrorCategory::from_code(
+        category.unwrap_or(""),
+        fallback_msg,
+    );
+    cat.to_ui_status().to_string()
 }
 
 /// 根据遗留错误消息内容分类错误类型。仅作为 core 未提供 error_category 时的 fallback。
 pub fn sync_error_category(msg: &str) -> String {
-    let lower = msg.to_lowercase();
-    if lower.contains("token")
-        && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided"))
-    {
-        return "token_missing".to_string();
-    }
-    if lower.contains("resource not accessible by personal access token") {
-        return "token_permission_denied".to_string();
-    }
-    if lower.contains("repository not found")
-        || (lower.contains("not found") && lower.contains("repo"))
-        || lower.contains("404")
-        || lower.contains("permission denied")
-        || lower.contains("403")
-    {
-        return "auth_failed".to_string();
-    }
-    if lower.contains("ref not found")
-        || lower.contains("couldn't find remote ref")
-        || lower.contains("remote branch not found")
-        || (lower.contains("branch") && lower.contains("not found"))
-    {
-        return "branch_missing".to_string();
-    }
-    if lower.contains("non-fast-forward")
-        || lower.contains("non fast forward")
-        || lower.contains("nonfastforward")
-        || (lower.contains("fetch first") && lower.contains("push"))
-    {
-        return "non_fast_forward".to_string();
-    }
-    if lower.contains("checkout_conflict") || lower.contains("local_blocking_file") {
-        return "conflict".to_string();
-    }
-    if lower.contains("conflict") || lower.contains("merge conflict") {
-        return "conflict".to_string();
-    }
-    if lower.contains("unrelated") {
-        return "unrelated_histories".to_string();
-    }
-    if lower.contains("authentication")
-        || lower.contains("auth failed")
-        || lower.contains("401")
-        || lower.contains("credentials")
-        || lower.contains("could not authenticate")
-        || lower.contains("bad credentials")
-    {
-        return "auth_failed".to_string();
-    }
-    if lower.contains("resolve")
-        || lower.contains("timeout")
-        || lower.contains("connection refused")
-        || lower.contains("dns")
-        || lower.contains("network")
-        || lower.contains("proxy")
-        || lower.contains("eof")
-        || lower.contains("tls")
-        || lower.contains("ssl")
-        || lower.contains("certificate")
-        || lower.contains("unreachable")
-        || lower.contains("connection reset")
-        || lower.contains("no route to host")
-    {
-        return "network_failed".to_string();
-    }
-    "error".to_string()
+    writer_core::sync::SyncErrorCategory::from_error_string(msg)
+        .to_ui_status()
+        .to_string()
 }
 
 #[cfg(test)]
@@ -467,7 +381,7 @@ pub fn save_sync_configs(
 ) -> Result<(), String> {
     let api = WriterCoreApi::new(path);
     let config_result = api.save_sync_config(config.clone().into());
-    let config_json = match config_result {
+    let config_envelope = match config_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,
             vec!["sync_config.json".to_string()],
@@ -477,20 +391,15 @@ pub fn save_sync_configs(
             }],
         ),
         Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-    }
-    .to_json_string();
-    let config_envelope: serde_json::Value =
-        serde_json::from_str(&config_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
-    if config_envelope["success"] != true {
-        let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-        let raw_error = config_envelope["rawError"]
-            .as_str()
-            .unwrap_or("error.save_sync_config_failed");
+    };
+    if !config_envelope.success {
+        let error_code = config_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+        let raw_error = config_envelope.raw_error.as_deref().unwrap_or("error.save_sync_config_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 
     let secrets_result = api.save_sync_secrets(secrets.clone().into());
-    let secrets_json = match secrets_result {
+    let secrets_envelope = match secrets_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,
             vec!["sync_secrets.local.json".to_string()],
@@ -500,15 +409,10 @@ pub fn save_sync_configs(
             }],
         ),
         Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-    }
-    .to_json_string();
-    let secrets_envelope: serde_json::Value =
-        serde_json::from_str(&secrets_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
-    if secrets_envelope["success"] != true {
-        let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-        let raw_error = secrets_envelope["rawError"]
-            .as_str()
-            .unwrap_or("error.save_sync_secrets_failed");
+    };
+    if !secrets_envelope.success {
+        let error_code = secrets_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+        let raw_error = secrets_envelope.raw_error.as_deref().unwrap_or("error.save_sync_secrets_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 

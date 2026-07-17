@@ -704,7 +704,7 @@ impl WriterAppService {
     where
         F: FnOnce(&mut EditorSession) -> R,
     {
-        let mut session = self.editor_session.lock().unwrap();
+        let mut session = self.editor_session.lock().unwrap_or_else(|e| e.into_inner());
         f(&mut session)
     }
 

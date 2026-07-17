@@ -91,6 +91,20 @@ where
         }
     }
 
+    pub fn into_value_envelope(self) -> ResultEnvelope<serde_json::Value> {
+        ResultEnvelope {
+            success: self.success,
+            data: self.data.and_then(|d| serde_json::to_value(d).ok()),
+            error_code: self.error_code,
+            message_key: self.message_key,
+            message_args: self.message_args,
+            raw_error: self.raw_error,
+            warnings: self.warnings,
+            changed_paths: self.changed_paths,
+            changed_entities: self.changed_entities,
+        }
+    }
+
     pub fn to_json_string(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|err| {
             serde_json::json!({

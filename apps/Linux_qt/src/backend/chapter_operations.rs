@@ -59,47 +59,30 @@ impl AppBackend {
         let c = chapter_id.to_string();
         if let Some(core) = self.core_api() {
             return match core.open_chapter(&p, &v, &c) {
-                Ok(content) => serde_json::json!({
-                    "success": true,
-                    "data": {
+                Ok(content) => {
+                    let data = serde_json::json!({
                         "content": content.content,
                         "title": content.meta.title,
                         "projectId": p,
                         "volumeId": v,
                         "chapterId": c,
                         "meta": content.meta,
-                    },
-                    "warnings": [],
-                    "changedPaths": [],
-                    "changedEntities": [],
-                })
-                .to_string()
-                .into(),
-                Err(e) => serde_json::json!({
-                    "success": false,
-                    "errorCode": "CORE_ERROR",
-                    "messageKey": "error.io",
-
-                    "rawError": format!("{}", e),
-                    "warnings": [],
-                    "changedPaths": [],
-                    "changedEntities": [],
-                })
-                .to_string()
-                .into(),
+                    });
+                    writer_core::api::ResultEnvelope::success(data).to_json_string().into()
+                }
+                Err(e) => {
+                    writer_core::api::ResultEnvelope::<()>::error(
+                        writer_core::api::WriterError::Io(e.to_string()),
+                    )
+                    .to_json_string()
+                    .into()
+                }
             };
         }
-        serde_json::json!({
-            "success": false,
-            "errorCode": "INVALID_WORKSPACE",
-            "messageKey": "error.invalid_workspace",
-
-            "rawError": "Core not initialized",
-            "warnings": [],
-            "changedPaths": [],
-            "changedEntities": [],
-        })
-        .to_string()
+        writer_core::api::ResultEnvelope::<()>::error(
+            writer_core::api::WriterError::InvalidWorkspace,
+        )
+        .to_json_string()
         .into()
     }
 

@@ -557,30 +557,19 @@ impl AppBackend {
                     json.into()
                 }
                 Err(e) => {
-                    let err_json = serde_json::json!({
-                        "success": false,
-                        "messageKey": "error.core_error",
-                        "messageArgs": {},
-                        "rawError": e.to_string(),
-                        "warnings": [],
-                        "changedPaths": [],
-                        "changedEntities": [],
-                    });
-                    err_json.to_string().into()
+                    writer_core::api::ResultEnvelope::<()>::error(
+                        writer_core::api::WriterError::Io(e.to_string()),
+                    )
+                    .to_json_string()
+                    .into()
                 }
             }
         } else {
-            let err_json = serde_json::json!({
-                "success": false,
-                "errorCode": "INVALID_WORKSPACE",
-                "messageKey": "error.invalid_workspace",
-                "messageArgs": {},
-                "rawError": "Core not initialized",
-                "warnings": [],
-                "changedPaths": [],
-                "changedEntities": [],
-            });
-            err_json.to_string().into()
+            writer_core::api::ResultEnvelope::<()>::error(
+                writer_core::api::WriterError::InvalidWorkspace,
+            )
+            .to_json_string()
+            .into()
         }
     }
 

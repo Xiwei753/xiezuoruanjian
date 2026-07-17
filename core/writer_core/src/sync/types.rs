@@ -1,5 +1,235 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncErrorCategory {
+    None,
+    TokenMissing,
+    TokenInvalid,
+    TokenPermissionDenied,
+    AuthError,
+    RepoNotFoundOrNoPermission,
+    GithubUnauthorized,
+    GithubForbidden,
+    EmptyUrl,
+    MissingPermission,
+    NetworkProbeFailed,
+    GithubNetworkFailed,
+    DnsFailed,
+    TlsFailed,
+    BranchMissing,
+    RemoteBranchMissing,
+    NotFound,
+    FileNotFound,
+    NonFastForward,
+    Conflict,
+    CheckoutConflict,
+    LocalBlockingFile,
+    UnrelatedHistories,
+    LocalIoError,
+    ApiRateLimited,
+    ApiError,
+    DirtyRepo,
+    Other,
+}
+
+impl Default for SyncErrorCategory {
+    fn default() -> Self {
+        SyncErrorCategory::None
+    }
+}
+
+impl SyncErrorCategory {
+    pub fn to_ui_status(&self) -> &'static str {
+        match self {
+            SyncErrorCategory::None => "error",
+            SyncErrorCategory::TokenMissing => "token_missing",
+            SyncErrorCategory::TokenInvalid => "token_invalid",
+            SyncErrorCategory::TokenPermissionDenied => "token_permission_denied",
+            SyncErrorCategory::AuthError
+            | SyncErrorCategory::GithubUnauthorized
+            | SyncErrorCategory::GithubForbidden => "auth_failed",
+            SyncErrorCategory::RepoNotFoundOrNoPermission => "repo_not_found_or_no_permission",
+            SyncErrorCategory::EmptyUrl => "not_configured",
+            SyncErrorCategory::MissingPermission => "permission_missing",
+            SyncErrorCategory::NetworkProbeFailed
+            | SyncErrorCategory::GithubNetworkFailed
+            | SyncErrorCategory::DnsFailed
+            | SyncErrorCategory::TlsFailed => "network_failed",
+            SyncErrorCategory::BranchMissing | SyncErrorCategory::RemoteBranchMissing => {
+                "branch_missing"
+            }
+            SyncErrorCategory::NotFound | SyncErrorCategory::FileNotFound => "auth_failed",
+            SyncErrorCategory::NonFastForward => "non_fast_forward",
+            SyncErrorCategory::Conflict
+            | SyncErrorCategory::CheckoutConflict
+            | SyncErrorCategory::LocalBlockingFile => "conflict",
+            SyncErrorCategory::UnrelatedHistories => "unrelated_histories",
+            SyncErrorCategory::LocalIoError => "error",
+            SyncErrorCategory::ApiRateLimited => "error",
+            SyncErrorCategory::ApiError => "error",
+            SyncErrorCategory::DirtyRepo => "dirty_repo",
+            SyncErrorCategory::Other => "error",
+        }
+    }
+
+    pub fn to_message_key(&self) -> &'static str {
+        match self {
+            SyncErrorCategory::None => "sync.result.generic_error",
+            SyncErrorCategory::TokenMissing => "sync.result.token_missing",
+            SyncErrorCategory::TokenInvalid => "sync.result.token_invalid",
+            SyncErrorCategory::TokenPermissionDenied => "sync.result.token_permission_denied",
+            SyncErrorCategory::AuthError => "sync.result.auth_failed",
+            SyncErrorCategory::RepoNotFoundOrNoPermission => {
+                "sync.result.repo_not_found_or_no_permission"
+            }
+            SyncErrorCategory::GithubUnauthorized | SyncErrorCategory::GithubForbidden => {
+                "sync.result.auth_failed"
+            }
+            SyncErrorCategory::EmptyUrl => "sync.result.configured_not_tested",
+            SyncErrorCategory::MissingPermission => "sync.result.permission_missing",
+            SyncErrorCategory::NetworkProbeFailed
+            | SyncErrorCategory::GithubNetworkFailed
+            | SyncErrorCategory::DnsFailed
+            | SyncErrorCategory::TlsFailed => "sync.result.network_failed",
+            SyncErrorCategory::BranchMissing | SyncErrorCategory::RemoteBranchMissing => {
+                "sync.result.branch_recovered_summary"
+            }
+            SyncErrorCategory::NotFound | SyncErrorCategory::FileNotFound => {
+                "sync.result.auth_failed"
+            }
+            SyncErrorCategory::NonFastForward => "sync.result.non_fast_forward",
+            SyncErrorCategory::Conflict
+            | SyncErrorCategory::CheckoutConflict
+            | SyncErrorCategory::LocalBlockingFile => "sync.result.conflict_summary",
+            SyncErrorCategory::UnrelatedHistories => "sync.result.unrelated_histories",
+            SyncErrorCategory::LocalIoError => "sync.result.generic_error",
+            SyncErrorCategory::ApiRateLimited => "sync.result.generic_error",
+            SyncErrorCategory::ApiError => "sync.result.generic_error",
+            SyncErrorCategory::DirtyRepo => "sync.result.dirty_repo_blocked",
+            SyncErrorCategory::Other => "sync.result.generic_error",
+        }
+    }
+
+    pub fn from_error_string(msg: &str) -> Self {
+        let lower = msg.to_lowercase();
+        if lower.contains("token")
+            && (lower.contains("missing")
+                || lower.contains("empty")
+                || lower.contains("not provided"))
+        {
+            return SyncErrorCategory::TokenMissing;
+        }
+        if lower.contains("resource not accessible by personal access token") {
+            return SyncErrorCategory::TokenPermissionDenied;
+        }
+        if lower.contains("repository not found")
+            || (lower.contains("not found") && lower.contains("repo"))
+            || lower.contains("404")
+            || lower.contains("permission denied")
+            || lower.contains("403")
+        {
+            return SyncErrorCategory::RepoNotFoundOrNoPermission;
+        }
+        if lower.contains("ref not found")
+            || lower.contains("couldn't find remote ref")
+            || lower.contains("remote branch not found")
+            || (lower.contains("branch") && lower.contains("not found"))
+        {
+            return SyncErrorCategory::BranchMissing;
+        }
+        if lower.contains("non-fast-forward")
+            || lower.contains("non fast forward")
+            || lower.contains("nonfastforward")
+            || (lower.contains("fetch first") && lower.contains("push"))
+        {
+            return SyncErrorCategory::NonFastForward;
+        }
+        if lower.contains("checkout_conflict") || lower.contains("local_blocking_file") {
+            return SyncErrorCategory::CheckoutConflict;
+        }
+        if lower.contains("conflict") || lower.contains("merge conflict") {
+            return SyncErrorCategory::Conflict;
+        }
+        if lower.contains("unrelated") {
+            return SyncErrorCategory::UnrelatedHistories;
+        }
+        if lower.contains("authentication")
+            || lower.contains("auth failed")
+            || lower.contains("401")
+            || lower.contains("credentials")
+            || lower.contains("could not authenticate")
+            || lower.contains("bad credentials")
+        {
+            return SyncErrorCategory::AuthError;
+        }
+        if lower.contains("resolve")
+            || lower.contains("timeout")
+            || lower.contains("connection refused")
+            || lower.contains("dns")
+            || lower.contains("network")
+            || lower.contains("proxy")
+            || lower.contains("eof")
+            || lower.contains("tls")
+            || lower.contains("ssl")
+            || lower.contains("certificate")
+            || lower.contains("unreachable")
+            || lower.contains("connection reset")
+            || lower.contains("no route to host")
+        {
+            return SyncErrorCategory::GithubNetworkFailed;
+        }
+        SyncErrorCategory::Other
+    }
+
+    pub fn from_code(code: &str, fallback_msg: &str) -> Self {
+        match code {
+            "none" | "" => Self::from_error_string(fallback_msg),
+            "token_missing" => SyncErrorCategory::TokenMissing,
+            "token_invalid" => SyncErrorCategory::TokenInvalid,
+            "token_permission_denied" => SyncErrorCategory::TokenPermissionDenied,
+            "auth_error" => SyncErrorCategory::AuthError,
+            "repo_not_found_or_no_permission" => SyncErrorCategory::RepoNotFoundOrNoPermission,
+            "github_unauthorized" => SyncErrorCategory::GithubUnauthorized,
+            "github_forbidden" => SyncErrorCategory::GithubForbidden,
+            "empty_url" => SyncErrorCategory::EmptyUrl,
+            "missing_permission" => SyncErrorCategory::MissingPermission,
+            "network_probe_failed" => SyncErrorCategory::NetworkProbeFailed,
+            "github_network_failed" => SyncErrorCategory::GithubNetworkFailed,
+            "dns_failed" => SyncErrorCategory::DnsFailed,
+            "tls_failed" => SyncErrorCategory::TlsFailed,
+            "branch_missing" => SyncErrorCategory::BranchMissing,
+            "remote_branch_missing" => SyncErrorCategory::RemoteBranchMissing,
+            "not_found" => {
+                let lower = fallback_msg.to_lowercase();
+                if lower.contains("branch") || lower.contains("ref") {
+                    SyncErrorCategory::BranchMissing
+                } else {
+                    SyncErrorCategory::NotFound
+                }
+            }
+            "file_not_found" => {
+                let lower = fallback_msg.to_lowercase();
+                if lower.contains("branch") || lower.contains("ref") {
+                    SyncErrorCategory::BranchMissing
+                } else {
+                    SyncErrorCategory::FileNotFound
+                }
+            }
+            "non_fast_forward" => SyncErrorCategory::NonFastForward,
+            "conflict" => SyncErrorCategory::Conflict,
+            "checkout_conflict" => SyncErrorCategory::CheckoutConflict,
+            "local_blocking_file" => SyncErrorCategory::LocalBlockingFile,
+            "unrelated_histories" => SyncErrorCategory::UnrelatedHistories,
+            "local_io_error" => SyncErrorCategory::LocalIoError,
+            "api_rate_limited" => SyncErrorCategory::ApiRateLimited,
+            "api_error" => SyncErrorCategory::ApiError,
+            "dirty_repo" => SyncErrorCategory::DirtyRepo,
+            _ => SyncErrorCategory::Other,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -274,21 +504,8 @@ impl SyncResult {
 }
 
 fn sync_error_category_to_message_key(category: &str) -> String {
-    match category {
-        "conflict" => "sync.result.conflict_summary".to_string(),
-        "remote_branch_missing" => "sync.result.branch_recovered_summary".to_string(),
-        "token_missing" => "sync.result.token_missing".to_string(),
-        "token_invalid" => "sync.result.token_invalid".to_string(),
-        "token_permission_denied" => "sync.result.token_permission_denied".to_string(),
-        "repo_not_found_or_no_permission" => "sync.result.repo_not_found_or_no_permission".to_string(),
-        "auth_failed" => "sync.result.auth_failed".to_string(),
-        "network_failed" => "sync.result.network_failed".to_string(),
-        "non_fast_forward" => "sync.result.non_fast_forward".to_string(),
-        "unrelated_histories" => "sync.result.unrelated_histories".to_string(),
-        "not_configured" => "sync.result.configured_not_tested".to_string(),
-        "dirty_repo" => "sync.result.dirty_repo_blocked".to_string(),
-        _ => "sync.result.generic_error".to_string(),
-    }
+    let cat = SyncErrorCategory::from_code(category, "");
+    cat.to_message_key().to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
