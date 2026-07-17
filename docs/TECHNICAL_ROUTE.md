@@ -1,287 +1,119 @@
 # 技术路线与架构约束
 
-Status: active
-Last verified: 2026-06-11
-Truth source: code / product decision / protocol
-Supersedes: docs/TECHNICAL_ROUTE.md (previous version)
+本文档只定义长期架构，不记录阶段性实现步骤。
 
-## 最高优先级规则
-- **核心契约约束：** 所有跨平台业务设计与能力对齐，必须以本文档为唯一准则。其优先级高于任何单端（Android、Linux、未来新增端）的局部技术路线和实现细节。
-- 任何后续提示词、AI 任务、人工改动，如果与本文档冲突，以本文档为准。
-- 不能在功能实现中私自换技术栈，更不能绕过 Core 在平台端私自建立业务状态机。
-- 如需改变路线，必须先单独提交技术路线文档变更，并说明为什么旧路线不再适用。
+## 总体结构
 
-## 当前仓库事实
-- 平台目录路线：
-  - `apps/Linux_qt` 只服务 Linux Qt/QML 客户端，优先稳定 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、渲染、动画、日志导出和 runtime profile，不混 Windows 兼容逻辑。
-  - `apps/windows` 是 Windows 原生客户端唯一落点：WinUI 3 / Windows App SDK 应用壳 + 自研 SujianEditor + DirectWrite/Direct2D + Windows IME + Rust `writer_core`。不得复用 Linux Qt/QML，也不得另设 Windows 桌面专用新目录。
-  - 后续如需 GTK，可新增 Linux GTK 客户端目录，当前不新增实现。
-  - Android 继续作为独立原生客户端推进。
-  - HarmonyOS 保持既有骨架和 Rust Core 内核接入。
-- Android：
-  - Kotlin + XML/View。
-  - AppCompat / Material / ConstraintLayout / Lifecycle。
-  - 当前主业务入口是 `AppServiceBridge + UniFFI` 自动生成的 Kotlin 绑定。
-  - `NativeCoreBridge` / `writer_core_jni` 仅作为 legacy JSON/JNI fallback，不是新业务入口。
-  - 只正式支持 arm64-v8a。
-  - 暂不引入 Compose 作为主 UI 技术。
-- Windows：
-  - 当前路线是 `apps/windows` 原生 WinUI 3 / Windows App SDK 客户端。
-  - 正文写作区必须是自研 `SujianEditor`，文本布局/渲染走 DirectWrite/Direct2D，IME 走 Windows 原生 composition/commit 与候选窗口锚点链路。
-  - issue #433 执行顺序：先验证自研 `SujianEditor` MVP（纯文本显示、点击定位、输入、删除、换行、方向键、基础滚动、微软拼音 composition/commit、候选窗口锚点、通过 `writer_core` 打开/保存章节），再补设置页、统计页、同步页等完整页面。
-  - Windows 客户端只负责 UI、输入法、光标、文本布局、渲染、动画和平台集成；工作区、项目、卷、章节、保存、同步、设置等业务逻辑继续由 `core/writer_core` 提供。
-  - 禁止恢复 Windows Qt 旧实现、旧打包、旧安装器、旧 workflow、旧 runtime profile、DWM/IME/pending-key 兼容入口。
-- Linux：
-  - 当前是 `apps/Linux_qt` Qt/QML 路线。
-  - 遵循 Qt/KDE Linux 应用路线，当前优先级是 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、输入法、渲染、动画、日志导出和 runtime profile。
-  - 不再随意 Qt5 / Qt6 / Qt Quick / 其他 UI 栈来回切。
-- Core：
-  - Rust Core 是业务真相来源。
-  - 工作区、作品、卷、章节、同步、删除安全等由 Core 兜底。
-  - `core/writer_core/src/api/` 是当前跨平台稳定 API 层，`facade::WriterCore` 是内部聚合入口，`app_service.rs` 是 UniFFI adapter。
+素笺写作采用“Rust Core + 平台原生客户端”的单仓库结构。
 
-## 总体原则
-- Core 负责业务数据和跨平台逻辑。
-- 平台端负责输入、渲染、系统能力接入。
-- UI 不保存长期业务真相。
-- 不用临时文件或 SharedPreferences 绕过 Core。
-- 不在 UI 层假成功。
-- 不在 UI 层吞错误。
-- 不用过程文档替代架构文档。
+- Rust Core 负责业务数据、磁盘格式、项目结构、设置、同步、统计和跨平台规则。
+- 平台客户端负责界面、导航、输入法、排版、渲染、动画和系统集成。
+- Bridge 只转换类型和调用约定，不复制业务规则。
 
-## 编辑器底层路线
-- 最新路线见 [自绘编辑器与统一事件层路线](editor_engine_route.md)。
-- 编辑器路线是：Core 统一编辑事务 + 平台原生文本能力 + 必要时自绘渲染层。
-- Core `editor` 模块统一产出 `EditorTransaction` 与 `EditorVisualTransaction` 等平台无关语义；新路线统一称 `visual_transaction_json` / typed visual transaction。
-- Android SujianEditorView 是 Android 正文写作区唯一主路径，分层绘制，接管选区、光标与动画；不得回退 EditText/Span 正文方案。
-- Linux `apps/Linux_qt` 正文写作区唯一主路径是 `SujianEditorItem` + `AnimationCoordinator` / `RenderPlan` / `VisualPayload`。
-- Linux 动画只能走 Core visual transaction → Rust AnimationCoordinator → RenderPlan → SujianEditorItem Scene Graph：
-  Core `EditorVisualTransaction` → `SujianEditorItem.visual_transaction_json` → Rust `AnimationCoordinator` / `RenderPlan` → Scene Graph 节点更新。
-  Insert 动画期间，静态正文层临时跳过 inserted range（自研渲染层的内部渲染状态，不是正文数据污染），AnimationCoordinator 驱动纹理动画。
-  Delete 动画使用旧 glyph snapshot（删除前的字形位置），AnimationCoordinator 驱动吞回动画。
-  动画由 SujianEditorItem 内部 Scene Graph 渲染，不是 QML overlay。
-  禁止恢复：TextArea fallback、QTextDocument 字符格式隐藏、正文透明 span/透明颜色污染正文数据、正文完整绘制+overlay冒充真吐字。
-  自研渲染层自己的 hidden range 是允许的内部渲染状态，不是正文数据污染。
-  Insert 与 reflow 动画完成/跳过必须优先按 transactionId / rangeId 清 hidden range，byte range 只能作为旧数据兜底；滚动、加载正文、格式化、字号变化、章节切换、关闭动画时必须立即清空或落最终状态。
-- Android SujianEditorView 已进入自绘阶段，分层绘制：静态正文层 → 选区高亮层 → preedit 层 → 动画层 → 光标层。
-  动画期间静态层跳过 animated insert range 避免重影，删除动画使用删除前 snapshot glyph rect。
-  动画数据走 Core typed `EditorVisualTransactionData`，`SujianEditorView` 是唯一主路径；不得回退 WriterEditText、Span/透明文字、typed DTO → JSON → 手写 parser。活跃动画期间继续 `invalidate`，滚动中不创建动画，关闭动画后真实正文、保存、撤销不受影响；`insertRangeId` / `reflowRangeIds` 精确清 hidden range 必须保留。
+依赖方向固定为：
 
-## 三端边界
-- Windows：`apps/windows` 原生 WinUI 3 / Windows App SDK + 自研 SujianEditor + DirectWrite/Direct2D。
-- Linux：`apps/Linux_qt` Qt/QML + SujianEditorItem + AnimationCoordinator/RenderPlan。
-- Android：`apps/android` Kotlin View + 自研 SujianEditorView。
-- 三端共享 `writer_core`、typed DTO、设置 key、同步协议、统计格式和动画事务语义；不共享 UI、输入法、光标、打包、标题栏、平台渲染实现。
+```text
+UI / Platform
+    ↓
+Typed Bridge / Adapter
+    ↓
+Rust Core API
+    ↓
+Domain / Storage / Sync
+```
 
-## Android 图谱技术路线
-- 图谱不是普通页面，而是大画布图形系统。**图谱最终是与正文并列的创作知识图谱，不仅限于章节树结构。**
-- 章节结构图只是图谱在未自定义时的**一种自动生成视图**。
-- 正文和图谱通过 anchor 和 link 绑定。
-- 数据模型与布局在 Rust Core。**存储也必须由 Rust Core 的 workspace 统一管理**，不允许 Android 私自用 SharedPreferences 等保存长期图数据。
-- Android 只拿快照渲染。
-- Android 不在每帧访问 Rust Core。
-- Android 不在每帧解析 JSON。
-- Android 不在每帧重新布局。
-- Android 不用 RecyclerView / LinearLayout / 普通 ViewGroup 拼节点。
-- Android 不用 WebView 做图谱。
-- Android 暂不迁移 Compose。
-- Compose Canvas 可作为参考，但不是当前主路线。
-- 正式图谱路线为 **StarMap**（星图）。MindMap 已废弃，仅保留迁移兼容。
-- 推荐路线：
-  - V1：建立 StarMapSnapshot、StarMapRenderer 接口、Android 自定义渲染 View 骨架。
-  - V1 可以用硬件加速 Canvas 验证数据链路和交互。
-  - 渲染接口必须预留 GLSurfaceView/OpenGL ES 后端。
-  - 目标路线是独立渲染 Surface + GPU 批量绘制节点/边/文本纹理。
-  - 后续性能不足时升级到 GLSurfaceView/OpenGL ES，不推翻 Core 和 Model。
-- 为什么：
-  - 普通 View 树无法承受大量节点高频平移缩放。
-  - RecyclerView 是列表，不是无限二维画布。
-  - WebView 会带来输入延迟、调试复杂、原生能力割裂。
-  - Compose 迁移成本高，当前仓库没有 Compose 依赖，不适合为导图单点引入新 UI 栈。
-  - OpenGL ES / GLSurfaceView 是 Android 大画布高性能图形路线之一。
+下层不得依赖上层，Core 不知道任何平台 UI 类型。
 
-## 跨语言暴露层与传输路线 (FFI / UniFFI)
-- **当前路线：**
-  - Rust Core 是唯一业务真相来源，Android 主业务入口固定为 `AppServiceBridge + UniFFI`。
-  - Rust `api/` 模块定义稳定 DTO、错误映射和 `WriterCoreApi` 服务，是 Core API 层收口的事实边界。
-  - `core/writer_core/src/api.udl` 只声明 UniFFI 需要暴露的 DTO、错误枚举和 `WriterAppService` 方法；Kotlin `writer_core.kt` 必须由 UniFFI 生成，不得手写业务逻辑。
-  - `core/writer_core/src/app_service.rs` 是薄 UniFFI adapter，只保留 Android 兼容的 `WriterAppService` 对象和方法名，并委托 `api::WriterCoreApi`。
-  - Android 分层为 `UI/ViewModel -> Repository/Controller -> Workspace/Writing/Settings/Sync/Stats/StarMap Bridge -> AppServiceBridge -> UniFFI -> Rust Core`。
-  - 当前路线已经从“FFI 主链路收口”进入“Core API 层收口”：新增平台能力应优先落到 Rust `api/`，再由 UniFFI 或其他平台 adapter 暴露。
-- **typed DTO 与 envelope_json 的演进与收口路线：**
-  - **唯一性原则**：UI 层与 Repository 层只能使用 UniFFI 暴露的 **typed DTO** 进行业务交互，防止出现同一功能双重入口和双套错误映射。
-  - **JSON 边界封闭**：所有基于 `envelope_json` (JSON fallback) 的残留接口必须**严格封闭在各个 Bridge 内部**（并在 Bridge 内转换为强类型 Model 或 `BridgeResult<T>`），禁止泄露至 Repository 或 UI 层。
-  - **新功能红线**：新开发的功能**绝对禁止**继续添加 `envelope_json` 形式的 API，必须完全采用 typed DTO。
-  - **旧接口清理**：现有的 `envelope_json` API 全部标记为 `legacy`（过时），后续迭代中逐步予以重构和删除。
-- **legacy JSON 使用边界：**
-  - `NativeCoreBridge` / `writer_core_jni` 仅保留给尚未迁完的 fallback、native 加载状态和少量 legacy 动作路径。
-  - 统计、星图等尚返回 JSON 字符串的接口是临时迁移残留，只能封闭在领域 Bridge 内并转换为 `BridgeResult<T>`；不得把裸 JSON 扩散到 UI 作为新契约。
-  - 当前收口目标不是把所有 Core 接口一次性 API-ification / typed DTO 化，而是先确保残留 JSON 不越过领域 Bridge 边界。
-- **禁止事项：**
-  - 禁止在 UI / Repository 层直接使用/调用任何 `envelope_json` 或 raw JSON 字符串 API。
-  - 禁止在新功能/新模块的接口设计中添加或使用 `envelope_json` / `_envelope_json` 方法。
-  - 禁止把 `NativeCoreBridge + JSON over JNI` 写成当前主路线。
-  - 禁止用 JSON 字符串伪装 UniFFI typed API。
-  - 禁止把 `api.udl`当作业务 API 的唯一设计文档或事实来源。
-  - 禁止把 `app_service.rs` 继续扩展成 DTO、错误、业务转发混杂的大文件。
-  - 禁止手改 UniFFI 生成文件中的业务逻辑。
-  - 禁止继续新增手写 `Java_com_xiwei_...` JNI 主业务函数。
+## 平台路线
 
-## 网络同步路线
-- **核心原则：** 拥抱基于 Token 的标准 API，对容易失败的底层代理探测进行"断舍离"。
-- **主路线：GitHub API 同步**
-  - **唯一正式用户路线**是 `BackendType::GithubApi`，即基于 GitHub REST API + Token 的同步。
-  - 所有业务流程、多端同步、诊断、UI 入口均围绕 GitHub API 设计和保证。
-  - 文档和 UI 必须明确主路线只支持 GitHub API 同步。
-- **Git/libgit2 标记为 legacy**
-  - `BackendType::Git`（基于 libgit2 的同步）是 **legacy 后端**，不承诺独立诊断，不再当正式用户路线。
-  - Git 后端不支持独立 diagnose（返回 `unsupported_git_backend`），不保证在所有网络环境下可用。
-  - 不再为 Git 后端新增功能、修复或诊断能力。
-  - **禁止**在 UI 中将 Git 后端作为推荐选项或默认选项展示。
-  - 未来破坏性版本可能完全移除 Git 后端。
-- **Android 与多端演进：**
-  - 由于移动端（Android）和部分受限网络环境（Linux）下，底层 C 语言库（`libgit2`）对系统 VPN 和代理透明转发的支持极差，导致频繁出现 `Certificate (-17)` 和 TCP 阻断问题。
-  - **当前确立**：彻底拥抱基于 Token 的 HTTP/REST API（如 GitHub API）。精简乃至删除内核中对底层 22 端口、443 端口的暴力 TCP 探测和 HTTP CONNECT 代理探针。
-- **未来可能扩展能力：**
-  - 后续可根据需要将同步服务扩展到 WebDav、S3 等其他存储介质，同步服务内部预留 `BackendType` 枚举抽象。
-  - **UI 红线约束**：当前绝对不得在客户端 UI 或 settings 界面新增 WebDav / S3 的假入口或选项占位，避免给用户造成功能已就绪的误导。
-  - 网络层只需保证 HTTP Client (如 `reqwest`) 能读取系统级别或用户设定的常规代理配置，网络连接的具体报错直接抛给上层，不在底层过度诊断拦截。
+- Android 使用原生 Kotlin 客户端。
+- Linux 使用独立的 Qt 原生客户端。
+- Windows 使用独立的 Windows 原生客户端，不复用 Linux Qt 界面实现。
+- HarmonyOS 保留原生客户端与 Rust Core 接入。
+- 新平台复用 Core 契约，不复制现有平台 UI。
 
-## AI 智能体旁路路线 (AI Agent Bypass)
-- **核心原则：** AI 服务不能干扰主线业务数据的原子写入，必须作为“旁路辅助”。
-- **行动驱动 (Action-Driven UI)：**
-  - AI 不能只返回干瘪的文本回答。
-  - AI 模块必须返回结构化的 `AiActionResponse`，包含 `display_text`（给人看的）和 `actions: Vec<AiAction>`（给 UI 画按钮的）。
-  - 各端 UI（Android/Linux）收到数据后，在对话框底部渲染原生按钮。用户点击按钮，通过 UniFFI 接口直接调用 Core 的执行函数（如 `navigate_to_settings` 或 `apply_theme`），实现真正的“智能体”体验。
+不同平台可以有不同的排版、输入法和渲染实现，但功能语义、设置键、数据格式和同步规则必须一致。
 
-## Android 图谱分层职责 (正式路线为 StarMap)
-- Rust Core：
-  - StarMapGraph / StarMapNode / StarMapEdge / StarMapEmbed / StarMapLink / StarMapLayout / StarMapSnapshot。
-  - 真正作为正文并列图谱的数据由 Core 读写并生成快照。若没有自定义图谱，则退化为从作品/卷/章节自动生成的结构图。
-  - 计算 grid / radial 布局。
-  - 支持节点与正文片段（StarMapAnchor）的双向绑定，便于后续 AI 扩写及跳转。
-- Android Bridge：
-  - 主链路通过 `AppServiceBridge + UniFFI` 暴露 typed DTO / typed error。
-  - 少量高复杂度统计/图谱快照可暂时返回 JSON 字符串，但必须封闭在领域 Bridge 内。
-  - 后续可新增 typed snapshot 或 buffer 传输，但不能把 JSON/JNI fallback 恢复成主路线。
-  - 不泄露 token。
-  - 不崩溃。
-- Android Model：
-  - Kotlin data class 映射快照。
-  - 管理 Viewport。
-  - 管理选中节点。
-  - 不保存长期业务数据。
-- Android Activity：
-  - 只负责页面生命周期、入口、错误显示。
-- Android Renderer：
-  - 只负责绘制快照。
-  - 每帧只更新 viewport matrix。
-  - 支持平移、缩放、惯性、点击命中。
-  - 缓存 Paint、Path、TextLayout、节点 bounds。
-  - 可见区域裁剪。
-  - Debug HUD 显示 fps、frame time、visible nodes、total nodes。
-- Layout：
-  - 只放 toolbar、surface、状态层。
-  - 不用复杂嵌套布局堆节点。
+## Core 边界
 
-## 120fps 性能约束
-- 目标设备：骁龙 888 级别。
-- 目标体验：小中型导图拖动/缩放尽量贴近 120Hz。
-- 每帧预算按 8.33ms 设计。
-- 拖动过程中禁止：
-  - IO；
-  - JSON 解析；
-  - Rust Core 调用；
-  - 布局计算；
-  - 大量 Kotlin 对象分配；
-  - 创建 Paint / Path / Rect / Shader；
-  - 重新测量所有文本。
-- 必须：
-  - 支持 requestedFrameRate / 高刷请求；
-  - 支持 frame time 统计；
-  - 支持可见区域裁剪；
-  - 支持文本/路径缓存；
-  - 支持布局快照复用。
-- 后续 OpenGL ES 路线：
-  - 节点和边批量绘制。
-  - 文本使用纹理图集或缓存 bitmap。
-  - 大量节点不走每节点 View。
-  - 后续可接 Android Frame Pacing / Swappy，但不在 V1 强制引入。
+Core 负责：
 
-## 技术决策记录
-- 不用 WebView。
-  - 原因：会带来输入延迟、调试复杂、原生能力割裂。
-  - 以后如何改变该决策：如果未来需要完全跨平台的 Web 渲染且能接受性能损失，必须先证明原生方案不再适用。
-- 不用每节点 Android View。
-  - 原因：普通 View 树无法承受大量节点高频平移缩放。
-  - 以后如何改变该决策：除非 Android 推出能在普通 View 树上支持无限大画布万级节点高性能的新机制。
-- 不把 Compose 作为当前图谱主路线。
-  - 原因：当前仓库没有 Compose 依赖，迁移成本高，不适合为图谱单点引入。
-  - 以后如何改变该决策：当整个 Android App 全面迁移 Compose，且 Compose Canvas 性能达标时。
-- 不把图谱数据写死在 Android。
-  - 原因：业务数据和结构应由 Rust Core 统一管理，保证多端一致性。
-  - 以后如何改变该决策：如果完全放弃跨平台策略。
-- Rust Core 负责图数据和布局。
-  - 原因：统一数据结构和布局算法，避免多端重复实现。
-  - 以后如何改变该决策：如果布局算法极其依赖特定平台的字体测量且无法在 Core 中实现时，但仍应尽量在 Core 算大局，平台微调。
-- Android 渲染层以 Renderer 接口隔离 Canvas / OpenGL 后端。
-  - 原因：V1 可先用 Canvas 验证逻辑，后续性能不足时可平滑升级 OpenGL ES。
-  - 以后如何改变该决策：不可轻易改变，始终需要接口隔离。
-- V1 允许 JSON 快照，但只用于低频加载。
-  - 原因：实现成本低，适合早期验证，但大规模数据会卡顿。
-  - 以后如何改变该决策：当 JSON 快照成为性能瓶颈（达到前述触发条件）时，升级二进制。
-- 如果 JSON 快照成为瓶颈，升级到 DirectByteBuffer / FlatBuffers / Protobuf。
-  - 原因：减少内存拷贝和反序列化开销。
-  - 以后如何改变该决策：如果发现新一代零拷贝序列化方案更好。
-- V1 先做可测骨架，不一次做完整功能。
-  - 原因：分步验证，降低风险，避免大重构。
-  - 以后如何改变该决策：无。
+- 工作区、作品、卷、章节和星图数据；
+- 文件读取、写入、迁移和删除安全；
+- 设置 Schema 与同步属性；
+- 同步计划、冲突语义和错误分类；
+- 写作统计；
+- 编辑命令、正文 revision 和平台无关的视觉意图。
 
-## 目录级技术路线
-除了本全局技术路线外，各个核心目录也定义了各自的实现边界。后续修改代码时，必须遵守对应目录的技术路线：
+Core 不负责：
 
-| 目录 | 技术路线文档 | 说明 |
-|------|------------|------|
-| `apps/Linux_qt/` | `docs/editor_engine_route.md` | 自研编辑器渲染引擎路线 |
-| `core/writer_core/` (starmap) | `docs/starmap_semantics.md` | 星图语义模型 |
-| `core/writer_core/` (starmap) | `docs/starmap_canvas_model.md` | 星图画布模型契约 |
-| `core/writer_core/` (starmap) | `docs/starmap_implementation_route.md` | 星图实现路线 |
-| 跨平台 | `docs/platform_interaction_contract.md` | 平台系统交互契约（输入法、光标、剪贴板、动画、能力、同步） |
+- 窗口、页面和控件；
+- 字体塑形与像素坐标；
+- 光标绘制、候选框和平台输入法协议；
+- 动画时间线、纹理和图形 API；
+- 平台权限与安装包。
 
-**冲突处理规则**：
-- 如果全局文档和目录文档存在冲突，先以更严格的约束为准。
-- 如果需要调整路线，必须先提交文档变更，不能在功能代码里绕开。
+## 编辑器边界
 
-## 富文本路线约束（RichTextModel）
+正文由 Core 保存唯一业务真相。平台可以维护用于排版和输入法查询的显示镜像，但只能应用 Core 返回的变更。
 
-### 核心原则
-- 自研写作区当前路线只适合纯文本写作区 + 吞吐动画 + 光标控制，不是富文本终极形态。
-- 要支撑富文本，必须先设计统一 RichTextModel，不能跳过模型层直接在渲染层堆功能。
+编辑链路保持分层：
 
-### 统一 RichTextModel 定义
-- **数据结构**：`plain_text + style_runs + paragraph_attrs + inline_marks`
-  - `plain_text`：纯文本正文，不含任何格式标记
-  - `style_runs`：字符级样式区间（粗体、斜体、下划线、删除线等），每个 run 包含 `[start, end)` 和 style type
-  - `paragraph_attrs`：段落级属性（对齐方式、缩进、列表类型等），每个段落一个 attr set
-  - `inline_marks`：行内标记（链接、注释、图片占位等），每个 mark 包含位置和元数据
-- **存储**：Core 保存结构化 runs，不能保存 HTML，不能污染正文纯文本
-- **传输**：通过 typed DTO（非 envelope_json）在 Core 和平台端之间传输
+```text
+平台输入
+→ 编辑命令
+→ Core 正文事务
+→ 显示补丁与视觉意图
+→ 平台排版
+→ 视觉规划
+→ 渲染
+```
 
-### 平台端渲染策略
-- **Android**：使用 Spanned / StaticLayout 或自研 run layout，将 style_runs 映射为 CharacterStyle / ParagraphStyle span
-- **Linux_qt**：使用 QTextLayout FormatRange 或自研 run layout，将 style_runs 映射为 QTextCharFormat
-- **Harmony**：使用 TextStyle / TextDecoration 或自研 run layout
-- **共同约束**：渲染层只消费 RichTextModel 的结构化数据，不反向生成 HTML 或富文本序列化
+约束：
 
-### 红线
-- **禁止**将正文保存为 HTML 或任何富文本标记格式
-- **禁止**在正文纯文本中插入格式控制字符或零宽字符
-- **禁止**跳过 RichTextModel 直接在渲染层实现富文本逻辑
-- **禁止**在 Core 中保存平台特定的渲染状态（如 Span 对象、QTextCharFormat）
-- **禁止**为富文本功能引入 envelope_json 接口，必须使用 typed DTO
+- 输入法预输入是平台临时状态，提交后才进入正文。
+- UTF-8 byte offset、range、revision 和 session generation 必须经过验证。
+- 动画不能决定正文是否成功，也不能污染正文内容。
+- Renderer 只消费不可变绘制数据，不读取业务状态。
+- 连续输入和动画中断必须从当前可见状态继续，不能依赖随机资源标识猜测对应关系。
 
-### 演进路径
-1. V1：在 Core 定义 RichTextModel 数据结构和序列化格式
-2. V2：平台端实现 RichTextModel → 渲染层映射
-3. V3：编辑操作（插入/删除/格式切换）通过 Core EditorTransaction 统一处理
-4. V4：富文本编辑的 undo/redo 纳入 Core history 模块
+## 跨语言接口
+
+- 新接口使用强类型 DTO、枚举和错误类型。
+- JSON 只允许存在于确实需要文本协议的边界。
+- Rust 内部不得把强类型结果序列化后再解析回来。
+- 自动生成绑定是构建产物，不承载手写业务逻辑。
+- Bridge 不允许通过默认值制造假成功或吞掉错误。
+
+## 数据与同步
+
+- [workspace_format.md](workspace_format.md) 是工作区磁盘格式的权威定义。
+- [settings_schema.md](settings_schema.md) 定义设置的类型、默认值和同步属性。
+- [sync_rules.md](sync_rules.md) 定义同步、删除和冲突语义。
+- [starmap_semantics.md](starmap_semantics.md) 定义星图对象与引用语义。
+
+平台 UI 不能为了显示方便修改这些格式。
+
+## Rust 安全边界
+
+- GUI 对象只在所属线程访问。
+- 禁止手写 `Send/Sync` 绕过裸指针或平台线程限制。
+- 禁止从共享引用制造可变裸指针或伪造 `&mut`。
+- 禁止通过泄漏资源解决生命周期问题。
+- `unsafe` 仅用于必要的 FFI 边界，并说明完整安全前提。
+- 服务路径的锁、外部输入、磁盘和网络错误必须显式处理。
+- 不允许用宽范围 `allow`、魔法值或动态 JSON 逃避编译器检查。
+
+具体守卫见仓库根目录 [AGENTS.md](../AGENTS.md) 和 `tools/check_rust_safety_patterns.py`。
+
+## 文档边界
+
+长期文档只描述架构、契约和格式。以下内容不进入本目录：
+
+- 某次修复的具体步骤；
+- 类、函数和文件级改造方案；
+- 阶段性能力矩阵；
+- 历史迁移与已淘汰路线；
+- 为某个 Agent 准备的一次性执行清单。
+
+这些内容使用 GitHub Issue 管理，完成后关闭即可。
