@@ -38,7 +38,7 @@ class AndroidLayoutEngine(
 
         val currentConfigFp = computeConfigFingerprint()
 
-        if (currentConfigFp != lastConfigFingerprint) {
+        if (currentConfigFp != lastConfigFingerprint || layout == null) {
             layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(0f, lineSpacingMultiplier)
@@ -157,10 +157,10 @@ class AndroidLayoutEngine(
             cursorX,
             cursorY,
             cursorHeight,
-            mirror.getSelectionStartUtf8(),
-            mirror.getSelectionEndUtf8(),
-            mirror.getSelectionStartUtf16(),
-            mirror.getSelectionEndUtf16(),
+            mirror.getSelectionAnchorUtf8(),
+            mirror.getSelectionHeadUtf8(),
+            mirror.getSelectionAnchorUtf16(),
+            mirror.getSelectionHeadUtf16(),
             compRange?.first ?: -1,
             compRange?.second ?: -1,
             emptyList()

@@ -53,10 +53,8 @@ class SujianEditorView @JvmOverloads constructor(
         val dto = bridge.loadText(text, cursorUtf8) ?: return
         val result = EditResult.fromDto(dto)
         mirror.loadFromSnapshot(text, cursorUtf8, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
-        layoutEngine.setWidth(width.toFloat())
-        layoutEngine.requestLayout()
+        updateLayoutConfig()
         visualPlanner.resetOldRevision()
-        invalidate()
     }
 
     fun insertText(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
@@ -122,6 +120,7 @@ class SujianEditorView @JvmOverloads constructor(
         val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
         coordinator.submitTransaction(transaction)
         updateMaxScroll()
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
         if (result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
         }
@@ -153,9 +152,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun setFontSize(sizeSp: Float) {
         textPaint.textSize = sizeSp * resources.displayMetrics.scaledDensity
-        layoutEngine.setWidth(width.toFloat())
-        layoutEngine.requestLayout()
-        invalidate()
+        updateLayoutConfig()
     }
 
     private var lineSpacingMultiplier: Float = 1.0f
@@ -163,8 +160,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun setLineSpacingMultiplier(multiplier: Float) {
         lineSpacingMultiplier = multiplier
         layoutEngine.setLineSpacingMultiplier(multiplier)
-        layoutEngine.requestLayout()
-        invalidate()
+        updateLayoutConfig()
     }
 
     fun getSelectionStart(): Int = mirror.getSelectionStartUtf8()
@@ -200,9 +196,7 @@ class SujianEditorView @JvmOverloads constructor(
         val bridge = kernelBridge ?: return
         val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
-        if (result.displayPatches.isNotEmpty()) {
-            applyEditResultFull(result)
-        }
+        applyEditResultFull(result)
     }
 
     fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto) {
@@ -222,7 +216,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        if (w > 0 && mirror.getLengthUtf16() > 0) {
+        if (w > 0) {
             layoutEngine.setWidth(w.toFloat())
             layoutEngine.requestLayout()
         }
@@ -235,6 +229,14 @@ class SujianEditorView @JvmOverloads constructor(
         if (layout != null) {
             maxScrollY = (layout.height - height).coerceAtLeast(0).toFloat()
         }
+    }
+
+    private fun updateLayoutConfig() {
+        layoutEngine.setWidth(width.toFloat())
+        layoutEngine.requestLayout()
+        updateMaxScroll()
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {

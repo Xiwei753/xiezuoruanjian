@@ -101,6 +101,16 @@ class AndroidVisualPlanner(
                 toHeight = newRev.cursorHeight,
                 shouldAnimate = true
             )
+        } else if (newRev != null) {
+            cursorTransition = PreparedVisualTransaction.CursorTransition(
+                fromX = newRev.cursorX,
+                fromY = newRev.cursorY,
+                fromHeight = newRev.cursorHeight,
+                toX = newRev.cursorX,
+                toY = newRev.cursorY,
+                toHeight = newRev.cursorHeight,
+                shouldAnimate = false
+            )
         }
 
         val finalSlices = if (rebaseSnapshot != null && rebaseSnapshot.sliceVisualStates.isNotEmpty()) {
@@ -601,11 +611,14 @@ class AndroidVisualPlanner(
         slices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot
     ): List<PreparedVisualTransaction.AnimatedSlice> {
-        val rebaseByLineRole = rebaseSnapshot.sliceVisualStates.groupBy { "${it.role}_${it.lineIndex}" }
+        val rebaseByDocRange = rebaseSnapshot.sliceVisualStates.groupBy {
+            "${it.role}_${it.documentByteStart}_${it.documentByteEndExclusive}"
+        }
         return slices.map { slice ->
-            val lineIndex = slice.snapshot?.lineIndex ?: -1
-            val key = "${slice.role}_${lineIndex}"
-            val candidates = rebaseByLineRole[key] ?: return@map slice
+            val docStart = slice.snapshot?.documentByteStart ?: -1
+            val docEnd = slice.snapshot?.documentByteEndExclusive ?: -1
+            val key = "${slice.role}_${docStart}_${docEnd}"
+            val candidates = rebaseByDocRange[key] ?: return@map slice
             val rebaseState = candidates.firstOrNull() ?: return@map slice
             when (slice.role) {
                 SliceRole.Move -> {

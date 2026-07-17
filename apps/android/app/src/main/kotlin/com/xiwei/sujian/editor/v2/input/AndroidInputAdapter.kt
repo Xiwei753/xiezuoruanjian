@@ -85,6 +85,10 @@ class AndroidInputAdapter(
         editorView.onCompositionUpdated()
     }
 
+    fun applyNewCursorPosition(newCursorPosition: Int) {
+        // preedit cursor is platform-only visual state; do NOT send SetSelection to Rust
+    }
+
     fun handleCompositionFinish() {
         if (!isComposing) return
         val committedText = currentCompositionText

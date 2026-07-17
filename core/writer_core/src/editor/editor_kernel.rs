@@ -331,6 +331,9 @@ impl EditorKernel {
         old_selection: (usize, usize),
     ) -> EditorEditResult {
         let byte_offset = byte_offset.min(self.text.len());
+        if !self.text.is_char_boundary(byte_offset) {
+            return self.noop_result(base_revision, old_cursor, old_selection);
+        }
 
         self.text.insert_str(byte_offset, text);
         self.revision = self.revision.saturating_add(1);
@@ -421,6 +424,9 @@ impl EditorKernel {
         };
         let byte_start = byte_start.min(self.text.len());
         let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
+        if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
+            return self.noop_result(base_revision, old_cursor, old_selection);
+        }
         if byte_start >= byte_end_exclusive {
             return self.noop_result(base_revision, old_cursor, old_selection);
         }
@@ -518,6 +524,9 @@ impl EditorKernel {
         };
         let byte_start = byte_start.min(self.text.len());
         let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
+        if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
+            return self.noop_result(base_revision, old_cursor, old_selection);
+        }
 
         let old_text = self.text.clone();
 
@@ -816,7 +825,25 @@ impl EditorKernel {
 
         let replace_start = prefix_len;
         let replace_end = old_bytes.len() - suffix_len;
-        let inserted_text = new_text[prefix_len..new_bytes.len() - suffix_len].to_string();
+        let inserted_end = new_bytes.len() - suffix_len;
+
+        if !old_text.is_char_boundary(replace_end) {
+            let mut corrected = replace_end;
+            while corrected > replace_start && !old_text.is_char_boundary(corrected) {
+                corrected -= 1;
+            }
+            return ((replace_start, corrected), new_text[prefix_len..new_bytes.len() - suffix_len].to_string());
+        }
+
+        if !new_text.is_char_boundary(inserted_end) {
+            let mut corrected = inserted_end;
+            while corrected > prefix_len && !new_text.is_char_boundary(corrected) {
+                corrected -= 1;
+            }
+            return ((replace_start, replace_end), new_text[prefix_len..corrected].to_string());
+        }
+
+        let inserted_text = new_text[prefix_len..inserted_end].to_string();
 
         ((replace_start, replace_end), inserted_text)
     }

@@ -62,11 +62,8 @@ class AndroidRenderer {
             val animatedLineRegions = computeAnimatedLineRegions(layout, transaction)
             renderLayoutWithAnimatedHoles(canvas, layout, animatedLineRegions)
             renderSelectionDecoration(canvas, layout, transaction)
-            renderAnimatedSlices(canvas, transaction, frame.progress)
+            renderAnimatedSlices(canvas, layout, transaction, frame.progress)
             renderPreeditDecoration(canvas, layout, transaction)
-            if (transaction.cursorTransition != null && transaction.cursorTransition.shouldAnimate) {
-                renderCursorTransition(canvas, transaction, frame.progress)
-            }
             renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
         } else {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
@@ -134,7 +131,7 @@ class AndroidRenderer {
         canvas.restore()
     }
 
-    private fun renderAnimatedSlices(canvas: Canvas, transaction: PreparedVisualTransaction, progress: Float) {
+    private fun renderAnimatedSlices(canvas: Canvas, layout: android.text.Layout, transaction: PreparedVisualTransaction, progress: Float) {
         for (slice in transaction.animatedSlices) {
             val snapshot = slice.snapshot ?: continue
             val bitmap = snapshot.bitmap ?: continue

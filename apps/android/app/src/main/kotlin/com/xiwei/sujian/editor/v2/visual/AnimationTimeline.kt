@@ -80,6 +80,8 @@ data class SliceVisualState(
     val snapshotId: Long,
     val role: SliceRole,
     val lineIndex: Int,
+    val documentByteStart: Int = -1,
+    val documentByteEndExclusive: Int = -1,
     val currentLeft: Float,
     val currentTop: Float,
     val currentRight: Float,

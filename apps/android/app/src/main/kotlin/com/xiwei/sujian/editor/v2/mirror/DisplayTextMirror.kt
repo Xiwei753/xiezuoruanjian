@@ -114,10 +114,14 @@ class DisplayTextMirror {
     private var cursorUtf16: Int = 0
     private var compositionStartUtf16: Int = -1
     private var compositionEndUtf16: Int = -1
-    private var selectionStartUtf8: Int = 0
-    private var selectionEndUtf8: Int = 0
-    private var selectionStartUtf16: Int = 0
-    private var selectionEndUtf16: Int = 0
+    private var selectionAnchorUtf8: Int = 0
+    private var selectionHeadUtf8: Int = 0
+    private var selectionAnchorUtf16: Int = 0
+    private var selectionHeadUtf16: Int = 0
+    private var compositionReplaceStartUtf8: Int = 0
+    private var compositionReplaceEndUtf8: Int = 0
+    private var compositionOriginalText: String = ""
+    private var hasActiveComposition: Boolean = false
 
     fun getText(): String = buffer.toString()
 
@@ -131,38 +135,38 @@ class DisplayTextMirror {
 
     fun getLengthUtf16(): Int = buffer.length
 
-    fun getSelectionStartUtf16(): Int = minOf(selectionStartUtf16, selectionEndUtf16)
+    fun getSelectionStartUtf16(): Int = minOf(selectionAnchorUtf16, selectionHeadUtf16)
 
-    fun getSelectionEndUtf16(): Int = maxOf(selectionStartUtf16, selectionEndUtf16)
+    fun getSelectionEndUtf16(): Int = maxOf(selectionAnchorUtf16, selectionHeadUtf16)
 
-    fun getSelectionStartUtf8(): Int = minOf(selectionStartUtf8, selectionEndUtf8)
+    fun getSelectionStartUtf8(): Int = minOf(selectionAnchorUtf8, selectionHeadUtf8)
 
-    fun getSelectionEndUtf8(): Int = maxOf(selectionStartUtf8, selectionEndUtf8)
+    fun getSelectionEndUtf8(): Int = maxOf(selectionAnchorUtf8, selectionHeadUtf8)
 
-    fun getSelectionAnchorUtf8(): Int = selectionStartUtf8
+    fun getSelectionAnchorUtf8(): Int = selectionAnchorUtf8
 
-    fun getSelectionHeadUtf8(): Int = selectionEndUtf8
+    fun getSelectionHeadUtf8(): Int = selectionHeadUtf8
+
+    fun getSelectionAnchorUtf16(): Int = selectionAnchorUtf16
+
+    fun getSelectionHeadUtf16(): Int = selectionHeadUtf16
+
+    fun hasComposition(): Boolean = hasActiveComposition
 
     fun applyEditResult(result: EditResult) {
+        restoreCompositionBeforePatch()
         applyPatches(result.displayPatches)
         val indexMap = AndroidTextIndexMap(this)
         cursorUtf8 = result.newSelectionEnd
         cursorUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
-        selectionStartUtf8 = result.newSelectionStart
-        selectionEndUtf8 = result.newSelectionEnd
-        selectionStartUtf16 = indexMap.utf8ToUtf16(result.newSelectionStart)
-        selectionEndUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
+        selectionAnchorUtf8 = result.newSelectionStart
+        selectionHeadUtf8 = result.newSelectionEnd
+        selectionAnchorUtf16 = indexMap.utf8ToUtf16(result.newSelectionStart)
+        selectionHeadUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
     }
 
     fun applyPatches(patches: List<DisplayPatch>) {
         if (patches.isEmpty()) return
-
-        val hadComposition = compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16
-        if (hadComposition) {
-            buffer.replace(compositionStartUtf16, compositionEndUtf16, "")
-            compositionStartUtf16 = -1
-            compositionEndUtf16 = -1
-        }
 
         var indexMap = AndroidTextIndexMap(this)
         for (patch in patches) {
@@ -182,10 +186,10 @@ class DisplayTextMirror {
             cursorUtf8 = patch.resultingSelectionEnd
             indexMap = AndroidTextIndexMap(this)
             cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
-            selectionStartUtf8 = patch.resultingSelectionStart
-            selectionEndUtf8 = patch.resultingSelectionEnd
-            selectionStartUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionStart)
-            selectionEndUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionEnd)
+            selectionAnchorUtf8 = patch.resultingSelectionStart
+            selectionHeadUtf8 = patch.resultingSelectionEnd
+            selectionAnchorUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionStart)
+            selectionHeadUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionEnd)
         }
     }
 
@@ -193,21 +197,38 @@ class DisplayTextMirror {
         applyPatches(DisplayPatch.fromDtoList(patches))
     }
 
+    private fun restoreCompositionBeforePatch() {
+        if (!hasActiveComposition) return
+        if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
+            clearCompositionSpans()
+            buffer.replace(compositionStartUtf16, compositionEndUtf16, compositionOriginalText)
+        }
+        compositionStartUtf16 = -1
+        compositionEndUtf16 = -1
+        hasActiveComposition = false
+        compositionOriginalText = ""
+    }
+
     fun updateComposition(replaceStartUtf8: Int, replaceEndUtf8: Int, preeditText: String) {
         val indexMap = AndroidTextIndexMap(this)
         clearCompositionSpans()
 
-        if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
+        if (hasActiveComposition && compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
             buffer.replace(compositionStartUtf16, compositionEndUtf16, preeditText)
         } else {
+            compositionReplaceStartUtf8 = replaceStartUtf8
+            compositionReplaceEndUtf8 = replaceEndUtf8
             val insertStartUtf16 = indexMap.utf8ToUtf16(replaceStartUtf8)
             val insertEndUtf16 = indexMap.utf8ToUtf16(replaceEndUtf8)
             if (insertStartUtf16 < insertEndUtf16) {
+                compositionOriginalText = buffer.substring(insertStartUtf16, insertEndUtf16)
                 buffer.replace(insertStartUtf16, insertEndUtf16, preeditText)
             } else {
+                compositionOriginalText = ""
                 buffer.insert(insertStartUtf16, preeditText)
             }
             compositionStartUtf16 = insertStartUtf16
+            hasActiveComposition = true
         }
         compositionEndUtf16 = compositionStartUtf16 + preeditText.length
 
@@ -220,12 +241,14 @@ class DisplayTextMirror {
     }
 
     fun clearComposition() {
-        if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
-            buffer.delete(compositionStartUtf16, compositionEndUtf16)
+        if (hasActiveComposition && compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
+            clearCompositionSpans()
+            buffer.replace(compositionStartUtf16, compositionEndUtf16, compositionOriginalText)
         }
-        clearCompositionSpans()
         compositionStartUtf16 = -1
         compositionEndUtf16 = -1
+        hasActiveComposition = false
+        compositionOriginalText = ""
     }
 
     fun getCompositionRangeUtf16(): Pair<Int, Int>? {
@@ -240,19 +263,21 @@ class DisplayTextMirror {
         }
     }
 
-    fun loadFromSnapshot(text: String, cursorUtf8: Int, revision: Long, selectionStartUtf8: Int = cursorUtf8, selectionEndUtf8: Int = cursorUtf8) {
+    fun loadFromSnapshot(text: String, cursorUtf8: Int, revision: Long, selectionAnchorUtf8: Int = cursorUtf8, selectionHeadUtf8: Int = cursorUtf8) {
         buffer.clear()
         buffer.append(text)
         this.cursorUtf8 = cursorUtf8
         this.currentRevision = revision
         this.compositionStartUtf16 = -1
         this.compositionEndUtf16 = -1
-        this.selectionStartUtf8 = selectionStartUtf8
-        this.selectionEndUtf8 = selectionEndUtf8
+        this.hasActiveComposition = false
+        this.compositionOriginalText = ""
+        this.selectionAnchorUtf8 = selectionAnchorUtf8
+        this.selectionHeadUtf8 = selectionHeadUtf8
         val indexMap = AndroidTextIndexMap(this)
         this.cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
-        this.selectionStartUtf16 = indexMap.utf8ToUtf16(selectionStartUtf8)
-        this.selectionEndUtf16 = indexMap.utf8ToUtf16(selectionEndUtf8)
+        this.selectionAnchorUtf16 = indexMap.utf8ToUtf16(selectionAnchorUtf8)
+        this.selectionHeadUtf16 = indexMap.utf8ToUtf16(selectionHeadUtf8)
     }
 
     fun loadText(text: String, cursorUtf8: Int) {
