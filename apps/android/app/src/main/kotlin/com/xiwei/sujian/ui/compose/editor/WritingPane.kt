@@ -24,8 +24,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
+import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeProvider
-import com.xiwei.sujian.editor.selfrender.SujianEditorView
+import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.editor.v2.host.UniFFIEditorKernelBridge
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
 import com.xiwei.sujian.ui.compose.theme.BindEditorThemeColors
@@ -137,15 +139,8 @@ fun WritingPane(
                         editorView = this
 
                         try {
-                            val animBridge = BridgeProvider.getEditorAnimationBridge(ctx)
-                            setVisualTransactionProvider { oldText, newText, oldCursor, newCursor, cause, maxChars, durationMs ->
-                                try {
-                                    when (val result = animBridge.editorVisualTransaction(oldText, newText, oldCursor, newCursor, cause, maxChars, durationMs)) {
-                                        is com.xiwei.sujian.data.BridgeResult.Success -> result.data
-                                        else -> null
-                                    }
-                                } catch (_: Exception) { null }
-                            }
+                            val appServiceBridge = BridgeProvider.getAppServiceBridge(ctx)
+                            kernelBridge = UniFFIEditorKernelBridge(appServiceBridge)
                         } catch (_: Exception) { }
 
                         onContentChanged = { newText ->

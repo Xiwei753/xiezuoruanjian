@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.text.Layout
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import android.icu.text.BreakIterator
 
 class AndroidLineSnapshotBuilder {
     private var snapshotIdCounter: Long = 0L
@@ -107,15 +108,13 @@ class AndroidLineSnapshotBuilder {
 
         val lineText = text.substring(lineStartUtf16.coerceAtMost(text.length), lineEndUtf16.coerceAtMost(text.length))
 
+        val graphemeBreaks = computeGraphemeBoundaries(lineText)
+
         var clusterStartUtf16 = lineStartUtf16
         var clusterIdCounter = 0L
 
-        var i = 0
-        while (i < lineText.length) {
-            val char = lineText[i]
-            val isSurrogatePair = char.isHighSurrogate() && i + 1 < lineText.length && lineText[i + 1].isLowSurrogate()
-            val clusterLenUtf16 = if (isSurrogatePair) 2 else 1
-            val clusterEndUtf16 = clusterStartUtf16 + clusterLenUtf16
+        for (boundary in graphemeBreaks) {
+            val clusterEndUtf16 = lineStartUtf16 + boundary
 
             val clusterStartUtf8 = indexMap.utf16ToUtf8(clusterStartUtf16)
             val clusterEndUtf8 = indexMap.utf16ToUtf8(clusterEndUtf16)
@@ -135,7 +134,10 @@ class AndroidLineSnapshotBuilder {
             val sourceTop = 0f
             val sourceBottom = bottom - top
 
-            val shapingFp = buildShapingFingerprint(lineText, i, isSurrogatePair)
+            val localStart = (clusterStartUtf16 - lineStartUtf16).coerceIn(0, lineText.length)
+            val localEnd = (clusterEndUtf16 - lineStartUtf16).coerceIn(0, lineText.length)
+            val clusterText = lineText.substring(localStart, localEnd)
+            val shapingFp = buildShapingFingerprint(clusterText)
 
             clusters.add(LineClusterSnapshot(
                 clusterId = clusterIdCounter++,
@@ -149,20 +151,31 @@ class AndroidLineSnapshotBuilder {
             ))
 
             clusterStartUtf16 = clusterEndUtf16
-            i += clusterLenUtf16
         }
 
         return clusters
     }
 
-    private fun buildShapingFingerprint(text: String, startIdx: Int, isSurrogatePair: Boolean): String {
-        val char = text[startIdx]
-        val codePoint = if (isSurrogatePair && startIdx + 1 < text.length) {
-            Character.toCodePoint(char, text[startIdx + 1])
-        } else {
-            char.code
+    private fun computeGraphemeBoundaries(text: String): List<Int> {
+        if (text.isEmpty()) return emptyList()
+
+        val boundaries = mutableListOf<Int>()
+        val iter = BreakIterator.getCharacterInstance()
+        iter.setText(text)
+
+        var pos = iter.first()
+        while (pos != BreakIterator.DONE) {
+            boundaries.add(pos)
+            pos = iter.next()
         }
-        val type = Character.getType(codePoint)
-        return "${codePoint}_${type}"
+
+        return boundaries
+    }
+
+    private fun buildShapingFingerprint(clusterText: String): String {
+        if (clusterText.isEmpty()) return ""
+        val firstCodePoint = clusterText.codePointAt(0)
+        val type = Character.getType(firstCodePoint)
+        return "${firstCodePoint}_${type}"
     }
 }

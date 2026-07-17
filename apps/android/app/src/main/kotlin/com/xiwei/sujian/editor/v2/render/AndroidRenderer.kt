@@ -22,32 +22,11 @@ class AndroidRenderFrame(
     val scrollY: Float
 )
 
-class AndroidRenderer(
-    private val mirror: DisplayTextMirror,
-    private val layoutEngine: AndroidLayoutEngine,
+class VisualTransactionCoordinator(
     private val resourceStore: VisualResourceStore
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
-    private var currentTransactionKey: Long = 0
-    private val cursorPaint = Paint().apply {
-        color = Color.BLACK
-        strokeWidth = 2f
-        isAntiAlias = true
-    }
-    private val selectionPaint = Paint().apply {
-        color = Color.argb(51, 0, 0, 255)
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
-    private val preeditUnderlinePaint = Paint().apply {
-        color = Color.BLACK
-        strokeWidth = 2f
-        isAntiAlias = true
-    }
-    private val slicePaint = Paint().apply {
-        isAntiAlias = true
-    }
 
     fun submitTransaction(transaction: PreparedVisualTransaction?) {
         if (transaction == null) return
@@ -66,7 +45,6 @@ class AndroidRenderer(
             }
         }
 
-        currentTransactionKey = transaction.transactionId
         activeTransaction = transaction
         timeline = AnimationTimeline(transaction.durationMs)
     }
@@ -95,32 +73,105 @@ class AndroidRenderer(
             }
         }
 
-        oldTimeline?.cancel()
+        oldTimeline.cancel()
+    }
+
+    fun computeFrame(frameTimeMs: Long): AndroidRenderFrame {
+        val transaction = activeTransaction
+        val tl = timeline
+
+        if (transaction != null && tl != null && transaction.animatedSlices.isNotEmpty()) {
+            tl.markFirstVisibleFrame(frameTimeMs)
+            val progress = tl.progress(frameTimeMs)
+
+            if (tl.isCompleted(frameTimeMs)) {
+                completeTransaction(transaction)
+                activeTransaction = null
+                timeline = null
+            }
+
+            return AndroidRenderFrame(
+                transaction = transaction,
+                progress = progress,
+                viewportWidth = 0,
+                viewportHeight = 0,
+                scrollX = 0f,
+                scrollY = 0f
+            )
+        }
+
+        return AndroidRenderFrame(
+            transaction = null,
+            progress = 0f,
+            viewportWidth = 0,
+            viewportHeight = 0,
+            scrollX = 0f,
+            scrollY = 0f
+        )
+    }
+
+    private fun completeTransaction(transaction: PreparedVisualTransaction) {
+        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
+        for (slice in transaction.animatedSlices) {
+            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
+        }
+        timeline?.complete()
+    }
+
+    private fun cancelTransaction(transaction: PreparedVisualTransaction) {
+        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
+        for (slice in transaction.animatedSlices) {
+            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
+        }
+        timeline?.cancel()
+    }
+
+    fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
+}
+
+class AndroidRenderer(
+    private val mirror: DisplayTextMirror,
+    private val layoutEngine: AndroidLayoutEngine,
+    private val resourceStore: VisualResourceStore
+) {
+    private val coordinator = VisualTransactionCoordinator(resourceStore)
+    private val cursorPaint = Paint().apply {
+        color = Color.BLACK
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+    private val selectionPaint = Paint().apply {
+        color = Color.argb(51, 0, 0, 255)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
+    private val preeditUnderlinePaint = Paint().apply {
+        color = Color.BLACK
+        strokeWidth = 2f
+        isAntiAlias = true
+    }
+    private val slicePaint = Paint().apply {
+        isAntiAlias = true
+    }
+
+    fun submitTransaction(transaction: PreparedVisualTransaction?) {
+        coordinator.submitTransaction(transaction)
     }
 
     fun renderFrame(canvas: Canvas, frameTimeMs: Long) {
-        val transaction = activeTransaction
-        val tl = timeline
+        val frame = coordinator.computeFrame(frameTimeMs)
 
         canvas.drawColor(Color.WHITE)
 
         val layout = layoutEngine.getLayout()
         if (layout != null) {
-            if (transaction != null && tl != null && transaction.animatedSlices.isNotEmpty()) {
-                tl.markFirstVisibleFrame(frameTimeMs)
-                val progress = tl.progress(frameTimeMs)
-
+            val transaction = frame.transaction
+            if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
                 renderStaticBackground(canvas, layout, transaction)
                 renderSelectionDecoration(canvas, layout, transaction)
-                renderAnimatedSlices(canvas, transaction, progress)
+                renderAnimatedSlices(canvas, transaction, frame.progress)
                 renderPreeditDecoration(canvas, layout, transaction)
-                renderCursorTransition(canvas, transaction, progress)
-
-                if (tl.isCompleted(frameTimeMs)) {
-                    completeTransaction(transaction)
-                    activeTransaction = null
-                    timeline = null
-                }
+                renderCursorTransition(canvas, transaction, frame.progress)
             } else {
                 renderSelectionHighlight(canvas, layout)
                 layout.draw(canvas)
@@ -272,23 +323,7 @@ class AndroidRenderer(
         }
     }
 
-    private fun completeTransaction(transaction: PreparedVisualTransaction) {
-        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
-        for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
-        }
-        timeline?.complete()
-    }
-
-    private fun cancelTransaction(transaction: PreparedVisualTransaction) {
-        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
-        for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
-        }
-        timeline?.cancel()
-    }
-
-    fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
+    fun hasActiveAnimation(): Boolean = coordinator.hasActiveAnimation()
 
     fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int) {
         cursorPaint.color = cursorColor

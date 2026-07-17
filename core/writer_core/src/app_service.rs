@@ -710,21 +710,30 @@ impl WriterAppService {
             .flatten()
     }
 
+    fn with_kernel<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&std::sync::Mutex<crate::editor::EditorKernel>) -> R,
+    {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(f)
+    }
+
     pub fn editor_kernel_apply(
         &self,
         command_json: String,
     ) -> crate::api::EditorEditResultDto {
-        use crate::editor::{EditorCommand, EditorKernel};
-        use std::sync::Mutex;
-        
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-        
+        use crate::editor::EditorCommand;
+
         let command: EditorCommand = match serde_json::from_str(&command_json) {
             Ok(c) => c,
             Err(_) => {
-                let mut kernel = EditorKernel::new();
+                let mut kernel = crate::editor::EditorKernel::new();
                 let result = kernel.apply(EditorCommand::SetSelection {
                     anchor_byte_offset: 0,
                     head_byte_offset: 0,
@@ -732,8 +741,8 @@ impl WriterAppService {
                 return result.into();
             }
         };
-        
-        KERNEL.with(|k| {
+
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             let result = kernel.apply(command);
             result.into()
@@ -745,14 +754,7 @@ impl WriterAppService {
         text: String,
         cursor_byte_offset: u32,
     ) -> crate::api::EditorEditResultDto {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-        
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-        
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             let result = kernel.load_text(text, cursor_byte_offset as usize);
             result.into()
@@ -766,14 +768,7 @@ impl WriterAppService {
         old_preedit_text: String,
         new_preedit_text: String,
     ) -> String {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             let replace_range = if composition_replace_start < composition_replace_end_exclusive {
                 Some((composition_replace_start as usize, composition_replace_end_exclusive as usize))
@@ -789,7 +784,6 @@ impl WriterAppService {
         })
     }
 
-    /// #535: 获取 CompositionUpdate 的 VisualIntent。
     pub fn editor_kernel_composition_update_visual_intent(
         &self,
         composition_replace_start: u32,
@@ -797,14 +791,7 @@ impl WriterAppService {
         old_preedit_text: String,
         new_preedit_text: String,
     ) -> crate::api::EditorVisualIntentDto {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let kernel = k.lock().unwrap();
             let replace_range = if composition_replace_start < composition_replace_end_exclusive {
                 Some((composition_replace_start as usize, composition_replace_end_exclusive as usize))
@@ -827,14 +814,9 @@ impl WriterAppService {
         committed_text: String,
         original_text: String,
     ) -> crate::api::EditorEditResultDto {
-        use crate::editor::{EditorCommand, EditorKernel, EditorTransactionCause};
-        use std::sync::Mutex;
+        use crate::editor::{EditorCommand, EditorTransactionCause};
 
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             let command = EditorCommand::Replace {
                 byte_start: composition_replace_start as usize,
@@ -852,14 +834,7 @@ impl WriterAppService {
         &self,
         enabled: u8,
     ) {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             kernel.set_animation_enabled(enabled != 0);
         })
@@ -869,70 +844,35 @@ impl WriterAppService {
         &self,
         duration_ms: u64,
     ) {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             kernel.set_animation_duration_ms(duration_ms);
         })
     }
 
     pub fn editor_kernel_get_text(&self) -> String {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let kernel = k.lock().unwrap();
             kernel.text().to_string()
         })
     }
 
     pub fn editor_kernel_get_revision(&self) -> u64 {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let kernel = k.lock().unwrap();
             kernel.revision()
         })
     }
 
     pub fn editor_kernel_get_cursor(&self) -> u32 {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let kernel = k.lock().unwrap();
             kernel.cursor() as u32
         })
     }
 
     pub fn editor_kernel_get_selection_anchor(&self) -> u32 {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let kernel = k.lock().unwrap();
             kernel.selection_anchor() as u32
         })
