@@ -4,3 +4,13 @@ members = [
     "apps/Linux_qt",
 ]
 resolver = "2"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unused_must_use = "warn"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "warn"
+non_send_fields_in_send_ty = "warn"
+unwrap_used = { level = "warn", priority = 1 }
+expect_used = { level = "warn", priority = 1 }

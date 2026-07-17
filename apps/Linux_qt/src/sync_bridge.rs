@@ -69,18 +69,18 @@ mod tests {
             "token_missing"
         );
 
-        // auth_failed (first block)
+        // repo_not_found_or_no_permission (repository/404/403)
         assert_eq!(
             sync_error_category("repository not found on github"),
-            "auth_failed"
+            "repo_not_found_or_no_permission"
         );
-        assert_eq!(sync_error_category("error: not found repo"), "auth_failed");
-        assert_eq!(sync_error_category("status 404"), "auth_failed");
+        assert_eq!(sync_error_category("error: not found repo"), "repo_not_found_or_no_permission");
+        assert_eq!(sync_error_category("status 404"), "repo_not_found_or_no_permission");
         assert_eq!(
             sync_error_category("Permission denied (publickey)"),
-            "auth_failed"
+            "repo_not_found_or_no_permission"
         );
-        assert_eq!(sync_error_category("HTTP 403 Forbidden"), "auth_failed");
+        assert_eq!(sync_error_category("HTTP 403 Forbidden"), "repo_not_found_or_no_permission");
 
         // branch_missing
         assert_eq!(
@@ -186,7 +186,7 @@ mod tests {
     fn typed_sync_error_category_falls_back_when_missing() {
         assert_eq!(
             sync_error_category_from_code(None, "repository not found"),
-            "auth_failed"
+            "repo_not_found_or_no_permission"
         );
         assert_eq!(
             sync_error_category_from_code(Some(""), "timeout while connecting"),

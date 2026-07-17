@@ -60,15 +60,14 @@ impl SafeAppPtr {
     }
 
     pub fn set_from_pinned(&self, pinned: qmetaobject::QObjectPinned<AppBackend>) {
-        // SAFETY: QObjectPinned is #[repr(transparent)] over &RefCell<T>;
-        // transmuting to *const RefCell<T> preserves the address.
-        // The caller must ensure the QObjectBox outlives all SafeAppPtr clones.
-        // as *mut AppBackend pattern: this transmute extracts the heap address
-        // from QObjectPinned; no actual mutability is gained — the pointer
-        // is stored as *const and only dereferenced through RefCell guards.
+        // SAFETY: QObjectPinned<AppBackend> is #[repr(transparent)] over &RefCell<AppBackend>.
+        // Pointer cast extracts the inner &RefCell address from the transparent wrapper.
+        // The QObjectBox pins on heap; Rc<Cell<>> is !Send/!Sync; app_backend is last field.
+        // No actual mutability is gained — the pointer is stored as *const and only
+        // dereferenced through RefCell guards.
         let cell_ptr: *const std::cell::RefCell<AppBackend> =
-            // SAFETY: see comment block above; transmute extracts &RefCell address from repr(transparent) QObjectPinned.
-            unsafe { std::mem::transmute(pinned) };
+            // SAFETY: see above; pointer cast from repr(transparent) QObjectPinned to inner &RefCell.
+            unsafe { *(&pinned as *const _ as *const &std::cell::RefCell<AppBackend>) };
         self.cell.set(cell_ptr);
     }
 

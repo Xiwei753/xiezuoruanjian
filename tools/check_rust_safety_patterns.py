@@ -77,6 +77,16 @@ RULES: tuple[PatternRule, ...] = (
         re.compile(r"\b(?:std::panic::)?AssertUnwindSafe\b"),
         "禁止用 AssertUnwindSafe 掩盖未建立的 panic/借用边界",
     ),
+    PatternRule(
+        "transmute-pointer-escape",
+        re.compile(r"\bstd::mem::transmute\s*[<(]"),
+        "禁止用 transmute 绕过类型系统；Qt 互操作应使用指针转换并附 SAFETY 说明",
+    ),
+    PatternRule(
+        "production-lock-unwrap",
+        re.compile(r"\.lock\(\)\s*\.\s*unwrap\(\)"),
+        "生产代码中 Mutex lock().unwrap() 可能因锁中毒 panic；应使用 lock().unwrap_or_else 或 ok()",
+    ),
 )
 
 SKIP_DIRS = {
@@ -130,7 +140,27 @@ _RULES_WITH_JUSTIFICATION = {
     "assert-unwind-safe",
     "app-backend-mut-pointer-cast",
     "app-backend-mut-alias",
+    "transmute-pointer-escape",
+    "production-lock-unwrap",
 }
+
+_RULES_PRODUCTION_ONLY = {
+    "production-lock-unwrap",
+}
+
+
+def _is_in_test_context(lines: list[str], index: int) -> bool:
+    for i in range(max(0, index - 80), index + 1):
+        stripped = lines[i].strip()
+        if stripped.startswith("#[test]") or stripped.startswith("#[tokio::test]"):
+            return True
+        if re.match(r"^\s*fn\s+test_", stripped) or re.match(r"^\s*async\s+fn\s+test_", stripped):
+            return True
+        if stripped == "mod tests {" or stripped.startswith("mod tests"):
+            return True
+    if len(lines) > 1 and lines[0].strip().startswith("#[cfg(test)]"):
+        return True
+    return False
 
 
 def scan_text(path: Path, text: str) -> list[Finding]:
@@ -143,6 +173,9 @@ def scan_text(path: Path, text: str) -> list[Finding]:
             if rule.pattern.search(code):
                 if rule.name in _RULES_WITH_JUSTIFICATION:
                     if _has_nearby_justification(lines, index):
+                        continue
+                if rule.name in _RULES_PRODUCTION_ONLY:
+                    if _is_in_test_context(lines, index):
                         continue
                 findings.append(Finding(path, index + 1, rule.name, rule.message))
 

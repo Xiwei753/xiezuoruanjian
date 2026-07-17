@@ -64,21 +64,37 @@ const QT_KEY_BACKSPACE: i32 = 0x0100_0003;
 const QT_KEY_TAB: i32 = 0x0100_0001;
 #[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_ENTER: i32 = 0x0100_0005;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_INSERT: i32 = 0x0100_0006;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_RETURN: i32 = 0x0100_0004;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_DELETE: i32 = 0x0100_0007;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_LEFT: i32 = 0x0100_0012;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_UP: i32 = 0x0100_0013;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_RIGHT: i32 = 0x0100_0014;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_DOWN: i32 = 0x0100_0015;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_HOME: i32 = 0x0100_0010;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_END: i32 = 0x0100_0011;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_ESCAPE: i32 = 0x0100_0000;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_PAGEUP: i32 = 0x0100_0016;
+#[allow(dead_code)] // SAFETY: Qt virtual key constant used by key mapping
 const QT_KEY_PAGEDOWN: i32 = 0x0100_0017;
+#[allow(dead_code)] // SAFETY: Qt modifier constant used by key mapping
 const QT_CTRL_MODIFIER: i32 = 0x0400_0000;
+#[allow(dead_code)] // SAFETY: Qt modifier constant used by key mapping
 const QT_SHIFT_MODIFIER: i32 = 0x0200_0000;
+#[allow(dead_code)] // SAFETY: Qt modifier constant used by key mapping
 const QT_ALT_MODIFIER: i32 = 0x0800_0000;
+#[allow(dead_code)] // SAFETY: Qt modifier constant used by key mapping
 const QT_META_MODIFIER: i32 = 0x1000_0000;
 
 /// Linux Qt TextInputAdapter 实现

@@ -205,7 +205,8 @@ struct UndoEntry {
     new_text: String,
     old_cursor: usize,
     new_cursor: usize,
-    cause: EditorTransactionCause, // preserved for future undo-cause inspection
+    #[allow(dead_code)] // SAFETY: preserved for future undo-cause inspection
+    cause: EditorTransactionCause,
 }
 
 impl EditorKernel {

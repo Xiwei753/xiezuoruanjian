@@ -128,6 +128,56 @@ fn bad() {
         self.assertIn("assert-unwind-safe", rules)
         self.assertIn("app-backend-mut-alias", rules)
 
+    def test_detects_transmute_pointer_escape(self) -> None:
+        source = r'''
+fn bad() {
+    let ptr: *const RefCell<AppBackend> = std::mem::transmute(pinned);
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("transmute-pointer-escape", rules)
+
+    def test_accepts_justified_transmute(self) -> None:
+        source = r'''
+fn qt_interop() {
+    // SAFETY: QObjectPinned is #[repr(transparent)] over &RefCell<T>; pointer cast extracts inner reference.
+    let ptr: *const RefCell<AppBackend> = std::mem::transmute(pinned);
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("transmute-pointer-escape", rules)
+
+    def test_detects_production_lock_unwrap(self) -> None:
+        source = r'''
+fn production_code(mutex: &Mutex<Vec<u8>>) {
+    let guard = mutex.lock().unwrap();
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("production-lock-unwrap", rules)
+
+    def test_accepts_test_lock_unwrap(self) -> None:
+        source = r'''
+#[cfg(test)]
+mod tests {
+    fn test_something(mutex: &Mutex<Vec<u8>>) {
+        let guard = mutex.lock().unwrap();
+    }
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("production-lock-unwrap", rules)
+
+    def test_accepts_justified_lock_unwrap(self) -> None:
+        source = r'''
+fn init_once(mutex: &Mutex<()>) {
+    // SAFETY: lock only held during init; no other thread can poison it.
+    let guard = mutex.lock().unwrap();
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("production-lock-unwrap", rules)
+
 
 if __name__ == "__main__":
     unittest.main()
