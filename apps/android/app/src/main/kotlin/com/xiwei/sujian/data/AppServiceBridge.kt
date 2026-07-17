@@ -206,18 +206,6 @@ class AppServiceBridge(workspacePath: String) {
         holder.service.editorKernelLoadText(text, cursorByteOffset)
     }
 
-    fun editorKernelCompositionUpdate(
-        compositionReplaceStart: UInt,
-        compositionReplaceEndExclusive: UInt,
-        oldPreeditText: String,
-        newPreeditText: String
-    ): BridgeResult<String> = holder.wrapResult {
-        holder.service.editorKernelCompositionUpdate(
-            compositionReplaceStart, compositionReplaceEndExclusive,
-            oldPreeditText, newPreeditText
-        )
-    }
-
     fun editorKernelCompositionCommit(
         compositionReplaceStart: UInt,
         compositionReplaceEndExclusive: UInt,
