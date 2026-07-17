@@ -125,4 +125,11 @@ class VisualTransactionCoordinator(
     }
 
     fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
+
+    fun cancelActiveTransaction() {
+        val transaction = activeTransaction ?: return
+        cancelTransaction(transaction)
+        activeTransaction = null
+        timeline = null
+    }
 }

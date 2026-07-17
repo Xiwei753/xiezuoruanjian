@@ -142,20 +142,20 @@ class AppServiceBridge(workspacePath: String) {
     fun resolveLayout(metrics: uniffi.writer_core.WindowMetricsDto) = layoutPolicyBridge.resolveLayout(metrics)
     fun resolveScreenPolicy(screenRole: ScreenRoleDto, shellMode: ShellModeDto) = layoutPolicyBridge.resolveScreenPolicy(screenRole, shellMode)
 
-    fun editorKernelInsert(byteOffset: UInt, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
-        holder.service.editorKernelInsert(byteOffset, text, cause)
+    fun editorKernelInsert(byteOffset: UInt, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelInsert(byteOffset, text, cause, expectedRevision)
     }
 
-    fun editorKernelDelete(byteStart: UInt, byteEndExclusive: UInt, cause: uniffi.writer_core.EditorTransactionCauseDto): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
-        holder.service.editorKernelDelete(byteStart, byteEndExclusive, cause)
+    fun editorKernelDelete(byteStart: UInt, byteEndExclusive: UInt, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelDelete(byteStart, byteEndExclusive, cause, expectedRevision)
     }
 
-    fun editorKernelReplace(byteStart: UInt, byteEndExclusive: UInt, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
-        holder.service.editorKernelReplace(byteStart, byteEndExclusive, replacementText, originalText, cause)
+    fun editorKernelReplace(byteStart: UInt, byteEndExclusive: UInt, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelReplace(byteStart, byteEndExclusive, replacementText, originalText, cause, expectedRevision)
     }
 
-    fun editorKernelSetSelection(anchorByteOffset: UInt, headByteOffset: UInt): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
-        holder.service.editorKernelSetSelection(anchorByteOffset, headByteOffset)
+    fun editorKernelSetSelection(anchorByteOffset: UInt, headByteOffset: UInt, expectedRevision: ULong): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelSetSelection(anchorByteOffset, headByteOffset, expectedRevision)
     }
 
     fun editorKernelUndo(): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {

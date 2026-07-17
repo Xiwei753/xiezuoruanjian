@@ -713,6 +713,7 @@ impl WriterAppService {
         byte_offset: u32,
         text: String,
         cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
@@ -721,7 +722,7 @@ impl WriterAppService {
                 byte_offset: byte_offset as usize,
                 text,
                 cause: core_cause,
-                expected_revision: 0,
+                expected_revision,
             });
             result.into()
         })
@@ -732,6 +733,7 @@ impl WriterAppService {
         byte_start: u32,
         byte_end_exclusive: u32,
         cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
@@ -741,7 +743,7 @@ impl WriterAppService {
                 byte_end_exclusive: byte_end_exclusive as usize,
                 deleted_text: String::new(),
                 cause: core_cause,
-                expected_revision: 0,
+                expected_revision,
             });
             result.into()
         })
@@ -754,6 +756,7 @@ impl WriterAppService {
         replacement_text: String,
         original_text: String,
         cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
@@ -764,7 +767,7 @@ impl WriterAppService {
                 replacement_text,
                 original_text,
                 cause: core_cause,
-                expected_revision: 0,
+                expected_revision,
             });
             result.into()
         })
@@ -774,13 +777,14 @@ impl WriterAppService {
         &self,
         anchor_byte_offset: u32,
         head_byte_offset: u32,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::SetSelection {
                 anchor_byte_offset: anchor_byte_offset as usize,
                 head_byte_offset: head_byte_offset as usize,
-                expected_revision: 0,
+                expected_revision,
             });
             result.into()
         })
@@ -846,13 +850,14 @@ impl WriterAppService {
         use crate::editor::{EditorCommand, EditorTransactionCause};
 
         self.with_session(|s| {
+            let expected_revision = s.kernel.revision();
             let command = EditorCommand::Replace {
                 byte_start: composition_replace_start as usize,
                 byte_end_exclusive: composition_replace_end_exclusive as usize,
                 replacement_text: committed_text,
                 original_text,
                 cause: EditorTransactionCause::TypingCommit,
-                expected_revision: 0,
+                expected_revision,
             };
             let result = s.kernel.apply(command);
             result.into()

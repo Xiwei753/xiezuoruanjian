@@ -62,28 +62,32 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun insertText(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.insert(byteOffset, text, cause) ?: return
+        var actualText = text
+        if (autoIndentEnabled && text == "\n") {
+            actualText = text + computeAutoIndentPrefix()
+        }
+        val dto = bridge.insert(byteOffset, actualText, cause, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.DELETE) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.delete(byteStart, byteEndExclusive, cause) ?: return
+        val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause) ?: return
+        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.setSelection(anchorByteOffset, headByteOffset) ?: return
+        val dto = bridge.setSelection(anchorByteOffset, headByteOffset, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
@@ -104,10 +108,12 @@ class SujianEditorView @JvmOverloads constructor(
 
     private fun applyEditResultFull(result: EditResult) {
         val oldRevision = layoutEngine.captureImmutableRevision()
+        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore)
+        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots)
         coordinator.submitTransaction(transaction)
         if (result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
@@ -117,9 +123,11 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun applyCommandResult(result: EditResult) {
         val oldRevision = layoutEngine.captureImmutableRevision()
+        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore)
+        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots)
         coordinator.submitTransaction(transaction)
         if (result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
@@ -134,9 +142,11 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent) {
         val oldRevision = layoutEngine.captureImmutableRevision()
+        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore)
+        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots)
         coordinator.submitTransaction(transaction)
         invalidate()
     }
@@ -378,6 +388,9 @@ class SujianEditorView @JvmOverloads constructor(
         val bridge = kernelBridge ?: return
         bridge.setAnimationEnabled(enabled)
         bridge.setAnimationDurationMs(durationMs)
+        if (!enabled) {
+            coordinator.cancelActiveTransaction()
+        }
     }
 
     private var smoothCursorEnabled: Boolean = true
@@ -387,6 +400,8 @@ class SujianEditorView @JvmOverloads constructor(
         smoothCursorEnabled = enabled
         smoothCursorDurationMs = durationMs
     }
+
+    fun isSmoothCursorEnabled(): Boolean = smoothCursorEnabled
 
     private var autoIndentEnabled: Boolean = false
     private var autoIndentWidthSp: Float = 2f
@@ -456,10 +471,10 @@ class SujianEditorView @JvmOverloads constructor(
 }
 
 interface EditorKernelBridge {
-    fun insert(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
-    fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
-    fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
-    fun setSelection(anchorByteOffset: Int, headByteOffset: Int): EditorEditResultDto?
+    fun insert(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun setSelection(anchorByteOffset: Int, headByteOffset: Int, expectedRevision: Long): EditorEditResultDto?
     fun undo(): EditorEditResultDto?
     fun redo(): EditorEditResultDto?
     fun loadText(text: String, cursorUtf8: Int): EditorEditResultDto?

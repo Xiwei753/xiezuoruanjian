@@ -29,7 +29,7 @@ class AndroidInputConnection(
             val byteOffset = mirror.getCursorUtf8()
             adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
         }
-        applyNewCursorPosition(newCursorPosition)
+        applyNewCursorPosition(newCursorPosition, text.length)
         notifySelectionChanged()
         return true
     }
@@ -119,12 +119,16 @@ class AndroidInputConnection(
         return text.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
     }
 
-    private fun applyNewCursorPosition(newCursorPosition: Int) {
-        if (newCursorPosition == 0) return
-        val cursorUtf16 = mirror.getCursorUtf16()
-        val newCursorUtf16 = cursorUtf16 + newCursorPosition - 1
-        if (newCursorUtf16 < 0 || newCursorUtf16 > mirror.getLengthUtf16()) return
+    private fun applyNewCursorPosition(newCursorPosition: Int, committedTextLength: Int = 0) {
+        if (newCursorPosition == 0 || newCursorPosition == 1) return
         val indexMap = AndroidTextIndexMap(mirror)
+        val cursorUtf16 = mirror.getCursorUtf16()
+        val newCursorUtf16 = if (newCursorPosition > 1) {
+            cursorUtf16 + newCursorPosition - 1
+        } else {
+            (cursorUtf16 - committedTextLength + newCursorPosition + 1).coerceAtLeast(0)
+        }
+        if (newCursorUtf16 < 0 || newCursorUtf16 > mirror.getLengthUtf16()) return
         val newCursorUtf8 = indexMap.utf16ToUtf8(newCursorUtf16)
         adapter.sendSetSelectionToKernel(newCursorUtf8, newCursorUtf8)
     }

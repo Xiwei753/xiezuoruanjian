@@ -10,6 +10,7 @@ class AndroidLayoutEngine(
     private val mirror: DisplayTextMirror,
     private val textPaint: TextPaint
 ) {
+    private val snapshotBuilder = AndroidLineSnapshotBuilder()
     private var layout: DynamicLayout? = null
     private var currentRevision: AndroidLayoutRevision? = null
     private var width: Float = 0f
@@ -52,6 +53,19 @@ class AndroidLayoutEngine(
 
     fun captureImmutableRevision(): AndroidLayoutRevision? {
         return currentRevision?.copy()
+    }
+
+    fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
+        val l = layout ?: return emptyMap()
+        val rev = currentRevision ?: return emptyMap()
+        val result = mutableMapOf<Int, AndroidLineSnapshot>()
+        for (idx in lineIndices) {
+            val snapshot = snapshotBuilder.buildSnapshotForLine(l, idx, rev)
+            if (snapshot != null) {
+                result[idx] = snapshot
+            }
+        }
+        return result
     }
 
     fun getLayout(): Layout? = layout

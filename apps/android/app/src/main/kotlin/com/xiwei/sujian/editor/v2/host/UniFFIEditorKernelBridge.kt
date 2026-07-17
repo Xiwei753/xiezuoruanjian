@@ -9,29 +9,29 @@ class UniFFIEditorKernelBridge(
     private val appServiceBridge: AppServiceBridge
 ) : EditorKernelBridge {
 
-    override fun insert(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelInsert(byteOffset.toUInt(), text, cause)) {
+    override fun insert(byteOffset: Int, text: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelInsert(byteOffset.toUInt(), text, cause, expectedRevision.toULong())) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun delete(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelDelete(byteStart.toUInt(), byteEndExclusive.toUInt(), cause)) {
+    override fun delete(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelDelete(byteStart.toUInt(), byteEndExclusive.toUInt(), cause, expectedRevision.toULong())) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelReplace(byteStart.toUInt(), byteEndExclusive.toUInt(), replacementText, originalText, cause)) {
+    override fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelReplace(byteStart.toUInt(), byteEndExclusive.toUInt(), replacementText, originalText, cause, expectedRevision.toULong())) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun setSelection(anchorByteOffset: Int, headByteOffset: Int): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelSetSelection(anchorByteOffset.toUInt(), headByteOffset.toUInt())) {
+    override fun setSelection(anchorByteOffset: Int, headByteOffset: Int, expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelSetSelection(anchorByteOffset.toUInt(), headByteOffset.toUInt(), expectedRevision.toULong())) {
             is BridgeResult.Success -> result.data
             else -> null
         }
