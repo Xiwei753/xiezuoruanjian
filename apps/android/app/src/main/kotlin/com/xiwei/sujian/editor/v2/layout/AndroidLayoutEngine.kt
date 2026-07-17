@@ -10,6 +10,7 @@ class AndroidLayoutEngine(
     private val mirror: DisplayTextMirror,
     private val textPaint: TextPaint
 ) {
+    private val snapshotBuilder = AndroidLineSnapshotBuilder()
     private var layout: DynamicLayout? = null
     private var currentRevision: AndroidLayoutRevision? = null
     private var width: Float = 0f
@@ -36,23 +37,35 @@ class AndroidLayoutEngine(
         if (width <= 0f) return
 
         val currentConfigFp = computeConfigFingerprint()
-        val existingLayout = layout
 
-        if (existingLayout != null && currentConfigFp == lastConfigFingerprint) {
-            revisionCounter++
-            currentRevision = buildRevision(existingLayout)
-            return
+        if (currentConfigFp != lastConfigFingerprint) {
+            layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(0f, lineSpacingMultiplier)
+                .setIncludePad(false)
+                .build()
+            lastConfigFingerprint = currentConfigFp
         }
 
-        layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(0f, lineSpacingMultiplier)
-            .setIncludePad(false)
-            .build()
-
-        lastConfigFingerprint = currentConfigFp
         revisionCounter++
         currentRevision = buildRevision(layout!!)
+    }
+
+    fun captureImmutableRevision(): AndroidLayoutRevision? {
+        return currentRevision?.copy()
+    }
+
+    fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
+        val l = layout ?: return emptyMap()
+        val rev = currentRevision ?: return emptyMap()
+        val result = mutableMapOf<Int, AndroidLineSnapshot>()
+        for (idx in lineIndices) {
+            val snapshot = snapshotBuilder.buildSnapshotForLine(l, idx, rev)
+            if (snapshot != null) {
+                result[idx] = snapshot
+            }
+        }
+        return result
     }
 
     fun getLayout(): Layout? = layout
