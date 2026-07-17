@@ -550,19 +550,32 @@ impl EditorKernel {
 
         let display_patches = if old_text != self.text {
             let changes = diff_plain_text(old_text, &self.text);
-            changes.into_iter().map(|c| {
-                let (range, inserted) = match &c {
-                    EditorChange::Insert { index, text } => ((*index, *index), text.clone()),
-                    EditorChange::Delete { index, text } => ((*index, *index + text.len()), String::new()),
-                };
-                DisplayPatch {
+            if changes.is_empty() {
+                vec![]
+            } else {
+                let mut min_start = usize::MAX;
+                let mut max_end = 0;
+                for c in &changes {
+                    match c {
+                        EditorChange::Delete { index, text } => {
+                            min_start = min_start.min(*index);
+                            max_end = max_end.max(*index + text.len());
+                        }
+                        EditorChange::Insert { index, text } => {
+                            min_start = min_start.min(*index);
+                            max_end = max_end.max(*index + text.len());
+                        }
+                    }
+                }
+                let inserted_text = self.text[min_start..max_end.min(self.text.len())].to_string();
+                vec![DisplayPatch {
                     base_revision,
                     new_revision,
-                    replace_byte_range: range,
-                    inserted_text: inserted,
+                    replace_byte_range: (min_start, max_end.min(old_text.len())),
+                    inserted_text,
                     resulting_selection_byte_range: new_selection,
-                }
-            }).collect()
+                }]
+            }
         } else {
             vec![]
         };
@@ -927,11 +940,9 @@ mod tests {
             cause: EditorTransactionCause::Typing,
         });
 
-        assert_eq!(result.display_patches.len(), 2);
+        assert_eq!(result.display_patches.len(), 1);
         assert_eq!(result.display_patches[0].replace_byte_range, (6, 11));
-        assert_eq!(result.display_patches[0].inserted_text, "");
-        assert_eq!(result.display_patches[1].replace_byte_range, (6, 6));
-        assert_eq!(result.display_patches[1].inserted_text, "rust");
+        assert_eq!(result.display_patches[0].inserted_text, "rust");
     }
 
     #[test]
@@ -1169,7 +1180,7 @@ mod tests {
     }
 
     #[test]
-    fn multiple_display_patches_for_replace() {
+    fn atomic_display_patch_for_replace() {
         let mut kernel = EditorKernel::with_text("hello world".to_string(), 11);
         let result = kernel.apply(EditorCommand::Replace {
             byte_start: 6,
@@ -1178,12 +1189,10 @@ mod tests {
             original_text: "world".to_string(),
             cause: EditorTransactionCause::Typing,
         });
-        assert!(result.display_patches.len() >= 1);
-        let total_deleted: usize = result.display_patches.iter()
-            .filter(|p| p.inserted_text.is_empty())
-            .map(|p| p.replace_byte_range.1 - p.replace_byte_range.0)
-            .sum();
-        assert_eq!(total_deleted, 5);
+        assert_eq!(result.display_patches.len(), 1);
+        let patch = &result.display_patches[0];
+        assert_eq!(patch.replace_byte_range, (6, 11));
+        assert_eq!(patch.inserted_text, "rust");
     }
 
     #[test]

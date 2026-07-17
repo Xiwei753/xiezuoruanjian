@@ -5,15 +5,29 @@ use crate::api::{
     WriterError,
 };
 
+use std::sync::Mutex;
+
+struct EditorSession {
+    kernel: crate::editor::EditorKernel,
+    chapter_id: Option<String>,
+    generation: u64,
+}
+
 /// Thin UniFFI adapter. Stable Core API behavior lives in `api::WriterCoreApi`.
 pub struct WriterAppService {
     api: WriterCoreApi,
+    editor_session: Mutex<EditorSession>,
 }
 
 impl WriterAppService {
     pub fn new(workspace_path: String) -> Self {
         Self {
             api: WriterCoreApi::new(workspace_path),
+            editor_session: Mutex::new(EditorSession {
+                kernel: crate::editor::EditorKernel::new(),
+                chapter_id: None,
+                generation: 0,
+            }),
         }
     }
 
@@ -686,42 +700,12 @@ impl WriterAppService {
         }
     }
 
-    pub fn editor_visual_transaction(
-        &self,
-        old_text: String,
-        new_text: String,
-        old_cursor_index: u32,
-        new_cursor_index: u32,
-        cause: crate::api::EditorTransactionCauseDto,
-        max_animated_chars: u32,
-        animation_duration_ms: u64,
-    ) -> Option<crate::api::EditorVisualTransactionDto> {
-        self.api
-            .editor_visual_transaction(
-                &old_text,
-                &new_text,
-                old_cursor_index,
-                new_cursor_index,
-                cause,
-                max_animated_chars,
-                animation_duration_ms,
-            )
-            .ok()
-            .flatten()
-    }
-
-    fn with_kernel<F, R>(&self, f: F) -> R
+    fn with_session<F, R>(&self, f: F) -> R
     where
-        F: FnOnce(&std::sync::Mutex<crate::editor::EditorKernel>) -> R,
+        F: FnOnce(&mut EditorSession) -> R,
     {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(f)
+        let mut session = self.editor_session.lock().unwrap();
+        f(&mut session)
     }
 
     pub fn editor_kernel_insert(
@@ -732,9 +716,8 @@ impl WriterAppService {
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let result = kernel.apply(EditorCommand::Insert {
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::Insert {
                 byte_offset: byte_offset as usize,
                 text,
                 cause: core_cause,
@@ -751,9 +734,8 @@ impl WriterAppService {
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let result = kernel.apply(EditorCommand::Delete {
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::Delete {
                 byte_start: byte_start as usize,
                 byte_end_exclusive: byte_end_exclusive as usize,
                 deleted_text: String::new(),
@@ -773,9 +755,8 @@ impl WriterAppService {
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let result = kernel.apply(EditorCommand::Replace {
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::Replace {
                 byte_start: byte_start as usize,
                 byte_end_exclusive: byte_end_exclusive as usize,
                 replacement_text,
@@ -792,9 +773,8 @@ impl WriterAppService {
         head_byte_offset: u32,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let result = kernel.apply(EditorCommand::SetSelection {
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::SetSelection {
                 anchor_byte_offset: anchor_byte_offset as usize,
                 head_byte_offset: head_byte_offset as usize,
             });
@@ -804,18 +784,16 @@ impl WriterAppService {
 
     pub fn editor_kernel_undo(&self) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let result = kernel.apply(EditorCommand::Undo);
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::Undo);
             result.into()
         })
     }
 
     pub fn editor_kernel_redo(&self) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let result = kernel.apply(EditorCommand::Redo);
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::Redo);
             result.into()
         })
     }
@@ -825,9 +803,9 @@ impl WriterAppService {
         text: String,
         cursor_byte_offset: u32,
     ) -> crate::api::EditorEditResultDto {
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let result = kernel.load_text(text, cursor_byte_offset as usize);
+        self.with_session(|s| {
+            s.generation = s.generation.saturating_add(1);
+            let result = s.kernel.load_text(text, cursor_byte_offset as usize);
             result.into()
         })
     }
@@ -839,14 +817,13 @@ impl WriterAppService {
         old_preedit_text: String,
         new_preedit_text: String,
     ) -> crate::api::EditorVisualIntentDto {
-        self.with_kernel(|k| {
-            let kernel = k.lock().unwrap();
+        self.with_session(|s| {
             let replace_range = if composition_replace_start < composition_replace_end_exclusive {
                 Some((composition_replace_start as usize, composition_replace_end_exclusive as usize))
             } else {
                 None
             };
-            let intent = kernel.composition_update_visual_intent(
+            let intent = s.kernel.composition_update_visual_intent(
                 replace_range,
                 &old_preedit_text,
                 &new_preedit_text,
@@ -864,8 +841,7 @@ impl WriterAppService {
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::{EditorCommand, EditorTransactionCause};
 
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
+        self.with_session(|s| {
             let command = EditorCommand::Replace {
                 byte_start: composition_replace_start as usize,
                 byte_end_exclusive: composition_replace_end_exclusive as usize,
@@ -873,7 +849,7 @@ impl WriterAppService {
                 original_text,
                 cause: EditorTransactionCause::TypingCommit,
             };
-            let result = kernel.apply(command);
+            let result = s.kernel.apply(command);
             result.into()
         })
     }
@@ -882,9 +858,8 @@ impl WriterAppService {
         &self,
         enabled: u8,
     ) {
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            kernel.set_animation_enabled(enabled != 0);
+        self.with_session(|s| {
+            s.kernel.set_animation_enabled(enabled != 0);
         })
     }
 
@@ -892,37 +867,45 @@ impl WriterAppService {
         &self,
         duration_ms: u64,
     ) {
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            kernel.set_animation_duration_ms(duration_ms);
+        self.with_session(|s| {
+            s.kernel.set_animation_duration_ms(duration_ms);
         })
     }
 
     pub fn editor_kernel_get_text(&self) -> String {
-        self.with_kernel(|k| {
-            let kernel = k.lock().unwrap();
-            kernel.text().to_string()
+        self.with_session(|s| {
+            s.kernel.text().to_string()
         })
     }
 
     pub fn editor_kernel_get_revision(&self) -> u64 {
-        self.with_kernel(|k| {
-            let kernel = k.lock().unwrap();
-            kernel.revision()
+        self.with_session(|s| {
+            s.kernel.revision()
         })
     }
 
     pub fn editor_kernel_get_cursor(&self) -> u32 {
-        self.with_kernel(|k| {
-            let kernel = k.lock().unwrap();
-            kernel.cursor() as u32
+        self.with_session(|s| {
+            s.kernel.cursor() as u32
         })
     }
 
     pub fn editor_kernel_get_selection_anchor(&self) -> u32 {
-        self.with_kernel(|k| {
-            let kernel = k.lock().unwrap();
-            kernel.selection_anchor() as u32
+        self.with_session(|s| {
+            s.kernel.selection_anchor() as u32
+        })
+    }
+
+    pub fn editor_kernel_session_snapshot(&self) -> crate::api::EditorSessionSnapshotDto {
+        self.with_session(|s| {
+            crate::api::EditorSessionSnapshotDto {
+                text: s.kernel.text().to_string(),
+                revision: s.kernel.revision(),
+                cursor: s.kernel.cursor() as u32,
+                selection_anchor: s.kernel.selection_anchor() as u32,
+                generation: s.generation,
+                chapter_id: s.chapter_id.clone().unwrap_or_default(),
+            }
         })
     }
 }
