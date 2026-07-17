@@ -699,3 +699,92 @@ fn test_settings_auto_indent_contract() {
     assert_eq!(json["autoIndentEnabled"], true);
     assert_eq!(json["autoIndentWidth"], 4.0);
 }
+
+#[test]
+fn test_workspace_diagnostics_dto_contract() {
+    let dto = crate::api::types::WorkspaceDiagnosticsDto {
+        has_workspace: true,
+        workspace_path: "/workspace".to_string(),
+        core_initialized: true,
+        path_exists: true,
+        is_dir: true,
+        manifest_path: "/workspace/manifest.json".to_string(),
+        manifest_exists: true,
+        projects_path: "/workspace/projects".to_string(),
+        projects_dir_exists: true,
+        app_meta_exists: true,
+        writable: true,
+        writable_error: "".to_string(),
+        validate_workspace: true,
+        tree_count: 5,
+        last_workspace_path: "/last".to_string(),
+        create_project_available: true,
+    };
+
+    let json = serde_json::to_value(&dto).unwrap();
+    let keys = sorted_keys(&json);
+
+    assert!(keys.contains(&"appMetaExists".to_string()));
+    assert!(keys.contains(&"coreInitialized".to_string()));
+    assert!(keys.contains(&"createProjectAvailable".to_string()));
+    assert!(keys.contains(&"hasWorkspace".to_string()));
+    assert!(keys.contains(&"isDir".to_string()));
+    assert!(keys.contains(&"lastWorkspacePath".to_string()));
+    assert!(keys.contains(&"manifestExists".to_string()));
+    assert!(keys.contains(&"manifestPath".to_string()));
+    assert!(keys.contains(&"pathExists".to_string()));
+    assert!(keys.contains(&"projectsDirExists".to_string()));
+    assert!(keys.contains(&"projectsPath".to_string()));
+    assert!(keys.contains(&"treeCount".to_string()));
+    assert!(keys.contains(&"validateWorkspace".to_string()));
+    assert!(keys.contains(&"workspacePath".to_string()));
+    assert!(keys.contains(&"writable".to_string()));
+    assert!(keys.contains(&"writableError".to_string()));
+
+    let deserialized: crate::api::types::WorkspaceDiagnosticsDto = serde_json::from_value(json).unwrap();
+    assert_eq!(dto, deserialized);
+}
+
+#[test]
+fn test_recent_edit_dto_contract() {
+    let dto = crate::api::types::RecentEditDto {
+        project_id: "p1".to_string(),
+        volume_id: "v1".to_string(),
+        chapter_id: "c1".to_string(),
+        timestamp: "2023-10-10".to_string(),
+    };
+
+    let json = serde_json::to_value(&dto).unwrap();
+    let keys = sorted_keys(&json);
+
+    assert!(keys.contains(&"chapter_id".to_string()));
+    assert!(keys.contains(&"project_id".to_string()));
+    assert!(keys.contains(&"timestamp".to_string()));
+    assert!(keys.contains(&"volume_id".to_string()));
+
+    let deserialized: crate::api::types::RecentEditDto = serde_json::from_value(json).unwrap();
+    assert_eq!(dto, deserialized);
+}
+
+#[test]
+fn test_volume_dto_contract() {
+    let dto = crate::api::types::VolumeDto {
+        id: "v1".to_string(),
+        title: "Volume 1".to_string(),
+        created_at: "2023-01-01".to_string(),
+        updated_at: "2023-01-02".to_string(),
+        order: 1,
+    };
+
+    let json = serde_json::to_value(&dto).unwrap();
+    let keys = sorted_keys(&json);
+
+    assert!(keys.contains(&"created_at".to_string()));
+    assert!(keys.contains(&"id".to_string()));
+    assert!(keys.contains(&"order".to_string()));
+    assert!(keys.contains(&"title".to_string()));
+    assert!(keys.contains(&"updated_at".to_string()));
+
+    let deserialized: crate::api::types::VolumeDto = serde_json::from_value(json).unwrap();
+    assert_eq!(dto, deserialized);
+}
