@@ -1133,7 +1133,12 @@ interface WriterAppService {
 
     // ── #535: Editor V2 Kernel ──
 
-    EditorEditResultDto editor_kernel_apply(string command_json);
+    EditorEditResultDto editor_kernel_insert(u32 byte_offset, string text, EditorTransactionCauseDto cause);
+    EditorEditResultDto editor_kernel_delete(u32 byte_start, u32 byte_end_exclusive, EditorTransactionCauseDto cause);
+    EditorEditResultDto editor_kernel_replace(u32 byte_start, u32 byte_end_exclusive, string replacement_text, string original_text, EditorTransactionCauseDto cause);
+    EditorEditResultDto editor_kernel_set_selection(u32 anchor_byte_offset, u32 head_byte_offset);
+    EditorEditResultDto editor_kernel_undo();
+    EditorEditResultDto editor_kernel_redo();
     EditorEditResultDto editor_kernel_load_text(string text, u32 cursor_byte_offset);
     string editor_kernel_composition_update(u32 composition_replace_start, u32 composition_replace_end_exclusive, string old_preedit_text, string new_preedit_text);
     EditorVisualIntentDto editor_kernel_composition_update_visual_intent(u32 composition_replace_start, u32 composition_replace_end_exclusive, string old_preedit_text, string new_preedit_text);

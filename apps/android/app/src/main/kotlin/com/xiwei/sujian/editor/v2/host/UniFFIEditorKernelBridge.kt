@@ -2,15 +2,50 @@ package com.xiwei.sujian.editor.v2.host
 
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
-import com.xiwei.sujian.editor.v2.mirror.EditResult
 import uniffi.writer_core.EditorEditResultDto
+import uniffi.writer_core.EditorTransactionCauseDto
 
 class UniFFIEditorKernelBridge(
     private val appServiceBridge: AppServiceBridge
 ) : EditorKernelBridge {
 
-    override fun apply(commandJson: String): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelApply(commandJson)) {
+    override fun insert(byteOffset: Int, text: String, cause: EditorTransactionCauseDto): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelInsert(byteOffset.toUInt(), text, cause)) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun delete(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelDelete(byteStart.toUInt(), byteEndExclusive.toUInt(), cause)) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelReplace(byteStart.toUInt(), byteEndExclusive.toUInt(), replacementText, originalText, cause)) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun setSelection(anchorByteOffset: Int, headByteOffset: Int): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelSetSelection(anchorByteOffset.toUInt(), headByteOffset.toUInt())) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun undo(): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelUndo()) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun redo(): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelRedo()) {
             is BridgeResult.Success -> result.data
             else -> null
         }

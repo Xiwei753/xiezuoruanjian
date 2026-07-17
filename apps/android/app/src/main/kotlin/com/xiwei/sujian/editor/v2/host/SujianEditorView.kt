@@ -63,9 +63,48 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun applyCommand(commandJson: String) {
+    fun insertText(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.apply(commandJson) ?: return
+        val dto = bridge.insert(byteOffset, text, cause) ?: return
+        val result = EditResult.fromDto(dto)
+        mirror.applyPatches(result.displayPatches)
+        applyCommandResult(result)
+    }
+
+    fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.DELETE) {
+        val bridge = kernelBridge ?: return
+        val dto = bridge.delete(byteStart, byteEndExclusive, cause) ?: return
+        val result = EditResult.fromDto(dto)
+        mirror.applyPatches(result.displayPatches)
+        applyCommandResult(result)
+    }
+
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
+        val bridge = kernelBridge ?: return
+        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause) ?: return
+        val result = EditResult.fromDto(dto)
+        mirror.applyPatches(result.displayPatches)
+        applyCommandResult(result)
+    }
+
+    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int) {
+        val bridge = kernelBridge ?: return
+        val dto = bridge.setSelection(anchorByteOffset, headByteOffset) ?: return
+        val result = EditResult.fromDto(dto)
+        applyCommandResult(result)
+    }
+
+    fun performUndo() {
+        val bridge = kernelBridge ?: return
+        val dto = bridge.undo() ?: return
+        val result = EditResult.fromDto(dto)
+        mirror.applyPatches(result.displayPatches)
+        applyCommandResult(result)
+    }
+
+    fun performRedo() {
+        val bridge = kernelBridge ?: return
+        val dto = bridge.redo() ?: return
         val result = EditResult.fromDto(dto)
         mirror.applyPatches(result.displayPatches)
         applyCommandResult(result)
@@ -122,8 +161,7 @@ class SujianEditorView @JvmOverloads constructor(
         selectionStartUtf8 = start
         selectionEndUtf8 = end
         isSelectionActive = start != end
-        val commandJson = """{"kind":"SetSelection","anchor_byte_offset":$start,"head_byte_offset":$end}"""
-        applyCommand(commandJson)
+        setSelectionTyped(start, end)
     }
 
     fun scrollToSelection() {
@@ -144,10 +182,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun replaceRange(start: Int, end: Int, newText: String) {
-        val escapedText = newText.replace("\\", "\\\\").replace("\"", "\\\"")
-            .replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-        val commandJson = """{"kind":"Replace","byte_start":$start,"byte_end_exclusive":$end,"replacement_text":"$escapedText","original_text":"","cause":"Programmatic"}"""
-        applyCommand(commandJson)
+        replaceRangeTyped(start, end, newText, "", uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC)
     }
 
     fun replaceAll(searchStr: String, replaceStr: String) {
@@ -249,8 +284,7 @@ class SujianEditorView @JvmOverloads constructor(
         selectionStartUtf8 = byteOffset
         selectionEndUtf8 = byteOffset
         isSelectionActive = false
-        val commandJson = """{"kind":"SetSelection","anchor_byte_offset":$byteOffset,"head_byte_offset":$byteOffset}"""
-        applyCommand(commandJson)
+        setSelectionTyped(byteOffset, byteOffset)
         showSoftInput()
     }
 
@@ -396,7 +430,12 @@ class SujianEditorView @JvmOverloads constructor(
 }
 
 interface EditorKernelBridge {
-    fun apply(commandJson: String): EditorEditResultDto?
+    fun insert(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
+    fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
+    fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
+    fun setSelection(anchorByteOffset: Int, headByteOffset: Int): EditorEditResultDto?
+    fun undo(): EditorEditResultDto?
+    fun redo(): EditorEditResultDto?
     fun loadText(text: String, cursorUtf8: Int): EditorEditResultDto?
     fun compositionCommit(
         compositionReplaceStart: Int,

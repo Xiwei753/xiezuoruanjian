@@ -2,6 +2,7 @@ package com.xiwei.sujian.editor.v2.input
 
 import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputConnection(
     private val adapter: AndroidInputAdapter,
@@ -13,8 +14,8 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             adapter.handleCompositionFinish()
         }
-        val commandJson = buildInsertCommand(text.toString())
-        adapter.sendCommandToKernel(commandJson)
+        val byteOffset = mirror.getCursorUtf8()
+        adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
         return true
     }
 
@@ -23,8 +24,13 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             adapter.handleCompositionFinish()
         }
-        val commandJson = buildDeleteCommand(beforeLength, afterLength)
-        adapter.sendCommandToKernel(commandJson)
+        val indexMap = AndroidTextIndexMap(mirror)
+        val cursorUtf16 = mirror.getCursorUtf16()
+        val deleteStartUtf16 = (cursorUtf16 - beforeLength).coerceAtLeast(0)
+        val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(mirror.getText().length)
+        val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
+        adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
         return true
     }
 
@@ -44,8 +50,10 @@ class AndroidInputConnection(
     }
 
     override fun setSelection(start: Int, end: Int): Boolean {
-        val commandJson = buildSetSelectionCommand(start, end)
-        adapter.sendCommandToKernel(commandJson)
+        val indexMap = AndroidTextIndexMap(mirror)
+        val anchorByte = indexMap.utf16ToUtf8(start)
+        val headByte = indexMap.utf16ToUtf8(end)
+        adapter.sendSetSelectionToKernel(anchorByte, headByte)
         return true
     }
 
@@ -71,38 +79,5 @@ class AndroidInputConnection(
         val start = selStart.coerceAtMost(text.length)
         val end = selEnd.coerceAtMost(text.length)
         return text.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
-    }
-
-    private fun buildInsertCommand(text: String): String {
-        val byteOffset = mirror.getCursorUtf8()
-        return """{"kind":"Insert","byte_offset":$byteOffset,"text":${escapeJson(text)},"cause":"Typing"}"""
-    }
-
-    private fun buildDeleteCommand(beforeLength: Int, afterLength: Int): String {
-        val indexMap = AndroidTextIndexMap(mirror)
-        val cursorUtf16 = mirror.getCursorUtf16()
-        val deleteStartUtf16 = (cursorUtf16 - beforeLength).coerceAtLeast(0)
-        val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(mirror.getText().length)
-        val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
-        val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
-        val deletedText = mirror.getText().substring(deleteStartUtf16, deleteEndUtf16)
-        val commandJson = """{"kind":"Delete","byte_start":$byteStart,"byte_end_exclusive":$byteEnd,"deleted_text":${escapeJson(deletedText)},"cause":"Delete"}"""
-        return commandJson
-    }
-
-    private fun buildSetSelectionCommand(anchorUtf16: Int, headUtf16: Int): String {
-        val indexMap = AndroidTextIndexMap(mirror)
-        val anchorByte = indexMap.utf16ToUtf8(anchorUtf16)
-        val headByte = indexMap.utf16ToUtf8(headUtf16)
-        return """{"kind":"SetSelection","anchor_byte_offset":$anchorByte,"head_byte_offset":$headByte}"""
-    }
-
-    private fun escapeJson(s: String): String {
-        val escaped = s.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-        return "\"$escaped\""
     }
 }

@@ -81,22 +81,104 @@ impl WriterCoreApi {
         KERNEL.with(f)
     }
 
-    /// #535: Apply an EditorCommand to the thread-local EditorKernel.
-    ///
-    /// The command is passed as JSON (serde-serialized EditorCommand).
-    /// Returns EditorEditResultDto containing display_patches and visual_intent.
-    pub fn editor_kernel_apply(
+    /// #535: Insert text at the given byte offset.
+    pub fn editor_kernel_insert(
         &self,
-        command_json: &str,
+        byte_offset: u32,
+        text: &str,
+        cause: EditorTransactionCauseDto,
     ) -> ApiResult<EditorEditResultDto> {
         use crate::editor::EditorCommand;
-
-        let command: EditorCommand = serde_json::from_str(command_json)
-            .map_err(|e| crate::error::Error::Json(e))?;
-
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
         self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
-            let result = kernel.apply(command);
+            let result = kernel.apply(EditorCommand::Insert {
+                byte_offset: byte_offset as usize,
+                text: text.to_string(),
+                cause: core_cause,
+            });
+            Ok(result.into())
+        })
+    }
+
+    /// #535: Delete text in the given byte range.
+    pub fn editor_kernel_delete(
+        &self,
+        byte_start: u32,
+        byte_end_exclusive: u32,
+        cause: EditorTransactionCauseDto,
+    ) -> ApiResult<EditorEditResultDto> {
+        use crate::editor::EditorCommand;
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
+        self.with_kernel(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.apply(EditorCommand::Delete {
+                byte_start: byte_start as usize,
+                byte_end_exclusive: byte_end_exclusive as usize,
+                deleted_text: String::new(),
+                cause: core_cause,
+            });
+            Ok(result.into())
+        })
+    }
+
+    /// #535: Replace text in the given byte range.
+    pub fn editor_kernel_replace(
+        &self,
+        byte_start: u32,
+        byte_end_exclusive: u32,
+        replacement_text: &str,
+        original_text: &str,
+        cause: EditorTransactionCauseDto,
+    ) -> ApiResult<EditorEditResultDto> {
+        use crate::editor::EditorCommand;
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
+        self.with_kernel(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.apply(EditorCommand::Replace {
+                byte_start: byte_start as usize,
+                byte_end_exclusive: byte_end_exclusive as usize,
+                replacement_text: replacement_text.to_string(),
+                original_text: original_text.to_string(),
+                cause: core_cause,
+            });
+            Ok(result.into())
+        })
+    }
+
+    /// #535: Set selection to the given byte offsets.
+    pub fn editor_kernel_set_selection(
+        &self,
+        anchor_byte_offset: u32,
+        head_byte_offset: u32,
+    ) -> ApiResult<EditorEditResultDto> {
+        use crate::editor::EditorCommand;
+        self.with_kernel(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.apply(EditorCommand::SetSelection {
+                anchor_byte_offset: anchor_byte_offset as usize,
+                head_byte_offset: head_byte_offset as usize,
+            });
+            Ok(result.into())
+        })
+    }
+
+    /// #535: Undo the last edit.
+    pub fn editor_kernel_undo(&self) -> ApiResult<EditorEditResultDto> {
+        use crate::editor::EditorCommand;
+        self.with_kernel(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.apply(EditorCommand::Undo);
+            Ok(result.into())
+        })
+    }
+
+    /// #535: Redo the last undone edit.
+    pub fn editor_kernel_redo(&self) -> ApiResult<EditorEditResultDto> {
+        use crate::editor::EditorCommand;
+        self.with_kernel(|k| {
+            let mut kernel = k.lock().unwrap();
+            let result = kernel.apply(EditorCommand::Redo);
             Ok(result.into())
         })
     }

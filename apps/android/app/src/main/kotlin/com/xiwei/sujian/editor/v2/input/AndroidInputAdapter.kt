@@ -5,6 +5,7 @@ import android.view.View
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.mirror.EditResult
+import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputAdapter(
     context: Context,
@@ -31,8 +32,20 @@ class AndroidInputAdapter(
 
     override fun onCheckIsTextEditor(): Boolean = true
 
-    fun sendCommandToKernel(commandJson: String) {
-        editorView.applyCommand(commandJson)
+    fun sendInsertToKernel(byteOffset: Int, text: String, cause: EditorTransactionCauseDto) {
+        editorView.insertText(byteOffset, text, cause)
+    }
+
+    fun sendDeleteToKernel(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto) {
+        editorView.deleteRange(byteStart, byteEndExclusive, cause)
+    }
+
+    fun sendReplaceToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
+        editorView.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+    }
+
+    fun sendSetSelectionToKernel(anchorByteOffset: Int, headByteOffset: Int) {
+        editorView.setSelectionTyped(anchorByteOffset, headByteOffset)
     }
 
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
@@ -88,8 +101,7 @@ class AndroidInputAdapter(
         }
 
         mirror.clearComposition()
-        val commandJson = """{"kind":"Replace","byte_start":$replaceStart,"byte_end_exclusive":$replaceEnd,"replacement_text":${escapeJson(committedText)},"original_text":${escapeJson(originalText)},"cause":"TypingCommit"}"""
-        sendCommandToKernel(commandJson)
+        sendReplaceToKernel(replaceStart, replaceEnd, committedText, originalText, EditorTransactionCauseDto.TYPING_COMMIT)
     }
 
     fun handleCompositionCancel() {
@@ -111,14 +123,5 @@ class AndroidInputAdapter(
     fun getCompositionRangeUtf8(): Pair<Int, Int>? {
         if (!isComposing) return null
         return Pair(compositionReplaceStartUtf8, compositionReplaceEndUtf8)
-    }
-
-    private fun escapeJson(s: String): String {
-        val escaped = s.replace("\\", "\\\\")
-            .replace("\"", "\\\"")
-            .replace("\n", "\\n")
-            .replace("\r", "\\r")
-            .replace("\t", "\\t")
-        return "\"$escaped\""
     }
 }
