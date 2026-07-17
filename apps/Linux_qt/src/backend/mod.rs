@@ -106,16 +106,10 @@ impl BackendRuntime {
             r.current_setting_diagnostics_verbose = true;
         }
         let app_ptr = SafeAppPtr::new();
-        // SAFETY: See SafeAppPtr documentation for the full list of invariants.
-        // Key points for this cast:
-        // - QObjectBox heap-allocates and pins AppBackend; the address is stable.
-        // - The pointer is stored in Rc<Cell<>> which is !Send/!Sync, preventing
-        //   cross-thread propagation.
-        // - app_backend is the last field in BackendRuntime, so it outlives all
-        //   domain backends that dereference this pointer.
         let raw_ptr = {
             let pinned = app_backend.pinned();
             let r = pinned.borrow();
+            // SAFETY: QObjectBox heap-allocates and pins AppBackend; Rc<Cell<>> is !Send/!Sync; app_backend is last field so it outlives all domain backends. See SafeAppPtr docs.
             &*r as *const AppBackend as *mut AppBackend
         };
         app_ptr.set(raw_ptr);

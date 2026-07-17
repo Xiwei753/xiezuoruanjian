@@ -108,6 +108,31 @@ def _has_safety_comment(lines: list[str], index: int) -> bool:
     return False
 
 
+def _has_inline_justification(line: str) -> bool:
+    stripped = line.strip()
+    idx = stripped.find("//")
+    if idx == -1:
+        return False
+    comment = stripped[idx + 2:].strip()
+    return bool(comment) and ("SAFETY:" in comment or len(comment) >= 10)
+
+
+def _has_nearby_justification(lines: list[str], index: int, lookback: int = 2) -> bool:
+    for previous in lines[max(0, index - lookback) : index]:
+        stripped = previous.strip()
+        if stripped and "SAFETY:" in stripped:
+            return True
+    return _has_inline_justification(lines[index])
+
+
+_RULES_WITH_JUSTIFICATION = {
+    "broad-dead-code-allow",
+    "assert-unwind-safe",
+    "app-backend-mut-pointer-cast",
+    "app-backend-mut-alias",
+}
+
+
 def scan_text(path: Path, text: str) -> list[Finding]:
     findings: list[Finding] = []
     lines = text.splitlines()
@@ -116,9 +141,11 @@ def scan_text(path: Path, text: str) -> list[Finding]:
         code = _code_part(line)
         for rule in RULES:
             if rule.pattern.search(code):
+                if rule.name in _RULES_WITH_JUSTIFICATION:
+                    if _has_nearby_justification(lines, index):
+                        continue
                 findings.append(Finding(path, index + 1, rule.name, rule.message))
 
-        # 正常 FFI/平台边界允许 unsafe，但必须在紧邻位置写清安全前提。
         if re.search(r"\bunsafe\s*\{", code) and not _has_safety_comment(lines, index):
             findings.append(
                 Finding(

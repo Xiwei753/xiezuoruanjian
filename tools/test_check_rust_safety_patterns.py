@@ -86,6 +86,48 @@ const RAW: &str = r#"#[allow(dead_code)] and AssertUnwindSafe"#;
             )
             self.assertEqual(MODULE.scan_repository(root), [])
 
+    def test_accepts_justified_dead_code_allow(self) -> None:
+        source = r'''
+#[allow(dead_code)] // qmetaobject macro field used by Qt meta-object system
+struct Foo { x: i32 }
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("broad-dead-code-allow", rules)
+
+    def test_accepts_justified_assert_unwind_safe(self) -> None:
+        source = r'''
+fn ffi_boundary() {
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; closure only accesses owned data.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("assert-unwind-safe", rules)
+
+    def test_accepts_justified_app_backend_mut_alias(self) -> None:
+        source = r'''
+fn with_app_mut(&mut self) {
+    // SAFETY: pointer from QObjectBox-pinned AppBackend; null-guarded; single-threaded (Rc).
+    unsafe { &mut *app }
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("app-backend-mut-alias", rules)
+
+    def test_flags_unjustified_patterns(self) -> None:
+        source = r'''
+#[allow(dead_code)]
+struct Unjustified { x: i32 }
+fn bad() {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
+    unsafe { &mut *app }
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("broad-dead-code-allow", rules)
+        self.assertIn("assert-unwind-safe", rules)
+        self.assertIn("app-backend-mut-alias", rules)
+
 
 if __name__ == "__main__":
     unittest.main()

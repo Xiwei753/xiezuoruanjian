@@ -191,6 +191,7 @@ impl SyncBackend for GitHubApiBackend {
             force_sync,
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
         );
+        // SAFETY: AssertUnwindSafe needed for catch_unwind at sync boundary; the closure only calls perform_lww_sync with borrowed data; on panic, the error is caught and returned as a SyncResult::Error.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync)
         })) {

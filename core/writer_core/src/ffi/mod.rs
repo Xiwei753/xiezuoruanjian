@@ -60,6 +60,7 @@ pub(crate) fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
     if s.is_null() {
         return Err(-1);
     }
+    // SAFETY: s is null-checked above; the C ABI caller guarantees a valid NUL-terminated UTF-8 string.
     match unsafe { CStr::from_ptr(s) }.to_str() {
         Ok(s) => Ok(s.to_string()),
         Err(_) => Err(-2),
@@ -141,6 +142,7 @@ pub unsafe extern "C" fn writer_core_calculate_word_count(text: *const c_char) -
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
+        // SAFETY: ptr is null-checked above; ptr was originally created by CString::into_raw() in rust_str_to_c; caller must ensure no double-free.
         unsafe { drop(CString::from_raw(ptr)) };
     }
 }

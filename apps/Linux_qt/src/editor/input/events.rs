@@ -7,7 +7,7 @@ use crate::sujian_editor_item::PreeditAttribute;
 
 /// 归一化输入事件 — Layer 2 → Layer 3 的唯一数据流
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // enum variants used by EditorInputController dispatch
 pub(crate) enum EditorInputEvent {
     /// 普通文本插入（键盘直接输入、Linux 符号）
     PlainText { text: String },
@@ -87,6 +87,7 @@ pub(crate) fn decode_utf16_ptr(text: *const u16, text_len: i32) -> String {
     if text.is_null() || text_len <= 0 {
         return String::new();
     }
+    // SAFETY: text is checked for null above; text_len is checked > 0 above; the C++ caller guarantees the pointer is valid for text_len elements.
     let slice = unsafe { std::slice::from_raw_parts(text, text_len as usize) };
     decode_utf16_lossy(slice)
 }

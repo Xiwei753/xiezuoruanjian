@@ -263,6 +263,7 @@ impl QQuickItem for SujianEditorItem {
             ));
         }
 
+        // SAFETY: final_root was obtained from QSG node allocation in the same paint call; QQuickItem::updatePaintNode contract guarantees the node is valid.
         unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
     }
 }

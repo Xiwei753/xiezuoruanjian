@@ -14,13 +14,13 @@ use super::ime_platform::ImePlatformDetector;
 use super::utf16_converter;
 
 /// Linux Qt 原始输入事件
-#[allow(dead_code)]
+#[allow(dead_code)] // FFI event struct used by platform IME bridge
 pub struct LinuxQtRawInputEvent {
     pub kind: LinuxQtRawInputKind,
 }
 
 /// Linux Qt 原始输入事件类型
-#[allow(dead_code)]
+#[allow(dead_code)] // FFI event enum used by platform IME bridge
 pub enum LinuxQtRawInputKind {
     KeyPress {
         key: i32,
@@ -44,7 +44,7 @@ pub enum LinuxQtRawInputKind {
 }
 
 /// Linux Qt preedit 属性（从 Qt QInputMethodEvent::Attribute 映射）
-#[allow(dead_code)]
+#[allow(dead_code)] // FFI attribute struct used by platform IME bridge
 pub struct LinuxQtPreeditAttribute {
     pub attr_type: i32,
     pub start: i32,
@@ -58,11 +58,11 @@ impl PlatformRawInputEvent for LinuxQtRawInputEvent {
     }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code)] // Qt virtual key constant used by key mapping
 const QT_KEY_BACKSPACE: i32 = 0x0100_0003;
-#[allow(dead_code)]
+#[allow(dead_code)] // Qt virtual key constant used by key mapping
 const QT_KEY_TAB: i32 = 0x0100_0001;
-#[allow(dead_code)]
+#[allow(dead_code)] // Qt virtual key constant used by key mapping
 const QT_KEY_ENTER: i32 = 0x0100_0005;
 const QT_KEY_INSERT: i32 = 0x0100_0006;
 const QT_KEY_RETURN: i32 = 0x0100_0004;

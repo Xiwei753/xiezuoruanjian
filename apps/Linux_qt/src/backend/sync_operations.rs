@@ -216,6 +216,7 @@ impl AppBackend {
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
+            // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
                 let mut config = match api.load_sync_config() {
@@ -505,6 +506,7 @@ impl AppBackend {
         let op_id_capture = op_id.clone();
         let trigger = trigger.to_string();
         thread::spawn(move || {
+            // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
                 let mut config = match api.load_sync_config() {

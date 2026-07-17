@@ -168,8 +168,7 @@ pub(crate) fn is_complex_grapheme(ch: char) -> bool {
     false
 }
 
-// dead_code: qmetaobject macro fields are used by Qt meta-object system
-#[allow(dead_code)]
+#[allow(dead_code)] // qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject)]
 pub struct SujianEditorItem {
     base: qt_base_class!(trait QQuickItem),
