@@ -154,18 +154,24 @@ class DisplayTextMirror {
     fun hasComposition(): Boolean = hasActiveComposition
 
     fun applyEditResult(result: EditResult) {
+        val hadComposition = hasActiveComposition
+        if (hadComposition) {
+            removeCompositionOverlay()
+        }
         applyPatches(result.displayPatches)
         updateSelectionFromResult(result)
     }
 
     private fun updateSelectionFromResult(result: EditResult) {
         val indexMap = AndroidTextIndexMap(this)
-        cursorUtf8 = result.newSelectionEnd
-        cursorUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
-        selectionAnchorUtf8 = result.newSelectionStart
-        selectionHeadUtf8 = result.newSelectionEnd
-        selectionAnchorUtf16 = indexMap.utf8ToUtf16(result.newSelectionStart)
-        selectionHeadUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
+        val normStart = minOf(result.newSelectionStart, result.newSelectionEnd)
+        val normEnd = maxOf(result.newSelectionStart, result.newSelectionEnd)
+        cursorUtf8 = normEnd
+        cursorUtf16 = indexMap.utf8ToUtf16(normEnd)
+        selectionAnchorUtf8 = normStart
+        selectionHeadUtf8 = normEnd
+        selectionAnchorUtf16 = indexMap.utf8ToUtf16(normStart)
+        selectionHeadUtf16 = indexMap.utf8ToUtf16(normEnd)
     }
 
     fun applyPatches(patches: List<DisplayPatch>) {
@@ -198,39 +204,29 @@ class DisplayTextMirror {
     }
 
     fun restoreCompositionBeforePatch() {
-        if (!hasActiveComposition) return
-        if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
-            clearCompositionSpans()
-            buffer.replace(compositionStartUtf16, compositionEndUtf16, compositionOriginalText)
-        }
-        compositionStartUtf16 = -1
-        compositionEndUtf16 = -1
-        hasActiveComposition = false
-        compositionOriginalText = ""
+        removeCompositionOverlay()
     }
 
     fun updateComposition(replaceStartUtf8: Int, replaceEndUtf8: Int, preeditText: String) {
         val indexMap = AndroidTextIndexMap(this)
-        clearCompositionSpans()
+        removeCompositionOverlay()
 
-        if (hasActiveComposition && compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
-            buffer.replace(compositionStartUtf16, compositionEndUtf16, preeditText as CharSequence)
+        compositionReplaceStartUtf8 = replaceStartUtf8
+        compositionReplaceEndUtf8 = replaceEndUtf8
+        val insertStartUtf16 = indexMap.utf8ToUtf16(replaceStartUtf8)
+        val insertEndUtf16 = indexMap.utf8ToUtf16(replaceEndUtf8)
+
+        if (insertStartUtf16 < insertEndUtf16) {
+            compositionOriginalText = buffer.substring(insertStartUtf16, insertEndUtf16)
+            buffer.replace(insertStartUtf16, insertEndUtf16, preeditText as CharSequence)
         } else {
-            compositionReplaceStartUtf8 = replaceStartUtf8
-            compositionReplaceEndUtf8 = replaceEndUtf8
-            val insertStartUtf16 = indexMap.utf8ToUtf16(replaceStartUtf8)
-            val insertEndUtf16 = indexMap.utf8ToUtf16(replaceEndUtf8)
-            if (insertStartUtf16 < insertEndUtf16) {
-                compositionOriginalText = buffer.substring(insertStartUtf16, insertEndUtf16)
-                buffer.replace(insertStartUtf16, insertEndUtf16, preeditText as CharSequence)
-            } else {
-                compositionOriginalText = ""
-                buffer.insert(insertStartUtf16, preeditText as CharSequence)
-            }
-            compositionStartUtf16 = insertStartUtf16
-            hasActiveComposition = true
+            compositionOriginalText = ""
+            buffer.insert(insertStartUtf16, preeditText as CharSequence)
         }
-        compositionEndUtf16 = compositionStartUtf16 + preeditText.length
+
+        compositionStartUtf16 = insertStartUtf16
+        compositionEndUtf16 = insertStartUtf16 + preeditText.length
+        hasActiveComposition = true
 
         buffer.setSpan(
             UnderlineSpan(),
@@ -241,7 +237,12 @@ class DisplayTextMirror {
     }
 
     fun clearComposition() {
-        if (hasActiveComposition && compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
+        removeCompositionOverlay()
+    }
+
+    private fun removeCompositionOverlay() {
+        if (!hasActiveComposition) return
+        if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
             clearCompositionSpans()
             buffer.replace(compositionStartUtf16, compositionEndUtf16, compositionOriginalText)
         }

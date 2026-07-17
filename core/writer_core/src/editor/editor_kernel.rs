@@ -610,8 +610,13 @@ impl EditorKernel {
         old_cursor: usize,
         old_selection: (usize, usize),
     ) -> EditorEditResult {
-        self.selection_anchor = anchor_byte_offset.min(self.text.len());
-        self.cursor = head_byte_offset.min(self.text.len());
+        let anchor = anchor_byte_offset.min(self.text.len());
+        let head = head_byte_offset.min(self.text.len());
+        if !self.text.is_char_boundary(anchor) || !self.text.is_char_boundary(head) {
+            return self.noop_result(base_revision, old_cursor, old_selection);
+        }
+        self.selection_anchor = anchor;
+        self.cursor = head;
 
         let new_selection = (self.selection_anchor, self.cursor);
 
@@ -1010,10 +1015,11 @@ impl EditorKernel {
         base_revision: u64,
     ) -> EditorEditResult {
         let current_selection = (self.selection_anchor, self.cursor);
+        let new_rev = self.revision.saturating_add(1);
         EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
-            new_revision: self.revision,
+            new_revision: new_rev,
             display_patches: vec![],
             old_selection_byte_range: current_selection,
             new_selection_byte_range: current_selection,

@@ -92,7 +92,11 @@ class AndroidInputAdapter(
         val textLengthUtf16 = mirror.getLengthUtf16()
         val targetUtf16 = (currentCursorUtf16 + newCursorPosition - 1).coerceIn(0, textLengthUtf16)
         val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
-        mirror.setSelectionInternal(targetUtf8, targetUtf8)
+        if (isComposing) {
+            mirror.setSelectionInternal(targetUtf8, targetUtf8)
+        } else {
+            editorView.setSelectionTyped(targetUtf8, targetUtf8)
+        }
     }
 
     fun handleCompositionFinish() {
@@ -148,7 +152,6 @@ class AndroidInputAdapter(
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
 
-        mirror.clearComposition()
         editorView.applyCompositionUpdate(
             com.xiwei.sujian.editor.v2.mirror.VisualIntent(
                 cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
@@ -159,7 +162,9 @@ class AndroidInputAdapter(
                 durationMs = 0L,
                 coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(0, 0, false)
             )
-        ) {}
+        ) {
+            mirror.clearComposition()
+        }
     }
 
     fun startComposingRegion(byteStart: Int, byteEnd: Int, selectedText: String) {

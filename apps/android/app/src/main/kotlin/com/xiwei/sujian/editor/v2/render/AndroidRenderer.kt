@@ -123,6 +123,10 @@ class AndroidRenderer {
     ): List<android.graphics.RectF> {
         val regions = mutableListOf<android.graphics.RectF>()
         for (slice in transaction.animatedSlices) {
+            val snapshot = slice.snapshot ?: continue
+            val bitmap = snapshot.bitmap ?: continue
+            val srcRect = slice.sourceRect
+            if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
             regions.add(slice.destinationRect)
         }
         return regions

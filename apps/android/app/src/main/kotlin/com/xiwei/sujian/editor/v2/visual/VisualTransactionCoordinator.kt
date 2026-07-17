@@ -25,14 +25,18 @@ class VisualTransactionCoordinator(
     fun captureCurrentFrame(frameTimeMs: Long): VisualFrameSnapshot? {
         val transaction = activeTransaction ?: return null
         val tl = timeline ?: return null
-        val p = tl.progress(frameTimeMs)
         if (tl.getState() != TransactionState.Rendering && tl.getState() != TransactionState.Paused) return null
+        val p = tl.progress(frameTimeMs)
         val sliceStates = computeSliceVisualStates(transaction, p)
         return VisualFrameSnapshot(
             progress = p,
             state = tl.getState(),
             sliceVisualStates = sliceStates
         )
+    }
+
+    fun captureRebaseSnapshot(frameTimeMs: Long): VisualFrameSnapshot? {
+        return captureCurrentFrame(frameTimeMs)
     }
 
     private fun computeSliceVisualStates(

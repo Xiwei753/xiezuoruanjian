@@ -43,6 +43,7 @@ class SujianEditorView @JvmOverloads constructor(
     private var scrollY: Float = 0f
     private var maxScrollY: Float = 0f
     private var searchHighlights: List<Pair<Int, Int>> = emptyList()
+    private var pendingLayoutNeeded: Boolean = false
 
     var kernelBridge: EditorKernelBridge? = null
 
@@ -58,6 +59,8 @@ class SujianEditorView @JvmOverloads constructor(
         visualPlanner.resetOldRevision()
         if (width > 0) {
             updateLayoutConfig()
+        } else {
+            pendingLayoutNeeded = true
         }
     }
 
@@ -128,8 +131,6 @@ class SujianEditorView @JvmOverloads constructor(
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
         if (beforePatch != null) {
             beforePatch.invoke()
-        } else {
-            mirror.restoreCompositionBeforePatch()
         }
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
@@ -240,15 +241,12 @@ class SujianEditorView @JvmOverloads constructor(
         val bridge = kernelBridge ?: return
         val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
-        applyEditResultFull(result, suppressContentCallback = true)
-        onContentChanged?.invoke(mirror.getText())
+        applyEditResultFull(result)
     }
 
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
         val result = EditResult.fromDto(dto)
-        applyEditResultFull(result) {
-            mirror.restoreCompositionBeforePatch()
-        }
+        applyEditResultFull(result)
     }
 
     fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto) {
@@ -268,8 +266,8 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
-            layoutEngine.setWidth(w.toFloat())
             updateLayoutConfig()
+            pendingLayoutNeeded = false
         }
     }
 
@@ -454,6 +452,7 @@ class SujianEditorView @JvmOverloads constructor(
         super.onWindowFocusChanged(hasWindowFocus)
         if (!hasWindowFocus) {
             coordinator.cancelActiveTransaction()
+            resourceStore.releaseAll()
         }
     }
 
@@ -518,7 +517,7 @@ class SujianEditorView @JvmOverloads constructor(
         val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
         val text = mirror.getText()
         val safeCursorUtf16 = cursorUtf16.coerceIn(0, text.length)
-        val lineStartUtf16 = text.lastIndexOf('\n', (safeCursorUtf16 - 1).coerceAtLeast(0)) + 1
+        val lineStartUtf16 = if (safeCursorUtf16 > 0) text.lastIndexOf('\n', safeCursorUtf16 - 1) + 1 else 0
         val linePrefix = text.substring(lineStartUtf16, safeCursorUtf16)
         val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
         return indent
