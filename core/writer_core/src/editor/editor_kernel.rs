@@ -205,7 +205,7 @@ struct UndoEntry {
     new_text: String,
     old_cursor: usize,
     new_cursor: usize,
-    cause: EditorTransactionCause,
+    cause: EditorTransactionCause, // preserved for future undo-cause inspection
 }
 
 impl EditorKernel {
@@ -1158,9 +1158,6 @@ impl EditorKernel {
     ) -> EditorVisualIntent {
         let replace_start = composition_replace_range
             .map(|(s, _)| s)
-            .unwrap_or(self.cursor);
-        let replace_end = composition_replace_range
-            .map(|(_, e)| e)
             .unwrap_or(self.cursor);
         let new_end = replace_start + new_preedit_text.len();
 

@@ -132,6 +132,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun onCompositionUpdated() {
         layoutEngine.requestLayout()
+        updateMaxScroll()
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
     }
 
@@ -148,6 +150,8 @@ class SujianEditorView @JvmOverloads constructor(
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
         coordinator.submitTransaction(transaction)
+        updateMaxScroll()
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
     }
 
@@ -228,12 +232,8 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
-            layoutEngine.setWidth(w.toFloat())
-            layoutEngine.requestLayout()
-            updateMaxScroll()
-            scrollY = scrollY.coerceIn(0f, maxScrollY)
+            updateLayoutConfig()
         }
-        invalidate()
     }
 
     private fun updateMaxScroll() {
