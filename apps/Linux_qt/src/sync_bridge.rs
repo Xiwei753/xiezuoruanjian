@@ -44,27 +44,10 @@ pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str)
     cat.to_ui_status().to_string()
 }
 
-/// 根据遗留错误消息内容分类错误类型。
-///
-/// 已废弃：新代码应使用 `sync_error_category_from_code` 并传入 core 提供的结构化错误码。
-/// 此函数仅在 core 未提供 error_category 时作为最后手段使用。
-#[deprecated(note = "Use sync_error_category_from_code with structured error code from core")]
-pub fn sync_error_category(msg: &str) -> String {
-    let _ = msg;
-    "error".to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::{determine_diagnostics_status, sync_error_category_from_code};
     use writer_core::api::types::SyncDiagnosticsResultDto;
-
-    #[test]
-    fn test_sync_error_category_deprecated_returns_error() {
-        #[allow(deprecated)]
-        let result = super::sync_error_category("any message");
-        assert_eq!(result, "error");
-    }
 
     #[test]
     fn typed_sync_error_category_takes_precedence() {
@@ -174,13 +157,6 @@ mod tests {
                 cat
             );
         }
-    }
-
-    #[test]
-    fn test_sync_error_category_deprecated_returns_error_for_resource() {
-        #[allow(deprecated)]
-        let result = super::sync_error_category("Resource not accessible by personal access token");
-        assert_eq!(result, "error");
     }
 
     /// Helper: 构造一个 success=true 的 SyncDiagnosticsResultDto，仅关键字段有值。

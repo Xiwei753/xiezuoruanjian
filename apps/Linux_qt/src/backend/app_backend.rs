@@ -569,7 +569,7 @@ impl AppBackend {
 
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
         let result = system_utils::copy_text_to_clipboard_impl(&text.to_string());
-        result.to_string().into()
+        result.to_json().to_string().into()
     }
 
     fn workspace_path(&self) -> QString {

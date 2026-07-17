@@ -111,14 +111,6 @@ impl SyncErrorCategory {
         }
     }
 
-    #[deprecated(
-        note = "Use from_code(error.sync_category(), msg) instead. String-based error classification is unreliable."
-    )]
-    pub fn from_error_string(msg: &str) -> Self {
-        let _ = msg;
-        SyncErrorCategory::Other
-    }
-
     pub fn from_code(code: &str, _fallback_msg: &str) -> Self {
         match code {
             "none" | "" => SyncErrorCategory::Other,

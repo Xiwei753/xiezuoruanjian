@@ -196,18 +196,53 @@ fn get_or_create_arboard() -> Option<std::sync::MutexGuard<'static, Option<arboa
     Some(guard)
 }
 
-pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
-    let mk_success = |backend: &str| -> serde_json::Value {
-        serde_json::json!({
-            "success": true,
-            "data": { "backend": backend },
+pub(crate) enum ClipboardBackend {
+    WlCopy,
+    Xclip,
+    Xsel,
+    Arboard,
+}
 
-            "warnings": [],
-            "changedPaths": [],
-            "changedEntities": [],
-        })
-    };
+pub(crate) enum ClipboardCopyResult {
+    Success { backend: ClipboardBackend },
+    Unavailable,
+}
 
+impl ClipboardCopyResult {
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            ClipboardCopyResult::Success { backend } => {
+                let backend_str = match backend {
+                    ClipboardBackend::WlCopy => "wl-copy",
+                    ClipboardBackend::Xclip => "xclip",
+                    ClipboardBackend::Xsel => "xsel",
+                    ClipboardBackend::Arboard => "arboard",
+                };
+                serde_json::json!({
+                    "success": true,
+                    "data": { "backend": backend_str },
+                    "warnings": [],
+                    "changedPaths": [],
+                    "changedEntities": [],
+                })
+            }
+            ClipboardCopyResult::Unavailable => {
+                serde_json::json!({
+                    "success": false,
+                    "errorCode": "CLIPBOARD_UNAVAILABLE",
+                    "messageKey": "error.clipboard_unavailable",
+                    "messageArgs": {},
+                    "rawError": "No clipboard backend available",
+                    "warnings": [],
+                    "changedPaths": [],
+                    "changedEntities": [],
+                })
+            }
+        }
+    }
+}
+
+pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> ClipboardCopyResult {
     // 1. Try wl-copy (Wayland)
     if let Ok(mut child) = std::process::Command::new("wl-copy")
         .stdin(std::process::Stdio::piped())
@@ -217,7 +252,7 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return mk_success("wl-copy"),
+            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::WlCopy },
             _ => {}
         }
     }
@@ -232,7 +267,7 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return mk_success("xclip"),
+            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::Xclip },
             _ => {}
         }
     }
@@ -247,7 +282,7 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return mk_success("xsel"),
+            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::Xsel },
             _ => {}
         }
     }
@@ -256,21 +291,12 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
     if let Some(mut guard) = get_or_create_arboard() {
         if let Some(ref mut clip) = *guard {
             if clip.set_text(text_str.to_string()).is_ok() {
-                return mk_success("arboard");
+                return ClipboardCopyResult::Success { backend: ClipboardBackend::Arboard };
             }
         }
     }
 
-    serde_json::json!({
-        "success": false,
-        "errorCode": "CLIPBOARD_UNAVAILABLE",
-        "messageKey": "error.clipboard_unavailable",
-        "messageArgs": {},
-        "rawError": "No clipboard backend available",
-        "warnings": [],
-        "changedPaths": [],
-        "changedEntities": [],
-    })
+    ClipboardCopyResult::Unavailable
 }
 
 #[cfg(test)]
