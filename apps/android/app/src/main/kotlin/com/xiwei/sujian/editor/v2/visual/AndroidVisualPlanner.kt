@@ -1,21 +1,41 @@
 package com.xiwei.sujian.editor.v2.visual
 
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
+import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshotBuilder
 import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
+import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 
-class AndroidVisualPlanner {
+class AndroidVisualPlanner(
+    private val mirror: DisplayTextMirror
+) {
     private val snapshotBuilder = AndroidLineSnapshotBuilder()
+
+    fun computeAffectedLineIndices(
+        visualIntent: VisualIntent,
+        oldRevision: AndroidLayoutRevision?
+    ): Set<Int> {
+        if (oldRevision == null) return emptySet()
+        val affectedLines = mutableSetOf<Int>()
+        for ((start, end) in visualIntent.oldAffectedByteRanges) {
+            for (i in oldRevision.lineRanges.indices) {
+                val lineRange = oldRevision.lineRanges[i]
+                if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
+                    affectedLines.add(i)
+                }
+            }
+        }
+        return affectedLines
+    }
 
     fun prepare(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
         newRevision: AndroidLayoutRevision?,
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine,
-        resourceStore: VisualResourceStore
+        resourceStore: VisualResourceStore,
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ): PreparedVisualTransaction {
-        val layout = layoutEngine.getLayout()
         val durationMs = visualIntent.durationMs
         val transactionKey = System.nanoTime()
 
@@ -27,30 +47,27 @@ class AndroidVisualPlanner {
         val newRev = newRevision
         val snapshotOwner = SnapshotOwner.OwnedByTransaction(transactionKey)
 
-        if (oldRev != null && newRev != null && layout != null) {
+        if (oldRev != null && newRev != null) {
             val affectedLines = computeAffectedLines(visualIntent, oldRev, newRev)
             val mode = parseAnimationMode(visualIntent.animationMode)
 
             when (mode) {
                 AnimationMode.GlyphAnimation, AnimationMode.ClusterAnimation -> {
                     planClusterLevelAnimation(
-                        visualIntent, oldRev, newRev, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner,
-                        layoutEngine
+                        visualIntent, oldRev, newRev,
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots
                     )
                 }
                 AnimationMode.RunAnimation -> {
                     planRunAnimation(
-                        visualIntent, oldRev, newRev, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner,
-                        layoutEngine
+                        visualIntent, oldRev, newRev,
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots
                     )
                 }
                 AnimationMode.LineReflowAnimation -> {
                     planLineReflowAnimation(
-                        visualIntent, oldRev, newRev, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner,
-                        layoutEngine
+                        visualIntent, oldRev, newRev,
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots
                     )
                 }
                 AnimationMode.SystemSuppressed -> {
@@ -58,9 +75,8 @@ class AndroidVisualPlanner {
                 }
                 else -> {
                     planCrossfadeAnimation(
-                        visualIntent, oldRev, newRev, layout,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner,
-                        layoutEngine
+                        visualIntent, oldRev, newRev,
+                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots
                     )
                 }
             }
@@ -69,19 +85,20 @@ class AndroidVisualPlanner {
         }
 
         if (visualIntent.coordinatedCursor.shouldAnimate && newRev != null) {
-            val cursorLine = layoutEngine.getCursorLine()
-            val cursorX = layoutEngine.getPrimaryHorizontalUtf8(visualIntent.coordinatedCursor.newByteOffset)
+            val cursorByteOffset = visualIntent.coordinatedCursor.newByteOffset
+            val cursorLine = findLineForUtf8(newRev, cursorByteOffset)
             val lineRange = newRev.lineRanges.getOrNull(cursorLine)
 
             val fromX = if (oldRev != null) {
-                layoutEngine.getPrimaryHorizontalUtf8(visualIntent.coordinatedCursor.oldByteOffset)
-            } else cursorX
+                val oldCursorLine = findLineForUtf8(oldRev, visualIntent.coordinatedCursor.oldByteOffset)
+                oldRev.lineRanges.getOrNull(oldCursorLine)?.left ?: 0f
+            } else lineRange?.left ?: 0f
 
             cursorTransition = PreparedVisualTransaction.CursorTransition(
                 fromX = fromX,
                 fromY = lineRange?.top ?: 0f,
                 fromHeight = (lineRange?.bottom ?: 0f) - (lineRange?.top ?: 0f),
-                toX = cursorX,
+                toX = lineRange?.left ?: 0f,
                 toY = lineRange?.top ?: 0f,
                 toHeight = (lineRange?.bottom ?: 0f) - (lineRange?.top ?: 0f),
                 shouldAnimate = true
@@ -94,8 +111,8 @@ class AndroidVisualPlanner {
             newRevision = newRev,
             staticPatches = staticPatches,
             animatedSlices = animatedSlices,
-            selectionDecoration = buildSelectionDecoration(layoutEngine),
-            preeditDecoration = buildPreeditDecoration(layoutEngine),
+            selectionDecoration = buildSelectionDecoration(newRev),
+            preeditDecoration = buildPreeditDecoration(),
             cursorTransition = cursorTransition,
             durationMs = durationMs
         )
@@ -105,13 +122,12 @@ class AndroidVisualPlanner {
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision,
-        newLayout: android.text.Layout,
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         resourceStore: VisualResourceStore,
         snapshotOwner: SnapshotOwner,
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         val isInsert = visualIntent.isInsert()
         val isDelete = visualIntent.isDelete()
@@ -119,8 +135,8 @@ class AndroidVisualPlanner {
 
         if (isReplace) {
             planClusterReplaceAnimation(
-                visualIntent, oldRev, newRev, newLayout,
-                affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, layoutEngine
+                visualIntent, oldRev, newRev,
+                affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots
             )
             return
         }
@@ -130,11 +146,8 @@ class AndroidVisualPlanner {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
 
             if (isInsert && newLineRange != null) {
-                val newSnapshot = createSnapshotWithClusters(newLayout, lineIndex, newRev, resourceStore, snapshotOwner, layoutEngine)
-                if (newSnapshot != null && newSnapshot.clusters.isNotEmpty()) {
-                    addClusterInsertSlices(newSnapshot, visualIntent, animatedSlices)
-                    addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
-                } else if (newSnapshot != null) {
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner)
+                if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
                         snapshot = newSnapshot,
@@ -148,10 +161,8 @@ class AndroidVisualPlanner {
                     ))
                 }
             } else if (isDelete && oldLineRange != null) {
-                val oldSnapshot = createSnapshotWithClusters(newLayout, lineIndex, oldRev, resourceStore, snapshotOwner, layoutEngine)
-                if (oldSnapshot != null && oldSnapshot.clusters.isNotEmpty()) {
-                    addClusterDeleteSlices(oldSnapshot, visualIntent, animatedSlices)
-                } else if (oldSnapshot != null) {
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots)
+                if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
                         snapshot = oldSnapshot,
@@ -173,13 +184,12 @@ class AndroidVisualPlanner {
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision,
-        newLayout: android.text.Layout,
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         resourceStore: VisualResourceStore,
         snapshotOwner: SnapshotOwner,
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         val offsetMap = buildOffsetMap(visualIntent, oldRev, newRev)
 
@@ -187,46 +197,35 @@ class AndroidVisualPlanner {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
-            val oldSnapshot = if (oldLineRange != null) createSnapshotWithClusters(newLayout, lineIndex, oldRev, resourceStore, snapshotOwner, layoutEngine) else null
-            val newSnapshot = if (newLineRange != null) createSnapshotWithClusters(newLayout, lineIndex, newRev, resourceStore, snapshotOwner, layoutEngine) else null
+            val oldSnapshot = if (oldLineRange != null) createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots) else null
+            val newSnapshot = if (newLineRange != null) createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner) else null
 
-            val oldClusters = oldSnapshot?.clusters ?: emptyList()
-            val newClusters = newSnapshot?.clusters ?: emptyList()
-
-            val oldAffected = oldClusters.filter { c -> visualIntent.oldAffectedByteRanges.any { r -> c.documentByteStart < r.second && c.documentByteEndExclusive > r.first } }
-            val newAffected = newClusters.filter { c -> visualIntent.newAffectedByteRanges.any { r -> c.documentByteStart < r.second && c.documentByteEndExclusive > r.first } }
-            val oldUnaffected = oldClusters.filter { c -> visualIntent.oldAffectedByteRanges.none { r -> c.documentByteStart < r.second && c.documentByteEndExclusive > r.first } }
-            val newUnaffected = newClusters.filter { c -> visualIntent.newAffectedByteRanges.none { r -> c.documentByteStart < r.second && c.documentByteEndExclusive > r.first } }
-
-            for (cluster in oldAffected) {
-                if (oldSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = cluster.sourceRectInLineImage,
-                        destinationRect = cluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 0f
-                    ))
-                }
+            if (oldSnapshot != null && oldLineRange != null) {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = oldSnapshot,
+                    sourceRect = oldSnapshot.sourceRect,
+                    destinationRect = android.graphics.RectF(
+                        oldLineRange.left, oldLineRange.top,
+                        oldLineRange.right, oldLineRange.bottom
+                    ),
+                    startAlpha = 1f,
+                    endAlpha = 0f
+                ))
             }
 
-            for (cluster in newAffected) {
-                if (newSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = newSnapshot,
-                        sourceRect = cluster.sourceRectInLineImage,
-                        destinationRect = cluster.visualRectInDocument,
-                        startAlpha = 0f,
-                        endAlpha = 1f
-                    ))
-                }
-            }
-
-            matchUnaffectedClustersWithOffsetMap(oldUnaffected, newUnaffected, oldSnapshot, newSnapshot, animatedSlices, offsetMap)
-
-            if (newSnapshot != null) {
+            if (newSnapshot != null && newLineRange != null) {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Insert,
+                    snapshot = newSnapshot,
+                    sourceRect = newSnapshot.sourceRect,
+                    destinationRect = android.graphics.RectF(
+                        newLineRange.left, newLineRange.top,
+                        newLineRange.right, newLineRange.bottom
+                    ),
+                    startAlpha = 0f,
+                    endAlpha = 1f
+                ))
                 addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
             }
         }
@@ -244,194 +243,58 @@ class AndroidVisualPlanner {
 
         if (oldRanges.isEmpty() || newRanges.isEmpty()) return offsetMap
 
-        val oldEnd = oldRanges.last().second
-        val newEnd = newRanges.last().second
-        val shift = newEnd - oldEnd
+        val oldAffectedEnd = oldRanges.last().second
+        val newAffectedEnd = newRanges.last().second
+        val shift = newAffectedEnd - oldAffectedEnd
 
         for (lineRange in oldRev.lineRanges) {
-            if (lineRange.startUtf8 >= oldEnd) {
+            if (lineRange.startUtf8 >= oldAffectedEnd) {
                 offsetMap[lineRange.startUtf8] = lineRange.startUtf8 + shift
                 offsetMap[lineRange.endUtf8] = lineRange.endUtf8 + shift
-            } else {
+            } else if (lineRange.endUtf8 <= oldRanges.first().first) {
                 offsetMap[lineRange.startUtf8] = lineRange.startUtf8
                 offsetMap[lineRange.endUtf8] = lineRange.endUtf8
+            } else {
+                val overlapStart = lineRange.startUtf8.coerceAtLeast(oldRanges.first().first)
+                val overlapEnd = lineRange.endUtf8.coerceAtMost(oldAffectedEnd)
+                val newOverlapStart = mapThroughRanges(overlapStart, oldRanges, newRanges)
+                val newOverlapEnd = mapThroughRanges(overlapEnd, oldRanges, newRanges)
+                if (newOverlapStart >= 0) offsetMap[overlapStart] = newOverlapStart
+                if (newOverlapEnd >= 0) offsetMap[overlapEnd] = newOverlapEnd
             }
         }
         return offsetMap
     }
 
-    private fun matchUnaffectedClustersWithOffsetMap(
-        oldClusters: List<LineClusterSnapshot>,
-        newClusters: List<LineClusterSnapshot>,
-        oldSnapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot?,
-        newSnapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot?,
-        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
-        offsetMap: Map<Int, Int>
-    ) {
-        val usedNewIndices = mutableSetOf<Int>()
-
-        for (oldCluster in oldClusters) {
-            val mappedStart = offsetMap[oldCluster.documentByteStart] ?: oldCluster.documentByteStart
-            val mappedEnd = offsetMap[oldCluster.documentByteEndExclusive] ?: oldCluster.documentByteEndExclusive
-
-            val matchIdx = newClusters.indices.firstOrNull { idx ->
-                idx !in usedNewIndices &&
-                newClusters[idx].shapingFingerprint == oldCluster.shapingFingerprint &&
-                (newClusters[idx].documentByteStart == mappedStart ||
-                 newClusters[idx].documentByteEndExclusive == mappedEnd)
-            }
-
-            if (matchIdx == null) {
-                val fallbackIdx = newClusters.indices.firstOrNull { idx ->
-                    idx !in usedNewIndices &&
-                    newClusters[idx].shapingFingerprint == oldCluster.shapingFingerprint
-                }
-                if (fallbackIdx != null) {
-                    usedNewIndices.add(fallbackIdx)
-                    val newCluster = newClusters[fallbackIdx]
-                    val geometryChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-                    if (geometryChanged && newSnapshot != null) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Move,
-                            snapshot = newSnapshot,
-                            sourceRect = newCluster.sourceRectInLineImage,
-                            destinationRect = newCluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 1f,
-                            fromDestinationRect = oldCluster.visualRectInDocument
-                        ))
-                    }
-                }
-                continue
-            }
-
-            usedNewIndices.add(matchIdx)
-            val newCluster = newClusters[matchIdx]
-            val geometryChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-
-            if (geometryChanged && newSnapshot != null) {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Move,
-                    snapshot = newSnapshot,
-                    sourceRect = newCluster.sourceRectInLineImage,
-                    destinationRect = newCluster.visualRectInDocument,
-                    startAlpha = 1f,
-                    endAlpha = 1f,
-                    fromDestinationRect = oldCluster.visualRectInDocument
-                ))
+    private fun mapThroughRanges(offset: Int, oldRanges: List<Pair<Int, Int>>, newRanges: List<Pair<Int, Int>>): Int {
+        for (i in oldRanges.indices) {
+            val (oldStart, oldEnd) = oldRanges[i]
+            if (offset in oldStart..oldEnd) {
+                val newRange = newRanges.getOrNull(i) ?: continue
+                val ratio = if (oldEnd == oldStart) 0f else (offset - oldStart).toFloat() / (oldEnd - oldStart)
+                return newRange.first + (ratio * (newRange.second - newRange.first)).toInt()
             }
         }
-    }
-
-    private fun matchUnaffectedClusters(
-        oldClusters: List<LineClusterSnapshot>,
-        newClusters: List<LineClusterSnapshot>,
-        oldSnapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot?,
-        newSnapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot?,
-        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>
-    ) {
-        val usedNewIndices = mutableSetOf<Int>()
-
-        for (oldCluster in oldClusters) {
-            val matchIdx = newClusters.indices.firstOrNull { idx ->
-                idx !in usedNewIndices &&
-                newClusters[idx].shapingFingerprint == oldCluster.shapingFingerprint
-            }
-
-            if (matchIdx != null) {
-                usedNewIndices.add(matchIdx)
-                val newCluster = newClusters[matchIdx]
-                val geometryChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-
-                if (geometryChanged && newSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Move,
-                        snapshot = newSnapshot,
-                        sourceRect = newCluster.sourceRectInLineImage,
-                        destinationRect = newCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 1f,
-                        fromDestinationRect = oldCluster.visualRectInDocument
-                    ))
-                }
-            }
-        }
-    }
-
-    private fun addClusterInsertSlices(
-        snapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot,
-        visualIntent: VisualIntent,
-        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>
-    ) {
-        val newRanges = visualIntent.newAffectedByteRanges
-        for (cluster in snapshot.clusters) {
-            val isAffected = newRanges.any { r -> cluster.documentByteStart < r.second && cluster.documentByteEndExclusive > r.first }
-            if (isAffected) {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Insert,
-                    snapshot = snapshot,
-                    sourceRect = cluster.sourceRectInLineImage,
-                    destinationRect = cluster.visualRectInDocument,
-                    startAlpha = 0f,
-                    endAlpha = 1f
-                ))
-            }
-        }
-    }
-
-    private fun addClusterDeleteSlices(
-        snapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot,
-        visualIntent: VisualIntent,
-        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>
-    ) {
-        val oldRanges = visualIntent.oldAffectedByteRanges
-        for (cluster in snapshot.clusters) {
-            val isAffected = oldRanges.any { r -> cluster.documentByteStart < r.second && cluster.documentByteEndExclusive > r.first }
-            if (isAffected) {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Delete,
-                    snapshot = snapshot,
-                    sourceRect = cluster.sourceRectInLineImage,
-                    destinationRect = cluster.visualRectInDocument,
-                    startAlpha = 1f,
-                    endAlpha = 0f
-                ))
-            }
-        }
-    }
-
-    private fun addStaticPatchForAnimatedLine(
-        snapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot,
-        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
-    ) {
-        staticPatches.add(PreparedVisualTransaction.StaticPatch(
-            newSnapshotId = snapshot.snapshotId,
-            lineIndex = snapshot.lineIndex,
-            destinationRect = snapshot.destinationRect,
-            visibleSourceRects = emptyList()
-        ))
+        return -1
     }
 
     private fun planRunAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision,
-        newLayout: android.text.Layout,
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         resourceStore: VisualResourceStore,
         snapshotOwner: SnapshotOwner,
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
             if (oldLineRange != null && newLineRange != null) {
-                val oldSnapshot = createSnapshot(newLayout, lineIndex, oldRev, resourceStore, snapshotOwner)
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
-
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeOld,
@@ -460,7 +323,7 @@ class AndroidVisualPlanner {
                     addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -484,20 +347,19 @@ class AndroidVisualPlanner {
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision,
-        newLayout: android.text.Layout,
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         resourceStore: VisualResourceStore,
         snapshotOwner: SnapshotOwner,
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
             if (oldLineRange != null && newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Move,
@@ -517,7 +379,7 @@ class AndroidVisualPlanner {
                     addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -533,7 +395,7 @@ class AndroidVisualPlanner {
                     addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
                 }
             } else if (oldLineRange != null) {
-                val oldSnapshot = createSnapshot(newLayout, lineIndex, oldRev, resourceStore, snapshotOwner)
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -556,20 +418,19 @@ class AndroidVisualPlanner {
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision,
-        newLayout: android.text.Layout,
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
         resourceStore: VisualResourceStore,
         snapshotOwner: SnapshotOwner,
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
             if (oldLineRange != null && newLineRange != null) {
-                val oldSnapshot = createSnapshot(newLayout, lineIndex, oldRev, resourceStore, snapshotOwner)
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeOld,
@@ -584,7 +445,7 @@ class AndroidVisualPlanner {
                     ))
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshot(newLayout, lineIndex, newRev, resourceStore, snapshotOwner)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -643,6 +504,18 @@ class AndroidVisualPlanner {
         }
     }
 
+    private fun addStaticPatchForAnimatedLine(
+        snapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot,
+        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
+    ) {
+        staticPatches.add(PreparedVisualTransaction.StaticPatch(
+            newSnapshotId = snapshot.snapshotId,
+            lineIndex = snapshot.lineIndex,
+            destinationRect = snapshot.destinationRect,
+            visibleSourceRects = emptyList()
+        ))
+    }
+
     private fun computeAffectedLines(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -671,6 +544,14 @@ class AndroidVisualPlanner {
         return affectedLines
     }
 
+    private fun findLineForUtf8(rev: AndroidLayoutRevision, byteOffset: Int): Int {
+        for (i in rev.lineRanges.indices) {
+            val range = rev.lineRanges[i]
+            if (byteOffset <= range.endUtf8) return i
+        }
+        return rev.lineRanges.lastIndex.coerceAtLeast(0)
+    }
+
     private fun parseAnimationMode(mode: String): AnimationMode {
         return when (mode) {
             "GlyphAnimation" -> AnimationMode.GlyphAnimation
@@ -685,64 +566,50 @@ class AndroidVisualPlanner {
     fun resetOldRevision() {
     }
 
+    private fun createSnapshotFromRevision(
+        revision: AndroidLayoutRevision,
+        lineIndex: Int,
+        resourceStore: VisualResourceStore,
+        owner: SnapshotOwner,
+        preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
+    ): com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot? {
+        val preCaptured = preCapturedOldSnapshots[lineIndex]
+        if (preCaptured != null) {
+            resourceStore.put(preCaptured, owner)
+            return preCaptured
+        }
+        val lineRange = revision.lineRanges.getOrNull(lineIndex) ?: return null
+        val snapshot = snapshotBuilder.buildSnapshotFromRevision(lineRange, mirror) ?: return null
+        resourceStore.put(snapshot, owner)
+        return snapshot
+    }
+
     private fun buildSelectionDecoration(
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+        newRev: AndroidLayoutRevision?
     ): PreparedVisualTransaction.SelectionDecoration? {
-        val mirror = layoutEngine.getMirror()
         val selStart = mirror.getSelectionStartUtf16()
         val selEnd = mirror.getSelectionEndUtf16()
-        if (selStart == selEnd) return null
+        if (selStart == selEnd || newRev == null) return null
 
-        val layout = layoutEngine.getLayout() ?: return null
-        val startLine = layout.getLineForOffset(selStart)
-        val endLine = layout.getLineForOffset(selEnd)
         val rects = mutableListOf<android.graphics.RectF>()
-        for (line in startLine..endLine) {
-            val top = layout.getLineTop(line).toFloat()
-            val bottom = layout.getLineBottom(line).toFloat()
-            rects.add(android.graphics.RectF(
-                layout.getLineLeft(line), top, layout.getLineRight(line), bottom
-            ))
+        for (lineRange in newRev.lineRanges) {
+            if (selStart < lineRange.endUtf16 && selEnd > lineRange.startUtf16) {
+                rects.add(android.graphics.RectF(
+                    lineRange.left, lineRange.top, lineRange.right, lineRange.bottom
+                ))
+            }
         }
+        if (rects.isEmpty()) return null
         return PreparedVisualTransaction.SelectionDecoration(selStart, selEnd, rects)
     }
 
-    private fun buildPreeditDecoration(
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-    ): PreparedVisualTransaction.PreeditDecoration? {
-        val mirror = layoutEngine.getMirror()
+    private fun buildPreeditDecoration(): PreparedVisualTransaction.PreeditDecoration? {
         val compRange = mirror.getCompositionRangeUtf16() ?: return null
         return PreparedVisualTransaction.PreeditDecoration(
             startUtf16 = compRange.first,
             endUtf16 = compRange.second,
             underlineColor = android.graphics.Color.BLACK
         )
-    }
-
-    private fun createSnapshot(
-        layout: android.text.Layout,
-        lineIndex: Int,
-        revision: AndroidLayoutRevision,
-        resourceStore: VisualResourceStore,
-        owner: SnapshotOwner = SnapshotOwner.OwnedByTransaction(System.nanoTime())
-    ): com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot? {
-        val snapshot = snapshotBuilder.buildSnapshotForLine(layout, lineIndex, revision) ?: return null
-        resourceStore.put(snapshot, owner)
-        return snapshot
-    }
-
-    private fun createSnapshotWithClusters(
-        layout: android.text.Layout,
-        lineIndex: Int,
-        revision: AndroidLayoutRevision,
-        resourceStore: VisualResourceStore,
-        owner: SnapshotOwner,
-        layoutEngine: com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-    ): com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot? {
-        val mirror = layoutEngine.getMirror()
-        val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(layout, lineIndex, revision, mirror) ?: return null
-        resourceStore.put(snapshot, owner)
-        return snapshot
     }
 
     private enum class AnimationMode {
