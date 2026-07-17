@@ -390,9 +390,6 @@ class SujianEditorView @JvmOverloads constructor(
         coordinatedAnimationEnabled = enabled
     }
 
-    fun setVisualTransactionProvider(provider: ((String, String, Int, Int, String, Int, Long) -> uniffi.writer_core.EditorVisualTransactionDto?)?) {
-    }
-
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         setBackgroundColor(colors.background)
         textPaint.color = colors.text

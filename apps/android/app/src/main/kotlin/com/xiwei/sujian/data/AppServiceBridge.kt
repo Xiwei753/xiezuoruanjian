@@ -46,8 +46,6 @@ class AppServiceBridge(workspacePath: String) {
     val statsBridge: StatsBridge by lazy { StatsBridge(holder) }
     val starMapBridge: StarMapBridge by lazy { StarMapBridge(holder) }
     val layoutPolicyBridge: LayoutPolicyBridge by lazy { LayoutPolicyBridge(holder) }
-    val editorAnimationBridge: EditorAnimationBridge by lazy { EditorAnimationBridge(this) }
-
     companion object {
         private const val TAG = "AppServiceBridge"
     }
@@ -143,40 +141,6 @@ class AppServiceBridge(workspacePath: String) {
 
     fun resolveLayout(metrics: uniffi.writer_core.WindowMetricsDto) = layoutPolicyBridge.resolveLayout(metrics)
     fun resolveScreenPolicy(screenRole: ScreenRoleDto, shellMode: ShellModeDto) = layoutPolicyBridge.resolveScreenPolicy(screenRole, shellMode)
-
-    // ── Editor Animation (internal, for EditorAnimationBridge) ──
-
-    internal fun editorVisualTransactionDto(
-        oldText: String,
-        newText: String,
-        oldCursorIndex: UInt,
-        newCursorIndex: UInt,
-        cause: String,
-        maxAnimatedChars: UInt,
-        animationDurationMs: ULong
-    ): BridgeResult<uniffi.writer_core.EditorVisualTransactionDto?> = holder.wrapResult {
-        val causeDto = causeStringToDto(cause)
-        holder.service.editorVisualTransaction(
-            oldText, newText, oldCursorIndex, newCursorIndex,
-            causeDto, maxAnimatedChars, animationDurationMs
-        )
-    }
-
-    private fun causeStringToDto(cause: String): uniffi.writer_core.EditorTransactionCauseDto {
-        return when (cause) {
-            "Typing" -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
-            "Delete" -> uniffi.writer_core.EditorTransactionCauseDto.DELETE
-            "ImeComposition" -> uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION
-            "TypingCommit" -> uniffi.writer_core.EditorTransactionCauseDto.TYPING_COMMIT
-            "Paste" -> uniffi.writer_core.EditorTransactionCauseDto.PASTE
-            "Undo" -> uniffi.writer_core.EditorTransactionCauseDto.UNDO
-            "Redo" -> uniffi.writer_core.EditorTransactionCauseDto.REDO
-            "Load" -> uniffi.writer_core.EditorTransactionCauseDto.LOAD
-            "Format" -> uniffi.writer_core.EditorTransactionCauseDto.FORMAT
-            "Programmatic" -> uniffi.writer_core.EditorTransactionCauseDto.PROGRAMMATIC
-            else -> uniffi.writer_core.EditorTransactionCauseDto.TYPING
-        }
-    }
 
     fun editorKernelInsert(byteOffset: UInt, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.editorKernelInsert(byteOffset, text, cause)

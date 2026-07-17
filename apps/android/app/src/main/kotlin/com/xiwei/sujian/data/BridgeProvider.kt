@@ -23,6 +23,5 @@ object BridgeProvider {
     fun getActionBridge(context: Context): ActionBridge = ActionBridge(getAppServiceBridge(context))
     fun getLayoutPolicyBridge(context: Context): LayoutPolicyBridge = getAppServiceBridge(context).layoutPolicyBridge
     fun getScreenPolicyBridge(context: Context): ScreenPolicyBridge = ScreenPolicyBridge(getAppServiceBridge(context))
-    fun getEditorAnimationBridge(context: Context): EditorAnimationBridge = getAppServiceBridge(context).editorAnimationBridge
     fun getAiStatus(context: Context): Boolean = getAppServiceBridge(context).aiAvailable()
 }
