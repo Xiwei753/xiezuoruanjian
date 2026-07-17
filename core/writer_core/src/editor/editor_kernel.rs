@@ -60,12 +60,8 @@ pub enum EditorCommand {
         head_byte_offset: usize,
         expected_revision: u64,
     },
-    Undo {
-        expected_revision: u64,
-    },
-    Redo {
-        expected_revision: u64,
-    },
+    Undo,
+    Redo,
     ReplaceAll {
         search: String,
         replacement: String,
@@ -285,13 +281,12 @@ impl EditorKernel {
             | EditorCommand::Replace { expected_revision, .. }
             | EditorCommand::SetSelection { expected_revision, .. }
             | EditorCommand::ReplaceAll { expected_revision, .. }
-            | EditorCommand::InsertLineBreak { expected_revision, .. }
-            | EditorCommand::Undo { expected_revision }
-            | EditorCommand::Redo { expected_revision } => {
+            | EditorCommand::InsertLineBreak { expected_revision, .. } => {
                 if *expected_revision != 0 && *expected_revision != base_revision {
                     return self.noop_result(base_revision, self.cursor, (self.selection_anchor, self.cursor));
                 }
             }
+            EditorCommand::Undo | EditorCommand::Redo => {}
         }
 
         let old_cursor = self.cursor;
@@ -310,10 +305,10 @@ impl EditorKernel {
             EditorCommand::SetSelection { anchor_byte_offset, head_byte_offset, .. } => {
                 self.apply_set_selection(anchor_byte_offset, head_byte_offset, base_revision, old_cursor, old_selection)
             }
-            EditorCommand::Undo { .. } => {
+            EditorCommand::Undo => {
                 self.apply_undo(base_revision, old_cursor, old_selection)
             }
-            EditorCommand::Redo { .. } => {
+            EditorCommand::Redo => {
                 self.apply_redo(base_revision, old_cursor, old_selection)
             }
             EditorCommand::ReplaceAll { search, replacement, .. } => {
@@ -788,21 +783,12 @@ impl EditorKernel {
         while prefix_len < old_bytes.len() && prefix_len < new_bytes.len() && old_bytes[prefix_len] == new_bytes[prefix_len] {
             prefix_len += 1;
         }
-        while prefix_len > 0 && !old_text.is_char_boundary(prefix_len) {
-            prefix_len -= 1;
-        }
 
         let mut suffix_len = 0;
         while suffix_len < old_bytes.len() - prefix_len && suffix_len < new_bytes.len() - prefix_len
             && old_bytes[old_bytes.len() - 1 - suffix_len] == new_bytes[new_bytes.len() - 1 - suffix_len]
         {
             suffix_len += 1;
-        }
-        while suffix_len > 0 && !old_text.is_char_boundary(old_bytes.len() - suffix_len) {
-            suffix_len -= 1;
-        }
-        while suffix_len > 0 && !new_text.is_char_boundary(new_bytes.len() - suffix_len) {
-            suffix_len -= 1;
         }
 
         let replace_start = prefix_len;
@@ -1233,7 +1219,7 @@ mod tests {
         });
         assert_eq!(kernel.text(), "abc");
 
-        let result = kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        let result = kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "ab");
         assert_eq!(kernel.cursor(), 2);
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Undo);
@@ -1248,10 +1234,10 @@ mod tests {
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
         });
-        kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "ab");
 
-        let result = kernel.apply(EditorCommand::Redo { expected_revision: 0 });
+        let result = kernel.apply(EditorCommand::Redo);
         assert_eq!(kernel.text(), "abc");
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Redo);
     }
@@ -1351,7 +1337,7 @@ mod tests {
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
         });
-        kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "ab");
 
         kernel.apply(EditorCommand::Insert {
@@ -1361,7 +1347,7 @@ mod tests {
             expected_revision: 0,
         });
 
-        let result = kernel.apply(EditorCommand::Redo { expected_revision: 0 });
+        let result = kernel.apply(EditorCommand::Redo);
         assert_eq!(kernel.text(), "abd");
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CursorOnly);
     }
@@ -1503,13 +1489,13 @@ mod tests {
         });
         assert_eq!(kernel.text(), "abc");
 
-        kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "ab");
 
-        kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "a");
 
-        kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "");
     }
 
@@ -1558,7 +1544,7 @@ mod tests {
             expected_revision: 0,
         });
         kernel.load_text("new".to_string(), 3);
-        let result = kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        let result = kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "new");
     }
 
@@ -1596,21 +1582,15 @@ mod tests {
     }
 
     #[test]
-    fn compute_single_patch_aligns_to_utf8_char_boundary() {
-        let old_text = "你好世界";
-        let new_text = "你好朋友";
-        let (range, inserted) = EditorKernel::compute_single_patch(old_text, new_text);
-        assert!(old_text.is_char_boundary(range.0), "replace_start should be char boundary");
-        assert!(old_text.is_char_boundary(range.1), "replace_end should be char boundary");
-        assert_eq!(range, (6, 12));
-        assert_eq!(inserted, "朋友");
-
-        let old_text2 = "ab中c";
-        let new_text2 = "ab文c";
-        let (range2, inserted2) = EditorKernel::compute_single_patch(old_text2, new_text2);
-        assert!(old_text2.is_char_boundary(range2.0));
-        assert!(old_text2.is_char_boundary(range2.1));
-        assert_eq!(range2, (2, 5));
-        assert_eq!(inserted2, "文");
+    fn composition_update_visual_intent_with_replace_range() {
+        let kernel = EditorKernel::with_text("你好世界".to_string(), 12);
+        let intent = kernel.composition_update_visual_intent(
+            Some((6, 12)),
+            "世界",
+            "朋友",
+        );
+        assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
+        assert_eq!(intent.old_affected_byte_ranges, vec![(6, 12)]);
+        assert_eq!(intent.new_affected_byte_ranges, vec![(6, 12)]);
     }
 }

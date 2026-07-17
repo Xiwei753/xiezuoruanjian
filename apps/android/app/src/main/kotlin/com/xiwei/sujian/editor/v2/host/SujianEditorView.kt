@@ -97,14 +97,14 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun performUndo() {
         val bridge = kernelBridge ?: return
-        val dto = bridge.undo(mirror.getRevision()) ?: return
+        val dto = bridge.undo() ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     fun performRedo() {
         val bridge = kernelBridge ?: return
-        val dto = bridge.redo(mirror.getRevision()) ?: return
+        val dto = bridge.redo() ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
@@ -112,12 +112,12 @@ class SujianEditorView @JvmOverloads constructor(
     private fun applyEditResultFull(result: EditResult) {
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
         if (result.displayPatches.isNotEmpty()) {
@@ -129,11 +129,11 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyCommandResult(result: EditResult) {
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
         if (result.displayPatches.isNotEmpty()) {
@@ -150,12 +150,12 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         mirrorUpdate?.invoke()
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
         invalidate()
@@ -477,11 +477,6 @@ class SujianEditorView @JvmOverloads constructor(
     fun setSmoothCursorEnabled(enabled: Boolean, durationMs: Long) {
         smoothCursorEnabled = enabled
         smoothCursorDurationMs = durationMs
-        val bridge = kernelBridge ?: return
-        bridge.setAnimationEnabled(enabled || coordinatedAnimationEnabled)
-        if (enabled) {
-            bridge.setAnimationDurationMs(durationMs)
-        }
     }
 
     fun isSmoothCursorEnabled(): Boolean = smoothCursorEnabled
@@ -502,8 +497,6 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun setCoordinatedAnimationEnabled(enabled: Boolean) {
         coordinatedAnimationEnabled = enabled
-        val bridge = kernelBridge ?: return
-        bridge.setAnimationEnabled(enabled || smoothCursorEnabled)
     }
 
     fun isCoordinatedAnimationEnabled(): Boolean = coordinatedAnimationEnabled
@@ -511,26 +504,9 @@ class SujianEditorView @JvmOverloads constructor(
     private fun computeAutoIndentPrefix(): String {
         if (!autoIndentEnabled) return ""
         val text = mirror.getText()
-        val cursorByte = mirror.getCursorUtf8()
-        val textBytes = text.toByteArray(Charsets.UTF_8)
-        val safeCursorByte = cursorByte.coerceIn(0, textBytes.size)
-        var byteIdx = 0
-        var lastNewlineByte = -1
-        while (byteIdx < safeCursorByte) {
-            if (textBytes[byteIdx] == '\n'.code.toByte()) {
-                lastNewlineByte = byteIdx
-            }
-            val b = textBytes[byteIdx]
-            byteIdx += when {
-                (b.toInt() and 0x80) == 0 -> 1
-                (b.toInt() and 0xE0) == 0xC0 -> 2
-                (b.toInt() and 0xF0) == 0xE0 -> 3
-                else -> 4
-            }
-        }
-        val lineStartByte = lastNewlineByte + 1
-        val linePrefixBytes = textBytes.copyOfRange(lineStartByte, safeCursorByte)
-        val linePrefix = String(linePrefixBytes, Charsets.UTF_8)
+        val cursor = mirror.getCursorUtf8()
+        val lineStart = text.lastIndexOf('\n', cursor - 1) + 1
+        val linePrefix = text.substring(lineStart, cursor)
         val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
         return indent
     }
@@ -577,8 +553,8 @@ interface EditorKernelBridge {
     fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
     fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
     fun setSelection(anchorByteOffset: Int, headByteOffset: Int, expectedRevision: Long): EditorEditResultDto?
-    fun undo(expectedRevision: Long): EditorEditResultDto?
-    fun redo(expectedRevision: Long): EditorEditResultDto?
+    fun undo(): EditorEditResultDto?
+    fun redo(): EditorEditResultDto?
     fun loadText(text: String, cursorUtf8: Int): EditorEditResultDto?
     fun compositionCommit(
         compositionReplaceStart: Int,
