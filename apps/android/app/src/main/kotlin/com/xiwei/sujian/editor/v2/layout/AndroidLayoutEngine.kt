@@ -130,6 +130,8 @@ class AndroidLayoutEngine(
         val cursorY = l.getLineTop(cursorLine).toFloat()
         val cursorHeight = (l.getLineBottom(cursorLine) - l.getLineTop(cursorLine)).toFloat()
 
+        val compRange = mirror.getCompositionRangeUtf16()
+
         return AndroidLayoutRevision(
             revisionCounter,
             mirror.getRevision(),
@@ -142,6 +144,12 @@ class AndroidLayoutEngine(
             cursorX,
             cursorY,
             cursorHeight,
+            mirror.getSelectionStartUtf8(),
+            mirror.getSelectionEndUtf8(),
+            mirror.getSelectionStartUtf16(),
+            mirror.getSelectionEndUtf16(),
+            compRange?.first ?: -1,
+            compRange?.second ?: -1,
             emptyList()
         )
     }

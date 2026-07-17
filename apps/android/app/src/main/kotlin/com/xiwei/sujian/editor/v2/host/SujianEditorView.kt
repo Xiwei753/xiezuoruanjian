@@ -34,10 +34,10 @@ class SujianEditorView @JvmOverloads constructor(
         isAntiAlias = true
     }
     private val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
-    private val visualPlanner = AndroidVisualPlanner(mirror)
+    private val visualPlanner = AndroidVisualPlanner()
     private val resourceStore = VisualResourceStore()
     private val coordinator = VisualTransactionCoordinator(resourceStore)
-    private val renderer = AndroidRenderer(mirror, layoutEngine)
+    private val renderer = AndroidRenderer()
     private val inputAdapter = AndroidInputAdapter(context, mirror, this)
 
     private var scrollX: Float = 0f
@@ -111,12 +111,12 @@ class SujianEditorView @JvmOverloads constructor(
 
     private fun applyEditResultFull(result: EditResult) {
         val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision)
+        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision)
+        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
         val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
@@ -128,11 +128,11 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun applyCommandResult(result: EditResult) {
         val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision)
+        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision)
+        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
         val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
@@ -149,12 +149,12 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
         val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision)
+        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
         mirrorUpdate?.invoke()
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision)
+        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
         val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots)
         coordinator.submitTransaction(transaction)
@@ -249,7 +249,29 @@ class SujianEditorView @JvmOverloads constructor(
         val frame = coordinator.computeFrame(frameTimeMs, width, height, scrollX, scrollY)
         val layout = layoutEngine.getLayout()
         if (layout != null) {
-            renderer.draw(canvas, layout, frame, searchHighlights)
+            val rev = layoutEngine.getCurrentRevision()
+            val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
+                val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+                Pair(indexMap.utf8ToUtf16(startUtf8), indexMap.utf8ToUtf16(endUtf8))
+            }
+            val renderFrame = AndroidRenderFrame(
+                transaction = frame.transaction,
+                progress = frame.progress,
+                viewportWidth = frame.viewportWidth,
+                viewportHeight = frame.viewportHeight,
+                scrollX = frame.scrollX,
+                scrollY = frame.scrollY,
+                cursorUtf16 = rev?.cursorUtf16 ?: mirror.getCursorUtf16(),
+                cursorX = rev?.cursorX ?: 0f,
+                cursorY = rev?.cursorY ?: 0f,
+                cursorHeight = rev?.cursorHeight ?: 0f,
+                selectionStartUtf16 = rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16(),
+                selectionEndUtf16 = rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16(),
+                compositionStartUtf16 = rev?.compositionStartUtf16 ?: -1,
+                compositionEndUtf16 = rev?.compositionEndUtf16 ?: -1,
+                searchHighlightsUtf16 = searchHighlightsUtf16
+            )
+            renderer.draw(canvas, layout, renderFrame)
         }
         canvas.restore()
         if (coordinator.hasActiveAnimation()) {

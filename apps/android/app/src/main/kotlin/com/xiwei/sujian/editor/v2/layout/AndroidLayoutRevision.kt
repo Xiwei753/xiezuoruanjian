@@ -12,6 +12,12 @@ data class AndroidLayoutRevision(
     val cursorX: Float,
     val cursorY: Float,
     val cursorHeight: Float,
+    val selectionStartUtf8: Int,
+    val selectionEndUtf8: Int,
+    val selectionStartUtf16: Int,
+    val selectionEndUtf16: Int,
+    val compositionStartUtf16: Int,
+    val compositionEndUtf16: Int,
     val snapshotHandles: List<Long>
 ) {
     data class LineRange(
