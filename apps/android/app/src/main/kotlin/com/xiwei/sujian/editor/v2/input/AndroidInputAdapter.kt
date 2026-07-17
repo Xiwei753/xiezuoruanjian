@@ -102,14 +102,12 @@ class AndroidInputAdapter(
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, originalText)
             if (dto != null) {
                 val result = EditResult.fromDto(dto)
-                mirror.clearComposition()
                 editorView.applyEditResultFull(result)
                 return
             }
         }
 
-        mirror.clearComposition()
-        sendReplaceToKernel(replaceStart, replaceEnd, committedText, originalText, EditorTransactionCauseDto.TYPING_COMMIT)
+        editorView.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, originalText, EditorTransactionCauseDto.TYPING_COMMIT)
     }
 
     fun handleCompositionCommitWithText(finalText: String, newCursorPosition: Int) {
@@ -127,14 +125,12 @@ class AndroidInputAdapter(
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, finalText, "")
             if (dto != null) {
                 val result = EditResult.fromDto(dto)
-                mirror.clearComposition()
                 editorView.applyEditResultFull(result)
                 return
             }
         }
 
-        mirror.clearComposition()
-        sendReplaceToKernel(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+        editorView.clearCompositionAndReplace(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
     }
 
     fun handleCompositionCancel() {

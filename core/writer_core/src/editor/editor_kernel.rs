@@ -285,7 +285,7 @@ impl EditorKernel {
              | EditorCommand::Undo { expected_revision }
              | EditorCommand::Redo { expected_revision } => {
                 if *expected_revision != base_revision {
-                    return self.noop_result(base_revision, self.cursor, (self.selection_anchor, self.cursor));
+                    return self.stale_session_result(base_revision);
                 }
             }
         }
@@ -414,6 +414,11 @@ impl EditorKernel {
         old_cursor: usize,
         old_selection: (usize, usize),
     ) -> EditorEditResult {
+        let (byte_start, byte_end_exclusive) = if byte_start > byte_end_exclusive {
+            (byte_end_exclusive, byte_start)
+        } else {
+            (byte_start, byte_end_exclusive)
+        };
         let byte_start = byte_start.min(self.text.len());
         let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
         if byte_start >= byte_end_exclusive {
@@ -506,6 +511,11 @@ impl EditorKernel {
         old_cursor: usize,
         old_selection: (usize, usize),
     ) -> EditorEditResult {
+        let (byte_start, byte_end_exclusive) = if byte_start > byte_end_exclusive {
+            (byte_end_exclusive, byte_start)
+        } else {
+            (byte_start, byte_end_exclusive)
+        };
         let byte_start = byte_start.min(self.text.len());
         let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
 
@@ -787,6 +797,9 @@ impl EditorKernel {
         while prefix_len > 0 && !old_text.is_char_boundary(prefix_len) {
             prefix_len -= 1;
         }
+        while prefix_len > 0 && !new_text.is_char_boundary(prefix_len) {
+            prefix_len -= 1;
+        }
 
         let mut suffix_len = 0;
         while suffix_len < old_bytes.len() - prefix_len && suffix_len < new_bytes.len() - prefix_len
@@ -956,6 +969,33 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
+        }
+    }
+
+    fn stale_session_result(
+        &mut self,
+        base_revision: u64,
+    ) -> EditorEditResult {
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: (self.selection_anchor, self.cursor),
+            new_selection_byte_range: (self.selection_anchor, self.cursor),
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::Programmatic,
+                operation_kind: EditorOperationKind::CursorOnly,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_byte_offset: self.cursor,
+                    new_byte_offset: self.cursor,
+                    should_animate: false,
+                },
+            },
         }
     }
 

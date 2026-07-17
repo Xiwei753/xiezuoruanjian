@@ -205,6 +205,11 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto) {
+        mirror.clearComposition()
+        replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+    }
+
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
         searchHighlights = highlights
         invalidate()
@@ -217,8 +222,10 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        layoutEngine.setWidth(w.toFloat())
-        layoutEngine.requestLayout()
+        if (w > 0 && mirror.getLengthUtf16() > 0) {
+            layoutEngine.setWidth(w.toFloat())
+            layoutEngine.requestLayout()
+        }
         updateMaxScroll()
         invalidate()
     }
@@ -491,12 +498,12 @@ class SujianEditorView @JvmOverloads constructor(
 
     private fun computeAutoIndentPrefix(): String {
         if (!autoIndentEnabled) return ""
-        val text = mirror.getText()
-        val cursorUtf8 = mirror.getCursorUtf8()
         val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val cursorUtf8 = mirror.getCursorUtf8()
         val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
-        val lineStart = text.lastIndexOf('\n', (cursorUtf16 - 1).coerceAtLeast(0)) + 1
-        val linePrefix = text.substring(lineStart, cursorUtf16.coerceAtMost(text.length))
+        val text = mirror.getText()
+        val lineStartUtf16 = text.lastIndexOf('\n', (cursorUtf16 - 1).coerceAtLeast(0)) + 1
+        val linePrefix = text.substring(lineStartUtf16, cursorUtf16.coerceAtMost(text.length))
         val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
         return indent
     }

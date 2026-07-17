@@ -49,6 +49,7 @@ class VisualTransactionCoordinator(
             SliceVisualState(
                 snapshotId = slice.snapshot?.snapshotId ?: -1L,
                 role = slice.role,
+                lineIndex = slice.snapshot?.lineIndex ?: -1,
                 currentLeft = currentLeft,
                 currentTop = currentTop,
                 currentRight = currentRight,

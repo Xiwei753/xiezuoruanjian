@@ -242,32 +242,67 @@ class AndroidVisualPlanner(
             val newSnapshot = if (newLineRange != null) createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) else null
 
             if (oldSnapshot != null && oldLineRange != null) {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Delete,
-                    snapshot = oldSnapshot,
-                    sourceRect = oldSnapshot.sourceRect,
-                    destinationRect = android.graphics.RectF(
-                        oldLineRange.left, oldLineRange.top,
-                        oldLineRange.right, oldLineRange.bottom
-                    ),
-                    startAlpha = 1f,
-                    endAlpha = 0f
-                ))
+                if (oldSnapshot.clusters.isNotEmpty()) {
+                    for (cluster in oldSnapshot.clusters) {
+                        val inOldRange = visualIntent.oldAffectedByteRanges.any { (start, end) ->
+                            cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                        }
+                        if (inOldRange) {
+                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                                role = SliceRole.Delete,
+                                snapshot = oldSnapshot,
+                                sourceRect = cluster.sourceRectInLineImage,
+                                destinationRect = cluster.visualRectInDocument,
+                                startAlpha = 1f,
+                                endAlpha = 0f
+                            ))
+                        }
+                    }
+                } else {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Delete,
+                        snapshot = oldSnapshot,
+                        sourceRect = oldSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            oldLineRange.left, oldLineRange.top,
+                            oldLineRange.right, oldLineRange.bottom
+                        ),
+                        startAlpha = 1f,
+                        endAlpha = 0f
+                    ))
+                }
             }
 
             if (newSnapshot != null && newLineRange != null) {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Insert,
-                    snapshot = newSnapshot,
-                    sourceRect = newSnapshot.sourceRect,
-                    destinationRect = android.graphics.RectF(
-                        newLineRange.left, newLineRange.top,
-                        newLineRange.right, newLineRange.bottom
-                    ),
-                    startAlpha = 0f,
-                    endAlpha = 1f
-                ))
-                // addStaticPatchForAnimatedLine removed
+                if (newSnapshot.clusters.isNotEmpty()) {
+                    for (cluster in newSnapshot.clusters) {
+                        val inNewRange = visualIntent.newAffectedByteRanges.any { (start, end) ->
+                            cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                        }
+                        if (inNewRange) {
+                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                                role = SliceRole.Insert,
+                                snapshot = newSnapshot,
+                                sourceRect = cluster.sourceRectInLineImage,
+                                destinationRect = cluster.visualRectInDocument,
+                                startAlpha = 0f,
+                                endAlpha = 1f
+                            ))
+                        }
+                    }
+                } else {
+                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Insert,
+                        snapshot = newSnapshot,
+                        sourceRect = newSnapshot.sourceRect,
+                        destinationRect = android.graphics.RectF(
+                            newLineRange.left, newLineRange.top,
+                            newLineRange.right, newLineRange.bottom
+                        ),
+                        startAlpha = 0f,
+                        endAlpha = 1f
+                    ))
+                }
             }
         }
     }
@@ -566,10 +601,12 @@ class AndroidVisualPlanner(
         slices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot
     ): List<PreparedVisualTransaction.AnimatedSlice> {
-        val rebaseById = rebaseSnapshot.sliceVisualStates.associateBy { it.snapshotId }
+        val rebaseByLineRole = rebaseSnapshot.sliceVisualStates.groupBy { "${it.role}_${it.lineIndex}" }
         return slices.map { slice ->
-            val snapshotId = slice.snapshot?.snapshotId ?: return@map slice
-            val rebaseState = rebaseById[snapshotId] ?: return@map slice
+            val lineIndex = slice.snapshot?.lineIndex ?: -1
+            val key = "${slice.role}_${lineIndex}"
+            val candidates = rebaseByLineRole[key] ?: return@map slice
+            val rebaseState = candidates.firstOrNull() ?: return@map slice
             when (slice.role) {
                 SliceRole.Move -> {
                     slice.copy(

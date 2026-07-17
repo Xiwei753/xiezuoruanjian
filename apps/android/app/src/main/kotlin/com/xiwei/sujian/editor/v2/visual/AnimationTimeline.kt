@@ -79,6 +79,7 @@ data class VisualFrameSnapshot(
 data class SliceVisualState(
     val snapshotId: Long,
     val role: SliceRole,
+    val lineIndex: Int,
     val currentLeft: Float,
     val currentTop: Float,
     val currentRight: Float,

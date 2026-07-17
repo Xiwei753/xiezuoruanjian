@@ -59,15 +59,15 @@ class AndroidRenderer {
         val transaction = frame.transaction
         if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
+            val animatedLineRegions = computeAnimatedLineRegions(layout, transaction)
+            renderLayoutWithAnimatedHoles(canvas, layout, animatedLineRegions)
             renderSelectionDecoration(canvas, layout, transaction)
-            renderStaticBackground(canvas, layout, transaction)
             renderAnimatedSlices(canvas, transaction, frame.progress)
             renderPreeditDecoration(canvas, layout, transaction)
             if (transaction.cursorTransition != null && transaction.cursorTransition.shouldAnimate) {
                 renderCursorTransition(canvas, transaction, frame.progress)
-            } else {
-                renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
             }
+            renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
         } else {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             renderSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
@@ -98,28 +98,40 @@ class AndroidRenderer {
         }
     }
 
-    private fun renderStaticBackground(
-        canvas: Canvas,
+    private fun computeAnimatedLineRegions(
         layout: android.text.Layout,
         transaction: PreparedVisualTransaction
-    ) {
+    ): List<android.graphics.RectF> {
         val animatedLines = mutableSetOf<Int>()
         for (slice in transaction.animatedSlices) {
             slice.snapshot?.lineIndex?.let { animatedLines.add(it) }
         }
-
-        for (i in 0 until layout.lineCount) {
-            if (i in animatedLines) continue
-            val lineTop = layout.getLineTop(i)
-            val lineBottom = layout.getLineBottom(i)
-            canvas.save()
-            canvas.clipRect(
-                layout.getLineLeft(i), lineTop.toFloat(),
-                layout.getLineRight(i), lineBottom.toFloat()
-            )
-            layout.draw(canvas)
-            canvas.restore()
+        val regions = mutableListOf<android.graphics.RectF>()
+        for (lineIndex in animatedLines) {
+            if (lineIndex < 0 || lineIndex >= layout.lineCount) continue
+            regions.add(android.graphics.RectF(
+                layout.getLineLeft(lineIndex), layout.getLineTop(lineIndex).toFloat(),
+                layout.getLineRight(lineIndex), layout.getLineBottom(lineIndex).toFloat()
+            ))
         }
+        return regions
+    }
+
+    private fun renderLayoutWithAnimatedHoles(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        animatedLineRegions: List<android.graphics.RectF>
+    ) {
+        if (animatedLineRegions.isEmpty()) {
+            layout.draw(canvas)
+            return
+        }
+        canvas.save()
+        for (region in animatedLineRegions) {
+            canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
+        }
+        layout.draw(canvas)
+        canvas.restore()
     }
 
     private fun renderAnimatedSlices(canvas: Canvas, transaction: PreparedVisualTransaction, progress: Float) {
