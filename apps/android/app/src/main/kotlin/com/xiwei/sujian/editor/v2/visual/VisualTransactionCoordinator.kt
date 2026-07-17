@@ -21,13 +21,16 @@ class VisualTransactionCoordinator(
 
             if (frameSnapshot != null && frameSnapshot.state == TransactionState.Rendering) {
                 lastFrameSnapshot = frameSnapshot
-                rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction, oldTimeline)
+                val rebased = rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction, oldTimeline)
+                activeTransaction = rebased
             } else {
                 cancelTransaction(oldTransaction)
+                activeTransaction = transaction
             }
+        } else {
+            activeTransaction = transaction
         }
 
-        activeTransaction = transaction
         timeline = AnimationTimeline(transaction.durationMs)
     }
 
@@ -36,7 +39,7 @@ class VisualTransactionCoordinator(
         frameSnapshot: VisualFrameSnapshot,
         newTransaction: PreparedVisualTransaction,
         oldTimeline: AnimationTimeline?
-    ) {
+    ): PreparedVisualTransaction {
         val newOwner = SnapshotOwner.OwnedByTransaction(newTransaction.transactionId)
         val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
 
@@ -55,23 +58,33 @@ class VisualTransactionCoordinator(
             }
         }
 
-        if (frameSnapshot.progress > 0f) {
-            for (slice in newTransaction.animatedSlices) {
-                if (slice.role == SliceRole.Move && slice.fromDestinationRect != null) {
-                    val currentLeft = slice.fromDestinationRect.left + (slice.destinationRect.left - slice.fromDestinationRect.left) * frameSnapshot.progress
-                    val currentTop = slice.fromDestinationRect.top + (slice.destinationRect.top - slice.fromDestinationRect.top) * frameSnapshot.progress
-                    val currentRight = slice.fromDestinationRect.right + (slice.destinationRect.right - slice.fromDestinationRect.right) * frameSnapshot.progress
-                    val currentBottom = slice.fromDestinationRect.bottom + (slice.destinationRect.bottom - slice.fromDestinationRect.bottom) * frameSnapshot.progress
-                    slice.fromDestinationRect = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
-                } else if (slice.role == SliceRole.Insert) {
-                    slice.startAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress
-                } else if (slice.role == SliceRole.Delete) {
-                    slice.endAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress
+        val rebasedSlices = if (frameSnapshot.progress > 0f) {
+            newTransaction.animatedSlices.map { slice ->
+                when (slice.role) {
+                    SliceRole.Move -> {
+                        val fromRect = slice.fromDestinationRect ?: slice.destinationRect
+                        val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * frameSnapshot.progress
+                        val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * frameSnapshot.progress
+                        val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * frameSnapshot.progress
+                        val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * frameSnapshot.progress
+                        slice.copy(fromDestinationRect = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom))
+                    }
+                    SliceRole.Insert -> {
+                        slice.copy(startAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress)
+                    }
+                    SliceRole.Delete -> {
+                        slice.copy(endAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress)
+                    }
+                    else -> slice.copy()
                 }
             }
+        } else {
+            newTransaction.animatedSlices.map { it.copy() }
         }
 
         oldTimeline.cancel()
+
+        return newTransaction.copy(animatedSlices = rebasedSlices)
     }
 
     fun computeFrame(frameTimeMs: Long, viewportWidth: Int = 0, viewportHeight: Int = 0, scrollX: Float = 0f, scrollY: Float = 0f): AndroidRenderFrame {
@@ -94,7 +107,16 @@ class VisualTransactionCoordinator(
                 viewportWidth = viewportWidth,
                 viewportHeight = viewportHeight,
                 scrollX = scrollX,
-                scrollY = scrollY
+                scrollY = scrollY,
+                cursorUtf16 = 0,
+                cursorX = 0f,
+                cursorY = 0f,
+                cursorHeight = 0f,
+                selectionStartUtf16 = 0,
+                selectionEndUtf16 = 0,
+                compositionStartUtf16 = -1,
+                compositionEndUtf16 = -1,
+                searchHighlightsUtf16 = emptyList()
             )
         }
 
@@ -104,7 +126,16 @@ class VisualTransactionCoordinator(
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
             scrollX = scrollX,
-            scrollY = scrollY
+            scrollY = scrollY,
+            cursorUtf16 = 0,
+            cursorX = 0f,
+            cursorY = 0f,
+            cursorHeight = 0f,
+            selectionStartUtf16 = 0,
+            selectionEndUtf16 = 0,
+            compositionStartUtf16 = -1,
+            compositionEndUtf16 = -1,
+            searchHighlightsUtf16 = emptyList()
         )
     }
 

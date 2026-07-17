@@ -1,28 +1,27 @@
 package com.xiwei.sujian.editor.v2.visual
 
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshotBuilder
 import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
-import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import uniffi.writer_core.AnimationModeDto
 
 class AndroidVisualPlanner(
-    private val mirror: DisplayTextMirror
 ) {
     private val snapshotBuilder = AndroidLineSnapshotBuilder()
 
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
-        oldRevision: AndroidLayoutRevision?
+        revision: AndroidLayoutRevision?,
+        useNewRanges: Boolean = false
     ): Set<Int> {
-        if (oldRevision == null) return emptySet()
+        if (revision == null) return emptySet()
         val affectedLines = mutableSetOf<Int>()
-        for ((start, end) in visualIntent.oldAffectedByteRanges) {
-            for (i in oldRevision.lineRanges.indices) {
-                val lineRange = oldRevision.lineRanges[i]
+        val ranges = if (useNewRanges) visualIntent.newAffectedByteRanges else visualIntent.oldAffectedByteRanges
+        for ((start, end) in ranges) {
+            for (i in revision.lineRanges.indices) {
+                val lineRange = revision.lineRanges[i]
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
@@ -110,7 +109,7 @@ class AndroidVisualPlanner(
             staticPatches = staticPatches,
             animatedSlices = animatedSlices,
             selectionDecoration = buildSelectionDecoration(newRev),
-            preeditDecoration = buildPreeditDecoration(),
+            preeditDecoration = buildPreeditDecoration(newRev),
             cursorTransition = cursorTransition,
             durationMs = durationMs
         )
@@ -591,18 +590,16 @@ class AndroidVisualPlanner(
             resourceStore.put(preCaptured, owner)
             return preCaptured
         }
-        val lineRange = revision.lineRanges.getOrNull(lineIndex) ?: return null
-        val snapshot = snapshotBuilder.buildSnapshotFromRevision(lineRange, mirror) ?: return null
-        resourceStore.put(snapshot, owner)
-        return snapshot
+        return null
     }
 
     private fun buildSelectionDecoration(
         newRev: AndroidLayoutRevision?
     ): PreparedVisualTransaction.SelectionDecoration? {
-        val selStart = mirror.getSelectionStartUtf16()
-        val selEnd = mirror.getSelectionEndUtf16()
-        if (selStart == selEnd || newRev == null) return null
+        if (newRev == null) return null
+        val selStart = newRev.selectionStartUtf16
+        val selEnd = newRev.selectionEndUtf16
+        if (selStart == selEnd) return null
 
         val rects = mutableListOf<android.graphics.RectF>()
         for (lineRange in newRev.lineRanges) {
@@ -616,11 +613,14 @@ class AndroidVisualPlanner(
         return PreparedVisualTransaction.SelectionDecoration(selStart, selEnd, rects)
     }
 
-    private fun buildPreeditDecoration(): PreparedVisualTransaction.PreeditDecoration? {
-        val compRange = mirror.getCompositionRangeUtf16() ?: return null
+    private fun buildPreeditDecoration(newRev: AndroidLayoutRevision?): PreparedVisualTransaction.PreeditDecoration? {
+        if (newRev == null) return null
+        val compStart = newRev.compositionStartUtf16
+        val compEnd = newRev.compositionEndUtf16
+        if (compStart < 0 || compEnd < 0 || compStart >= compEnd) return null
         return PreparedVisualTransaction.PreeditDecoration(
-            startUtf16 = compRange.first,
-            endUtf16 = compRange.second,
+            startUtf16 = compStart,
+            endUtf16 = compEnd,
             underlineColor = android.graphics.Color.BLACK
         )
     }
