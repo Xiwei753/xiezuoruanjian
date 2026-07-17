@@ -19,26 +19,6 @@ mod sync_ops;
 mod workspace_ops;
 mod writing_stats_ops;
 
-use std::ffi::{CStr, CString};
-use std::os::raw::c_char;
-use std::sync::Mutex;
-
-use once_cell::sync::OnceCell;
-
-use crate::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
-use crate::facade::WriterCore;
-
-pub(crate) static CORE: OnceCell<Mutex<Option<WriterCore>>> = OnceCell::new();
-static LAST_ERROR: OnceCell<Mutex<String>> = OnceCell::new();
-
-pub(crate) fn set_last_error(msg: &str) {
-    if let Some(m) = LAST_ERROR.get() {
-        if let Ok(mut guard) = m.lock() {
-            *guard = msg.to_string();
-        }
-    }
-}
-
 pub(crate) fn with_core<F, R>(f: F) -> Result<R, String>
 where
     F: FnOnce(&WriterCore) -> Result<R, String>,
@@ -170,77 +150,5 @@ pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
     match with_core(|core| Ok(core.ai_available() as i32)) {
         Ok(v) => v,
         Err(_) => 0,
-    }
-}
-
-/// # Safety
-/// `old_text`, `new_text`, `cause` must be valid null-terminated UTF-8 C strings.
-/// `old_cursor_index` and `new_cursor_index` are UTF-8 byte offsets.
-/// Returns a caller-owned JSON C string (null when no animation is warranted).
-/// Free with `writer_core_free_string`.
-///
-/// This is a **stateless** function that does not require `writer_core_init`.
-/// It computes a visual transaction purely from the input parameters.
-/// When the change should not be animated (e.g., Paste, Load, multi-change),
-/// returns a JSON string with `data: null`.
-#[no_mangle]
-pub unsafe extern "C" fn writer_core_editor_visual_transaction(
-    old_text: *const c_char,
-    new_text: *const c_char,
-    old_cursor_index: u32,
-    new_cursor_index: u32,
-    cause: *const c_char,
-    max_animated_chars: u32,
-    animation_duration_ms: u32,
-) -> *mut c_char {
-    let old = match c_str_to_rust(old_text) {
-        Ok(s) => s,
-        Err(_) => return err_json("INVALID_ARG", "old_text is null or invalid UTF-8"),
-    };
-    let new = match c_str_to_rust(new_text) {
-        Ok(s) => s,
-        Err(_) => return err_json("INVALID_ARG", "new_text is null or invalid UTF-8"),
-    };
-    let cause_str = match c_str_to_rust(cause) {
-        Ok(s) => s,
-        Err(_) => return err_json("INVALID_ARG", "cause is null or invalid UTF-8"),
-    };
-
-    let core_cause = match cause_str.as_str() {
-        "Typing" => EditorTransactionCause::Typing,
-        "Delete" => EditorTransactionCause::Delete,
-        "ImeComposition" => EditorTransactionCause::ImeComposition,
-        "TypingCommit" => EditorTransactionCause::TypingCommit,
-        "Paste" => EditorTransactionCause::Paste,
-        "Undo" => EditorTransactionCause::Undo,
-        "Redo" => EditorTransactionCause::Redo,
-        "Load" => EditorTransactionCause::Load,
-        "Format" => EditorTransactionCause::Format,
-        "Programmatic" => EditorTransactionCause::Programmatic,
-        _ => EditorTransactionCause::Typing,
-    };
-
-    let old_sel = EditorSelection::collapsed(&old, old_cursor_index as usize);
-    let new_sel = EditorSelection::collapsed(&new, new_cursor_index as usize);
-
-    let mut engine = EditorEngine::with_animation_limits(
-        max_animated_chars as usize,
-        animation_duration_ms as u64,
-    );
-    let transaction = engine.create_transaction(&old, &new, old_sel, new_sel, core_cause);
-    let vt = engine.visual_transaction(&transaction);
-
-    match vt {
-        Some(vt_data) => ok_json(vt_data),
-        None => {
-            // Return JSON with data: null to indicate no animation warranted
-            let envelope = serde_json::json!({
-                "success": true,
-                "data": null
-            });
-            let s = serde_json::to_string(&envelope)
-                .unwrap_or_else(|_| r#"{"success":true,"data":null}"#.to_string());
-            CString::new(s).unwrap_or_default().into_raw()
-        }
     }
 }

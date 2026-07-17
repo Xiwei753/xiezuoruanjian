@@ -114,6 +114,8 @@ class DisplayTextMirror {
     private var cursorUtf16: Int = 0
     private var compositionStartUtf16: Int = -1
     private var compositionEndUtf16: Int = -1
+    private var selectionStartUtf8: Int = 0
+    private var selectionEndUtf8: Int = 0
     private var selectionStartUtf16: Int = 0
     private var selectionEndUtf16: Int = 0
 
@@ -132,6 +134,19 @@ class DisplayTextMirror {
     fun getSelectionStartUtf16(): Int = selectionStartUtf16
 
     fun getSelectionEndUtf16(): Int = selectionEndUtf16
+
+    fun getSelectionStartUtf8(): Int = selectionStartUtf8
+
+    fun getSelectionEndUtf8(): Int = selectionEndUtf8
+
+    fun applyEditResult(result: EditResult) {
+        applyPatches(result.displayPatches)
+        val indexMap = AndroidTextIndexMap(this)
+        selectionStartUtf8 = result.newSelectionStart
+        selectionEndUtf8 = result.newSelectionEnd
+        selectionStartUtf16 = indexMap.utf8ToUtf16(result.newSelectionStart)
+        selectionEndUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
+    }
 
     fun applyPatches(patches: List<DisplayPatch>) {
         if (patches.isEmpty()) return
@@ -161,6 +176,8 @@ class DisplayTextMirror {
             cursorUtf8 = patch.resultingSelectionEnd
             indexMap = AndroidTextIndexMap(this)
             cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
+            selectionStartUtf8 = patch.resultingSelectionStart
+            selectionEndUtf8 = patch.resultingSelectionEnd
             selectionStartUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionStart)
             selectionEndUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionEnd)
         }
@@ -212,16 +229,22 @@ class DisplayTextMirror {
         }
     }
 
-    fun loadText(text: String, cursorUtf8: Int) {
+    fun loadFromSnapshot(text: String, cursorUtf8: Int, revision: Long) {
         buffer.clear()
         buffer.append(text)
         this.cursorUtf8 = cursorUtf8
-        this.currentRevision = 0
+        this.currentRevision = revision
         this.compositionStartUtf16 = -1
         this.compositionEndUtf16 = -1
+        this.selectionStartUtf8 = cursorUtf8
+        this.selectionEndUtf8 = cursorUtf8
         val indexMap = AndroidTextIndexMap(this)
         this.cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
         this.selectionStartUtf16 = this.cursorUtf16
         this.selectionEndUtf16 = this.cursorUtf16
+    }
+
+    fun loadText(text: String, cursorUtf8: Int) {
+        loadFromSnapshot(text, cursorUtf8, 0)
     }
 }

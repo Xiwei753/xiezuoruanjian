@@ -15,12 +15,16 @@ class AndroidLayoutEngine(
     private var width: Float = 0f
     private var lineSpacingMultiplier: Float = 1.0f
     private var revisionCounter: Long = 0
+    private var lastConfigFingerprint: String = ""
     private var lastEditorRevision: Long = -1
+
+    private fun computeConfigFingerprint(): String {
+        return "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_${lineSpacingMultiplier}"
+    }
 
     fun setWidth(width: Float) {
         if (this.width != width) {
             this.width = width
-            requestLayout()
         }
     }
 
@@ -32,9 +36,14 @@ class AndroidLayoutEngine(
         val text = mirror.getSpannable()
         if (width <= 0f) return
 
+        val currentConfigFp = computeConfigFingerprint()
+        val currentEditorRevision = mirror.getRevision()
         val existingLayout = layout
-        if (existingLayout != null && mirror.getRevision() == lastEditorRevision) {
+
+        if (existingLayout != null && currentConfigFp == lastConfigFingerprint) {
+            revisionCounter++
             currentRevision = buildRevision(existingLayout)
+            lastEditorRevision = currentEditorRevision
             return
         }
 
@@ -44,7 +53,8 @@ class AndroidLayoutEngine(
             .setIncludePad(false)
             .build()
 
-        lastEditorRevision = mirror.getRevision()
+        lastConfigFingerprint = currentConfigFp
+        lastEditorRevision = currentEditorRevision
         revisionCounter++
         currentRevision = buildRevision(layout!!)
     }
@@ -58,7 +68,6 @@ class AndroidLayoutEngine(
     fun getMirror(): DisplayTextMirror = mirror
 
     fun getLineForUtf8(byteOffset: Int): Int {
-        val rev = currentRevision ?: return 0
         val indexMap = AndroidTextIndexMap(mirror)
         val utf16 = indexMap.utf8ToUtf16(byteOffset)
         val l = layout ?: return 0

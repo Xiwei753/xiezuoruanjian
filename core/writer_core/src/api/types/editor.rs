@@ -590,6 +590,17 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EditorSessionSnapshotDto {
+    pub text: String,
+    pub revision: u64,
+    pub cursor: u32,
+    pub selection_anchor: u32,
+    pub generation: u64,
+    pub chapter_id: String,
+}
+
 // ── #516: VisualRevision DTO ──
 
 /// 已提交正文的视觉修订 DTO。

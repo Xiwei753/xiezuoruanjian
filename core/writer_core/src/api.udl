@@ -1127,10 +1127,6 @@ interface WriterAppService {
 
     ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role, ShellModeDto shell_mode);
 
-    // ── Editor Visual Transaction ──
-
-    EditorVisualTransactionDto? editor_visual_transaction(string old_text, string new_text, u32 old_cursor_index, u32 new_cursor_index, EditorTransactionCauseDto cause, u32 max_animated_chars, u64 animation_duration_ms);
-
     // ── #535: Editor V2 Kernel ──
 
     EditorEditResultDto editor_kernel_insert(u32 byte_offset, string text, EditorTransactionCauseDto cause);
@@ -1148,6 +1144,7 @@ interface WriterAppService {
     u64 editor_kernel_get_revision();
     u32 editor_kernel_get_cursor();
     u32 editor_kernel_get_selection_anchor();
+    EditorSessionSnapshotDto editor_kernel_session_snapshot();
 };
 
 // ── Layout Policy DTOs ──
@@ -1359,12 +1356,6 @@ dictionary ScreenPolicyDto {
 
 // ── Editor Animation DTOs ──
 
-enum EditorAnimationKindDto {
-    "Insert",
-    "Delete",
-    "Cursor",
-};
-
 enum AnimationModeDto {
     "GlyphAnimation",
     "ClusterAnimation",
@@ -1385,51 +1376,6 @@ enum EditorTransactionCauseDto {
     "Load",
     "Format",
     "Programmatic",
-};
-
-// ── Editor Visual Transaction DTOs ──
-
-enum VisualCoordinateModeDto {
-    "Baseline",
-};
-
-dictionary CursorRectDto {
-    f64 x;
-    f64 top;
-    f64 bottom;
-    f64 baseline_y;
-};
-
-dictionary GlyphRectDto {
-    f64 x;
-    f64 y;
-    f64 w;
-    f64 h;
-    string char_;
-    f64 baseline_y;
-    u64 byte_start;
-    u64 byte_end;
-};
-
-dictionary EditorVisualTransactionDto {
-    u64 id;
-    EditorAnimationKindDto kind;
-    EditorTransactionCauseDto cause;
-    string old_text;
-    string new_text;
-    u32 old_selection_anchor;
-    u32 old_selection_head;
-    u32 new_selection_anchor;
-    u32 new_selection_head;
-    u32 inserted_range_start;
-    u32 inserted_range_end;
-    boolean has_inserted_range;
-    u32 deleted_range_start;
-    u32 deleted_range_end;
-    boolean has_deleted_range;
-    AnimationModeDto animation_mode;
-    u64 duration_ms;
-    VisualCoordinateModeDto coordinate_mode;
 };
 
 // ── #535: Editor V2 Kernel DTOs ──
@@ -1487,4 +1433,13 @@ dictionary EditorEditResultDto {
     u32 new_selection_start;
     u32 new_selection_end;
     EditorVisualIntentDto visual_intent;
+};
+
+dictionary EditorSessionSnapshotDto {
+    string text;
+    u64 revision;
+    u32 cursor;
+    u32 selection_anchor;
+    u64 generation;
+    string chapter_id;
 };

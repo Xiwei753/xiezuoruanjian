@@ -108,13 +108,13 @@ class AndroidLineSnapshotBuilder {
 
         val lineText = text.substring(lineStartUtf16.coerceAtMost(text.length), lineEndUtf16.coerceAtMost(text.length))
 
-        val graphemeBreaks = computeGraphemeBoundaries(lineText)
+        val graphemeRanges = computeGraphemeRanges(lineText)
 
-        var clusterStartUtf16 = lineStartUtf16
         var clusterIdCounter = 0L
 
-        for (boundary in graphemeBreaks) {
-            val clusterEndUtf16 = lineStartUtf16 + boundary
+        for ((start, end) in graphemeRanges) {
+            val clusterStartUtf16 = lineStartUtf16 + start
+            val clusterEndUtf16 = lineStartUtf16 + end
 
             val clusterStartUtf8 = indexMap.utf16ToUtf8(clusterStartUtf16)
             val clusterEndUtf8 = indexMap.utf16ToUtf8(clusterEndUtf16)
@@ -134,10 +134,10 @@ class AndroidLineSnapshotBuilder {
             val sourceTop = 0f
             val sourceBottom = bottom - top
 
-            val localStart = (clusterStartUtf16 - lineStartUtf16).coerceIn(0, lineText.length)
-            val localEnd = (clusterEndUtf16 - lineStartUtf16).coerceIn(0, lineText.length)
+            val localStart = start.coerceIn(0, lineText.length)
+            val localEnd = end.coerceIn(0, lineText.length)
             val clusterText = lineText.substring(localStart, localEnd)
-            val shapingFp = buildShapingFingerprint(clusterText)
+            val shapingFp = buildShapingFingerprint(clusterText, layout, lineIndex, clusterStartUtf16)
 
             clusters.add(LineClusterSnapshot(
                 clusterId = clusterIdCounter++,
@@ -149,33 +149,40 @@ class AndroidLineSnapshotBuilder {
                 visualRectInDocument = android.graphics.RectF(x0, top, x1, bottom),
                 shapingFingerprint = shapingFp
             ))
-
-            clusterStartUtf16 = clusterEndUtf16
         }
 
         return clusters
     }
 
-    private fun computeGraphemeBoundaries(text: String): List<Int> {
+    private fun computeGraphemeRanges(text: String): List<Pair<Int, Int>> {
         if (text.isEmpty()) return emptyList()
 
-        val boundaries = mutableListOf<Int>()
+        val ranges = mutableListOf<Pair<Int, Int>>()
         val iter = BreakIterator.getCharacterInstance()
         iter.setText(text)
 
-        var pos = iter.first()
-        while (pos != BreakIterator.DONE) {
-            boundaries.add(pos)
-            pos = iter.next()
+        var start = iter.first()
+        if (start != BreakIterator.DONE) {
+            var end = iter.next()
+            while (end != BreakIterator.DONE) {
+                if (start < end) {
+                    ranges.add(Pair(start, end))
+                }
+                start = end
+                end = iter.next()
+            }
         }
 
-        return boundaries
+        return ranges
     }
 
-    private fun buildShapingFingerprint(clusterText: String): String {
+    private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
         if (clusterText.isEmpty()) return ""
-        val firstCodePoint = clusterText.codePointAt(0)
-        val type = Character.getType(firstCodePoint)
-        return "${firstCodePoint}_${type}"
+        val codePoints = clusterText.codePoints().toArray()
+        val types = codePoints.map { Character.getType(it).toString() }.joinToString(",")
+        val runIndex = if (clusterStartUtf16 < layout.getLineEnd(lineIndex)) {
+            layout.getPrimaryHorizontal(clusterStartUtf16).toInt()
+        } else 0
+        return "${clusterText.hashCode()}_${types}_${runIndex}"
     }
 }

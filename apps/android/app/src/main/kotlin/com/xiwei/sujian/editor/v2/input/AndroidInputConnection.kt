@@ -6,16 +6,32 @@ import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputConnection(
     private val adapter: AndroidInputAdapter,
-    private val mirror: DisplayTextMirror
-) : BaseInputConnection(adapter, true) {
+    private val mirror: DisplayTextMirror,
+    private val editorView: com.xiwei.sujian.editor.v2.host.SujianEditorView
+) : BaseInputConnection(editorView, true) {
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text.isNullOrEmpty()) return true
         if (adapter.isComposing()) {
-            adapter.handleCompositionFinish()
+            adapter.handleCompositionCommitWithText(text.toString(), newCursorPosition)
+            return true
         }
-        val byteOffset = mirror.getCursorUtf8()
-        adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
+        val selStart = mirror.getSelectionStartUtf8()
+        val selEnd = mirror.getSelectionEndUtf8()
+        if (selStart != selEnd) {
+            val indexMap = AndroidTextIndexMap(mirror)
+            val byteStart = indexMap.utf16ToUtf8(selStart)
+            val byteEnd = indexMap.utf16ToUtf8(selEnd)
+            val originalText = mirror.getText().substring(
+                byteStart.coerceAtMost(mirror.getText().toByteArray(Charsets.UTF_8).size),
+                byteEnd.coerceAtMost(mirror.getText().toByteArray(Charsets.UTF_8).size)
+            )
+            adapter.sendReplaceToKernel(byteStart, byteEnd, text.toString(), originalText, EditorTransactionCauseDto.TYPING)
+        } else {
+            val byteOffset = mirror.getCursorUtf8()
+            adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
+        }
+        notifySelectionChanged()
         return true
     }
 
@@ -31,6 +47,7 @@ class AndroidInputConnection(
         val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
         val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
         adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
+        notifySelectionChanged()
         return true
     }
 
@@ -45,7 +62,22 @@ class AndroidInputConnection(
     }
 
     override fun finishComposingText(): Boolean {
-        adapter.handleCompositionFinish()
+        if (adapter.isComposing()) {
+            adapter.handleCompositionFinish()
+        }
+        return true
+    }
+
+    override fun setComposingRegion(start: Int, end: Int): Boolean {
+        if (start < 0 || end < 0 || start > end) return false
+        if (adapter.isComposing()) {
+            adapter.handleCompositionCancel()
+        }
+        val indexMap = AndroidTextIndexMap(mirror)
+        val byteStart = indexMap.utf16ToUtf8(start)
+        val byteEnd = indexMap.utf16ToUtf8(end)
+        val selectedText = mirror.getText().substring(start.coerceAtMost(mirror.getText().length), end.coerceAtMost(mirror.getText().length))
+        adapter.startComposingRegion(byteStart, byteEnd, selectedText)
         return true
     }
 
@@ -54,6 +86,7 @@ class AndroidInputConnection(
         val anchorByte = indexMap.utf16ToUtf8(start)
         val headByte = indexMap.utf16ToUtf8(end)
         adapter.sendSetSelectionToKernel(anchorByte, headByte)
+        notifySelectionChanged()
         return true
     }
 
@@ -79,5 +112,14 @@ class AndroidInputConnection(
         val start = selStart.coerceAtMost(text.length)
         val end = selEnd.coerceAtMost(text.length)
         return text.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
+    }
+
+    private fun notifySelectionChanged() {
+        val imm = editorView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager ?: return
+        val selStart = mirror.getSelectionStartUtf16()
+        val selEnd = mirror.getSelectionEndUtf16()
+        val candidatesStart = mirror.getCompositionRangeUtf16()?.first ?: -1
+        val candidatesEnd = mirror.getCompositionRangeUtf16()?.second ?: -1
+        imm.updateSelection(editorView, selStart, selEnd, candidatesStart, candidatesEnd)
     }
 }

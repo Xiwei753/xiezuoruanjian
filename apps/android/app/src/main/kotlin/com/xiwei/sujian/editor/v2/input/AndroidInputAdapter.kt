@@ -25,7 +25,7 @@ class AndroidInputAdapter(
                     android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
             outAttrs.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION or
                     android.view.inputmethod.EditorInfo.IME_ACTION_NONE
-            return AndroidInputConnection(this, mirror)
+            return AndroidInputConnection(this, mirror, editorView)
         }
         return null
     }
@@ -104,6 +104,32 @@ class AndroidInputAdapter(
         sendReplaceToKernel(replaceStart, replaceEnd, committedText, originalText, EditorTransactionCauseDto.TYPING_COMMIT)
     }
 
+    fun handleCompositionCommitWithText(finalText: String, newCursorPosition: Int) {
+        if (!isComposing) return
+        val replaceStart = compositionReplaceStartUtf8
+        val replaceEnd = compositionReplaceEndUtf8
+        currentCompositionText = ""
+        previousCompositionText = ""
+        isComposing = false
+        compositionReplaceStartUtf8 = 0
+        compositionReplaceEndUtf8 = 0
+
+        val bridge = editorView.kernelBridge
+        if (bridge != null) {
+            val dto = bridge.compositionCommit(replaceStart, replaceEnd, finalText, "")
+            if (dto != null) {
+                val result = EditResult.fromDto(dto)
+                mirror.clearComposition()
+                mirror.applyPatches(result.displayPatches)
+                editorView.applyCommandResult(result)
+                return
+            }
+        }
+
+        mirror.clearComposition()
+        sendReplaceToKernel(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+    }
+
     fun handleCompositionCancel() {
         if (!isComposing) return
         currentCompositionText = ""
@@ -114,6 +140,14 @@ class AndroidInputAdapter(
 
         mirror.clearComposition()
         editorView.onCompositionUpdated()
+    }
+
+    fun startComposingRegion(byteStart: Int, byteEnd: Int, selectedText: String) {
+        compositionReplaceStartUtf8 = byteStart
+        compositionReplaceEndUtf8 = byteEnd
+        currentCompositionText = selectedText
+        previousCompositionText = ""
+        isComposing = true
     }
 
     fun isComposing(): Boolean = isComposing

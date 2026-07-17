@@ -213,4 +213,8 @@ class AppServiceBridge(workspacePath: String) {
             oldPreeditText, newPreeditText
         )
     }
+
+    fun editorKernelSessionSnapshot(): BridgeResult<uniffi.writer_core.EditorSessionSnapshotDto> = holder.wrapResult {
+        holder.service.editorKernelSessionSnapshot()
+    }
 }

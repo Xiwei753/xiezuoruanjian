@@ -131,10 +131,8 @@ class VisualTransactionCoordinator(
 
 class AndroidRenderer(
     private val mirror: DisplayTextMirror,
-    private val layoutEngine: AndroidLayoutEngine,
-    private val resourceStore: VisualResourceStore
+    private val layoutEngine: AndroidLayoutEngine
 ) {
-    private val coordinator = VisualTransactionCoordinator(resourceStore)
     private val cursorPaint = Paint().apply {
         color = Color.BLACK
         strokeWidth = 2f
@@ -150,33 +148,58 @@ class AndroidRenderer(
         strokeWidth = 2f
         isAntiAlias = true
     }
+    private val searchHighlightPaint = Paint().apply {
+        color = Color.argb(40, 255, 200, 0)
+        style = Paint.Style.FILL
+        isAntiAlias = true
+    }
     private val slicePaint = Paint().apply {
         isAntiAlias = true
     }
 
-    fun submitTransaction(transaction: PreparedVisualTransaction?) {
-        coordinator.submitTransaction(transaction)
+    fun draw(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        frame: AndroidRenderFrame,
+        searchHighlights: List<Pair<Int, Int>> = emptyList()
+    ) {
+        val transaction = frame.transaction
+        if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
+            renderStaticBackground(canvas, layout, transaction)
+            renderSelectionDecoration(canvas, layout, transaction)
+            renderSearchHighlights(canvas, layout, searchHighlights)
+            renderAnimatedSlices(canvas, transaction, frame.progress)
+            renderPreeditDecoration(canvas, layout, transaction)
+            renderCursorTransition(canvas, transaction, frame.progress)
+        } else {
+            renderSearchHighlights(canvas, layout, searchHighlights)
+            renderSelectionHighlight(canvas, layout)
+            layout.draw(canvas)
+            renderPreeditUnderline(canvas, layout)
+            renderCursor(canvas, layout)
+        }
     }
 
-    fun renderFrame(canvas: Canvas, frameTimeMs: Long) {
-        val frame = coordinator.computeFrame(frameTimeMs)
-
-        canvas.drawColor(Color.WHITE)
-
-        val layout = layoutEngine.getLayout()
-        if (layout != null) {
-            val transaction = frame.transaction
-            if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
-                renderStaticBackground(canvas, layout, transaction)
-                renderSelectionDecoration(canvas, layout, transaction)
-                renderAnimatedSlices(canvas, transaction, frame.progress)
-                renderPreeditDecoration(canvas, layout, transaction)
-                renderCursorTransition(canvas, transaction, frame.progress)
-            } else {
-                renderSelectionHighlight(canvas, layout)
-                layout.draw(canvas)
-                renderPreeditUnderline(canvas, layout)
-                renderCursor(canvas, layout)
+    private fun renderSearchHighlights(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        highlights: List<Pair<Int, Int>>
+    ) {
+        if (highlights.isEmpty()) return
+        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        for ((startUtf8, endUtf8) in highlights) {
+            val startUtf16 = indexMap.utf8ToUtf16(startUtf8)
+            val endUtf16 = indexMap.utf8ToUtf16(endUtf8)
+            val startLine = layout.getLineForOffset(startUtf16)
+            val endLine = layout.getLineForOffset(endUtf16)
+            for (line in startLine..endLine) {
+                val lineStart = if (line == startLine) startUtf16 else layout.getLineStart(line)
+                val lineEnd = if (line == endLine) endUtf16 else layout.getLineEnd(line)
+                val left = layout.getPrimaryHorizontal(lineStart)
+                val right = layout.getPrimaryHorizontal(lineEnd - 1)
+                val top = layout.getLineTop(line).toFloat()
+                val bottom = layout.getLineBottom(line).toFloat()
+                canvas.drawRect(left, top, right, bottom, searchHighlightPaint)
             }
         }
     }
@@ -299,8 +322,6 @@ class AndroidRenderer(
             val lineEnd = if (line == endLine) selEnd else layout.getLineEnd(line)
             val top = layout.getLineTop(line).toFloat()
             val bottom = layout.getLineBottom(line).toFloat()
-            val left = layout.getPrimaryHorizontal(lineStart)
-            val right = layout.getPrimaryHorizontal(lineEnd - 1) + layout.getLineWidth(line)
             canvas.drawRect(
                 layout.getLineLeft(line), top,
                 layout.getLineRight(line), bottom,
@@ -322,8 +343,6 @@ class AndroidRenderer(
             canvas.drawLine(startX, bottom, endX, bottom, preeditUnderlinePaint)
         }
     }
-
-    fun hasActiveAnimation(): Boolean = coordinator.hasActiveAnimation()
 
     fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int) {
         cursorPaint.color = cursorColor
