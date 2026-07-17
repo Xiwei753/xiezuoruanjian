@@ -7,6 +7,7 @@ class VisualTransactionCoordinator(
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
+    private var lastFrameSnapshot: VisualFrameSnapshot? = null
 
     fun submitTransaction(transaction: PreparedVisualTransaction?) {
         if (transaction == null) return
@@ -19,6 +20,7 @@ class VisualTransactionCoordinator(
             val frameSnapshot = oldTimeline.currentVisualFrame(frameTimeMs)
 
             if (frameSnapshot != null && frameSnapshot.state == TransactionState.Rendering) {
+                lastFrameSnapshot = frameSnapshot
                 rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction, oldTimeline)
             } else {
                 cancelTransaction(oldTransaction)
@@ -50,6 +52,22 @@ class VisualTransactionCoordinator(
             val snapshot = slice.snapshot ?: continue
             if (!newTransaction.animatedSlices.any { it.snapshot?.snapshotId == snapshot.snapshotId }) {
                 resourceStore.release(snapshot.snapshotId, newOwner)
+            }
+        }
+
+        if (frameSnapshot.progress > 0f) {
+            for (slice in newTransaction.animatedSlices) {
+                if (slice.role == SliceRole.Move && slice.fromDestinationRect != null) {
+                    val currentLeft = slice.fromDestinationRect.left + (slice.destinationRect.left - slice.fromDestinationRect.left) * frameSnapshot.progress
+                    val currentTop = slice.fromDestinationRect.top + (slice.destinationRect.top - slice.fromDestinationRect.top) * frameSnapshot.progress
+                    val currentRight = slice.fromDestinationRect.right + (slice.destinationRect.right - slice.fromDestinationRect.right) * frameSnapshot.progress
+                    val currentBottom = slice.fromDestinationRect.bottom + (slice.destinationRect.bottom - slice.fromDestinationRect.bottom) * frameSnapshot.progress
+                    slice.fromDestinationRect = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
+                } else if (slice.role == SliceRole.Insert) {
+                    slice.startAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress
+                } else if (slice.role == SliceRole.Delete) {
+                    slice.endAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress
+                }
             }
         }
 
@@ -107,4 +125,11 @@ class VisualTransactionCoordinator(
     }
 
     fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
+
+    fun cancelActiveTransaction() {
+        val transaction = activeTransaction ?: return
+        cancelTransaction(transaction)
+        activeTransaction = null
+        timeline = null
+    }
 }
