@@ -255,10 +255,7 @@ impl GitBackend for Git2Backend {
                                 ],
                             };
                             let payload = serde_json::to_string(&summary).unwrap_or_default();
-                            return Err(crate::Error::Io(std::io::Error::other(format!(
-                                "checkout_conflict_payload:{}",
-                                payload
-                            ))));
+                            return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
                         }
                     }
                     // Check for untracked files that would be overwritten
@@ -285,10 +282,7 @@ impl GitBackend for Git2Backend {
                     ],
                 };
                 let payload = serde_json::to_string(&summary).unwrap_or_default();
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "checkout_conflict_payload:{}",
-                    payload
-                ))));
+                return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
             }
         }
 
@@ -322,8 +316,7 @@ impl GitBackend for Git2Backend {
             };
             if let Err(e) = repo.checkout_tree(fetch_tree.as_object(), Some(&mut dry_run_builder)) {
                 rollback(&repo);
-                let err_msg = e.to_string();
-                if err_msg.contains("conflict") || err_msg.contains("Conflict") {
+                if e.class() == git2::ErrorClass::Checkout || e.code() == git2::ErrorCode::Conflict {
                     let paths = conflicted_paths.borrow().clone();
                     let summary = crate::sync::SyncConflictSummary {
                         status: "conflict".to_string(),
@@ -339,14 +332,11 @@ impl GitBackend for Git2Backend {
                         ],
                     };
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "checkout_conflict_payload:{}",
-                        payload
-                    ))));
+                    return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
                 }
                 return Err(crate::Error::Io(std::io::Error::other(format!(
                     "checkout dry-run failed: {}",
-                    err_msg
+                    e
                 ))));
             }
 
@@ -386,11 +376,8 @@ impl GitBackend for Git2Backend {
             let mut merge_opts = git2::MergeOptions::new();
             if let Err(e) = repo.merge(&[&fetch_commit], Some(&mut merge_opts), None) {
                 rollback(&repo);
-                let err_msg = e.to_string();
                 if e.code() == git2::ErrorCode::Conflict
                     || e.class() == git2::ErrorClass::Checkout
-                    || err_msg.contains("conflict")
-                    || err_msg.contains("Conflict")
                 {
                     let summary = build_conflict_summary(
                         &repo,
@@ -398,12 +385,9 @@ impl GitBackend for Git2Backend {
                         "本地未提交的改动或冲突阻止了合并操作。",
                     );
                     let payload = serde_json::to_string(&summary).unwrap_or_default();
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "checkout_conflict_payload:{}",
-                        payload
-                    ))));
+                    return Err(crate::Error::SyncCheckoutConflict { summary_json: payload });
                 }
-                return Err(crate::Error::Io(std::io::Error::other(err_msg)));
+                return Err(crate::Error::Io(std::io::Error::other(e.to_string())));
             }
 
             let mut index = match repo.index() {
@@ -527,18 +511,12 @@ impl GitBackend for Git2Backend {
             if let Some(details) = settings_conflict_details {
                 rollback(&repo);
                 let payload = serde_json::to_string(&details).unwrap_or_default();
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "settings_conflict_payload:{}",
-                    payload
-                ))));
+                return Err(crate::Error::SyncSettingsConflict { details_json: payload });
             }
 
             if index.has_conflicts() {
                 rollback(&repo);
-                // Return an error for conflicts with a special prefix that can be parsed
-                return Err(crate::Error::Io(std::io::Error::other(
-                    "SyncConflict_Detected".to_string(),
-                )));
+                return Err(crate::Error::SyncConflictDetected);
             } else {
                 let oid = match index.write_tree() {
                     Ok(o) => o,

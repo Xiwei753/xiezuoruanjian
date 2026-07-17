@@ -65,6 +65,18 @@ pub enum Error {
         transaction_id: String,
         missing_files: Vec<String>,
     },
+    #[error("Sync checkout conflict: {summary_json}")]
+    SyncCheckoutConflict { summary_json: String },
+    #[error("Sync settings conflict: {details_json}")]
+    SyncSettingsConflict { details_json: String },
+    #[error("Sync conflict detected")]
+    SyncConflictDetected,
+    #[error("Sync non-fast-forward: {detail}")]
+    SyncNonFastForward { detail: String },
+    #[error("Sync unrelated histories: {detail}")]
+    SyncUnrelatedHistories { detail: String },
+    #[error("Sync remote branch not found: {detail}")]
+    SyncRemoteBranchNotFound { detail: String },
 
     // --- Storage errors ---
     #[error("Disk full: path={path}, required={required_bytes} bytes")]
@@ -98,6 +110,12 @@ impl Error {
             Error::SyncRateLimited { .. } => "SYNC_RATE_LIMITED",
             Error::SyncDocumentConflict { .. } => "SYNC_DOCUMENT_CONFLICT",
             Error::SyncIncompleteTransaction { .. } => "SYNC_INCOMPLETE_TRANSACTION",
+            Error::SyncCheckoutConflict { .. } => "SYNC_CHECKOUT_CONFLICT",
+            Error::SyncSettingsConflict { .. } => "SYNC_SETTINGS_CONFLICT",
+            Error::SyncConflictDetected => "SYNC_CONFLICT_DETECTED",
+            Error::SyncNonFastForward { .. } => "SYNC_NON_FAST_FORWARD",
+            Error::SyncUnrelatedHistories { .. } => "SYNC_UNRELATED_HISTORIES",
+            Error::SyncRemoteBranchNotFound { .. } => "SYNC_REMOTE_BRANCH_NOT_FOUND",
             Error::DiskFull { .. } => "DISK_FULL",
             Error::StorageTransactionIncomplete { .. } => "STORAGE_TRANSACTION_INCOMPLETE",
             Error::Other(_) => "OTHER",
@@ -124,6 +142,12 @@ impl Error {
             Error::SyncRateLimited { .. } => true,
             Error::SyncDocumentConflict { .. } => false,
             Error::SyncIncompleteTransaction { .. } => true,
+            Error::SyncCheckoutConflict { .. } => false,
+            Error::SyncSettingsConflict { .. } => false,
+            Error::SyncConflictDetected => false,
+            Error::SyncNonFastForward { .. } => false,
+            Error::SyncUnrelatedHistories { .. } => false,
+            Error::SyncRemoteBranchNotFound { .. } => true,
             Error::DiskFull { .. } => false,
             Error::StorageTransactionIncomplete { .. } => true,
             Error::Other(_) => true,
@@ -171,6 +195,21 @@ impl Error {
             } => {
                 m.insert("transaction_id".into(), transaction_id.clone());
                 m.insert("missing_files".into(), missing_files.join(","));
+            }
+            Error::SyncCheckoutConflict { summary_json } => {
+                m.insert("summary_json".into(), summary_json.clone());
+            }
+            Error::SyncSettingsConflict { details_json } => {
+                m.insert("details_json".into(), details_json.clone());
+            }
+            Error::SyncNonFastForward { detail } => {
+                m.insert("detail".into(), detail.clone());
+            }
+            Error::SyncUnrelatedHistories { detail } => {
+                m.insert("detail".into(), detail.clone());
+            }
+            Error::SyncRemoteBranchNotFound { detail } => {
+                m.insert("detail".into(), detail.clone());
             }
             Error::DiskFull {
                 path,

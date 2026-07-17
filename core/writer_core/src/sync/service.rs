@@ -33,35 +33,58 @@ fn map_git_error(e: crate::Error) -> crate::Error {
     if let crate::Error::Io(io_err) = &e {
         let msg = io_err.to_string();
         if msg.contains("failed to resolve address") {
-            return crate::Error::Io(std::io::Error::other(format!("DNS 解析失败: {}", msg)));
+            return crate::Error::SyncNetworkUnavailable {
+                reason: format!("DNS 解析失败: {}", msg),
+            };
         }
     }
     e
 }
 
 #[cfg(feature = "git-https")]
-fn classify_error(e_str: &str) -> SyncStatus {
-    let lower = e_str.to_lowercase();
-    if lower.contains("recoverable_error") {
-        SyncStatus::RecoverableError(e_str.replace("recoverable_error:", "").trim().to_string())
-    } else if lower.contains("fatal_error") {
-        SyncStatus::FatalError(e_str.replace("fatal_error:", "").trim().to_string())
-    } else {
-        let category = crate::sync::types::SyncErrorCategory::from_error_string(e_str);
-        match category {
-            crate::sync::types::SyncErrorCategory::AuthError
-            | crate::sync::types::SyncErrorCategory::TokenMissing
-            | crate::sync::types::SyncErrorCategory::TokenInvalid
-            | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
-            | crate::sync::types::SyncErrorCategory::GithubNetworkFailed
-            | crate::sync::types::SyncErrorCategory::DnsFailed
-            | crate::sync::types::SyncErrorCategory::TlsFailed
-            | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
-            | crate::sync::types::SyncErrorCategory::UnrelatedHistories => {
-                SyncStatus::RecoverableError(e_str.to_string())
-            }
-            _ => SyncStatus::FatalError(e_str.to_string()),
+fn classify_error(e: &crate::Error) -> SyncStatus {
+    match e {
+        crate::Error::SyncAuthFailed { .. }
+        | crate::Error::SyncRateLimited { .. } => {
+            SyncStatus::RecoverableError(e.to_string())
         }
+        crate::Error::SyncNetworkUnavailable { .. } => {
+            SyncStatus::RecoverableError(e.to_string())
+        }
+        crate::Error::SyncCheckoutConflict { .. }
+        | crate::Error::SyncSettingsConflict { .. }
+        | crate::Error::SyncConflictDetected
+        | crate::Error::SyncDocumentConflict { .. } => {
+            SyncStatus::Conflict
+        }
+        crate::Error::SyncNonFastForward { .. } => {
+            SyncStatus::RecoverableError(e.to_string())
+        }
+        crate::Error::SyncUnrelatedHistories { .. } => {
+            SyncStatus::RecoverableError(e.to_string())
+        }
+        crate::Error::SyncRemoteBranchNotFound { .. } => {
+            SyncStatus::RecoverableError(e.to_string())
+        }
+        crate::Error::Io(io_err) => {
+            let msg = io_err.to_string();
+            let category = crate::sync::types::SyncErrorCategory::from_error_string(&msg);
+            match category {
+                crate::sync::types::SyncErrorCategory::AuthError
+                | crate::sync::types::SyncErrorCategory::TokenMissing
+                | crate::sync::types::SyncErrorCategory::TokenInvalid
+                | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
+                | crate::sync::types::SyncErrorCategory::GithubNetworkFailed
+                | crate::sync::types::SyncErrorCategory::DnsFailed
+                | crate::sync::types::SyncErrorCategory::TlsFailed
+                | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
+                | crate::sync::types::SyncErrorCategory::UnrelatedHistories => {
+                    SyncStatus::RecoverableError(msg)
+                }
+                _ => SyncStatus::FatalError(msg),
+            }
+        }
+        _ => SyncStatus::FatalError(e.to_string()),
     }
 }
 
@@ -147,117 +170,74 @@ fn handle_pull_error(
     result: &SyncResult,
     first_sync_mode: FirstSyncMode,
 ) -> PullOutcome {
-    let e_str = e.to_string();
-
-    if e_str.contains("settings_conflict_payload:") {
-        let payload_str = e_str
-            .split("settings_conflict_payload:")
-            .nth(1)
-            .unwrap_or("")
-            .trim();
-        let details: Option<Vec<SettingConflictDetail>> = serde_json::from_str(payload_str).ok();
-        let mut res = SyncResult::error(
-            SyncStatus::Conflict,
-            first_sync_mode,
-            "Settings semantic merge conflict".to_string(),
-            Some("conflict".to_string()),
-        );
-        res.settings_conflicts = details;
-        let summary = SyncConflictSummary {
-            status: "conflict".to_string(),
-            local_dirty: true,
-            remote_changed: true,
-            conflicted_files: vec!["app-meta/settings/settings.sync.json".to_string()],
-            blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。"
-                .to_string(),
-            safe_next_steps: vec![
-                "手动检查本地与远端设置。".to_string(),
-                "重新保存设置以覆盖或重新同步。".to_string(),
-            ],
-        };
-        res.conflict_summary = Some(summary);
-        return PullOutcome::Return(res);
-    }
-
-    if e_str.contains("checkout_conflict_payload:") {
-        let payload_str = e_str
-            .split("checkout_conflict_payload:")
-            .nth(1)
-            .unwrap_or("")
-            .trim();
-        let summary: Option<SyncConflictSummary> = serde_json::from_str(payload_str).ok();
-
-        let mut res = SyncResult::error(
-            SyncStatus::Conflict,
-            first_sync_mode,
-            "Pull failed due to conflict.".to_string(),
-            Some("conflict".to_string()),
-        );
-        res.conflict_summary = summary;
-        return PullOutcome::Return(res);
-    }
-
-    let e_str_lower = e_str.to_lowercase();
-    if e_str_lower.contains("checkout_conflict")
-        || e_str_lower.contains("local_blocking_file")
-        || e_str_lower.contains("conflict prevents checkout")
-    {
-        let mut res = SyncResult::error(
-            SyncStatus::Conflict,
-            first_sync_mode,
-            format!("Pull failed: {}", e),
-            Some("conflict".to_string()),
-        );
-        if let Ok(repo) = git2::Repository::open(workspace_path) {
-            let fetch_commit_id = repo
-                .find_reference("FETCH_HEAD")
-                .ok()
-                .and_then(|r| r.target());
-            let summary = build_conflict_summary(
-                &repo,
-                fetch_commit_id,
-                "本地工作区有文件会阻止远端更新，请先处理冲突文件后再同步。",
+    match &e {
+        crate::Error::SyncSettingsConflict { details_json } => {
+            let details: Option<Vec<SettingConflictDetail>> = serde_json::from_str(details_json).ok();
+            let mut res = SyncResult::error(
+                SyncStatus::Conflict,
+                first_sync_mode,
+                "Settings semantic merge conflict".to_string(),
+                Some("conflict".to_string()),
             );
+            res.settings_conflicts = details;
+            let summary = SyncConflictSummary {
+                status: "conflict".to_string(),
+                local_dirty: true,
+                remote_changed: true,
+                conflicted_files: vec!["app-meta/settings/settings.sync.json".to_string()],
+                blocked_reason: "本地和远端都修改了设置文件 settings.sync.json 且产生了冲突。"
+                    .to_string(),
+                safe_next_steps: vec![
+                    "手动检查本地与远端设置。".to_string(),
+                    "重新保存设置以覆盖或重新同步。".to_string(),
+                ],
+            };
             res.conflict_summary = Some(summary);
+            PullOutcome::Return(res)
         }
-        return PullOutcome::Return(res);
-    }
-    if e_str_lower.contains("unrelated")
-        || e_str_lower.contains("merge")
-        || e_str_lower.contains("no common ancestor")
-    {
-        let status = classify_error(&e.to_string());
-        return PullOutcome::Return(SyncResult::error(
-            status,
-            FirstSyncMode::UnrelatedHistories,
-            format!("Pull failed: {}", e),
-            None,
-        ));
-    }
-    if e_str_lower.contains("ref not found")
-        || e_str_lower.contains("couldn't find remote ref")
-        || (e_str_lower.contains("remote branch") && e_str_lower.contains("not found"))
-    {
-        if first_sync_mode != FirstSyncMode::InitExistingWorkspace
-            && first_sync_mode != FirstSyncMode::AlreadyGitRepo
-        {
-            return PullOutcome::Return(SyncResult::error(
-                classify_error(&e.to_string()),
+        crate::Error::SyncCheckoutConflict { summary_json } => {
+            let summary: Option<SyncConflictSummary> = serde_json::from_str(summary_json).ok();
+            let mut res = SyncResult::error(
+                SyncStatus::Conflict,
+                first_sync_mode,
+                "Pull failed due to conflict.".to_string(),
+                Some("conflict".to_string()),
+            );
+            res.conflict_summary = summary;
+            PullOutcome::Return(res)
+        }
+        crate::Error::SyncConflictDetected => {
+            handle_merge_conflict(workspace_path, result, first_sync_mode)
+        }
+        crate::Error::SyncUnrelatedHistories { .. } => {
+            PullOutcome::Return(SyncResult::error(
+                classify_error(&e),
+                FirstSyncMode::UnrelatedHistories,
+                format!("Pull failed: {}", e),
+                None,
+            ))
+        }
+        crate::Error::SyncRemoteBranchNotFound { .. } => {
+            if first_sync_mode != FirstSyncMode::InitExistingWorkspace
+                && first_sync_mode != FirstSyncMode::AlreadyGitRepo
+            {
+                return PullOutcome::Return(SyncResult::error(
+                    classify_error(&e),
+                    first_sync_mode,
+                    format!("Pull failed: {}", e),
+                    Some("remote_branch_missing".to_string()),
+                ));
+            }
+            PullOutcome::Continue
+        }
+        _ => {
+            PullOutcome::Return(SyncResult::error(
+                classify_error(&e),
                 first_sync_mode,
                 format!("Pull failed: {}", e),
-                Some("remote_branch_missing".to_string()),
-            ));
+                None,
+            ))
         }
-        PullOutcome::Continue
-    } else if e.to_string().contains("SyncConflict_Detected") {
-        handle_merge_conflict(workspace_path, result, first_sync_mode)
-    } else {
-        PullOutcome::Return(SyncResult::error(
-            classify_error(&e.to_string()),
-            first_sync_mode,
-            format!("Pull failed: {}", e),
-            None,
-        ))
     }
 }
 
@@ -274,7 +254,8 @@ fn handle_merge_conflict(
     let repo = match git2::Repository::open(workspace_path) {
         Ok(r) => r,
         Err(e) => {
-            result.status = classify_error(&e.to_string());
+            let err = crate::Error::Io(std::io::Error::other(e.to_string()));
+            result.status = classify_error(&err);
             result.error = Some(e.to_string());
             return PullOutcome::Return(result);
         }
@@ -283,7 +264,8 @@ fn handle_merge_conflict(
     let index = match repo.index() {
         Ok(i) => i,
         Err(e) => {
-            result.status = classify_error(&e.to_string());
+            let err = crate::Error::Io(std::io::Error::other(e.to_string()));
+            result.status = classify_error(&err);
             result.error = Some(e.to_string());
             return PullOutcome::Return(result);
         }
@@ -293,7 +275,8 @@ fn handle_merge_conflict(
         let conflicts = match index.conflicts() {
             Ok(c) => c,
             Err(e) => {
-                result.status = classify_error(&e.to_string());
+                let err = crate::Error::Io(std::io::Error::other(e.to_string()));
+                result.status = classify_error(&err);
                 result.error = Some(e.to_string());
                 return PullOutcome::Return(result);
             }
@@ -553,7 +536,7 @@ impl SyncService {
 
             if let Err(e) = Self::ensure_local_branch_exists(&repo, &config.branch) {
                 return Ok(SyncResult::error(
-                    classify_error(&e.to_string()),
+                    classify_error(&e),
                     result.first_sync_mode,
                     e.to_string(),
                     None,
@@ -588,7 +571,7 @@ impl SyncService {
             if !paths_to_stage.is_empty() {
                 if let Err(e) = backend.stage_paths(workspace_path, &paths_to_stage) {
                     return Ok(SyncResult::error(
-                        classify_error(&e.to_string()),
+                        classify_error(&e),
                         result.first_sync_mode,
                         e.to_string(),
                         None,
@@ -596,7 +579,7 @@ impl SyncService {
                 }
                 if let Err(e) = backend.commit(workspace_path, "Auto sync local changes") {
                     return Ok(SyncResult::error(
-                        classify_error(&e.to_string()),
+                        classify_error(&e),
                         result.first_sync_mode,
                         e.to_string(),
                         None,
@@ -705,7 +688,7 @@ impl SyncService {
             Ok(p) => p,
             Err(e) => {
                 return Ok(SyncResult::error(
-                    classify_error(&e.to_string()),
+                    classify_error(&e),
                     result.first_sync_mode,
                     e.to_string(),
                     None,
@@ -719,7 +702,7 @@ impl SyncService {
         if !paths_to_stage.is_empty() {
             if let Err(e) = backend.stage_paths(workspace_path, &paths_to_stage) {
                 return Ok(SyncResult::error(
-                    classify_error(&e.to_string()),
+                    classify_error(&e),
                     result.first_sync_mode,
                     e.to_string(),
                     None,
@@ -744,7 +727,7 @@ impl SyncService {
                 Ok(None) => {}
                 Err(e) => {
                     return Ok(SyncResult::error(
-                        classify_error(&e.to_string()),
+                        classify_error(&e),
                         result.first_sync_mode,
                         format!("Commit failed: {}", e),
                         None,
@@ -757,7 +740,7 @@ impl SyncService {
                 .map_err(map_git_error)
             {
                 return Ok(SyncResult::error(
-                    classify_error(&e.to_string()),
+                    classify_error(&e),
                     result.first_sync_mode,
                     format!("Push failed: {}", e),
                     None,
@@ -780,7 +763,7 @@ impl SyncService {
         state.last_error = result.error.clone();
 
         if let Err(e) = Self::save_sync_state(workspace_path, &state) {
-            result.status = classify_error(&e.to_string());
+            result.status = classify_error(&e);
             result.error = Some(format!("Failed to save sync state: {}", e));
             return Ok(result);
         }

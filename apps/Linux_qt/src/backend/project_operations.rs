@@ -265,14 +265,17 @@ impl AppBackend {
     // -------------------------------------------------------------------------
     // Envelope 消费辅助函数
     // -------------------------------------------------------------------------
-    fn typed_envelope_to_result(
+    fn typed_envelope_to_result<T: serde::Serialize>(
         &mut self,
-        envelope: writer_core::api::ResultEnvelope<serde_json::Value>,
-        on_success: impl FnOnce(&mut Self, &serde_json::Value),
+        envelope: writer_core::api::ResultEnvelope<T>,
+        on_success: impl FnOnce(&mut Self, &T),
     ) -> QString {
         if envelope.success {
-            let mut value = serde_json::to_value(&envelope).unwrap_or_default();
-            on_success(self, &envelope.data.unwrap_or_default());
+            if let Some(ref data) = envelope.data {
+                on_success(self, data);
+            }
+            let value_envelope = envelope.into_value_envelope();
+            let mut value = serde_json::to_value(&value_envelope).unwrap_or_default();
             value["state"] = self.current_app_state_value();
             value.to_string().into()
         } else {
@@ -310,28 +313,27 @@ impl AppBackend {
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::ProjectDto>::error(error),
-            }.into_value_envelope();
+            };
             self.typed_envelope_to_result(envelope, |app, data| {
-                if let Some(proj_id) = data.get("id").and_then(|v| v.as_str()) {
-                    app.selected_project_id = Some(proj_id.to_string());
-                    app.selected_item_changed();
-                    app.selected_volume_id = None;
-                    app.selected_chapter_id = None;
+                let proj_id = &data.id;
+                app.selected_project_id = Some(proj_id.clone());
+                app.selected_item_changed();
+                app.selected_volume_id = None;
+                app.selected_chapter_id = None;
 
-                    let default_volume_id = {
-                        if let Ok(volumes) = api.list_volumes(proj_id) {
-                            volumes.first().map(|v| v.id.clone())
-                        } else {
-                            None
-                        }
-                    };
-                    if let Some(ref vol_id) = default_volume_id {
-                        app.selected_volume_id = Some(vol_id.clone());
+                let default_volume_id = {
+                    if let Ok(volumes) = api.list_volumes(proj_id) {
+                        volumes.first().map(|v| v.id.clone())
+                    } else {
+                        None
                     }
-
-                    app.reload_tree();
-                    app.trigger_projects_reloaded();
+                };
+                if let Some(ref vol_id) = default_volume_id {
+                    app.selected_volume_id = Some(vol_id.clone());
                 }
+
+                app.reload_tree();
+                app.trigger_projects_reloaded();
             })
         } else {
             self.mutation_error_json("error.invalid_workspace".to_string(), "核心模块未初始化".to_string())
@@ -367,16 +369,14 @@ impl AppBackend {
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::types::VolumeDto>::error(error),
-            }.into_value_envelope();
+            };
             self.typed_envelope_to_result(envelope, |app, data| {
-                if let Some(vol_id) = data.get("id").and_then(|v| v.as_str()) {
-                    app.selected_project_id = Some(project_id.to_string());
-                    app.selected_volume_id = Some(vol_id.to_string());
-                    app.selected_item_changed();
-                    app.selected_chapter_id = None;
-                    app.reload_tree();
-                    app.trigger_projects_reloaded();
-                }
+                app.selected_project_id = Some(project_id.to_string());
+                app.selected_volume_id = Some(data.id.clone());
+                app.selected_item_changed();
+                app.selected_chapter_id = None;
+                app.reload_tree();
+                app.trigger_projects_reloaded();
                 app.debug_log(
                     "volume",
                     "create_volume_success",
@@ -419,17 +419,14 @@ impl AppBackend {
                     )
                 }
                 Err(error) => ResultEnvelope::<writer_core::api::ChapterMetaDto>::error(error),
-            }.into_value_envelope();
+            };
             self.typed_envelope_to_result(envelope, |app, data| {
-                if let Some(chap_id) = data.get("id").and_then(|v| v.as_str())
-                {
-                    app.selected_project_id = Some(project_id.to_string());
-                    app.selected_volume_id = Some(volume_id.to_string());
-                    app.selected_chapter_id = Some(chap_id.to_string());
-                    app.selected_item_changed();
-                    app.reload_tree();
-                    app.trigger_projects_reloaded();
-                }
+                app.selected_project_id = Some(project_id.to_string());
+                app.selected_volume_id = Some(volume_id.to_string());
+                app.selected_chapter_id = Some(data.id.clone());
+                app.selected_item_changed();
+                app.reload_tree();
+                app.trigger_projects_reloaded();
                 app.debug_log(
                     "chapter",
                     "create_chapter_success",
@@ -462,8 +459,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ProjectDeleted".to_string(), entity_id: Some(project_id_str.clone()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.into_value_envelope();
-            self.typed_envelope_to_result(envelope, |app, data| {
+            };
+            self.typed_envelope_to_result(envelope, |app, _data| {
                 if app.selected_project_id.as_deref() == Some(&project_id_str) {
                     app.selected_project_id = None;
                     app.selected_volume_id = None;
@@ -508,8 +505,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "VolumeDeleted".to_string(), entity_id: Some(volume_id_str.clone()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.into_value_envelope();
-            self.typed_envelope_to_result(envelope, |app, data| {
+            };
+            self.typed_envelope_to_result(envelope, |app, _data| {
                 if app.selected_volume_id.as_deref() == Some(&volume_id_str) {
                     app.selected_volume_id = None;
                     app.clear_editor_state();
@@ -555,8 +552,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ChapterDeleted".to_string(), entity_id: Some(chapter_id_str.clone()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.into_value_envelope();
-            self.typed_envelope_to_result(envelope, |app, data| {
+            };
+            self.typed_envelope_to_result(envelope, |app, _data| {
                 if app.selected_chapter_id.as_deref() == Some(&chapter_id_str) {
                     app.clear_editor_state();
                 }
@@ -653,8 +650,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ProjectRenamed".to_string(), entity_id: Some(project_id.to_string()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.into_value_envelope();
-            self.typed_envelope_to_result(envelope, |app, data| {
+            };
+            self.typed_envelope_to_result(envelope, |app, _data| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
             })
@@ -714,8 +711,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "VolumeRenamed".to_string(), entity_id: Some(volume_id.to_string()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.into_value_envelope();
-            self.typed_envelope_to_result(envelope, |app, data| {
+            };
+            self.typed_envelope_to_result(envelope, |app, _data| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
             })
@@ -780,8 +777,8 @@ impl AppBackend {
                     vec![ChangedEntityDto { entity_type: "ChapterRenamed".to_string(), entity_id: Some(chapter_id.to_string()) }],
                 ),
                 Err(error) => ResultEnvelope::<bool>::error(error),
-            }.into_value_envelope();
-            self.typed_envelope_to_result(envelope, |app, data| {
+            };
+            self.typed_envelope_to_result(envelope, |app, _data| {
                 app.reload_tree();
                 app.trigger_projects_reloaded();
             })
