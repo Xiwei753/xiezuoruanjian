@@ -36,23 +36,22 @@ class AndroidLayoutEngine(
         if (width <= 0f) return
 
         val currentConfigFp = computeConfigFingerprint()
-        val existingLayout = layout
 
-        if (existingLayout != null && currentConfigFp == lastConfigFingerprint) {
-            revisionCounter++
-            currentRevision = buildRevision(existingLayout)
-            return
+        if (currentConfigFp != lastConfigFingerprint) {
+            layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
+                .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(0f, lineSpacingMultiplier)
+                .setIncludePad(false)
+                .build()
+            lastConfigFingerprint = currentConfigFp
         }
 
-        layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
-            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
-            .setLineSpacing(0f, lineSpacingMultiplier)
-            .setIncludePad(false)
-            .build()
-
-        lastConfigFingerprint = currentConfigFp
         revisionCounter++
         currentRevision = buildRevision(layout!!)
+    }
+
+    fun captureImmutableRevision(): AndroidLayoutRevision? {
+        return currentRevision?.copy()
     }
 
     fun getLayout(): Layout? = layout

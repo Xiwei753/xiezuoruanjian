@@ -21,6 +21,7 @@ class AndroidRenderer(
     private val mirror: DisplayTextMirror,
     private val layoutEngine: AndroidLayoutEngine
 ) {
+    private var backgroundColor: Int = Color.WHITE
     private val cursorPaint = Paint().apply {
         color = Color.BLACK
         strokeWidth = 2f
@@ -51,6 +52,7 @@ class AndroidRenderer(
         frame: AndroidRenderFrame,
         searchHighlights: List<Pair<Int, Int>> = emptyList()
     ) {
+        canvas.drawColor(backgroundColor)
         val transaction = frame.transaction
         if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
             renderStaticBackground(canvas, layout, transaction)
@@ -232,9 +234,10 @@ class AndroidRenderer(
         }
     }
 
-    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int) {
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
         cursorPaint.color = cursorColor
         selectionPaint.color = selectionColor
         preeditUnderlinePaint.color = preeditColor
+        backgroundColor = bgColor
     }
 }

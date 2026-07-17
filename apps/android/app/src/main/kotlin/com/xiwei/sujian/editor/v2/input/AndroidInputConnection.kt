@@ -58,6 +58,8 @@ class AndroidInputConnection(
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text == null) return true
         adapter.handleCompositionUpdate(text.toString(), newCursorPosition)
+        applyNewCursorPosition(newCursorPosition)
+        notifySelectionChanged()
         return true
     }
 
@@ -65,6 +67,7 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             adapter.handleCompositionFinish()
         }
+        notifySelectionChanged()
         return true
     }
 

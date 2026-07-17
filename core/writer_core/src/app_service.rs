@@ -721,6 +721,7 @@ impl WriterAppService {
                 byte_offset: byte_offset as usize,
                 text,
                 cause: core_cause,
+                expected_revision: 0,
             });
             result.into()
         })
@@ -740,6 +741,7 @@ impl WriterAppService {
                 byte_end_exclusive: byte_end_exclusive as usize,
                 deleted_text: String::new(),
                 cause: core_cause,
+                expected_revision: 0,
             });
             result.into()
         })
@@ -762,6 +764,7 @@ impl WriterAppService {
                 replacement_text,
                 original_text,
                 cause: core_cause,
+                expected_revision: 0,
             });
             result.into()
         })
@@ -777,6 +780,7 @@ impl WriterAppService {
             let result = s.kernel.apply(EditorCommand::SetSelection {
                 anchor_byte_offset: anchor_byte_offset as usize,
                 head_byte_offset: head_byte_offset as usize,
+                expected_revision: 0,
             });
             result.into()
         })
@@ -848,6 +852,7 @@ impl WriterAppService {
                 replacement_text: committed_text,
                 original_text,
                 cause: EditorTransactionCause::TypingCommit,
+                expected_revision: 0,
             };
             let result = s.kernel.apply(command);
             result.into()

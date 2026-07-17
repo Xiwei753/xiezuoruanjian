@@ -42,6 +42,8 @@ pub enum EditorCommand {
         text: String,
         /// 编辑原因
         cause: EditorTransactionCause,
+        /// 期望的基础 revision，0 表示不检查
+        expected_revision: u64,
     },
     /// 删除指定范围的文本
     Delete {
@@ -53,6 +55,8 @@ pub enum EditorCommand {
         deleted_text: String,
         /// 编辑原因
         cause: EditorTransactionCause,
+        /// 期望的基础 revision，0 表示不检查
+        expected_revision: u64,
     },
     /// 替换指定范围的文本
     Replace {
@@ -66,6 +70,8 @@ pub enum EditorCommand {
         original_text: String,
         /// 编辑原因
         cause: EditorTransactionCause,
+        /// 期望的基础 revision，0 表示不检查
+        expected_revision: u64,
     },
     /// 设置选区
     SetSelection {
@@ -73,6 +79,8 @@ pub enum EditorCommand {
         anchor_byte_offset: usize,
         /// 选区头部（UTF-8 byte offset）
         head_byte_offset: usize,
+        /// 期望的基础 revision，0 表示不检查
+        expected_revision: u64,
     },
     /// 撤销
     Undo,
@@ -279,20 +287,33 @@ impl EditorKernel {
     /// 返回 EditorEditResult，包含 display_patches 和 visual_intent。
     pub fn apply(&mut self, command: EditorCommand) -> EditorEditResult {
         let base_revision = self.revision;
+
+        match &command {
+            EditorCommand::Insert { expected_revision, .. }
+            | EditorCommand::Delete { expected_revision, .. }
+            | EditorCommand::Replace { expected_revision, .. }
+            | EditorCommand::SetSelection { expected_revision, .. } => {
+                if *expected_revision != 0 && *expected_revision != base_revision {
+                    return self.noop_result(base_revision, self.cursor, (self.selection_anchor, self.cursor));
+                }
+            }
+            EditorCommand::Undo | EditorCommand::Redo => {}
+        }
+
         let old_cursor = self.cursor;
         let old_selection = (self.selection_anchor, self.cursor);
 
         match command {
-            EditorCommand::Insert { byte_offset, text, cause } => {
+            EditorCommand::Insert { byte_offset, text, cause, .. } => {
                 self.apply_insert(byte_offset, &text, cause, base_revision, old_cursor, old_selection)
             }
-            EditorCommand::Delete { byte_start, byte_end_exclusive, deleted_text: _, cause } => {
+            EditorCommand::Delete { byte_start, byte_end_exclusive, deleted_text: _, cause, .. } => {
                 self.apply_delete(byte_start, byte_end_exclusive, cause, base_revision, old_cursor, old_selection)
             }
-            EditorCommand::Replace { byte_start, byte_end_exclusive, replacement_text, original_text: _, cause } => {
+            EditorCommand::Replace { byte_start, byte_end_exclusive, replacement_text, original_text: _, cause, .. } => {
                 self.apply_replace(byte_start, byte_end_exclusive, &replacement_text, cause, base_revision, old_cursor, old_selection)
             }
-            EditorCommand::SetSelection { anchor_byte_offset, head_byte_offset } => {
+            EditorCommand::SetSelection { anchor_byte_offset, head_byte_offset, .. } => {
                 self.apply_set_selection(anchor_byte_offset, head_byte_offset, base_revision, old_cursor, old_selection)
             }
             EditorCommand::Undo => {
@@ -686,6 +707,9 @@ impl EditorKernel {
     }
 
     /// 加载文本（章节打开时调用）
+    ///
+    /// 始终生成完整 replacement patch，即使正文相同。
+    /// 平台 Mirror 通过 loadFromSessionSnapshot 重建，不依赖增量 patch。
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditResult {
         let base_revision = self.revision;
         let old_cursor = self.cursor;
@@ -693,22 +717,47 @@ impl EditorKernel {
 
         let old_text = self.text.clone();
         self.text = text;
-        self.cursor = cursor.min(self.text.len());
-        self.selection_anchor = self.cursor;
+        let cursor = cursor.min(self.text.len());
+        self.cursor = cursor;
+        self.selection_anchor = cursor;
         self.revision = self.revision.saturating_add(1);
         self.undo_stack.clear();
         self.redo_stack.clear();
 
         let new_selection = (self.cursor, self.cursor);
+        let new_revision = self.revision;
 
-        let changes = diff_plain_text(&old_text, &self.text);
-        let (old_affected, new_affected) = Self::affected_ranges_from_changes(&changes);
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: (0, old_text.len()),
+            inserted_text: self.text.clone(),
+            resulting_selection_byte_range: new_selection,
+        }];
 
-        self.build_edit_result(
-            base_revision, &old_text, EditorTransactionCause::Load,
-            old_selection, new_selection, EditorOperationKind::Load,
-            old_affected, new_affected, old_cursor,
-        )
+        let visual_intent = EditorVisualIntent {
+            cause: EditorTransactionCause::Load,
+            operation_kind: EditorOperationKind::Load,
+            old_affected_byte_ranges: if old_text.is_empty() { vec![] } else { vec![(0, old_text.len())] },
+            new_affected_byte_ranges: if self.text.is_empty() { vec![] } else { vec![(0, self.text.len())] },
+            animation_mode: AnimationMode::SystemSuppressed,
+            duration_ms: 0,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: false,
+            },
+        };
+
+        EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        }
     }
 
     /// 创建 CompositionUpdate 事务 — 预输入更新。
@@ -805,6 +854,7 @@ mod tests {
             byte_offset: 6,
             text: "世界".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
 
         assert_eq!(kernel.text(), "你好世界");
@@ -824,6 +874,7 @@ mod tests {
             byte_end_exclusive: 12,
             deleted_text: "世界".to_string(),
             cause: EditorTransactionCause::Delete,
+            expected_revision: 0,
         });
 
         assert_eq!(kernel.text(), "你好");
@@ -840,6 +891,7 @@ mod tests {
             replacement_text: "朋友".to_string(),
             original_text: "世界".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
 
         assert_eq!(kernel.text(), "你好朋友");
@@ -853,6 +905,7 @@ mod tests {
         let result = kernel.apply(EditorCommand::SetSelection {
             anchor_byte_offset: 0,
             head_byte_offset: 3,
+            expected_revision: 0,
         });
 
         assert_eq!(kernel.text(), "hello");
@@ -868,6 +921,7 @@ mod tests {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "abc");
 
@@ -884,6 +938,7 @@ mod tests {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "ab");
@@ -900,6 +955,7 @@ mod tests {
             byte_offset: 3,
             text: " text".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
 
         let result = kernel.load_text("new content".to_string(), 0);
@@ -918,6 +974,7 @@ mod tests {
             byte_offset: 0,
             text: "a".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(kernel.revision(), 1);
 
@@ -925,6 +982,7 @@ mod tests {
             byte_offset: 1,
             text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(kernel.revision(), 2);
     }
@@ -938,6 +996,7 @@ mod tests {
             replacement_text: "rust".to_string(),
             original_text: "world".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
 
         assert_eq!(result.display_patches.len(), 1);
@@ -951,6 +1010,7 @@ mod tests {
         let result = kernel.apply(EditorCommand::SetSelection {
             anchor_byte_offset: 0,
             head_byte_offset: 0,
+            expected_revision: 0,
         });
 
         assert_eq!(result.visual_intent.coordinated_cursor.old_byte_offset, 3);
@@ -967,6 +1027,7 @@ mod tests {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
 
         assert_eq!(result.visual_intent.animation_mode, AnimationMode::SystemSuppressed);
@@ -980,6 +1041,7 @@ mod tests {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         kernel.apply(EditorCommand::Undo);
         assert_eq!(kernel.text(), "ab");
@@ -988,6 +1050,7 @@ mod tests {
             byte_offset: 2,
             text: "d".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
 
         let result = kernel.apply(EditorCommand::Redo);
@@ -1002,6 +1065,7 @@ mod tests {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
 
         let json = serde_json::to_string(&result).unwrap();
@@ -1059,6 +1123,7 @@ mod tests {
             replacement_text: "你好".to_string(),
             original_text: String::new(),
             cause: EditorTransactionCause::TypingCommit,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "你好你好");
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Replace);
@@ -1073,6 +1138,7 @@ mod tests {
             byte_end_exclusive: 2,
             deleted_text: String::new(),
             cause: EditorTransactionCause::Delete,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "abc");
         assert_eq!(result.display_patches.len(), 0);
@@ -1085,6 +1151,7 @@ mod tests {
             byte_offset: 100,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "abc");
         assert_eq!(kernel.cursor(), 3);
@@ -1099,6 +1166,7 @@ mod tests {
             replacement_text: "X".to_string(),
             original_text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "aXc");
         assert!(!result.display_patches.is_empty());
@@ -1111,16 +1179,19 @@ mod tests {
             byte_offset: 0,
             text: "a".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         kernel.apply(EditorCommand::Insert {
             byte_offset: 1,
             text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "abc");
 
@@ -1141,6 +1212,7 @@ mod tests {
             byte_offset: 0,
             text: "你好世界".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
@@ -1150,6 +1222,7 @@ mod tests {
             byte_end_exclusive: 12,
             deleted_text: "世界".to_string(),
             cause: EditorTransactionCause::Delete,
+            expected_revision: 0,
         });
         assert_eq!(kernel.text(), "你好");
         assert_eq!(kernel.cursor(), 6);
@@ -1162,6 +1235,7 @@ mod tests {
         let result = kernel.apply(EditorCommand::SetSelection {
             anchor_byte_offset: 1,
             head_byte_offset: 1,
+            expected_revision: 0,
         });
         assert!(!result.visual_intent.coordinated_cursor.should_animate);
     }
@@ -1173,6 +1247,7 @@ mod tests {
             byte_offset: 3,
             text: " text".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         kernel.load_text("new".to_string(), 3);
         let result = kernel.apply(EditorCommand::Undo);
@@ -1188,6 +1263,7 @@ mod tests {
             replacement_text: "rust".to_string(),
             original_text: "world".to_string(),
             cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         assert_eq!(result.display_patches.len(), 1);
         let patch = &result.display_patches[0];

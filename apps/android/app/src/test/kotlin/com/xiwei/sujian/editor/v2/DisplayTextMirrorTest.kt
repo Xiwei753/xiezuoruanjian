@@ -79,8 +79,8 @@ class DisplayTextMirrorTest {
         assertEquals("aXc", mirror.getText())
     }
 
-    @Test
-    fun applyPatches_skipsStaleRevisions() {
+    @Test(expected = IllegalStateException::class)
+    fun applyPatches_rejectsStaleRevisions() {
         val mirror = DisplayTextMirror()
         mirror.loadText("ab", 2)
 
@@ -90,8 +90,6 @@ class DisplayTextMirrorTest {
         )
 
         mirror.applyPatches(patches)
-        assertEquals("abc", mirror.getText())
-        assertEquals(1, mirror.getRevision())
     }
 
     @Test

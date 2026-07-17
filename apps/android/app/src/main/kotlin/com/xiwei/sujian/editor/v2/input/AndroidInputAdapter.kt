@@ -50,8 +50,15 @@ class AndroidInputAdapter(
 
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
         if (!isComposing) {
-            compositionReplaceStartUtf8 = mirror.getCursorUtf8()
-            compositionReplaceEndUtf8 = compositionReplaceStartUtf8
+            val selStart = mirror.getSelectionStartUtf8()
+            val selEnd = mirror.getSelectionEndUtf8()
+            if (selStart != selEnd) {
+                compositionReplaceStartUtf8 = selStart
+                compositionReplaceEndUtf8 = selEnd
+            } else {
+                compositionReplaceStartUtf8 = mirror.getCursorUtf8()
+                compositionReplaceEndUtf8 = compositionReplaceStartUtf8
+            }
             isComposing = true
         }
         previousCompositionText = currentCompositionText
