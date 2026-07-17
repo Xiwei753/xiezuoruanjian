@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 #[cfg(feature = "git-https")]
 use crate::sync::conflict::build_conflict_summary;
 #[cfg(feature = "git-https")]

@@ -1,20 +1,6 @@
 // =============================================================================
 // mod.rs — Linux_qt 客户端 QObject 后端聚合与生命周期管理器
 // =============================================================================
-//
-// 引用了什么：
-// - qmetaobject::QObjectBox/QmlEngine/pinned：Qt 绑定宏与底层引擎控制接口。
-// - app_backend：引入各领域具体的后端的强类型结构体定义。
-//
-// 干什么的：
-// - 声明并聚合所有的后台适配器子模块（workspace_backend、sync_backend 等）。
-// - 实现 SafeAppPtr 指针安全共享机制，用于使子模块获取主 AppBackend 的上下文指针，避免内存泄漏与生命周期交叉问题。
-// - 提供 BackendRuntime 所有者结构体，强引用并管理所有被 QObjectBox 包装的后端适配器，保证它们的生命周期贯穿 Qt 程序的整个生命周期。
-// - 提供 register_context_properties 方法，负责在 main.qml 加载前一站式绑定所有的 Context Property。
-//
-// 被什么引用：
-// - 被 apps/Linux_qt/src/main.rs 引用，用于实例化 BackendRuntime 并注册全局 QML 环境属性。
-// =============================================================================
 
 pub mod app_backend;
 pub mod linux_qt_layout_plan_dto;
@@ -31,8 +17,35 @@ pub use app_backend::{
 };
 pub use linux_theme_controller::LinuxThemeController;
 
-/// Safely shares the heap-allocated AppBackend pointer with other domain backends.
-/// Guaranteed to be valid as long as BackendRuntime is alive.
+/// Shared pointer to the heap-allocated AppBackend.
+///
+/// # Safety invariants (must hold for the entire lifetime of BackendRuntime)
+///
+/// 1. **Pinned heap allocation**: The AppBackend lives inside a QObjectBox
+///    which heap-allocates and pins the object. The raw pointer obtained via
+///    `set()` remains valid as long as the QObjectBox owner is alive.
+///
+/// 2. **Destruction order**: `app_backend` MUST be the last field in
+///    BackendRuntime so that Rust drops all domain backends (which hold
+///    SafeAppPtr clones) before dropping the QObjectBox<AppBackend>.
+///    If app_backend were destroyed first, the dangling pointer would be
+///    unsound to dereference during child backend destructors.
+///
+/// 3. **Single-threaded access**: Rc<Cell<*mut>> is intentionally !Send and
+///    !Sync. All QObject backends live on the GUI thread. The Rust type
+///    system prevents this pointer from crossing thread boundaries.
+///
+/// 4. **No concurrent &mut**: Each domain backend's `with_app_mut` takes
+///    `&mut self`, which prevents two backends from simultaneously holding
+///    `&mut AppBackend`. However, this is a *convention* guarantee, not
+///    enforced by the type system — a future refactor should replace this
+///    with a proper single-owner command dispatcher.
+///
+/// **Known limitation**: `&mut *app` from a raw pointer bypasses Rust's
+/// alias checker. If two backends call `with_app_mut` through different
+/// code paths that the borrow checker cannot see (e.g., Qt signal
+/// re-entry), aliasing rules may be violated. This is a known debt that
+/// should be resolved by moving to a command-dispatch architecture.
 #[derive(Clone)]
 pub struct SafeAppPtr {
     ptr: std::rc::Rc<std::cell::Cell<*mut AppBackend>>,
@@ -67,8 +80,12 @@ impl Default for SafeAppPtr {
 ///
 /// Qt only receives raw QObject pointers from `set_object_property`; this
 /// runtime keeps the Rust QObjectBox owners alive until after `engine.exec()`.
+///
+/// **Field order matters**: Rust destroys fields in declaration order.
+/// `app_backend` MUST be the last field so that all domain backends
+/// (which hold SafeAppPtr pointing into app_backend) are dropped first.
+/// See <https://doc.rust-lang.org/reference/destructors.html>.
 pub struct BackendRuntime {
-    app_backend: QObjectBox<AppBackend>,
     workspace_backend: QObjectBox<WorkspaceBackend>,
     project_backend: QObjectBox<ProjectBackend>,
     editor_backend: QObjectBox<EditorBackend>,
@@ -76,12 +93,12 @@ pub struct BackendRuntime {
     sync_backend: QObjectBox<SyncBackend>,
     starmap_backend: QObjectBox<StarMapBackend>,
     theme_controller: QObjectBox<LinuxThemeController>,
+    app_backend: QObjectBox<AppBackend>,
 }
 
 impl BackendRuntime {
     pub fn new() -> Self {
         let app_backend = QObjectBox::new(AppBackend::default());
-        // alpha 阶段 diagnostics 默认 true，覆盖 Default trait 的 false
         {
             let pinned = app_backend.pinned();
             let mut r = pinned.borrow_mut();
@@ -89,13 +106,13 @@ impl BackendRuntime {
             r.current_setting_diagnostics_verbose = true;
         }
         let app_ptr = SafeAppPtr::new();
-        // SAFETY: app_backend is heap-allocated inside QObjectBox and pinned
-        // for the entire lifetime of BackendRuntime. The pointer remains valid
-        // because BackendRuntime owns app_backend and outlives all domain
-        // backends that receive the clone. Single-threaded access is enforced
-        // by Rc<Cell<*mut>> (not Send/Sync). The cast from & to *mut is safe
-        // because all access goes through with_app/with_app_mut which guards
-        // against concurrent mutation at the call site.
+        // SAFETY: See SafeAppPtr documentation for the full list of invariants.
+        // Key points for this cast:
+        // - QObjectBox heap-allocates and pins AppBackend; the address is stable.
+        // - The pointer is stored in Rc<Cell<>> which is !Send/!Sync, preventing
+        //   cross-thread propagation.
+        // - app_backend is the last field in BackendRuntime, so it outlives all
+        //   domain backends that dereference this pointer.
         let raw_ptr = {
             let pinned = app_backend.pinned();
             let r = pinned.borrow();

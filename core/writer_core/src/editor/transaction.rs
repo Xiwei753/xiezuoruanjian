@@ -283,6 +283,7 @@ pub struct GlyphRect {
     since = "0.12.0",
     note = "Use EditorVisualTransaction instead. This will be removed in a future version."
 )]
+// dead_code: deprecated struct kept for backward compatibility, will be removed
 #[allow(dead_code)]
 pub(crate) struct EditorAnimationEvent {
     pub id: u64,

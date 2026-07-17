@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use crate::sync::github_api_client::{
     github_delete_content_serial, github_get_content, github_put_content_serial,
 };

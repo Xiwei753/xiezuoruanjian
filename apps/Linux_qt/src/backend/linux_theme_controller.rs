@@ -1,6 +1,8 @@
 use super::*;
 use crate::backend::SafeAppPtr;
 
+// non_snake_case: Qt QML naming convention
+// dead_code: qmetaobject macro fields are used by Qt meta-object system
 #[allow(non_snake_case, dead_code)]
 #[derive(QObject, Default)]
 pub struct LinuxThemeController {
@@ -32,6 +34,11 @@ impl LinuxThemeController {
 
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         if let Some(app) = self.app.get() {
+            // SAFETY: pointer was set from QObjectBox-pinned AppBackend in
+            // BackendRuntime::new; null-guarded above; single-threaded (Rc).
+            // KNOWN LIMITATION: &mut *app from a raw pointer bypasses Rust's alias
+            // checker. Qt signal re-entry could violate aliasing. This should be
+            // replaced with a command-dispatch architecture in a future refactor.
             unsafe { f(&*app) }
         } else {
             default
@@ -40,6 +47,11 @@ impl LinuxThemeController {
 
     fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         if let Some(app) = self.app.get() {
+            // SAFETY: pointer was set from QObjectBox-pinned AppBackend in
+            // BackendRuntime::new; null-guarded above; single-threaded (Rc).
+            // KNOWN LIMITATION: &mut *app from a raw pointer bypasses Rust's alias
+            // checker. Qt signal re-entry could violate aliasing. This should be
+            // replaced with a command-dispatch architecture in a future refactor.
             unsafe { f(&mut *app) }
         } else {
             default

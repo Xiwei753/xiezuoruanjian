@@ -3,20 +3,14 @@
 //! 坐标填充、帧驱动、Scene Graph 绘制、暂停策略收敛到此。
 //! SujianEditorItem 不直接管理动画状态，只通过此适配器。
 //!
-//! 已完成迁移：
-//! - should_suppress_animation / notify_animation_suppressed / resumed 已真实接入
-//! - drive_animation() 通过 item_ptr 触发 update() 请求 Scene Graph 重绘
-//! - cancel_all_animations / finish_all_animations 通过 item_ptr 触发 explicit_clear_requested
-//! - 动画由 Rust Coordinator → Scene Graph (child[1]) 渲染，
-//!   动画模式由 Core EditorVisualTransaction.animationMode 唯一决定
-//!
-//! 当前架构：
-//! - drive_animation() → QQuickItem::update() → updatePaintNode → Scene Graph 渲染
-//! - 这是已收敛的动画主路径，无独立 AnimationTimer 或 requestAnimationFrame 旁路
-//! - snapshotAnimation 模式降级为 systemSuppressed（无渲染器）
+//! 安全约束：
+//! - 本适配器持有 QQuickItem* 裸指针，仅限 GUI 线程使用。
+//! - 使用 Rc<Cell<>> 而非 Mutex，因为 GUI 单线程不需要跨线程同步；
+//!   Rc 不是 Send/Sync，编译器会阻止跨线程传播。
 
 use cpp::cpp;
-use std::sync::Mutex;
+use std::cell::Cell;
+use std::rc::Rc;
 use writer_core::platform_interaction::animation_driver::{
     AnimationDriveRequest, AnimationDriver, AnimationSuppressReason,
 };
@@ -28,7 +22,7 @@ cpp! {{
 pub struct LinuxQtAnimationDriver {
     suppressed: bool,
     suppress_reason: Option<AnimationSuppressReason>,
-    item_ptr: Mutex<*mut std::ffi::c_void>,
+    item_ptr: Rc<Cell<*mut std::ffi::c_void>>,
 }
 
 impl LinuxQtAnimationDriver {
@@ -36,14 +30,12 @@ impl LinuxQtAnimationDriver {
         Self {
             suppressed: false,
             suppress_reason: None,
-            item_ptr: Mutex::new(std::ptr::null_mut()),
+            item_ptr: Rc::new(Cell::new(std::ptr::null_mut())),
         }
     }
 
     pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
-        if let Ok(mut guard) = self.item_ptr.lock() {
-            *guard = ptr;
-        }
+        self.item_ptr.set(ptr);
     }
 }
 
@@ -53,22 +45,17 @@ impl Default for LinuxQtAnimationDriver {
     }
 }
 
-unsafe impl Send for LinuxQtAnimationDriver {}
-unsafe impl Sync for LinuxQtAnimationDriver {}
-
 impl AnimationDriver for LinuxQtAnimationDriver {
     fn drive_animation(&mut self, request: AnimationDriveRequest) {
         if self.suppressed {
             return;
         }
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if !item_ptr.is_null() {
-                let _ = request;
-                cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                    item_ptr->update();
-                });
-            }
+        let item_ptr = self.item_ptr.get();
+        if !item_ptr.is_null() {
+            let _ = request;
+            cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                item_ptr->update();
+            });
         }
     }
 
@@ -91,24 +78,20 @@ impl AnimationDriver for LinuxQtAnimationDriver {
     }
 
     fn cancel_all_animations(&mut self) {
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if !item_ptr.is_null() {
-                cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                    QMetaObject::invokeMethod(item_ptr, "explicit_clear_requested");
-                });
-            }
+        let item_ptr = self.item_ptr.get();
+        if !item_ptr.is_null() {
+            cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                QMetaObject::invokeMethod(item_ptr, "explicit_clear_requested");
+            });
         }
     }
 
     fn finish_all_animations(&mut self) {
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if !item_ptr.is_null() {
-                cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                    QMetaObject::invokeMethod(item_ptr, "explicit_clear_requested");
-                });
-            }
+        let item_ptr = self.item_ptr.get();
+        if !item_ptr.is_null() {
+            cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                QMetaObject::invokeMethod(item_ptr, "explicit_clear_requested");
+            });
         }
     }
 }

@@ -181,6 +181,21 @@ pub(crate) fn detect_system_theme_from_platform() -> String {
         .unwrap_or_else(|| "light".to_string())
 }
 
+use std::sync::Mutex;
+
+static ARBOARD_CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
+
+fn get_or_create_arboard() -> Option<std::sync::MutexGuard<'static, Option<arboard::Clipboard>>> {
+    let mut guard = ARBOARD_CLIPBOARD.lock().ok()?;
+    if guard.is_none() {
+        match arboard::Clipboard::new() {
+            Ok(clip) => { *guard = Some(clip); }
+            Err(_) => return None,
+        }
+    }
+    Some(guard)
+}
+
 pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
     let mk_success = |backend: &str| -> serde_json::Value {
         serde_json::json!({
@@ -237,11 +252,12 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
         }
     }
 
-    // 4. Last resort: arboard (Rust clipboard API)
-    if let Ok(mut clip) = arboard::Clipboard::new() {
-        if clip.set_text(text_str.to_string()).is_ok() {
-            Box::leak(Box::new(clip));
-            return mk_success("arboard");
+    // 4. Last resort: arboard (Rust clipboard API) — long-lived, reused, not leaked
+    if let Some(mut guard) = get_or_create_arboard() {
+        if let Some(ref mut clip) = *guard {
+            if clip.set_text(text_str.to_string()).is_ok() {
+                return mk_success("arboard");
+            }
         }
     }
 

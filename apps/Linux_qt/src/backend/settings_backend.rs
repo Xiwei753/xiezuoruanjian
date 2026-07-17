@@ -18,6 +18,8 @@
 use super::*;
 use crate::backend::SafeAppPtr;
 
+// non_snake_case: Qt QML naming convention
+// dead_code: qmetaobject macro fields are used by Qt meta-object system
 #[allow(non_snake_case, dead_code)]
 #[derive(QObject, Default)]
 pub struct SettingsBackend {
@@ -91,6 +93,9 @@ impl SettingsBackend {
         if let Some(app) = self.app.get() {
             // SAFETY: pointer was set from QObjectBox-pinned AppBackend in
             // BackendRuntime::new; null-guarded above; single-threaded (Rc).
+            // KNOWN LIMITATION: &mut *app from a raw pointer bypasses Rust's alias
+            // checker. Qt signal re-entry could violate aliasing. This should be
+            // replaced with a command-dispatch architecture in a future refactor.
             unsafe { f(&*app) }
         } else {
             crate::backend::app_backend::debug_error_static(
@@ -106,6 +111,9 @@ impl SettingsBackend {
         if let Some(app) = self.app.get() {
             // SAFETY: same as with_app; &mut is safe because callers hold
             // &mut self, preventing aliasing within this backend.
+            // KNOWN LIMITATION: &mut *app from a raw pointer bypasses Rust's alias
+            // checker. Qt signal re-entry could violate aliasing. This should be
+            // replaced with a command-dispatch architecture in a future refactor.
             unsafe { f(&mut *app) }
         } else {
             crate::backend::app_backend::debug_error_static(
