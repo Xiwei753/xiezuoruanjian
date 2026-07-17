@@ -277,26 +277,48 @@ class AndroidVisualPlanner {
             val matchIdx = newClusters.indices.firstOrNull { idx ->
                 idx !in usedNewIndices &&
                 newClusters[idx].shapingFingerprint == oldCluster.shapingFingerprint &&
-                newClusters[idx].documentByteStart == mappedStart &&
-                newClusters[idx].documentByteEndExclusive == mappedEnd
+                (newClusters[idx].documentByteStart == mappedStart ||
+                 newClusters[idx].documentByteEndExclusive == mappedEnd)
             }
 
-            if (matchIdx != null) {
-                usedNewIndices.add(matchIdx)
-                val newCluster = newClusters[matchIdx]
-                val geometryChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-
-                if (geometryChanged && newSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Move,
-                        snapshot = newSnapshot,
-                        sourceRect = newCluster.sourceRectInLineImage,
-                        destinationRect = newCluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 1f,
-                        fromDestinationRect = oldCluster.visualRectInDocument
-                    ))
+            if (matchIdx == null) {
+                val fallbackIdx = newClusters.indices.firstOrNull { idx ->
+                    idx !in usedNewIndices &&
+                    newClusters[idx].shapingFingerprint == oldCluster.shapingFingerprint
                 }
+                if (fallbackIdx != null) {
+                    usedNewIndices.add(fallbackIdx)
+                    val newCluster = newClusters[fallbackIdx]
+                    val geometryChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+                    if (geometryChanged && newSnapshot != null) {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Move,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 1f,
+                            fromDestinationRect = oldCluster.visualRectInDocument
+                        ))
+                    }
+                }
+                continue
+            }
+
+            usedNewIndices.add(matchIdx)
+            val newCluster = newClusters[matchIdx]
+            val geometryChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+
+            if (geometryChanged && newSnapshot != null) {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Move,
+                    snapshot = newSnapshot,
+                    sourceRect = newCluster.sourceRectInLineImage,
+                    destinationRect = newCluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 1f,
+                    fromDestinationRect = oldCluster.visualRectInDocument
+                ))
             }
         }
     }

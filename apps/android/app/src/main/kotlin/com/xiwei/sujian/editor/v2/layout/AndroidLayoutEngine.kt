@@ -16,7 +16,6 @@ class AndroidLayoutEngine(
     private var lineSpacingMultiplier: Float = 1.0f
     private var revisionCounter: Long = 0
     private var lastConfigFingerprint: String = ""
-    private var lastEditorRevision: Long = -1
 
     private fun computeConfigFingerprint(): String {
         return "${width}_${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}_${lineSpacingMultiplier}"
@@ -37,13 +36,11 @@ class AndroidLayoutEngine(
         if (width <= 0f) return
 
         val currentConfigFp = computeConfigFingerprint()
-        val currentEditorRevision = mirror.getRevision()
         val existingLayout = layout
 
         if (existingLayout != null && currentConfigFp == lastConfigFingerprint) {
             revisionCounter++
             currentRevision = buildRevision(existingLayout)
-            lastEditorRevision = currentEditorRevision
             return
         }
 
@@ -54,7 +51,6 @@ class AndroidLayoutEngine(
             .build()
 
         lastConfigFingerprint = currentConfigFp
-        lastEditorRevision = currentEditorRevision
         revisionCounter++
         currentRevision = buildRevision(layout!!)
     }

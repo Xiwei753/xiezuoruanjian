@@ -20,17 +20,16 @@ class AndroidInputConnection(
         val selEnd = mirror.getSelectionEndUtf8()
         if (selStart != selEnd) {
             val indexMap = AndroidTextIndexMap(mirror)
-            val byteStart = indexMap.utf16ToUtf8(selStart)
-            val byteEnd = indexMap.utf16ToUtf8(selEnd)
-            val originalText = mirror.getText().substring(
-                byteStart.coerceAtMost(mirror.getText().toByteArray(Charsets.UTF_8).size),
-                byteEnd.coerceAtMost(mirror.getText().toByteArray(Charsets.UTF_8).size)
-            )
+            val byteStart = selStart
+            val byteEnd = selEnd
+            val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
+            val originalText = String(textBytes, byteStart.coerceAtMost(textBytes.size)..byteEnd.coerceAtMost(textBytes.size), Charsets.UTF_8)
             adapter.sendReplaceToKernel(byteStart, byteEnd, text.toString(), originalText, EditorTransactionCauseDto.TYPING)
         } else {
             val byteOffset = mirror.getCursorUtf8()
             adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
         }
+        applyNewCursorPosition(newCursorPosition)
         notifySelectionChanged()
         return true
     }
@@ -39,6 +38,7 @@ class AndroidInputConnection(
         if (beforeLength == 0 && afterLength == 0) return true
         if (adapter.isComposing()) {
             adapter.handleCompositionFinish()
+            return true
         }
         val indexMap = AndroidTextIndexMap(mirror)
         val cursorUtf16 = mirror.getCursorUtf16()
@@ -76,8 +76,10 @@ class AndroidInputConnection(
         val indexMap = AndroidTextIndexMap(mirror)
         val byteStart = indexMap.utf16ToUtf8(start)
         val byteEnd = indexMap.utf16ToUtf8(end)
-        val selectedText = mirror.getText().substring(start.coerceAtMost(mirror.getText().length), end.coerceAtMost(mirror.getText().length))
+        val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
+        val selectedText = String(textBytes, byteStart.coerceAtMost(textBytes.size)..byteEnd.coerceAtMost(textBytes.size), Charsets.UTF_8)
         adapter.startComposingRegion(byteStart, byteEnd, selectedText)
+        notifySelectionChanged()
         return true
     }
 
@@ -112,6 +114,16 @@ class AndroidInputConnection(
         val start = selStart.coerceAtMost(text.length)
         val end = selEnd.coerceAtMost(text.length)
         return text.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
+    }
+
+    private fun applyNewCursorPosition(newCursorPosition: Int) {
+        if (newCursorPosition == 0) return
+        val cursorUtf16 = mirror.getCursorUtf16()
+        val newCursorUtf16 = cursorUtf16 + newCursorPosition - 1
+        if (newCursorUtf16 < 0 || newCursorUtf16 > mirror.getLengthUtf16()) return
+        val indexMap = AndroidTextIndexMap(mirror)
+        val newCursorUtf8 = indexMap.utf16ToUtf8(newCursorUtf16)
+        adapter.sendSetSelectionToKernel(newCursorUtf8, newCursorUtf8)
     }
 
     private fun notifySelectionChanged() {

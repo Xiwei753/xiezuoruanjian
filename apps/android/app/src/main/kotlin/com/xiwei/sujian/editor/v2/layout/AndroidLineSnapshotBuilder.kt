@@ -180,9 +180,10 @@ class AndroidLineSnapshotBuilder {
         if (clusterText.isEmpty()) return ""
         val codePoints = clusterText.codePoints().toArray()
         val types = codePoints.map { Character.getType(it).toString() }.joinToString(",")
-        val runIndex = if (clusterStartUtf16 < layout.getLineEnd(lineIndex)) {
-            layout.getPrimaryHorizontal(clusterStartUtf16).toInt()
-        } else 0
-        return "${clusterText.hashCode()}_${types}_${runIndex}"
+        val runIdentity = try {
+            val run = layout.getPrimaryHorizontal(clusterStartUtf16).toBits().toRawBits()
+            run.toString()
+        } catch (_: Exception) { "0" }
+        return "${clusterText}_${types}_${runIdentity}"
     }
 }

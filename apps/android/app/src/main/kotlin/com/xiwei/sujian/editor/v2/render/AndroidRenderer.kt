@@ -6,12 +6,7 @@ import android.graphics.Paint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
-import com.xiwei.sujian.editor.v2.visual.AnimationTimeline
 import com.xiwei.sujian.editor.v2.visual.SliceRole
-import com.xiwei.sujian.editor.v2.visual.SnapshotOwner
-import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
-import com.xiwei.sujian.editor.v2.visual.TransactionState
-import com.xiwei.sujian.editor.v2.visual.VisualFrameSnapshot
 
 class AndroidRenderFrame(
     val transaction: PreparedVisualTransaction?,
@@ -21,113 +16,6 @@ class AndroidRenderFrame(
     val scrollX: Float,
     val scrollY: Float
 )
-
-class VisualTransactionCoordinator(
-    private val resourceStore: VisualResourceStore
-) {
-    private var activeTransaction: PreparedVisualTransaction? = null
-    private var timeline: AnimationTimeline? = null
-
-    fun submitTransaction(transaction: PreparedVisualTransaction?) {
-        if (transaction == null) return
-
-        val oldTransaction = activeTransaction
-        val oldTimeline = timeline
-
-        if (oldTransaction != null && oldTimeline != null) {
-            val frameTimeMs = System.nanoTime() / 1_000_000
-            val frameSnapshot = oldTimeline.currentVisualFrame(frameTimeMs)
-
-            if (frameSnapshot != null && frameSnapshot.state == TransactionState.Rendering) {
-                rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction, oldTimeline)
-            } else {
-                cancelTransaction(oldTransaction)
-            }
-        }
-
-        activeTransaction = transaction
-        timeline = AnimationTimeline(transaction.durationMs)
-    }
-
-    private fun rebaseFromOldTransaction(
-        oldTransaction: PreparedVisualTransaction,
-        frameSnapshot: VisualFrameSnapshot,
-        newTransaction: PreparedVisualTransaction,
-        oldTimeline: AnimationTimeline?
-    ) {
-        val newOwner = SnapshotOwner.OwnedByTransaction(newTransaction.transactionId)
-        val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
-
-        for (slice in oldTransaction.animatedSlices) {
-            val snapshot = slice.snapshot ?: continue
-            val currentOwner = resourceStore.getOwner(snapshot.snapshotId)
-            if (currentOwner == oldOwner) {
-                resourceStore.transferOwnership(snapshot.snapshotId, newOwner)
-            }
-        }
-
-        for (slice in oldTransaction.animatedSlices) {
-            val snapshot = slice.snapshot ?: continue
-            if (!newTransaction.animatedSlices.any { it.snapshot?.snapshotId == snapshot.snapshotId }) {
-                resourceStore.release(snapshot.snapshotId, newOwner)
-            }
-        }
-
-        oldTimeline.cancel()
-    }
-
-    fun computeFrame(frameTimeMs: Long): AndroidRenderFrame {
-        val transaction = activeTransaction
-        val tl = timeline
-
-        if (transaction != null && tl != null && transaction.animatedSlices.isNotEmpty()) {
-            tl.markFirstVisibleFrame(frameTimeMs)
-            val progress = tl.progress(frameTimeMs)
-
-            if (tl.isCompleted(frameTimeMs)) {
-                completeTransaction(transaction)
-                activeTransaction = null
-                timeline = null
-            }
-
-            return AndroidRenderFrame(
-                transaction = transaction,
-                progress = progress,
-                viewportWidth = 0,
-                viewportHeight = 0,
-                scrollX = 0f,
-                scrollY = 0f
-            )
-        }
-
-        return AndroidRenderFrame(
-            transaction = null,
-            progress = 0f,
-            viewportWidth = 0,
-            viewportHeight = 0,
-            scrollX = 0f,
-            scrollY = 0f
-        )
-    }
-
-    private fun completeTransaction(transaction: PreparedVisualTransaction) {
-        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
-        for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
-        }
-        timeline?.complete()
-    }
-
-    private fun cancelTransaction(transaction: PreparedVisualTransaction) {
-        val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
-        for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
-        }
-        timeline?.cancel()
-    }
-
-    fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
-}
 
 class AndroidRenderer(
     private val mirror: DisplayTextMirror,

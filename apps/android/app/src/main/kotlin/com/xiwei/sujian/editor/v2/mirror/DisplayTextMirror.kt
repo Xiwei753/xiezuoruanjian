@@ -142,6 +142,8 @@ class DisplayTextMirror {
     fun applyEditResult(result: EditResult) {
         applyPatches(result.displayPatches)
         val indexMap = AndroidTextIndexMap(this)
+        cursorUtf8 = result.newSelectionEnd
+        cursorUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
         selectionStartUtf8 = result.newSelectionStart
         selectionEndUtf8 = result.newSelectionEnd
         selectionStartUtf16 = indexMap.utf8ToUtf16(result.newSelectionStart)
@@ -229,19 +231,19 @@ class DisplayTextMirror {
         }
     }
 
-    fun loadFromSnapshot(text: String, cursorUtf8: Int, revision: Long) {
+    fun loadFromSnapshot(text: String, cursorUtf8: Int, revision: Long, selectionStartUtf8: Int = cursorUtf8, selectionEndUtf8: Int = cursorUtf8) {
         buffer.clear()
         buffer.append(text)
         this.cursorUtf8 = cursorUtf8
         this.currentRevision = revision
         this.compositionStartUtf16 = -1
         this.compositionEndUtf16 = -1
-        this.selectionStartUtf8 = cursorUtf8
-        this.selectionEndUtf8 = cursorUtf8
+        this.selectionStartUtf8 = selectionStartUtf8
+        this.selectionEndUtf8 = selectionEndUtf8
         val indexMap = AndroidTextIndexMap(this)
         this.cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
-        this.selectionStartUtf16 = this.cursorUtf16
-        this.selectionEndUtf16 = this.cursorUtf16
+        this.selectionStartUtf16 = indexMap.utf8ToUtf16(selectionStartUtf8)
+        this.selectionEndUtf16 = indexMap.utf8ToUtf16(selectionEndUtf8)
     }
 
     fun loadText(text: String, cursorUtf8: Int) {
