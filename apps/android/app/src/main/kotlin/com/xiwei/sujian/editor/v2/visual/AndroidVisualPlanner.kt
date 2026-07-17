@@ -141,7 +141,7 @@ class AndroidVisualPlanner(
         if (isReplace) {
             planClusterReplaceAnimation(
                 visualIntent, oldRev, newRev,
-                affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots
+                affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots
             )
             return
         }
@@ -153,36 +153,71 @@ class AndroidVisualPlanner(
             if (isInsert && newLineRange != null) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 if (newSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = newSnapshot,
-                        sourceRect = newSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            newLineRange.left, newLineRange.top,
-                            newLineRange.right, newLineRange.bottom
-                        ),
-                        startAlpha = 0f,
-                        endAlpha = 1f
-                    ))
+                    if (newSnapshot.clusters.isNotEmpty()) {
+                        for (cluster in newSnapshot.clusters) {
+                            val inNewRange = visualIntent.newAffectedByteRanges.any { (start, end) ->
+                                cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                            }
+                            if (inNewRange) {
+                                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                                    role = SliceRole.Insert,
+                                    snapshot = newSnapshot,
+                                    sourceRect = cluster.sourceRectInLineImage,
+                                    destinationRect = cluster.visualRectInDocument,
+                                    startAlpha = 0f,
+                                    endAlpha = 1f
+                                ))
+                            }
+                        }
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Insert,
+                            snapshot = newSnapshot,
+                            sourceRect = newSnapshot.sourceRect,
+                            destinationRect = android.graphics.RectF(
+                                newLineRange.left, newLineRange.top,
+                                newLineRange.right, newLineRange.bottom
+                            ),
+                            startAlpha = 0f,
+                            endAlpha = 1f
+                        ))
+                    }
                 }
             } else if (isDelete && oldLineRange != null) {
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots)
                 if (oldSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            oldLineRange.left, oldLineRange.top,
-                            oldLineRange.right, oldLineRange.bottom
-                        ),
-                        startAlpha = 1f,
-                        endAlpha = 0f
-                    ))
+                    if (oldSnapshot.clusters.isNotEmpty()) {
+                        for (cluster in oldSnapshot.clusters) {
+                            val inOldRange = visualIntent.oldAffectedByteRanges.any { (start, end) ->
+                                cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                            }
+                            if (inOldRange) {
+                                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                                    role = SliceRole.Delete,
+                                    snapshot = oldSnapshot,
+                                    sourceRect = cluster.sourceRectInLineImage,
+                                    destinationRect = cluster.visualRectInDocument,
+                                    startAlpha = 1f,
+                                    endAlpha = 0f
+                                ))
+                            }
+                        }
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Delete,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldSnapshot.sourceRect,
+                            destinationRect = android.graphics.RectF(
+                                oldLineRange.left, oldLineRange.top,
+                                oldLineRange.right, oldLineRange.bottom
+                            ),
+                            startAlpha = 1f,
+                            endAlpha = 0f
+                        ))
+                    }
                 }
             }
         }
-        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
     }
 
     private fun planClusterReplaceAnimation(
@@ -232,10 +267,9 @@ class AndroidVisualPlanner(
                     startAlpha = 0f,
                     endAlpha = 1f
                 ))
-                addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
+                // addStaticPatchForAnimatedLine removed
             }
         }
-        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
     }
 
     private fun buildOffsetMap(
@@ -328,7 +362,7 @@ class AndroidVisualPlanner(
                         startAlpha = 0f,
                         endAlpha = 1f
                     ))
-                    addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
+                    // addStaticPatchForAnimatedLine removed
                 }
             } else if (newLineRange != null) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
@@ -344,11 +378,10 @@ class AndroidVisualPlanner(
                         startAlpha = 0f,
                         endAlpha = 1f
                     ))
-                    addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
+                    // addStaticPatchForAnimatedLine removed
                 }
             }
         }
-        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
     }
 
     private fun planLineReflowAnimation(
@@ -385,7 +418,7 @@ class AndroidVisualPlanner(
                             oldLineRange.right, oldLineRange.bottom
                         )
                     ))
-                    addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
+                    // addStaticPatchForAnimatedLine removed
                 }
             } else if (newLineRange != null) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
@@ -401,7 +434,7 @@ class AndroidVisualPlanner(
                         startAlpha = 0f,
                         endAlpha = 1f
                     ))
-                    addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
+                    // addStaticPatchForAnimatedLine removed
                 }
             } else if (oldLineRange != null) {
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots)
@@ -420,7 +453,6 @@ class AndroidVisualPlanner(
                 }
             }
         }
-        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
     }
 
     private fun planCrossfadeAnimation(
@@ -468,62 +500,16 @@ class AndroidVisualPlanner(
                         startAlpha = 0f,
                         endAlpha = 1f
                     ))
-                    addStaticPatchForAnimatedLine(newSnapshot, staticPatches)
+                    // addStaticPatchForAnimatedLine removed
                 }
             }
         }
-        addUnaffectedStaticPatches(newRev, affectedLines, staticPatches)
     }
 
     private fun planNoAnimation(
         newRev: AndroidLayoutRevision,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
     ) {
-        for (i in 0 until newRev.lineCount) {
-            val newLineRange = newRev.lineRanges.getOrNull(i) ?: continue
-            staticPatches.add(PreparedVisualTransaction.StaticPatch(
-                newSnapshotId = System.nanoTime() + i,
-                lineIndex = i,
-                destinationRect = android.graphics.RectF(
-                    newLineRange.left, newLineRange.top,
-                    newLineRange.right, newLineRange.bottom
-                ),
-                visibleSourceRects = emptyList()
-            ))
-        }
-    }
-
-    private fun addUnaffectedStaticPatches(
-        newRev: AndroidLayoutRevision,
-        affectedLines: Set<Int>,
-        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
-    ) {
-        for (i in 0 until newRev.lineCount) {
-            if (i !in affectedLines) {
-                val newLineRange = newRev.lineRanges.getOrNull(i) ?: continue
-                staticPatches.add(PreparedVisualTransaction.StaticPatch(
-                    newSnapshotId = System.nanoTime() + i,
-                    lineIndex = i,
-                    destinationRect = android.graphics.RectF(
-                        newLineRange.left, newLineRange.top,
-                        newLineRange.right, newLineRange.bottom
-                    ),
-                    visibleSourceRects = emptyList()
-                ))
-            }
-        }
-    }
-
-    private fun addStaticPatchForAnimatedLine(
-        snapshot: com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot,
-        staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
-    ) {
-        staticPatches.add(PreparedVisualTransaction.StaticPatch(
-            newSnapshotId = snapshot.snapshotId,
-            lineIndex = snapshot.lineIndex,
-            destinationRect = snapshot.destinationRect,
-            visibleSourceRects = emptyList()
-        ))
     }
 
     private fun computeAffectedLines(

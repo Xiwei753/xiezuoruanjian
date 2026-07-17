@@ -96,38 +96,36 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun performUndo() {
         val bridge = kernelBridge ?: return
-        val dto = bridge.undo() ?: return
+        val dto = bridge.undo(mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     fun performRedo() {
         val bridge = kernelBridge ?: return
-        val dto = bridge.redo() ?: return
+        val dto = bridge.redo(mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     private fun applyEditResultFull(result: EditResult) {
-        val rebaseSnapshot = coordinator.takeRebaseSnapshot()
+        val frameTimeMs = System.nanoTime() / 1_000_000
+        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
         coordinator.submitTransaction(transaction)
+        updateMaxScroll()
         if (result.displayPatches.isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
         }
         invalidate()
-    }
-
-    fun applyCommandResult(result: EditResult) {
-        applyEditResultFull(result)
     }
 
     fun onCompositionUpdated() {
@@ -136,15 +134,16 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
-        val rebaseSnapshot = coordinator.takeRebaseSnapshot()
+        val frameTimeMs = System.nanoTime() / 1_000_000
+        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedOldLineIndices)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
         mirrorUpdate?.invoke()
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshots(affectedNewLineIndices)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
         coordinator.submitTransaction(transaction)
         invalidate()
@@ -203,7 +202,6 @@ class SujianEditorView @JvmOverloads constructor(
         val result = EditResult.fromDto(dto)
         if (result.displayPatches.isNotEmpty()) {
             applyEditResultFull(result)
-            onContentChanged?.invoke(mirror.getText())
         }
     }
 
@@ -220,7 +218,9 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         layoutEngine.setWidth(w.toFloat())
+        layoutEngine.requestLayout()
         updateMaxScroll()
+        invalidate()
     }
 
     private fun updateMaxScroll() {
@@ -428,7 +428,8 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (!hasWindowFocus && coordinator.hasActiveAnimation()) {
+        if (!hasWindowFocus) {
+            coordinator.cancelActiveTransaction()
             resourceStore.releaseAll()
         }
     }
@@ -491,9 +492,11 @@ class SujianEditorView @JvmOverloads constructor(
     private fun computeAutoIndentPrefix(): String {
         if (!autoIndentEnabled) return ""
         val text = mirror.getText()
-        val cursor = mirror.getCursorUtf8()
-        val lineStart = text.lastIndexOf('\n', cursor - 1) + 1
-        val linePrefix = text.substring(lineStart, cursor)
+        val cursorUtf8 = mirror.getCursorUtf8()
+        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
+        val lineStart = text.lastIndexOf('\n', (cursorUtf16 - 1).coerceAtLeast(0)) + 1
+        val linePrefix = text.substring(lineStart, cursorUtf16.coerceAtMost(text.length))
         val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
         return indent
     }
@@ -540,8 +543,8 @@ interface EditorKernelBridge {
     fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
     fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
     fun setSelection(anchorByteOffset: Int, headByteOffset: Int, expectedRevision: Long): EditorEditResultDto?
-    fun undo(): EditorEditResultDto?
-    fun redo(): EditorEditResultDto?
+    fun undo(expectedRevision: Long): EditorEditResultDto?
+    fun redo(expectedRevision: Long): EditorEditResultDto?
     fun loadText(text: String, cursorUtf8: Int): EditorEditResultDto?
     fun compositionCommit(
         compositionReplaceStart: Int,

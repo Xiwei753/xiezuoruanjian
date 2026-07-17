@@ -131,13 +131,17 @@ class DisplayTextMirror {
 
     fun getLengthUtf16(): Int = buffer.length
 
-    fun getSelectionStartUtf16(): Int = selectionStartUtf16
+    fun getSelectionStartUtf16(): Int = minOf(selectionStartUtf16, selectionEndUtf16)
 
-    fun getSelectionEndUtf16(): Int = selectionEndUtf16
+    fun getSelectionEndUtf16(): Int = maxOf(selectionStartUtf16, selectionEndUtf16)
 
-    fun getSelectionStartUtf8(): Int = selectionStartUtf8
+    fun getSelectionStartUtf8(): Int = minOf(selectionStartUtf8, selectionEndUtf8)
 
-    fun getSelectionEndUtf8(): Int = selectionEndUtf8
+    fun getSelectionEndUtf8(): Int = maxOf(selectionStartUtf8, selectionEndUtf8)
+
+    fun getSelectionAnchorUtf8(): Int = selectionStartUtf8
+
+    fun getSelectionHeadUtf8(): Int = selectionEndUtf8
 
     fun applyEditResult(result: EditResult) {
         applyPatches(result.displayPatches)

@@ -58,12 +58,16 @@ class AndroidRenderer {
         canvas.drawColor(backgroundColor)
         val transaction = frame.transaction
         if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
-            renderStaticBackground(canvas, layout, transaction)
-            renderSelectionDecoration(canvas, layout, transaction)
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
+            renderSelectionDecoration(canvas, layout, transaction)
+            renderStaticBackground(canvas, layout, transaction)
             renderAnimatedSlices(canvas, transaction, frame.progress)
             renderPreeditDecoration(canvas, layout, transaction)
-            renderCursorTransition(canvas, transaction, frame.progress)
+            if (transaction.cursorTransition != null && transaction.cursorTransition.shouldAnimate) {
+                renderCursorTransition(canvas, transaction, frame.progress)
+            } else {
+                renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+            }
         } else {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             renderSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
@@ -99,18 +103,13 @@ class AndroidRenderer {
         layout: android.text.Layout,
         transaction: PreparedVisualTransaction
     ) {
-        val hiddenLines = mutableSetOf<Int>()
-        for (patch in transaction.staticPatches) {
-            if (patch.visibleSourceRects.isEmpty()) {
-                hiddenLines.add(patch.lineIndex)
-            }
-        }
+        val animatedLines = mutableSetOf<Int>()
         for (slice in transaction.animatedSlices) {
-            slice.snapshot?.lineIndex?.let { hiddenLines.add(it) }
+            slice.snapshot?.lineIndex?.let { animatedLines.add(it) }
         }
 
         for (i in 0 until layout.lineCount) {
-            if (i in hiddenLines) continue
+            if (i in animatedLines) continue
             val lineTop = layout.getLineTop(i)
             val lineBottom = layout.getLineBottom(i)
             canvas.save()

@@ -103,8 +103,7 @@ class AndroidInputAdapter(
             if (dto != null) {
                 val result = EditResult.fromDto(dto)
                 mirror.clearComposition()
-                mirror.applyEditResult(result)
-                editorView.applyCommandResult(result)
+                editorView.applyEditResultFull(result)
                 return
             }
         }
@@ -129,8 +128,7 @@ class AndroidInputAdapter(
             if (dto != null) {
                 val result = EditResult.fromDto(dto)
                 mirror.clearComposition()
-                mirror.applyEditResult(result)
-                editorView.applyCommandResult(result)
+                editorView.applyEditResultFull(result)
                 return
             }
         }

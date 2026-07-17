@@ -7,7 +7,6 @@ class VisualTransactionCoordinator(
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
-    private var pendingRebaseSnapshot: VisualFrameSnapshot? = null
 
     fun submitTransaction(transaction: PreparedVisualTransaction?) {
         if (transaction == null) return
@@ -16,33 +15,24 @@ class VisualTransactionCoordinator(
         val oldTimeline = timeline
 
         if (oldTransaction != null && oldTimeline != null) {
-            val frameTimeMs = System.nanoTime() / 1_000_000
-            val frameSnapshot = oldTimeline.currentVisualFrame(frameTimeMs)
-
-            if (frameSnapshot != null && frameSnapshot.state == TransactionState.Rendering) {
-                val sliceStates = computeSliceVisualStates(oldTransaction, frameSnapshot.progress)
-                pendingRebaseSnapshot = VisualFrameSnapshot(
-                    progress = frameSnapshot.progress,
-                    state = frameSnapshot.state,
-                    sliceVisualStates = sliceStates
-                )
-                transferResourcesToNewTransaction(oldTransaction, transaction)
-            } else {
-                cancelTransaction(oldTransaction)
-                pendingRebaseSnapshot = null
-            }
-        } else {
-            pendingRebaseSnapshot = null
+            cancelTransaction(oldTransaction)
         }
 
         activeTransaction = transaction
         timeline = AnimationTimeline(transaction.durationMs)
     }
 
-    fun takeRebaseSnapshot(): VisualFrameSnapshot? {
-        val snapshot = pendingRebaseSnapshot
-        pendingRebaseSnapshot = null
-        return snapshot
+    fun captureCurrentFrame(frameTimeMs: Long): VisualFrameSnapshot? {
+        val transaction = activeTransaction ?: return null
+        val tl = timeline ?: return null
+        val p = tl.progress(frameTimeMs)
+        if (tl.getState() != TransactionState.Rendering && tl.getState() != TransactionState.Paused) return null
+        val sliceStates = computeSliceVisualStates(transaction, p)
+        return VisualFrameSnapshot(
+            progress = p,
+            state = tl.getState(),
+            sliceVisualStates = sliceStates
+        )
     }
 
     private fun computeSliceVisualStates(
@@ -66,31 +56,6 @@ class VisualTransactionCoordinator(
                 currentAlpha = currentAlpha
             )
         }
-    }
-
-    private fun transferResourcesToNewTransaction(
-        oldTransaction: PreparedVisualTransaction,
-        newTransaction: PreparedVisualTransaction
-    ) {
-        val newOwner = SnapshotOwner.OwnedByTransaction(newTransaction.transactionId)
-        val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
-
-        for (slice in oldTransaction.animatedSlices) {
-            val snapshot = slice.snapshot ?: continue
-            val currentOwner = resourceStore.getOwner(snapshot.snapshotId)
-            if (currentOwner == oldOwner) {
-                resourceStore.transferOwnership(snapshot.snapshotId, newOwner)
-            }
-        }
-
-        for (slice in oldTransaction.animatedSlices) {
-            val snapshot = slice.snapshot ?: continue
-            if (!newTransaction.animatedSlices.any { it.snapshot?.snapshotId == snapshot.snapshotId }) {
-                resourceStore.release(snapshot.snapshotId, newOwner)
-            }
-        }
-
-        timeline?.cancel()
     }
 
     fun computeFrame(
@@ -183,6 +148,5 @@ class VisualTransactionCoordinator(
         cancelTransaction(transaction)
         activeTransaction = null
         timeline = null
-        pendingRebaseSnapshot = null
     }
 }

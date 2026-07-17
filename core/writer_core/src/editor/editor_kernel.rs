@@ -60,8 +60,8 @@ pub enum EditorCommand {
         head_byte_offset: usize,
         expected_revision: u64,
     },
-    Undo,
-    Redo,
+    Undo { expected_revision: u64 },
+    Redo { expected_revision: u64 },
     ReplaceAll {
         search: String,
         replacement: String,
@@ -279,14 +279,15 @@ impl EditorKernel {
             EditorCommand::Insert { expected_revision, .. }
             | EditorCommand::Delete { expected_revision, .. }
             | EditorCommand::Replace { expected_revision, .. }
-            | EditorCommand::SetSelection { expected_revision, .. }
-            | EditorCommand::ReplaceAll { expected_revision, .. }
-            | EditorCommand::InsertLineBreak { expected_revision, .. } => {
-                if *expected_revision != 0 && *expected_revision != base_revision {
+             | EditorCommand::SetSelection { expected_revision, .. }
+             | EditorCommand::ReplaceAll { expected_revision, .. }
+             | EditorCommand::InsertLineBreak { expected_revision, .. }
+             | EditorCommand::Undo { expected_revision }
+             | EditorCommand::Redo { expected_revision } => {
+                if *expected_revision != base_revision {
                     return self.noop_result(base_revision, self.cursor, (self.selection_anchor, self.cursor));
                 }
             }
-            EditorCommand::Undo | EditorCommand::Redo => {}
         }
 
         let old_cursor = self.cursor;
@@ -305,10 +306,10 @@ impl EditorKernel {
             EditorCommand::SetSelection { anchor_byte_offset, head_byte_offset, .. } => {
                 self.apply_set_selection(anchor_byte_offset, head_byte_offset, base_revision, old_cursor, old_selection)
             }
-            EditorCommand::Undo => {
+            EditorCommand::Undo { .. } => {
                 self.apply_undo(base_revision, old_cursor, old_selection)
             }
-            EditorCommand::Redo => {
+            EditorCommand::Redo { .. } => {
                 self.apply_redo(base_revision, old_cursor, old_selection)
             }
             EditorCommand::ReplaceAll { search, replacement, .. } => {
@@ -783,12 +784,21 @@ impl EditorKernel {
         while prefix_len < old_bytes.len() && prefix_len < new_bytes.len() && old_bytes[prefix_len] == new_bytes[prefix_len] {
             prefix_len += 1;
         }
+        while prefix_len > 0 && !old_text.is_char_boundary(prefix_len) {
+            prefix_len -= 1;
+        }
 
         let mut suffix_len = 0;
         while suffix_len < old_bytes.len() - prefix_len && suffix_len < new_bytes.len() - prefix_len
             && old_bytes[old_bytes.len() - 1 - suffix_len] == new_bytes[new_bytes.len() - 1 - suffix_len]
         {
             suffix_len += 1;
+        }
+        while suffix_len > 0 && !old_text.is_char_boundary(old_bytes.len() - suffix_len) {
+            suffix_len -= 1;
+        }
+        while suffix_len > 0 && !new_text.is_char_boundary(new_bytes.len() - suffix_len) {
+            suffix_len -= 1;
         }
 
         let replace_start = prefix_len;
@@ -1211,7 +1221,7 @@ mod tests {
     #[test]
     fn undo_restores_previous_state() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
-        kernel.apply(EditorCommand::Insert {
+        let result = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
@@ -1219,7 +1229,7 @@ mod tests {
         });
         assert_eq!(kernel.text(), "abc");
 
-        let result = kernel.apply(EditorCommand::Undo);
+        let result = kernel.apply(EditorCommand::Undo { expected_revision: result.new_revision });
         assert_eq!(kernel.text(), "ab");
         assert_eq!(kernel.cursor(), 2);
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Undo);
@@ -1228,16 +1238,16 @@ mod tests {
     #[test]
     fn redo_restores_undone_state() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
-        kernel.apply(EditorCommand::Insert {
+        let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
         });
-        kernel.apply(EditorCommand::Undo);
+        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision });
         assert_eq!(kernel.text(), "ab");
 
-        let result = kernel.apply(EditorCommand::Redo);
+        let result = kernel.apply(EditorCommand::Redo { expected_revision: r2.new_revision });
         assert_eq!(kernel.text(), "abc");
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Redo);
     }
@@ -1264,7 +1274,7 @@ mod tests {
         let mut kernel = EditorKernel::new();
         assert_eq!(kernel.revision(), 0);
 
-        kernel.apply(EditorCommand::Insert {
+        let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 0,
             text: "a".to_string(),
             cause: EditorTransactionCause::Typing,
@@ -1276,7 +1286,7 @@ mod tests {
             byte_offset: 1,
             text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
-            expected_revision: 0,
+            expected_revision: r1.new_revision,
         });
         assert_eq!(kernel.revision(), 2);
     }
@@ -1331,23 +1341,23 @@ mod tests {
     #[test]
     fn undo_then_new_edit_clears_redo() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
-        kernel.apply(EditorCommand::Insert {
+        let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
         });
-        kernel.apply(EditorCommand::Undo);
+        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision });
         assert_eq!(kernel.text(), "ab");
 
-        kernel.apply(EditorCommand::Insert {
+        let r3 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "d".to_string(),
             cause: EditorTransactionCause::Typing,
-            expected_revision: 0,
+            expected_revision: r2.new_revision,
         });
 
-        let result = kernel.apply(EditorCommand::Redo);
+        let result = kernel.apply(EditorCommand::Redo { expected_revision: r3.new_revision });
         assert_eq!(kernel.text(), "abd");
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CursorOnly);
     }
@@ -1469,33 +1479,33 @@ mod tests {
     #[test]
     fn undo_after_multiple_edits_restores_correctly() {
         let mut kernel = EditorKernel::new();
-        kernel.apply(EditorCommand::Insert {
+        let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 0,
             text: "a".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
         });
-        kernel.apply(EditorCommand::Insert {
+        let r2 = kernel.apply(EditorCommand::Insert {
             byte_offset: 1,
             text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
-            expected_revision: 0,
+            expected_revision: r1.new_revision,
         });
-        kernel.apply(EditorCommand::Insert {
+        let r3 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
-            expected_revision: 0,
+            expected_revision: r2.new_revision,
         });
         assert_eq!(kernel.text(), "abc");
 
-        kernel.apply(EditorCommand::Undo);
+        let r4 = kernel.apply(EditorCommand::Undo { expected_revision: r3.new_revision });
         assert_eq!(kernel.text(), "ab");
 
-        kernel.apply(EditorCommand::Undo);
+        let r5 = kernel.apply(EditorCommand::Undo { expected_revision: r4.new_revision });
         assert_eq!(kernel.text(), "a");
 
-        kernel.apply(EditorCommand::Undo);
+        kernel.apply(EditorCommand::Undo { expected_revision: r5.new_revision });
         assert_eq!(kernel.text(), "");
     }
 
@@ -1516,7 +1526,7 @@ mod tests {
             byte_end_exclusive: 12,
             deleted_text: "世界".to_string(),
             cause: EditorTransactionCause::Delete,
-            expected_revision: 0,
+            expected_revision: result.new_revision,
         });
         assert_eq!(kernel.text(), "你好");
         assert_eq!(kernel.cursor(), 6);
@@ -1544,7 +1554,7 @@ mod tests {
             expected_revision: 0,
         });
         kernel.load_text("new".to_string(), 3);
-        let result = kernel.apply(EditorCommand::Undo);
+        let result = kernel.apply(EditorCommand::Undo { expected_revision: 0 });
         assert_eq!(kernel.text(), "new");
     }
 

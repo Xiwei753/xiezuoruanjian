@@ -790,18 +790,18 @@ impl WriterAppService {
         })
     }
 
-    pub fn editor_kernel_undo(&self) -> crate::api::EditorEditResultDto {
+    pub fn editor_kernel_undo(&self, expected_revision: u64) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
-            let result = s.kernel.apply(EditorCommand::Undo);
+            let result = s.kernel.apply(EditorCommand::Undo { expected_revision });
             result.into()
         })
     }
 
-    pub fn editor_kernel_redo(&self) -> crate::api::EditorEditResultDto {
+    pub fn editor_kernel_redo(&self, expected_revision: u64) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
-            let result = s.kernel.apply(EditorCommand::Redo);
+            let result = s.kernel.apply(EditorCommand::Redo { expected_revision });
             result.into()
         })
     }
