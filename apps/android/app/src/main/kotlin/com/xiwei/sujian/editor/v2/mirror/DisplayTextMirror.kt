@@ -154,7 +154,6 @@ class DisplayTextMirror {
     fun hasComposition(): Boolean = hasActiveComposition
 
     fun applyEditResult(result: EditResult) {
-        restoreCompositionBeforePatch()
         applyPatches(result.displayPatches)
         updateSelectionFromResult(result)
     }
@@ -198,7 +197,7 @@ class DisplayTextMirror {
         applyPatches(DisplayPatch.fromDtoList(patches))
     }
 
-    private fun restoreCompositionBeforePatch() {
+    fun restoreCompositionBeforePatch() {
         if (!hasActiveComposition) return
         if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
             clearCompositionSpans()

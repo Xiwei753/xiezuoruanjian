@@ -25,7 +25,7 @@ class VisualResourceStore {
     fun release(snapshotId: Long, releaser: SnapshotOwner) {
         val entry = snapshots[snapshotId] ?: return
         if (!isOwner(entry.owner, releaser)) {
-            throw IllegalStateException("Cannot release snapshot $snapshotId: owner mismatch. Current: ${entry.owner}, Releaser: $releaser")
+            return
         }
         entry.snapshot.bitmap?.recycle()
         entry.owner = SnapshotOwner.Released
@@ -34,8 +34,10 @@ class VisualResourceStore {
 
     fun releaseAll() {
         snapshots.values.forEach {
-            it.snapshot.bitmap?.recycle()
-            it.owner = SnapshotOwner.Released
+            if (it.owner !is SnapshotOwner.Released) {
+                it.snapshot.bitmap?.recycle()
+                it.owner = SnapshotOwner.Released
+            }
         }
         snapshots.clear()
     }

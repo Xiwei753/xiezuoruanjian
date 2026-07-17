@@ -39,7 +39,10 @@ class AndroidInputConnection(
         val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(mirror.getText().length)
         val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
         val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
-        if (byteStart > byteEnd) return false
+        if (byteStart >= byteEnd) return false
+
+        if (!isValidUtf8CharBoundary(byteStart) || !isValidUtf8CharBoundary(byteEnd)) return false
+
         adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
         notifySelectionChanged()
         return true
@@ -67,10 +70,20 @@ class AndroidInputConnection(
         val indexMap = AndroidTextIndexMap(mirror)
         val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
         val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
-        if (byteStart > byteEnd) return false
+        if (byteStart >= byteEnd) return false
+
+        if (!isValidUtf8CharBoundary(byteStart) || !isValidUtf8CharBoundary(byteEnd)) return false
+
         adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
         notifySelectionChanged()
         return true
+    }
+
+    private fun isValidUtf8CharBoundary(byteOffset: Int): Boolean {
+        val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
+        if (byteOffset < 0 || byteOffset > textBytes.size) return false
+        if (byteOffset == 0 || byteOffset == textBytes.size) return true
+        return (textBytes[byteOffset].toInt() and 0xC0) != 0x80
     }
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
@@ -84,7 +97,6 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             adapter.handleCompositionFinish()
         }
-        notifySelectionChanged()
         return true
     }
 
@@ -139,6 +151,7 @@ class AndroidInputConnection(
         val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
         val safeStart = byteStart.coerceIn(0, textBytes.size)
         val safeEnd = byteEnd.coerceIn(safeStart, textBytes.size)
+        if (safeStart >= safeEnd) return ""
         return String(textBytes, safeStart, safeEnd - safeStart, Charsets.UTF_8)
     }
 

@@ -114,7 +114,11 @@ class SujianEditorView @JvmOverloads constructor(
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
-        beforePatch?.invoke()
+        if (beforePatch != null) {
+            beforePatch.invoke()
+        } else {
+            mirror.restoreCompositionBeforePatch()
+        }
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
@@ -209,14 +213,12 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result) {
-            mirror.clearComposition()
+            mirror.restoreCompositionBeforePatch()
         }
     }
 
     fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto) {
-        replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause) {
-            mirror.clearComposition()
-        }
+        replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
     }
 
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
@@ -418,6 +420,7 @@ class SujianEditorView @JvmOverloads constructor(
         if (!hasWindowFocus) {
             coordinator.cancelActiveTransaction()
             resourceStore.releaseAll()
+            visualPlanner.resetOldRevision()
         }
     }
 

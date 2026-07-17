@@ -240,6 +240,7 @@ class DisplayTextMirrorTest {
             )
         )
 
+        mirror.restoreCompositionBeforePatch()
         mirror.applyEditResult(result)
         assertNull(mirror.getCompositionRangeUtf16())
     }

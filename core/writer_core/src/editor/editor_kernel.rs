@@ -1008,13 +1008,14 @@ impl EditorKernel {
         &mut self,
         base_revision: u64,
     ) -> EditorEditResult {
+        let current_selection = (self.selection_anchor, self.cursor);
         EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: (self.selection_anchor, self.cursor),
-            new_selection_byte_range: (self.selection_anchor, self.cursor),
+            old_selection_byte_range: current_selection,
+            new_selection_byte_range: current_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::Programmatic,
                 operation_kind: EditorOperationKind::CursorOnly,

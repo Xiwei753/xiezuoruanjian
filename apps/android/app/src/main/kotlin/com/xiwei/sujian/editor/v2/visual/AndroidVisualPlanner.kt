@@ -584,14 +584,18 @@ class AndroidVisualPlanner(
         if (oldSnapshot.clusters.isEmpty() || newSnapshot.clusters.isEmpty()) return emptyList()
         val offsetMap = buildOffsetMap(visualIntent, oldRev, newRev)
         val pairs = mutableListOf<Pair<LineClusterSnapshot, LineClusterSnapshot>>()
+        val newUsed = mutableSetOf<Int>()
         for (oldCluster in oldSnapshot.clusters) {
             val mappedStart = offsetMap[oldCluster.documentByteStart]
+            val mappedEnd = offsetMap[oldCluster.documentByteEndExclusive]
             if (mappedStart != null) {
-                val newCluster = newSnapshot.clusters.firstOrNull {
-                    it.documentByteStart == mappedStart
+                val newIdx = newSnapshot.clusters.indices.firstOrNull { i ->
+                    i !in newUsed && newSnapshot.clusters[i].documentByteStart == mappedStart &&
+                        (mappedEnd == null || newSnapshot.clusters[i].documentByteEndExclusive == mappedEnd)
                 }
-                if (newCluster != null) {
-                    pairs.add(Pair(oldCluster, newCluster))
+                if (newIdx != null) {
+                    newUsed.add(newIdx)
+                    pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
                 }
             }
         }
@@ -733,7 +737,7 @@ class AndroidVisualPlanner(
     }
 
     private fun semanticRebaseKey(role: SliceRole, lineIndex: Int, docStart: Int, docEnd: Int): String {
-        return "${role}_${lineIndex}"
+        return "${role}_${lineIndex}_${docStart}_${docEnd}"
     }
 
     private fun findClosestRebaseState(

@@ -59,12 +59,12 @@ class AndroidRenderer {
         val transaction = frame.transaction
         if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
+            renderSelectionDecoration(canvas, layout, transaction)
             val animatedRegions = computeAnimatedSliceRegions(transaction)
             renderLayoutWithAnimatedHoles(canvas, layout, animatedRegions)
-            renderSelectionDecoration(canvas, layout, transaction)
             renderAnimatedSlices(canvas, layout, transaction, frame.progress)
             renderPreeditDecoration(canvas, layout, transaction)
-            renderCursorWithTransition(canvas, layout, frame, transaction)
+            renderCursorAlways(canvas, layout, frame, transaction)
         } else {
             renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             renderSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
@@ -115,10 +115,16 @@ class AndroidRenderer {
             return
         }
         canvas.save()
+        val bgPaint = Paint().apply { color = backgroundColor; style = Paint.Style.FILL }
+        for (region in animatedLineRegions) {
+            canvas.drawRect(region, bgPaint)
+        }
+        canvas.save()
         for (region in animatedLineRegions) {
             canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
         }
         layout.draw(canvas)
+        canvas.restore()
         canvas.restore()
     }
 
@@ -158,7 +164,7 @@ class AndroidRenderer {
         canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
     }
 
-    private fun renderCursorWithTransition(
+    private fun renderCursorAlways(
         canvas: Canvas,
         layout: android.text.Layout,
         frame: AndroidRenderFrame,

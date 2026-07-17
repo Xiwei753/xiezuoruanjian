@@ -93,7 +93,6 @@ class AndroidInputAdapter(
         val committedText = currentCompositionText
         val replaceStart = compositionReplaceStartUtf8
         val replaceEnd = compositionReplaceEndUtf8
-        val originalText = previousCompositionText
         currentCompositionText = ""
         previousCompositionText = ""
         isComposing = false
@@ -102,14 +101,14 @@ class AndroidInputAdapter(
 
         val bridge = editorView.kernelBridge
         if (bridge != null) {
-            val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, originalText)
+            val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, "")
             if (dto != null) {
                 editorView.applyCompositionCommit(dto)
                 return
             }
         }
 
-        editorView.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, originalText, EditorTransactionCauseDto.TYPING_COMMIT)
+        editorView.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, "", EditorTransactionCauseDto.TYPING_COMMIT)
     }
 
     fun handleCompositionCommitWithText(finalText: String, newCursorPosition: Int) {
