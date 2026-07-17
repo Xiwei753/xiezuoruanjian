@@ -196,9 +196,14 @@ class DisplayTextMirror {
         if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
             buffer.replace(compositionStartUtf16, compositionEndUtf16, preeditText)
         } else {
-            val insertPos = indexMap.utf8ToUtf16(replaceStartUtf8)
-            buffer.insert(insertPos, preeditText)
-            compositionStartUtf16 = insertPos
+            val insertStartUtf16 = indexMap.utf8ToUtf16(replaceStartUtf8)
+            val insertEndUtf16 = indexMap.utf8ToUtf16(replaceEndUtf8)
+            if (insertStartUtf16 < insertEndUtf16) {
+                buffer.replace(insertStartUtf16, insertEndUtf16, preeditText)
+            } else {
+                buffer.insert(insertStartUtf16, preeditText)
+            }
+            compositionStartUtf16 = insertStartUtf16
         }
         compositionEndUtf16 = compositionStartUtf16 + preeditText.length
 

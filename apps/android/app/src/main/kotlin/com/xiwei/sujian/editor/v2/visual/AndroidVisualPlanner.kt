@@ -134,7 +134,7 @@ class AndroidVisualPlanner(
         if (isReplace) {
             planClusterReplaceAnimation(
                 visualIntent, oldRev, newRev,
-                affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots
+                affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots
             )
             return
         }
@@ -146,32 +146,70 @@ class AndroidVisualPlanner(
             if (isInsert && newLineRange != null) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 if (newSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = newSnapshot,
-                        sourceRect = newSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            newLineRange.left, newLineRange.top,
-                            newLineRange.right, newLineRange.bottom
-                        ),
-                        startAlpha = 0f,
-                        endAlpha = 1f
-                    ))
+                    val newClusters = newSnapshot.clusters
+                    if (newClusters.isNotEmpty() && visualIntent.newAffectedByteRanges.isNotEmpty()) {
+                        for (cluster in newClusters) {
+                            val inRange = visualIntent.newAffectedByteRanges.any { (s, e) ->
+                                cluster.documentByteStart >= s && cluster.documentByteEndExclusive <= e
+                            }
+                            if (inRange) {
+                                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                                    role = SliceRole.Insert,
+                                    snapshot = newSnapshot,
+                                    sourceRect = cluster.sourceRectInLineImage,
+                                    destinationRect = cluster.visualRectInDocument,
+                                    startAlpha = 0f,
+                                    endAlpha = 1f
+                                ))
+                            }
+                        }
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Insert,
+                            snapshot = newSnapshot,
+                            sourceRect = newSnapshot.sourceRect,
+                            destinationRect = android.graphics.RectF(
+                                newLineRange.left, newLineRange.top,
+                                newLineRange.right, newLineRange.bottom
+                            ),
+                            startAlpha = 0f,
+                            endAlpha = 1f
+                        ))
+                    }
                 }
             } else if (isDelete && oldLineRange != null) {
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots)
                 if (oldSnapshot != null) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = oldSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            oldLineRange.left, oldLineRange.top,
-                            oldLineRange.right, oldLineRange.bottom
-                        ),
-                        startAlpha = 1f,
-                        endAlpha = 0f
-                    ))
+                    val oldClusters = oldSnapshot.clusters
+                    if (oldClusters.isNotEmpty() && visualIntent.oldAffectedByteRanges.isNotEmpty()) {
+                        for (cluster in oldClusters) {
+                            val inRange = visualIntent.oldAffectedByteRanges.any { (s, e) ->
+                                cluster.documentByteStart >= s && cluster.documentByteEndExclusive <= e
+                            }
+                            if (inRange) {
+                                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                                    role = SliceRole.Delete,
+                                    snapshot = oldSnapshot,
+                                    sourceRect = cluster.sourceRectInLineImage,
+                                    destinationRect = cluster.visualRectInDocument,
+                                    startAlpha = 1f,
+                                    endAlpha = 0f
+                                ))
+                            }
+                        }
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Delete,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldSnapshot.sourceRect,
+                            destinationRect = android.graphics.RectF(
+                                oldLineRange.left, oldLineRange.top,
+                                oldLineRange.right, oldLineRange.bottom
+                            ),
+                            startAlpha = 1f,
+                            endAlpha = 0f
+                        ))
+                    }
                 }
             }
         }

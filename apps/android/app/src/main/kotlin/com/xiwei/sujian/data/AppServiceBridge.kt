@@ -158,12 +158,12 @@ class AppServiceBridge(workspacePath: String) {
         holder.service.editorKernelSetSelection(anchorByteOffset, headByteOffset, expectedRevision)
     }
 
-    fun editorKernelUndo(): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
-        holder.service.editorKernelUndo()
+    fun editorKernelUndo(expectedRevision: ULong): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelUndo(expectedRevision)
     }
 
-    fun editorKernelRedo(): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
-        holder.service.editorKernelRedo()
+    fun editorKernelRedo(expectedRevision: ULong): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelRedo(expectedRevision)
     }
 
     fun editorKernelLoadText(text: String, cursorByteOffset: UInt): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {

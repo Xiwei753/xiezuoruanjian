@@ -37,15 +37,15 @@ class UniFFIEditorKernelBridge(
         }
     }
 
-    override fun undo(): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelUndo()) {
+    override fun undo(expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelUndo(expectedRevision.toULong())) {
             is BridgeResult.Success -> result.data
             else -> null
         }
     }
 
-    override fun redo(): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelRedo()) {
+    override fun redo(expectedRevision: Long): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelRedo(expectedRevision.toULong())) {
             is BridgeResult.Success -> result.data
             else -> null
         }

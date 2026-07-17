@@ -68,6 +68,19 @@ class AndroidLayoutEngine(
         return result
     }
 
+    fun captureLineBitmapSnapshotsWithClusters(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
+        val l = layout ?: return emptyMap()
+        val rev = currentRevision ?: return emptyMap()
+        val result = mutableMapOf<Int, AndroidLineSnapshot>()
+        for (idx in lineIndices) {
+            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror)
+            if (snapshot != null) {
+                result[idx] = snapshot
+            }
+        }
+        return result
+    }
+
     fun getLayout(): Layout? = layout
 
     fun getCurrentRevision(): AndroidLayoutRevision? = currentRevision
