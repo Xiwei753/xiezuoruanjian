@@ -4,7 +4,7 @@
 
 use super::*;
 use crate::sync_bridge::{
-    mask_sync_error, save_sync_configs, sync_error_category, sync_error_category_from_code,
+    mask_sync_error, save_sync_configs, sync_error_category_from_code,
 };
 
 impl AppBackend {
@@ -223,8 +223,8 @@ impl AppBackend {
                                             };
                                         }
                                         return SyncTaskOutcome {
-                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category(&e.to_string()),
-                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category(&e.to_string()), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
+                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category_from_code(None,&e.to_string()),
+                                            action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(None,&e.to_string()), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                                         };
                                     }
                                 }
@@ -256,8 +256,8 @@ impl AppBackend {
                 Err(e) => SyncTaskOutcome {
                     operation_id: operation_id.to_string(),
                     operation_kind: "sync".to_string(),
-                    sync_status: sync_error_category(&e.to_string()),
-                    action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category(&e.to_string()), phase_key: None, summary_key: Some("sync.result.clone_failed".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
+                    sync_status: sync_error_category_from_code(None,&e.to_string()),
+                    action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(None,&e.to_string()), phase_key: None, summary_key: Some("sync.result.clone_failed".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                 },
             }
         } else if has_workspace() {
@@ -385,7 +385,7 @@ impl AppBackend {
                 }
                 Err(e) => {
                     let err_str = e.to_string();
-                    let cat = sync_error_category(&err_str);
+                    let cat = sync_error_category_from_code(None,&err_str);
                     let summary_key = if cat == "conflict" {
                         debug_log_static(
                             "sync",

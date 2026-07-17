@@ -60,11 +60,11 @@ pub(crate) fn github_get_content(
         .header("User-Agent", "WriterApp/1.0")
         .header("Accept", "application/vnd.github+json")
         .send()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
     let status = resp.status();
     let body = resp
         .text()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
     if status.as_u16() == 404 {
         return Ok(None);
     }
@@ -76,7 +76,12 @@ pub(crate) fn github_get_content(
         ));
     }
     let json: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| crate::Error::Other(format!("api_error: invalid contents json: {}", e)))?;
+        .map_err(|e| crate::Error::SyncGithubApiError {
+            category: "api_error".to_string(),
+            context: format!("invalid contents json: {}", e),
+            status: 0,
+            body_preview: String::new(),
+        })?;
     let sha = json["sha"].as_str().map(|s| s.to_string());
     let content_b64 = json["content"]
         .as_str()
@@ -85,7 +90,12 @@ pub(crate) fn github_get_content(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(content_b64.as_bytes())
         .map_err(|e| {
-            crate::Error::Other(format!("api_error: invalid base64 for {}: {}", path, e))
+            crate::Error::SyncGithubApiError {
+                category: "api_error".to_string(),
+                context: format!("invalid base64 for {}: {}", path, e),
+                status: 0,
+                body_preview: String::new(),
+            }
         })?;
     Ok(Some((bytes, sha)))
 }
@@ -125,11 +135,11 @@ pub(crate) fn github_put_content_once(
         .header("Accept", "application/vnd.github+json")
         .json(&payload)
         .send()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
     let status = resp.status();
     let body = resp
         .text()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
     Ok((status, body))
 }
 
@@ -202,11 +212,11 @@ pub(crate) fn github_delete_content_once(
         .header("Accept", "application/vnd.github+json")
         .json(&payload)
         .send()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
     let status = resp.status();
     let body = resp
         .text()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
     Ok((status, body))
 }
 

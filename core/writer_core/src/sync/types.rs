@@ -111,80 +111,17 @@ impl SyncErrorCategory {
         }
     }
 
+    #[deprecated(
+        note = "Use from_code(error.sync_category(), msg) instead. String-based error classification is unreliable."
+    )]
     pub fn from_error_string(msg: &str) -> Self {
-        let lower = msg.to_lowercase();
-        if lower.contains("token")
-            && (lower.contains("missing")
-                || lower.contains("empty")
-                || lower.contains("not provided"))
-        {
-            return SyncErrorCategory::TokenMissing;
-        }
-        if lower.contains("resource not accessible by personal access token") {
-            return SyncErrorCategory::TokenPermissionDenied;
-        }
-        if lower.contains("repository not found")
-            || (lower.contains("not found") && lower.contains("repo"))
-            || lower.contains("404")
-            || lower.contains("permission denied")
-            || lower.contains("403")
-        {
-            return SyncErrorCategory::RepoNotFoundOrNoPermission;
-        }
-        if lower.contains("ref not found")
-            || lower.contains("couldn't find remote ref")
-            || lower.contains("remote branch not found")
-            || (lower.contains("branch") && lower.contains("not found"))
-        {
-            return SyncErrorCategory::BranchMissing;
-        }
-        if lower.contains("non-fast-forward")
-            || lower.contains("non fast forward")
-            || lower.contains("nonfastforward")
-            || (lower.contains("fetch first") && lower.contains("push"))
-        {
-            return SyncErrorCategory::NonFastForward;
-        }
-        if lower.contains("checkout_conflict") || lower.contains("local_blocking_file") {
-            return SyncErrorCategory::CheckoutConflict;
-        }
-        if lower.contains("conflict") || lower.contains("merge conflict") {
-            return SyncErrorCategory::Conflict;
-        }
-        if lower.contains("unrelated") {
-            return SyncErrorCategory::UnrelatedHistories;
-        }
-        if lower.contains("authentication")
-            || lower.contains("auth failed")
-            || lower.contains("401")
-            || lower.contains("credentials")
-            || lower.contains("could not authenticate")
-            || lower.contains("bad credentials")
-        {
-            return SyncErrorCategory::AuthError;
-        }
-        if lower.contains("resolve")
-            || lower.contains("timeout")
-            || lower.contains("connection refused")
-            || lower.contains("dns")
-            || lower.contains("network")
-            || lower.contains("proxy")
-            || lower.contains("eof")
-            || lower.contains("tls")
-            || lower.contains("ssl")
-            || lower.contains("certificate")
-            || lower.contains("unreachable")
-            || lower.contains("connection reset")
-            || lower.contains("no route to host")
-        {
-            return SyncErrorCategory::GithubNetworkFailed;
-        }
+        let _ = msg;
         SyncErrorCategory::Other
     }
 
-    pub fn from_code(code: &str, fallback_msg: &str) -> Self {
+    pub fn from_code(code: &str, _fallback_msg: &str) -> Self {
         match code {
-            "none" | "" => Self::from_error_string(fallback_msg),
+            "none" | "" => SyncErrorCategory::Other,
             "token_missing" => SyncErrorCategory::TokenMissing,
             "token_invalid" => SyncErrorCategory::TokenInvalid,
             "token_permission_denied" => SyncErrorCategory::TokenPermissionDenied,
@@ -200,22 +137,8 @@ impl SyncErrorCategory {
             "tls_failed" => SyncErrorCategory::TlsFailed,
             "branch_missing" => SyncErrorCategory::BranchMissing,
             "remote_branch_missing" => SyncErrorCategory::RemoteBranchMissing,
-            "not_found" => {
-                let lower = fallback_msg.to_lowercase();
-                if lower.contains("branch") || lower.contains("ref") {
-                    SyncErrorCategory::BranchMissing
-                } else {
-                    SyncErrorCategory::NotFound
-                }
-            }
-            "file_not_found" => {
-                let lower = fallback_msg.to_lowercase();
-                if lower.contains("branch") || lower.contains("ref") {
-                    SyncErrorCategory::BranchMissing
-                } else {
-                    SyncErrorCategory::FileNotFound
-                }
-            }
+            "not_found" => SyncErrorCategory::NotFound,
+            "file_not_found" => SyncErrorCategory::FileNotFound,
             "non_fast_forward" => SyncErrorCategory::NonFastForward,
             "conflict" => SyncErrorCategory::Conflict,
             "checkout_conflict" => SyncErrorCategory::CheckoutConflict,
@@ -224,6 +147,7 @@ impl SyncErrorCategory {
             "local_io_error" => SyncErrorCategory::LocalIoError,
             "api_rate_limited" => SyncErrorCategory::ApiRateLimited,
             "api_error" => SyncErrorCategory::ApiError,
+            "network_error" => SyncErrorCategory::GithubNetworkFailed,
             "dirty_repo" => SyncErrorCategory::DirtyRepo,
             _ => SyncErrorCategory::Other,
         }

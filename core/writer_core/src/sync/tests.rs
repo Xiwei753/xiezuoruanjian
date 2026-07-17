@@ -3253,8 +3253,8 @@ mod tests {
             "tree 404 handler must call /git/ref/heads/ to distinguish repo/branch issues"
         );
         assert!(
-            source.contains("remote_branch_missing"),
-            "tree 404 handler must produce remote_branch_missing error when branch is absent"
+            source.contains("SyncRemoteBranchNotFound"),
+            "tree 404 handler must produce SyncRemoteBranchNotFound error when branch is absent"
         );
         assert!(
             source.contains("repo_not_found_or_no_permission"),

@@ -97,6 +97,11 @@ RULES: tuple[PatternRule, ...] = (
         re.compile(r"\.lock\(\)\s*\.\s*unwrap\(\)"),
         "生产代码中 Mutex lock().unwrap() 可能因锁中毒 panic；应使用 lock().unwrap_or_else 或 ok()",
     ),
+    PatternRule(
+        "from-error-string-usage",
+        re.compile(r"\bfrom_error_string\s*\("),
+        "from_error_string 已废弃；应使用 from_code(error.sync_category(), msg) 做结构化分类",
+    ),
 )
 
 SKIP_DIRS = {
@@ -145,6 +150,14 @@ def _has_nearby_justification(lines: list[str], index: int, lookback: int = 2) -
     return _has_inline_justification(lines[index])
 
 
+def _has_nearby_deprecated(lines: list[str], index: int, lookback: int = 3) -> bool:
+    for previous in lines[max(0, index - lookback) : index]:
+        stripped = previous.strip()
+        if stripped and "#[deprecated" in stripped:
+            return True
+    return False
+
+
 _RULES_WITH_JUSTIFICATION = {
     "broad-dead-code-allow",
     "assert-unwind-safe",
@@ -152,6 +165,10 @@ _RULES_WITH_JUSTIFICATION = {
     "app-backend-mut-alias",
     "transmute-pointer-escape",
     "production-lock-unwrap",
+}
+
+_RULES_WITH_DEPRECATED = {
+    "from-error-string-usage",
 }
 
 _RULES_PRODUCTION_ONLY = {
@@ -183,6 +200,9 @@ def scan_text(path: Path, text: str) -> list[Finding]:
             if rule.pattern.search(code):
                 if rule.name in _RULES_WITH_JUSTIFICATION:
                     if _has_nearby_justification(lines, index):
+                        continue
+                if rule.name in _RULES_WITH_DEPRECATED:
+                    if _has_nearby_deprecated(lines, index):
                         continue
                 if rule.name in _RULES_PRODUCTION_ONLY:
                     if _is_in_test_context(lines, index):

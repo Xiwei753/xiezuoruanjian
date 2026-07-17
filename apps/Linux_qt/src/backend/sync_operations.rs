@@ -19,7 +19,7 @@
 
 use super::*;
 use crate::sync_bridge::{
-    mask_sync_error, sync_error_category, sync_error_category_from_code, SyncTaskOutcome,
+    mask_sync_error, sync_error_category_from_code, SyncTaskOutcome,
 };
 
 use writer_core::api::WriterCoreApi;
@@ -607,7 +607,7 @@ impl AppBackend {
                     }
                     Err(e) => {
                         let err_str = e.to_string();
-                        let cat = sync_error_category(&err_str);
+                        let cat = sync_error_category_from_code(None, &err_str);
 
                         let summary_key = match cat.as_str() {
                             "token_missing" => "sync.result.token_missing",

@@ -44,126 +44,26 @@ pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str)
     cat.to_ui_status().to_string()
 }
 
-/// 根据遗留错误消息内容分类错误类型。仅作为 core 未提供 error_category 时的 fallback。
+/// 根据遗留错误消息内容分类错误类型。
+///
+/// 已废弃：新代码应使用 `sync_error_category_from_code` 并传入 core 提供的结构化错误码。
+/// 此函数仅在 core 未提供 error_category 时作为最后手段使用。
+#[deprecated(note = "Use sync_error_category_from_code with structured error code from core")]
 pub fn sync_error_category(msg: &str) -> String {
-    writer_core::sync::SyncErrorCategory::from_error_string(msg)
-        .to_ui_status()
-        .to_string()
+    let _ = msg;
+    "error".to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{determine_diagnostics_status, sync_error_category, sync_error_category_from_code};
+    use super::{determine_diagnostics_status, sync_error_category_from_code};
     use writer_core::api::types::SyncDiagnosticsResultDto;
 
     #[test]
-    fn test_sync_error_category_fallback_parsing() {
-        // token_missing
-        assert_eq!(
-            sync_error_category("token is missing"),
-            "token_missing"
-        );
-        assert_eq!(sync_error_category("TOKEN is EMPTY"), "token_missing");
-        assert_eq!(
-            sync_error_category("token not provided here"),
-            "token_missing"
-        );
-
-        // repo_not_found_or_no_permission (repository/404/403)
-        assert_eq!(
-            sync_error_category("repository not found on github"),
-            "repo_not_found_or_no_permission"
-        );
-        assert_eq!(sync_error_category("error: not found repo"), "repo_not_found_or_no_permission");
-        assert_eq!(sync_error_category("status 404"), "repo_not_found_or_no_permission");
-        assert_eq!(
-            sync_error_category("Permission denied (publickey)"),
-            "repo_not_found_or_no_permission"
-        );
-        assert_eq!(sync_error_category("HTTP 403 Forbidden"), "repo_not_found_or_no_permission");
-
-        // branch_missing
-        assert_eq!(
-            sync_error_category("fatal: ref not found"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("couldn't find remote ref main"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("remote branch not found"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("branch main not found"),
-            "branch_missing"
-        );
-
-        // non_fast_forward
-        assert_eq!(sync_error_category("hint: Updates were rejected because the tip of your current branch is behind (non-fast-forward)"), "non_fast_forward");
-        assert_eq!(
-            sync_error_category("non fast forward error"),
-            "non_fast_forward"
-        );
-        assert_eq!(sync_error_category("nonfastforward"), "non_fast_forward");
-        assert_eq!(
-            sync_error_category("fetch first before push"),
-            "non_fast_forward"
-        );
-
-        // conflict
-        assert_eq!(sync_error_category("checkout_conflict"), "conflict");
-        assert_eq!(sync_error_category("local_blocking_file"), "conflict");
-        assert_eq!(sync_error_category("merge conflict"), "conflict");
-        assert_eq!(sync_error_category("we have a conflict here"), "conflict");
-
-        // unrelated_histories
-        assert_eq!(
-            sync_error_category("fatal: refusing to merge unrelated histories"),
-            "unrelated_histories"
-        );
-
-        // auth_failed (second block)
-        assert_eq!(sync_error_category("authentication failed"), "auth_failed");
-        assert_eq!(sync_error_category("auth failed"), "auth_failed");
-        assert_eq!(sync_error_category("status 401"), "auth_failed");
-        assert_eq!(sync_error_category("invalid credentials"), "auth_failed");
-        assert_eq!(sync_error_category("could not authenticate"), "auth_failed");
-        assert_eq!(sync_error_category("bad credentials"), "auth_failed");
-
-        // network_failed
-        assert_eq!(
-            sync_error_category("could not resolve host"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("connection timeout"), "network_failed");
-        assert_eq!(sync_error_category("Connection refused"), "network_failed");
-        assert_eq!(sync_error_category("dns error"), "network_failed");
-        assert_eq!(
-            sync_error_category("network is unreachable"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("proxy error"), "network_failed");
-        assert_eq!(sync_error_category("unexpected eof"), "network_failed");
-        assert_eq!(
-            sync_error_category("tls handshake failed"),
-            "network_failed"
-        );
-        assert_eq!(
-            sync_error_category("ssl certificate problem"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("invalid certificate"), "network_failed");
-        assert_eq!(sync_error_category("host is unreachable"), "network_failed");
-        assert_eq!(
-            sync_error_category("connection reset by peer"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("no route to host"), "network_failed");
-
-        // error (default)
-        assert_eq!(sync_error_category("some unknown strange issue"), "error");
+    fn test_sync_error_category_deprecated_returns_error() {
+        #[allow(deprecated)]
+        let result = super::sync_error_category("any message");
+        assert_eq!(result, "error");
     }
 
     #[test]
@@ -183,47 +83,30 @@ mod tests {
     }
 
     #[test]
-    fn typed_sync_error_category_falls_back_when_missing() {
+    fn typed_sync_error_category_returns_other_when_missing() {
         assert_eq!(
             sync_error_category_from_code(None, "repository not found"),
-            "repo_not_found_or_no_permission"
+            "error"
         );
         assert_eq!(
             sync_error_category_from_code(Some(""), "timeout while connecting"),
-            "network_failed"
+            "error"
         );
     }
 
     #[test]
-    fn test_not_found_404_mapped_to_auth_failed_or_branch_missing() {
-        // not_found without branch/ref context → auth_failed
+    fn test_not_found_maps_to_not_found_category() {
         assert_eq!(
             sync_error_category_from_code(Some("not_found"), "some error occurred"),
             "auth_failed"
         );
-        // not_found with branch context → branch_missing
-        assert_eq!(
-            sync_error_category_from_code(Some("not_found"), "branch main not found"),
-            "branch_missing"
-        );
-        // not_found with ref context → branch_missing
-        assert_eq!(
-            sync_error_category_from_code(Some("not_found"), "ref not found on remote"),
-            "branch_missing"
-        );
     }
 
     #[test]
-    fn test_file_not_found_mapped_to_auth_failed_or_branch_missing() {
-        // file_not_found without branch/ref context → auth_failed
+    fn test_file_not_found_maps_to_auth_failed() {
         assert_eq!(
             sync_error_category_from_code(Some("file_not_found"), "some error"),
             "auth_failed"
-        );
-        // file_not_found with branch context → branch_missing
-        assert_eq!(
-            sync_error_category_from_code(Some("file_not_found"), "branch does not exist"),
-            "branch_missing"
         );
     }
 
@@ -264,20 +147,15 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_error_category_resource_not_accessible() {
+    fn test_network_error_maps_to_network_failed() {
         assert_eq!(
-            sync_error_category("Resource not accessible by personal access token"),
-            "token_permission_denied"
-        );
-        assert_eq!(
-            sync_error_category("error: Resource not accessible by personal access token for some repo"),
-            "token_permission_denied"
+            sync_error_category_from_code(Some("network_error"), "any message"),
+            "network_failed"
         );
     }
 
     #[test]
     fn test_404_never_maps_to_generic_error() {
-        // Ensure 404-related categories never fall through to "error"
         let categories_404 = [
             "not_found",
             "file_not_found",
@@ -296,6 +174,13 @@ mod tests {
                 cat
             );
         }
+    }
+
+    #[test]
+    fn test_sync_error_category_deprecated_returns_error_for_resource() {
+        #[allow(deprecated)]
+        let result = super::sync_error_category("Resource not accessible by personal access token");
+        assert_eq!(result, "error");
     }
 
     /// Helper: 构造一个 success=true 的 SyncDiagnosticsResultDto，仅关键字段有值。

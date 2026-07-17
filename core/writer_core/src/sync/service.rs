@@ -85,22 +85,7 @@ fn classify_error(e: &crate::Error) -> SyncStatus {
             }
         }
         crate::Error::Io(io_err) => {
-            let msg = io_err.to_string();
-            let category = crate::sync::types::SyncErrorCategory::from_error_string(&msg);
-            match category {
-                crate::sync::types::SyncErrorCategory::AuthError
-                | crate::sync::types::SyncErrorCategory::TokenMissing
-                | crate::sync::types::SyncErrorCategory::TokenInvalid
-                | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
-                | crate::sync::types::SyncErrorCategory::GithubNetworkFailed
-                | crate::sync::types::SyncErrorCategory::DnsFailed
-                | crate::sync::types::SyncErrorCategory::TlsFailed
-                | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
-                | crate::sync::types::SyncErrorCategory::UnrelatedHistories => {
-                    SyncStatus::RecoverableError(msg)
-                }
-                _ => SyncStatus::FatalError(msg),
-            }
+            SyncStatus::FatalError(io_err.to_string())
         }
         _ => SyncStatus::FatalError(e.to_string()),
     }

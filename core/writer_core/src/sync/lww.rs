@@ -18,7 +18,7 @@ fn sync_download_pool(task_count: usize) -> crate::Result<rayon::ThreadPool> {
     rayon::ThreadPoolBuilder::new()
         .num_threads(task_count.clamp(1, MAX_PARALLEL_DOWNLOADS))
         .build()
-        .map_err(|e| crate::Error::Other(format!("sync_parallel_pool_error: {}", e)))
+        .map_err(|e| crate::Error::Io(std::io::Error::other(format!("sync_parallel_pool_error: {}", e))))
 }
 
 fn save_conflict_copy(
@@ -46,10 +46,10 @@ fn save_conflict_copy(
     }
 
     std::fs::write(&conflict_path, remote_content).map_err(|e| {
-        crate::Error::Other(format!(
-            "local_io_error: write conflict copy {}: {}",
+        crate::Error::Io(std::io::Error::other(format!(
+            "write conflict copy {}: {}",
             path, e
-        ))
+        )))
     })?;
 
     Ok(conflict_filename)
@@ -341,7 +341,10 @@ pub(crate) fn perform_lww_sync(
                 attempt += 1;
                 if attempt >= max_retries {
                     let err = e.to_string();
-                    let category = crate::sync::types::SyncErrorCategory::from_error_string(&err);
+                    let category = crate::sync::types::SyncErrorCategory::from_code(
+                        e.sync_category(),
+                        &err,
+                    );
                     result.status = match category {
                         crate::sync::types::SyncErrorCategory::LocalIoError => {
                             SyncStatus::Error("local_io_error".to_string())
@@ -389,20 +392,28 @@ fn execute_lww_sync_attempt(
         .header("User-Agent", "WriterApp/1.0")
         .header("Accept", "application/vnd.github+json")
         .send()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
 
     let mut remote_tree_files = std::collections::HashMap::new();
     let tree_status = resp.status();
     let tree_body = resp
         .text()
-        .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+        .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
     if tree_status.as_u16() == 200 {
         let json: serde_json::Value = serde_json::from_str(&tree_body)
-            .map_err(|e| crate::Error::Other(format!("api_error: invalid tree json: {}", e)))?;
+            .map_err(|e| crate::Error::SyncGithubApiError {
+                category: "api_error".to_string(),
+                context: format!("invalid tree json: {}", e),
+                status: 0,
+                body_preview: String::new(),
+            })?;
         if json["truncated"].as_bool().unwrap_or(false) {
-            return Err(crate::Error::Other(
-                "api_error: GitHub tree response truncated, repository is too large".to_string(),
-            ));
+            return Err(crate::Error::SyncGithubApiError {
+                category: "api_error".to_string(),
+                context: "GitHub tree response truncated, repository is too large".to_string(),
+                status: 0,
+                body_preview: String::new(),
+            });
         }
         if let Some(tree) = json["tree"].as_array() {
             for item in tree {
@@ -423,7 +434,7 @@ fn execute_lww_sync_attempt(
             .header("User-Agent", "WriterApp/1.0")
             .header("Accept", "application/vnd.github+json")
             .send()
-            .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+            .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
         let ref_status = ref_resp.status().as_u16();
         if ref_status == 200 {
             // 仓库和分支都存在，tree 404 说明是空仓库，remote_tree_files 保持为空
@@ -440,34 +451,42 @@ fn execute_lww_sync_attempt(
                 .header("User-Agent", "WriterApp/1.0")
                 .header("Accept", "application/vnd.github+json")
                 .send()
-                .map_err(|e| crate::Error::Other(format!("network_error: {}", e)))?;
+                .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: e.to_string() })?;
             let repo_status = repo_resp.status().as_u16();
             if repo_status == 200 {
                 // 仓库可访问但分支不存在
-                return Err(crate::Error::Other(format!(
-                    "remote_branch_missing: branch '{}' not found in repository",
-                    config.branch
-                )));
+                return Err(crate::Error::SyncRemoteBranchNotFound {
+                    detail: format!("branch '{}' not found in repository", config.branch),
+                });
             } else if repo_status == 401 || repo_status == 403 {
-                return Err(crate::Error::Other(
-                    "repo_not_found_or_no_permission: token lacks access to repository".to_string(),
-                ));
+                return Err(crate::Error::SyncGithubApiError {
+                    category: "repo_not_found_or_no_permission".to_string(),
+                    context: "token lacks access to repository".to_string(),
+                    status: repo_status,
+                    body_preview: String::new(),
+                });
             } else {
-                return Err(crate::Error::Other(
-                    "repo_not_found_or_no_permission: repository not found or inaccessible"
-                        .to_string(),
-                ));
+                return Err(crate::Error::SyncGithubApiError {
+                    category: "repo_not_found_or_no_permission".to_string(),
+                    context: "repository not found or inaccessible".to_string(),
+                    status: repo_status,
+                    body_preview: String::new(),
+                });
             }
         } else if ref_status == 401 || ref_status == 403 {
-            return Err(crate::Error::Other(
-                "repo_not_found_or_no_permission: authentication failed or token lacks permission"
-                    .to_string(),
-            ));
+            return Err(crate::Error::SyncGithubApiError {
+                category: "repo_not_found_or_no_permission".to_string(),
+                context: "authentication failed or token lacks permission".to_string(),
+                status: ref_status,
+                body_preview: String::new(),
+            });
         } else {
-            return Err(crate::Error::Other(format!(
-                "repo_not_found_or_no_permission: unexpected HTTP {} when checking ref",
-                ref_status
-            )));
+            return Err(crate::Error::SyncGithubApiError {
+                category: "repo_not_found_or_no_permission".to_string(),
+                context: format!("unexpected HTTP {} when checking ref", ref_status),
+                status: ref_status,
+                body_preview: String::new(),
+            });
         }
     } else {
         return Err(crate::sync::github_api_client::github_api_error(
@@ -484,7 +503,12 @@ fn execute_lww_sync_attempt(
         {
             remote_manifest =
                 serde_json::from_slice::<SyncManifest>(&content_bytes).map_err(|e| {
-                    crate::Error::Other(format!("api_error: invalid remote manifest: {}", e))
+                    crate::Error::SyncGithubApiError {
+                        category: "api_error".to_string(),
+                        context: format!("invalid remote manifest: {}", e),
+                        status: 0,
+                        body_preview: String::new(),
+                    }
                 })?;
         }
     }
@@ -642,25 +666,25 @@ fn execute_lww_sync_attempt(
                     let full_path = workspace_path.join(path);
                     if let Some(parent) = full_path.parent() {
                         std::fs::create_dir_all(parent).map_err(|e| {
-                            crate::Error::Other(format!(
-                                "local_io_error: create pending_take_remote dir {}: {}",
+                            crate::Error::Io(std::io::Error::other(format!(
+                                "create pending_take_remote dir {}: {}",
                                 path, e
-                            ))
+                            )))
                         })?;
                     }
                     let tmp_path =
                         full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                     std::fs::write(&tmp_path, &content).map_err(|e| {
-                        crate::Error::Other(format!(
-                            "local_io_error: write pending_take_remote {}: {}",
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "write pending_take_remote {}: {}",
                             path, e
-                        ))
+                        )))
                     })?;
                     std::fs::rename(&tmp_path, &full_path).map_err(|e| {
-                        crate::Error::Other(format!(
-                            "local_io_error: rename pending_take_remote {}: {}",
+                        crate::Error::Io(std::io::Error::other(format!(
+                            "rename pending_take_remote {}: {}",
                             path, e
-                        ))
+                        )))
                     })?;
                     Ok((path.clone(), Some(content)))
                 })
@@ -950,24 +974,26 @@ fn execute_lww_sync_attempt(
                 let Some((content, _sha)) =
                     github_get_content(client, api_base, token, &config.branch, path)?
                 else {
-                    return Err(crate::Error::Other(format!(
-                        "api_error: remote file missing while downloading {}",
-                        path
-                    )));
+                    return Err(crate::Error::SyncGithubApiError {
+                        category: "api_error".to_string(),
+                        context: format!("remote file missing while downloading {}", path),
+                        status: 0,
+                        body_preview: String::new(),
+                    });
                 };
                 let full_path = workspace_path.join(path);
                 if let Some(parent) = full_path.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| {
-                        crate::Error::Other(format!("local_io_error: {}: {}", path, e))
+                        crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
                     })?;
                 }
                 let tmp_path =
                     full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
                 std::fs::write(&tmp_path, content).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
+                    crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
                 })?;
                 std::fs::rename(tmp_path, &full_path).map_err(|e| {
-                    crate::Error::Other(format!("local_io_error: {}: {}", path, e))
+                    crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
                 })?;
                 Ok(())
             })
@@ -989,10 +1015,10 @@ fn execute_lww_sync_attempt(
     let full_manifest_path = workspace_path.join(SYNC_MANIFEST_PATH);
     if let Some(parent) = full_manifest_path.parent() {
         std::fs::create_dir_all(parent)
-            .map_err(|e| crate::Error::Other(format!("local_io_error: manifest dir: {}", e)))?;
+            .map_err(|e| crate::Error::Io(std::io::Error::other(format!("manifest dir: {}", e))))?;
     }
     std::fs::write(&full_manifest_path, &manifest_json)
-        .map_err(|e| crate::Error::Other(format!("local_io_error: write manifest: {}", e)))?;
+        .map_err(|e| crate::Error::Io(std::io::Error::other(format!("write manifest: {}", e))))?;
 
     log::debug!("[sync] github_api step=正在上传本地较新文件");
     for path in &to_upload {
@@ -1001,7 +1027,7 @@ fn execute_lww_sync_attempt(
             continue;
         }
         let content = std::fs::read(&full_path)
-            .map_err(|e| crate::Error::Other(format!("local_io_error: read {}: {}", path, e)))?;
+            .map_err(|e| crate::Error::Io(std::io::Error::other(format!("read {}: {}", path, e))))?;
         github_put_content_serial(
             client,
             api_base,

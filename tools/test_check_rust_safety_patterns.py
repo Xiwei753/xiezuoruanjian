@@ -205,6 +205,33 @@ struct Good {
         rules = self.rule_names(source)
         self.assertNotIn("rc-cell-raw-pointer", rules)
 
+    def test_detects_from_error_string_usage(self) -> None:
+        source = r'''
+fn bad(msg: &str) -> SyncErrorCategory {
+    SyncErrorCategory::from_error_string(msg)
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("from-error-string-usage", rules)
+
+    def test_accepts_from_code_usage(self) -> None:
+        source = r'''
+fn good(code: &str, msg: &str) -> SyncErrorCategory {
+    SyncErrorCategory::from_code(code, msg)
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("from-error-string-usage", rules)
+
+    def test_accepts_error_other_without_format(self) -> None:
+        source = r'''
+fn ok(msg: String) -> crate::Error {
+    crate::Error::Other(msg)
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("error-other-string-category", rules)
+
 
 if __name__ == "__main__":
     unittest.main()

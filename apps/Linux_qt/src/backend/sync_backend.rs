@@ -21,7 +21,7 @@ mod sync_operations;
 use super::*;
 use crate::backend::AppRef;
 use crate::sync_bridge::{
-    determine_diagnostics_status, mask_sync_error, sync_error_category,
+    determine_diagnostics_status, mask_sync_error, sync_error_category_from_code,
     SyncTaskOutcome,
 };
 use writer_core::api::WriterCoreApi;
@@ -458,7 +458,7 @@ impl AppBackend {
                         }
                     }
                     Err(e) => {
-                        let status = sync_error_category(&e.to_string());
+                        let status = sync_error_category_from_code(None, &e.to_string());
                         let state = writer_core::api::SyncOperationStateDto {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "diagnose".to_string(),

@@ -20,7 +20,7 @@ impl GitHubApiBackend {
             .timeout(std::time::Duration::from_secs(15))
             .no_proxy()
             .build()
-            .map_err(|e| crate::Error::Other(format!("Failed to build HTTP client: {}", e)))
+            .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: format!("Failed to build HTTP client: {}", e) })
     }
 
     pub(crate) fn api_base_url(remote_url: &str) -> String {
