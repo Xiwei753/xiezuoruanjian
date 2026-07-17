@@ -832,29 +832,6 @@ impl WriterAppService {
         })
     }
 
-    pub fn editor_kernel_composition_update(
-        &self,
-        composition_replace_start: u32,
-        composition_replace_end_exclusive: u32,
-        old_preedit_text: String,
-        new_preedit_text: String,
-    ) -> String {
-        self.with_kernel(|k| {
-            let mut kernel = k.lock().unwrap();
-            let replace_range = if composition_replace_start < composition_replace_end_exclusive {
-                Some((composition_replace_start as usize, composition_replace_end_exclusive as usize))
-            } else {
-                None
-            };
-            let tx = kernel.composition_update(
-                replace_range,
-                &old_preedit_text,
-                &new_preedit_text,
-            );
-            serde_json::to_string(&tx).unwrap_or_default()
-        })
-    }
-
     pub fn editor_kernel_composition_update_visual_intent(
         &self,
         composition_replace_start: u32,
