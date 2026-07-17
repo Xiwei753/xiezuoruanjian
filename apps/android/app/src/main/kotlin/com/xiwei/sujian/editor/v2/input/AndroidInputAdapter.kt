@@ -86,7 +86,6 @@ class AndroidInputAdapter(
     }
 
     fun applyNewCursorPosition(newCursorPosition: Int) {
-        // preedit cursor is platform-only visual state; do NOT send SetSelection to Rust
     }
 
     fun handleCompositionFinish() {

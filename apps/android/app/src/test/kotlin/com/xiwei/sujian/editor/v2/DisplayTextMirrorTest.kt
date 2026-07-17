@@ -24,17 +24,35 @@ class DisplayTextMirrorTest {
         val mirror = DisplayTextMirror()
         mirror.loadText("ab", 2)
 
-        val patches = listOf(DisplayPatch(
+        val result = EditResult(
+            transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
-            replaceByteStart = 2,
-            replaceByteEndExclusive = 2,
-            insertedText = "c",
-            resultingSelectionStart = 3,
-            resultingSelectionEnd = 3
-        ))
+            displayPatches = listOf(DisplayPatch(
+                baseRevision = 0,
+                newRevision = 1,
+                replaceByteStart = 2,
+                replaceByteEndExclusive = 2,
+                insertedText = "c",
+                resultingSelectionStart = 3,
+                resultingSelectionEnd = 3
+            )),
+            oldSelectionStart = 2,
+            oldSelectionEnd = 2,
+            newSelectionStart = 3,
+            newSelectionEnd = 3,
+            visualIntent = VisualIntent(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+                oldAffectedByteRanges = emptyList(),
+                newAffectedByteRanges = listOf(Pair(2, 3)),
+                animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+                durationMs = 160,
+                coordinatedCursor = CoordinatedCursor(2, 3, true)
+            )
+        )
 
-        mirror.applyPatches(patches)
+        mirror.applyEditResult(result)
         assertEquals("abc", mirror.getText())
         assertEquals(3, mirror.getCursorUtf8())
         assertEquals(1, mirror.getRevision())
@@ -45,17 +63,35 @@ class DisplayTextMirrorTest {
         val mirror = DisplayTextMirror()
         mirror.loadText("abc", 3)
 
-        val patches = listOf(DisplayPatch(
+        val result = EditResult(
+            transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
-            replaceByteStart = 2,
-            replaceByteEndExclusive = 3,
-            insertedText = "",
-            resultingSelectionStart = 2,
-            resultingSelectionEnd = 2
-        ))
+            displayPatches = listOf(DisplayPatch(
+                baseRevision = 0,
+                newRevision = 1,
+                replaceByteStart = 2,
+                replaceByteEndExclusive = 3,
+                insertedText = "",
+                resultingSelectionStart = 2,
+                resultingSelectionEnd = 2
+            )),
+            oldSelectionStart = 3,
+            oldSelectionEnd = 3,
+            newSelectionStart = 2,
+            newSelectionEnd = 2,
+            visualIntent = VisualIntent(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.DELETE,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.DELETE,
+                oldAffectedByteRanges = listOf(Pair(2, 3)),
+                newAffectedByteRanges = emptyList(),
+                animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+                durationMs = 160,
+                coordinatedCursor = CoordinatedCursor(3, 2, true)
+            )
+        )
 
-        mirror.applyPatches(patches)
+        mirror.applyEditResult(result)
         assertEquals("ab", mirror.getText())
         assertEquals(2, mirror.getCursorUtf8())
     }
@@ -65,17 +101,35 @@ class DisplayTextMirrorTest {
         val mirror = DisplayTextMirror()
         mirror.loadText("abc", 3)
 
-        val patches = listOf(DisplayPatch(
+        val result = EditResult(
+            transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
-            replaceByteStart = 1,
-            replaceByteEndExclusive = 2,
-            insertedText = "X",
-            resultingSelectionStart = 2,
-            resultingSelectionEnd = 2
-        ))
+            displayPatches = listOf(DisplayPatch(
+                baseRevision = 0,
+                newRevision = 1,
+                replaceByteStart = 1,
+                replaceByteEndExclusive = 2,
+                insertedText = "X",
+                resultingSelectionStart = 2,
+                resultingSelectionEnd = 2
+            )),
+            oldSelectionStart = 3,
+            oldSelectionEnd = 3,
+            newSelectionStart = 2,
+            newSelectionEnd = 2,
+            visualIntent = VisualIntent(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.REPLACE,
+                oldAffectedByteRanges = listOf(Pair(1, 2)),
+                newAffectedByteRanges = listOf(Pair(1, 2)),
+                animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+                durationMs = 160,
+                coordinatedCursor = CoordinatedCursor(3, 2, true)
+            )
+        )
 
-        mirror.applyPatches(patches)
+        mirror.applyEditResult(result)
         assertEquals("aXc", mirror.getText())
     }
 
@@ -93,21 +147,39 @@ class DisplayTextMirrorTest {
     }
 
     @Test
-    fun applyPatches_handlesChineseText() {
+    fun applyEditResult_handlesChineseText() {
         val mirror = DisplayTextMirror()
         mirror.loadText("你好", 6)
 
-        val patches = listOf(DisplayPatch(
+        val result = EditResult(
+            transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
-            replaceByteStart = 6,
-            replaceByteEndExclusive = 6,
-            insertedText = "世",
-            resultingSelectionStart = 9,
-            resultingSelectionEnd = 9
-        ))
+            displayPatches = listOf(DisplayPatch(
+                baseRevision = 0,
+                newRevision = 1,
+                replaceByteStart = 6,
+                replaceByteEndExclusive = 6,
+                insertedText = "世",
+                resultingSelectionStart = 9,
+                resultingSelectionEnd = 9
+            )),
+            oldSelectionStart = 6,
+            oldSelectionEnd = 6,
+            newSelectionStart = 9,
+            newSelectionEnd = 9,
+            visualIntent = VisualIntent(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+                oldAffectedByteRanges = emptyList(),
+                newAffectedByteRanges = listOf(Pair(6, 9)),
+                animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+                durationMs = 160,
+                coordinatedCursor = CoordinatedCursor(6, 9, true)
+            )
+        )
 
-        mirror.applyPatches(patches)
+        mirror.applyEditResult(result)
         assertEquals("你好世", mirror.getText())
         assertEquals(9, mirror.getCursorUtf8())
     }
@@ -134,23 +206,41 @@ class DisplayTextMirrorTest {
     }
 
     @Test
-    fun applyPatches_clearsCompositionBeforeApplying() {
+    fun applyEditResult_clearsCompositionBeforeApplying() {
         val mirror = DisplayTextMirror()
         mirror.loadText("ab", 2)
 
         mirror.updateComposition(2, 2, "c")
 
-        val patches = listOf(DisplayPatch(
+        val result = EditResult(
+            transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
-            replaceByteStart = 2,
-            replaceByteEndExclusive = 2,
-            insertedText = "d",
-            resultingSelectionStart = 3,
-            resultingSelectionEnd = 3
-        ))
+            displayPatches = listOf(DisplayPatch(
+                baseRevision = 0,
+                newRevision = 1,
+                replaceByteStart = 2,
+                replaceByteEndExclusive = 2,
+                insertedText = "d",
+                resultingSelectionStart = 3,
+                resultingSelectionEnd = 3
+            )),
+            oldSelectionStart = 2,
+            oldSelectionEnd = 2,
+            newSelectionStart = 3,
+            newSelectionEnd = 3,
+            visualIntent = VisualIntent(
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+                oldAffectedByteRanges = emptyList(),
+                newAffectedByteRanges = listOf(Pair(2, 3)),
+                animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+                durationMs = 160,
+                coordinatedCursor = CoordinatedCursor(2, 3, true)
+            )
+        )
 
-        mirror.applyPatches(patches)
+        mirror.applyEditResult(result)
         assertNull(mirror.getCompositionRangeUtf16())
     }
 }

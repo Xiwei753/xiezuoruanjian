@@ -156,6 +156,10 @@ class DisplayTextMirror {
     fun applyEditResult(result: EditResult) {
         restoreCompositionBeforePatch()
         applyPatches(result.displayPatches)
+        updateSelectionFromResult(result)
+    }
+
+    private fun updateSelectionFromResult(result: EditResult) {
         val indexMap = AndroidTextIndexMap(this)
         cursorUtf8 = result.newSelectionEnd
         cursorUtf16 = indexMap.utf8ToUtf16(result.newSelectionEnd)
@@ -186,13 +190,7 @@ class DisplayTextMirror {
             buffer.replace(replaceStartUtf16, replaceEndUtf16, patch.insertedText as CharSequence)
 
             currentRevision = patch.newRevision
-            cursorUtf8 = patch.resultingSelectionEnd
             indexMap = AndroidTextIndexMap(this)
-            cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
-            selectionAnchorUtf8 = patch.resultingSelectionStart
-            selectionHeadUtf8 = patch.resultingSelectionEnd
-            selectionAnchorUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionStart)
-            selectionHeadUtf16 = indexMap.utf8ToUtf16(patch.resultingSelectionEnd)
         }
     }
 

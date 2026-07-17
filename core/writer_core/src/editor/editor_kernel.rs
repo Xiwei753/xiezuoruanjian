@@ -813,6 +813,7 @@ impl EditorKernel {
                 new_suffix_len += 1;
             }
         }
+
         while old_suffix_len > 0 && !old_text.is_char_boundary(old_text.len() - old_suffix_len) {
             old_suffix_len -= 1;
         }
@@ -820,9 +821,28 @@ impl EditorKernel {
             new_suffix_len -= 1;
         }
 
+        let old_remaining_after_prefix = old_text.len() - prefix_len;
+        let new_remaining_after_prefix = new_text.len() - prefix_len;
+        if old_suffix_len > old_remaining_after_prefix {
+            old_suffix_len = old_remaining_after_prefix;
+            while old_suffix_len > 0 && !old_text.is_char_boundary(old_text.len() - old_suffix_len) {
+                old_suffix_len -= 1;
+            }
+        }
+        if new_suffix_len > new_remaining_after_prefix {
+            new_suffix_len = new_remaining_after_prefix;
+            while new_suffix_len > 0 && !new_text.is_char_boundary(new_text.len() - new_suffix_len) {
+                new_suffix_len -= 1;
+            }
+        }
+
         let replace_start = prefix_len;
         let replace_end = old_text.len() - old_suffix_len;
         let inserted_end = new_text.len() - new_suffix_len;
+
+        if replace_start > replace_end && inserted_end <= prefix_len {
+            return ((replace_start, replace_start), String::new());
+        }
 
         let inserted_text = if prefix_len < inserted_end {
             new_text[prefix_len..inserted_end].to_string()

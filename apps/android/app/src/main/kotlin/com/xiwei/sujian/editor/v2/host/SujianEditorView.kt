@@ -383,65 +383,27 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun previousGraphemeByteLen(offset: Int): Int {
-        val text = mirror.getText()
-        val utf16Offset = text.byteOffsetToUtf16(offset)
+        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val utf16Offset = indexMap.utf8ToUtf16(offset)
         if (utf16Offset <= 0) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
-        iter.setText(text)
+        iter.setText(mirror.getText())
         val prev = iter.preceding(utf16Offset)
         if (prev == android.icu.text.BreakIterator.DONE) return 0
-        val prevUtf8 = text.utf16OffsetToByte(prev)
+        val prevUtf8 = indexMap.utf16ToUtf8(prev)
         return offset - prevUtf8
     }
 
     private fun nextGraphemeByteLen(offset: Int): Int {
-        val text = mirror.getText()
-        val utf16Offset = text.byteOffsetToUtf16(offset)
-        if (utf16Offset >= text.length) return 0
+        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val utf16Offset = indexMap.utf8ToUtf16(offset)
+        if (utf16Offset >= mirror.getLengthUtf16()) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
-        iter.setText(text)
+        iter.setText(mirror.getText())
         val next = iter.following(utf16Offset)
         if (next == android.icu.text.BreakIterator.DONE) return 0
-        val nextUtf8 = text.utf16OffsetToByte(next)
+        val nextUtf8 = indexMap.utf16ToUtf8(next)
         return nextUtf8 - offset
-    }
-
-    private fun String.byteOffsetToUtf16(byteOffset: Int): Int {
-        val bytes = this.toByteArray(Charsets.UTF_8)
-        var utf16Index = 0
-        var byteIndex = 0
-        while (byteIndex < byteOffset.coerceAtMost(bytes.size)) {
-            val b = bytes[byteIndex]
-            val charLen = when {
-                (b.toInt() and 0x80) == 0 -> 1
-                (b.toInt() and 0xE0) == 0xC0 -> 2
-                (b.toInt() and 0xF0) == 0xE0 -> 3
-                else -> 4
-            }
-            val codePoint = String(bytes, byteIndex, charLen.coerceAtMost(bytes.size - byteIndex), Charsets.UTF_8)
-            utf16Index += codePoint.length
-            byteIndex += charLen
-        }
-        return utf16Index
-    }
-
-    private fun String.utf16OffsetToByte(utf16Offset: Int): Int {
-        val bytes = this.toByteArray(Charsets.UTF_8)
-        var utf16Index = 0
-        var byteIndex = 0
-        while (utf16Index < utf16Offset.coerceAtMost(this.length) && byteIndex < bytes.size) {
-            val b = bytes[byteIndex]
-            val charLen = when {
-                (b.toInt() and 0x80) == 0 -> 1
-                (b.toInt() and 0xE0) == 0xC0 -> 2
-                (b.toInt() and 0xF0) == 0xE0 -> 3
-                else -> 4
-            }
-            val codePoint = String(bytes, byteIndex, charLen.coerceAtMost(bytes.size - byteIndex), Charsets.UTF_8)
-            utf16Index += codePoint.length
-            byteIndex += charLen
-        }
-        return byteIndex
     }
 
     override fun onFocusChanged(gained: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
@@ -472,7 +434,6 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun setText(text: String) {
         loadText(text, 0)
-        onContentChanged?.invoke(text)
     }
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long) {
