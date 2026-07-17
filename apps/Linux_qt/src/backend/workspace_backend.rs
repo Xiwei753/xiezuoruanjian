@@ -4,7 +4,7 @@
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新工作区状态。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新工作区状态。
 //
 // 干什么的：
 // - 实现 WorkspaceBackend 结构体，作为 QML 中 "workspaceBackend" 对象的桥梁。
@@ -17,7 +17,7 @@
 // =============================================================================
 
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 
 use super::super::json_utils::qjson_object_from_json;
 use qmetaobject::QJsonObject;
@@ -66,11 +66,11 @@ pub struct WorkspaceBackend {
     save_last_navigation_state: qt_method!(fn(&mut self, route: QString, project_id: QString, volume_id: QString, chapter_id: QString, starmap_id: QString)),
     get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
     clear_last_navigation_state: qt_method!(fn(&mut self)),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl WorkspaceBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
@@ -79,7 +79,7 @@ impl WorkspaceBackend {
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         self.app.with_app(default, f)
     }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         self.app.with_app_mut(default, f)
     }
     fn emit_workspace_changed(&mut self) {

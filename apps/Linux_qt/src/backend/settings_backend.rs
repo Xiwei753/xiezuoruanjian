@@ -4,7 +4,7 @@
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新本地/同步设置状态。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新本地/同步设置状态。
 //
 // 干什么的：
 // - 实现 SettingsBackend 结构体，作为 QML 中 "settingsBackend" 对象的桥梁。
@@ -16,7 +16,7 @@
 // =============================================================================
 
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 
 #[allow(non_snake_case)] // Qt QML naming convention
 #[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
@@ -77,11 +77,11 @@ pub struct SettingsBackend {
     refresh_theme_data: qt_method!(fn(&mut self)),
     /// 标记是否有待保存的设置
     pending_save: bool,
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl SettingsBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
@@ -92,7 +92,7 @@ impl SettingsBackend {
         self.app.with_app(default, f)
     }
 
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         self.app.with_app_mut(default, f)
     }
 

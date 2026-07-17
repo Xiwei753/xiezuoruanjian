@@ -4,7 +4,7 @@
 
 use super::super::json_utils::qjson_object_from_json;
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 use qmetaobject::QJsonObject;
 
 #[path = "project_operations.rs"]
@@ -91,11 +91,11 @@ pub struct ProjectBackend {
     select_volume: qt_method!(fn(&mut self, project_id: QString, volume_id: QString)),
     select_chapter:
         qt_method!(fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString)),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl ProjectBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
@@ -104,7 +104,7 @@ impl ProjectBackend {
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         self.app.with_app(default, f)
     }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         self.app.with_app_mut(default, f)
     }
     fn emit_changed(&mut self) {

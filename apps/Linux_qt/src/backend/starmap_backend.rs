@@ -4,7 +4,7 @@
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新星图数据。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新星图数据。
 //
 // 干什么的：
 // - 实现 StarMapBackend 结构体，作为 QML 中 "starmapBackend" 对象的桥梁。
@@ -16,7 +16,7 @@
 // =============================================================================
 
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
@@ -124,11 +124,11 @@ pub struct StarMapBackend {
     hit_test_nodes_json: qt_method!(fn(&self, nodes_json: QString, x: f64, y: f64) -> QString),
     calculate_grid_layout_json:
         qt_method!(fn(&self, node_ids_json: QString, existing_layout_json: QString) -> QString),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl StarMapBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
@@ -137,7 +137,7 @@ impl StarMapBackend {
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         self.app.with_app(default, f)
     }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         self.app.with_app_mut(default, f)
     }
 

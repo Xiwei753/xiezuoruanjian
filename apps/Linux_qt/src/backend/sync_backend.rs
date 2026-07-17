@@ -4,7 +4,7 @@
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新网络同步状态。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新网络同步状态。
 //
 // 干什么的：
 // - 实现 SyncBackend 结构体，作为 QML 中 "syncBackend" 对象的桥梁。
@@ -19,7 +19,7 @@
 mod sync_operations;
 
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 use crate::sync_bridge::{
     determine_diagnostics_status, mask_sync_error, sync_error_category,
     SyncTaskOutcome,
@@ -59,11 +59,11 @@ pub struct SyncBackend {
     maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
     open_workspace_dir: qt_method!(fn(&mut self)),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl SyncBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
@@ -72,7 +72,7 @@ impl SyncBackend {
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         self.app.with_app(default, f)
     }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         self.app.with_app_mut(default, f)
     }
     fn sync_enabled(&self) -> bool {

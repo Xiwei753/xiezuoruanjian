@@ -31,10 +31,11 @@ use std::path::Path;
 #[cfg(feature = "git-https")]
 fn map_git_error(e: crate::Error) -> crate::Error {
     if let crate::Error::Io(io_err) = &e {
-        let msg = io_err.to_string();
-        if msg.contains("failed to resolve address") {
+        if io_err.kind() == std::io::ErrorKind::AddrNotAvailable
+            || io_err.kind() == std::io::ErrorKind::ConnectionAborted
+        {
             return crate::Error::SyncNetworkUnavailable {
-                reason: format!("DNS 解析失败: {}", msg),
+                reason: format!("DNS 解析失败: {}", io_err),
             };
         }
     }
@@ -65,6 +66,23 @@ fn classify_error(e: &crate::Error) -> SyncStatus {
         }
         crate::Error::SyncRemoteBranchNotFound { .. } => {
             SyncStatus::RecoverableError(e.to_string())
+        }
+        crate::Error::SyncGithubApiError { category, .. } => {
+            let cat = crate::sync::types::SyncErrorCategory::from_code(category, "");
+            match cat {
+                crate::sync::types::SyncErrorCategory::AuthError
+                | crate::sync::types::SyncErrorCategory::TokenMissing
+                | crate::sync::types::SyncErrorCategory::TokenInvalid
+                | crate::sync::types::SyncErrorCategory::TokenPermissionDenied
+                | crate::sync::types::SyncErrorCategory::GithubNetworkFailed
+                | crate::sync::types::SyncErrorCategory::DnsFailed
+                | crate::sync::types::SyncErrorCategory::TlsFailed
+                | crate::sync::types::SyncErrorCategory::NetworkProbeFailed
+                | crate::sync::types::SyncErrorCategory::ApiRateLimited => {
+                    SyncStatus::RecoverableError(e.to_string())
+                }
+                _ => SyncStatus::FatalError(e.to_string()),
+            }
         }
         crate::Error::Io(io_err) => {
             let msg = io_err.to_string();

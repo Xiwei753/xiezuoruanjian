@@ -249,45 +249,26 @@ impl AppBackend {
                     vec![writer_core::api::ChangedEntityDto { entity_type: "ChapterCleared".to_string(), entity_id: Some(c.clone()) }],
                 ),
                 Err(error) => writer_core::api::ResultEnvelope::<writer_core::api::types::ChapterSaveReceiptDto>::error(error),
-            }.to_json_string();
-            match serde_json::from_str::<serde_json::Value>(&envelope) {
-                Ok(envelope) => {
-                    let is_success = envelope
-                        .get("success")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    if is_success {
-                        self.debug_log(
-                            "chapter",
-                            "clear_chapter_content_success",
-                            &format!("chapter_id={}", c),
-                        );
-                        self.current_save_status = "已清空".to_string();
-                    } else {
-                        let message_key = envelope
-                            .get("messageKey")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("error.core_error");
-                        let raw_err = envelope
-                            .get("rawError")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("未知错误");
-                        self.debug_error("chapter", "clear_chapter_content_failed", raw_err);
-                        self.current_save_status = "清空失败".to_string();
-                        self.set_error(message_key);
-                    }
-                    self.save_status_changed();
-                    self.workspace_content_changed();
-                    serde_to_qjson_object(envelope)
-                }
-                Err(e) => {
-                    let err_msg = format!("解析 envelope 失败: {}", e);
-                    self.debug_error("chapter", "clear_chapter_content_failed", &err_msg);
-                    self.current_save_status = "清空失败".to_string();
-                    self.save_status_changed();
-                    bridge_error_object("error.json_parse", "JSON_ERROR", &err_msg)
-                }
+            };
+            if envelope.success {
+                self.debug_log(
+                    "chapter",
+                    "clear_chapter_content_success",
+                    &format!("chapter_id={}", c),
+                );
+                self.current_save_status = "已清空".to_string();
+            } else {
+                let message_key = envelope.message_key.as_deref().unwrap_or("error.core_error");
+                let raw_err = envelope.raw_error.as_deref().unwrap_or("未知错误");
+                self.debug_error("chapter", "clear_chapter_content_failed", raw_err);
+                self.current_save_status = "清空失败".to_string();
+                self.set_error(message_key);
             }
+            self.save_status_changed();
+            self.workspace_content_changed();
+            let value = serde_json::to_value(&envelope.into_value_envelope())
+                .unwrap_or_else(|_| serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+            serde_to_qjson_object(value)
         } else {
             self.debug_error(
                 "chapter",

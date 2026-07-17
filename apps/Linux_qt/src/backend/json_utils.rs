@@ -57,28 +57,28 @@ pub(crate) fn serde_to_qjson_array(value: serde_json::Value) -> QJsonArray {
 }
 
 pub(crate) fn bridge_error_object(message_key: &str, code: &str, raw_error: &str) -> QJsonObject {
-    // messageKey 供 QML 侧做 qsTr 翻译，rawError 放技术细节
-    // 不再输出 userMessage，用户可见文案由 QML 侧根据 messageKey 翻译
-    serde_to_qjson_object(serde_json::json!({
-        "success": false,
-        "errorCode": code,
-        "messageKey": message_key,
-        "messageArgs": {},
-        "rawError": raw_error,
-        "warnings": [],
-        "changedPaths": [],
-        "changedEntities": []
-    }))
+    let envelope: writer_core::api::ResultEnvelope<serde_json::Value> =
+        writer_core::api::ResultEnvelope {
+            success: false,
+            data: None,
+            error_code: Some(code.to_string()),
+            message_key: Some(message_key.to_string()),
+            message_args: Some(std::collections::HashMap::new()),
+            raw_error: Some(raw_error.to_string()),
+            warnings: Vec::new(),
+            changed_paths: Vec::new(),
+            changed_entities: Vec::new(),
+        };
+    let value = serde_json::to_value(&envelope)
+        .unwrap_or_else(|_| serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+    serde_to_qjson_object(value)
 }
 
 pub(crate) fn bridge_success_object(data: serde_json::Value) -> QJsonObject {
-    serde_to_qjson_object(serde_json::json!({
-        "success": true,
-        "data": data,
-        "warnings": [],
-        "changedPaths": [],
-        "changedEntities": []
-    }))
+    let envelope = writer_core::api::ResultEnvelope::success(data);
+    let value = serde_json::to_value(&envelope.into_value_envelope())
+        .unwrap_or_else(|_| serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
+    serde_to_qjson_object(value)
 }
 
 pub(crate) fn qjson_object_from_json(raw: &str) -> QJsonObject {

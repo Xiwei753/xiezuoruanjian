@@ -68,6 +68,16 @@ RULES: tuple[PatternRule, ...] = (
         "禁止从共享裸指针伪造 &mut AppBackend",
     ),
     PatternRule(
+        "safe-app-ptr-usage",
+        re.compile(r"\bSafeAppPtr\b"),
+        "SafeAppPtr 已被 AppRef (Rc<RefCell<AppBackend>>) 替代；禁止新增使用",
+    ),
+    PatternRule(
+        "rc-cell-raw-pointer",
+        re.compile(r"Rc\s*<\s*Cell\s*<\s*\*const"),
+        "禁止用 Rc<Cell<*const>> 存储裸指针；应使用 Rc<RefCell<T>> 直接共享",
+    ),
+    PatternRule(
         "revision-zero-bypass",
         re.compile(r"\bexpected_revision\s*==\s*0\b"),
         "禁止使用 0 绕过编辑器版本校验",

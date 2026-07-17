@@ -4,7 +4,7 @@
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新正文状态与字数信息。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新正文状态与字数信息。
 //
 // 干什么的：
 // - 实现 EditorBackend 结构体，作为 QML 中 "editorBackend" 对象的桥梁。
@@ -18,7 +18,7 @@
 // =============================================================================
 
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 
 #[path = "chapter_operations.rs"]
 mod chapter_operations;
@@ -136,11 +136,11 @@ pub struct EditorBackend {
     execute_action: qt_method!(
         fn(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString
     ),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl EditorBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
@@ -149,7 +149,7 @@ impl EditorBackend {
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
         self.app.with_app(default, f)
     }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         self.app.with_app_mut(default, f)
     }
     fn save_status(&self) -> QString {

@@ -178,6 +178,33 @@ fn init_once(mutex: &Mutex<()>) {
         rules = self.rule_names(source)
         self.assertNotIn("production-lock-unwrap", rules)
 
+    def test_detects_safe_app_ptr_usage(self) -> None:
+        source = r'''
+fn bad() {
+    let ptr = SafeAppPtr::new();
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("safe-app-ptr-usage", rules)
+
+    def test_detects_rc_cell_raw_pointer(self) -> None:
+        source = r'''
+struct Bad {
+    cell: Rc<Cell<*const RefCell<AppBackend>>>,
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("rc-cell-raw-pointer", rules)
+
+    def test_accepts_rc_refcell_pattern(self) -> None:
+        source = r'''
+struct Good {
+    inner: Rc<RefCell<AppBackend>>,
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("rc-cell-raw-pointer", rules)
+
 
 if __name__ == "__main__":
     unittest.main()

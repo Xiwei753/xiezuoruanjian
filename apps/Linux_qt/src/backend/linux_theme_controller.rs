@@ -1,5 +1,5 @@
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 
 #[allow(non_snake_case)] // Qt QML naming convention
 #[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
@@ -20,11 +20,11 @@ pub struct LinuxThemeController {
     set_selected_builtin_theme_id: qt_method!(fn(&mut self, val: QString)),
     set_selected_palette_id: qt_method!(fn(&mut self, val: QString)),
     set_system_is_dark: qt_method!(fn(&mut self, val: bool)),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl LinuxThemeController {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
@@ -35,7 +35,7 @@ impl LinuxThemeController {
         self.app.with_app(default, f)
     }
 
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
         self.app.with_app_mut(default, f)
     }
 

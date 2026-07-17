@@ -136,18 +136,9 @@ impl SyncBackend for GitHubApiBackend {
                 }
             }
             Err(e) => {
-                let err_msg = e.to_string().to_lowercase();
                 result.raw_error = Some(e.to_string());
-                if err_msg.contains("dns")
-                    || err_msg.contains("resolve")
-                    || err_msg.contains("name resolution")
-                {
+                if e.is_connect() {
                     result.error_category = "dns_failed".to_string();
-                } else if err_msg.contains("ssl")
-                    || err_msg.contains("certificate")
-                    || err_msg.contains("tls")
-                {
-                    result.error_category = "tls_failed".to_string();
                 } else {
                     result.error_category = "github_network_failed".to_string();
                 }

@@ -180,6 +180,15 @@ impl From<crate::error::Error> for WriterError {
             Error::SyncRemoteBranchNotFound { detail } => {
                 WriterError::SyncFailed(format!("remote_branch_not_found: {}", detail))
             }
+            Error::SyncGithubApiError {
+                category,
+                context,
+                status,
+                body_preview,
+            } => WriterError::SyncFailed(format!(
+                "github_api_error: category={} context={} status={} body={}",
+                category, context, status, body_preview
+            )),
             Error::DiskFull {
                 path,
                 required_bytes,
