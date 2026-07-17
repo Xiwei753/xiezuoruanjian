@@ -19,17 +19,14 @@ class AndroidInputConnection(
         val selStart = mirror.getSelectionStartUtf8()
         val selEnd = mirror.getSelectionEndUtf8()
         if (selStart != selEnd) {
-            val indexMap = AndroidTextIndexMap(mirror)
             val byteStart = selStart
             val byteEnd = selEnd
-            val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
-            val originalText = String(textBytes, byteStart.coerceAtMost(textBytes.size)..byteEnd.coerceAtMost(textBytes.size), Charsets.UTF_8)
+            val originalText = extractUtf8Text(byteStart, byteEnd)
             adapter.sendReplaceToKernel(byteStart, byteEnd, text.toString(), originalText, EditorTransactionCauseDto.TYPING)
         } else {
             val byteOffset = mirror.getCursorUtf8()
             adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
         }
-        applyNewCursorPosition(newCursorPosition, text.length)
         notifySelectionChanged()
         return true
     }
@@ -52,13 +49,39 @@ class AndroidInputConnection(
     }
 
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
-        return deleteSurroundingText(beforeLength, afterLength)
+        if (beforeLength == 0 && afterLength == 0) return true
+        if (adapter.isComposing()) {
+            adapter.handleCompositionFinish()
+            return true
+        }
+        val text = mirror.getText()
+        val cursorUtf16 = mirror.getCursorUtf16()
+
+        var deleteStartUtf16 = cursorUtf16
+        var count = beforeLength
+        while (count > 0 && deleteStartUtf16 > 0) {
+            deleteStartUtf16 = text.offsetByCodePoints(deleteStartUtf16, -1)
+            count--
+        }
+
+        var deleteEndUtf16 = cursorUtf16
+        count = afterLength
+        while (count > 0 && deleteEndUtf16 < text.length) {
+            deleteEndUtf16 = text.offsetByCodePoints(deleteEndUtf16, 1)
+            count--
+        }
+
+        val indexMap = AndroidTextIndexMap(mirror)
+        val byteStart = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val byteEnd = indexMap.utf16ToUtf8(deleteEndUtf16)
+        adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
+        notifySelectionChanged()
+        return true
     }
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text == null) return true
         adapter.handleCompositionUpdate(text.toString(), newCursorPosition)
-        applyNewCursorPosition(newCursorPosition)
         notifySelectionChanged()
         return true
     }
@@ -79,8 +102,7 @@ class AndroidInputConnection(
         val indexMap = AndroidTextIndexMap(mirror)
         val byteStart = indexMap.utf16ToUtf8(start)
         val byteEnd = indexMap.utf16ToUtf8(end)
-        val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
-        val selectedText = String(textBytes, byteStart.coerceAtMost(textBytes.size)..byteEnd.coerceAtMost(textBytes.size), Charsets.UTF_8)
+        val selectedText = extractUtf8Text(byteStart, byteEnd)
         adapter.startComposingRegion(byteStart, byteEnd, selectedText)
         notifySelectionChanged()
         return true
@@ -119,18 +141,11 @@ class AndroidInputConnection(
         return text.substring(start.coerceAtMost(end), end.coerceAtLeast(start))
     }
 
-    private fun applyNewCursorPosition(newCursorPosition: Int, committedTextLength: Int = 0) {
-        if (newCursorPosition == 0 || newCursorPosition == 1) return
-        val indexMap = AndroidTextIndexMap(mirror)
-        val cursorUtf16 = mirror.getCursorUtf16()
-        val newCursorUtf16 = if (newCursorPosition > 1) {
-            cursorUtf16 + newCursorPosition - 1
-        } else {
-            (cursorUtf16 - committedTextLength + newCursorPosition + 1).coerceAtLeast(0)
-        }
-        if (newCursorUtf16 < 0 || newCursorUtf16 > mirror.getLengthUtf16()) return
-        val newCursorUtf8 = indexMap.utf16ToUtf8(newCursorUtf16)
-        adapter.sendSetSelectionToKernel(newCursorUtf8, newCursorUtf8)
+    private fun extractUtf8Text(byteStart: Int, byteEnd: Int): String {
+        val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
+        val safeStart = byteStart.coerceIn(0, textBytes.size)
+        val safeEnd = byteEnd.coerceIn(safeStart, textBytes.size)
+        return String(textBytes, safeStart, safeEnd - safeStart, Charsets.UTF_8)
     }
 
     private fun notifySelectionChanged() {

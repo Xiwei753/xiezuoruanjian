@@ -1093,6 +1093,7 @@ mod tests {
             byte_offset: 2,
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         let dto: EditorEditResultDto = result.into();
         assert!(dto.transaction_id > 0);
@@ -1148,6 +1149,7 @@ mod tests {
             byte_offset: 2,
             text: "c".to_string(),
             cause: crate::editor::EditorTransactionCause::Typing,
+            expected_revision: 0,
         });
         let dto: EditorEditResultDto = result.into();
         let json = serde_json::to_string(&dto).unwrap();

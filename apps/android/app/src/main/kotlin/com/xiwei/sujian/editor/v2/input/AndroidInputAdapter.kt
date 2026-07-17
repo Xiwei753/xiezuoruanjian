@@ -50,13 +50,19 @@ class AndroidInputAdapter(
 
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
         if (!isComposing) {
-            compositionReplaceStartUtf8 = mirror.getCursorUtf8()
-            compositionReplaceEndUtf8 = compositionReplaceStartUtf8
+            val selStart = mirror.getSelectionStartUtf8()
+            val selEnd = mirror.getSelectionEndUtf8()
+            if (selStart != selEnd) {
+                compositionReplaceStartUtf8 = selStart
+                compositionReplaceEndUtf8 = selEnd
+            } else {
+                compositionReplaceStartUtf8 = mirror.getCursorUtf8()
+                compositionReplaceEndUtf8 = compositionReplaceStartUtf8
+            }
             isComposing = true
         }
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
-        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
 
         val bridge = editorView.kernelBridge
         if (bridge != null) {
@@ -68,11 +74,14 @@ class AndroidInputAdapter(
             )
             if (intentDto != null) {
                 val visualIntent = com.xiwei.sujian.editor.v2.mirror.VisualIntent.fromDto(intentDto)
-                editorView.applyCompositionUpdate(visualIntent)
+                editorView.applyCompositionUpdate(visualIntent) {
+                    mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
+                }
                 return
             }
         }
 
+        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
         editorView.onCompositionUpdated()
     }
 

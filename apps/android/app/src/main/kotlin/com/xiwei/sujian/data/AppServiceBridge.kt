@@ -217,4 +217,21 @@ class AppServiceBridge(workspacePath: String) {
     fun editorKernelSessionSnapshot(): BridgeResult<uniffi.writer_core.EditorSessionSnapshotDto> = holder.wrapResult {
         holder.service.editorKernelSessionSnapshot()
     }
+
+    fun editorKernelReplaceAll(
+        search: String,
+        replacement: String,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelReplaceAll(search, replacement, expectedRevision)
+    }
+
+    fun editorKernelInsertLineBreak(
+        byteOffset: UInt,
+        autoIndentPrefix: String,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelInsertLineBreak(byteOffset, autoIndentPrefix, cause, expectedRevision)
+    }
 }

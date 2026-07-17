@@ -918,4 +918,41 @@ impl WriterAppService {
             }
         })
     }
+
+    pub fn editor_kernel_replace_all(
+        &self,
+        search: String,
+        replacement: String,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::ReplaceAll {
+                search,
+                replacement,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_insert_line_break(
+        &self,
+        byte_offset: u32,
+        auto_indent_prefix: String,
+        cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::InsertLineBreak {
+                byte_offset: byte_offset as usize,
+                auto_indent_prefix,
+                cause: core_cause,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
 }

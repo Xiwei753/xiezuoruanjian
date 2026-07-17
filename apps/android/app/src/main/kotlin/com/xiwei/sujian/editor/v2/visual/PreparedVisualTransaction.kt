@@ -21,14 +21,14 @@ data class PreparedVisualTransaction(
         val visibleSourceRects: List<android.graphics.Rect>
     )
 
-    data class AnimatedSlice(
+    class AnimatedSlice(
         val role: SliceRole,
         val snapshot: AndroidLineSnapshot?,
         val sourceRect: android.graphics.Rect,
         val destinationRect: android.graphics.RectF,
-        val startAlpha: Float,
-        val endAlpha: Float,
-        val fromDestinationRect: android.graphics.RectF? = null
+        var startAlpha: Float,
+        var endAlpha: Float,
+        var fromDestinationRect: android.graphics.RectF? = null
     )
 
     data class SelectionDecoration(
