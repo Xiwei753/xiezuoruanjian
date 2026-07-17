@@ -56,7 +56,9 @@ class SujianEditorView @JvmOverloads constructor(
         coordinator.cancelActiveTransaction()
         resourceStore.releaseAll()
         visualPlanner.resetOldRevision()
-        updateLayoutConfig()
+        if (width > 0) {
+            updateLayoutConfig()
+        }
     }
 
     fun insertText(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
@@ -109,13 +111,17 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun applyEditResultFull(result: EditResult, beforePatch: (() -> Unit)? = null, suppressContentCallback: Boolean = false) {
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
-
         if (result.displayPatches.isEmpty() && result.baseRevision != result.newRevision) {
             reloadFromKernel()
             return
         }
+        if (result.displayPatches.isEmpty() && result.baseRevision != mirror.getRevision()) {
+            reloadFromKernel()
+            return
+        }
+
+        val frameTimeMs = System.nanoTime() / 1_000_000
+        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
@@ -145,17 +151,20 @@ class SujianEditorView @JvmOverloads constructor(
         val snapshot = bridge.sessionSnapshot() ?: return
         val cursorUtf8 = snapshot.cursor.toInt()
         val selAnchorUtf8 = snapshot.selectionAnchor.toInt()
+        val selHeadUtf8 = cursorUtf8
         mirror.loadFromSnapshot(
             snapshot.text,
             cursorUtf8,
             snapshot.revision.toLong(),
             selAnchorUtf8,
-            cursorUtf8
+            selHeadUtf8
         )
         coordinator.cancelActiveTransaction()
         resourceStore.releaseAll()
         updateLayoutConfig()
-        onContentChanged?.invoke(mirror.getText())
+        if (mirror.getText().isNotEmpty()) {
+            onContentChanged?.invoke(mirror.getText())
+        }
     }
 
     fun onCompositionUpdated() {
@@ -260,10 +269,7 @@ class SujianEditorView @JvmOverloads constructor(
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
             layoutEngine.setWidth(w.toFloat())
-            layoutEngine.requestLayout()
-            updateMaxScroll()
-            scrollY = scrollY.coerceIn(0f, maxScrollY)
-            invalidate()
+            updateLayoutConfig()
         }
     }
 
@@ -448,7 +454,6 @@ class SujianEditorView @JvmOverloads constructor(
         super.onWindowFocusChanged(hasWindowFocus)
         if (!hasWindowFocus) {
             coordinator.cancelActiveTransaction()
-            resourceStore.releaseAll()
         }
     }
 

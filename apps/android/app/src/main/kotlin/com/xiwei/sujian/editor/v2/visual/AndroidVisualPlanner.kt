@@ -719,10 +719,10 @@ class AndroidVisualPlanner(
         }
         return slices.map { slice ->
             val lineIndex = slice.snapshot?.lineIndex ?: -1
-            val lineKey = "${slice.role}_${lineIndex}"
-            val lineCandidates = rebaseByLineAndRole[lineKey]
+            val roleKey = "${slice.role}_${lineIndex}"
+            val lineCandidates = rebaseByLineAndRole[roleKey]
             val rebaseState = lineCandidates?.firstOrNull()
-                ?: findClosestRebaseState(slice, rebaseByLineAndRole)
+                ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot)
             if (rebaseState != null) {
                 applyRebaseState(slice, rebaseState)
             } else {
@@ -731,16 +731,20 @@ class AndroidVisualPlanner(
         }
     }
 
-    private fun findClosestRebaseState(
+    private fun findClosestRebaseStateByPosition(
         slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseByLineAndRole: Map<String, List<SliceVisualState>>
+        rebaseSnapshot: VisualFrameSnapshot
     ): SliceVisualState? {
-        val lineIndex = slice.snapshot?.lineIndex ?: -1
-        val lineKey = "${slice.role}_${lineIndex}"
-        val lineCandidates = rebaseByLineAndRole[lineKey] ?: return null
-        if (lineCandidates.size == 1) return lineCandidates.first()
-        val sliceY = slice.destinationRect.top
-        return lineCandidates.minByOrNull { kotlin.math.abs(it.currentTop - sliceY) }
+        val sliceTop = slice.destinationRect.top
+        val sliceLeft = slice.destinationRect.left
+        val sliceRole = slice.role
+        return rebaseSnapshot.sliceVisualStates
+            .filter { it.role == sliceRole }
+            .minByOrNull {
+                val dy = kotlin.math.abs(it.currentTop - sliceTop)
+                val dx = kotlin.math.abs(it.currentLeft - sliceLeft)
+                dy + dx
+            }
     }
 
     private fun applyRebaseState(

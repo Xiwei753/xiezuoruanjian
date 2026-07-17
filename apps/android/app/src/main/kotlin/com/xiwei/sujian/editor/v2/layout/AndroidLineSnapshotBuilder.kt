@@ -179,7 +179,9 @@ class AndroidLineSnapshotBuilder {
 
     private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
         if (clusterText.isEmpty()) return ""
-        val typeSummary = clusterText.codePoints().map { Character.getType(it) }.distinct().sorted().joinToString(",")
+        val codePoints = clusterText.codePoints().toArray()
+        val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
+        val firstCp = codePoints.firstOrNull() ?: 0
         val runIndex = try {
             val lineStart = layout.getLineStart(lineIndex)
             val lineEnd = layout.getLineEnd(lineIndex)
@@ -194,6 +196,6 @@ class AndroidLineSnapshotBuilder {
             runIdx
         } catch (_: Exception) { 0 }
         val paintHash = layout.paint?.hashCode() ?: 0
-        return "${clusterText}_${typeSummary}_${runIndex}_${paintHash}"
+        return "${codePoints.joinToString(",")}_${typeSummary}_${runIndex}_${paintHash}"
     }
 }

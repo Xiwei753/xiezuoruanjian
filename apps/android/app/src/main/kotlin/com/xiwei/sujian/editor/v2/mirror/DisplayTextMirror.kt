@@ -283,4 +283,14 @@ class DisplayTextMirror {
     fun loadText(text: String, cursorUtf8: Int) {
         loadFromSnapshot(text, cursorUtf8, 0)
     }
+
+    fun setSelectionInternal(anchorUtf8: Int, headUtf8: Int) {
+        val indexMap = AndroidTextIndexMap(this)
+        selectionAnchorUtf8 = anchorUtf8
+        selectionHeadUtf8 = headUtf8
+        selectionAnchorUtf16 = indexMap.utf8ToUtf16(anchorUtf8)
+        selectionHeadUtf16 = indexMap.utf8ToUtf16(headUtf8)
+        cursorUtf8 = headUtf8
+        cursorUtf16 = selectionHeadUtf16
+    }
 }
