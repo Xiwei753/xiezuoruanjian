@@ -44,6 +44,9 @@ jobs:
       - name: Test Rust safety pattern checker
         run: python3 tools/test_check_rust_safety_patterns.py
 
+      - name: Run Rust safety pattern scan on repository
+        run: python3 tools/check_rust_safety_patterns.py .
+
       - name: Security audit Rust dependencies
         run: |
           if ! command -v cargo-audit &> /dev/null; then

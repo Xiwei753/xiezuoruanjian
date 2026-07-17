@@ -70,30 +70,10 @@ impl SyncBackend {
         }
     }
     fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            // SAFETY: pointer from QObjectBox-pinned AppBackend; null-guarded; single-threaded (Rc). See SafeAppPtr docs.
-            unsafe { f(&*app) }
-        } else {
-            crate::backend::app_backend::debug_error_static(
-                "sync",
-                "BACKEND_LINK_BROKEN",
-                "app pointer is null",
-            );
-            default
-        }
+        self.app.with_app(default, f)
     }
     fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            // SAFETY: same as with_app; &mut safe because callers hold &mut self. KNOWN LIMITATION: Qt signal re-entry could violate aliasing; see SafeAppPtr docs.
-            unsafe { f(&mut *app) }
-        } else {
-            crate::backend::app_backend::debug_error_static(
-                "sync",
-                "BACKEND_LINK_BROKEN",
-                "app pointer is null",
-            );
-            default
-        }
+        self.app.with_app_mut(default, f)
     }
     fn sync_enabled(&self) -> bool {
         self.with_app(false, |app| app.sync_enabled())

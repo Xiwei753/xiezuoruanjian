@@ -17,13 +17,19 @@ pub use app_backend::{
 };
 pub use linux_theme_controller::LinuxThemeController;
 
-/// Shared pointer to the heap-allocated AppBackend.
+/// Shared reference to the RefCell inside QObjectBox<AppBackend>.
+///
+/// Unlike the previous raw-pointer approach, this uses RefCell's runtime
+/// borrow checking to prevent aliasing violations. Domain backends call
+/// `with_app` / `with_app_mut` which go through `RefCell::try_borrow` /
+/// `RefCell::try_borrow_mut`, returning the default value on borrow conflict
+/// instead of causing undefined behaviour.
 ///
 /// # Safety invariants (must hold for the entire lifetime of BackendRuntime)
 ///
-/// 1. **Pinned heap allocation**: The AppBackend lives inside a QObjectBox
+/// 1. **Pinned heap allocation**: The RefCell lives inside a QObjectBox
 ///    which heap-allocates and pins the object. The raw pointer obtained via
-///    `set()` remains valid as long as the QObjectBox owner is alive.
+///    `set_from_pinned()` remains valid as long as the QObjectBox owner is alive.
 ///
 /// 2. **Destruction order**: `app_backend` MUST be the last field in
 ///    BackendRuntime so that Rust drops all domain backends (which hold
@@ -31,41 +37,87 @@ pub use linux_theme_controller::LinuxThemeController;
 ///    If app_backend were destroyed first, the dangling pointer would be
 ///    unsound to dereference during child backend destructors.
 ///
-/// 3. **Single-threaded access**: Rc<Cell<*mut>> is intentionally !Send and
+/// 3. **Single-threaded access**: Rc<Cell<*const>> is intentionally !Send and
 ///    !Sync. All QObject backends live on the GUI thread. The Rust type
 ///    system prevents this pointer from crossing thread boundaries.
 ///
-/// 4. **No concurrent &mut**: Each domain backend's `with_app_mut` takes
-///    `&mut self`, which prevents two backends from simultaneously holding
-///    `&mut AppBackend`. However, this is a *convention* guarantee, not
-///    enforced by the type system — a future refactor should replace this
-///    with a proper single-owner command dispatcher.
-///
-/// **Known limitation**: `&mut *app` from a raw pointer bypasses Rust's
-/// alias checker. If two backends call `with_app_mut` through different
-/// code paths that the borrow checker cannot see (e.g., Qt signal
-/// re-entry), aliasing rules may be violated. This is a known debt that
-/// should be resolved by moving to a command-dispatch architecture.
+/// 4. **Runtime borrow checking**: `with_app` uses `RefCell::try_borrow` and
+///    `with_app_mut` uses `RefCell::try_borrow_mut`. If Qt signal re-entry
+///    causes a nested borrow, the inner call returns the default value instead
+///    of producing undefined behaviour. This is a strict improvement over the
+///    previous `&mut *app` raw-pointer approach which silently violated
+///    Rust's aliasing rules.
 #[derive(Clone)]
 pub struct SafeAppPtr {
-    ptr: std::rc::Rc<std::cell::Cell<*mut AppBackend>>,
+    cell: std::rc::Rc<std::cell::Cell<*const std::cell::RefCell<AppBackend>>>,
 }
 
 impl SafeAppPtr {
     pub fn new() -> Self {
         Self {
-            ptr: std::rc::Rc::new(std::cell::Cell::new(std::ptr::null_mut())),
+            cell: std::rc::Rc::new(std::cell::Cell::new(std::ptr::null())),
         }
     }
-    pub fn set(&self, app: *mut AppBackend) {
-        self.ptr.set(app);
+
+    pub fn set_from_pinned(&self, pinned: qmetaobject::QObjectPinned<AppBackend>) {
+        // SAFETY: QObjectPinned is #[repr(transparent)] over &RefCell<T>;
+        // transmuting to *const RefCell<T> preserves the address.
+        // The caller must ensure the QObjectBox outlives all SafeAppPtr clones.
+        let cell_ptr: *const std::cell::RefCell<AppBackend> = unsafe { std::mem::transmute(pinned) };
+        self.cell.set(cell_ptr);
     }
-    pub fn get(&self) -> Option<*mut AppBackend> {
-        let p = self.ptr.get();
-        if p.is_null() {
-            None
-        } else {
-            Some(p)
+
+    pub fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+        let cell_ptr = self.cell.get();
+        if cell_ptr.is_null() {
+            crate::backend::app_backend::debug_error_static(
+                "safe_app_ptr",
+                "BACKEND_LINK_BROKEN",
+                "app RefCell pointer is null",
+            );
+            return default;
+        }
+        // SAFETY: cell_ptr came from QObjectPinned which wraps &RefCell<AppBackend>;
+        // QObjectBox pins the RefCell on the heap; Rc<Cell<>> is !Send/!Sync;
+        // app_backend is the last field in BackendRuntime so it outlives all domain backends.
+        let cell_ref: &std::cell::RefCell<AppBackend> = unsafe { &*cell_ptr };
+        match cell_ref.try_borrow() {
+            Ok(guard) => f(&*guard),
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "safe_app_ptr",
+                    "BORROW_CONFLICT",
+                    "AppBackend already borrowed mutably; returning default",
+                );
+                default
+            }
+        }
+    }
+
+    pub fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+        let cell_ptr = self.cell.get();
+        if cell_ptr.is_null() {
+            crate::backend::app_backend::debug_error_static(
+                "safe_app_ptr",
+                "BACKEND_LINK_BROKEN",
+                "app RefCell pointer is null",
+            );
+            return default;
+        }
+        // SAFETY: same as with_app; &mut self prevents two domain backends from
+        // calling with_app_mut simultaneously through normal Rust control flow.
+        // RefCell::try_borrow_mut catches Qt signal re-entry at runtime.
+        let cell_ref: &std::cell::RefCell<AppBackend> = unsafe { &*cell_ptr };
+        match cell_ref.try_borrow_mut() {
+            Ok(mut guard) => f(&mut *guard),
+            Err(_) => {
+                crate::backend::app_backend::debug_error_static(
+                    "safe_app_ptr",
+                    "BORROW_CONFLICT",
+                    "AppBackend already borrowed; returning default",
+                );
+                default
+            }
         }
     }
 }
@@ -106,13 +158,7 @@ impl BackendRuntime {
             r.current_setting_diagnostics_verbose = true;
         }
         let app_ptr = SafeAppPtr::new();
-        let raw_ptr = {
-            let pinned = app_backend.pinned();
-            let r = pinned.borrow();
-            // SAFETY: QObjectBox heap-allocates and pins AppBackend; Rc<Cell<>> is !Send/!Sync; app_backend is last field so it outlives all domain backends. See SafeAppPtr docs.
-            &*r as *const AppBackend as *mut AppBackend
-        };
-        app_ptr.set(raw_ptr);
+        app_ptr.set_from_pinned(app_backend.pinned());
 
         Self {
             workspace_backend: QObjectBox::new(WorkspaceBackend::new(app_ptr.clone())),
