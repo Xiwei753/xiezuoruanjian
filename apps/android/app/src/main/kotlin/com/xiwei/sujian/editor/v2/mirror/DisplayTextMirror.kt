@@ -145,7 +145,12 @@ class DisplayTextMirror {
 
         var indexMap = AndroidTextIndexMap(this)
         for (patch in patches) {
-            if (patch.newRevision <= currentRevision) continue
+            if (patch.baseRevision != currentRevision) {
+                throw IllegalStateException(
+                    "DisplayTextMirror revision discontinuity: expected baseRevision=$currentRevision, got ${patch.baseRevision}. " +
+                    "Must reload from EditorSession."
+                )
+            }
 
             val replaceStartUtf16 = indexMap.utf8ToUtf16(patch.replaceByteStart)
             val replaceEndUtf16 = indexMap.utf8ToUtf16(patch.replaceByteEndExclusive)

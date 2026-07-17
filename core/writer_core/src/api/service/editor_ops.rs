@@ -67,6 +67,20 @@ impl WriterCoreApi {
         Ok(caps.into())
     }
 
+    fn with_kernel<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&std::sync::Mutex<crate::editor::EditorKernel>) -> R,
+    {
+        use crate::editor::EditorKernel;
+        use std::sync::Mutex;
+
+        thread_local! {
+            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
+        }
+
+        KERNEL.with(f)
+    }
+
     /// #535: Apply an EditorCommand to the thread-local EditorKernel.
     ///
     /// The command is passed as JSON (serde-serialized EditorCommand).
@@ -75,17 +89,12 @@ impl WriterCoreApi {
         &self,
         command_json: &str,
     ) -> ApiResult<EditorEditResultDto> {
-        use crate::editor::{EditorCommand, EditorKernel};
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
+        use crate::editor::EditorCommand;
 
         let command: EditorCommand = serde_json::from_str(command_json)
             .map_err(|e| crate::error::Error::Json(e))?;
 
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             let result = kernel.apply(command);
             Ok(result.into())
@@ -98,14 +107,7 @@ impl WriterCoreApi {
         text: &str,
         cursor_byte_offset: u32,
     ) -> ApiResult<EditorEditResultDto> {
-        use crate::editor::EditorKernel;
-        use std::sync::Mutex;
-
-        thread_local! {
-            static KERNEL: Mutex<EditorKernel> = Mutex::new(EditorKernel::new());
-        }
-
-        KERNEL.with(|k| {
+        self.with_kernel(|k| {
             let mut kernel = k.lock().unwrap();
             let result = kernel.load_text(text.to_string(), cursor_byte_offset as usize);
             Ok(result.into())

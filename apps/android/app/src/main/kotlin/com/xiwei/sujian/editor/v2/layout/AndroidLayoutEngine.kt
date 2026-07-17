@@ -10,11 +10,12 @@ class AndroidLayoutEngine(
     private val mirror: DisplayTextMirror,
     private val textPaint: TextPaint
 ) {
-    private var layout: Layout? = null
+    private var layout: DynamicLayout? = null
     private var currentRevision: AndroidLayoutRevision? = null
     private var width: Float = 0f
     private var lineSpacingMultiplier: Float = 1.0f
     private var revisionCounter: Long = 0
+    private var lastEditorRevision: Long = -1
 
     fun setWidth(width: Float) {
         if (this.width != width) {
@@ -31,14 +32,21 @@ class AndroidLayoutEngine(
         val text = mirror.getSpannable()
         if (width <= 0f) return
 
+        val existingLayout = layout
+        if (existingLayout != null && mirror.getRevision() == lastEditorRevision) {
+            currentRevision = buildRevision(existingLayout)
+            return
+        }
+
         layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
             .setAlignment(Layout.Alignment.ALIGN_NORMAL)
             .setLineSpacing(0f, lineSpacingMultiplier)
             .setIncludePad(false)
             .build()
 
+        lastEditorRevision = mirror.getRevision()
         revisionCounter++
-        currentRevision = buildRevision()
+        currentRevision = buildRevision(layout!!)
     }
 
     fun getLayout(): Layout? = layout
@@ -68,12 +76,7 @@ class AndroidLayoutEngine(
         return l.getPrimaryHorizontal(utf16)
     }
 
-    private fun buildRevision(): AndroidLayoutRevision {
-        val l = layout ?: return AndroidLayoutRevision(
-            revisionCounter, mirror.getRevision(), width, "",
-            0, emptyList(), mirror.getCursorUtf8(), mirror.getCursorUtf16(), emptyList()
-        )
-
+    private fun buildRevision(l: Layout): AndroidLayoutRevision {
         val indexMap = AndroidTextIndexMap(mirror)
         val lineRanges = mutableListOf<AndroidLayoutRevision.LineRange>()
         for (i in 0 until l.lineCount) {
@@ -101,13 +104,15 @@ class AndroidLayoutEngine(
             ))
         }
 
+        val fontFingerprint = "${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}"
+
         return AndroidLayoutRevision(
             revisionCounter,
             mirror.getRevision(),
             width,
-            textPaint.textSize.toString(),
+            fontFingerprint,
             l.lineCount,
-            lineRanges,
+            lineRanges.toList(),
             mirror.getCursorUtf8(),
             mirror.getCursorUtf16(),
             emptyList()
