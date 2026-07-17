@@ -1,17 +1,10 @@
 # 项目文档
 
-本目录只保存长期有效的架构契约和数据格式。具体实现步骤、历史迁移、阶段性审计和能力快照统一放在 GitHub Issue，不进入长期文档。
+本目录只保存长期有效的架构约束和数据格式。具体实现步骤、历史迁移、阶段性审计和能力快照统一放在 GitHub Issue，不进入长期文档。
 
-## 架构与接口
+## 活动文档
 
 - [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md)：全局技术路线与平台边界。
-- [CROSS_PLATFORM_CAPABILITY_CONTRACT.md](CROSS_PLATFORM_CAPABILITY_CONTRACT.md)：跨平台能力契约。
-- [bridge_contract.md](bridge_contract.md)：跨语言 Bridge 边界。
-- [core_api.md](core_api.md)：Rust Core 对外能力契约。
-- [linux_backend_contract.md](linux_backend_contract.md)：Linux Backend 与 QML 的职责边界。
-
-## 数据格式
-
 - [workspace_format.md](workspace_format.md)：工作区磁盘格式。
 - [settings_schema.md](settings_schema.md)：设置项及同步属性。
 - [sync_rules.md](sync_rules.md)：同步与冲突规则。
