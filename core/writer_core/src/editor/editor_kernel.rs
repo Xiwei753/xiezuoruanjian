@@ -788,11 +788,9 @@ impl EditorKernel {
             return ((0, 0), String::new());
         }
 
-        let old_bytes = old_text.as_bytes();
-        let new_bytes = new_text.as_bytes();
-
         let mut prefix_len = 0;
-        while prefix_len < old_bytes.len() && prefix_len < new_bytes.len() && old_bytes[prefix_len] == new_bytes[prefix_len] {
+        for (ob, nb) in old_text.bytes().zip(new_text.bytes()) {
+            if ob != nb { break; }
             prefix_len += 1;
         }
         while prefix_len > 0 && !old_text.is_char_boundary(prefix_len) {
@@ -802,42 +800,29 @@ impl EditorKernel {
             prefix_len -= 1;
         }
 
-        let mut suffix_len = 0;
-        while suffix_len < old_bytes.len() - prefix_len && suffix_len < new_bytes.len() - prefix_len
-            && old_bytes[old_bytes.len() - 1 - suffix_len] == new_bytes[new_bytes.len() - 1 - suffix_len]
+        let mut old_suffix_len = 0;
+        let mut new_suffix_len = 0;
         {
-            suffix_len += 1;
+            let old_remaining = &old_text[prefix_len..];
+            let new_remaining = &new_text[prefix_len..];
+            let old_rev = old_remaining.bytes().rev();
+            let new_rev = new_remaining.bytes().rev();
+            for (ob, nb) in old_rev.zip(new_rev) {
+                if ob != nb { break; }
+                old_suffix_len += 1;
+                new_suffix_len += 1;
+            }
         }
-        while suffix_len > 0 && !old_text.is_char_boundary(old_bytes.len() - suffix_len) {
-            suffix_len -= 1;
+        while old_suffix_len > 0 && !old_text.is_char_boundary(old_text.len() - old_suffix_len) {
+            old_suffix_len -= 1;
         }
-        while suffix_len > 0 && !new_text.is_char_boundary(new_bytes.len() - suffix_len) {
-            suffix_len -= 1;
+        while new_suffix_len > 0 && !new_text.is_char_boundary(new_text.len() - new_suffix_len) {
+            new_suffix_len -= 1;
         }
 
         let replace_start = prefix_len;
-        let replace_end = old_bytes.len() - suffix_len;
-        let inserted_end = new_bytes.len() - suffix_len;
-
-        let replace_end = if replace_end > replace_start && !old_text.is_char_boundary(replace_end) {
-            let mut c = replace_end;
-            while c > replace_start && !old_text.is_char_boundary(c) {
-                c -= 1;
-            }
-            c
-        } else {
-            replace_end
-        };
-
-        let inserted_end = if inserted_end > prefix_len && !new_text.is_char_boundary(inserted_end) {
-            let mut c = inserted_end;
-            while c > prefix_len && !new_text.is_char_boundary(c) {
-                c -= 1;
-            }
-            c
-        } else {
-            inserted_end
-        };
+        let replace_end = old_text.len() - old_suffix_len;
+        let inserted_end = new_text.len() - new_suffix_len;
 
         let inserted_text = if prefix_len < inserted_end {
             new_text[prefix_len..inserted_end].to_string()
@@ -1677,5 +1662,61 @@ mod tests {
         assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
         assert_eq!(intent.old_affected_byte_ranges, vec![(6, 12)]);
         assert_eq!(intent.new_affected_byte_ranges, vec![(6, 12)]);
+    }
+
+    #[test]
+    fn compute_single_patch_cjk_replace() {
+        let ((start, end), inserted) = EditorKernel::compute_single_patch("你好", "你坏");
+        assert_eq!(start, 3);
+        assert_eq!(end, 6);
+        assert_eq!(inserted, "坏");
+    }
+
+    #[test]
+    fn compute_single_patch_cjk_insert() {
+        let ((start, end), inserted) = EditorKernel::compute_single_patch("你好", "你好世界");
+        assert_eq!(start, 6);
+        assert_eq!(end, 6);
+        assert_eq!(inserted, "世界");
+    }
+
+    #[test]
+    fn compute_single_patch_cjk_delete() {
+        let ((start, end), inserted) = EditorKernel::compute_single_patch("你好世界", "你好");
+        assert_eq!(start, 6);
+        assert_eq!(end, 12);
+        assert_eq!(inserted, "");
+    }
+
+    #[test]
+    fn compute_single_patch_mixed_ascii_cjk() {
+        let ((start, end), inserted) = EditorKernel::compute_single_patch("a你好b", "a你坏b");
+        assert_eq!(start, 4);
+        assert_eq!(end, 7);
+        assert_eq!(inserted, "坏");
+    }
+
+    #[test]
+    fn compute_single_patch_empty_old() {
+        let ((start, end), inserted) = EditorKernel::compute_single_patch("", "你好");
+        assert_eq!(start, 0);
+        assert_eq!(end, 0);
+        assert_eq!(inserted, "你好");
+    }
+
+    #[test]
+    fn compute_single_patch_empty_new() {
+        let ((start, end), inserted) = EditorKernel::compute_single_patch("你好", "");
+        assert_eq!(start, 0);
+        assert_eq!(end, 6);
+        assert_eq!(inserted, "");
+    }
+
+    #[test]
+    fn compute_single_patch_identical() {
+        let ((start, end), inserted) = EditorKernel::compute_single_patch("你好", "你好");
+        assert_eq!(start, 0);
+        assert_eq!(end, 0);
+        assert_eq!(inserted, "");
     }
 }

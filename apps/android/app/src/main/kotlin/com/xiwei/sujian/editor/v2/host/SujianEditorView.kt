@@ -80,11 +80,11 @@ class SujianEditorView @JvmOverloads constructor(
         applyEditResultFull(result)
     }
 
-    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null) {
         val bridge = kernelBridge ?: return
         val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
-        applyEditResultFull(result)
+        applyEditResultFull(result, beforePatch)
     }
 
     fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int) {
@@ -108,12 +108,13 @@ class SujianEditorView @JvmOverloads constructor(
         applyEditResultFull(result)
     }
 
-    private fun applyEditResultFull(result: EditResult) {
+    private fun applyEditResultFull(result: EditResult, beforePatch: (() -> Unit)? = null) {
         val frameTimeMs = System.nanoTime() / 1_000_000
         val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
+        beforePatch?.invoke()
         mirror.applyEditResult(result)
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
@@ -203,13 +204,15 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
         val result = EditResult.fromDto(dto)
-        mirror.clearComposition()
-        applyEditResultFull(result)
+        applyEditResultFull(result) {
+            mirror.clearComposition()
+        }
     }
 
     fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto) {
-        mirror.clearComposition()
-        replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+        replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause) {
+            mirror.clearComposition()
+        }
     }
 
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
@@ -225,9 +228,10 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
         if (w > 0) {
-            updateLayoutConfig()
-        } else {
+            layoutEngine.setWidth(w.toFloat())
+            layoutEngine.requestLayout()
             updateMaxScroll()
+            scrollY = scrollY.coerceIn(0f, maxScrollY)
         }
         invalidate()
     }
