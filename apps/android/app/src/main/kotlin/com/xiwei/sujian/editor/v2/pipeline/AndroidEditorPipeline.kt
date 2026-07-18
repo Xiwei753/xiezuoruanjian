@@ -65,7 +65,10 @@ class AndroidEditorPipeline private constructor(
         val bridge = kernelBridge ?: return LoadTextResult.Failed
         val dto = bridge.loadText(text, cursorUtf8) ?: return LoadTextResult.Failed
         val result = EditResult.fromDto(dto)
-        mirror.loadFromSnapshot(text, cursorUtf8, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
+        if (result.isStale()) {
+            return LoadTextResult.Failed
+        }
+        mirror.loadFromSnapshot(text, result.newSelectionEnd, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
         resetAfterLoad()
         return LoadTextResult.Loaded(result)
     }
@@ -147,7 +150,10 @@ class AndroidEditorPipeline private constructor(
         result: EditResult,
         beforePatch: (() -> Unit)? = null
     ): PipelineOutput {
-        if (result.isStale() || result.isInvalid()) {
+        if (result.isStale()) {
+            return PipelineOutput.StaleOrInvalid
+        }
+        if (result.isInvalid() && result.displayPatches.isEmpty()) {
             return PipelineOutput.StaleOrInvalid
         }
         if (result.displayPatches.isEmpty() && result.baseRevision != result.newRevision) {
