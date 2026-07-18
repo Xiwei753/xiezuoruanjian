@@ -1172,6 +1172,52 @@ impl EditorKernel {
         let old_cursor = self.cursor;
         let old_selection = (self.selection_anchor, self.cursor);
 
+        if cursor > text.len() || !text.is_char_boundary(cursor) {
+            let clamped = Self::clamp_to_char_boundary(&text, cursor);
+            let old_text = self.text.clone();
+            self.text = text;
+            self.cursor = clamped;
+            self.selection_anchor = clamped;
+            self.revision = self.revision.saturating_add(1);
+            self.undo_stack.clear();
+            self.redo_stack.clear();
+
+            let new_selection = (self.cursor, self.cursor);
+            let new_revision = self.revision;
+
+            let display_patches = vec![DisplayPatch {
+                base_revision,
+                new_revision,
+                replace_byte_range: (0, old_text.len()),
+                inserted_text: self.text.clone(),
+                resulting_selection_byte_range: new_selection,
+            }];
+
+            let visual_intent = EditorVisualIntent {
+                cause: EditorTransactionCause::Load,
+                operation_kind: EditorOperationKind::Load,
+                old_affected_byte_ranges: if old_text.is_empty() { vec![] } else { vec![(0, old_text.len())] },
+                new_affected_byte_ranges: if self.text.is_empty() { vec![] } else { vec![(0, self.text.len())] },
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_byte_offset: old_cursor,
+                    new_byte_offset: self.cursor,
+                    should_animate: false,
+                },
+            };
+
+            return EditorEditOutcome::InvalidOffset(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision,
+                display_patches,
+                old_selection_byte_range: old_selection,
+                new_selection_byte_range: new_selection,
+                visual_intent,
+            });
+        }
+
         let old_text = self.text.clone();
         self.text = text;
         let cursor = Self::clamp_to_char_boundary(&self.text, cursor);
