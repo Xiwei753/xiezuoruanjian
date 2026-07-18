@@ -217,10 +217,30 @@ class AndroidInputConnection(
             val (sessionId, _, generation) = adapter.compositionSessionInfo()
             if (sessionId != 0L) {
                 val bridge = pipeline.kernelBridge ?: return true
-                val cursorUtf16 = start
+                val compRangeUtf16 = mirror.getCompositionRangeUtf16()
+                val preeditCursorUtf16 = if (compRangeUtf16 != null) {
+                    val compStartUtf16 = compRangeUtf16.first
+                    val compEndUtf16 = compRangeUtf16.second
+                    val preeditUtf16Len = adapter.getCompositionText().let { text ->
+                        var count = 0; var i = 0
+                        while (i < text.length) {
+                            val cp = text.codePointAt(i)
+                            count += Character.charCount(cp)
+                            i += Character.charCount(cp)
+                        }
+                        count
+                    }
+                    when {
+                        start < compStartUtf16 -> 0
+                        start > compEndUtf16 -> preeditUtf16Len
+                        else -> start - compStartUtf16
+                    }
+                } else {
+                    0
+                }
                 val dto = bridge.updateComposition(
                     sessionId, generation,
-                    adapter.getCompositionText(), cursorUtf16,
+                    adapter.getCompositionText(), preeditCursorUtf16,
                     mirror.getRevision()
                 )
                 if (dto != null) {

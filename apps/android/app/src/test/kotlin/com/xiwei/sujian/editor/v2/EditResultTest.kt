@@ -38,8 +38,8 @@ class EditResultTest {
             durationMs = 160,
             coordinatedCursor = CoordinatedCursor(2, 3, true)
         )
-        assertEquals("typing", intent.cause)
-        assertEquals("insert", intent.operationKind)
+        assertEquals(uniffi.writer_core.EditorTransactionCauseDto.TYPING, intent.cause)
+        assertEquals(uniffi.writer_core.EditorOperationKindDto.INSERT, intent.operationKind)
         assertEquals(1, intent.oldAffectedByteRanges.size)
         assertEquals(1, intent.newAffectedByteRanges.size)
         assertEquals(160, intent.durationMs)

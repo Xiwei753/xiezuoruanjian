@@ -296,6 +296,8 @@ class AppServiceBridge(workspacePath: String) {
         holder.service.editorKernelCancelComposition(compositionSessionId, compositionGeneration, expectedRevision)
     }
 
+    // ── #541: Text Edit Session API ──
+
     fun textEditSessionCreate(
         targetId: String,
         initialText: String,
@@ -314,29 +316,42 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun textEditSessionInsert(
-        sessionId: ULong, byteOffset: UInt, text: String,
-        cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong
+        sessionId: ULong,
+        byteOffset: UInt,
+        text: String,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionInsert(sessionId, byteOffset, text, cause, expectedRevision)
     }
 
     fun textEditSessionDelete(
-        sessionId: ULong, byteStart: UInt, byteEndExclusive: UInt,
-        cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong
+        sessionId: ULong,
+        byteStart: UInt,
+        byteEndExclusive: UInt,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionDelete(sessionId, byteStart, byteEndExclusive, cause, expectedRevision)
     }
 
     fun textEditSessionReplace(
-        sessionId: ULong, byteStart: UInt, byteEndExclusive: UInt,
-        replacementText: String, originalText: String,
-        cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong
+        sessionId: ULong,
+        byteStart: UInt,
+        byteEndExclusive: UInt,
+        replacementText: String,
+        originalText: String,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionReplace(sessionId, byteStart, byteEndExclusive, replacementText, originalText, cause, expectedRevision)
     }
 
     fun textEditSessionSetSelection(
-        sessionId: ULong, anchorByteOffset: UInt, headByteOffset: UInt, expectedRevision: ULong
+        sessionId: ULong,
+        anchorByteOffset: UInt,
+        headByteOffset: UInt,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionSetSelection(sessionId, anchorByteOffset, headByteOffset, expectedRevision)
     }
@@ -354,54 +369,82 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun textEditSessionCompositionUpdateVisualIntent(
-        sessionId: ULong, compositionReplaceStart: UInt, compositionReplaceEndExclusive: UInt,
-        oldPreeditText: String, newPreeditText: String
+        sessionId: ULong,
+        compositionReplaceStart: UInt,
+        compositionReplaceEndExclusive: UInt,
+        oldPreeditText: String,
+        newPreeditText: String
     ): BridgeResult<uniffi.writer_core.EditorVisualIntentDto> = holder.wrapResult {
         holder.service.textEditSessionCompositionUpdateVisualIntent(sessionId, compositionReplaceStart, compositionReplaceEndExclusive, oldPreeditText, newPreeditText)
     }
 
     fun textEditSessionCommitText(
-        sessionId: ULong, byteStart: UInt, byteEndExclusive: UInt, replacementText: String,
-        resultingSelectionAnchor: UInt, resultingSelectionHead: UInt,
-        compositionSessionId: ULong, compositionBaseRevision: ULong, compositionGeneration: ULong,
-        cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong
+        sessionId: ULong,
+        byteStart: UInt,
+        byteEndExclusive: UInt,
+        replacementText: String,
+        resultingSelectionAnchor: UInt,
+        resultingSelectionHead: UInt,
+        compositionSessionId: ULong,
+        compositionBaseRevision: ULong,
+        compositionGeneration: ULong,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionCommitText(
             sessionId, byteStart, byteEndExclusive, replacementText,
             resultingSelectionAnchor, resultingSelectionHead,
-            compositionSessionId, compositionBaseRevision, compositionGeneration, cause, expectedRevision
+            compositionSessionId, compositionBaseRevision, compositionGeneration,
+            cause, expectedRevision
         )
     }
 
     fun textEditSessionDeleteSurrounding(
-        sessionId: ULong, beforeByteStart: UInt, beforeByteEndExclusive: UInt,
-        afterByteStart: UInt, afterByteEndExclusive: UInt,
-        cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong
+        sessionId: ULong,
+        beforeByteStart: UInt,
+        beforeByteEndExclusive: UInt,
+        afterByteStart: UInt,
+        afterByteEndExclusive: UInt,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionDeleteSurrounding(sessionId, beforeByteStart, beforeByteEndExclusive, afterByteStart, afterByteEndExclusive, cause, expectedRevision)
     }
 
     fun textEditSessionBeginComposition(
-        sessionId: ULong, replaceStart: UInt, replaceEndExclusive: UInt, expectedRevision: ULong
+        sessionId: ULong,
+        replaceStart: UInt,
+        replaceEndExclusive: UInt,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionBeginComposition(sessionId, replaceStart, replaceEndExclusive, expectedRevision)
     }
 
     fun textEditSessionUpdateComposition(
-        sessionId: ULong, compositionSessionId: ULong, compositionGeneration: ULong,
-        newPreeditText: String, newPreeditCursorOffset: UInt, expectedRevision: ULong
+        sessionId: ULong,
+        compositionSessionId: ULong,
+        compositionGeneration: ULong,
+        newPreeditText: String,
+        newPreeditCursorOffset: UInt,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionUpdateComposition(sessionId, compositionSessionId, compositionGeneration, newPreeditText, newPreeditCursorOffset, expectedRevision)
     }
 
     fun textEditSessionFinishComposition(
-        sessionId: ULong, compositionSessionId: ULong, compositionGeneration: ULong, expectedRevision: ULong
+        sessionId: ULong,
+        compositionSessionId: ULong,
+        compositionGeneration: ULong,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionFinishComposition(sessionId, compositionSessionId, compositionGeneration, expectedRevision)
     }
 
     fun textEditSessionCancelComposition(
-        sessionId: ULong, compositionSessionId: ULong, compositionGeneration: ULong, expectedRevision: ULong
+        sessionId: ULong,
+        compositionSessionId: ULong,
+        compositionGeneration: ULong,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionCancelComposition(sessionId, compositionSessionId, compositionGeneration, expectedRevision)
     }
@@ -427,14 +470,20 @@ class AppServiceBridge(workspacePath: String) {
     }
 
     fun textEditSessionReplaceAll(
-        sessionId: ULong, search: String, replacement: String, expectedRevision: ULong
+        sessionId: ULong,
+        search: String,
+        replacement: String,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionReplaceAll(sessionId, search, replacement, expectedRevision)
     }
 
     fun textEditSessionInsertLineBreak(
-        sessionId: ULong, byteOffset: UInt, autoIndentPrefix: String,
-        cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: ULong
+        sessionId: ULong,
+        byteOffset: UInt,
+        autoIndentPrefix: String,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.textEditSessionInsertLineBreak(sessionId, byteOffset, autoIndentPrefix, cause, expectedRevision)
     }

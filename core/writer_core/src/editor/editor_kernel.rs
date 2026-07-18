@@ -1801,11 +1801,14 @@ impl EditorKernel {
         self.text.replace_range(replace_start..replace_end, &committed_text);
         self.revision = self.revision.saturating_add(1);
 
-        let resulting_cursor = if preedit_cursor_utf16 > 0 {
+        let committed_utf16_len: usize = committed_text.chars().map(|c| c.len_utf16()).sum();
+        let preedit_cursor_utf16_clamped = preedit_cursor_utf16.min(committed_utf16_len);
+
+        let resulting_cursor_before_clamp = if preedit_cursor_utf16_clamped > 0 {
             let mut utf16_count = 0usize;
             let mut byte_offset = 0usize;
             for ch in committed_text.chars() {
-                if utf16_count >= preedit_cursor_utf16 {
+                if utf16_count >= preedit_cursor_utf16_clamped {
                     break;
                 }
                 let ch_len_utf16 = ch.len_utf16();
@@ -1816,7 +1819,9 @@ impl EditorKernel {
         } else {
             replace_start
         };
-        let resulting_cursor = Self::clamp_to_char_boundary(&self.text, resulting_cursor);
+        let resulting_cursor = Self::clamp_to_char_boundary(&self.text, resulting_cursor_before_clamp);
+        let selection_was_adjusted = resulting_cursor != resulting_cursor_before_clamp
+            || preedit_cursor_utf16 != preedit_cursor_utf16_clamped;
         self.cursor = resulting_cursor;
         self.selection_anchor = self.cursor;
         self.composition_session = None;
@@ -1840,7 +1845,7 @@ impl EditorKernel {
             resulting_selection_byte_range: new_selection,
         }];
 
-        EditorEditOutcome::Applied(EditorEditResult {
+        let edit_result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -1860,7 +1865,13 @@ impl EditorKernel {
                     should_animate: false,
                 },
             },
-        })
+        };
+
+        if selection_was_adjusted {
+            EditorEditOutcome::AppliedWithAdjustedSelection(edit_result)
+        } else {
+            EditorEditOutcome::Applied(edit_result)
+        }
     }
 
     fn apply_cancel_composition(
@@ -2705,7 +2716,7 @@ mod tests {
             composition_session_id: session_id,
             composition_generation: gen,
             new_preedit_text: "世界".to_string(),
-            new_preedit_cursor_offset: 6,
+            new_preedit_cursor_offset: 2,
             expected_revision: begin.new_revision,
         }).into_result();
 
@@ -2882,7 +2893,7 @@ mod tests {
             composition_session_id: session_id,
             composition_generation: gen,
             new_preedit_text: "世界".to_string(),
-            new_preedit_cursor_offset: 6,
+            new_preedit_cursor_offset: 2,
             expected_revision: begin.new_revision,
         }).into_result();
 
@@ -2897,6 +2908,38 @@ mod tests {
         assert_eq!(kernel.text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
         assert_eq!(kernel.selection_anchor(), 12);
+    }
+
+    #[test]
+    fn finish_composition_cursor_exceeds_preedit_length_returns_adjusted() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_start: 6,
+            replace_end_exclusive: 6,
+            expected_revision: 0,
+        }).into_result();
+
+        let (session_id, _base_rev, gen) = kernel.composition_session_info().unwrap();
+
+        kernel.apply(EditorCommand::UpdateComposition {
+            composition_session_id: session_id,
+            composition_generation: gen,
+            new_preedit_text: "世界".to_string(),
+            new_preedit_cursor_offset: 99,
+            expected_revision: begin.new_revision,
+        }).into_result();
+
+        let (_, _, new_gen) = kernel.composition_session_info().unwrap();
+
+        let outcome = kernel.apply(EditorCommand::FinishComposition {
+            composition_session_id: session_id,
+            composition_generation: new_gen,
+            expected_revision: begin.new_revision,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::AppliedWithAdjustedSelection(_)));
+        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.cursor(), 12);
+        assert!(kernel.composition_session_info().is_none());
     }
 
     #[test]
