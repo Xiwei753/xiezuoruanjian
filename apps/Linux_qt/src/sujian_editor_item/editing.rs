@@ -53,8 +53,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn clear_undo_stack(&mut self) {
-        self.buffer.undo_stack.clear();
-        self.buffer.redo_stack.clear();
+        self.pipeline.clear_undo_redo();
+        self.sync_buffer_from_pipeline();
     }
 
     pub(crate) fn insert_text(&mut self, text: QString) {
@@ -93,15 +93,19 @@ impl SujianEditorItem {
         self.preedit_cursor_rect = None;
 
         let old = self.buffer.snapshot();
-        self.buffer.push_undo(old.clone());
 
         if was_composing && session_replace_start != session_replace_end {
-            self.buffer.text.replace_range(session_replace_start..session_replace_end, &inserted);
-            self.buffer.cursor = session_replace_start + inserted.len();
-            self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, self.buffer.cursor);
-            self.buffer.selection_anchor = self.buffer.cursor;
+            let _ = self.pipeline.replace_range(session_replace_start, session_replace_end, &inserted, EditorTransactionCause::TypingCommit);
+            self.sync_buffer_from_pipeline();
         } else {
-            self.buffer.replace_selection_or_insert(&inserted);
+            let (sel_start, sel_end) = self.buffer.selection_range();
+            if sel_start != sel_end {
+                let _ = self.pipeline.replace_range(sel_start, sel_end, &inserted, EditorTransactionCause::Typing);
+                self.sync_buffer_from_pipeline();
+            } else {
+                let _ = self.pipeline.insert_text(self.buffer.cursor, &inserted, EditorTransactionCause::Typing);
+                self.sync_buffer_from_pipeline();
+            }
         }
         self.adjust_affinity_at_wrap_boundary();
         let cause = explicit_cause.unwrap_or_else(|| {
@@ -314,18 +318,20 @@ impl SujianEditorItem {
         self.preedit_cursor_rect = None;
 
         let old = self.buffer.snapshot();
-        self.buffer.push_undo(old.clone());
 
-        self.buffer.text = new_text;
-        self.buffer.cursor = crate::sujian_editor_item::buffer::clamp_to_char_boundary(&self.buffer.text, new_cursor);
-        self.buffer.selection_anchor = self.buffer.cursor;
-
-        self.adjust_affinity_at_wrap_boundary();
         let cause = if inserted.chars().count() == 1 {
             EditorTransactionCause::Typing
         } else {
             EditorTransactionCause::TypingCommit
         };
+        if del_start != del_end {
+            let _ = self.pipeline.replace_range(del_start, del_end, &inserted, cause);
+        } else {
+            let _ = self.pipeline.insert_text(del_start, &inserted, cause);
+        }
+        self.sync_buffer_from_pipeline();
+
+        self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
         if was_composing && self.current_typing_animation_enabled {
@@ -407,58 +413,81 @@ impl SujianEditorItem {
         if !self.current_editor_enabled {
             return;
         }
-        let old = self.buffer.snapshot();
-
-        if !self.buffer.delete_backward() {
+        let cursor = self.buffer.cursor;
+        if self.buffer.has_selection() {
+            let (start, end) = self.buffer.selection_range();
+            let old = self.buffer.snapshot();
+            if self.pipeline.delete_range(start, end, EditorTransactionCause::Delete).is_some() {
+                self.sync_buffer_from_pipeline();
+                self.adjust_affinity_at_wrap_boundary();
+                let new = self.buffer.snapshot();
+                let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+                self.emit_content_changed();
+            }
             return;
         }
-        self.buffer.push_undo(old.clone());
-        self.adjust_affinity_at_wrap_boundary();
-        let new = self.buffer.snapshot();
-
-        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-
-        self.emit_content_changed();
+        let Some(prev) = prev_char_boundary(&self.buffer.text, cursor) else {
+            return;
+        };
+        let old = self.buffer.snapshot();
+        if self.pipeline.delete_range(prev, cursor, EditorTransactionCause::Delete).is_some() {
+            self.sync_buffer_from_pipeline();
+            self.adjust_affinity_at_wrap_boundary();
+            let new = self.buffer.snapshot();
+            let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+            self.emit_content_changed();
+        }
     }
 
     pub(crate) fn delete_forward(&mut self) {
         if !self.current_editor_enabled {
             return;
         }
-        let old = self.buffer.snapshot();
-
-        if !self.buffer.delete_forward() {
+        let cursor = self.buffer.cursor;
+        if self.buffer.has_selection() {
+            let (start, end) = self.buffer.selection_range();
+            let old = self.buffer.snapshot();
+            if self.pipeline.delete_range(start, end, EditorTransactionCause::Delete).is_some() {
+                self.sync_buffer_from_pipeline();
+                self.adjust_affinity_at_wrap_boundary();
+                let new = self.buffer.snapshot();
+                let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+                self.emit_content_changed();
+            }
             return;
         }
-        self.buffer.push_undo(old.clone());
-        self.adjust_affinity_at_wrap_boundary();
-        let new = self.buffer.snapshot();
-
-        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-
-        self.emit_content_changed();
+        let Some(next) = next_char_boundary(&self.buffer.text, cursor) else {
+            return;
+        };
+        let old = self.buffer.snapshot();
+        if self.pipeline.delete_range(cursor, next, EditorTransactionCause::Delete).is_some() {
+            self.sync_buffer_from_pipeline();
+            self.adjust_affinity_at_wrap_boundary();
+            let new = self.buffer.snapshot();
+            let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+            self.emit_content_changed();
+        }
     }
 
     pub(crate) fn delete_selection(&mut self) {
         if !self.current_editor_enabled || !self.buffer.has_selection() {
             return;
         }
+        let (start, end) = self.buffer.selection_range();
         let old = self.buffer.snapshot();
-
-        if !self.buffer.delete_selection() {
-            return;
+        if self.pipeline.delete_range(start, end, EditorTransactionCause::Delete).is_some() {
+            self.sync_buffer_from_pipeline();
+            self.adjust_affinity_at_wrap_boundary();
+            let new = self.buffer.snapshot();
+            let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+            self.emit_content_changed();
         }
-        self.buffer.push_undo(old.clone());
-        self.adjust_affinity_at_wrap_boundary();
-        let new = self.buffer.snapshot();
-
-        let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-
-        self.emit_content_changed();
     }
 
     pub(crate) fn select_all(&mut self) {
-        self.buffer.select_all();
+        let text_len = self.buffer.text.len();
+        let _ = self.pipeline.set_selection(0, text_len);
+        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.adjust_affinity_at_wrap_boundary();
         self.cursor_position_changed();
@@ -471,21 +500,25 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn undo(&mut self) {
-        let Some((old, new)) = self.buffer.undo() else {
-            return;
-        };
-        self.adjust_affinity_at_wrap_boundary();
-        self.record_transaction(old, new, EditorTransactionCause::Undo, true);
-        self.emit_content_changed();
+        let old = self.buffer.snapshot();
+        if self.pipeline.perform_undo().is_some() {
+            self.sync_buffer_from_pipeline();
+            self.adjust_affinity_at_wrap_boundary();
+            let new = self.buffer.snapshot();
+            self.record_transaction(old, new, EditorTransactionCause::Undo, true);
+            self.emit_content_changed();
+        }
     }
 
     pub(crate) fn redo(&mut self) {
-        let Some((old, new)) = self.buffer.redo() else {
-            return;
-        };
-        self.adjust_affinity_at_wrap_boundary();
-        self.record_transaction(old, new, EditorTransactionCause::Redo, true);
-        self.emit_content_changed();
+        let old = self.buffer.snapshot();
+        if self.pipeline.perform_redo().is_some() {
+            self.sync_buffer_from_pipeline();
+            self.adjust_affinity_at_wrap_boundary();
+            let new = self.buffer.snapshot();
+            self.record_transaction(old, new, EditorTransactionCause::Redo, true);
+            self.emit_content_changed();
+        }
     }
 
     pub(crate) fn handle_key(&mut self, key: i32, modifiers: i32) -> bool {
@@ -500,7 +533,8 @@ impl SujianEditorItem {
             "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
             x, y, self.current_scroll_y, index, affinity, extend
         ));
-        self.buffer.move_cursor(index, extend);
+        let _ = self.pipeline.set_selection(if extend { self.buffer.selection_anchor } else { index }, index);
+        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.preedit_text.clear();
         self.preedit_cursor = 0;
@@ -520,7 +554,8 @@ impl SujianEditorItem {
         let (index, affinity) = self.hit_test(x as f64, y as f64);
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
-        self.buffer.move_cursor(index, true);
+        let _ = self.pipeline.set_selection(self.buffer.selection_anchor, index);
+        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
@@ -601,8 +636,8 @@ impl SujianEditorItem {
         let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
         let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
 
-        self.buffer.selection_anchor = byte_start;
-        self.buffer.cursor = byte_end;
+        let _ = self.pipeline.set_selection(byte_start, byte_end);
+        self.sync_buffer_from_pipeline();
     }
 
     pub(crate) fn clipboard_copy(&mut self) -> bool {
@@ -659,7 +694,13 @@ impl SujianEditorItem {
         } else {
             CaretAffinity::Upstream
         };
-        self.buffer.move_cursor(next, extend);
+        if extend {
+            let anchor = self.buffer.selection_anchor;
+            let _ = self.pipeline.set_selection(anchor, next);
+        } else {
+            let _ = self.pipeline.set_selection(next, next);
+        }
+        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
@@ -694,7 +735,13 @@ impl SujianEditorItem {
         self.cursor_ctrl.affinity = self
             .editor_layout
             .affinity_for_index_on_line(&lines[target_idx], index);
-        self.buffer.move_cursor(index, extend);
+        if extend {
+            let anchor = self.buffer.selection_anchor;
+            let _ = self.pipeline.set_selection(anchor, index);
+        } else {
+            let _ = self.pipeline.set_selection(index, index);
+        }
+        self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
@@ -724,8 +771,13 @@ impl SujianEditorItem {
         };
         let old_cursor_rect = self.current_cursor_rect_for_transaction();
         self.cursor_ctrl.affinity = affinity;
-        self.buffer.move_cursor(index, extend);
-        self.bump_visual_revision();
+        if extend {
+            let anchor = self.buffer.selection_anchor;
+            let _ = self.pipeline.set_selection(anchor, index);
+        } else {
+            let _ = self.pipeline.set_selection(index, index);
+        }
+        self.sync_buffer_from_pipeline();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();

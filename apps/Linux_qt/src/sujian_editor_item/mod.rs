@@ -34,6 +34,7 @@ pub(crate) mod layout_revision;
 pub(crate) mod line_snapshot;
 pub(crate) mod line_snapshot_builder;
 pub(crate) mod animated_slice;
+pub(crate) mod pipeline;
 pub(crate) mod static_line_patch;
 pub(crate) mod text_visual_transaction;
 pub(crate) mod properties;
@@ -256,6 +257,7 @@ pub struct SujianEditorItem {
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
 
+    pipeline: pipeline::LinuxEditorPipeline,
     buffer: EditorBuffer,
     engine: EditorEngine,
     current_content_height: f32,
@@ -395,6 +397,7 @@ impl Default for SujianEditorItem {
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
 
+            pipeline: pipeline::LinuxEditorPipeline::new(),
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
             current_content_height: 0.0,
@@ -450,6 +453,15 @@ impl Default for SujianEditorItem {
 }
 
 impl SujianEditorItem {
+    pub(crate) fn sync_buffer_from_pipeline(&mut self) {
+        let mirror = self.pipeline.mirror();
+        if self.buffer.text != mirror.text() {
+            self.buffer.text = mirror.text().to_string();
+        }
+        self.buffer.cursor = mirror.cursor();
+        self.buffer.selection_anchor = mirror.selection_anchor();
+    }
+
     pub(crate) fn request_static_repaint(&mut self) {
         self.render_dirty = true;
         let item = self as &dyn QQuickItem;

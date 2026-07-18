@@ -24,9 +24,10 @@ impl SujianEditorItem {
             return;
         }
         let old = self.buffer.snapshot();
-        self.buffer.set_text(normalized);
-        self.buffer.cursor = 0;
-        self.buffer.selection_anchor = 0;
+        self.pipeline.load_text(normalized.clone(), 0);
+        self.sync_buffer_from_pipeline();
+        self.buffer.undo_stack.clear();
+        self.buffer.redo_stack.clear();
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
         self.previous_canonical_snapshot = None;
@@ -53,9 +54,14 @@ impl SujianEditorItem {
         let old = self.buffer.snapshot();
         let old_cursor = self.buffer.cursor;
         let old_anchor = self.buffer.selection_anchor;
-        self.buffer.set_text(normalized);
-        self.buffer.cursor = clamp_to_char_boundary(&self.buffer.text, old_cursor);
-        self.buffer.selection_anchor = clamp_to_char_boundary(&self.buffer.text, old_anchor);
+        self.pipeline.load_text(normalized.clone(), old_cursor);
+        if self.pipeline.mirror().cursor() != clamp_to_char_boundary(&self.pipeline.mirror().text(), old_cursor) {
+            let _ = self.pipeline.set_selection(
+                clamp_to_char_boundary(self.pipeline.mirror().text(), old_anchor),
+                clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor),
+            );
+        }
+        self.sync_buffer_from_pipeline();
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
         self.previous_canonical_snapshot = None;
