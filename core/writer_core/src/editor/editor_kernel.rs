@@ -1503,7 +1503,6 @@ impl EditorKernel {
 
         let mut patches = Vec::new();
         let mut text = self.text.clone();
-        let mut delta: i64 = 0;
 
         let after_range = if after_byte_start < after_byte_end_exclusive {
             Some((after_byte_start, after_byte_end_exclusive))
@@ -1523,25 +1522,19 @@ impl EditorKernel {
             if as_ >= ae || as_ < sel_max {
                 return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
             }
-            let deleted_len = ae - as_;
             text.replace_range(as_..ae, "");
-            delta -= deleted_len as i64;
             patches.push((as_, ae, String::new()));
         }
 
         if let Some((bs, be)) = before_range {
-            let adjusted_bs = bs;
-            let adjusted_be = be;
-            if adjusted_bs > text.len() || adjusted_be > text.len() || !text.is_char_boundary(adjusted_bs) || !text.is_char_boundary(adjusted_be) {
+            if bs > text.len() || be > text.len() || !text.is_char_boundary(bs) || !text.is_char_boundary(be) {
                 return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
             }
-            if adjusted_bs >= adjusted_be || adjusted_be > sel_min {
+            if bs >= be || be > sel_min {
                 return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
             }
-            let deleted_len = adjusted_be - adjusted_bs;
-            text.replace_range(adjusted_bs..adjusted_be, "");
-            delta -= deleted_len as i64;
-            patches.push((adjusted_bs, adjusted_be, String::new()));
+            text.replace_range(bs..be, "");
+            patches.push((bs, be, String::new()));
         }
 
         if patches.is_empty() {
@@ -1552,18 +1545,14 @@ impl EditorKernel {
         self.text = text;
         self.revision = self.revision.saturating_add(1);
 
-        let new_sel_min = (sel_min as i64 + delta.min(0)) as usize;
-        let new_sel_max = if delta < 0 {
-            let before_delta = if before_range.is_some() {
-                let (bs, be) = before_range.unwrap();
-                (bs as i64 - be as i64) as i64
-            } else {
-                0
-            };
-            ((sel_max as i64) + before_delta) as usize
+        let before_deleted_len: usize = if let Some((bs, be)) = before_range {
+            be.saturating_sub(bs)
         } else {
-            sel_max
+            0
         };
+
+        let new_sel_min = sel_min.saturating_sub(before_deleted_len);
+        let new_sel_max = sel_max.saturating_sub(before_deleted_len);
         self.selection_anchor = new_sel_min;
         self.cursor = new_sel_max;
 
@@ -2481,5 +2470,285 @@ mod tests {
         assert_eq!(start, 0);
         assert_eq!(end, 0);
         assert_eq!(inserted, "");
+    }
+
+    #[test]
+    fn delete_surrounding_both_sides_preserves_selection() {
+        let mut kernel = EditorKernel::with_text("ABCDEFGHIJ".to_string(), 3).unwrap();
+        kernel.apply(EditorCommand::SetSelection {
+            anchor_byte_offset: 3,
+            head_byte_offset: 6,
+            expected_revision: 0,
+        }).into_result();
+
+        let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
+            before_byte_start: 0,
+            before_byte_end_exclusive: 2,
+            after_byte_start: 7,
+            after_byte_end_exclusive: 9,
+            cause: EditorTransactionCause::Delete,
+            expected_revision: 0,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "CDEFGJ");
+        assert_eq!(kernel.selection_anchor(), 1);
+        assert_eq!(kernel.cursor(), 4);
+    }
+
+    #[test]
+    fn delete_surrounding_before_only_shifts_selection() {
+        let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
+        kernel.apply(EditorCommand::SetSelection {
+            anchor_byte_offset: 3,
+            head_byte_offset: 5,
+            expected_revision: 0,
+        }).into_result();
+
+        let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
+            before_byte_start: 0,
+            before_byte_end_exclusive: 2,
+            after_byte_start: 0,
+            after_byte_end_exclusive: 0,
+            cause: EditorTransactionCause::Delete,
+            expected_revision: 0,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "CDE");
+        assert_eq!(kernel.selection_anchor(), 1);
+        assert_eq!(kernel.cursor(), 3);
+    }
+
+    #[test]
+    fn delete_surrounding_after_only_preserves_selection() {
+        let mut kernel = EditorKernel::with_text("ABCDE".to_string(), 3).unwrap();
+        kernel.apply(EditorCommand::SetSelection {
+            anchor_byte_offset: 0,
+            head_byte_offset: 3,
+            expected_revision: 0,
+        }).into_result();
+
+        let outcome = kernel.apply(EditorCommand::DeleteSurrounding {
+            before_byte_start: 0,
+            before_byte_end_exclusive: 0,
+            after_byte_start: 4,
+            after_byte_end_exclusive: 5,
+            cause: EditorTransactionCause::Delete,
+            expected_revision: 0,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "ABCD");
+        assert_eq!(kernel.selection_anchor(), 0);
+        assert_eq!(kernel.cursor(), 3);
+    }
+
+    #[test]
+    fn commit_text_with_session_validation() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_start: 6,
+            replace_end_exclusive: 6,
+            expected_revision: 0,
+        }).into_result();
+
+        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+
+        let outcome = kernel.apply(EditorCommand::CommitText {
+            byte_start: 6,
+            byte_end_exclusive: 6,
+            replacement_text: "世界".to_string(),
+            resulting_selection_anchor: 12,
+            resulting_selection_head: 12,
+            composition_session_id: session_id,
+            composition_base_revision: base_rev,
+            composition_generation: gen,
+            cause: EditorTransactionCause::TypingCommit,
+            expected_revision: begin.new_revision,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.cursor(), 12);
+        assert!(kernel.composition_session_info().is_none());
+    }
+
+    #[test]
+    fn commit_text_wrong_session_returns_stale() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        kernel.apply(EditorCommand::BeginComposition {
+            replace_start: 6,
+            replace_end_exclusive: 6,
+            expected_revision: 0,
+        }).into_result();
+
+        let outcome = kernel.apply(EditorCommand::CommitText {
+            byte_start: 6,
+            byte_end_exclusive: 6,
+            replacement_text: "世界".to_string(),
+            resulting_selection_anchor: 12,
+            resulting_selection_head: 12,
+            composition_session_id: 999,
+            composition_base_revision: 0,
+            composition_generation: 0,
+            cause: EditorTransactionCause::TypingCommit,
+            expected_revision: 1,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::StaleRevision(_)));
+        assert_eq!(kernel.text(), "你好");
+    }
+
+    #[test]
+    fn commit_text_empty_string_deletes_range() {
+        let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_start: 6,
+            replace_end_exclusive: 12,
+            expected_revision: 0,
+        }).into_result();
+
+        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+
+        let outcome = kernel.apply(EditorCommand::CommitText {
+            byte_start: 6,
+            byte_end_exclusive: 12,
+            replacement_text: String::new(),
+            resulting_selection_anchor: 6,
+            resulting_selection_head: 6,
+            composition_session_id: session_id,
+            composition_base_revision: base_rev,
+            composition_generation: gen,
+            cause: EditorTransactionCause::TypingCommit,
+            expected_revision: begin.new_revision,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.cursor(), 6);
+    }
+
+    #[test]
+    fn finish_composition_materializes_preedit() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_start: 6,
+            replace_end_exclusive: 6,
+            expected_revision: 0,
+        }).into_result();
+
+        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+
+        kernel.apply(EditorCommand::UpdateComposition {
+            composition_session_id: session_id,
+            composition_generation: gen,
+            new_preedit_text: "世界".to_string(),
+            new_preedit_cursor_offset: 6,
+            expected_revision: begin.new_revision,
+        }).into_result();
+
+        let (_, _, new_gen) = kernel.composition_session_info().unwrap();
+
+        let outcome = kernel.apply(EditorCommand::FinishComposition {
+            composition_session_id: session_id,
+            composition_generation: new_gen,
+            expected_revision: begin.new_revision,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "你好世界");
+        assert_eq!(kernel.cursor(), 12);
+        assert!(kernel.composition_session_info().is_none());
+    }
+
+    #[test]
+    fn finish_composition_empty_preedit_no_text_change() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_start: 6,
+            replace_end_exclusive: 6,
+            expected_revision: 0,
+        }).into_result();
+
+        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+
+        let outcome = kernel.apply(EditorCommand::FinishComposition {
+            composition_session_id: session_id,
+            composition_generation: gen,
+            expected_revision: begin.new_revision,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "你好");
+        assert_eq!(kernel.cursor(), 6);
+        assert!(kernel.composition_session_info().is_none());
+    }
+
+    #[test]
+    fn cancel_composition_preserves_text() {
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
+        let begin = kernel.apply(EditorCommand::BeginComposition {
+            replace_start: 3,
+            replace_end_exclusive: 6,
+            expected_revision: 0,
+        }).into_result();
+
+        let (session_id, base_rev, gen) = kernel.composition_session_info().unwrap();
+
+        kernel.apply(EditorCommand::UpdateComposition {
+            composition_session_id: session_id,
+            composition_generation: gen,
+            new_preedit_text: "坏".to_string(),
+            new_preedit_cursor_offset: 3,
+            expected_revision: begin.new_revision,
+        }).into_result();
+
+        let (_, _, new_gen) = kernel.composition_session_info().unwrap();
+
+        let outcome = kernel.apply(EditorCommand::CancelComposition {
+            composition_session_id: session_id,
+            composition_generation: new_gen,
+            expected_revision: begin.new_revision,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "你好");
+        assert!(kernel.composition_session_info().is_none());
+    }
+
+    #[test]
+    fn stale_revision_returns_current_revision() {
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
+        let r1 = kernel.apply(EditorCommand::Insert {
+            byte_offset: 3,
+            text: "d".to_string(),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
+        }).into_result();
+        assert_eq!(r1.new_revision, 1);
+
+        let outcome = kernel.apply(EditorCommand::Insert {
+            byte_offset: 4,
+            text: "e".to_string(),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: 99,
+        });
+        match outcome {
+            EditorEditOutcome::StaleRevision(result) => {
+                assert_eq!(result.base_revision, 1);
+                assert_eq!(result.new_revision, 1);
+            }
+            _ => panic!("expected StaleRevision"),
+        }
+    }
+
+    #[test]
+    fn load_text_with_invalid_cursor_returns_adjusted() {
+        let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
+        let outcome = kernel.load_text("new".to_string(), 100);
+        assert!(matches!(outcome, EditorEditOutcome::AppliedWithAdjustedSelection(_)));
+        assert_eq!(kernel.text(), "new");
+        assert_eq!(kernel.cursor(), 3);
+    }
+
+    #[test]
+    fn load_text_with_valid_cursor_returns_applied() {
+        let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
+        let outcome = kernel.load_text("new".to_string(), 2);
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
+        assert_eq!(kernel.text(), "new");
+        assert_eq!(kernel.cursor(), 2);
     }
 }

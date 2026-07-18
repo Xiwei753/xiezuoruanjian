@@ -855,12 +855,13 @@ impl WriterAppService {
             let expected_revision = s.kernel.revision();
             let (session_id, base_rev, generation) = s.kernel.composition_session_info()
                 .unwrap_or((0, expected_revision, 0));
+            let cursor_after = composition_replace_start as usize + committed_text.len();
             let command = EditorCommand::CommitText {
                 byte_start: composition_replace_start as usize,
                 byte_end_exclusive: composition_replace_end_exclusive as usize,
                 replacement_text: committed_text,
-                resulting_selection_anchor: composition_replace_start as usize,
-                resulting_selection_head: composition_replace_start as usize,
+                resulting_selection_anchor: cursor_after,
+                resulting_selection_head: cursor_after,
                 composition_session_id: session_id,
                 composition_base_revision: base_rev,
                 composition_generation: generation,
