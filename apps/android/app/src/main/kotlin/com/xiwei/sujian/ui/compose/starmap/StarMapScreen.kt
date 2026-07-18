@@ -348,9 +348,11 @@ private fun StarMapEditorScreen(
                                     }
                                 }
                                 canvasEditingNodeId = null
+                                coordinator.unregisterTarget(targetId)
                             },
                             onCancel = {
                                 canvasEditingNodeId = null
+                                coordinator.unregisterTarget(targetId)
                             },
                             onEditingStateChanged = { state ->
                                 if (state == EditingState.IDLE || state == EditingState.RELEASED) {

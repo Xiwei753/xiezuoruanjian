@@ -29,7 +29,7 @@ class AnimatedTextEditorCoordinator(
     }
 
     fun unregisterTarget(targetId: String) {
-        if (activeTargetId == targetId) {
+        if (activeTargetId == targetId && editingState != EditingState.COMMITTING && editingState != EditingState.CANCELLING) {
             cancelActiveEdit()
         }
         targets.remove(targetId)
