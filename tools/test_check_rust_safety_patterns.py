@@ -243,6 +243,18 @@ fn call_qt(item: *mut c_void) {
         rules = self.rule_names(source)
         self.assertIn("cpp-unsafe-call", rules)
 
+    def test_accepts_cpp_unsafe_empty_capture(self) -> None:
+        source = r'''
+fn qt_version() -> String {
+    let ptr = cpp!(unsafe [] -> *const std::ffi::c_char as "const char*" {
+        return qVersion();
+    });
+    unsafe { std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned() }
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("cpp-unsafe-call", rules)
+
     def test_accepts_cpp_unsafe_in_test_context(self) -> None:
         source = r'''
 #[cfg(test)]

@@ -104,8 +104,8 @@ RULES: tuple[PatternRule, ...] = (
     ),
     PatternRule(
         "cpp-unsafe-call",
-        re.compile(r"cpp!\s*\(\s*unsafe\b"),
-        "cpp!(unsafe [...]) 必须说明捕获指针的来源、有效期、所属线程和 null 前提",
+        re.compile(r"cpp!\s*\(\s*unsafe\s*\[(?!\s*\])"),
+        "cpp!(unsafe [...]) 捕获指针时必须说明来源、有效期、所属线程和 null 前提；空捕获列表 [] 不触发此规则",
     ),
 )
 
