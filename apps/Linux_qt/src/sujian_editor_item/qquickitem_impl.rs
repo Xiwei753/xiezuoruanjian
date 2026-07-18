@@ -13,6 +13,7 @@ impl QQuickItem for SujianEditorItem {
         }
         let item_ptr = self as *mut Self as *mut std::ffi::c_void;
         input::install_event_filter(obj_ptr, item_ptr);
+        self.clipboard_adapter.set_item_ptr(obj_ptr);
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
