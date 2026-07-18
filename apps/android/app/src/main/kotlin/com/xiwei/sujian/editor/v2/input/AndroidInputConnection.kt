@@ -55,8 +55,8 @@ class AndroidInputConnection(
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
         val beforeStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
-        val beforeEndUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
-        val afterStartUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
+        val beforeEndUtf8 = indexMap.utf16ToUtf8(cursorUtf16)
+        val afterStartUtf8 = indexMap.utf16ToUtf8(cursorUtf16)
         val afterEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
 
         val hasBefore = beforeStartUtf8 < beforeEndUtf8 && beforeEndUtf8 <= selMin
@@ -105,8 +105,8 @@ class AndroidInputConnection(
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
         val beforeStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
-        val beforeEndUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
-        val afterStartUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
+        val beforeEndUtf8 = indexMap.utf16ToUtf8(cursorUtf16)
+        val afterStartUtf8 = indexMap.utf16ToUtf8(cursorUtf16)
         val afterEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
 
         val hasBefore = beforeStartUtf8 < beforeEndUtf8 && beforeEndUtf8 <= selMin

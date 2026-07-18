@@ -487,7 +487,7 @@ class AndroidVisualPlanner(
             if (oldLineRange != null && newLineRange != null) {
                 val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots)
-                if (newSnapshot != null) {
+                if (newSnapshot != null && oldSnapshot != null) {
                     val matchedPairs = matchClustersByOffsetMap(
                         oldSnapshot, newSnapshot, visualIntent, oldRev, newRev
                     )

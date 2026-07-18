@@ -234,4 +234,77 @@ class AppServiceBridge(workspacePath: String) {
     ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
         holder.service.editorKernelInsertLineBreak(byteOffset, autoIndentPrefix, cause, expectedRevision)
     }
+
+    fun editorKernelCommitText(
+        byteStart: UInt,
+        byteEndExclusive: UInt,
+        replacementText: String,
+        resultingSelectionAnchor: UInt,
+        resultingSelectionHead: UInt,
+        compositionSessionId: ULong,
+        compositionBaseRevision: ULong,
+        compositionGeneration: ULong,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelCommitText(
+            byteStart, byteEndExclusive, replacementText,
+            resultingSelectionAnchor, resultingSelectionHead,
+            compositionSessionId, compositionBaseRevision, compositionGeneration,
+            cause, expectedRevision
+        )
+    }
+
+    fun editorKernelDeleteSurrounding(
+        beforeByteStart: UInt,
+        beforeByteEndExclusive: UInt,
+        afterByteStart: UInt,
+        afterByteEndExclusive: UInt,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelDeleteSurrounding(
+            beforeByteStart, beforeByteEndExclusive,
+            afterByteStart, afterByteEndExclusive,
+            cause, expectedRevision
+        )
+    }
+
+    fun editorKernelBeginComposition(
+        replaceStart: UInt,
+        replaceEndExclusive: UInt,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelBeginComposition(replaceStart, replaceEndExclusive, expectedRevision)
+    }
+
+    fun editorKernelUpdateComposition(
+        compositionSessionId: ULong,
+        compositionGeneration: ULong,
+        newPreeditText: String,
+        newPreeditCursorOffset: UInt,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelUpdateComposition(
+            compositionSessionId, compositionGeneration,
+            newPreeditText, newPreeditCursorOffset,
+            expectedRevision
+        )
+    }
+
+    fun editorKernelFinishComposition(
+        compositionSessionId: ULong,
+        compositionGeneration: ULong,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelFinishComposition(compositionSessionId, compositionGeneration, expectedRevision)
+    }
+
+    fun editorKernelCancelComposition(
+        compositionSessionId: ULong,
+        compositionGeneration: ULong,
+        expectedRevision: ULong
+    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
+        holder.service.editorKernelCancelComposition(compositionSessionId, compositionGeneration, expectedRevision)
+    }
 }

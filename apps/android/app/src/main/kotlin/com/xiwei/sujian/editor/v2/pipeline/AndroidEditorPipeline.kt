@@ -2,7 +2,7 @@ package com.xiwei.sujian.editor.v2.pipeline
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Paint
+import android.text.TextPaint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
@@ -33,7 +33,7 @@ class AndroidEditorPipeline private constructor(
 ) {
 
     companion object {
-        fun create(mirror: DisplayTextMirror, textPaint: Paint, hostView: View): AndroidEditorPipeline {
+        fun create(mirror: DisplayTextMirror, textPaint: TextPaint, hostView: View): AndroidEditorPipeline {
             val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
             val visualPlanner = AndroidVisualPlanner()
             val resourceStore = VisualResourceStore()

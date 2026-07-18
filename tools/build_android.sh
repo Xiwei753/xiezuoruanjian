@@ -106,6 +106,8 @@ fi
 
 echo "生成 UniFFI Kotlin 绑定..."
 cd "$WORKSPACE_ROOT"
+UNIFFI_OUT_DIR="apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/uniffi/writer_core"
+rm -rf "$UNIFFI_OUT_DIR"
 cargo run --bin uniffi-bindgen -- generate \
     core/writer_core/src/api.udl \
     --language kotlin \

@@ -440,7 +440,8 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) => {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -476,7 +477,8 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) => {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -513,7 +515,7 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) => {
+            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -547,7 +549,7 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) => {
+            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -579,7 +581,7 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) => {
+            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
@@ -611,7 +613,7 @@ impl LinuxEditorPipeline {
         };
         let outcome = self.kernel.apply(command);
         match outcome {
-            EditorEditOutcome::Applied(result) => {
+            EditorEditOutcome::Applied(result) | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
                 if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),

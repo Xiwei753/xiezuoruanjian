@@ -102,7 +102,7 @@ class AndroidInputAdapter(
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         val dto = bridge.updateComposition(
-            sessionId, baseRev, generation,
+            sessionId, generation,
             newPreeditText, newPreeditCursorOffset,
             mirror.getRevision()
         ) ?: return
@@ -116,7 +116,7 @@ class AndroidInputAdapter(
         val bridge = pipeline.kernelBridge ?: return
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
-        val dto = bridge.finishComposition(sessionId, baseRev, generation, mirror.getRevision()) ?: return
+        val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision()) ?: return
         val output = pipeline.applyCompositionCommit(dto)
         onPipelineOutput?.invoke(output)
         compositionSessionId = 0L
@@ -128,7 +128,7 @@ class AndroidInputAdapter(
         val bridge = pipeline.kernelBridge ?: return
         val (sessionId, baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
-        bridge.cancelComposition(sessionId, baseRev, generation, mirror.getRevision())
+        bridge.cancelComposition(sessionId, generation, mirror.getRevision())
         compositionSessionId = 0L
         compositionBaseRevision = 0L
         compositionGeneration = 0u
@@ -238,7 +238,7 @@ class AndroidInputAdapter(
         if (bridge != null) {
             val (sessionId, baseRev, generation) = compositionSessionInfo()
             if (sessionId != 0L) {
-                val dto = bridge.finishComposition(sessionId, baseRev, generation, mirror.getRevision())
+                val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
                 if (dto != null) {
                     val output = pipeline.applyCompositionCommit(dto)
                     onPipelineOutput?.invoke(output)
