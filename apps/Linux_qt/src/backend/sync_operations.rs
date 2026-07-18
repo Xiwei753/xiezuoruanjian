@@ -235,7 +235,6 @@ impl AppBackend {
                         };
                         return SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
-                            operation_kind: "dry_run".to_string(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                         };
@@ -269,7 +268,6 @@ impl AppBackend {
 
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
-                            operation_kind: "dry_run".to_string(),
                             sync_status: "dry_run_success".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
@@ -291,7 +289,6 @@ impl AppBackend {
 
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
-                            operation_kind: "dry_run".to_string(),
                             sync_status: cat,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
@@ -323,7 +320,6 @@ impl AppBackend {
                     };
                     callback(SyncTaskOutcome {
                         operation_id: op_id_capture,
-                        operation_kind: "dry_run".to_string(),
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
                     });
@@ -525,7 +521,6 @@ impl AppBackend {
                         };
                         return SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
-                            operation_kind: "sync".to_string(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                         };
@@ -600,7 +595,6 @@ impl AppBackend {
 
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
-                            operation_kind: "sync".to_string(),
                             sync_status: status_code,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
@@ -635,7 +629,6 @@ impl AppBackend {
                         };
                         SyncTaskOutcome {
                             operation_id: op_id_capture.clone(),
-                            operation_kind: "sync".to_string(),
                             sync_status: cat,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                         }
@@ -667,7 +660,6 @@ impl AppBackend {
                     };
                     callback(SyncTaskOutcome {
                         operation_id: op_id_capture,
-                        operation_kind: "sync".to_string(),
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
                     });

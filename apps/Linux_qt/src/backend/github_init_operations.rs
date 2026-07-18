@@ -167,7 +167,6 @@ impl AppBackend {
                             if let Err(e) = api.create_workspace_if_needed() {
                                 return SyncTaskOutcome {
                                     operation_id: operation_id.to_string(),
-                                    operation_kind: "github_init".to_string(),
                                     sync_status: "error".to_string(),
                                     action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
                                         operation_id: operation_id.to_string(),
@@ -206,24 +205,24 @@ impl AppBackend {
                                         let err = push_res.error.unwrap_or_default();
                                         if let Some(se) = save_outcome {
                                             return SyncTaskOutcome {
-                                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
+                                                operation_id: operation_id.to_string(), sync_status: "error".to_string(),
                                                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&err)), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
                                             };
                                         }
                                         return SyncTaskOutcome {
-                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category_from_code(category.as_deref(), &err),
+                                            operation_id: operation_id.to_string(), sync_status: sync_error_category_from_code(category.as_deref(), &err),
                                             action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(category.as_deref(), &err), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&err))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&err)) }).unwrap_or_default(),
                                         };
                                     }
                                     Err(e) => {
                                         if let Some(se) = save_outcome {
                                             return SyncTaskOutcome {
-                                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
+                                                operation_id: operation_id.to_string(), sync_status: "error".to_string(),
                                                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.push_failed_save_config_failed".to_string()), summary_args: [("push_error".to_string(), mask_sync_error(&e.to_string())), ("save_error".to_string(), se)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                                             };
                                         }
                                         return SyncTaskOutcome {
-                                            operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: sync_error_category_from_code(None,&e.to_string()),
+                                            operation_id: operation_id.to_string(), sync_status: sync_error_category_from_code(None,&e.to_string()),
                                             action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(None,&e.to_string()), phase_key: None, summary_key: Some("sync.result.push_failed".to_string()), summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                                         };
                                     }
@@ -232,11 +231,11 @@ impl AppBackend {
                         }
                         match save_sync_configs(path, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
-                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "success".to_string(),
+                                operation_id: operation_id.to_string(), sync_status: "success".to_string(),
                                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "success".to_string(), phase_key: None, summary_key: Some("sync.result.clone_init_success".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: None }).unwrap_or_default(),
                             },
                             Err(e) => SyncTaskOutcome {
-                                operation_id: operation_id.to_string(), operation_kind: "sync".to_string(), sync_status: "error".to_string(),
+                                operation_id: operation_id.to_string(), sync_status: "error".to_string(),
                                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "error".to_string(), phase_key: None, summary_key: Some("sync.result.save_config_failed".to_string()), summary_args: [("error".to_string(), e)].into_iter().collect(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: None }).unwrap_or_default(),
                             },
                         }
@@ -244,7 +243,6 @@ impl AppBackend {
                         let err = result.error.unwrap_or_default();
                         SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
-                            operation_kind: "sync".to_string(),
                             sync_status: sync_error_category_from_code(
                                 result.error_category.as_deref(),
                                 &err,
@@ -255,7 +253,6 @@ impl AppBackend {
                 }
                 Err(e) => SyncTaskOutcome {
                     operation_id: operation_id.to_string(),
-                    operation_kind: "sync".to_string(),
                     sync_status: sync_error_category_from_code(None,&e.to_string()),
                     action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: sync_error_category_from_code(None,&e.to_string()), phase_key: None, summary_key: Some("sync.result.clone_failed".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: Some(mask_sync_error(&e.to_string())) }).unwrap_or_default(),
                 },
@@ -268,13 +265,11 @@ impl AppBackend {
                         match save_sync_configs(path, cfg_ref, sec_ref) {
                             Ok(()) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(),
-                                operation_kind: "sync".to_string(),
                                 sync_status: "success".to_string(),
                                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto { operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), status_code: "success".to_string(), phase_key: None, summary_key: Some("sync.result.remote_configured_sync_success".to_string()), summary_args: std::collections::HashMap::new(), counts: writer_core::api::SyncOperationCountsDto::default(), raw_error: None }).unwrap_or_default(),
                             },
                             Err(e) => SyncTaskOutcome {
                                 operation_id: operation_id.to_string(),
-                                operation_kind: "github_init".to_string(),
                                 sync_status: "error".to_string(),
                                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
                                     operation_id: operation_id.to_string(),
@@ -336,7 +331,6 @@ impl AppBackend {
                         );
                         SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
-                            operation_kind: "github_init".to_string(),
                             sync_status: "conflict".to_string(),
                             action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
                                 operation_id: operation_id.to_string(),
@@ -368,7 +362,6 @@ impl AppBackend {
                         };
                         SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
-                            operation_kind: "github_init".to_string(),
                             sync_status: cat.clone(),
                             action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
                                 operation_id: operation_id.to_string(),
@@ -401,7 +394,6 @@ impl AppBackend {
                     };
                     SyncTaskOutcome {
                         operation_id: operation_id.to_string(),
-                        operation_kind: "github_init".to_string(),
                         sync_status: cat.clone(),
                         action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
                             operation_id: operation_id.to_string(),
@@ -418,7 +410,7 @@ impl AppBackend {
             }
         } else if is_git_repo() {
             SyncTaskOutcome {
-                operation_id: operation_id.to_string(), operation_kind: "github_init".to_string(), sync_status: "error".to_string(),
+                operation_id: operation_id.to_string(), sync_status: "error".to_string(),
                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
                     operation_id: operation_id.to_string(),
                     operation_kind: "github_init".to_string(),
@@ -433,7 +425,6 @@ impl AppBackend {
         } else {
             SyncTaskOutcome {
                 operation_id: operation_id.to_string(),
-                operation_kind: "github_init".to_string(),
                 sync_status: "error".to_string(),
                 action_result: serde_json::to_string(&writer_core::api::SyncOperationStateDto {
                     operation_id: operation_id.to_string(),

@@ -713,7 +713,6 @@ mod tests {
 
         let outcome = SyncTaskOutcome {
             operation_id: "".to_string(),
-            operation_kind: "sync".to_string(),
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
         };
@@ -733,7 +732,6 @@ mod tests {
 
         let outcome = SyncTaskOutcome {
             operation_id: "".to_string(),
-            operation_kind: "sync".to_string(),
             sync_status: "conflict".to_string(),
             action_result: "Conflict".to_string(),
         };
@@ -749,7 +747,6 @@ mod tests {
 
         let outcome = SyncTaskOutcome {
             operation_id: "".to_string(),
-            operation_kind: "sync".to_string(),
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
         };

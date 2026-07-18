@@ -8,7 +8,7 @@
 // - writer_core::sync：核心底层的 Git 与 RESTful 同步控制服务（唯一正式同步模块）。
 //
 // 干什么的：
-// - 封装多线程异步同步/诊断任务结果传输结构体（SyncTaskOutcome），提供 operation_id 和 operation_kind。
+// - 封装多线程异步同步/诊断任务结果传输结构体（SyncTaskOutcome），提供 operation_id。
 // - 负责错误消息脱敏处理（mask_sync_error），剥离 Token 等隐私信息，严守数据防泄露红线。
 // - 将底层网络或 Git 抛出的原始错误分类映射为 UI 状态码（sync_error_category），供 StatusPill 等组件渲染。
 //
@@ -24,7 +24,6 @@ use writer_core::sync::{SyncConfig, SyncSecrets};
 /// 同步任务结果封装。
 pub struct SyncTaskOutcome {
     pub operation_id: String,
-    pub operation_kind: String,
     pub sync_status: String,
     pub action_result: String,
 }
