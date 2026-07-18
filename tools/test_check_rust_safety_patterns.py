@@ -18,10 +18,10 @@ SPEC.loader.exec_module(MODULE)
 
 
 class RustSafetyPatternTests(unittest.TestCase):
-    def rule_names(self, source: str) -> set[str]:
+    def rule_names(self, source: str, path: str = "sample.rs") -> set[str]:
         return {
             finding.rule
-            for finding in MODULE.scan_text(Path("sample.rs"), source)
+            for finding in MODULE.scan_text(Path(path), source)
         }
 
     def test_detects_known_compiler_bypass_patterns(self) -> None:
@@ -86,15 +86,15 @@ const RAW: &str = r#"#[allow(dead_code)] and AssertUnwindSafe"#;
             )
             self.assertEqual(MODULE.scan_repository(root), [])
 
-    def test_accepts_justified_dead_code_allow(self) -> None:
+    def test_flags_dead_code_allow_even_with_comment(self) -> None:
         source = r'''
 #[allow(dead_code)] // qmetaobject macro field used by Qt meta-object system
 struct Foo { x: i32 }
 '''
         rules = self.rule_names(source)
-        self.assertNotIn("broad-dead-code-allow", rules)
+        self.assertIn("broad-dead-code-allow", rules)
 
-    def test_accepts_justified_assert_unwind_safe(self) -> None:
+    def test_flags_assert_unwind_safe_even_with_comment(self) -> None:
         source = r'''
 fn ffi_boundary() {
     // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; closure only accesses owned data.
@@ -102,9 +102,9 @@ fn ffi_boundary() {
 }
 '''
         rules = self.rule_names(source)
-        self.assertNotIn("assert-unwind-safe", rules)
+        self.assertIn("assert-unwind-safe", rules)
 
-    def test_accepts_justified_app_backend_mut_alias(self) -> None:
+    def test_flags_app_backend_mut_alias_even_with_comment(self) -> None:
         source = r'''
 fn with_app_mut(&mut self) {
     // SAFETY: pointer from QObjectBox-pinned AppBackend; null-guarded; single-threaded (Rc).
@@ -112,7 +112,7 @@ fn with_app_mut(&mut self) {
 }
 '''
         rules = self.rule_names(source)
-        self.assertNotIn("app-backend-mut-alias", rules)
+        self.assertIn("app-backend-mut-alias", rules)
 
     def test_flags_unjustified_patterns(self) -> None:
         source = r'''
@@ -137,7 +137,7 @@ fn bad() {
         rules = self.rule_names(source)
         self.assertIn("transmute-pointer-escape", rules)
 
-    def test_accepts_justified_transmute(self) -> None:
+    def test_flags_transmute_even_with_comment(self) -> None:
         source = r'''
 fn qt_interop() {
     // SAFETY: QObjectPinned is #[repr(transparent)] over &RefCell<T>; pointer cast extracts inner reference.
@@ -145,7 +145,7 @@ fn qt_interop() {
 }
 '''
         rules = self.rule_names(source)
-        self.assertNotIn("transmute-pointer-escape", rules)
+        self.assertIn("transmute-pointer-escape", rules)
 
     def test_detects_production_lock_unwrap(self) -> None:
         source = r'''
@@ -168,7 +168,7 @@ mod tests {
         rules = self.rule_names(source)
         self.assertNotIn("production-lock-unwrap", rules)
 
-    def test_accepts_justified_lock_unwrap(self) -> None:
+    def test_flags_lock_unwrap_even_with_comment(self) -> None:
         source = r'''
 fn init_once(mutex: &Mutex<()>) {
     // SAFETY: lock only held during init; no other thread can poison it.
@@ -176,7 +176,7 @@ fn init_once(mutex: &Mutex<()>) {
 }
 '''
         rules = self.rule_names(source)
-        self.assertNotIn("production-lock-unwrap", rules)
+        self.assertIn("production-lock-unwrap", rules)
 
     def test_detects_safe_app_ptr_usage(self) -> None:
         source = r'''
@@ -231,6 +231,49 @@ fn ok(msg: String) -> crate::Error {
 '''
         rules = self.rule_names(source)
         self.assertNotIn("error-other-string-category", rules)
+
+    def test_detects_cpp_unsafe_call(self) -> None:
+        source = r'''
+fn call_qt(item: *mut c_void) {
+    cpp!(unsafe [item as "QQuickItem*"] {
+        item->update();
+    });
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("cpp-unsafe-call", rules)
+
+    def test_accepts_cpp_unsafe_in_test_context(self) -> None:
+        source = r'''
+#[cfg(test)]
+mod tests {
+    fn test_qt_call(item: *mut c_void) {
+        cpp!(unsafe [item as "QQuickItem*"] {
+            item->update();
+        });
+    }
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("cpp-unsafe-call", rules)
+
+    def test_assert_unwind_safe_allowed_in_whitelisted_path(self) -> None:
+        source = r'''
+fn ffi_boundary() {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
+}
+'''
+        rules = self.rule_names(source, path="apps/Linux_qt/src/backend/sync_backend.rs")
+        self.assertNotIn("assert-unwind-safe", rules)
+
+    def test_assert_unwind_safe_flagged_in_non_whitelisted_path(self) -> None:
+        source = r'''
+fn other_file() {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
+}
+'''
+        rules = self.rule_names(source, path="apps/Linux_qt/src/backend/other.rs")
+        self.assertIn("assert-unwind-safe", rules)
 
 
 if __name__ == "__main__":

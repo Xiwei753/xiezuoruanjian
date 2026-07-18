@@ -88,102 +88,113 @@ impl SettingsBackend {
         }
     }
 
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
-        self.app.with_app(default, f)
+    fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+        self.app.with_app(f)
     }
 
-    fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
-        self.app.with_app_mut(default, f)
+    fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+        self.app.with_app_mut(f)
     }
 
     fn setting_font_size(&self) -> f32 {
-        self.with_app(16.0, |app| app.setting_font_size())
+        self.with_app(|app| app.setting_font_size()).unwrap_or(16.0)
     }
     fn set_setting_font_size(&mut self, val: f32) {
-        self.with_app_mut((), |app| app.set_setting_font_size(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_font_size(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_line_spacing(&self) -> f32 {
-        self.with_app(1.5, |app| app.setting_line_spacing())
+        self.with_app(|app| app.setting_line_spacing()).unwrap_or(1.5)
     }
     fn set_setting_line_spacing(&mut self, val: f32) {
-        self.with_app_mut((), |app| app.set_setting_line_spacing(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_line_spacing(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_auto_save_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_auto_save_enabled())
+        self.with_app(|app| app.setting_auto_save_enabled()).unwrap_or(true)
     }
     fn set_setting_auto_save_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_auto_save_enabled(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_auto_save_enabled(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_auto_save_delay_ms(&self) -> u32 {
-        self.with_app(1500, |app| app.setting_auto_save_delay_ms())
+        self.with_app(|app| app.setting_auto_save_delay_ms()).unwrap_or(1500)
     }
     fn set_setting_auto_save_delay_ms(&mut self, val: u32) {
-        self.with_app_mut((), |app| app.set_setting_auto_save_delay_ms(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_auto_save_delay_ms(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_auto_indent_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_auto_indent_enabled())
+        self.with_app(|app| app.setting_auto_indent_enabled()).unwrap_or(true)
     }
     fn set_setting_auto_indent_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_auto_indent_enabled(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_auto_indent_enabled(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_auto_indent_width(&self) -> f32 {
-        self.with_app(2.0, |app| app.setting_auto_indent_width())
+        self.with_app(|app| app.setting_auto_indent_width()).unwrap_or(2.0)
     }
     fn set_setting_auto_indent_width(&mut self, val: f32) {
-        self.with_app_mut((), |app| app.set_setting_auto_indent_width(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_auto_indent_width(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_theme_mode(&self) -> QString {
-        self.with_app("system".into(), |app| app.setting_theme_mode())
+        self.with_app(|app| app.setting_theme_mode()).unwrap_or_else(|_| "system".into())
     }
     fn setting_monet_color(&self) -> QString {
-        self.with_app("".into(), |app| app.setting_monet_color())
+        self.with_app(|app| app.setting_monet_color()).unwrap_or_else(|_| "".into())
     }
     fn setting_theme_palette_json(&self) -> QString {
-        self.with_app("".into(), |app| app.setting_theme_palette_json())
+        self.with_app(|app| app.setting_theme_palette_json()).unwrap_or_else(|_| "".into())
     }
     fn setting_color_source(&self) -> QString {
-        self.with_app("built_in".into(), |app| app.setting_color_source())
+        self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| "built_in".into())
     }
     fn set_setting_color_source(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_color_source(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_color_source(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_appearance_mode(&self) -> QString {
-        self.with_app("system".into(), |app| app.setting_appearance_mode())
+        self.with_app(|app| app.setting_appearance_mode()).unwrap_or_else(|_| "system".into())
     }
     fn set_setting_appearance_mode(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_appearance_mode(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_appearance_mode(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_dynamic_color_enabled(&self) -> bool {
-        self.with_app(false, |app| app.setting_dynamic_color_enabled())
+        self.with_app(|app| app.setting_dynamic_color_enabled()).unwrap_or(false)
     }
     fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_dynamic_color_enabled(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_dynamic_color_enabled(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_selected_palette_id(&self) -> QString {
-        self.with_app("".into(), |app| app.setting_selected_palette_id())
+        self.with_app(|app| app.setting_selected_palette_id()).unwrap_or_else(|_| "".into())
     }
     fn set_setting_selected_palette_id(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_selected_palette_id(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_selected_palette_id(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_selected_builtin_theme_id(&self) -> QString {
-        self.with_app("".into(), |app| app.setting_selected_builtin_theme_id())
+        self.with_app(|app| app.setting_selected_builtin_theme_id()).unwrap_or_else(|_| "".into())
     }
     fn set_setting_selected_builtin_theme_id(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_selected_builtin_theme_id(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn resolved_theme_palette_json(&self) -> QString {
-        self.with_app("".into(), |app| {
+        self.with_app(|app| {
             let color_source = app.setting_color_source().to_string();
             if color_source != "saved_palette" {
                 return "".into();
@@ -207,7 +218,7 @@ impl SettingsBackend {
             } else {
                 "".into()
             }
-        })
+        }).unwrap_or_else(|_| "".into())
     }
     fn resolved_builtin_themes_json(&self) -> QString {
         self.list_builtin_themes_json()
@@ -222,85 +233,95 @@ impl SettingsBackend {
         self.setting_color_source()
     }
     fn setting_typing_animation_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_typing_animation_enabled())
+        self.with_app(|app| app.setting_typing_animation_enabled()).unwrap_or(true)
     }
     fn set_setting_typing_animation_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_typing_animation_enabled(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_typing_animation_enabled(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_smooth_cursor_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_smooth_cursor_enabled())
+        self.with_app(|app| app.setting_smooth_cursor_enabled()).unwrap_or(true)
     }
     fn set_setting_smooth_cursor_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_smooth_cursor_enabled(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_smooth_cursor_enabled(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_typing_animation_duration_ms(&self) -> u32 {
-        self.with_app(100, |app| app.setting_typing_animation_duration_ms())
+        self.with_app(|app| app.setting_typing_animation_duration_ms()).unwrap_or(100)
     }
     fn set_setting_typing_animation_duration_ms(&mut self, val: u32) {
-        self.with_app_mut((), |app| app.set_setting_typing_animation_duration_ms(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_typing_animation_duration_ms(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_smooth_cursor_duration_ms(&self) -> u32 {
-        self.with_app(80, |app| app.setting_smooth_cursor_duration_ms())
+        self.with_app(|app| app.setting_smooth_cursor_duration_ms()).unwrap_or(80)
     }
     fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) {
-        self.with_app_mut((), |app| app.set_setting_smooth_cursor_duration_ms(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_smooth_cursor_duration_ms(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_coordinated_text_cursor_animation_enabled())
+        self.with_app(|app| app.setting_coordinated_text_cursor_animation_enabled()).unwrap_or(true)
     }
     fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_coordinated_text_cursor_animation_enabled(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_coordinated_text_cursor_animation_enabled(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn ai_available(&self) -> bool {
-        self.with_app(false, |app| app.ai_available())
+        self.with_app(|app| app.ai_available()).unwrap_or(false)
     }
     fn ai_enabled(&self) -> bool {
-        self.with_app(false, |app| app.ai_enabled())
+        self.with_app(|app| app.ai_enabled()).unwrap_or(false)
     }
     fn set_ai_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_ai_enabled(val));
-        self.ai_enabled_changed();
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_ai_enabled(val)).is_ok() {
+            self.ai_enabled_changed();
+            self.settings_changed();
+        }
     }
     fn setting_linux_qt_sidebar_width(&self) -> f64 {
-        self.with_app(240.0, |app| app.setting_linux_qt_sidebar_width())
+        self.with_app(|app| app.setting_linux_qt_sidebar_width()).unwrap_or(240.0)
     }
     fn set_setting_linux_qt_sidebar_width(&mut self, val: f64) {
-        self.with_app_mut((), |app| app.set_setting_linux_qt_sidebar_width(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_linux_qt_sidebar_width(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_linux_qt_editor_width(&self) -> f64 {
-        self.with_app(0.0, |app| app.setting_linux_qt_editor_width())
+        self.with_app(|app| app.setting_linux_qt_editor_width()).unwrap_or(0.0)
     }
     fn set_setting_linux_qt_editor_width(&mut self, val: f64) {
-        self.with_app_mut((), |app| app.set_setting_linux_qt_editor_width(val));
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_linux_qt_editor_width(val)).is_ok() {
+            self.settings_changed();
+        }
     }
     fn setting_diagnostics_enabled(&self) -> bool {
-        self.with_app(true, |app| app.setting_diagnostics_enabled())
+        self.with_app(|app| app.setting_diagnostics_enabled()).unwrap_or(true)
     }
     fn set_setting_diagnostics_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_diagnostics_enabled(val));
-        crate::backend::diagnostics::set_diagnostics_enabled(val);
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_diagnostics_enabled(val)).is_ok() {
+            crate::backend::diagnostics::set_diagnostics_enabled(val);
+            self.settings_changed();
+        }
     }
     fn setting_diagnostics_verbose(&self) -> bool {
-        self.with_app(true, |app| app.setting_diagnostics_verbose())
+        self.with_app(|app| app.setting_diagnostics_verbose()).unwrap_or(true)
     }
     fn set_setting_diagnostics_verbose(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_setting_diagnostics_verbose(val));
-        crate::backend::diagnostics::set_verbose_enabled(val);
-        self.settings_changed();
+        if self.with_app_mut(|app| app.set_setting_diagnostics_verbose(val)).is_ok() {
+            crate::backend::diagnostics::set_verbose_enabled(val);
+            self.settings_changed();
+        }
     }
     fn load_local_settings(&mut self) {
-        self.with_app_mut((), |app| app.load_local_settings());
-        let enabled = self.with_app(true, |app| app.setting_diagnostics_enabled());
-        let verbose = self.with_app(true, |app| app.setting_diagnostics_verbose());
+        let _ = self.with_app_mut(|app| app.load_local_settings());
+        let enabled = self.with_app(|app| app.setting_diagnostics_enabled()).unwrap_or(true);
+        let verbose = self.with_app(|app| app.setting_diagnostics_verbose()).unwrap_or(true);
         crate::backend::diagnostics::set_diagnostics_enabled(enabled);
         crate::backend::diagnostics::set_verbose_enabled(verbose);
         self.settings_changed();
@@ -308,7 +329,7 @@ impl SettingsBackend {
     }
     fn save_local_settings(&mut self) -> bool {
         self.pending_save = false;
-        self.with_app_mut(false, |app| app.save_local_settings())
+        self.with_app_mut(|app| app.save_local_settings()).unwrap_or(false)
     }
 
     /// 标记设置已变更，需要延迟保存。
@@ -336,7 +357,7 @@ impl SettingsBackend {
     }
 
     fn export_diagnostics_pack(&self) -> QString {
-        self.with_app("{\"success\":false,\"error\":\"no workspace\"}".into(), |app| {
+        self.with_app(|app| {
             let workspace_path = std::path::PathBuf::from(&app.current_workspace);
             let log_dir = crate::backend::diagnostics::get_log_dir(&workspace_path);
             match crate::backend::diagnostics::export_diagnostics_pack(
@@ -386,11 +407,11 @@ impl SettingsBackend {
                     envelope.to_string().into()
                 }
             }
-        })
+        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
 
     fn clear_logs(&self) -> QString {
-        self.with_app("".into(), |app| {
+        self.with_app(|app| {
             let log_dir = crate::backend::diagnostics::get_log_dir(
                 &std::path::PathBuf::from(&app.current_workspace),
             );
@@ -401,7 +422,7 @@ impl SettingsBackend {
                     e.into()
                 }
             }
-        })
+        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
 
     fn copy_device_info(&self) -> QString {
@@ -409,7 +430,7 @@ impl SettingsBackend {
     }
 
     fn open_log_directory(&self) -> QString {
-        self.with_app("".into(), |app| {
+        self.with_app(|app| {
             let log_dir = crate::backend::diagnostics::get_log_dir(
                 &std::path::PathBuf::from(&app.current_workspace),
             );
@@ -420,15 +441,15 @@ impl SettingsBackend {
                     e.into()
                 }
             }
-        })
+        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
 
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
-        self.with_app_mut("".into(), |app| app.copy_text_to_clipboard(text))
+        self.with_app_mut(|app| app.copy_text_to_clipboard(text)).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
 
     fn list_palette_records_json(&self) -> QString {
-        self.with_app("[]".into(), |app| {
+        self.with_app(|app| {
             if let Some(core) = app.core_api() {
                 match core.list_palette_records() {
                     Ok(records) => {
@@ -441,22 +462,22 @@ impl SettingsBackend {
             } else {
                 QString::from("[]")
             }
-        })
+        }).unwrap_or_else(|_| "[]".into())
     }
 
     fn list_builtin_themes_json(&self) -> QString {
-        self.with_app("[]".into(), |app| {
+        self.with_app(|app| {
             if let Some(core) = app.core_api() {
                 let themes = core.list_builtin_themes();
                 QString::from(serde_json::to_string(&themes).unwrap_or_else(|_| "[]".to_string()))
             } else {
                 QString::from("[]")
             }
-        })
+        }).unwrap_or_else(|_| "[]".into())
     }
 
     fn load_selected_palette_json(&self) -> QString {
-        self.with_app("".into(), |app| {
+        self.with_app(|app| {
             let palette_id = app.setting_selected_palette_id().to_string();
             if palette_id.is_empty() {
                 return QString::from("");
@@ -476,7 +497,7 @@ impl SettingsBackend {
             } else {
                 QString::from("")
             }
-        })
+        }).unwrap_or_else(|_| "".into())
     }
 
     fn refresh_theme_data(&mut self) {

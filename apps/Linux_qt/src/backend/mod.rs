@@ -20,8 +20,9 @@ pub use linux_theme_controller::LinuxThemeController;
 /// Shared reference to AppBackend via Rc<RefCell<>>.
 ///
 /// Domain backends call `with_app` / `with_app_mut` which go through
-/// `RefCell::try_borrow` / `RefCell::try_borrow_mut`, returning the default
-/// value on borrow conflict instead of causing undefined behaviour.
+/// `RefCell::try_borrow` / `RefCell::try_borrow_mut`, returning
+/// `Result<R, AppBorrowError>` on borrow conflict instead of silently
+/// returning a default value.
 ///
 /// # Ownership and lifetime
 ///
@@ -40,6 +41,17 @@ pub struct AppRef {
     inner: std::rc::Rc<std::cell::RefCell<AppBackend>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AppBorrowError;
+
+impl std::fmt::Display for AppBorrowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "AppBackend borrow conflict: another borrow is active")
+    }
+}
+
+impl std::error::Error for AppBorrowError {}
+
 impl AppRef {
     pub fn new(app: std::rc::Rc<std::cell::RefCell<AppBackend>>) -> Self {
         Self { inner: app }
@@ -49,30 +61,30 @@ impl AppRef {
         &self.inner
     }
 
-    pub fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
+    pub fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, AppBorrowError> {
         match self.inner.try_borrow() {
-            Ok(guard) => f(&*guard),
+            Ok(guard) => Ok(f(&*guard)),
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(
                     "app_ref",
                     "BORROW_CONFLICT",
-                    "AppBackend already borrowed mutably; returning default",
+                    "AppBackend already borrowed mutately; operation skipped",
                 );
-                default
+                Err(AppBorrowError)
             }
         }
     }
 
-    pub fn with_app_mut<R>(&self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
+    pub fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, AppBorrowError> {
         match self.inner.try_borrow_mut() {
-            Ok(mut guard) => f(&mut *guard),
+            Ok(mut guard) => Ok(f(&mut *guard)),
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(
                     "app_ref",
                     "BORROW_CONFLICT",
-                    "AppBackend already borrowed; returning default",
+                    "AppBackend already borrowed; operation skipped",
                 );
-                default
+                Err(AppBorrowError)
             }
         }
     }

@@ -1124,7 +1124,7 @@ mod tests {
 
     #[test]
     fn editor_edit_result_dto_from_kernel() {
-        let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
@@ -1180,7 +1180,7 @@ mod tests {
 
     #[test]
     fn editor_edit_result_dto_json_camel_case() {
-        let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = crate::editor::EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(crate::editor::EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),

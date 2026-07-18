@@ -4,6 +4,12 @@ pub(crate) fn envelope_error_json(error: writer_core::api::WriterError) -> Strin
     writer_core::api::ResultEnvelope::<serde_json::Value>::error(error).to_json_string()
 }
 
+pub(crate) fn borrow_conflict_error_json() -> String {
+    envelope_error_json(writer_core::api::WriterError::Other(
+        "AppBackend 借用冲突，操作未执行".to_string(),
+    ))
+}
+
 pub(crate) fn envelope_ok_json<T: serde::Serialize>(data: T) -> String {
     writer_core::api::ResultEnvelope::success(data).to_json_string()
 }

@@ -88,38 +88,54 @@ class AndroidInputAdapter(
     }
 
     private fun applyNewCursorPositionInComposition(newCursorPosition: Int, preeditText: String) {
-        if (newCursorPosition <= 0) return
-        val targetUtf16 = (newCursorPosition - 1).coerceIn(0, preeditText.length)
         val compositionRangeUtf16 = mirror.getCompositionRangeUtf16() ?: return
-        val absoluteUtf16 = compositionRangeUtf16.first + targetUtf16
+        val targetUtf16: Int
+        if (newCursorPosition > 0) {
+            targetUtf16 = (compositionRangeUtf16.first + (newCursorPosition - 1)).coerceIn(compositionRangeUtf16.first, compositionRangeUtf16.second)
+        } else if (newCursorPosition == 0) {
+            targetUtf16 = compositionRangeUtf16.first
+        } else {
+            targetUtf16 = (compositionRangeUtf16.first + newCursorPosition).coerceAtLeast(0)
+        }
         val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
-        val targetUtf8 = indexMap.utf16ToUtf8(absoluteUtf16)
+        val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
         mirror.setSelectionInternal(targetUtf8, targetUtf8)
     }
 
     fun applyNewCursorPosition(newCursorPosition: Int) {
+        val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
+        val committedBytes = mirror.getCommittedText().toByteArray(Charsets.UTF_8)
+        val cursorByteOffset = committedCursorUtf8.coerceIn(0, committedBytes.size)
+        val targetUtf8: Int
         if (newCursorPosition > 0) {
-            val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
-            val currentCursorUtf16 = mirror.getCursorUtf16()
-            val textLengthUtf16 = mirror.getLengthUtf16()
-            val targetUtf16 = (currentCursorUtf16 + newCursorPosition - 1).coerceIn(0, textLengthUtf16)
-            val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
-            if (isComposing) {
-                mirror.setSelectionInternal(targetUtf8, targetUtf8)
-            } else {
-                editorView.setSelectionTyped(targetUtf8, targetUtf8)
+            var pos = cursorByteOffset
+            var remaining = newCursorPosition - 1
+            while (remaining > 0 && pos < committedBytes.size) {
+                pos++
+                while (pos < committedBytes.size && (committedBytes[pos].toInt() and 0xC0) == 0x80) {
+                    pos++
+                }
+                remaining--
             }
-        } else if (newCursorPosition <= 0) {
-            val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
-            val currentCursorUtf16 = mirror.getCursorUtf16()
-            val textLengthUtf16 = mirror.getLengthUtf16()
-            val targetUtf16 = (currentCursorUtf16 + newCursorPosition).coerceIn(0, textLengthUtf16)
-            val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
-            if (isComposing) {
-                mirror.setSelectionInternal(targetUtf8, targetUtf8)
-            } else {
-                editorView.setSelectionTyped(targetUtf8, targetUtf8)
+            targetUtf8 = pos
+        } else if (newCursorPosition == 0) {
+            targetUtf8 = cursorByteOffset
+        } else {
+            var pos = cursorByteOffset
+            var remaining = -newCursorPosition
+            while (remaining > 0 && pos > 0) {
+                pos--
+                while (pos > 0 && (committedBytes[pos].toInt() and 0xC0) == 0x80) {
+                    pos--
+                }
+                remaining--
             }
+            targetUtf8 = pos
+        }
+        if (isComposing) {
+            mirror.setSelectionInternal(targetUtf8, targetUtf8)
+        } else {
+            editorView.setSelectionTyped(targetUtf8, targetUtf8)
         }
     }
 

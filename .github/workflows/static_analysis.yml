@@ -35,6 +35,9 @@ jobs:
           echo "PYTHONUTF8=1" >> "$GITHUB_ENV"
           echo "PYTHONIOENCODING=utf-8" >> "$GITHUB_ENV"
 
+      - name: Clippy on writer_core
+        run: cargo clippy --package writer_core --all-targets -- -D warnings
+
       - name: Check no binary artifacts in tracked files
         run: bash tools/check_no_binary_artifacts.sh
 

@@ -90,7 +90,7 @@ RULES: tuple[PatternRule, ...] = (
     PatternRule(
         "transmute-pointer-escape",
         re.compile(r"\bstd::mem::transmute\s*[<(]"),
-        "禁止用 transmute 绕过类型系统；Qt 互操作应使用指针转换并附 SAFETY 说明",
+        "禁止用 transmute 绕过类型系统",
     ),
     PatternRule(
         "production-lock-unwrap",
@@ -101,6 +101,11 @@ RULES: tuple[PatternRule, ...] = (
         "from-error-string-usage",
         re.compile(r"\bfrom_error_string\s*\("),
         "from_error_string 已废弃；应使用 from_code(error.sync_category(), msg) 做结构化分类",
+    ),
+    PatternRule(
+        "cpp-unsafe-call",
+        re.compile(r"cpp!\s*\(\s*unsafe\b"),
+        "cpp!(unsafe [...]) 必须说明捕获指针的来源、有效期、所属线程和 null 前提",
     ),
 )
 
@@ -133,23 +138,6 @@ def _has_safety_comment(lines: list[str], index: int) -> bool:
     return False
 
 
-def _has_inline_justification(line: str) -> bool:
-    stripped = line.strip()
-    idx = stripped.find("//")
-    if idx == -1:
-        return False
-    comment = stripped[idx + 2:].strip()
-    return bool(comment) and ("SAFETY:" in comment or len(comment) >= 10)
-
-
-def _has_nearby_justification(lines: list[str], index: int, lookback: int = 2) -> bool:
-    for previous in lines[max(0, index - lookback) : index]:
-        stripped = previous.strip()
-        if stripped and "SAFETY:" in stripped:
-            return True
-    return _has_inline_justification(lines[index])
-
-
 def _has_nearby_deprecated(lines: list[str], index: int, lookback: int = 3) -> bool:
     for previous in lines[max(0, index - lookback) : index]:
         stripped = previous.strip()
@@ -158,14 +146,28 @@ def _has_nearby_deprecated(lines: list[str], index: int, lookback: int = 3) -> b
     return False
 
 
-_RULES_WITH_JUSTIFICATION = {
-    "broad-dead-code-allow",
-    "assert-unwind-safe",
-    "app-backend-mut-pointer-cast",
-    "app-backend-mut-alias",
-    "transmute-pointer-escape",
-    "production-lock-unwrap",
-}
+_QMETA_MACRO_PATTERNS = [
+    re.compile(r"\bqt_property!\s*\("),
+    re.compile(r"\bqt_signal!\s*\(\s*\)"),
+    re.compile(r"\bqt_method!\s*\("),
+    re.compile(r"\bqt_base_class!\s*\("),
+]
+
+_QMETA_DERIVE_PATTERN = re.compile(r"#\[derive\s*\([^)]*\bQObject\b")
+
+
+def _is_qmetaobject_macro_field(lines: list[str], index: int) -> bool:
+    for i in range(index, min(len(lines), index + 3)):
+        stripped = lines[i].strip()
+        for pat in _QMETA_MACRO_PATTERNS:
+            if pat.search(stripped):
+                return True
+    for i in range(max(0, index - 3), min(len(lines), index + 3)):
+        stripped = lines[i].strip()
+        if _QMETA_DERIVE_PATTERN.search(stripped):
+            return True
+    return False
+
 
 _RULES_WITH_DEPRECATED = {
     "from-error-string-usage",
@@ -173,7 +175,26 @@ _RULES_WITH_DEPRECATED = {
 
 _RULES_PRODUCTION_ONLY = {
     "production-lock-unwrap",
+    "cpp-unsafe-call",
 }
+
+_ASSERT_UNWIND_SAFE_WHITELIST_PATHS = {
+    Path("apps/Linux_qt/src/backend/sync_backend.rs"),
+    Path("apps/Linux_qt/src/backend/sync_operations.rs"),
+    Path("apps/Linux_qt/src/editor/input/platform_ime.rs"),
+    Path("core/writer_core/src/sync/github_backend.rs"),
+}
+
+
+def _is_in_whitelisted_path(path: Path, whitelist: set[Path]) -> bool:
+    for allowed in whitelist:
+        try:
+            path.relative_to(allowed)
+            return True
+        except ValueError:
+            if path == allowed:
+                return True
+    return False
 
 
 def _is_in_test_context(lines: list[str], index: int) -> bool:
@@ -198,8 +219,11 @@ def scan_text(path: Path, text: str) -> list[Finding]:
         code = _code_part(line)
         for rule in RULES:
             if rule.pattern.search(code):
-                if rule.name in _RULES_WITH_JUSTIFICATION:
-                    if _has_nearby_justification(lines, index):
+                if rule.name == "assert-unwind-safe":
+                    if _is_in_whitelisted_path(path, _ASSERT_UNWIND_SAFE_WHITELIST_PATHS):
+                        continue
+                if rule.name == "broad-dead-code-allow":
+                    if _is_qmetaobject_macro_field(lines, index):
                         continue
                 if rule.name in _RULES_WITH_DEPRECATED:
                     if _has_nearby_deprecated(lines, index):

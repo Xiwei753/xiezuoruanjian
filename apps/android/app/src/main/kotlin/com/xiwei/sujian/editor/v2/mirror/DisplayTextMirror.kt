@@ -160,6 +160,36 @@ class DisplayTextMirror {
 
     fun hasComposition(): Boolean = hasActiveComposition
 
+    fun getCommittedCursorUtf8(): Int {
+        if (!hasActiveComposition) return cursorUtf8
+        return compositionReplaceStartUtf8
+    }
+
+    fun getCommittedSelectionStartUtf8(): Int {
+        if (!hasActiveComposition) return getSelectionStartUtf8()
+        return compositionReplaceStartUtf8
+    }
+
+    fun getCommittedSelectionEndUtf8(): Int {
+        if (!hasActiveComposition) return getSelectionEndUtf8()
+        return compositionReplaceStartUtf8
+    }
+
+    fun getCommittedText(): String {
+        if (!hasActiveComposition) return buffer.toString()
+        val indexMap = AndroidTextIndexMap(this)
+        val startUtf16 = indexMap.utf8ToUtf16(compositionReplaceStartUtf8)
+        val endUtf16 = compositionStartUtf16
+        return buffer.substring(0, startUtf16) + compositionOriginalText + buffer.substring(compositionEndUtf16.coerceAtMost(buffer.length))
+    }
+
+    fun getCommittedLengthUtf16(): Int {
+        if (!hasActiveComposition) return buffer.length
+        val indexMap = AndroidTextIndexMap(this)
+        val startUtf16 = indexMap.utf8ToUtf16(compositionReplaceStartUtf8)
+        return startUtf16 + compositionOriginalText.length + (buffer.length - compositionEndUtf16.coerceAtMost(buffer.length))
+    }
+
     fun applyEditResult(result: EditResult) {
         val hadComposition = hasActiveComposition
         if (hadComposition) {

@@ -208,6 +208,24 @@ pub struct EditorEditResult {
     pub visual_intent: EditorVisualIntent,
 }
 
+/// 编辑器输入校验错误
+#[derive(Debug, Clone)]
+pub enum EditorInputError {
+    InvalidCursorOffset { offset: usize, text_len: usize },
+}
+
+impl std::fmt::Display for EditorInputError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidCursorOffset { offset, text_len } => {
+                write!(f, "cursor offset {} is not a valid UTF-8 char boundary (text len {})", offset, text_len)
+            }
+        }
+    }
+}
+
+impl std::error::Error for EditorInputError {}
+
 /// #535: EditorKernel — 正文和业务唯一真相。
 ///
 /// 平台不能再维护第二份可独立编辑的正文真相。
@@ -243,8 +261,13 @@ struct UndoEntry {
     new_text: String,
     old_cursor: usize,
     new_cursor: usize,
-    #[allow(dead_code)] // SAFETY: preserved for future undo-cause inspection
     cause: EditorTransactionCause,
+}
+
+impl UndoEntry {
+    fn cause(&self) -> &EditorTransactionCause {
+        &self.cause
+    }
 }
 
 impl EditorKernel {
@@ -263,9 +286,14 @@ impl EditorKernel {
         }
     }
 
-    pub fn with_text(text: String, cursor: usize) -> Self {
-        let cursor = Self::clamp_to_char_boundary(&text, cursor);
-        Self {
+    pub fn with_text(text: String, cursor: usize) -> Result<Self, EditorInputError> {
+        if cursor > text.len() || !text.is_char_boundary(cursor) {
+            return Err(EditorInputError::InvalidCursorOffset {
+                offset: cursor,
+                text_len: text.len(),
+            });
+        }
+        Ok(Self {
             text,
             revision: 0,
             cursor,
@@ -276,7 +304,7 @@ impl EditorKernel {
             animation_enabled: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-        }
+        })
     }
 
     fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
@@ -1287,7 +1315,7 @@ mod tests {
 
     #[test]
     fn insert_command_produces_display_patch() {
-        let mut kernel = EditorKernel::with_text("你好".to_string(), 6);
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let result = kernel.apply(EditorCommand::Insert {
             byte_offset: 6,
             text: "世界".to_string(),
@@ -1306,7 +1334,7 @@ mod tests {
 
     #[test]
     fn delete_command_produces_display_patch() {
-        let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12);
+        let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
         let result = kernel.apply(EditorCommand::Delete {
             byte_start: 6,
             byte_end_exclusive: 12,
@@ -1322,7 +1350,7 @@ mod tests {
 
     #[test]
     fn replace_command_produces_display_patch() {
-        let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12);
+        let mut kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
             byte_start: 6,
             byte_end_exclusive: 12,
@@ -1339,7 +1367,7 @@ mod tests {
 
     #[test]
     fn set_selection_does_not_modify_text() {
-        let mut kernel = EditorKernel::with_text("hello".to_string(), 5);
+        let mut kernel = EditorKernel::with_text("hello".to_string(), 5).unwrap();
         let result = kernel.apply(EditorCommand::SetSelection {
             anchor_byte_offset: 0,
             head_byte_offset: 3,
@@ -1353,7 +1381,7 @@ mod tests {
 
     #[test]
     fn undo_restores_previous_state() {
-        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
@@ -1370,7 +1398,7 @@ mod tests {
 
     #[test]
     fn redo_restores_undone_state() {
-        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
@@ -1387,7 +1415,7 @@ mod tests {
 
     #[test]
     fn load_text_resets_state() {
-        let mut kernel = EditorKernel::with_text("old".to_string(), 3);
+        let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
         kernel.apply(EditorCommand::Insert {
             byte_offset: 3,
             text: " text".to_string(),
@@ -1426,7 +1454,7 @@ mod tests {
 
     #[test]
     fn display_patch_contains_correct_ranges() {
-        let mut kernel = EditorKernel::with_text("hello world".to_string(), 11);
+        let mut kernel = EditorKernel::with_text("hello world".to_string(), 11).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
             byte_start: 6,
             byte_end_exclusive: 11,
@@ -1443,7 +1471,7 @@ mod tests {
 
     #[test]
     fn coordinated_cursor_tracks_movement() {
-        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let result = kernel.apply(EditorCommand::SetSelection {
             anchor_byte_offset: 0,
             head_byte_offset: 0,
@@ -1456,7 +1484,7 @@ mod tests {
 
     #[test]
     fn animation_disabled_suppresses_animation() {
-        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         kernel.set_animation_enabled(false);
 
         let result = kernel.apply(EditorCommand::Insert {
@@ -1472,7 +1500,7 @@ mod tests {
 
     #[test]
     fn undo_then_new_edit_clears_redo() {
-        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
@@ -1496,7 +1524,7 @@ mod tests {
 
     #[test]
     fn edit_result_serializes_camel_case() {
-        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
@@ -1539,7 +1567,7 @@ mod tests {
 
     #[test]
     fn composition_update_does_not_modify_text() {
-        let mut kernel = EditorKernel::with_text("你好".to_string(), 6);
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let tx = kernel.composition_update(
             None,
             "",
@@ -1552,7 +1580,7 @@ mod tests {
 
     #[test]
     fn composition_commit_modifies_text_via_replace() {
-        let mut kernel = EditorKernel::with_text("你好".to_string(), 6);
+        let mut kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
             byte_start: 6,
             byte_end_exclusive: 6,
@@ -1568,7 +1596,7 @@ mod tests {
 
     #[test]
     fn delete_empty_range_is_noop() {
-        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let outcome = kernel.apply(EditorCommand::Delete {
             byte_start: 2,
             byte_end_exclusive: 2,
@@ -1582,7 +1610,7 @@ mod tests {
 
     #[test]
     fn insert_at_boundary_clamps() {
-        let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
+        let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
         let result = kernel.apply(EditorCommand::Insert {
             byte_offset: 100,
             text: "c".to_string(),
@@ -1595,7 +1623,7 @@ mod tests {
 
     #[test]
     fn replace_same_text_produces_patch() {
-        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
             byte_start: 1,
             byte_end_exclusive: 2,
@@ -1667,7 +1695,7 @@ mod tests {
 
     #[test]
     fn set_selection_with_same_position_no_cursor_animation() {
-        let mut kernel = EditorKernel::with_text("abc".to_string(), 1);
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 1).unwrap();
         let result = kernel.apply(EditorCommand::SetSelection {
             anchor_byte_offset: 1,
             head_byte_offset: 1,
@@ -1678,7 +1706,7 @@ mod tests {
 
     #[test]
     fn load_text_clears_undo_stack() {
-        let mut kernel = EditorKernel::with_text("old".to_string(), 3);
+        let mut kernel = EditorKernel::with_text("old".to_string(), 3).unwrap();
         kernel.apply(EditorCommand::Insert {
             byte_offset: 3,
             text: " text".to_string(),
@@ -1692,14 +1720,15 @@ mod tests {
     }
 
     #[test]
-    fn with_text_clamps_invalid_cursor_to_char_boundary() {
-        let kernel = EditorKernel::with_text("你好".to_string(), 4);
-        assert_eq!(kernel.cursor(), 3);
+    fn with_text_rejects_invalid_cursor_offset() {
+        let result = EditorKernel::with_text("你好".to_string(), 4);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), EditorInputError::InvalidCursorOffset { .. }));
     }
 
     #[test]
     fn stale_revision_returns_stale_outcome() {
-        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let outcome = kernel.apply(EditorCommand::Insert {
             byte_offset: 3,
             text: "d".to_string(),
@@ -1711,7 +1740,7 @@ mod tests {
 
     #[test]
     fn invalid_offset_returns_invalid_outcome() {
-        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
         let outcome = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "X".to_string(),
@@ -1723,7 +1752,7 @@ mod tests {
 
     #[test]
     fn atomic_display_patch_for_replace() {
-        let mut kernel = EditorKernel::with_text("hello world".to_string(), 11);
+        let mut kernel = EditorKernel::with_text("hello world".to_string(), 11).unwrap();
         let result = kernel.apply(EditorCommand::Replace {
             byte_start: 6,
             byte_end_exclusive: 11,
@@ -1740,7 +1769,7 @@ mod tests {
 
     #[test]
     fn composition_update_visual_intent_returns_correct_intent() {
-        let kernel = EditorKernel::with_text("你好".to_string(), 6);
+        let kernel = EditorKernel::with_text("你好".to_string(), 6).unwrap();
         let intent = kernel.composition_update_visual_intent(
             None,
             "",
@@ -1756,7 +1785,7 @@ mod tests {
 
     #[test]
     fn composition_update_visual_intent_with_replace_range() {
-        let kernel = EditorKernel::with_text("你好世界".to_string(), 12);
+        let kernel = EditorKernel::with_text("你好世界".to_string(), 12).unwrap();
         let intent = kernel.composition_update_visual_intent(
             Some((6, 12)),
             "世界",

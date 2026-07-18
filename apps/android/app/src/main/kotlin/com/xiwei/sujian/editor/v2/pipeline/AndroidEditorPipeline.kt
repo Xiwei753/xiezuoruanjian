@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
+import android.content.Context
 import android.graphics.Paint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
@@ -12,22 +13,29 @@ import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
 import com.xiwei.sujian.editor.v2.visual.VisualTransactionCoordinator
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.render.AndroidRenderFrame
+import com.xiwei.sujian.editor.v2.render.AndroidRenderer
+import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
+import android.view.View
 
 class AndroidEditorPipeline private constructor(
     val mirror: DisplayTextMirror,
     val layoutEngine: AndroidLayoutEngine,
     val visualPlanner: AndroidVisualPlanner,
     val resourceStore: VisualResourceStore,
-    val coordinator: VisualTransactionCoordinator
+    val coordinator: VisualTransactionCoordinator,
+    val renderer: AndroidRenderer,
+    val inputAdapter: AndroidInputAdapter
 ) {
 
     companion object {
-        fun create(mirror: DisplayTextMirror, textPaint: Paint): AndroidEditorPipeline {
+        fun create(mirror: DisplayTextMirror, textPaint: Paint, hostView: View): AndroidEditorPipeline {
             val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
             val visualPlanner = AndroidVisualPlanner()
             val resourceStore = VisualResourceStore()
             val coordinator = VisualTransactionCoordinator(resourceStore)
-            return AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator)
+            val renderer = AndroidRenderer()
+            val inputAdapter = AndroidInputAdapter(hostView.context, mirror, hostView)
+            return AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, inputAdapter)
         }
     }
 
@@ -129,6 +137,31 @@ class AndroidEditorPipeline private constructor(
         coordinator.cancelActiveTransaction()
         resourceStore.releaseAll()
         visualPlanner.resetOldRevision()
+    }
+
+    fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
+        val frameTimeMs = System.nanoTime() / 1_000_000
+        val layout = layoutEngine.getLayout()
+        if (layout != null) {
+            val rev = layoutEngine.getCurrentRevision()
+            val frame = computeFrame(
+                frameTimeMs,
+                cursorUtf16 = rev?.cursorUtf16 ?: mirror.getCursorUtf16(),
+                cursorX = rev?.cursorX ?: 0f,
+                cursorY = rev?.cursorY ?: 0f,
+                cursorHeight = rev?.cursorHeight ?: 0f,
+                selectionStartUtf16 = rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16(),
+                selectionEndUtf16 = rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16(),
+                compositionStartUtf16 = rev?.compositionStartUtf16 ?: -1,
+                compositionEndUtf16 = rev?.compositionEndUtf16 ?: -1,
+                searchHighlightsUtf16 = searchHighlightsUtf16,
+                viewportWidth = viewportWidth,
+                viewportHeight = viewportHeight,
+                scrollX = scrollX,
+                scrollY = scrollY
+            )
+            renderer.draw(canvas, layout, frame)
+        }
     }
 
     sealed class PipelineOutput {
