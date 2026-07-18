@@ -417,4 +417,14 @@ class AndroidEditorPipeline private constructor(
         data class Loaded(val result: EditResult) : LoadTextResult()
         object Failed : LoadTextResult()
     }
+
+    fun resetForReuse() {
+        cancelActiveTransaction()
+        mirror.loadFromSnapshot("", 0, 0, 0, 0)
+        layoutEngine.requestLayout()
+    }
+
+    fun invalidateCompositionSession() {
+        inputAdapter?.invalidateCompositionSession()
+    }
 }

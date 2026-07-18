@@ -12,6 +12,7 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
+import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class SujianEditorView @JvmOverloads constructor(
@@ -419,6 +420,64 @@ class SujianEditorView @JvmOverloads constructor(
             .setInsertionMarkerLocation(x, lineTop.toFloat(), lineBottom.toFloat(), lineBottom.toFloat(), android.view.inputmethod.CursorAnchorInfo.FLAG_HAS_VISIBLE_REGION)
             .build()
         imm.updateCursorAnchorInfo(this, info)
+    }
+
+    // ── #541: Session lifecycle for shared host ──
+
+    private var isSessionBound: Boolean = false
+
+    fun bindSession(
+        sessionBridge: EditorKernelBridge,
+        profile: TextEditorProfile,
+        initialText: String,
+        initialCursorUtf8: Int
+    ) {
+        if (isSessionBound) {
+            unbindSession("rebind")
+        }
+        kernelBridge = sessionBridge
+        isSessionBound = true
+        pipeline.setAutoIndent(
+            profile.autoIndentPolicy == com.xiwei.sujian.editor.v2.coordinator.AutoIndentPolicy.INDENT_ON_ENTER,
+            2f
+        )
+        loadText(initialText, initialCursorUtf8)
+        requestFocus()
+    }
+
+    fun unbindSession(reason: String) {
+        if (!isSessionBound) return
+        pipeline.cancelActiveTransaction()
+        pipeline.invalidateCompositionSession()
+        kernelBridge = null
+        isSessionBound = false
+        clearFocus()
+        val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+        imm?.hideSoftInputFromWindow(windowToken, 0)
+    }
+
+    fun resetForReuse() {
+        scrollX = 0f
+        scrollY = 0f
+        maxScrollY = 0f
+        searchHighlights = emptyList()
+        pendingLayoutNeeded = false
+        pipeline.resetForReuse()
+        invalidate()
+    }
+
+    fun updateHostGeometry(width: Float, height: Float) {
+        val lp = layoutParams
+        if (lp != null) {
+            lp.width = if (width > 0) width.toInt() else android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            lp.height = if (height > 0) height.toInt() else android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+            layoutParams = lp
+        }
+    }
+
+    fun release() {
+        unbindSession("release")
+        pipeline.releaseAllResources()
     }
 }
 
