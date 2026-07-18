@@ -27,12 +27,18 @@ class AndroidInputConnection(
             val byteOffset = mirror.getCursorUtf8()
             adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
         }
+        if (newCursorPosition != 0 && newCursorPosition != 1) {
+            adapter.applyNewCursorPosition(newCursorPosition)
+        }
         notifySelectionChanged()
         return true
     }
 
     override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
         if (beforeLength == 0 && afterLength == 0) return true
+        if (adapter.isComposing()) {
+            return handleCompositionDelete(beforeLength, afterLength)
+        }
         val indexMap = AndroidTextIndexMap(mirror)
         val cursorUtf16 = mirror.getCursorUtf16()
         val deleteStartUtf16 = (cursorUtf16 - beforeLength).coerceAtLeast(0)
@@ -50,6 +56,9 @@ class AndroidInputConnection(
 
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
         if (beforeLength == 0 && afterLength == 0) return true
+        if (adapter.isComposing()) {
+            return handleCompositionDeleteCodePoints(beforeLength, afterLength)
+        }
         val text = mirror.getText()
         val cursorUtf16 = mirror.getCursorUtf16()
 
@@ -75,6 +84,57 @@ class AndroidInputConnection(
         if (!isValidUtf8CharBoundary(byteStart) || !isValidUtf8CharBoundary(byteEnd)) return false
 
         adapter.sendDeleteToKernel(byteStart, byteEnd, EditorTransactionCauseDto.DELETE)
+        notifySelectionChanged()
+        return true
+    }
+
+    private fun handleCompositionDelete(beforeLength: Int, afterLength: Int): Boolean {
+        val compositionText = adapter.getCompositionText()
+        if (compositionText.isEmpty()) return true
+        val compositionRange = adapter.getCompositionRangeUtf8() ?: return false
+        val cursorInComposition = adapter.getCompositionCursorOffset() ?: compositionText.length
+
+        val deleteStartInComp = (cursorInComposition - beforeLength).coerceAtLeast(0)
+        val deleteEndInComp = (cursorInComposition + afterLength).coerceAtMost(compositionText.length)
+        if (deleteStartInComp >= deleteEndInComp) return false
+
+        val newPreedit = compositionText.removeRange(deleteStartInComp, deleteEndInComp)
+        if (newPreedit.isEmpty()) {
+            adapter.handleCompositionCancel()
+        } else {
+            val newCursor = deleteStartInComp
+            adapter.handleCompositionUpdate(newPreedit, newCursor + 1)
+        }
+        notifySelectionChanged()
+        return true
+    }
+
+    private fun handleCompositionDeleteCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+        val compositionText = adapter.getCompositionText()
+        if (compositionText.isEmpty()) return true
+
+        var deleteStart = compositionText.length
+        var count = beforeLength
+        while (count > 0 && deleteStart > 0) {
+            deleteStart = compositionText.offsetByCodePoints(deleteStart, -1)
+            count--
+        }
+
+        var deleteEnd = compositionText.length
+        count = afterLength
+        while (count > 0 && deleteEnd < compositionText.length) {
+            deleteEnd = compositionText.offsetByCodePoints(deleteEnd, 1)
+            count--
+        }
+
+        if (deleteStart >= deleteEnd) return false
+
+        val newPreedit = compositionText.removeRange(deleteStart, deleteEnd)
+        if (newPreedit.isEmpty()) {
+            adapter.handleCompositionCancel()
+        } else {
+            adapter.handleCompositionUpdate(newPreedit, deleteStart + 1)
+        }
         notifySelectionChanged()
         return true
     }

@@ -114,6 +114,12 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun applyEditResultFull(result: EditResult, beforePatch: (() -> Unit)? = null, suppressContentCallback: Boolean = false) {
+        if (result.isStale() || result.isInvalid()) {
+            if (result.isStale()) {
+                reloadFromKernel()
+            }
+            return
+        }
         if (result.displayPatches.isEmpty() && result.baseRevision != result.newRevision) {
             reloadFromKernel()
             return

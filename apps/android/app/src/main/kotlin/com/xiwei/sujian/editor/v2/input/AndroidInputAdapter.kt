@@ -77,25 +77,49 @@ class AndroidInputAdapter(
                 editorView.applyCompositionUpdate(visualIntent) {
                     mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
                 }
+                applyNewCursorPositionInComposition(newCursorPosition, preeditText)
                 return
             }
         }
 
         mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
+        applyNewCursorPositionInComposition(newCursorPosition, preeditText)
         editorView.onCompositionUpdated()
     }
 
-    fun applyNewCursorPosition(newCursorPosition: Int) {
+    private fun applyNewCursorPositionInComposition(newCursorPosition: Int, preeditText: String) {
         if (newCursorPosition <= 0) return
+        val targetUtf16 = (newCursorPosition - 1).coerceIn(0, preeditText.length)
+        val compositionRangeUtf16 = mirror.getCompositionRangeUtf16() ?: return
+        val absoluteUtf16 = compositionRangeUtf16.first + targetUtf16
         val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
-        val currentCursorUtf16 = mirror.getCursorUtf16()
-        val textLengthUtf16 = mirror.getLengthUtf16()
-        val targetUtf16 = (currentCursorUtf16 + newCursorPosition - 1).coerceIn(0, textLengthUtf16)
-        val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
-        if (isComposing) {
-            mirror.setSelectionInternal(targetUtf8, targetUtf8)
-        } else {
-            editorView.setSelectionTyped(targetUtf8, targetUtf8)
+        val targetUtf8 = indexMap.utf16ToUtf8(absoluteUtf16)
+        mirror.setSelectionInternal(targetUtf8, targetUtf8)
+    }
+
+    fun applyNewCursorPosition(newCursorPosition: Int) {
+        if (newCursorPosition > 0) {
+            val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+            val currentCursorUtf16 = mirror.getCursorUtf16()
+            val textLengthUtf16 = mirror.getLengthUtf16()
+            val targetUtf16 = (currentCursorUtf16 + newCursorPosition - 1).coerceIn(0, textLengthUtf16)
+            val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
+            if (isComposing) {
+                mirror.setSelectionInternal(targetUtf8, targetUtf8)
+            } else {
+                editorView.setSelectionTyped(targetUtf8, targetUtf8)
+            }
+        } else if (newCursorPosition <= 0) {
+            val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+            val currentCursorUtf16 = mirror.getCursorUtf16()
+            val textLengthUtf16 = mirror.getLengthUtf16()
+            val targetUtf16 = (currentCursorUtf16 + newCursorPosition).coerceIn(0, textLengthUtf16)
+            val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
+            if (isComposing) {
+                mirror.setSelectionInternal(targetUtf8, targetUtf8)
+            } else {
+                editorView.setSelectionTyped(targetUtf8, targetUtf8)
+            }
         }
     }
 
@@ -137,11 +161,17 @@ class AndroidInputAdapter(
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, finalText, "")
             if (dto != null) {
                 editorView.applyCompositionCommit(dto)
+                if (newCursorPosition != 0 && newCursorPosition != 1) {
+                    applyNewCursorPosition(newCursorPosition)
+                }
                 return
             }
         }
 
         editorView.clearCompositionAndReplace(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+        if (newCursorPosition != 0 && newCursorPosition != 1) {
+            applyNewCursorPosition(newCursorPosition)
+        }
     }
 
     fun handleCompositionCancel() {
@@ -178,6 +208,11 @@ class AndroidInputAdapter(
     fun isComposing(): Boolean = isComposing
 
     fun getCompositionText(): String = currentCompositionText
+
+    fun getCompositionCursorOffset(): Int? {
+        if (!isComposing) return null
+        return currentCompositionText.length
+    }
 
     fun getCompositionRangeUtf8(): Pair<Int, Int>? {
         if (!isComposing) return null

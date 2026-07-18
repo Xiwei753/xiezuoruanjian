@@ -25,6 +25,7 @@ class DisplayTextMirrorTest {
         mirror.loadText("ab", 2)
 
         val result = EditResult(
+            outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
             transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
@@ -64,6 +65,7 @@ class DisplayTextMirrorTest {
         mirror.loadText("abc", 3)
 
         val result = EditResult(
+            outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
             transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
@@ -102,6 +104,7 @@ class DisplayTextMirrorTest {
         mirror.loadText("abc", 3)
 
         val result = EditResult(
+            outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
             transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
@@ -152,6 +155,7 @@ class DisplayTextMirrorTest {
         mirror.loadText("你好", 6)
 
         val result = EditResult(
+            outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
             transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
@@ -213,6 +217,7 @@ class DisplayTextMirrorTest {
         mirror.updateComposition(2, 2, "c")
 
         val result = EditResult(
+            outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
             transactionId = 1,
             baseRevision = 0,
             newRevision = 1,

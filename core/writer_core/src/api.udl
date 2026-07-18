@@ -1425,7 +1425,16 @@ dictionary DisplayPatchDto {
     u32 resulting_selection_end;
 };
 
+enum EditorEditOutcomeDto {
+    "Applied",
+    "NoChange",
+    "StaleRevision",
+    "InvalidOffset",
+    "InvalidRange"
+};
+
 dictionary EditorEditResultDto {
+    EditorEditOutcomeDto outcome;
     u64 transaction_id;
     u64 base_revision;
     u64 new_revision;

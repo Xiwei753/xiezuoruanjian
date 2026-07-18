@@ -562,7 +562,8 @@ impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct EditorEditResultDto {
+ pub struct EditorEditResultDto {
+    pub outcome: EditorEditOutcomeDto,
     pub transaction_id: u64,
     pub base_revision: u64,
     pub new_revision: u64,
@@ -574,9 +575,44 @@ pub struct EditorEditResultDto {
     pub visual_intent: EditorVisualIntentDto,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorEditOutcomeDto {
+    Applied,
+    NoChange,
+    StaleRevision,
+    InvalidOffset,
+    InvalidRange,
+}
+
+impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
+    fn from(outcome: crate::editor::EditorEditOutcome) -> Self {
+        let (outcome_dto, r) = match outcome {
+            crate::editor::EditorEditOutcome::Applied(r) => (EditorEditOutcomeDto::Applied, r),
+            crate::editor::EditorEditOutcome::NoChange(r) => (EditorEditOutcomeDto::NoChange, r),
+            crate::editor::EditorEditOutcome::StaleRevision(r) => (EditorEditOutcomeDto::StaleRevision, r),
+            crate::editor::EditorEditOutcome::InvalidOffset(r) => (EditorEditOutcomeDto::InvalidOffset, r),
+            crate::editor::EditorEditOutcome::InvalidRange(r) => (EditorEditOutcomeDto::InvalidRange, r),
+        };
+        Self {
+            outcome: outcome_dto,
+            transaction_id: r.transaction_id,
+            base_revision: r.base_revision,
+            new_revision: r.new_revision,
+            display_patches: r.display_patches.into_iter().map(Into::into).collect(),
+            old_selection_start: r.old_selection_byte_range.0 as u32,
+            old_selection_end: r.old_selection_byte_range.1 as u32,
+            new_selection_start: r.new_selection_byte_range.0 as u32,
+            new_selection_end: r.new_selection_byte_range.1 as u32,
+            visual_intent: r.visual_intent.into(),
+        }
+    }
+}
+
 impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
     fn from(r: crate::editor::EditorEditResult) -> Self {
         Self {
+            outcome: EditorEditOutcomeDto::Applied,
             transaction_id: r.transaction_id,
             base_revision: r.base_revision,
             new_revision: r.new_revision,

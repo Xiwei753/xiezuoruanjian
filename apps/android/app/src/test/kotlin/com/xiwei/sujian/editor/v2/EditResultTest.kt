@@ -30,11 +30,11 @@ class EditResultTest {
     @Test
     fun visualIntentHoldsCorrectFields() {
         val intent = VisualIntent(
-            cause = "typing",
-            operationKind = "insert",
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
             oldAffectedByteRanges = listOf(Pair(2, 2)),
             newAffectedByteRanges = listOf(Pair(2, 3)),
-            animationMode = "ClusterAnimation",
+            animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
             durationMs = 160,
             coordinatedCursor = CoordinatedCursor(2, 3, true)
         )
@@ -49,6 +49,7 @@ class EditResultTest {
     @Test
     fun editResultHoldsCorrectFields() {
         val result = EditResult(
+            outcome = uniffi.writer_core.EditorEditOutcomeDto.APPLIED,
             transactionId = 1,
             baseRevision = 0,
             newRevision = 1,
@@ -60,11 +61,11 @@ class EditResultTest {
             newSelectionStart = 3,
             newSelectionEnd = 3,
             visualIntent = VisualIntent(
-                cause = "typing",
-                operationKind = "insert",
+                cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+                operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
                 oldAffectedByteRanges = listOf(Pair(2, 2)),
                 newAffectedByteRanges = listOf(Pair(2, 3)),
-                animationMode = "ClusterAnimation",
+                animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
                 durationMs = 160,
                 coordinatedCursor = CoordinatedCursor(2, 3, true)
             )
@@ -72,6 +73,8 @@ class EditResultTest {
         assertEquals(1, result.transactionId)
         assertEquals(1, result.displayPatches.size)
         assertEquals(3, result.newSelectionEnd)
+        assertTrue(result.isApplied())
+    }
     }
 
     @Test

@@ -724,7 +724,7 @@ impl WriterAppService {
                 cause: core_cause,
                 expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -745,7 +745,7 @@ impl WriterAppService {
                 cause: core_cause,
                 expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -769,7 +769,7 @@ impl WriterAppService {
                 cause: core_cause,
                 expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -786,7 +786,7 @@ impl WriterAppService {
                 head_byte_offset: head_byte_offset as usize,
                 expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -794,7 +794,7 @@ impl WriterAppService {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::Undo { expected_revision });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -802,7 +802,7 @@ impl WriterAppService {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::Redo { expected_revision });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -814,7 +814,7 @@ impl WriterAppService {
         self.with_session(|s| {
             s.generation = s.generation.saturating_add(1);
             let result = s.kernel.load_text(text, cursor_byte_offset as usize);
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -860,7 +860,7 @@ impl WriterAppService {
                 expected_revision,
             };
             let result = s.kernel.apply(command);
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -932,7 +932,7 @@ impl WriterAppService {
                 replacement,
                 expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -952,7 +952,7 @@ impl WriterAppService {
                 cause: core_cause,
                 expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 }

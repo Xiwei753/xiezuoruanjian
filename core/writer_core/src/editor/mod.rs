@@ -30,7 +30,7 @@ pub mod editor_kernel;
 pub mod transaction;
 
 pub use editor_kernel::{
-    CoordinatedCursor, DisplayPatch, EditorCommand, EditorEditResult, EditorKernel,
+    CoordinatedCursor, DisplayPatch, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
     EditorOperationKind, EditorVisualIntent,
 };
 

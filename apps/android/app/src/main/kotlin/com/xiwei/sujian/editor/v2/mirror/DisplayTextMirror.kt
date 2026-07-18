@@ -82,6 +82,7 @@ data class CoordinatedCursor(
 }
 
 data class EditResult(
+    val outcome: uniffi.writer_core.EditorEditOutcomeDto,
     val transactionId: Long,
     val baseRevision: Long,
     val newRevision: Long,
@@ -94,6 +95,7 @@ data class EditResult(
 ) {
     companion object {
         fun fromDto(dto: EditorEditResultDto): EditResult = EditResult(
+            outcome = dto.outcome,
             transactionId = dto.transactionId.toLong(),
             baseRevision = dto.baseRevision.toLong(),
             newRevision = dto.newRevision.toLong(),
@@ -105,6 +107,11 @@ data class EditResult(
             visualIntent = VisualIntent.fromDto(dto.visualIntent)
         )
     }
+
+    fun isApplied(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED
+    fun isStale(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.STALE_REVISION
+    fun isInvalid(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_OFFSET || outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_RANGE
+    fun isNoChange(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.NO_CHANGE
 }
 
 class DisplayTextMirror {

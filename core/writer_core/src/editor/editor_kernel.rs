@@ -147,6 +147,44 @@ pub struct CoordinatedCursor {
     pub should_animate: bool,
 }
 
+/// #535: 编辑结果分类 — 平台必须区分不同结果走不同恢复路径。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum EditorEditOutcome {
+    Applied(EditorEditResult),
+    NoChange(EditorEditResult),
+    StaleRevision(EditorEditResult),
+    InvalidOffset(EditorEditResult),
+    InvalidRange(EditorEditResult),
+}
+
+impl EditorEditOutcome {
+    pub fn into_result(self) -> EditorEditResult {
+        match self {
+            EditorEditOutcome::Applied(r)
+            | EditorEditOutcome::NoChange(r)
+            | EditorEditOutcome::StaleRevision(r)
+            | EditorEditOutcome::InvalidOffset(r)
+            | EditorEditOutcome::InvalidRange(r) => r,
+        }
+    }
+
+    pub fn is_applied(&self) -> bool {
+        matches!(self, EditorEditOutcome::Applied(_))
+    }
+
+    pub fn is_stale(&self) -> bool {
+        matches!(self, EditorEditOutcome::StaleRevision(_))
+    }
+
+    pub fn is_invalid(&self) -> bool {
+        matches!(
+            self,
+            EditorEditOutcome::InvalidOffset(_) | EditorEditOutcome::InvalidRange(_)
+        )
+    }
+}
+
 /// #535: 编辑结果 — EditorKernel.apply() 的返回值。
 ///
 /// 包含正文变化（display_patches）、选区变化和视觉意图。
@@ -226,7 +264,7 @@ impl EditorKernel {
     }
 
     pub fn with_text(text: String, cursor: usize) -> Self {
-        let cursor = cursor.min(text.len());
+        let cursor = Self::clamp_to_char_boundary(&text, cursor);
         Self {
             text,
             revision: 0,
@@ -239,6 +277,14 @@ impl EditorKernel {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
         }
+    }
+
+    fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
+        let mut offset = offset.min(text.len());
+        while offset > 0 && !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        offset
     }
 
     pub fn set_animation_duration_ms(&mut self, duration_ms: u64) {
@@ -272,8 +318,8 @@ impl EditorKernel {
     /// #535: 应用编辑命令 — 唯一正文修改入口。
     ///
     /// 平台输入适配器只调用此方法，不能直接修改正文。
-    /// 返回 EditorEditResult，包含 display_patches 和 visual_intent。
-    pub fn apply(&mut self, command: EditorCommand) -> EditorEditResult {
+    /// 返回 EditorEditOutcome，区分 Applied/NoChange/StaleRevision/InvalidOffset/InvalidRange。
+    pub fn apply(&mut self, command: EditorCommand) -> EditorEditOutcome {
         let base_revision = self.revision;
 
         match &command {
@@ -286,7 +332,7 @@ impl EditorKernel {
              | EditorCommand::Undo { expected_revision }
              | EditorCommand::Redo { expected_revision } => {
                 if *expected_revision != base_revision {
-                    return self.stale_session_result(base_revision);
+                    return EditorEditOutcome::StaleRevision(self.stale_session_result(base_revision));
                 }
             }
         }
@@ -330,10 +376,10 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let byte_offset = byte_offset.min(self.text.len());
         if !self.text.is_char_boundary(byte_offset) {
-            return self.noop_result(base_revision, old_cursor, old_selection);
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
 
         self.text.insert_str(byte_offset, text);
@@ -398,7 +444,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -406,7 +452,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn apply_delete(
@@ -417,15 +463,15 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
         let byte_start = byte_start.min(self.text.len());
         let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
         if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
-            return self.noop_result(base_revision, old_cursor, old_selection);
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
         if byte_start >= byte_end_exclusive {
-            return self.noop_result(base_revision, old_cursor, old_selection);
+            return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
         }
 
         let old_text = self.text.clone();
@@ -493,7 +539,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -501,7 +547,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn apply_replace(
@@ -513,12 +559,12 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
         let byte_start = byte_start.min(self.text.len());
         let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
         if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
-            return self.noop_result(base_revision, old_cursor, old_selection);
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
 
         let old_text = self.text.clone();
@@ -591,7 +637,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -599,7 +645,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn apply_set_selection(
@@ -609,11 +655,11 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let anchor = anchor_byte_offset.min(self.text.len());
         let head = head_byte_offset.min(self.text.len());
         if !self.text.is_char_boundary(anchor) || !self.text.is_char_boundary(head) {
-            return self.noop_result(base_revision, old_cursor, old_selection);
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
         self.selection_anchor = anchor;
         self.cursor = head;
@@ -638,7 +684,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::NoChange(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
@@ -646,7 +692,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn apply_undo(
@@ -654,10 +700,10 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let entry = match self.undo_stack.pop() {
             Some(e) => e,
-            None => return self.noop_result(base_revision, old_cursor, old_selection),
+            None => return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection)),
         };
 
         let old_text = self.text.clone();
@@ -708,7 +754,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -716,7 +762,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn apply_redo(
@@ -724,10 +770,10 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let entry = match self.redo_stack.pop() {
             Some(e) => e,
-            None => return self.noop_result(base_revision, old_cursor, old_selection),
+            None => return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection)),
         };
 
         let old_text = self.text.clone();
@@ -778,7 +824,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -786,7 +832,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn compute_single_patch(old_text: &str, new_text: &str) -> ((usize, usize), String) {
@@ -866,12 +912,12 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let old_text = self.text.clone();
         let new_text = old_text.replace(search, replacement);
 
         if new_text == old_text {
-            return self.noop_result(base_revision, old_cursor, old_selection);
+            return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection));
         }
 
         self.text = new_text;
@@ -918,7 +964,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -926,7 +972,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn apply_insert_line_break(
@@ -937,8 +983,11 @@ impl EditorKernel {
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
-    ) -> EditorEditResult {
+    ) -> EditorEditOutcome {
         let byte_offset = byte_offset.min(self.text.len());
+        if !self.text.is_char_boundary(byte_offset) {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
         let text = format!("\n{}", auto_indent_prefix);
 
         self.text.insert_str(byte_offset, &text);
@@ -999,7 +1048,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -1007,7 +1056,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     fn stale_session_result(
@@ -1102,14 +1151,14 @@ impl EditorKernel {
     ///
     /// 始终生成完整 replacement patch，即使正文相同。
     /// 平台 Mirror 通过 loadFromSessionSnapshot 重建，不依赖增量 patch。
-    pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditResult {
+    pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
         let base_revision = self.revision;
         let old_cursor = self.cursor;
         let old_selection = (self.selection_anchor, self.cursor);
 
         let old_text = self.text.clone();
         self.text = text;
-        let cursor = cursor.min(self.text.len());
+        let cursor = Self::clamp_to_char_boundary(&self.text, cursor);
         self.cursor = cursor;
         self.selection_anchor = cursor;
         self.revision = self.revision.saturating_add(1);
@@ -1141,7 +1190,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditResult {
+        EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -1149,7 +1198,7 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        }
+        })
     }
 
     /// 创建 CompositionUpdate 事务 — 预输入更新。
@@ -1244,7 +1293,7 @@ mod tests {
             text: "世界".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
 
         assert_eq!(kernel.text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
@@ -1264,7 +1313,7 @@ mod tests {
             deleted_text: "世界".to_string(),
             cause: EditorTransactionCause::Delete,
             expected_revision: 0,
-        });
+        }).into_result();
 
         assert_eq!(kernel.text(), "你好");
         assert_eq!(kernel.cursor(), 6);
@@ -1281,7 +1330,7 @@ mod tests {
             original_text: "世界".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
 
         assert_eq!(kernel.text(), "你好朋友");
         assert_eq!(kernel.cursor(), 12);
@@ -1295,8 +1344,7 @@ mod tests {
             anchor_byte_offset: 0,
             head_byte_offset: 3,
             expected_revision: 0,
-        });
-
+        }).into_result();
         assert_eq!(kernel.text(), "hello");
         assert_eq!(kernel.cursor(), 3);
         assert_eq!(result.display_patches.len(), 0);
@@ -1306,15 +1354,15 @@ mod tests {
     #[test]
     fn undo_restores_previous_state() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2);
-        let result = kernel.apply(EditorCommand::Insert {
+        let r1 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
         assert_eq!(kernel.text(), "abc");
 
-        let result = kernel.apply(EditorCommand::Undo { expected_revision: result.new_revision });
+        let result = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision }).into_result();
         assert_eq!(kernel.text(), "ab");
         assert_eq!(kernel.cursor(), 2);
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Undo);
@@ -1328,11 +1376,11 @@ mod tests {
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
-        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision });
+        }).into_result();
+        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision }).into_result();
         assert_eq!(kernel.text(), "ab");
 
-        let result = kernel.apply(EditorCommand::Redo { expected_revision: r2.new_revision });
+        let result = kernel.apply(EditorCommand::Redo { expected_revision: r2.new_revision }).into_result();
         assert_eq!(kernel.text(), "abc");
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::Redo);
     }
@@ -1345,9 +1393,9 @@ mod tests {
             text: " text".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
 
-        let result = kernel.load_text("new content".to_string(), 0);
+        let result = kernel.load_text("new content".to_string(), 0).into_result();
         assert_eq!(kernel.text(), "new content");
         assert_eq!(kernel.cursor(), 0);
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Load);
@@ -1364,7 +1412,7 @@ mod tests {
             text: "a".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
         assert_eq!(kernel.revision(), 1);
 
         kernel.apply(EditorCommand::Insert {
@@ -1372,7 +1420,7 @@ mod tests {
             text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: r1.new_revision,
-        });
+        }).into_result();
         assert_eq!(kernel.revision(), 2);
     }
 
@@ -1386,7 +1434,7 @@ mod tests {
             original_text: "world".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
 
         assert_eq!(result.display_patches.len(), 1);
         assert_eq!(result.display_patches[0].replace_byte_range, (6, 11));
@@ -1400,8 +1448,7 @@ mod tests {
             anchor_byte_offset: 0,
             head_byte_offset: 0,
             expected_revision: 0,
-        });
-
+        }).into_result();
         assert_eq!(result.visual_intent.coordinated_cursor.old_byte_offset, 3);
         assert_eq!(result.visual_intent.coordinated_cursor.new_byte_offset, 0);
         assert!(result.visual_intent.coordinated_cursor.should_animate);
@@ -1417,7 +1464,7 @@ mod tests {
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
 
         assert_eq!(result.visual_intent.animation_mode, AnimationMode::SystemSuppressed);
         assert!(!result.visual_intent.coordinated_cursor.should_animate);
@@ -1431,8 +1478,8 @@ mod tests {
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
-        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision });
+        }).into_result();
+        let r2 = kernel.apply(EditorCommand::Undo { expected_revision: r1.new_revision }).into_result();
         assert_eq!(kernel.text(), "ab");
 
         let r3 = kernel.apply(EditorCommand::Insert {
@@ -1440,9 +1487,9 @@ mod tests {
             text: "d".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: r2.new_revision,
-        });
+        }).into_result();
 
-        let result = kernel.apply(EditorCommand::Redo { expected_revision: r3.new_revision });
+        let result = kernel.apply(EditorCommand::Redo { expected_revision: r3.new_revision }).into_result();
         assert_eq!(kernel.text(), "abd");
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::CursorOnly);
     }
@@ -1455,7 +1502,7 @@ mod tests {
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
 
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"transactionId\":"), "JSON should use camelCase for transactionId, got: {}", json);
@@ -1513,7 +1560,7 @@ mod tests {
             original_text: String::new(),
             cause: EditorTransactionCause::TypingCommit,
             expected_revision: 0,
-        });
+        }).into_result();
         assert_eq!(kernel.text(), "你好你好");
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Replace);
         assert_eq!(result.visual_intent.cause, EditorTransactionCause::TypingCommit);
@@ -1522,7 +1569,7 @@ mod tests {
     #[test]
     fn delete_empty_range_is_noop() {
         let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
-        let result = kernel.apply(EditorCommand::Delete {
+        let outcome = kernel.apply(EditorCommand::Delete {
             byte_start: 2,
             byte_end_exclusive: 2,
             deleted_text: String::new(),
@@ -1530,7 +1577,7 @@ mod tests {
             expected_revision: 0,
         });
         assert_eq!(kernel.text(), "abc");
-        assert_eq!(result.display_patches.len(), 0);
+        assert!(matches!(outcome, EditorEditOutcome::InvalidRange(_)));
     }
 
     #[test]
@@ -1541,7 +1588,7 @@ mod tests {
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
         assert_eq!(kernel.text(), "abc");
         assert_eq!(kernel.cursor(), 3);
     }
@@ -1556,7 +1603,7 @@ mod tests {
             original_text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
         assert_eq!(kernel.text(), "aXc");
         assert!(!result.display_patches.is_empty());
     }
@@ -1569,28 +1616,28 @@ mod tests {
             text: "a".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
         let r2 = kernel.apply(EditorCommand::Insert {
             byte_offset: 1,
             text: "b".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: r1.new_revision,
-        });
+        }).into_result();
         let r3 = kernel.apply(EditorCommand::Insert {
             byte_offset: 2,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: r2.new_revision,
-        });
+        }).into_result();
         assert_eq!(kernel.text(), "abc");
 
-        let r4 = kernel.apply(EditorCommand::Undo { expected_revision: r3.new_revision });
+        let r4 = kernel.apply(EditorCommand::Undo { expected_revision: r3.new_revision }).into_result();
         assert_eq!(kernel.text(), "ab");
 
-        let r5 = kernel.apply(EditorCommand::Undo { expected_revision: r4.new_revision });
+        let r5 = kernel.apply(EditorCommand::Undo { expected_revision: r4.new_revision }).into_result();
         assert_eq!(kernel.text(), "a");
 
-        kernel.apply(EditorCommand::Undo { expected_revision: r5.new_revision });
+        kernel.apply(EditorCommand::Undo { expected_revision: r5.new_revision }).into_result();
         assert_eq!(kernel.text(), "");
     }
 
@@ -1602,7 +1649,7 @@ mod tests {
             text: "你好世界".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
         assert_eq!(kernel.text(), "你好世界");
         assert_eq!(kernel.cursor(), 12);
 
@@ -1612,7 +1659,7 @@ mod tests {
             deleted_text: "世界".to_string(),
             cause: EditorTransactionCause::Delete,
             expected_revision: result.new_revision,
-        });
+        }).into_result();
         assert_eq!(kernel.text(), "你好");
         assert_eq!(kernel.cursor(), 6);
         assert_eq!(result.visual_intent.operation_kind, EditorOperationKind::Delete);
@@ -1625,7 +1672,7 @@ mod tests {
             anchor_byte_offset: 1,
             head_byte_offset: 1,
             expected_revision: 0,
-        });
+        }).into_result();
         assert!(!result.visual_intent.coordinated_cursor.should_animate);
     }
 
@@ -1637,10 +1684,41 @@ mod tests {
             text: " text".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
-        kernel.load_text("new".to_string(), 3);
+        }).into_result();
+        kernel.load_text("new".to_string(), 3).into_result();
         let result = kernel.apply(EditorCommand::Undo { expected_revision: 0 });
+        assert!(matches!(result, EditorEditOutcome::StaleRevision(_)));
         assert_eq!(kernel.text(), "new");
+    }
+
+    #[test]
+    fn with_text_clamps_invalid_cursor_to_char_boundary() {
+        let kernel = EditorKernel::with_text("你好".to_string(), 4);
+        assert_eq!(kernel.cursor(), 3);
+    }
+
+    #[test]
+    fn stale_revision_returns_stale_outcome() {
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let outcome = kernel.apply(EditorCommand::Insert {
+            byte_offset: 3,
+            text: "d".to_string(),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: 99,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::StaleRevision(_)));
+    }
+
+    #[test]
+    fn invalid_offset_returns_invalid_outcome() {
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3);
+        let outcome = kernel.apply(EditorCommand::Insert {
+            byte_offset: 2,
+            text: "X".to_string(),
+            cause: EditorTransactionCause::Typing,
+            expected_revision: 0,
+        });
+        assert!(matches!(outcome, EditorEditOutcome::Applied(_)));
     }
 
     #[test]
@@ -1653,7 +1731,7 @@ mod tests {
             original_text: "world".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        });
+        }).into_result();
         assert_eq!(result.display_patches.len(), 1);
         let patch = &result.display_patches[0];
         assert_eq!(patch.replace_byte_range, (6, 11));
