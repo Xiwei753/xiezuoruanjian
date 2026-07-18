@@ -237,7 +237,7 @@ class AndroidInputAdapter(
         val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val (sessionId, baseRev, generation) = compositionSessionInfo()
-            if (sessionId != 0L && committedText.isEmpty()) {
+            if (sessionId != 0L) {
                 val dto = bridge.finishComposition(sessionId, baseRev, generation, mirror.getRevision())
                 if (dto != null) {
                     val output = pipeline.applyCompositionCommit(dto)

@@ -201,6 +201,7 @@ class AndroidInputConnection(
         val byteEnd = indexMap.utf16ToUtf8(end)
         val selectedText = extractUtf8Text(byteStart, byteEnd)
         adapter.startComposingRegion(byteStart, byteEnd, selectedText)
+        mirror.updateComposition(byteStart, byteEnd, selectedText)
         adapter.sendBeginCompositionToKernel(byteStart, byteEnd)
         notifySelectionChanged()
         return true
