@@ -20,6 +20,7 @@ mod sync_operations;
 
 use super::*;
 use crate::backend::AppRef;
+use crate::backend::DomainSnapshot;
 use crate::sync_bridge::{
     determine_diagnostics_status, mask_sync_error, sync_error_category_from_code,
     SyncTaskOutcome,
@@ -87,40 +88,12 @@ pub struct SyncBackend {
     open_workspace_dir: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
-    cached: std::cell::RefCell<SyncCached>,
     app: AppRef,
-}
-
-struct SyncCached {
-    sync_enabled: bool,
-    sync_auto_sync: bool,
-    sync_interval: u32,
-    has_sync_token: bool,
-    sync_in_progress: bool,
-    has_workspace: bool,
-    sync_can_run: bool,
-}
-
-impl Default for SyncCached {
-    fn default() -> Self {
-        Self {
-            sync_enabled: false,
-            sync_auto_sync: false,
-            sync_interval: 300,
-            has_sync_token: false,
-            sync_in_progress: false,
-            has_workspace: false,
-            sync_can_run: false,
-        }
-    }
 }
 
 impl SyncBackend {
     pub fn new(app: AppRef) -> Self {
-        let mut s = Self::default();
-        s.app = app;
-        s.cached = std::cell::RefCell::new(SyncCached::default());
-        s
+        Self { app, ..Default::default() }
     }
     fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app(f)
@@ -128,11 +101,11 @@ impl SyncBackend {
     fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app_mut(f)
     }
+    fn snap(&self) -> std::cell::Ref<'_, DomainSnapshot> {
+        self.app.snapshot().borrow()
+    }
     fn sync_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.sync_enabled()) {
-            self.cached.borrow_mut().sync_enabled = val;
-        }
-        self.cached.borrow().sync_enabled
+        self.snap().sync_enabled
     }
     fn set_sync_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_sync_enabled(val)).is_ok() {
@@ -164,10 +137,7 @@ impl SyncBackend {
         }
     }
     fn sync_auto_sync(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.sync_auto_sync()) {
-            self.cached.borrow_mut().sync_auto_sync = val;
-        }
-        self.cached.borrow().sync_auto_sync
+        self.snap().sync_auto_sync
     }
     fn set_sync_auto_sync(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_sync_auto_sync(val)).is_ok() {
@@ -175,10 +145,7 @@ impl SyncBackend {
         }
     }
     fn sync_interval(&self) -> u32 {
-        if let Ok(val) = self.with_app(|app| app.sync_interval()) {
-            self.cached.borrow_mut().sync_interval = val;
-        }
-        self.cached.borrow().sync_interval
+        self.snap().sync_interval
     }
     fn set_sync_interval(&mut self, val: u32) {
         if self.with_app_mut(|app| app.set_sync_interval(val)).is_ok() {
@@ -194,10 +161,7 @@ impl SyncBackend {
         }
     }
     fn has_sync_token(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.has_sync_token()) {
-            self.cached.borrow_mut().has_sync_token = val;
-        }
-        self.cached.borrow().has_sync_token
+        self.snap().has_sync_token
     }
     fn sync_operation_state(&self) -> QString {
         self.with_app(|app| app.sync_operation_state()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -206,10 +170,7 @@ impl SyncBackend {
         self.with_app(|app| app.sync_status()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn sync_in_progress(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.sync_in_progress()) {
-            self.cached.borrow_mut().sync_in_progress = val;
-        }
-        self.cached.borrow().sync_in_progress
+        self.snap().sync_in_progress
     }
     fn set_sync_status(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_sync_status(val)).is_ok() {
@@ -217,16 +178,10 @@ impl SyncBackend {
         }
     }
     fn has_workspace(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.has_workspace()) {
-            self.cached.borrow_mut().has_workspace = val;
-        }
-        self.cached.borrow().has_workspace
+        self.snap().has_workspace
     }
     fn sync_can_run(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.sync_can_run()) {
-            self.cached.borrow_mut().sync_can_run = val;
-        }
-        self.cached.borrow().sync_can_run
+        self.snap().sync_can_run
     }
     fn sync_block_reason(&self) -> QString {
         self.with_app(|app| app.sync_block_reason()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())

@@ -322,6 +322,103 @@ pub struct AppBackend {
 }
 
 impl AppBackend {
+    pub(crate) fn update_snapshot(
+        &self,
+        snapshot: &std::rc::Rc<std::cell::RefCell<super::DomainSnapshot>>,
+    ) {
+        let mut s = snapshot.borrow_mut();
+        s.save_status = self.current_save_status.clone();
+        s.word_count = self.current_word_count;
+        s.error_message = self.current_error_message.clone();
+        s.selected_item_id = {
+            if let Some(ref id) = self.selected_chapter_id {
+                id.clone()
+            } else if let Some(ref id) = self.selected_volume_id {
+                id.clone()
+            } else if let Some(ref id) = self.selected_project_id {
+                id.clone()
+            } else {
+                String::new()
+            }
+        };
+        s.has_selected_chapter_prop = self.selected_chapter_id.is_some();
+        s.chapter_path = {
+            if let (Some(api), Some(p), Some(v), Some(c)) = (
+                self.core_api(),
+                &self.selected_project_id,
+                &self.selected_volume_id,
+                &self.selected_chapter_id,
+            ) {
+                let mut path = String::new();
+                if let Ok(projects) = api.list_projects() {
+                    if let Some(proj) = projects.iter().find(|x| x.id == *p) {
+                        path.push_str(&proj.title);
+                    }
+                }
+                if let Ok(volumes) = api.list_volumes(p) {
+                    if let Some(vol) = volumes.iter().find(|x| x.id == *v) {
+                        path.push_str(" > ");
+                        path.push_str(&vol.title);
+                    }
+                }
+                if let Ok(chapters) = api.list_chapters(p, v) {
+                    if let Some(chap) = chapters.iter().find(|x| x.id == *c) {
+                        path.push_str(" > ");
+                        path.push_str(&chap.title);
+                    }
+                }
+                path
+            } else {
+                String::new()
+            }
+        };
+        s.setting_font_size = self.current_setting_font_size;
+        s.setting_line_spacing = self.current_setting_line_spacing;
+        s.setting_auto_save_enabled = self.current_setting_auto_save_enabled;
+        s.setting_auto_save_delay_ms = self.current_setting_auto_save_delay_ms;
+        s.setting_auto_indent_enabled = self.current_setting_auto_indent_enabled;
+        s.setting_auto_indent_width = self.current_setting_auto_indent_width;
+        s.setting_smooth_cursor_enabled = self.current_setting_smooth_cursor_enabled;
+        s.setting_typing_animation_enabled = self.current_setting_typing_animation_enabled;
+        s.setting_smooth_cursor_duration_ms = self.current_setting_smooth_cursor_duration_ms;
+        s.setting_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms;
+        s.setting_coordinated_text_cursor_animation_enabled = self.current_setting_coordinated_text_cursor_animation_enabled;
+        s.has_workspace = self.current_has_workspace;
+        s.sync_enabled = self.current_sync_enabled;
+        s.sync_auto_sync = self.current_sync_auto_sync;
+        s.sync_interval = self.current_sync_interval;
+        s.has_sync_token = !self.current_sync_token.is_empty();
+        s.sync_in_progress = self.current_sync_in_progress;
+        s.sync_can_run = self.current_has_workspace && self.current_sync_enabled && !self.current_sync_in_progress;
+        s.ai_available = cfg!(feature = "ai");
+        s.ai_enabled = self.current_ai_enabled;
+        s.setting_linux_qt_sidebar_width = self.current_setting_linux_qt_sidebar_width;
+        s.setting_linux_qt_editor_width = self.current_setting_linux_qt_editor_width;
+        s.setting_diagnostics_enabled = self.current_setting_diagnostics_enabled;
+        s.setting_diagnostics_verbose = self.current_setting_diagnostics_verbose;
+        s.setting_dynamic_color_enabled = self.current_setting_dynamic_color_enabled;
+        s.system_is_dark = self.current_system_is_dark;
+        s.appearance_mode = self.current_setting_appearance_mode.clone();
+        s.selected_palette_id = self.current_setting_selected_palette_id.clone();
+        s.has_selected_chapter = self.selected_chapter_id.is_some();
+        s.selected_chapter_exists = {
+            if let (Some(api), Some(p), Some(v), Some(c)) = (
+                self.core_api(),
+                &self.selected_project_id,
+                &self.selected_volume_id,
+                &self.selected_chapter_id,
+            ) {
+                if let Ok(chapters) = api.list_chapters(p, v) {
+                    chapters.iter().any(|chap| chap.id == *c)
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+    }
+
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_workspace && !self.current_workspace.is_empty() {
             Some(WriterCoreApi::new(&self.current_workspace))

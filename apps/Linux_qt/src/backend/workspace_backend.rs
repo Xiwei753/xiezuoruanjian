@@ -18,6 +18,7 @@
 
 use super::*;
 use crate::backend::AppRef;
+use crate::backend::DomainSnapshot;
 
 use crate::backend::json_utils::qjson_object_from_json;
 use qmetaobject::QJsonObject;
@@ -63,28 +64,22 @@ pub struct WorkspaceBackend {
     save_last_navigation_state: qt_method!(fn(&mut self, route: QString, project_id: QString, volume_id: QString, chapter_id: QString, starmap_id: QString)),
     get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
     clear_last_navigation_state: qt_method!(fn(&mut self)),
-    cached: std::cell::RefCell<WorkspaceCached>,
     app: AppRef,
-}
-
-#[derive(Default)]
-struct WorkspaceCached {
-    has_workspace: bool,
 }
 
 
 impl WorkspaceBackend {
     pub fn new(app: AppRef) -> Self {
-        let mut s = Self::default();
-        s.app = app;
-        s.cached = std::cell::RefCell::new(WorkspaceCached::default());
-        s
+        Self { app, ..Default::default() }
     }
     fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app(f)
     }
     fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app_mut(f)
+    }
+    fn snap(&self) -> std::cell::Ref<'_, DomainSnapshot> {
+        self.app.snapshot().borrow()
     }
     fn emit_workspace_changed(&mut self) {
         self.workspace_opened();
@@ -95,10 +90,7 @@ impl WorkspaceBackend {
         self.with_app(|app| app.workspace_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn has_workspace(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.has_workspace()) {
-            self.cached.borrow_mut().has_workspace = val;
-        }
-        self.cached.borrow().has_workspace
+        self.snap().has_workspace
     }
     fn pending_github_init_path(&self) -> QString {
         self.with_app(|app| app.pending_github_init_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())

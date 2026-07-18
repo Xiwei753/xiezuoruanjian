@@ -17,6 +17,7 @@
 
 use super::*;
 use crate::backend::AppRef;
+use crate::backend::DomainSnapshot;
 
 #[allow(non_snake_case)] // Qt QML naming convention
 #[derive(QObject, Default)]
@@ -126,62 +127,12 @@ pub struct SettingsBackend {
     refresh_theme_data: qt_method!(fn(&mut self)),
     /// 标记是否有待保存的设置
     pending_save: bool,
-    cached: std::cell::RefCell<SettingsCached>,
     app: AppRef,
-}
-
-struct SettingsCached {
-    setting_font_size: f32,
-    setting_line_spacing: f32,
-    setting_auto_save_enabled: bool,
-    setting_auto_save_delay_ms: u32,
-    setting_auto_indent_enabled: bool,
-    setting_auto_indent_width: f32,
-    setting_dynamic_color_enabled: bool,
-    setting_typing_animation_enabled: bool,
-    setting_smooth_cursor_enabled: bool,
-    setting_typing_animation_duration_ms: u32,
-    setting_smooth_cursor_duration_ms: u32,
-    setting_coordinated_text_cursor_animation_enabled: bool,
-    ai_available: bool,
-    ai_enabled: bool,
-    setting_linux_qt_sidebar_width: f64,
-    setting_linux_qt_editor_width: f64,
-    setting_diagnostics_enabled: bool,
-    setting_diagnostics_verbose: bool,
-}
-
-impl Default for SettingsCached {
-    fn default() -> Self {
-        Self {
-            setting_font_size: 16.0,
-            setting_line_spacing: 1.5,
-            setting_auto_save_enabled: true,
-            setting_auto_save_delay_ms: 1500,
-            setting_auto_indent_enabled: true,
-            setting_auto_indent_width: 2.0,
-            setting_dynamic_color_enabled: false,
-            setting_typing_animation_enabled: true,
-            setting_smooth_cursor_enabled: true,
-            setting_typing_animation_duration_ms: 100,
-            setting_smooth_cursor_duration_ms: 80,
-            setting_coordinated_text_cursor_animation_enabled: true,
-            ai_available: false,
-            ai_enabled: false,
-            setting_linux_qt_sidebar_width: 240.0,
-            setting_linux_qt_editor_width: 0.0,
-            setting_diagnostics_enabled: true,
-            setting_diagnostics_verbose: true,
-        }
-    }
 }
 
 impl SettingsBackend {
     pub fn new(app: AppRef) -> Self {
-        let mut s = Self::default();
-        s.app = app;
-        s.cached = std::cell::RefCell::new(SettingsCached::default());
-        s
+        Self { app, ..Default::default() }
     }
 
     fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
@@ -192,75 +143,61 @@ impl SettingsBackend {
         self.app.with_app_mut(f)
     }
 
+    fn snap(&self) -> std::cell::Ref<'_, DomainSnapshot> {
+        self.app.snapshot().borrow()
+    }
+
     fn setting_font_size(&self) -> f32 {
-        if let Ok(val) = self.with_app(|app| app.setting_font_size()) {
-            self.cached.borrow_mut().setting_font_size = val;
-        }
-        self.cached.borrow().setting_font_size
+        self.snap().setting_font_size
     }
     fn set_setting_font_size(&mut self, val: f32) {
         if self.with_app_mut(|app| app.set_setting_font_size(val)).is_ok() {
-            self.cached.borrow_mut().setting_font_size = val;
+            
             self.settings_changed();
         }
     }
     fn setting_line_spacing(&self) -> f32 {
-        if let Ok(val) = self.with_app(|app| app.setting_line_spacing()) {
-            self.cached.borrow_mut().setting_line_spacing = val;
-        }
-        self.cached.borrow().setting_line_spacing
+        self.snap().setting_line_spacing
     }
     fn set_setting_line_spacing(&mut self, val: f32) {
         if self.with_app_mut(|app| app.set_setting_line_spacing(val)).is_ok() {
-            self.cached.borrow_mut().setting_line_spacing = val;
+            
             self.settings_changed();
         }
     }
     fn setting_auto_save_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_auto_save_enabled()) {
-            self.cached.borrow_mut().setting_auto_save_enabled = val;
-        }
-        self.cached.borrow().setting_auto_save_enabled
+        self.snap().setting_auto_save_enabled
     }
     fn set_setting_auto_save_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_auto_save_enabled(val)).is_ok() {
-            self.cached.borrow_mut().setting_auto_save_enabled = val;
+            
             self.settings_changed();
         }
     }
     fn setting_auto_save_delay_ms(&self) -> u32 {
-        if let Ok(val) = self.with_app(|app| app.setting_auto_save_delay_ms()) {
-            self.cached.borrow_mut().setting_auto_save_delay_ms = val;
-        }
-        self.cached.borrow().setting_auto_save_delay_ms
+        self.snap().setting_auto_save_delay_ms
     }
     fn set_setting_auto_save_delay_ms(&mut self, val: u32) {
         if self.with_app_mut(|app| app.set_setting_auto_save_delay_ms(val)).is_ok() {
-            self.cached.borrow_mut().setting_auto_save_delay_ms = val;
+            
             self.settings_changed();
         }
     }
     fn setting_auto_indent_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_auto_indent_enabled()) {
-            self.cached.borrow_mut().setting_auto_indent_enabled = val;
-        }
-        self.cached.borrow().setting_auto_indent_enabled
+        self.snap().setting_auto_indent_enabled
     }
     fn set_setting_auto_indent_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_auto_indent_enabled(val)).is_ok() {
-            self.cached.borrow_mut().setting_auto_indent_enabled = val;
+            
             self.settings_changed();
         }
     }
     fn setting_auto_indent_width(&self) -> f32 {
-        if let Ok(val) = self.with_app(|app| app.setting_auto_indent_width()) {
-            self.cached.borrow_mut().setting_auto_indent_width = val;
-        }
-        self.cached.borrow().setting_auto_indent_width
+        self.snap().setting_auto_indent_width
     }
     fn set_setting_auto_indent_width(&mut self, val: f32) {
         if self.with_app_mut(|app| app.set_setting_auto_indent_width(val)).is_ok() {
-            self.cached.borrow_mut().setting_auto_indent_width = val;
+            
             self.settings_changed();
         }
     }
@@ -290,10 +227,7 @@ impl SettingsBackend {
         }
     }
     fn setting_dynamic_color_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_dynamic_color_enabled()) {
-            self.cached.borrow_mut().setting_dynamic_color_enabled = val;
-        }
-        self.cached.borrow().setting_dynamic_color_enabled
+        self.snap().setting_dynamic_color_enabled
     }
     fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_dynamic_color_enabled(val)).is_ok() {
@@ -356,76 +290,55 @@ impl SettingsBackend {
         self.setting_color_source()
     }
     fn setting_typing_animation_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_typing_animation_enabled()) {
-            self.cached.borrow_mut().setting_typing_animation_enabled = val;
-        }
-        self.cached.borrow().setting_typing_animation_enabled
+        self.snap().setting_typing_animation_enabled
     }
     fn set_setting_typing_animation_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_typing_animation_enabled(val)).is_ok() {
-            self.cached.borrow_mut().setting_typing_animation_enabled = val;
+            
             self.settings_changed();
         }
     }
     fn setting_smooth_cursor_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_smooth_cursor_enabled()) {
-            self.cached.borrow_mut().setting_smooth_cursor_enabled = val;
-        }
-        self.cached.borrow().setting_smooth_cursor_enabled
+        self.snap().setting_smooth_cursor_enabled
     }
     fn set_setting_smooth_cursor_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_smooth_cursor_enabled(val)).is_ok() {
-            self.cached.borrow_mut().setting_smooth_cursor_enabled = val;
+            
             self.settings_changed();
         }
     }
     fn setting_typing_animation_duration_ms(&self) -> u32 {
-        if let Ok(val) = self.with_app(|app| app.setting_typing_animation_duration_ms()) {
-            self.cached.borrow_mut().setting_typing_animation_duration_ms = val;
-        }
-        self.cached.borrow().setting_typing_animation_duration_ms
+        self.snap().setting_typing_animation_duration_ms
     }
     fn set_setting_typing_animation_duration_ms(&mut self, val: u32) {
         if self.with_app_mut(|app| app.set_setting_typing_animation_duration_ms(val)).is_ok() {
-            self.cached.borrow_mut().setting_typing_animation_duration_ms = val;
+            
             self.settings_changed();
         }
     }
     fn setting_smooth_cursor_duration_ms(&self) -> u32 {
-        if let Ok(val) = self.with_app(|app| app.setting_smooth_cursor_duration_ms()) {
-            self.cached.borrow_mut().setting_smooth_cursor_duration_ms = val;
-        }
-        self.cached.borrow().setting_smooth_cursor_duration_ms
+        self.snap().setting_smooth_cursor_duration_ms
     }
     fn set_setting_smooth_cursor_duration_ms(&mut self, val: u32) {
         if self.with_app_mut(|app| app.set_setting_smooth_cursor_duration_ms(val)).is_ok() {
-            self.cached.borrow_mut().setting_smooth_cursor_duration_ms = val;
+            
             self.settings_changed();
         }
     }
     fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_coordinated_text_cursor_animation_enabled()) {
-            self.cached.borrow_mut().setting_coordinated_text_cursor_animation_enabled = val;
-        }
-        self.cached.borrow().setting_coordinated_text_cursor_animation_enabled
+        self.snap().setting_coordinated_text_cursor_animation_enabled
     }
     fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_coordinated_text_cursor_animation_enabled(val)).is_ok() {
-            self.cached.borrow_mut().setting_coordinated_text_cursor_animation_enabled = val;
+            
             self.settings_changed();
         }
     }
     fn ai_available(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.ai_available()) {
-            self.cached.borrow_mut().ai_available = val;
-        }
-        self.cached.borrow().ai_available
+        self.snap().ai_available
     }
     fn ai_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.ai_enabled()) {
-            self.cached.borrow_mut().ai_enabled = val;
-        }
-        self.cached.borrow().ai_enabled
+        self.snap().ai_enabled
     }
     fn set_ai_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_ai_enabled(val)).is_ok() {
@@ -434,51 +347,39 @@ impl SettingsBackend {
         }
     }
     fn setting_linux_qt_sidebar_width(&self) -> f64 {
-        if let Ok(val) = self.with_app(|app| app.setting_linux_qt_sidebar_width()) {
-            self.cached.borrow_mut().setting_linux_qt_sidebar_width = val;
-        }
-        self.cached.borrow().setting_linux_qt_sidebar_width
+        self.snap().setting_linux_qt_sidebar_width
     }
     fn set_setting_linux_qt_sidebar_width(&mut self, val: f64) {
         if self.with_app_mut(|app| app.set_setting_linux_qt_sidebar_width(val)).is_ok() {
-            self.cached.borrow_mut().setting_linux_qt_sidebar_width = val;
+            
             self.settings_changed();
         }
     }
     fn setting_linux_qt_editor_width(&self) -> f64 {
-        if let Ok(val) = self.with_app(|app| app.setting_linux_qt_editor_width()) {
-            self.cached.borrow_mut().setting_linux_qt_editor_width = val;
-        }
-        self.cached.borrow().setting_linux_qt_editor_width
+        self.snap().setting_linux_qt_editor_width
     }
     fn set_setting_linux_qt_editor_width(&mut self, val: f64) {
         if self.with_app_mut(|app| app.set_setting_linux_qt_editor_width(val)).is_ok() {
-            self.cached.borrow_mut().setting_linux_qt_editor_width = val;
+            
             self.settings_changed();
         }
     }
     fn setting_diagnostics_enabled(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_diagnostics_enabled()) {
-            self.cached.borrow_mut().setting_diagnostics_enabled = val;
-        }
-        self.cached.borrow().setting_diagnostics_enabled
+        self.snap().setting_diagnostics_enabled
     }
     fn set_setting_diagnostics_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_diagnostics_enabled(val)).is_ok() {
-            self.cached.borrow_mut().setting_diagnostics_enabled = val;
+            
             crate::backend::diagnostics::set_diagnostics_enabled(val);
             self.settings_changed();
         }
     }
     fn setting_diagnostics_verbose(&self) -> bool {
-        if let Ok(val) = self.with_app(|app| app.setting_diagnostics_verbose()) {
-            self.cached.borrow_mut().setting_diagnostics_verbose = val;
-        }
-        self.cached.borrow().setting_diagnostics_verbose
+        self.snap().setting_diagnostics_verbose
     }
     fn set_setting_diagnostics_verbose(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_diagnostics_verbose(val)).is_ok() {
-            self.cached.borrow_mut().setting_diagnostics_verbose = val;
+            
             crate::backend::diagnostics::set_verbose_enabled(val);
             self.settings_changed();
         }

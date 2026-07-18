@@ -280,7 +280,7 @@ fn qt_version() -> String {
         rules = self.rule_names(source, path="apps/Linux_qt/src/editor/layout.rs")
         self.assertNotIn("cpp-unsafe-call", rules)
 
-    def test_flags_cpp_unsafe_empty_capture_in_disallowed_dir(self) -> None:
+    def test_flags_cpp_unsafe_empty_capture_in_disallowed_file(self) -> None:
         source = r'''
 fn qt_version() -> String {
     let ptr = cpp!(unsafe [] -> *const std::ffi::c_char as "const char*" {
@@ -306,7 +306,7 @@ mod tests {
         rules = self.rule_names(source, path="apps/Linux_qt/src/sujian_editor_item/test.rs")
         self.assertNotIn("cpp-unsafe-call", rules)
 
-    def test_accepts_cpp_unsafe_in_allowed_dir(self) -> None:
+    def test_accepts_cpp_unsafe_in_allowed_file(self) -> None:
         source = r'''
 fn call_qt(item: *mut c_void) {
     cpp!(unsafe [item as "QQuickItem*"] {
@@ -317,6 +317,28 @@ fn call_qt(item: *mut c_void) {
         rules = self.rule_names(source, path="apps/Linux_qt/src/sujian_editor_item/rendering.rs")
         self.assertNotIn("cpp-unsafe-call", rules)
 
+    def test_flags_cpp_unsafe_in_same_dir_but_not_allowed_file(self) -> None:
+        source = r'''
+fn call_qt(item: *mut c_void) {
+    cpp!(unsafe [item as "QQuickItem*"] {
+        item->update();
+    });
+}
+'''
+        rules = self.rule_names(source, path="apps/Linux_qt/src/sujian_editor_item/some_new_file.rs")
+        self.assertIn("cpp-unsafe-call", rules)
+
+    def test_flags_cpp_unsafe_in_allowed_dir_but_not_allowed_file(self) -> None:
+        source = r'''
+fn call_qt(item: *mut c_void) {
+    cpp!(unsafe [item as "QQuickItem*"] {
+        item->update();
+    });
+}
+'''
+        rules = self.rule_names(source, path="apps/Linux_qt/src/editor/input/other_file.rs")
+        self.assertIn("cpp-unsafe-call", rules)
+
     def test_assert_unwind_safe_flagged_in_non_whitelisted_function(self) -> None:
         source = r'''
 fn other_function() {
@@ -326,7 +348,7 @@ fn other_function() {
         rules = self.rule_names(source, path="apps/Linux_qt/src/backend/sync_backend.rs")
         self.assertIn("assert-unwind-safe", rules)
 
-    def test_flags_cpp_unsafe_in_disallowed_dir(self) -> None:
+    def test_flags_cpp_unsafe_in_disallowed_file(self) -> None:
         source = r'''
 fn call_qt(item: *mut c_void) {
     cpp!(unsafe [item as "QQuickItem*"] {

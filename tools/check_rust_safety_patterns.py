@@ -189,23 +189,22 @@ _RULES_PRODUCTION_ONLY = {
     "revision-zero-bypass",
 }
 
-_CPP_UNSAFE_ALLOWED_DIRS = {
-    "apps/Linux_qt/src/editor/input/",
-    "apps/Linux_qt/src/editor/scene_graph.rs",
-    "apps/Linux_qt/src/editor/renderer.rs",
-    "apps/Linux_qt/src/editor/layout.rs",
-    "apps/Linux_qt/src/sujian_editor_item/",
-    "apps/Linux_qt/src/platform/linux_qt/",
-    "apps/Linux_qt/src/main.rs",
+_CPP_UNSAFE_ALLOWED_FILES = {
+    Path("apps/Linux_qt/src/editor/input/qt_surface.rs"),
+    Path("apps/Linux_qt/src/editor/layout.rs"),
+    Path("apps/Linux_qt/src/editor/renderer.rs"),
+    Path("apps/Linux_qt/src/editor/scene_graph.rs"),
+    Path("apps/Linux_qt/src/main.rs"),
+    Path("apps/Linux_qt/src/platform/linux_qt/clipboard_focus_adapter.rs"),
+    Path("apps/Linux_qt/src/sujian_editor_item/ime_visual.rs"),
+    Path("apps/Linux_qt/src/sujian_editor_item/input_host.rs"),
+    Path("apps/Linux_qt/src/sujian_editor_item/properties.rs"),
+    Path("apps/Linux_qt/src/sujian_editor_item/rendering.rs"),
 }
 
 
-def _is_cpp_unsafe_in_allowed_dir(path: Path) -> bool:
-    path_str = str(path)
-    for allowed in _CPP_UNSAFE_ALLOWED_DIRS:
-        if path_str.startswith(allowed):
-            return True
-    return False
+def _is_cpp_unsafe_in_allowed_file(path: Path) -> bool:
+    return path in _CPP_UNSAFE_ALLOWED_FILES
 
 _ASSERT_UNWIND_SAFE_WHITELIST_ENTRIES = {
     (Path("apps/Linux_qt/src/backend/sync_backend.rs"), "perform_sync_diagnostics"),
@@ -295,7 +294,9 @@ def scan_text(path: Path, text: str) -> list[Finding]:
                     if _is_in_test_context(lines, index):
                         continue
                 if rule.name == "cpp-unsafe-call":
-                    if _is_cpp_unsafe_in_allowed_dir(path):
+                    if _is_in_test_context(lines, index):
+                        continue
+                    if _is_cpp_unsafe_in_allowed_file(path):
                         continue
                 findings.append(Finding(path, index + 1, rule.name, rule.message))
 
