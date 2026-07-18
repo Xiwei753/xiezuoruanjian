@@ -506,12 +506,12 @@ impl SettingsBackend {
                             records.into_iter().map(Into::into).collect();
                         QString::from(serde_json::to_string(&dtos).unwrap_or_else(|_| "[]".to_string()))
                     }
-                    Err(_) => QString::from("[]"),
+                    Err(_) => QString::from(crate::backend::json_utils::borrow_conflict_error_json()),
                 }
             } else {
-                QString::from("[]")
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             }
-        }).unwrap_or_else(|_| "[]".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn list_builtin_themes_json(&self) -> QString {
@@ -520,9 +520,9 @@ impl SettingsBackend {
                 let themes = core.list_builtin_themes();
                 QString::from(serde_json::to_string(&themes).unwrap_or_else(|_| "[]".to_string()))
             } else {
-                QString::from("[]")
+                QString::from(crate::backend::json_utils::borrow_conflict_error_json())
             }
-        }).unwrap_or_else(|_| "[]".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn load_selected_palette_json(&self) -> QString {

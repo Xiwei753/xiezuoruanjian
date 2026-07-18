@@ -290,20 +290,39 @@ mod tests {
     }
 }
 '''
-        rules = self.rule_names(source)
+        rules = self.rule_names(source, path="apps/Linux_qt/src/sujian_editor_item/test.rs")
         self.assertNotIn("cpp-unsafe-call", rules)
 
-    def test_accepts_cpp_unsafe_with_safety_comment(self) -> None:
+    def test_accepts_cpp_unsafe_in_allowed_dir(self) -> None:
         source = r'''
 fn call_qt(item: *mut c_void) {
-    // SAFETY: item is a QQuickItem* obtained from QML engine; valid for the lifetime of the scene graph node; GUI thread only; null-checked above.
     cpp!(unsafe [item as "QQuickItem*"] {
         item->update();
     });
 }
 '''
-        rules = self.rule_names(source)
+        rules = self.rule_names(source, path="apps/Linux_qt/src/sujian_editor_item/rendering.rs")
         self.assertNotIn("cpp-unsafe-call", rules)
+
+    def test_assert_unwind_safe_flagged_in_non_whitelisted_function(self) -> None:
+        source = r'''
+fn other_function() {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
+}
+'''
+        rules = self.rule_names(source, path="apps/Linux_qt/src/backend/sync_backend.rs")
+        self.assertIn("assert-unwind-safe", rules)
+
+    def test_flags_cpp_unsafe_in_disallowed_dir(self) -> None:
+        source = r'''
+fn call_qt(item: *mut c_void) {
+    cpp!(unsafe [item as "QQuickItem*"] {
+        item->update();
+    });
+}
+'''
+        rules = self.rule_names(source, path="apps/Linux_qt/src/backend/some_backend.rs")
+        self.assertIn("cpp-unsafe-call", rules)
 
     def test_flags_cpp_unsafe_without_safety_comment(self) -> None:
         source = r'''
@@ -313,26 +332,17 @@ fn call_qt(item: *mut c_void) {
     });
 }
 '''
-        rules = self.rule_names(source)
+        rules = self.rule_names(source, path="apps/Linux_qt/src/backend/some_backend.rs")
         self.assertIn("cpp-unsafe-call", rules)
 
-    def test_assert_unwind_safe_allowed_in_whitelisted_path(self) -> None:
+    def test_assert_unwind_safe_allowed_in_whitelisted_function(self) -> None:
         source = r'''
-fn ffi_boundary() {
+fn perform_sync_diagnostics() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
 }
 '''
         rules = self.rule_names(source, path="apps/Linux_qt/src/backend/sync_backend.rs")
         self.assertNotIn("assert-unwind-safe", rules)
-
-    def test_assert_unwind_safe_flagged_in_non_whitelisted_path(self) -> None:
-        source = r'''
-fn other_file() {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
-}
-'''
-        rules = self.rule_names(source, path="apps/Linux_qt/src/backend/other.rs")
-        self.assertIn("assert-unwind-safe", rules)
 
 
 if __name__ == "__main__":

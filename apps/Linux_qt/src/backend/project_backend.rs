@@ -123,13 +123,19 @@ impl ProjectBackend {
         if result.is_ok() {
             self.emit_changed();
         }
-        result.unwrap_or_else(|_| "[]".into())
+        result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_tree_model_json(&self) -> QString {
         self.with_app(|app| app.get_tree_model_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_tree_model(&self) -> QJsonArray {
-        self.with_app(|app| app.get_tree_model()).unwrap_or_default()
+        match self.with_app(|app| app.get_tree_model()) {
+            Ok(arr) => arr,
+            Err(_) => crate::backend::json_utils::serde_to_qjson_array(
+                serde_json::from_str(&crate::backend::json_utils::borrow_conflict_error_json())
+                    .unwrap_or(serde_json::json!([]))
+            ),
+        }
     }
     fn get_project_summaries_json(&self) -> QString {
         self.with_app(|app| app.get_project_summaries_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -182,22 +188,20 @@ impl ProjectBackend {
         _action_id: QString,
     ) -> QJsonObject {
         let item_type_str = item_type.to_string();
-        match item_type_str.as_str() {
-            "project" => {
-                let _ = self.with_app_mut(|app| app.select_project(project_id));
-            }
-            "volume" => {
-                let _ = self.with_app_mut(|app| app.select_volume(project_id, volume_id));
-            }
-            "chapter" => {
-                let _ = self.with_app_mut(|app| {
-                    app.select_chapter(project_id, volume_id, chapter_id)
-                });
-            }
-            _ => {}
+        let result = match item_type_str.as_str() {
+            "project" => self.with_app_mut(|app| app.select_project(project_id)),
+            "volume" => self.with_app_mut(|app| app.select_volume(project_id, volume_id)),
+            "chapter" => self.with_app_mut(|app| {
+                app.select_chapter(project_id, volume_id, chapter_id)
+            }),
+            _ => Ok(()),
+        };
+        if result.is_ok() {
+            self.selected_item_changed();
+            bridge_success_object(serde_json::json!({}))
+        } else {
+            qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json())
         }
-        self.selected_item_changed();
-        bridge_success_object(serde_json::json!({}))
     }
     fn delete_project_result(&mut self, project_id: QString, action_id: QString) -> QJsonObject {
         let result = self.with_app_mut(|app| {

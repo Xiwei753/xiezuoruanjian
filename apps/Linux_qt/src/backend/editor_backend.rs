@@ -319,12 +319,14 @@ impl EditorBackend {
         volume_id: QString,
         chapter_id: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.open_chapter(project_id, volume_id, chapter_id)
-        }).unwrap_or_default();
-        self.selected_item_changed();
-        self.chapter_path_changed();
-        out
+        });
+        if result.is_ok() {
+            self.selected_item_changed();
+            self.chapter_path_changed();
+        }
+        result.unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn get_chapter_content(
         &self,
@@ -344,7 +346,7 @@ impl EditorBackend {
         content: QString,
         allow_empty_overwrite: bool,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.save_chapter(
                 project_id,
                 volume_id,
@@ -352,9 +354,11 @@ impl EditorBackend {
                 content,
                 allow_empty_overwrite,
             )
-        }).unwrap_or_default();
-        self.save_status_changed();
-        out
+        });
+        if result.is_ok() {
+            self.save_status_changed();
+        }
+        result.unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn clear_chapter_content(
         &mut self,
@@ -364,7 +368,7 @@ impl EditorBackend {
     ) -> QJsonObject {
         self.with_app_mut(|app| {
             app.clear_chapter_content(project_id, volume_id, chapter_id)
-        }).unwrap_or_default()
+        }).unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn report_writing_event(
         &mut self,
@@ -376,7 +380,7 @@ impl EditorBackend {
         deleted_chars: u32,
         pasted_chars: u32,
     ) {
-        let _ = self.with_app_mut(|app| {
+        if self.with_app_mut(|app| {
             app.report_writing_event(
                 project_id,
                 volume_id,
@@ -386,7 +390,13 @@ impl EditorBackend {
                 deleted_chars,
                 pasted_chars,
             )
-        });
+        }).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "report_writing_event skipped due to borrow conflict",
+            );
+        }
     }
     fn process_writing_event_from_text(
         &mut self,
@@ -396,16 +406,22 @@ impl EditorBackend {
         old_text: QString,
         new_text: QString,
     ) {
-        let _ = self.with_app_mut(|app| {
+        if self.with_app_mut(|app| {
             app.process_writing_event_from_text(
                 project_id, volume_id, chapter_id, old_text, new_text,
             )
-        });
+        }).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "process_writing_event_from_text skipped due to borrow conflict",
+            );
+        }
     }
     fn get_writing_stats_summary(&self, start_date: QString, end_date: QString) -> QString {
         self.with_app(|app| {
             app.get_writing_stats_summary(start_date, end_date)
-        }).unwrap_or_else(|_| "{}".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_writing_stats_summary_object(
         &self,
@@ -414,12 +430,12 @@ impl EditorBackend {
     ) -> QJsonObject {
         self.with_app(|app| {
             app.get_writing_stats_summary_object(start_date, end_date)
-        }).unwrap_or_default()
+        }).unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn get_writing_stats_by_project(&self, start_date: QString, end_date: QString) -> QString {
         self.with_app(|app| {
             app.get_writing_stats_by_project(start_date, end_date)
-        }).unwrap_or_else(|_| "{}".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_writing_stats_by_project_object(
         &self,
@@ -428,12 +444,12 @@ impl EditorBackend {
     ) -> QJsonObject {
         self.with_app(|app| {
             app.get_writing_stats_by_project_object(start_date, end_date)
-        }).unwrap_or_default()
+        }).unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn get_writing_stats_by_chapter(&self, start_date: QString, end_date: QString) -> QString {
         self.with_app(|app| {
             app.get_writing_stats_by_chapter(start_date, end_date)
-        }).unwrap_or_else(|_| "{}".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_writing_stats_by_chapter_object(
         &self,
@@ -442,12 +458,12 @@ impl EditorBackend {
     ) -> QJsonObject {
         self.with_app(|app| {
             app.get_writing_stats_by_chapter_object(start_date, end_date)
-        }).unwrap_or_default()
+        }).unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn get_writing_stats_by_device(&self, start_date: QString, end_date: QString) -> QString {
         self.with_app(|app| {
             app.get_writing_stats_by_device(start_date, end_date)
-        }).unwrap_or_else(|_| "{}".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_writing_stats_by_device_object(
         &self,
@@ -456,7 +472,7 @@ impl EditorBackend {
     ) -> QJsonObject {
         self.with_app(|app| {
             app.get_writing_stats_by_device_object(start_date, end_date)
-        }).unwrap_or_default()
+        }).unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn get_writing_speed_curve(
         &self,
@@ -466,7 +482,7 @@ impl EditorBackend {
     ) -> QString {
         self.with_app(|app| {
             app.get_writing_speed_curve(start_date, end_date, bucket_minutes)
-        }).unwrap_or_else(|_| "{}".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_writing_speed_curve_object(
         &self,
@@ -476,13 +492,25 @@ impl EditorBackend {
     ) -> QJsonObject {
         self.with_app(|app| {
             app.get_writing_speed_curve_object(start_date, end_date, bucket_minutes)
-        }).unwrap_or_default()
+        }).unwrap_or_else(|_| qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn flush_writing_stats(&self) {
-        let _ = self.with_app(|app| app.flush_writing_stats());
+        if self.with_app(|app| app.flush_writing_stats()).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "flush_writing_stats skipped due to borrow conflict",
+            );
+        }
     }
     fn flush_recent_edits(&self) {
-        let _ = self.with_app(|app| app.flush_recent_edits());
+        if self.with_app(|app| app.flush_recent_edits()).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "flush_recent_edits skipped due to borrow conflict",
+            );
+        }
     }
     fn has_selected_chapter(&self) -> bool {
         self.with_app(|app| app.has_selected_chapter()).unwrap_or(false)
@@ -496,7 +524,13 @@ impl EditorBackend {
         }
     }
     fn request_auto_sync(&mut self, reason: QString) {
-        let _ = self.with_app_mut(|app| app.request_auto_sync(reason));
+        if self.with_app_mut(|app| app.request_auto_sync(reason)).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "request_auto_sync skipped due to borrow conflict",
+            );
+        }
     }
     fn log_qml(&self, level: QString, module: QString, event: QString, message: QString) {
         let _ = self.with_app(|app| app.log_qml(level, module, event, message));

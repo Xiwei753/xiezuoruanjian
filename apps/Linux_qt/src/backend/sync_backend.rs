@@ -237,7 +237,13 @@ impl SyncBackend {
         }
     }
     fn open_workspace_dir(&mut self) {
-        let _ = self.with_app_mut(|app| app.open_workspace_dir());
+        if self.with_app_mut(|app| app.open_workspace_dir()).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "sync_backend",
+                "BORROW_CONFLICT",
+                "open_workspace_dir skipped due to borrow conflict",
+            );
+        }
     }
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
         self.with_app_mut(|app| app.copy_text_to_clipboard(text)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())

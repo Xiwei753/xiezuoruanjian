@@ -501,7 +501,7 @@ impl LinuxEditorPipeline {
             let _ = self.kernel.apply(EditorCommand::SetSelection {
                 anchor_byte_offset: anchor,
                 head_byte_offset: cursor,
-                expected_revision: 0,
+                expected_revision: self.kernel.revision(),
             });
         }
         self.mirror.load_from_snapshot(

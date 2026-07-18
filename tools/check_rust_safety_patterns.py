@@ -186,14 +186,38 @@ _RULES_WITH_DEPRECATED = {
 
 _RULES_PRODUCTION_ONLY = {
     "production-lock-unwrap",
-    "cpp-unsafe-call",
 }
 
-_ASSERT_UNWIND_SAFE_WHITELIST_PATHS = {
-    Path("apps/Linux_qt/src/backend/sync_backend.rs"),
-    Path("apps/Linux_qt/src/backend/sync_operations.rs"),
-    Path("apps/Linux_qt/src/editor/input/platform_ime.rs"),
-    Path("core/writer_core/src/sync/github_backend.rs"),
+_CPP_UNSAFE_ALLOWED_DIRS = {
+    "apps/Linux_qt/src/editor/input/",
+    "apps/Linux_qt/src/editor/scene_graph.rs",
+    "apps/Linux_qt/src/editor/renderer.rs",
+    "apps/Linux_qt/src/editor/layout.rs",
+    "apps/Linux_qt/src/sujian_editor_item/",
+    "apps/Linux_qt/src/platform/linux_qt/",
+    "apps/Linux_qt/src/main.rs",
+}
+
+
+def _is_cpp_unsafe_in_allowed_dir(path: Path) -> bool:
+    path_str = str(path)
+    for allowed in _CPP_UNSAFE_ALLOWED_DIRS:
+        if path_str.startswith(allowed):
+            return True
+    return False
+
+_ASSERT_UNWIND_SAFE_WHITELIST_ENTRIES = {
+    (Path("apps/Linux_qt/src/backend/sync_backend.rs"), "perform_sync_diagnostics"),
+    (Path("apps/Linux_qt/src/backend/sync_operations.rs"), "perform_sync_dry_run"),
+    (Path("apps/Linux_qt/src/backend/sync_operations.rs"), "perform_sync_internal"),
+    (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_handle_key_and_text"),
+    (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_commit"),
+    (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_replace_and_commit"),
+    (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_preedit"),
+    (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_preedit_attrs"),
+    (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_ime_cancel"),
+    (Path("apps/Linux_qt/src/editor/input/platform_ime.rs"), "sujian_request_repaint"),
+    (Path("core/writer_core/src/sync/github_backend.rs"), "sync"),
 }
 
 
@@ -205,6 +229,33 @@ def _is_in_whitelisted_path(path: Path, whitelist: set[Path]) -> bool:
         except ValueError:
             if path == allowed:
                 return True
+    return False
+
+
+def _enclosing_function_name(lines: list[str], index: int) -> str | None:
+    for i in range(index, max(-1, index - 500), -1):
+        stripped = lines[i].strip()
+        m = re.match(
+            r"^\s*(?:pub\s*(?:\([^)]*\)\s*)?)?(?:extern\s+\"[^\"]+\"\s+)?(?:async\s+)?fn\s+(\w+)",
+            stripped,
+        )
+        if m:
+            return m.group(1)
+    return None
+
+
+def _is_assert_unwind_safe_allowed(path: Path, lines: list[str], index: int) -> bool:
+    func_name = _enclosing_function_name(lines, index)
+    if func_name is None:
+        return False
+    for allowed_path, allowed_func in _ASSERT_UNWIND_SAFE_WHITELIST_ENTRIES:
+        try:
+            path.relative_to(allowed_path)
+        except ValueError:
+            if path != allowed_path:
+                continue
+        if func_name == allowed_func:
+            return True
     return False
 
 
@@ -231,7 +282,7 @@ def scan_text(path: Path, text: str) -> list[Finding]:
         for rule in RULES:
             if rule.pattern.search(code):
                 if rule.name == "assert-unwind-safe":
-                    if _is_in_whitelisted_path(path, _ASSERT_UNWIND_SAFE_WHITELIST_PATHS):
+                    if _is_assert_unwind_safe_allowed(path, lines, index):
                         continue
                 if rule.name == "broad-dead-code-allow":
                     if _is_qmetaobject_macro_field(lines, index):
@@ -243,7 +294,7 @@ def scan_text(path: Path, text: str) -> list[Finding]:
                     if _is_in_test_context(lines, index):
                         continue
                 if rule.name == "cpp-unsafe-call":
-                    if _has_safety_comment(lines, index):
+                    if _is_cpp_unsafe_in_allowed_dir(path):
                         continue
                 findings.append(Finding(path, index + 1, rule.name, rule.message))
 

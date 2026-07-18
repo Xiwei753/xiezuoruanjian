@@ -398,7 +398,9 @@ impl EditorKernel {
         old_cursor: usize,
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
-        let byte_offset = byte_offset.min(self.text.len());
+        if byte_offset > self.text.len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
         if !self.text.is_char_boundary(byte_offset) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
@@ -485,8 +487,9 @@ impl EditorKernel {
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
-        let byte_start = byte_start.min(self.text.len());
-        let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
+        if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
         if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
@@ -580,8 +583,9 @@ impl EditorKernel {
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
-        let byte_start = byte_start.min(self.text.len());
-        let byte_end_exclusive = byte_end_exclusive.min(self.text.len());
+        if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
         if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
@@ -674,8 +678,11 @@ impl EditorKernel {
         old_cursor: usize,
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
-        let anchor = anchor_byte_offset.min(self.text.len());
-        let head = head_byte_offset.min(self.text.len());
+        let anchor = anchor_byte_offset;
+        let head = head_byte_offset;
+        if anchor > self.text.len() || head > self.text.len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
         if !self.text.is_char_boundary(anchor) || !self.text.is_char_boundary(head) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
@@ -940,7 +947,7 @@ impl EditorKernel {
 
         self.text = new_text;
         self.revision = self.revision.saturating_add(1);
-        self.cursor = self.cursor.min(self.text.len());
+        self.cursor = Self::clamp_to_char_boundary(&self.text, self.cursor);
         self.selection_anchor = self.cursor;
 
         self.undo_stack.push(UndoEntry {
@@ -1001,7 +1008,9 @@ impl EditorKernel {
         old_cursor: usize,
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
-        let byte_offset = byte_offset.min(self.text.len());
+        if byte_offset > self.text.len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
         if !self.text.is_char_boundary(byte_offset) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
@@ -1643,16 +1652,16 @@ mod tests {
     }
 
     #[test]
-    fn insert_at_boundary_clamps() {
+    fn insert_beyond_length_returns_invalid_offset() {
         let mut kernel = EditorKernel::with_text("ab".to_string(), 2).unwrap();
-        let result = kernel.apply(EditorCommand::Insert {
+        let outcome = kernel.apply(EditorCommand::Insert {
             byte_offset: 100,
             text: "c".to_string(),
             cause: EditorTransactionCause::Typing,
             expected_revision: 0,
-        }).into_result();
-        assert_eq!(kernel.text(), "abc");
-        assert_eq!(kernel.cursor(), 3);
+        });
+        assert!(matches!(outcome, EditorEditOutcome::InvalidOffset(_)));
+        assert_eq!(kernel.text(), "ab");
     }
 
     #[test]
