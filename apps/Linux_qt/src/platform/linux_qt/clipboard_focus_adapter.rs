@@ -45,6 +45,10 @@ impl LinuxQtClipboardFocusAdapter {
             },
         }
     }
+
+    pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
+        self.item_ptr.set(ptr);
+    }
 }
 
 impl Default for LinuxQtClipboardFocusAdapter {

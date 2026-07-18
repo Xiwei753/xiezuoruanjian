@@ -1487,8 +1487,8 @@ impl EditorEngine {
     #[cfg(test)]
     #[deprecated(
         since = "0.12.0",
-        note = "Use visual_transaction() instead. This will be removed in a future version."
-    )]
+         note = "Use visual_transaction() instead. This will be removed in a future version."
+     )]
     #[allow(deprecated)]
     pub(crate) fn animation_events(
         &mut self,

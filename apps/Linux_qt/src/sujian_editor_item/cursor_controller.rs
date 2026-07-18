@@ -266,11 +266,6 @@ impl CursorController {
         }
         false
     }
-
-    pub fn reset_blink(&mut self) {
-        self.blink_visible = true;
-        self.blink_last_toggle = Instant::now();
-    }
 }
 
 pub struct CursorUpdateResult {

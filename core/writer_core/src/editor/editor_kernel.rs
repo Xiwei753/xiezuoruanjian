@@ -413,6 +413,7 @@ impl EditorKernel {
             new_text: self.text.clone(),
             old_cursor,
             new_cursor: self.cursor,
+            cause,
         });
         self.redo_stack.clear();
 
@@ -506,6 +507,7 @@ impl EditorKernel {
             new_text: self.text.clone(),
             old_cursor,
             new_cursor: self.cursor,
+            cause,
         });
         self.redo_stack.clear();
 
@@ -949,7 +951,7 @@ impl EditorKernel {
             new_text: self.text.clone(),
             old_cursor,
             new_cursor: self.cursor,
-            cause: EditorTransactionCause::Format,
+            cause: EditorTransactionCause::Programmatic,
         });
         self.redo_stack.clear();
 
@@ -1019,7 +1021,7 @@ impl EditorKernel {
             new_text: self.text.clone(),
             old_cursor,
             new_cursor: self.cursor,
-            cause: cause.clone(),
+            cause,
         });
         self.redo_stack.clear();
 
