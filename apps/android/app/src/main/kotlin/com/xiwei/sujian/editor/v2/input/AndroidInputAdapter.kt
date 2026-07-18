@@ -107,10 +107,8 @@ class AndroidInputAdapter(
         val targetUtf16: Int
         if (newCursorPosition > 0) {
             targetUtf16 = (compositionRangeUtf16.first + (newCursorPosition - 1)).coerceIn(compositionRangeUtf16.first, compositionRangeUtf16.second)
-        } else if (newCursorPosition == 0) {
-            targetUtf16 = compositionRangeUtf16.first
         } else {
-            targetUtf16 = (compositionRangeUtf16.first + newCursorPosition).coerceAtLeast(0)
+            targetUtf16 = (compositionRangeUtf16.second + newCursorPosition).coerceIn(compositionRangeUtf16.first, compositionRangeUtf16.second)
         }
         compositionCursorUtf16 = targetUtf16 - compositionRangeUtf16.first
         val indexMap = AndroidTextIndexMap(mirror)

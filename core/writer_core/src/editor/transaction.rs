@@ -693,7 +693,7 @@ impl Timeline {
         }
 
         let new_start = frame_time_ms
-            .saturating_sub((self.paused_progress * self.duration_ms as f64) as u64);
+            .saturating_sub(#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] (self.paused_progress * self.duration_ms as f64) as u64);
         self.first_visible_frame_time_ms = Some(new_start);
         self.accumulated_paused_duration_ms = 0;
         self.pause_started_at_ms = None;
@@ -2011,6 +2011,7 @@ fn should_animate_changes(
 /// 5. cluster 数量 1–8 → GlyphAnimation（逐 cluster 动画）
 /// 6. cluster 数量 9–40 → RunAnimation（按 word/run/chunk 分组动画）
     /// 7. cluster 数量 > 40 → RunAnimation（SnapshotAnimation unavailable，无 snapshot renderer）
+#[allow(clippy::too_many_arguments)]
 pub fn choose_animation_mode(
     cluster_count: usize,
     contains_newline: bool,
@@ -2067,59 +2068,59 @@ pub fn is_complex_grapheme_code_point(cp: u32) -> bool {
     // Zero Width Joiner
     if cp == 0x200D { return true; }
     // Variation selectors (FE00-FE0F, E0100-E01EF)
-    if (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF) { return true; }
+    if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) { return true; }
     // Combining Diacritical Marks (0300-036F)
-    if cp >= 0x0300 && cp <= 0x036F { return true; }
+    if (0x0300..=0x036F).contains(&cp) { return true; }
     // Combining Diacritical Marks Extended (1AB0-1AFF)
-    if cp >= 0x1AB0 && cp <= 0x1AFF { return true; }
+    if (0x1AB0..=0x1AFF).contains(&cp) { return true; }
     // Combining Diacritical Marks Supplement (1DC0-1DFF)
-    if cp >= 0x1DC0 && cp <= 0x1DFF { return true; }
+    if (0x1DC0..=0x1DFF).contains(&cp) { return true; }
     // Combining Diacritical Marks for Symbols (20D0-20FF)
-    if cp >= 0x20D0 && cp <= 0x20FF { return true; }
+    if (0x20D0..=0x20FF).contains(&cp) { return true; }
     // Combining Half Marks (FE20-FE2F)
-    if cp >= 0xFE20 && cp <= 0xFE2F { return true; }
+    if (0xFE20..=0xFE2F).contains(&cp) { return true; }
     // Emoji code points (common ranges)
-    if cp >= 0x1F600 && cp <= 0x1F64F { return true; }
-    if cp >= 0x1F300 && cp <= 0x1F5FF { return true; }
-    if cp >= 0x1F680 && cp <= 0x1F6FF { return true; }
-    if cp >= 0x1F900 && cp <= 0x1F9FF { return true; }
+    if (0x1F600..=0x1F64F).contains(&cp) { return true; }
+    if (0x1F300..=0x1F5FF).contains(&cp) { return true; }
+    if (0x1F680..=0x1F6FF).contains(&cp) { return true; }
+    if (0x1F900..=0x1F9FF).contains(&cp) { return true; }
     // Regional Indicator (U+1F1E6-U+1F1FF)
-    if cp >= 0x1F1E6 && cp <= 0x1F1FF { return true; }
+    if (0x1F1E6..=0x1F1FF).contains(&cp) { return true; }
     false
 }
 
 /// 检测单个 code point 是否为组合字符（附加到前一个 base character）
 pub fn is_combining_code_point(cp: u32) -> bool {
     // Combining Diacritical Marks (0300-036F)
-    (cp >= 0x0300 && cp <= 0x036F)
+    (0x0300..=0x036F).contains(&cp)
     // Combining Diacritical Marks Extended (1AB0-1AFF)
-    || (cp >= 0x1AB0 && cp <= 0x1AFF)
+    || (0x1AB0..=0x1AFF).contains(&cp)
     // Combining Diacritical Marks Supplement (1DC0-1DFF)
-    || (cp >= 0x1DC0 && cp <= 0x1DFF)
+    || (0x1DC0..=0x1DFF).contains(&cp)
     // Combining Diacritical Marks for Symbols (20D0-20FF)
-    || (cp >= 0x20D0 && cp <= 0x20FF)
+    || (0x20D0..=0x20FF).contains(&cp)
     // Combining Half Marks (FE20-FE2F)
-    || (cp >= 0xFE20 && cp <= 0xFE2F)
+    || (0xFE20..=0xFE2F).contains(&cp)
     // Variation selectors
-    || (cp >= 0xFE00 && cp <= 0xFE0F)
-    || (cp >= 0xE0100 && cp <= 0xE01EF)
+    || (0xFE00..=0xFE0F).contains(&cp)
+    || (0xE0100..=0xE01EF).contains(&cp)
     // Zero Width Joiner
     || cp == 0x200D
 }
 
 /// 检测单个 code point 是否属于 CJK 字符
 pub fn is_cjk_code_point(cp: u32) -> bool {
-    (cp >= 0x4E00 && cp <= 0x9FFF)   // CJK Unified Ideographs
-    || (cp >= 0x3400 && cp <= 0x4DBF) // CJK Unified Ideographs Extension A
-    || (cp >= 0x20000 && cp <= 0x2A6DF) // CJK Unified Ideographs Extension B
-    || (cp >= 0x2A700 && cp <= 0x2B73F) // CJK Unified Ideographs Extension C
-    || (cp >= 0x2B740 && cp <= 0x2B81F) // CJK Unified Ideographs Extension D
-    || (cp >= 0xF900 && cp <= 0xFAFF) // CJK Compatibility Ideographs
-    || (cp >= 0x2F800 && cp <= 0x2FA1F) // CJK Compatibility Ideographs Supplement
-    || (cp >= 0x3000 && cp <= 0x303F) // CJK Symbols and Punctuation
-    || (cp >= 0x3040 && cp <= 0x309F) // Hiragana
-    || (cp >= 0x30A0 && cp <= 0x30FF) // Katakana
-    || (cp >= 0xAC00 && cp <= 0xD7AF) // Hangul Syllables
+    (0x4E00..=0x9FFF).contains(&cp)   // CJK Unified Ideographs
+    || (0x3400..=0x4DBF).contains(&cp) // CJK Unified Ideographs Extension A
+    || (0x20000..=0x2A6DF).contains(&cp) // CJK Unified Ideographs Extension B
+    || (0x2A700..=0x2B73F).contains(&cp) // CJK Unified Ideographs Extension C
+    || (0x2B740..=0x2B81F).contains(&cp) // CJK Unified Ideographs Extension D
+    || (0xF900..=0xFAFF).contains(&cp) // CJK Compatibility Ideographs
+    || (0x2F800..=0x2FA1F).contains(&cp) // CJK Compatibility Ideographs Supplement
+    || (0x3000..=0x303F).contains(&cp) // CJK Symbols and Punctuation
+    || (0x3040..=0x309F).contains(&cp) // Hiragana
+    || (0x30A0..=0x30FF).contains(&cp) // Katakana
+    || (0xAC00..=0xD7AF).contains(&cp) // Hangul Syllables
 }
 
 /// 将文本按 run/word/chunk 分组，用于 RunAnimation。
@@ -2257,7 +2258,7 @@ fn common_suffix_byte_len(old_text: &str, new_text: &str, prefix: usize) -> usiz
 }
 
 fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
-    if index >= text.len() {
+    if index > text.len() {
         return text.len();
     }
     let mut safe = index;

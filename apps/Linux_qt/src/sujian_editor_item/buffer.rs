@@ -188,7 +188,7 @@ pub fn next_char_boundary(text: &str, index: usize) -> Option<usize> {
 }
 
 pub fn clamp_to_char_boundary(text: &str, index: usize) -> usize {
-    if index >= text.len() {
+    if index > text.len() {
         return text.len();
     }
     if text.is_char_boundary(index) {

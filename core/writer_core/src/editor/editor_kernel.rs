@@ -263,6 +263,12 @@ struct UndoEntry {
     new_cursor: usize,
 }
 
+impl Default for EditorKernel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EditorKernel {
     pub fn new() -> Self {
         Self {
@@ -301,7 +307,7 @@ impl EditorKernel {
     }
 
     fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
-        if offset >= text.len() {
+        if offset > text.len() {
             return text.len();
         }
         if text.is_char_boundary(offset) {
@@ -578,6 +584,7 @@ impl EditorKernel {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_replace(
         &mut self,
         byte_start: usize,
@@ -1148,6 +1155,7 @@ impl EditorKernel {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn affected_ranges_from_changes(changes: &[EditorChange]) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
         let mut old_ranges = Vec::new();
         let mut new_ranges = Vec::new();

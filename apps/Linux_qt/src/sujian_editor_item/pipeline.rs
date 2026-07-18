@@ -124,6 +124,27 @@ pub(crate) struct CompositionState {
     pub suppress_next_ime_commit: bool,
 }
 
+pub(crate) struct CompositionCommitParams {
+    pub inserted_text: String,
+    pub session_replace_start: usize,
+    pub session_replace_end: usize,
+    pub cause: EditorTransactionCause,
+}
+
+pub(crate) struct CompositionCommitResult {
+    pub pending_preedit_cursor_rect: Option<CursorRect>,
+    pub was_composing: bool,
+    pub preedit_byte_start: usize,
+    pub preedit_byte_end: usize,
+    pub saved_virtual_text: String,
+    pub session_replace_start: usize,
+    pub session_replace_end: usize,
+    pub candidate_byte_start: usize,
+    pub candidate_byte_end: usize,
+    pub committed_replace_start: usize,
+    pub committed_replace_end: usize,
+}
+
 impl CompositionState {
     pub fn new() -> Self {
         Self {
@@ -153,6 +174,43 @@ impl CompositionState {
         self.preedit_cursor_rect = None;
         self.pending_preedit_cursor_rect = None;
         self.suppress_next_ime_commit = false;
+    }
+
+    pub fn save_pending_preedit_cursor_rect(&mut self) {
+        if !self.preedit_text.is_empty() && self.pending_preedit_cursor_rect.is_none() {
+            self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
+        }
+    }
+
+    pub fn take_pending_preedit_cursor_rect(&mut self) -> Option<CursorRect> {
+        self.pending_preedit_cursor_rect.take()
+    }
+
+    pub fn clear_preedit_fields(&mut self) {
+        self.preedit_text.clear();
+        self.preedit_cursor = 0;
+        self.preedit_attributes.clear();
+        self.preedit_old_text.clear();
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
+    }
+
+    pub fn session_replace_range(&self, fallback_cursor: usize) -> (usize, usize) {
+        self.composition_session
+            .as_ref()
+            .map(|s| (s.replace_start, s.replace_end_exclusive))
+            .unwrap_or((fallback_cursor, fallback_cursor))
+    }
+
+    pub fn virtual_text(&self) -> String {
+        self.composition_session
+            .as_ref()
+            .map(|s| s.virtual_text())
+            .unwrap_or_default()
+    }
+
+    pub fn finish_session(&mut self) {
+        self.composition_session = None;
     }
 }
 
@@ -578,5 +636,43 @@ impl LinuxEditorPipeline {
             self.kernel.revision(),
             self.kernel.selection_anchor(),
         );
+    }
+
+    pub fn prepare_composition_commit(
+        &mut self,
+        inserted_text: &str,
+        fallback_cursor: usize,
+        preedit_byte_start: usize,
+        preedit_byte_end: usize,
+    ) -> CompositionCommitResult {
+        self.composition.save_pending_preedit_cursor_rect();
+        let pending_pcr = self.composition.take_pending_preedit_cursor_rect();
+        let was_composing = self.composition.is_composing();
+        let saved_virtual_text = self.composition.virtual_text();
+        let (session_replace_start, session_replace_end) = self.composition.session_replace_range(fallback_cursor);
+        let candidate_byte_start = session_replace_start;
+        let candidate_byte_end = session_replace_start + inserted_text.len();
+        let committed_replace_start = session_replace_start;
+        let committed_replace_end = session_replace_end;
+
+        self.composition.clear_preedit_fields();
+
+        CompositionCommitResult {
+            pending_preedit_cursor_rect: pending_pcr,
+            was_composing,
+            preedit_byte_start,
+            preedit_byte_end,
+            saved_virtual_text,
+            session_replace_start,
+            session_replace_end,
+            candidate_byte_start,
+            candidate_byte_end,
+            committed_replace_start,
+            committed_replace_end,
+        }
+    }
+
+    pub fn finish_composition_commit(&mut self) {
+        self.composition.finish_session();
     }
 }

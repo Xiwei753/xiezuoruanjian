@@ -70,32 +70,13 @@ impl SujianEditorItem {
             return;
         }
 
-        if !self.pipeline.composition().preedit_text.is_empty() && self.pipeline.composition().pending_preedit_cursor_rect.is_none() {
-            self.pipeline.composition_mut().pending_preedit_cursor_rect = self.pipeline.composition().preedit_cursor_rect.clone();
-        }
-        let pending_pcr = self.pipeline.composition_mut().pending_preedit_cursor_rect.take();
-        let was_composing = !self.pipeline.composition().preedit_text.is_empty() || self.pipeline.composition().composition_session.is_some();
-
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
-        let saved_virtual_text = self.pipeline.composition().composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
-        let session_replace_start = self.pipeline.composition().composition_session.as_ref().map(|s| s.replace_start).unwrap_or(self.buffer.cursor);
-        let session_replace_end = self.pipeline.composition().composition_session.as_ref().map(|s| s.replace_end_exclusive).unwrap_or(self.buffer.cursor);
-        let candidate_byte_start = session_replace_start;
-        let candidate_byte_end = session_replace_start + inserted.len();
-        let committed_replace_start = session_replace_start;
-        let committed_replace_end = session_replace_end;
-
-        self.pipeline.composition_mut().preedit_text.clear();
-        self.pipeline.composition_mut().preedit_cursor = 0;
-        self.pipeline.composition_mut().preedit_attributes.clear();
-        self.pipeline.composition_mut().preedit_old_text.clear();
-        self.pipeline.composition_mut().preedit_visual_transaction = None;
-        self.pipeline.composition_mut().preedit_cursor_rect = None;
+        let commit = self.pipeline.prepare_composition_commit(&inserted, self.buffer.cursor, preedit_byte_start, preedit_byte_end);
 
         let old = self.buffer.snapshot();
 
-        if was_composing && session_replace_start != session_replace_end {
-            let _ = self.pipeline.replace_range(session_replace_start, session_replace_end, &inserted, EditorTransactionCause::TypingCommit);
+        if commit.was_composing && commit.session_replace_start != commit.session_replace_end {
+            let _ = self.pipeline.replace_range(commit.session_replace_start, commit.session_replace_end, &inserted, EditorTransactionCause::TypingCommit);
             self.sync_buffer_from_pipeline();
         } else {
             let (sel_start, sel_end) = self.buffer.selection_range();
@@ -117,9 +98,9 @@ impl SujianEditorItem {
         });
         let new = self.buffer.snapshot();
 
-        if was_composing && self.current_typing_animation_enabled {
+        if commit.was_composing && self.current_typing_animation_enabled {
             let width = self.bounding_width();
-            let old_cursor_rect = pending_pcr.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+            let old_cursor_rect = commit.pending_preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
 
             let old_snapshot = self.pipeline.animation_coordinator()
                 .active_composition_new_snapshot()
@@ -147,20 +128,20 @@ impl SujianEditorItem {
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-            let visual_text_unchanged = !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
+            let visual_text_unchanged = !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text;
 
             let key = self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
-                preedit_byte_start,
-                preedit_byte_end,
+                commit.preedit_byte_start,
+                commit.preedit_byte_end,
                 true,
                 visual_text_unchanged,
-                candidate_byte_start,
-                candidate_byte_end,
-                committed_replace_start,
-                committed_replace_end,
+                commit.candidate_byte_start,
+                commit.candidate_byte_end,
+                commit.committed_replace_start,
+                commit.committed_replace_end,
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -188,9 +169,9 @@ impl SujianEditorItem {
             let _vt = self.record_transaction(old, new, cause, true);
         }
 
-        self.pipeline.composition_mut().composition_session = None;
+        self.pipeline.finish_composition_commit();
 
-        if let Some(pcr) = pending_pcr {
+        if let Some(pcr) = commit.pending_preedit_cursor_rect {
             self.cursor_ctrl.visual_x = pcr.x;
             self.cursor_ctrl.visual_y = pcr.top;
             self.cursor_ctrl.force_snap_next = false;
@@ -211,30 +192,15 @@ impl SujianEditorItem {
             return;
         }
 
-        if !self.pipeline.composition().preedit_text.is_empty() && self.pipeline.composition().pending_preedit_cursor_rect.is_none() {
-            self.pipeline.composition_mut().pending_preedit_cursor_rect = self.pipeline.composition().preedit_cursor_rect.clone();
-        }
-        let pending_pcr = self.pipeline.composition_mut().pending_preedit_cursor_rect.take();
-        let was_composing = !self.pipeline.composition().preedit_text.is_empty() || self.pipeline.composition().composition_session.is_some();
-        let saved_virtual_text = self.pipeline.composition().composition_session.as_ref().map(|s| s.virtual_text()).unwrap_or_default();
-
         let (preedit_byte_start, preedit_byte_end) = self.preedit_byte_range_in_virtual_text();
-
-        let session_replace_start = self.pipeline.composition().composition_session
-            .as_ref()
-            .map(|s| s.replace_start)
-            .unwrap_or(self.buffer.cursor);
-        let session_replace_end = self.pipeline.composition().composition_session
-            .as_ref()
-            .map(|s| s.replace_end_exclusive)
-            .unwrap_or(self.buffer.cursor);
+        let commit = self.pipeline.prepare_composition_commit(&inserted, self.buffer.cursor, preedit_byte_start, preedit_byte_end);
 
         let committed_text = self.buffer.text.clone();
 
         let base_text = format!(
             "{}{}",
-            &committed_text[..session_replace_start],
-            &committed_text[session_replace_end..]
+            &committed_text[..commit.session_replace_start],
+            &committed_text[commit.session_replace_end..]
         );
 
         fn utf16_forward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
@@ -261,7 +227,7 @@ impl SujianEditorItem {
             pos
         }
 
-        let anchor_in_base = session_replace_start;
+        let anchor_in_base = commit.session_replace_start;
         let rs_byte = if replace_start < 0 {
             utf16_backward(&base_text, anchor_in_base, -replace_start)
         } else if replace_start == 0 {
@@ -292,13 +258,13 @@ impl SujianEditorItem {
         let new_text = new_base;
         let new_cursor = cursor_in_new_base;
 
-        let preedit_len = preedit_byte_end - preedit_byte_start;
-        let qt_replace_start_in_vt = if del_start <= session_replace_start {
+        let preedit_len = commit.preedit_byte_end - commit.preedit_byte_start;
+        let qt_replace_start_in_vt = if del_start <= commit.session_replace_start {
             del_start
         } else {
             del_start + preedit_len
         };
-        let qt_replace_end_in_vt = if del_end <= session_replace_start {
+        let qt_replace_end_in_vt = if del_end <= commit.session_replace_start {
             del_end
         } else {
             del_end + preedit_len
@@ -309,13 +275,6 @@ impl SujianEditorItem {
 
         let candidate_byte_start = del_start;
         let candidate_byte_end = del_start + inserted.len();
-
-        self.pipeline.composition_mut().preedit_text.clear();
-        self.pipeline.composition_mut().preedit_cursor = 0;
-        self.pipeline.composition_mut().preedit_attributes.clear();
-        self.pipeline.composition_mut().preedit_old_text.clear();
-        self.pipeline.composition_mut().preedit_visual_transaction = None;
-        self.pipeline.composition_mut().preedit_cursor_rect = None;
 
         let old = self.buffer.snapshot();
 
@@ -334,9 +293,9 @@ impl SujianEditorItem {
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
 
-        if was_composing && self.current_typing_animation_enabled {
+        if commit.was_composing && self.current_typing_animation_enabled {
             let width = self.bounding_width();
-            let old_cursor_rect = pending_pcr.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+            let old_cursor_rect = commit.pending_preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
 
             let old_snapshot = self.pipeline.animation_coordinator()
                 .active_composition_new_snapshot()
@@ -368,10 +327,10 @@ impl SujianEditorItem {
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
-                preedit_byte_start,
-                preedit_byte_end,
+                commit.preedit_byte_start,
+                commit.preedit_byte_end,
                 true,
-                !saved_virtual_text.is_empty() && saved_virtual_text == new.text,
+                !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text,
                 candidate_byte_start,
                 candidate_byte_end,
                 committed_replace_start,
@@ -398,9 +357,9 @@ impl SujianEditorItem {
             let _vt = self.record_transaction(old, new, cause, true);
         }
 
-        self.pipeline.composition_mut().composition_session = None;
+        self.pipeline.finish_composition_commit();
 
-        if let Some(pcr) = pending_pcr {
+        if let Some(pcr) = commit.pending_preedit_cursor_rect {
             self.cursor_ctrl.visual_x = pcr.x;
             self.cursor_ctrl.visual_y = pcr.top;
             self.cursor_ctrl.force_snap_next = false;
@@ -536,13 +495,7 @@ impl SujianEditorItem {
         let _ = self.pipeline.set_selection(if extend { self.buffer.selection_anchor } else { index }, index);
         self.sync_buffer_from_pipeline();
         self.bump_visual_revision();
-        self.pipeline.composition_mut().preedit_text.clear();
-        self.pipeline.composition_mut().preedit_cursor = 0;
-        self.pipeline.composition_mut().preedit_attributes.clear();
-        self.pipeline.composition_mut().preedit_old_text.clear();
-        self.pipeline.composition_mut().preedit_visual_transaction = None;
-        self.pipeline.composition_mut().preedit_cursor_rect = None;
-        self.pipeline.composition_mut().pending_preedit_cursor_rect = None;
+        self.pipeline.composition_mut().clear();
         self.cursor_position_changed();
         self.selection_changed();
         self.cursor_ctrl.dirty = true;
