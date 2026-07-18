@@ -436,6 +436,48 @@ interface EditorKernelBridge {
         committedText: String,
         originalText: String
     ): uniffi.writer_core.EditorEditResultDto?
+    fun commitText(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        resultingSelectionAnchor: Int,
+        resultingSelectionHead: Int,
+        compositionSessionId: Long,
+        compositionBaseRevision: Long,
+        compositionGeneration: Long,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: Long
+    ): uniffi.writer_core.EditorEditResultDto?
+    fun deleteSurrounding(
+        beforeByteStart: Int,
+        beforeByteEndExclusive: Int,
+        afterByteStart: Int,
+        afterByteEndExclusive: Int,
+        cause: uniffi.writer_core.EditorTransactionCauseDto,
+        expectedRevision: Long
+    ): uniffi.writer_core.EditorEditResultDto?
+    fun beginComposition(
+        replaceStart: Int,
+        replaceEndExclusive: Int,
+        expectedRevision: Long
+    ): uniffi.writer_core.EditorEditResultDto?
+    fun updateComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+        newPreeditText: String,
+        newPreeditCursorOffset: Int,
+        expectedRevision: Long
+    ): uniffi.writer_core.EditorEditResultDto?
+    fun finishComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+        expectedRevision: Long
+    ): uniffi.writer_core.EditorEditResultDto?
+    fun cancelComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+        expectedRevision: Long
+    ): uniffi.writer_core.EditorEditResultDto?
     fun compositionUpdateVisualIntent(
         compositionReplaceStart: UInt,
         compositionReplaceEndExclusive: UInt,

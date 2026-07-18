@@ -583,6 +583,7 @@ impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
 #[serde(rename_all = "camelCase")]
 pub enum EditorEditOutcomeDto {
     Applied,
+    AppliedWithAdjustedSelection,
     NoChange,
     StaleRevision,
     InvalidOffset,
@@ -594,6 +595,7 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
     fn from(outcome: crate::editor::EditorEditOutcome) -> Self {
         let (outcome_dto, r) = match outcome {
             crate::editor::EditorEditOutcome::Applied(r) => (EditorEditOutcomeDto::Applied, r),
+            crate::editor::EditorEditOutcome::AppliedWithAdjustedSelection(r) => (EditorEditOutcomeDto::AppliedWithAdjustedSelection, r),
             crate::editor::EditorEditOutcome::NoChange(r) => (EditorEditOutcomeDto::NoChange, r),
             crate::editor::EditorEditOutcome::StaleRevision(r) => (EditorEditOutcomeDto::StaleRevision, r),
             crate::editor::EditorEditOutcome::InvalidOffset(r) => (EditorEditOutcomeDto::InvalidOffset, r),

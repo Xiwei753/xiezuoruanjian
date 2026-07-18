@@ -108,7 +108,7 @@ data class EditResult(
         )
     }
 
-    fun isApplied(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED
+    fun isApplied(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED || outcome == uniffi.writer_core.EditorEditOutcomeDto.APPLIED_WITH_ADJUSTED_SELECTION
     fun isStale(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.STALE_REVISION
     fun isInvalid(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_OFFSET || outcome == uniffi.writer_core.EditorEditOutcomeDto.INVALID_RANGE
     fun isNoChange(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.NO_CHANGE

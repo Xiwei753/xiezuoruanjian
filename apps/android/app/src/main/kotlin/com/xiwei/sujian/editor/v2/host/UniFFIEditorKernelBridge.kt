@@ -75,6 +75,120 @@ class UniFFIEditorKernelBridge(
         }
     }
 
+    override fun commitText(
+        byteStart: Int,
+        byteEndExclusive: Int,
+        replacementText: String,
+        resultingSelectionAnchor: Int,
+        resultingSelectionHead: Int,
+        compositionSessionId: Long,
+        compositionBaseRevision: Long,
+        compositionGeneration: Long,
+        cause: EditorTransactionCauseDto,
+        expectedRevision: Long
+    ): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelCommitText(
+            byteStart.toUInt(),
+            byteEndExclusive.toUInt(),
+            replacementText,
+            resultingSelectionAnchor.toUInt(),
+            resultingSelectionHead.toUInt(),
+            compositionSessionId.toULong(),
+            compositionBaseRevision.toULong(),
+            compositionGeneration.toULong(),
+            cause,
+            expectedRevision.toULong()
+        )) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun deleteSurrounding(
+        beforeByteStart: Int,
+        beforeByteEndExclusive: Int,
+        afterByteStart: Int,
+        afterByteEndExclusive: Int,
+        cause: EditorTransactionCauseDto,
+        expectedRevision: Long
+    ): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelDeleteSurrounding(
+            beforeByteStart.toUInt(),
+            beforeByteEndExclusive.toUInt(),
+            afterByteStart.toUInt(),
+            afterByteEndExclusive.toUInt(),
+            cause,
+            expectedRevision.toULong()
+        )) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun beginComposition(
+        replaceStart: Int,
+        replaceEndExclusive: Int,
+        expectedRevision: Long
+    ): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelBeginComposition(
+            replaceStart.toUInt(),
+            replaceEndExclusive.toUInt(),
+            expectedRevision.toULong()
+        )) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun updateComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+        newPreeditText: String,
+        newPreeditCursorOffset: Int,
+        expectedRevision: Long
+    ): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelUpdateComposition(
+            compositionSessionId.toULong(),
+            compositionGeneration.toULong(),
+            newPreeditText,
+            newPreeditCursorOffset.toUInt(),
+            expectedRevision.toULong()
+        )) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun finishComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+        expectedRevision: Long
+    ): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelFinishComposition(
+            compositionSessionId.toULong(),
+            compositionGeneration.toULong(),
+            expectedRevision.toULong()
+        )) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
+    override fun cancelComposition(
+        compositionSessionId: Long,
+        compositionGeneration: Long,
+        expectedRevision: Long
+    ): EditorEditResultDto? {
+        return when (val result = appServiceBridge.editorKernelCancelComposition(
+            compositionSessionId.toULong(),
+            compositionGeneration.toULong(),
+            expectedRevision.toULong()
+        )) {
+            is BridgeResult.Success -> result.data
+            else -> null
+        }
+    }
+
     override fun setAnimationEnabled(enabled: Boolean) {
         appServiceBridge.editorKernelSetAnimationEnabled(enabled)
     }

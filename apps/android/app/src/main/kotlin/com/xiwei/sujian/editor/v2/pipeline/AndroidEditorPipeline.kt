@@ -57,9 +57,12 @@ class AndroidEditorPipeline private constructor(
         if (result.isStale()) {
             return LoadTextResult.Failed
         }
-        mirror.loadFromSnapshot(text, result.newSelectionEnd, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
-        resetAfterLoad()
-        return LoadTextResult.Loaded(result)
+        if (result.isApplied() || result.isNoChange()) {
+            mirror.loadFromSnapshot(text, result.newSelectionEnd, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
+            resetAfterLoad()
+            return LoadTextResult.Loaded(result)
+        }
+        return LoadTextResult.Failed
     }
 
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): PipelineOutput {

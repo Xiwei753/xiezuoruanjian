@@ -14,29 +14,25 @@ class AndroidInputConnection(
 ) : BaseInputConnection(hostView, true) {
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
-        if (text.isNullOrEmpty()) return true
+        val commitStr = text?.toString() ?: ""
         if (adapter.isComposing()) {
-            adapter.handleCompositionCommitWithText(text.toString(), newCursorPosition)
+            adapter.handleCompositionCommitWithText(commitStr, newCursorPosition)
             notifySelectionChanged()
             return true
         }
         val selStart = mirror.getCommittedSelectionStartUtf8()
         val selEnd = mirror.getCommittedSelectionEndUtf8()
-        if (selStart != selEnd) {
-            val byteStart = selStart
-            val byteEnd = selEnd
-            val originalText = extractCommittedUtf8Text(byteStart, byteEnd)
-            adapter.sendReplaceToKernel(byteStart, byteEnd, text.toString(), originalText, EditorTransactionCauseDto.TYPING)
-            if (newCursorPosition != 1) {
-                adapter.applyNewCursorPosition(newCursorPosition, byteStart, text.toString())
-            }
+        val byteStart = selStart
+        val byteEnd = selEnd
+        val originalText = if (byteStart != byteEnd) extractCommittedUtf8Text(byteStart, byteEnd) else ""
+        val resultingHead = if (newCursorPosition > 0) {
+            byteStart + commitStr.toByteArray(Charsets.UTF_8).size + newCursorPosition - 1
+        } else if (newCursorPosition < 0) {
+            byteStart + newCursorPosition
         } else {
-            val byteOffset = mirror.getCommittedCursorUtf8()
-            adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
-            if (newCursorPosition != 1) {
-                adapter.applyNewCursorPosition(newCursorPosition, byteOffset, text.toString())
-            }
+            byteStart + commitStr.toByteArray(Charsets.UTF_8).size
         }
+        adapter.sendCommitTextToKernel(byteStart, byteEnd, commitStr, originalText, resultingHead, resultingHead, EditorTransactionCauseDto.TYPING)
         notifySelectionChanged()
         return true
     }
@@ -49,18 +45,32 @@ class AndroidInputConnection(
         val indexMap = AndroidTextIndexMap(mirror)
         val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
         val cursorUtf16 = indexMap.utf8ToUtf16(committedCursorUtf8)
+        val selStart = mirror.getCommittedSelectionStartUtf8()
+        val selEnd = mirror.getCommittedSelectionEndUtf8()
+        val (selMin, selMax) = if (selStart <= selEnd) Pair(selStart, selEnd) else Pair(selEnd, selStart)
 
         val deleteStartUtf16 = (cursorUtf16 - beforeLength).coerceAtLeast(0)
         val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(indexMap.getUtf16Length())
 
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        val deleteStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
-        val deleteEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
+        val beforeStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val beforeEndUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
+        val afterStartUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
+        val afterEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
 
-        if (deleteStartUtf8 >= deleteEndUtf8) return false
+        val hasBefore = beforeStartUtf8 < beforeEndUtf8 && beforeEndUtf8 <= selMin
+        val hasAfter = afterStartUtf8 < afterEndUtf8 && afterStartUtf8 >= selMax
 
-        adapter.sendDeleteToKernel(deleteStartUtf8, deleteEndUtf8, EditorTransactionCauseDto.DELETE)
+        if (!hasBefore && !hasAfter) return false
+
+        adapter.sendDeleteSurroundingToKernel(
+            if (hasBefore) beforeStartUtf8 else 0,
+            if (hasBefore) beforeEndUtf8 else 0,
+            if (hasAfter) afterStartUtf8 else 0,
+            if (hasAfter) afterEndUtf8 else 0,
+            EditorTransactionCauseDto.DELETE
+        )
         notifySelectionChanged()
         return true
     }
@@ -74,6 +84,9 @@ class AndroidInputConnection(
         val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
         val cursorUtf16 = indexMap.utf8ToUtf16(committedCursorUtf8)
         val fullText = mirror.getText()
+        val selStart = mirror.getCommittedSelectionStartUtf8()
+        val selEnd = mirror.getCommittedSelectionEndUtf8()
+        val (selMin, selMax) = if (selStart <= selEnd) Pair(selStart, selEnd) else Pair(selEnd, selStart)
 
         var deleteStartUtf16 = cursorUtf16
         var count = beforeLength
@@ -91,12 +104,23 @@ class AndroidInputConnection(
 
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        val deleteStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
-        val deleteEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
+        val beforeStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val beforeEndUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
+        val afterStartUtf8 = indexMap.utf8ToUtf8(cursorUtf16)
+        val afterEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
 
-        if (deleteStartUtf8 >= deleteEndUtf8) return false
+        val hasBefore = beforeStartUtf8 < beforeEndUtf8 && beforeEndUtf8 <= selMin
+        val hasAfter = afterStartUtf8 < afterEndUtf8 && afterStartUtf8 >= selMax
 
-        adapter.sendDeleteToKernel(deleteStartUtf8, deleteEndUtf8, EditorTransactionCauseDto.DELETE)
+        if (!hasBefore && !hasAfter) return false
+
+        adapter.sendDeleteSurroundingToKernel(
+            if (hasBefore) beforeStartUtf8 else 0,
+            if (hasBefore) beforeEndUtf8 else 0,
+            if (hasAfter) afterStartUtf8 else 0,
+            if (hasAfter) afterEndUtf8 else 0,
+            EditorTransactionCauseDto.DELETE
+        )
         notifySelectionChanged()
         return true
     }
@@ -177,6 +201,7 @@ class AndroidInputConnection(
         val byteEnd = indexMap.utf16ToUtf8(end)
         val selectedText = extractUtf8Text(byteStart, byteEnd)
         adapter.startComposingRegion(byteStart, byteEnd, selectedText)
+        adapter.sendBeginCompositionToKernel(byteStart, byteEnd)
         notifySelectionChanged()
         return true
     }

@@ -847,22 +847,162 @@ impl WriterAppService {
         composition_replace_start: u32,
         composition_replace_end_exclusive: u32,
         committed_text: String,
-        original_text: String,
+        _original_text: String,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::{EditorCommand, EditorTransactionCause};
 
         self.with_session(|s| {
             let expected_revision = s.kernel.revision();
-            let command = EditorCommand::Replace {
+            let (session_id, base_rev, generation) = s.kernel.composition_session_info()
+                .unwrap_or((0, expected_revision, 0));
+            let command = EditorCommand::CommitText {
                 byte_start: composition_replace_start as usize,
                 byte_end_exclusive: composition_replace_end_exclusive as usize,
                 replacement_text: committed_text,
-                original_text,
+                resulting_selection_anchor: composition_replace_start as usize,
+                resulting_selection_head: composition_replace_start as usize,
+                composition_session_id: session_id,
+                composition_base_revision: base_rev,
+                composition_generation: generation,
                 cause: EditorTransactionCause::TypingCommit,
                 expected_revision,
             };
             let result = s.kernel.apply(command);
-            result.into_result().into()
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_commit_text(
+        &self,
+        byte_start: u32,
+        byte_end_exclusive: u32,
+        replacement_text: String,
+        resulting_selection_anchor: u32,
+        resulting_selection_head: u32,
+        composition_session_id: u64,
+        composition_base_revision: u64,
+        composition_generation: u64,
+        cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::CommitText {
+                byte_start: byte_start as usize,
+                byte_end_exclusive: byte_end_exclusive as usize,
+                replacement_text,
+                resulting_selection_anchor: resulting_selection_anchor as usize,
+                resulting_selection_head: resulting_selection_head as usize,
+                composition_session_id,
+                composition_base_revision,
+                composition_generation,
+                cause: core_cause,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_delete_surrounding(
+        &self,
+        before_byte_start: u32,
+        before_byte_end_exclusive: u32,
+        after_byte_start: u32,
+        after_byte_end_exclusive: u32,
+        cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::DeleteSurrounding {
+                before_byte_start: before_byte_start as usize,
+                before_byte_end_exclusive: before_byte_end_exclusive as usize,
+                after_byte_start: after_byte_start as usize,
+                after_byte_end_exclusive: after_byte_end_exclusive as usize,
+                cause: core_cause,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_begin_composition(
+        &self,
+        replace_start: u32,
+        replace_end_exclusive: u32,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::BeginComposition {
+                replace_start: replace_start as usize,
+                replace_end_exclusive: replace_end_exclusive as usize,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_update_composition(
+        &self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        new_preedit_text: String,
+        new_preedit_cursor_offset: u32,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::UpdateComposition {
+                composition_session_id,
+                composition_generation,
+                new_preedit_text,
+                new_preedit_cursor_offset: new_preedit_cursor_offset as usize,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_finish_composition(
+        &self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::FinishComposition {
+                composition_session_id,
+                composition_generation,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_cancel_composition(
+        &self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::CancelComposition {
+                composition_session_id,
+                composition_generation,
+                expected_revision,
+            });
+            result.into()
+        })
+    }
+
+    pub fn editor_kernel_composition_session_info(&self) -> Option<(u64, u64, u64)> {
+        self.with_session(|s| {
+            s.kernel.composition_session_info()
         })
     }
 

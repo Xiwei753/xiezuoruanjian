@@ -73,6 +73,48 @@ pub enum EditorCommand {
         cause: EditorTransactionCause,
         expected_revision: u64,
     },
+    CommitText {
+        byte_start: usize,
+        byte_end_exclusive: usize,
+        replacement_text: String,
+        resulting_selection_anchor: usize,
+        resulting_selection_head: usize,
+        composition_session_id: u64,
+        composition_base_revision: u64,
+        composition_generation: u64,
+        cause: EditorTransactionCause,
+        expected_revision: u64,
+    },
+    DeleteSurrounding {
+        before_byte_start: usize,
+        before_byte_end_exclusive: usize,
+        after_byte_start: usize,
+        after_byte_end_exclusive: usize,
+        cause: EditorTransactionCause,
+        expected_revision: u64,
+    },
+    BeginComposition {
+        replace_start: usize,
+        replace_end_exclusive: usize,
+        expected_revision: u64,
+    },
+    UpdateComposition {
+        composition_session_id: u64,
+        composition_generation: u64,
+        new_preedit_text: String,
+        new_preedit_cursor_offset: usize,
+        expected_revision: u64,
+    },
+    FinishComposition {
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    },
+    CancelComposition {
+        composition_session_id: u64,
+        composition_generation: u64,
+        expected_revision: u64,
+    },
 }
 
 /// #535: 显示补丁 — 平台显示镜像唯一允许消费的正文变化。
@@ -152,6 +194,7 @@ pub struct CoordinatedCursor {
 #[serde(rename_all = "camelCase")]
 pub enum EditorEditOutcome {
     Applied(EditorEditResult),
+    AppliedWithAdjustedSelection(EditorEditResult),
     NoChange(EditorEditResult),
     StaleRevision(EditorEditResult),
     InvalidOffset(EditorEditResult),
@@ -162,6 +205,7 @@ impl EditorEditOutcome {
     pub fn into_result(self) -> EditorEditResult {
         match self {
             EditorEditOutcome::Applied(r)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(r)
             | EditorEditOutcome::NoChange(r)
             | EditorEditOutcome::StaleRevision(r)
             | EditorEditOutcome::InvalidOffset(r)
@@ -170,7 +214,10 @@ impl EditorEditOutcome {
     }
 
     pub fn is_applied(&self) -> bool {
-        matches!(self, EditorEditOutcome::Applied(_))
+        matches!(
+            self,
+            EditorEditOutcome::Applied(_) | EditorEditOutcome::AppliedWithAdjustedSelection(_)
+        )
     }
 
     pub fn is_stale(&self) -> bool {
@@ -232,26 +279,28 @@ impl std::error::Error for EditorInputError {}
 /// 平台只持有与 Rust revision 对应的显示镜像。
 #[derive(Debug, Clone)]
 pub struct EditorKernel {
-    /// 当前正文
     text: String,
-    /// 当前 revision ID（递增）
     revision: u64,
-    /// 当前光标位置（UTF-8 byte offset）
     cursor: usize,
-    /// 当前选区锚点（UTF-8 byte offset）
     selection_anchor: usize,
-    /// 下一个事务 ID
     next_transaction_id: u64,
-    /// 动画时长（毫秒）
     animation_duration_ms: u64,
-    /// 最大动画字符数
     max_animated_chars: usize,
-    /// 动画是否启用
     animation_enabled: bool,
-    /// undo 栈
     undo_stack: Vec<UndoEntry>,
-    /// redo 栈
     redo_stack: Vec<UndoEntry>,
+    composition_session: Option<CompositionSessionState>,
+    next_composition_session_id: u64,
+}
+
+#[derive(Debug, Clone)]
+struct CompositionSessionState {
+    session_id: u64,
+    base_revision: u64,
+    generation: u64,
+    replace_start: usize,
+    replace_end_exclusive: usize,
+    preedit_text: String,
 }
 
 /// undo 条目
@@ -282,6 +331,8 @@ impl EditorKernel {
             animation_enabled: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            composition_session: None,
+            next_composition_session_id: 1,
         }
     }
 
@@ -303,6 +354,8 @@ impl EditorKernel {
             animation_enabled: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            composition_session: None,
+            next_composition_session_id: 1,
         })
     }
 
@@ -359,13 +412,19 @@ impl EditorKernel {
             EditorCommand::Insert { expected_revision, .. }
             | EditorCommand::Delete { expected_revision, .. }
             | EditorCommand::Replace { expected_revision, .. }
-             | EditorCommand::SetSelection { expected_revision, .. }
-             | EditorCommand::ReplaceAll { expected_revision, .. }
-             | EditorCommand::InsertLineBreak { expected_revision, .. }
-             | EditorCommand::Undo { expected_revision }
-             | EditorCommand::Redo { expected_revision } => {
+            | EditorCommand::SetSelection { expected_revision, .. }
+            | EditorCommand::ReplaceAll { expected_revision, .. }
+            | EditorCommand::InsertLineBreak { expected_revision, .. }
+            | EditorCommand::Undo { expected_revision }
+            | EditorCommand::Redo { expected_revision }
+            | EditorCommand::CommitText { expected_revision, .. }
+            | EditorCommand::DeleteSurrounding { expected_revision, .. }
+            | EditorCommand::BeginComposition { expected_revision, .. }
+            | EditorCommand::UpdateComposition { expected_revision, .. }
+            | EditorCommand::FinishComposition { expected_revision, .. }
+            | EditorCommand::CancelComposition { expected_revision, .. } => {
                 if *expected_revision != base_revision {
-                    return EditorEditOutcome::StaleRevision(self.stale_session_result(base_revision));
+                    return EditorEditOutcome::StaleRevision(self.stale_session_result());
                 }
             }
         }
@@ -397,6 +456,90 @@ impl EditorKernel {
             }
             EditorCommand::InsertLineBreak { byte_offset, auto_indent_prefix, cause, .. } => {
                 self.apply_insert_line_break(byte_offset, auto_indent_prefix, cause, base_revision, old_cursor, old_selection)
+            }
+            EditorCommand::CommitText {
+                byte_start,
+                byte_end_exclusive,
+                replacement_text,
+                resulting_selection_anchor,
+                resulting_selection_head,
+                composition_session_id,
+                composition_base_revision,
+                composition_generation,
+                cause,
+                ..
+            } => {
+                self.apply_commit_text(
+                    byte_start,
+                    byte_end_exclusive,
+                    &replacement_text,
+                    resulting_selection_anchor,
+                    resulting_selection_head,
+                    composition_session_id,
+                    composition_base_revision,
+                    composition_generation,
+                    cause,
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                )
+            }
+            EditorCommand::DeleteSurrounding {
+                before_byte_start,
+                before_byte_end_exclusive,
+                after_byte_start,
+                after_byte_end_exclusive,
+                cause,
+                ..
+            } => {
+                self.apply_delete_surrounding(
+                    before_byte_start,
+                    before_byte_end_exclusive,
+                    after_byte_start,
+                    after_byte_end_exclusive,
+                    cause,
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                )
+            }
+            EditorCommand::BeginComposition {
+                replace_start,
+                replace_end_exclusive,
+                ..
+            } => {
+                self.apply_begin_composition(replace_start, replace_end_exclusive, base_revision, old_cursor, old_selection)
+            }
+            EditorCommand::UpdateComposition {
+                composition_session_id,
+                composition_generation,
+                new_preedit_text,
+                new_preedit_cursor_offset,
+                ..
+            } => {
+                self.apply_update_composition(
+                    composition_session_id,
+                    composition_generation,
+                    &new_preedit_text,
+                    new_preedit_cursor_offset,
+                    base_revision,
+                    old_cursor,
+                    old_selection,
+                )
+            }
+            EditorCommand::FinishComposition {
+                composition_session_id,
+                composition_generation,
+                ..
+            } => {
+                self.apply_finish_composition(composition_session_id, composition_generation, base_revision, old_cursor, old_selection)
+            }
+            EditorCommand::CancelComposition {
+                composition_session_id,
+                composition_generation,
+                ..
+            } => {
+                self.apply_cancel_composition(composition_session_id, composition_generation, base_revision, old_cursor, old_selection)
             }
         }
     }
@@ -1099,14 +1242,12 @@ impl EditorKernel {
 
     fn stale_session_result(
         &mut self,
-        base_revision: u64,
     ) -> EditorEditResult {
         let current_selection = (self.selection_anchor, self.cursor);
-        let new_rev = self.revision.saturating_add(1);
         EditorEditResult {
             transaction_id: self.take_transaction_id(),
-            base_revision,
-            new_revision: new_rev,
+            base_revision: self.revision,
+            new_revision: self.revision,
             display_patches: vec![],
             old_selection_byte_range: current_selection,
             new_selection_byte_range: current_selection,
@@ -1195,65 +1336,21 @@ impl EditorKernel {
         let old_cursor = self.cursor;
         let old_selection = (self.selection_anchor, self.cursor);
 
-        if cursor > text.len() || !text.is_char_boundary(cursor) {
-            let clamped = Self::clamp_to_char_boundary(&text, cursor);
-            let old_text = self.text.clone();
-            self.text = text;
-            self.cursor = clamped;
-            self.selection_anchor = clamped;
-            self.revision = self.revision.saturating_add(1);
-            self.undo_stack.clear();
-            self.redo_stack.clear();
-
-            let new_selection = (self.cursor, self.cursor);
-            let new_revision = self.revision;
-
-            let display_patches = vec![DisplayPatch {
-                base_revision,
-                new_revision,
-                replace_byte_range: (0, old_text.len()),
-                inserted_text: self.text.clone(),
-                resulting_selection_byte_range: new_selection,
-            }];
-
-            let visual_intent = EditorVisualIntent {
-                cause: EditorTransactionCause::Load,
-                operation_kind: EditorOperationKind::Load,
-                old_affected_byte_ranges: if old_text.is_empty() { vec![] } else { vec![(0, old_text.len())] },
-                new_affected_byte_ranges: if self.text.is_empty() { vec![] } else { vec![(0, self.text.len())] },
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
-                coordinated_cursor: CoordinatedCursor {
-                    old_byte_offset: old_cursor,
-                    new_byte_offset: self.cursor,
-                    should_animate: false,
-                },
-            };
-
-            return EditorEditOutcome::InvalidOffset(EditorEditResult {
-                transaction_id: self.take_transaction_id(),
-                base_revision,
-                new_revision,
-                display_patches,
-                old_selection_byte_range: old_selection,
-                new_selection_byte_range: new_selection,
-                visual_intent,
-            });
-        }
-
-        let old_text = self.text.clone();
-        self.text = text;
-        let was_cursor_clamped = !self.text.is_char_boundary(cursor);
-        let resolved_cursor = if was_cursor_clamped {
-            Self::clamp_to_char_boundary(&self.text, cursor)
+        let needs_clamp = cursor > text.len() || !text.is_char_boundary(cursor);
+        let resolved_cursor = if needs_clamp {
+            Self::clamp_to_char_boundary(&text, cursor)
         } else {
             cursor
         };
+
+        let old_text = self.text.clone();
+        self.text = text;
         self.cursor = resolved_cursor;
         self.selection_anchor = resolved_cursor;
         self.revision = self.revision.saturating_add(1);
         self.undo_stack.clear();
         self.redo_stack.clear();
+        self.composition_session = None;
 
         let new_selection = (self.cursor, self.cursor);
         let new_revision = self.revision;
@@ -1280,27 +1377,487 @@ impl EditorKernel {
             },
         };
 
-        if was_cursor_clamped {
-            EditorEditOutcome::InvalidOffset(EditorEditResult {
-                transaction_id: self.take_transaction_id(),
-                base_revision,
-                new_revision,
-                display_patches,
-                old_selection_byte_range: old_selection,
-                new_selection_byte_range: new_selection,
-                visual_intent,
-            })
+        let result = EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        };
+
+        if needs_clamp {
+            EditorEditOutcome::AppliedWithAdjustedSelection(result)
         } else {
-            EditorEditOutcome::Applied(EditorEditResult {
-                transaction_id: self.take_transaction_id(),
+            EditorEditOutcome::Applied(result)
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_commit_text(
+        &mut self,
+        byte_start: usize,
+        byte_end_exclusive: usize,
+        replacement_text: &str,
+        resulting_selection_anchor: usize,
+        resulting_selection_head: usize,
+        composition_session_id: u64,
+        composition_base_revision: u64,
+        composition_generation: u64,
+        cause: EditorTransactionCause,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditOutcome {
+        if let Some(ref session) = self.composition_session {
+            if session.session_id != composition_session_id
+                || session.base_revision != composition_base_revision
+                || session.generation != composition_generation
+            {
+                return EditorEditOutcome::StaleRevision(self.stale_session_result());
+            }
+        } else if composition_session_id != 0 {
+            return EditorEditOutcome::StaleRevision(self.stale_session_result());
+        }
+
+        let (byte_start, byte_end_exclusive) = Self::normalize_range(byte_start, byte_end_exclusive);
+        if byte_start > self.text.len() || byte_end_exclusive > self.text.len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+        if !self.text.is_char_boundary(byte_start) || !self.text.is_char_boundary(byte_end_exclusive) {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+
+        let old_text = self.text.clone();
+
+        self.text.replace_range(byte_start..byte_end_exclusive, replacement_text);
+        self.revision = self.revision.saturating_add(1);
+
+        let sel_anchor = Self::clamp_to_char_boundary(&self.text, resulting_selection_anchor);
+        let sel_head = Self::clamp_to_char_boundary(&self.text, resulting_selection_head);
+        self.selection_anchor = sel_anchor;
+        self.cursor = sel_head;
+
+        self.undo_stack.push(UndoEntry {
+            old_text: old_text.clone(),
+            new_text: self.text.clone(),
+            old_cursor,
+            new_cursor: self.cursor,
+        });
+        self.redo_stack.clear();
+        self.composition_session = None;
+
+        let new_revision = self.revision;
+        let new_selection = (self.selection_anchor, self.cursor);
+        let old_affected = vec![(byte_start, byte_end_exclusive)];
+        let new_affected = vec![(byte_start, byte_start + replacement_text.len())];
+
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: (byte_start, byte_end_exclusive),
+            inserted_text: replacement_text.to_string(),
+            resulting_selection_byte_range: new_selection,
+        }];
+
+        let visual_intent = EditorVisualIntent {
+            cause,
+            operation_kind: EditorOperationKind::CompositionCommit,
+            old_affected_byte_ranges: old_affected,
+            new_affected_byte_ranges: new_affected,
+            animation_mode: AnimationMode::SystemSuppressed,
+            duration_ms: 0,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: false,
+            },
+        };
+
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        })
+    }
+
+    fn apply_delete_surrounding(
+        &mut self,
+        before_byte_start: usize,
+        before_byte_end_exclusive: usize,
+        after_byte_start: usize,
+        after_byte_end_exclusive: usize,
+        cause: EditorTransactionCause,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditOutcome {
+        let sel_anchor = self.selection_anchor;
+        let sel_head = self.cursor;
+        let (sel_min, sel_max) = if sel_anchor <= sel_head { (sel_anchor, sel_head) } else { (sel_head, sel_anchor) };
+
+        let mut patches = Vec::new();
+        let mut text = self.text.clone();
+        let mut delta: i64 = 0;
+
+        let after_range = if after_byte_start < after_byte_end_exclusive {
+            Some((after_byte_start, after_byte_end_exclusive))
+        } else {
+            None
+        };
+        let before_range = if before_byte_start < before_byte_end_exclusive {
+            Some((before_byte_start, before_byte_end_exclusive))
+        } else {
+            None
+        };
+
+        if let Some((as_, ae)) = after_range {
+            if as_ > text.len() || ae > text.len() || !text.is_char_boundary(as_) || !text.is_char_boundary(ae) {
+                return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            }
+            if as_ >= ae || as_ < sel_max {
+                return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+            }
+            let deleted_len = ae - as_;
+            text.replace_range(as_..ae, "");
+            delta -= deleted_len as i64;
+            patches.push((as_, ae, String::new()));
+        }
+
+        if let Some((bs, be)) = before_range {
+            let adjusted_bs = bs;
+            let adjusted_be = be;
+            if adjusted_bs > text.len() || adjusted_be > text.len() || !text.is_char_boundary(adjusted_bs) || !text.is_char_boundary(adjusted_be) {
+                return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+            }
+            if adjusted_bs >= adjusted_be || adjusted_be > sel_min {
+                return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+            }
+            let deleted_len = adjusted_be - adjusted_bs;
+            text.replace_range(adjusted_bs..adjusted_be, "");
+            delta -= deleted_len as i64;
+            patches.push((adjusted_bs, adjusted_be, String::new()));
+        }
+
+        if patches.is_empty() {
+            return EditorEditOutcome::NoChange(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+
+        let old_text = self.text.clone();
+        self.text = text;
+        self.revision = self.revision.saturating_add(1);
+
+        let new_sel_min = (sel_min as i64 + delta.min(0)) as usize;
+        let new_sel_max = if delta < 0 {
+            let before_delta = if before_range.is_some() {
+                let (bs, be) = before_range.unwrap();
+                (bs as i64 - be as i64) as i64
+            } else {
+                0
+            };
+            ((sel_max as i64) + before_delta) as usize
+        } else {
+            sel_max
+        };
+        self.selection_anchor = new_sel_min;
+        self.cursor = new_sel_max;
+
+        self.undo_stack.push(UndoEntry {
+            old_text: old_text.clone(),
+            new_text: self.text.clone(),
+            old_cursor,
+            new_cursor: self.cursor,
+        });
+        self.redo_stack.clear();
+
+        let new_revision = self.revision;
+        let new_selection = (self.selection_anchor, self.cursor);
+
+        let (replace_range, inserted_text) = Self::compute_single_patch(&old_text, &self.text);
+        let display_patches = if replace_range.0 < replace_range.1 || !inserted_text.is_empty() {
+            vec![DisplayPatch {
                 base_revision,
                 new_revision,
-                display_patches,
+                replace_byte_range: replace_range,
+                inserted_text,
+                resulting_selection_byte_range: new_selection,
+            }]
+        } else {
+            vec![]
+        };
+
+        let visual_intent = EditorVisualIntent {
+            cause,
+            operation_kind: EditorOperationKind::Delete,
+            old_affected_byte_ranges: patches.iter().map(|(s, e, _)| (*s, *e)).collect(),
+            new_affected_byte_ranges: vec![],
+            animation_mode: AnimationMode::SystemSuppressed,
+            duration_ms: 0,
+            coordinated_cursor: CoordinatedCursor {
+                old_byte_offset: old_cursor,
+                new_byte_offset: self.cursor,
+                should_animate: false,
+            },
+        };
+
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent,
+        })
+    }
+
+    fn apply_begin_composition(
+        &mut self,
+        replace_start: usize,
+        replace_end_exclusive: usize,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditOutcome {
+        if self.composition_session.is_some() {
+            return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+        if replace_start > self.text.len() || replace_end_exclusive > self.text.len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+        if !self.text.is_char_boundary(replace_start) || !self.text.is_char_boundary(replace_end_exclusive) {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+
+        let session_id = self.next_composition_session_id;
+        self.next_composition_session_id = self.next_composition_session_id.saturating_add(1);
+
+        self.composition_session = Some(CompositionSessionState {
+            session_id,
+            base_revision,
+            generation: 0,
+            replace_start,
+            replace_end_exclusive,
+            preedit_text: String::new(),
+        });
+
+        let new_selection = (self.selection_anchor, self.cursor);
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_byte_offset: old_cursor,
+                    new_byte_offset: self.cursor,
+                    should_animate: false,
+                },
+            },
+        })
+    }
+
+    fn apply_update_composition(
+        &mut self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        new_preedit_text: &str,
+        _new_preedit_cursor_offset: usize,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditOutcome {
+        let session = match &mut self.composition_session {
+            Some(s) if s.session_id == composition_session_id && s.generation == composition_generation => s,
+            _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
+        };
+
+        session.preedit_text = new_preedit_text.to_string();
+        session.generation = session.generation.saturating_add(1);
+
+        let new_selection = (self.selection_anchor, self.cursor);
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionUpdate,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_byte_offset: old_cursor,
+                    new_byte_offset: self.cursor,
+                    should_animate: false,
+                },
+            },
+        })
+    }
+
+    fn apply_finish_composition(
+        &mut self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditOutcome {
+        let session = match &self.composition_session {
+            Some(s) if s.session_id == composition_session_id && s.generation == composition_generation => s.clone(),
+            _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
+        };
+
+        if session.preedit_text.is_empty() {
+            self.composition_session = None;
+            let new_selection = (self.selection_anchor, self.cursor);
+            return EditorEditOutcome::Applied(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision: self.revision,
+                display_patches: vec![],
                 old_selection_byte_range: old_selection,
                 new_selection_byte_range: new_selection,
-                visual_intent,
-            })
+                visual_intent: EditorVisualIntent {
+                    cause: EditorTransactionCause::TypingCommit,
+                    operation_kind: EditorOperationKind::CompositionCommit,
+                    old_affected_byte_ranges: vec![],
+                    new_affected_byte_ranges: vec![],
+                    animation_mode: AnimationMode::SystemSuppressed,
+                    duration_ms: 0,
+                    coordinated_cursor: CoordinatedCursor {
+                        old_byte_offset: old_cursor,
+                        new_byte_offset: self.cursor,
+                        should_animate: false,
+                    },
+                },
+            });
         }
+
+        let replace_start = session.replace_start;
+        let replace_end = session.replace_end_exclusive;
+        let committed_text = session.preedit_text.clone();
+
+        if replace_start > self.text.len() || replace_end > self.text.len() {
+            self.composition_session = None;
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+
+        let old_text = self.text.clone();
+        self.text.replace_range(replace_start..replace_end, &committed_text);
+        self.revision = self.revision.saturating_add(1);
+        self.cursor = replace_start + committed_text.len();
+        self.selection_anchor = self.cursor;
+        self.composition_session = None;
+
+        self.undo_stack.push(UndoEntry {
+            old_text: old_text.clone(),
+            new_text: self.text.clone(),
+            old_cursor,
+            new_cursor: self.cursor,
+        });
+        self.redo_stack.clear();
+
+        let new_revision = self.revision;
+        let new_selection = (self.cursor, self.cursor);
+
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: (replace_start, replace_end),
+            inserted_text: committed_text.clone(),
+            resulting_selection_byte_range: new_selection,
+        }];
+
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::TypingCommit,
+                operation_kind: EditorOperationKind::CompositionCommit,
+                old_affected_byte_ranges: vec![(replace_start, replace_end)],
+                new_affected_byte_ranges: vec![(replace_start, replace_start + committed_text.len())],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_byte_offset: old_cursor,
+                    new_byte_offset: self.cursor,
+                    should_animate: false,
+                },
+            },
+        })
+    }
+
+    fn apply_cancel_composition(
+        &mut self,
+        composition_session_id: u64,
+        composition_generation: u64,
+        base_revision: u64,
+        old_cursor: usize,
+        old_selection: (usize, usize),
+    ) -> EditorEditOutcome {
+        let session = match &self.composition_session {
+            Some(s) if s.session_id == composition_session_id && s.generation == composition_generation => s.clone(),
+            _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
+        };
+
+        let replace_start = session.replace_start;
+        let replace_end = session.replace_end_exclusive;
+
+        if replace_start != replace_end && (replace_start > self.text.len() || replace_end > self.text.len()) {
+            self.composition_session = None;
+            return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
+        }
+
+        self.composition_session = None;
+
+        let new_selection = (self.selection_anchor, self.cursor);
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision: self.revision,
+            display_patches: vec![],
+            old_selection_byte_range: old_selection,
+            new_selection_byte_range: new_selection,
+            visual_intent: EditorVisualIntent {
+                cause: EditorTransactionCause::ImeComposition,
+                operation_kind: EditorOperationKind::CompositionCancel,
+                old_affected_byte_ranges: vec![],
+                new_affected_byte_ranges: vec![],
+                animation_mode: AnimationMode::SystemSuppressed,
+                duration_ms: 0,
+                coordinated_cursor: CoordinatedCursor {
+                    old_byte_offset: old_cursor,
+                    new_byte_offset: self.cursor,
+                    should_animate: false,
+                },
+            },
+        })
+    }
+
+    pub fn composition_session_info(&self) -> Option<(u64, u64, u64)> {
+        self.composition_session.as_ref().map(|s| (s.session_id, s.base_revision, s.generation))
     }
 
     /// 创建 CompositionUpdate 事务 — 预输入更新。
