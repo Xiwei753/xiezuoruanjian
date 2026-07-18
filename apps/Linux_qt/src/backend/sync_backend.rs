@@ -212,7 +212,7 @@ impl SyncBackend {
         let _ = self.with_app_mut(|app| app.open_workspace_dir());
     }
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
-        self.with_app_mut(|app| app.copy_text_to_clipboard(text)).unwrap_or_else(|_| "{}".into())
+        self.with_app_mut(|app| app.copy_text_to_clipboard(text)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 }
 

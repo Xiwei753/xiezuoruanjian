@@ -448,7 +448,7 @@ impl EditorBackend {
         let _ = self.with_app(|app| app.log_qml(level, module, event, message));
     }
     fn list_registered_actions(&mut self) -> QString {
-        self.with_app_mut(|app| app.list_registered_actions()).unwrap_or_else(|_| "[]".into())
+        self.with_app_mut(|app| app.list_registered_actions()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn execute_action(
         &mut self,

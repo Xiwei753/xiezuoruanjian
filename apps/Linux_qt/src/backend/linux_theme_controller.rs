@@ -102,7 +102,7 @@ impl LinuxThemeController {
                 }
                 None => "{}".into(),
             }
-        }).unwrap_or_else(|_| "{}".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn is_dark(&self) -> bool {

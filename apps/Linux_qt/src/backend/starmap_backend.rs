@@ -142,7 +142,7 @@ impl StarMapBackend {
     }
 
     fn list_starmaps_json(&self) -> QString {
-        self.with_app(|app| app.list_starmaps_json()).unwrap_or_else(|_| "[]".into())
+        self.with_app(|app| app.list_starmaps_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn list_starmaps(&self) -> QJsonArray {
         self.with_app(|app| app.list_starmaps()).unwrap_or_default()
@@ -153,7 +153,7 @@ impl StarMapBackend {
         }).unwrap_or_else(|_| "[]".into())
     }
     fn get_starmap_json(&self, starmap_id: QString) -> QString {
-        self.with_app(|app| app.get_starmap_json(starmap_id)).unwrap_or_else(|_| "{}".into())
+        self.with_app(|app| app.get_starmap_json(starmap_id)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn create_starmap_json(
         &mut self,
@@ -210,7 +210,7 @@ impl StarMapBackend {
         }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn get_main_starmap_json(&self, project_id: QString) -> QString {
-        self.with_app(|app| app.get_main_starmap_json(project_id)).unwrap_or_else(|_| "{}".into())
+        self.with_app(|app| app.get_main_starmap_json(project_id)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn unbind_starmap_json(&mut self, starmap_id: QString) -> QString {
         self.with_app_mut(|app| app.unbind_starmap_json(starmap_id)).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
@@ -238,7 +238,7 @@ impl StarMapBackend {
         crate::starmap_bridge::calculate_grid_layout_json(&ni, &el).into()
     }
     fn get_starmap_graph_json(&self, starmap_id: QString) -> QString {
-        self.with_app(|app| app.get_starmap_graph_json(starmap_id)).unwrap_or_else(|_| "{}".into())
+        self.with_app(|app| app.get_starmap_graph_json(starmap_id)).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_starmap_graph(&self, starmap_id: QString) -> QJsonObject {
         self.with_app(|app| {

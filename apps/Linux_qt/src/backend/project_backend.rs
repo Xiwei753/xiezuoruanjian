@@ -126,13 +126,13 @@ impl ProjectBackend {
         result.unwrap_or_else(|_| "[]".into())
     }
     fn get_tree_model_json(&self) -> QString {
-        self.with_app(|app| app.get_tree_model_json()).unwrap_or_else(|_| "[]".into())
+        self.with_app(|app| app.get_tree_model_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn get_tree_model(&self) -> QJsonArray {
         self.with_app(|app| app.get_tree_model()).unwrap_or_default()
     }
     fn get_project_summaries_json(&self) -> QString {
-        self.with_app(|app| app.get_project_summaries_json()).unwrap_or_else(|_| "[]".into())
+        self.with_app(|app| app.get_project_summaries_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn create_project(&mut self, title: QString, action_id: QString) -> QJsonObject {
         let result = self.with_app_mut(|app| app.create_project_json(title, action_id));
