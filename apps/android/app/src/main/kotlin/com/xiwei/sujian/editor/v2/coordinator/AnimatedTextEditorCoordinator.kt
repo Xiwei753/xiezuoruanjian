@@ -2,9 +2,9 @@ package com.xiwei.sujian.editor.v2.coordinator
 
 import android.content.Context
 import android.graphics.Rect
+import android.widget.FrameLayout
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
-import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 
@@ -54,6 +54,11 @@ class AnimatedTextEditorCoordinator(
         val view = getOrCreateEditorView()
         val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
         view.bindSession(bridge, target.profile, target.initialText, sel)
+
+        val geometry = target.currentGeometry
+        if (geometry.width() > 0 && geometry.height() > 0) {
+            positionViewOverTarget(view, geometry)
+        }
 
         state = EditingState.EDITING
         target.onEditingStateChanged?.invoke(EditingState.EDITING)
@@ -107,10 +112,10 @@ class AnimatedTextEditorCoordinator(
     fun updateTargetGeometry(targetId: String, geometry: Rect) {
         targets[targetId]?.updateGeometry(geometry)
         if (targetId == activeTargetId) {
-            sharedEditorView?.updateHostGeometry(
-                geometry.width().toFloat(),
-                geometry.height().toFloat()
-            )
+            val view = sharedEditorView
+            if (view != null && state == EditingState.EDITING) {
+                positionViewOverTarget(view, geometry)
+            }
         }
     }
 
@@ -121,6 +126,8 @@ class AnimatedTextEditorCoordinator(
     fun getActiveTargetId(): String? = activeTargetId
 
     fun getEditingState(): EditingState = state
+
+    fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
 
     fun getSharedEditorView(): SujianEditorView? = sharedEditorView
 
@@ -137,6 +144,29 @@ class AnimatedTextEditorCoordinator(
         }
         sharedEditorView = null
         state = EditingState.RELEASED
+    }
+
+    fun positionActiveTargetView(view: SujianEditorView) {
+        val targetId = activeTargetId ?: return
+        val geometry = targets[targetId]?.currentGeometry ?: return
+        positionViewOverTarget(view, geometry)
+    }
+
+    private fun positionViewOverTarget(view: SujianEditorView, geometry: Rect) {
+        val lp = view.layoutParams as? FrameLayout.LayoutParams
+            ?: FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT
+            )
+        lp.width = if (geometry.width() > 0) geometry.width() else FrameLayout.LayoutParams.MATCH_PARENT
+        lp.height = if (geometry.height() > 0) geometry.height() else FrameLayout.LayoutParams.MATCH_PARENT
+        lp.leftMargin = geometry.left
+        lp.topMargin = geometry.top
+        view.layoutParams = lp
+        view.updateHostGeometry(
+            geometry.width().toFloat(),
+            geometry.height().toFloat()
+        )
     }
 
     private fun getOrCreateEditorView(): SujianEditorView {

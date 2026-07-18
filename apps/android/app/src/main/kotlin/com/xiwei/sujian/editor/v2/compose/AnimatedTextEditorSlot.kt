@@ -3,7 +3,6 @@ package com.xiwei.sujian.editor.v2.compose
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -23,28 +22,32 @@ fun AnimatedTextEditorSlot(
 ) {
     var editorView by remember { mutableStateOf<SujianEditorView?>(null) }
 
+    val activeTargetId = coordinator.getActiveTargetId()
+    val editingState = coordinator.getEditingState()
+    val isVisible = activeTargetId != null && editingState == EditingState.EDITING
+
     Box(modifier = modifier.fillMaxSize()) {
-        AndroidView(
-            factory = { ctx ->
-                val view = coordinator.getSharedEditorView()
-                    ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
-                editorView = view
-                view
-            },
-            update = { view ->
-                val activeId = coordinator.getActiveTargetId()
-                val state = coordinator.getEditingState()
-                view.visibility = if (activeId != null && state == EditingState.EDITING) {
-                    android.view.View.VISIBLE
-                } else {
-                    android.view.View.GONE
-                }
-            },
-            onRelease = { view ->
-                view.visibility = android.view.View.GONE
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+        if (isVisible) {
+            AndroidView(
+                factory = { ctx ->
+                    val view = coordinator.getSharedEditorView()
+                        ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
+                    editorView = view
+                    view
+                },
+                update = { view ->
+                    view.visibility = android.view.View.VISIBLE
+                    coordinator.positionActiveTargetView(view)
+                },
+                onReset = { view ->
+                    view.resetForReuse()
+                },
+                onRelease = { view ->
+                    view.visibility = android.view.View.GONE
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
     }
 }
 

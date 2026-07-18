@@ -8,10 +8,19 @@ import android.view.MenuItem
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
@@ -188,54 +197,37 @@ class ChapterListActivity : AppCompatActivity() {
 
     private fun showNewVolumeDialog() {
         val pid = projectId ?: return
-
-        val editText = EditText(this)
-        editText.hint = getString(R.string.hint_volume_title)
-        editText.setPadding(48, 48, 48, 48)
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.dialog_new_volume_title)
-            .setView(editText)
-            .setPositiveButton(R.string.action_create) { _, _ ->
-                val title = editText.text.toString().trim()
-                if (title.isNotEmpty()) {
-                    ErrorUtil.safeRun(this) {
-                        workspaceRepository.createVolume(pid, title)
-                        loadChapters()
-                        loadProjectStats()
-                    }
-                }
-            }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
-    }
-
-    private fun showNewChapterDialog(volumeId: String) {
-        val pid = projectId ?: return
-
-        // 预填默认标题：按当前卷章节数量生成
-        val chapterCount = listItems.count { it is ListItem.Chapter && it.volumeId == volumeId }
-        val defaultTitle = getString(R.string.default_chapter_name_format, chapterCount + 1)
-
-        val editText = EditText(this)
-        editText.hint = getString(R.string.hint_chapter_title)
-        editText.setText(defaultTitle)
-        editText.setPadding(48, 48, 48, 48)
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.dialog_new_chapter_title)
-            .setView(editText)
-            .setPositiveButton(R.string.action_create) { _, _ ->
-                val title = editText.text.toString().trim()
-                // 允许空标题通过，后端会兜底生成"第N章"
+        showComposeTextDialog(
+            title = getString(R.string.dialog_new_volume_title),
+            hint = getString(R.string.hint_volume_title),
+            initialValue = ""
+        ) { title ->
+            if (title.isNotEmpty()) {
                 ErrorUtil.safeRun(this) {
-                    workspaceRepository.createChapter(pid, volumeId, title)
+                    workspaceRepository.createVolume(pid, title)
                     loadChapters()
                     loadProjectStats()
                 }
             }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
+        }
+    }
+
+    private fun showNewChapterDialog(volumeId: String) {
+        val pid = projectId ?: return
+        val chapterCount = listItems.count { it is ListItem.Chapter && it.volumeId == volumeId }
+        val defaultTitle = getString(R.string.default_chapter_name_format, chapterCount + 1)
+
+        showComposeTextDialog(
+            title = getString(R.string.dialog_new_chapter_title),
+            hint = getString(R.string.hint_chapter_title),
+            initialValue = defaultTitle
+        ) { title ->
+            ErrorUtil.safeRun(this) {
+                workspaceRepository.createChapter(pid, volumeId, title)
+                loadChapters()
+                loadProjectStats()
+            }
+        }
     }
 
 
@@ -281,26 +273,18 @@ class ChapterListActivity : AppCompatActivity() {
 
     private fun showRenameVolumeDialog(volumeId: String, currentTitle: String) {
         val pid = projectId ?: return
-        val editText = android.widget.EditText(this)
-        editText.setText(currentTitle)
-        editText.setSelection(currentTitle.length)
-        editText.hint = getString(R.string.hint_volume_title)
-        editText.setPadding(48, 48, 48, 48)
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.action_rename)
-            .setView(editText)
-            .setPositiveButton(R.string.action_ok) { _, _ ->
-                val newTitle = editText.text.toString().trim()
-                if (newTitle.isNotEmpty() && newTitle != currentTitle) {
-                    ErrorUtil.safeRun(this) {
-                        workspaceRepository.renameVolume(pid, volumeId, newTitle)
-                        loadChapters()
-                    }
+        showComposeTextDialog(
+            title = getString(R.string.action_rename),
+            hint = getString(R.string.hint_volume_title),
+            initialValue = currentTitle
+        ) { newTitle ->
+            if (newTitle.isNotEmpty() && newTitle != currentTitle) {
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.renameVolume(pid, volumeId, newTitle)
+                    loadChapters()
                 }
             }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
+        }
     }
 
     private fun showDeleteVolumeDialog(volumeId: String, title: String) {
@@ -391,26 +375,18 @@ class ChapterListActivity : AppCompatActivity() {
 
     private fun showRenameChapterDialog(volumeId: String, chapterId: String, currentTitle: String) {
         val pid = projectId ?: return
-        val editText = android.widget.EditText(this)
-        editText.setText(currentTitle)
-        editText.setSelection(currentTitle.length)
-        editText.hint = getString(R.string.hint_chapter_title)
-        editText.setPadding(48, 48, 48, 48)
-
-        AlertDialog.Builder(this)
-            .setTitle(R.string.action_rename)
-            .setView(editText)
-            .setPositiveButton(R.string.action_ok) { _, _ ->
-                val newTitle = editText.text.toString().trim()
-                if (newTitle.isNotEmpty() && newTitle != currentTitle) {
-                    ErrorUtil.safeRun(this) {
-                        workspaceRepository.renameChapter(pid, volumeId, chapterId, newTitle)
-                        loadChapters()
-                    }
+        showComposeTextDialog(
+            title = getString(R.string.action_rename),
+            hint = getString(R.string.hint_chapter_title),
+            initialValue = currentTitle
+        ) { newTitle ->
+            if (newTitle.isNotEmpty() && newTitle != currentTitle) {
+                ErrorUtil.safeRun(this) {
+                    workspaceRepository.renameChapter(pid, volumeId, chapterId, newTitle)
+                    loadChapters()
                 }
             }
-            .setNegativeButton(R.string.action_cancel, null)
-            .show()
+        }
     }
 
     private fun showDeleteChapterDialog(volumeId: String, chapterId: String, title: String) {
@@ -427,6 +403,54 @@ class ChapterListActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.action_cancel, null)
             .show()
+    }
+
+    private fun showComposeTextDialog(
+        title: String,
+        hint: String,
+        initialValue: String,
+        onConfirm: (String) -> Unit
+    ) {
+        val composeView = ComposeView(this).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+        }
+        var text by mutableStateOf(initialValue)
+        var dialog: AlertDialog? = null
+
+        composeView.setContent {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { dialog?.dismiss() },
+                title = { Text(title) },
+                text = {
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text(hint) },
+                        singleLine = true
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        onConfirm(text.trim())
+                        dialog?.dismiss()
+                    }) {
+                        Text(getString(R.string.action_ok))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { dialog?.dismiss() }) {
+                        Text(getString(R.string.action_cancel))
+                    }
+                }
+            )
+        }
+
+        dialog = AlertDialog.Builder(this)
+            .setView(composeView)
+            .setCancelable(true)
+            .create()
+        dialog.show()
     }
 
     private fun moveChapterUp(volumeId: String, chapterId: String) {
