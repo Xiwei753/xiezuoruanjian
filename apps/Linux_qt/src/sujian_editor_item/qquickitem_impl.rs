@@ -165,7 +165,7 @@ impl QQuickItem for SujianEditorItem {
             let has_active_txs = !self.animation_coordinator.prepared_queue.is_empty();
 
             if !has_active_txs {
-                self.texture_cache.clear();
+                self.pipeline.texture_cache_mut().clear();
                 scene_graph::clear_animation_layer(final_root, item_ptr);
             }
 
@@ -228,12 +228,12 @@ impl QQuickItem for SujianEditorItem {
                 final_root,
                 item_ptr,
                 &render_plan,
-                &self.texture_cache,
+                &self.pipeline.texture_cache(),
             );
 
             for key in &render_plan.frame_context.keys_to_complete {
                 if let Some(ids) = self.animation_coordinator.finish_by_key(*key) {
-                    self.texture_cache.remove_for_transaction(&ids);
+                    self.pipeline.texture_cache_mut().remove_for_transaction(&ids);
                 }
                 editor_animation_debug_log(&format!(
                     "update_paint_node: tid={}, gen={} completed (progress >= 1.0)",

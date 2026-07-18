@@ -26,47 +26,79 @@ mod chapter_operations;
 mod writing_stats;
 
 #[allow(non_snake_case)] // Qt QML naming convention (e.g. projectsReloaded)
-#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct EditorBackend {
+    #[allow(dead_code)]
     base: qt_base_class!(trait QObject),
+    #[allow(dead_code)]
     save_status: qt_property!(QString; READ save_status WRITE set_save_status NOTIFY save_status_changed),
+    #[allow(dead_code)]
     word_count: qt_property!(i32; READ word_count WRITE set_word_count NOTIFY word_count_changed),
+    #[allow(dead_code)]
     error_message: qt_property!(QString; READ error_message NOTIFY error_occurred),
+    #[allow(dead_code)]
     selected_item_id: qt_property!(QString; READ selected_item_id NOTIFY selected_item_changed),
+    #[allow(dead_code)]
     has_selected_chapter_prop: qt_property!(bool; READ has_selected_chapter_prop NOTIFY selected_item_changed),
+    #[allow(dead_code)]
     chapter_path: qt_property!(QString; READ chapter_path NOTIFY chapter_path_changed),
+    #[allow(dead_code)]
     setting_font_size: qt_property!(f32; READ setting_font_size WRITE set_setting_font_size NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_line_spacing: qt_property!(f32; READ setting_line_spacing WRITE set_setting_line_spacing NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_auto_save_enabled: qt_property!(bool; READ setting_auto_save_enabled WRITE set_setting_auto_save_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_auto_save_delay_ms: qt_property!(u32; READ setting_auto_save_delay_ms WRITE set_setting_auto_save_delay_ms NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms NOTIFY settings_changed),
+    #[allow(dead_code)]
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
+    #[allow(dead_code)]
     sync_enabled: qt_property!(bool; READ sync_enabled NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_auto_sync: qt_property!(bool; READ sync_auto_sync NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     save_status_changed: qt_signal!(),
+    #[allow(dead_code)]
     word_count_changed: qt_signal!(),
+    #[allow(dead_code)]
     error_occurred: qt_signal!(),
+    #[allow(dead_code)]
     selected_item_changed: qt_signal!(),
+    #[allow(dead_code)]
     chapter_path_changed: qt_signal!(),
+    #[allow(dead_code)]
     clear_editor: qt_signal!(),
+    #[allow(dead_code)]
     settings_changed: qt_signal!(),
+    #[allow(dead_code)]
     workspace_state_changed: qt_signal!(),
+    #[allow(dead_code)]
     sync_config_changed: qt_signal!(),
+    #[allow(dead_code)]
     calculate_word_count: qt_method!(fn(&mut self, text: QString)),
+    #[allow(dead_code)]
     open_chapter_json: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
     ),
+    #[allow(dead_code)]
     open_chapter: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
     ),
+    #[allow(dead_code)]
     get_chapter_content: qt_method!(
         fn(&self, project_id: QString, volume_id: QString, chapter_id: QString) -> QString
     ),
+    #[allow(dead_code)]
     save_chapter: qt_method!(
         fn(
             &mut self,
@@ -77,9 +109,11 @@ pub struct EditorBackend {
             allow_empty_overwrite: bool,
         ) -> QJsonObject
     ),
+    #[allow(dead_code)]
     clear_chapter_content: qt_method!(
         fn(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) -> QJsonObject
     ),
+    #[allow(dead_code)]
     report_writing_event: qt_method!(
         fn(
             &mut self,
@@ -92,6 +126,7 @@ pub struct EditorBackend {
             pasted_chars: u32,
         )
     ),
+    #[allow(dead_code)]
     process_writing_event_from_text: qt_method!(
         fn(
             &mut self,
@@ -102,37 +137,56 @@ pub struct EditorBackend {
             new_text: QString,
         )
     ),
+    #[allow(dead_code)]
     get_writing_stats_summary:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    #[allow(dead_code)]
     get_writing_stats_summary_object:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
+    #[allow(dead_code)]
     get_writing_stats_by_project:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    #[allow(dead_code)]
     get_writing_stats_by_project_object:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
+    #[allow(dead_code)]
     get_writing_stats_by_chapter:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    #[allow(dead_code)]
     get_writing_stats_by_chapter_object:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
+    #[allow(dead_code)]
     get_writing_stats_by_device:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QString),
+    #[allow(dead_code)]
     get_writing_stats_by_device_object:
         qt_method!(fn(&self, start_date: QString, end_date: QString) -> QJsonObject),
+    #[allow(dead_code)]
     get_writing_speed_curve: qt_method!(
         fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QString
     ),
+    #[allow(dead_code)]
     get_writing_speed_curve_object: qt_method!(
         fn(&self, start_date: QString, end_date: QString, bucket_minutes: u32) -> QJsonObject
     ),
+    #[allow(dead_code)]
     flush_writing_stats: qt_method!(fn(&self)),
+    #[allow(dead_code)]
     flush_recent_edits: qt_method!(fn(&self)),
+    #[allow(dead_code)]
     has_selected_chapter: qt_method!(fn(&self) -> bool),
+    #[allow(dead_code)]
     selected_chapter_exists: qt_method!(fn(&self) -> bool),
+    #[allow(dead_code)]
     clear_editor_state: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     request_auto_sync: qt_method!(fn(&mut self, reason: QString)),
+    #[allow(dead_code)]
     log_qml:
         qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
+    #[allow(dead_code)]
     list_registered_actions: qt_method!(fn(&mut self) -> QString),
+    #[allow(dead_code)]
     execute_action: qt_method!(
         fn(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString
     ),

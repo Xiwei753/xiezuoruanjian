@@ -94,6 +94,30 @@ struct Foo { x: i32 }
         rules = self.rule_names(source)
         self.assertIn("broad-dead-code-allow", rules)
 
+    def test_flags_struct_level_dead_code_allow_on_qobject(self) -> None:
+        source = r'''
+#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
+#[derive(QObject, Default)]
+pub struct EditorBackend {
+    base: qt_base_class!(trait QObject),
+    save_status: qt_property!(QString; READ save_status),
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("broad-dead-code-allow", rules)
+
+    def test_accepts_field_level_dead_code_allow_on_qt_property(self) -> None:
+        source = r'''
+#[derive(QObject, Default)]
+pub struct EditorBackend {
+    base: qt_base_class!(trait QObject),
+    #[allow(dead_code)]
+    save_status: qt_property!(QString; READ save_status),
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("broad-dead-code-allow", rules)
+
     def test_flags_assert_unwind_safe_even_with_comment(self) -> None:
         source = r'''
 fn ffi_boundary() {

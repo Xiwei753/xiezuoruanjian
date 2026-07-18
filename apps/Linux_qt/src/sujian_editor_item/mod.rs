@@ -301,7 +301,6 @@ pub struct SujianEditorItem {
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
     animation_coordinator: LinuxEditorAnimationCoordinator,
-    texture_cache: TextureCache,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
     layout_revision: LayoutRevision,
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
@@ -440,7 +439,6 @@ impl Default for SujianEditorItem {
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
             animation_coordinator: LinuxEditorAnimationCoordinator::new(),
-            texture_cache: animation_coordinator::TextureCache::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
             layout_revision: LayoutRevision::initial(),
             current_layout_snapshot: None,
@@ -477,7 +475,7 @@ impl SujianEditorItem {
 
     pub(crate) fn clear_active_text_animations(&mut self) {
         if self.animation_coordinator.suppress_all() {
-            self.texture_cache.clear();
+            self.pipeline.texture_cache_mut().clear();
             self.current_layout_snapshot = None;
             self.previous_layout_snapshot = None;
             self.previous_canonical_snapshot = None;
@@ -524,7 +522,7 @@ impl SujianEditorItem {
                     tid,
                     self.animation_coordinator.has_active_insert()
                 ));
-                self.texture_cache.remove_for_transaction(&ids);
+                self.pipeline.texture_cache_mut().remove_for_transaction(&ids);
                 self.request_static_repaint();
                 self.cursor_rect_changed();
             }

@@ -303,7 +303,7 @@ impl SujianEditorItem {
 
                 let mut all_found = true;
                 for id in &snapshot_ids {
-                    if !self.texture_cache.contains_line(id) {
+                    if !self.pipeline.texture_cache().contains_line(id) {
                         all_found = false;
                         break;
                     }
@@ -317,21 +317,21 @@ impl SujianEditorItem {
                 if let Some(ref old_snap) = t.old_snapshot {
                     for line in &old_snap.line_snapshots {
                         if let Some(ref image) = line.image {
-                            self.texture_cache.insert_line(line.id, image.clone());
+                            self.pipeline.texture_cache_mut().insert_line(line.id, image.clone());
                         }
                     }
                 }
                 if let Some(ref new_snap) = t.new_snapshot {
                     for line in &new_snap.line_snapshots {
                         if let Some(ref image) = line.image {
-                            self.texture_cache.insert_line(line.id, image.clone());
+                            self.pipeline.texture_cache_mut().insert_line(line.id, image.clone());
                         }
                     }
                 }
 
                 let mut any_missing = false;
                 for id in &snapshot_ids {
-                    if !self.texture_cache.contains_line(id) {
+                    if !self.pipeline.texture_cache().contains_line(id) {
                         any_missing = true;
                         break;
                     }

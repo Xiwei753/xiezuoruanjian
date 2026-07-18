@@ -156,16 +156,27 @@ _QMETA_MACRO_PATTERNS = [
 _QMETA_DERIVE_PATTERN = re.compile(r"#\[derive\s*\([^)]*\bQObject\b")
 
 
+def _is_struct_level_allow(lines: list[str], index: int) -> bool:
+    for i in range(index + 1, min(len(lines), index + 5)):
+        stripped = lines[i].strip()
+        if not stripped or stripped.startswith("//") or stripped.startswith("#["):
+            continue
+        if stripped.startswith("pub struct ") or stripped.startswith("struct "):
+            return True
+        if _QMETA_DERIVE_PATTERN.search(stripped):
+            return True
+        return False
+    return False
+
+
 def _is_qmetaobject_macro_field(lines: list[str], index: int) -> bool:
+    if _is_struct_level_allow(lines, index):
+        return False
     for i in range(index, min(len(lines), index + 3)):
         stripped = lines[i].strip()
         for pat in _QMETA_MACRO_PATTERNS:
             if pat.search(stripped):
                 return True
-    for i in range(max(0, index - 3), min(len(lines), index + 3)):
-        stripped = lines[i].strip()
-        if _QMETA_DERIVE_PATTERN.search(stripped):
-            return True
     return False
 
 
