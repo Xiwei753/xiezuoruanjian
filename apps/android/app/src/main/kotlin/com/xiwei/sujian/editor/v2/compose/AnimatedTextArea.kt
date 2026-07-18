@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -20,9 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
@@ -44,15 +43,57 @@ fun AnimatedTextArea(
     maxLines: Int = profile.maxLines,
     coordinator: AnimatedTextEditorCoordinator? = null
 ) {
-    val context = LocalContext.current
+    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
+
+    if (effectiveCoordinator != null) {
+        AnimatedTextAreaWithCoordinator(
+            targetId = targetId,
+            value = value,
+            onValueChange = onValueChange,
+            onCommit = onCommit,
+            modifier = modifier,
+            profile = profile,
+            label = label,
+            placeholder = placeholder,
+            enabled = enabled,
+            minLines = minLines,
+            maxLines = maxLines,
+            coordinator = effectiveCoordinator
+        )
+    } else {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = modifier,
+            label = label,
+            placeholder = placeholder,
+            enabled = enabled,
+            singleLine = false,
+            minLines = minLines,
+            maxLines = maxLines
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AnimatedTextAreaWithCoordinator(
+    targetId: String,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onCommit: (String) -> Unit,
+    modifier: Modifier,
+    profile: TextEditorProfile,
+    label: @Composable (() -> Unit)?,
+    placeholder: @Composable (() -> Unit)?,
+    enabled: Boolean,
+    minLines: Int,
+    maxLines: Int,
+    coordinator: AnimatedTextEditorCoordinator
+) {
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
     val interactionSource = remember { MutableInteractionSource() }
-
-    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current ?: remember {
-        val bridge = BridgeProvider.getAppServiceBridge(context)
-        AnimatedTextEditorCoordinator(context, bridge)
-    }
 
     val target = remember(targetId) {
         EditableTextTarget(
@@ -79,9 +120,9 @@ fun AnimatedTextArea(
     }
 
     DisposableEffect(targetId) {
-        effectiveCoordinator.registerTarget(target)
+        coordinator.registerTarget(target)
         onDispose {
-            effectiveCoordinator.unregisterTarget(targetId)
+            coordinator.unregisterTarget(targetId)
         }
     }
 
@@ -95,7 +136,7 @@ fun AnimatedTextArea(
         interactionSource.interactions.collect { interaction ->
             if (interaction is FocusInteraction.Focus && !isEditing && enabled) {
                 val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
-                effectiveCoordinator.beginEdit(targetId, cursorUtf8)
+                coordinator.beginEdit(targetId, cursorUtf8)
             }
         }
     }
@@ -111,7 +152,7 @@ fun AnimatedTextArea(
                     position.x, position.y,
                     position.x + size.width, position.y + size.height
                 )
-                effectiveCoordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
+                coordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
             }
     ) {
         OutlinedTextFieldDefaults.DecorationBox(

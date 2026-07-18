@@ -16,8 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalContext
-import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
@@ -34,14 +32,20 @@ fun AnimatedInlineText(
     enabled: Boolean = true,
     coordinator: AnimatedTextEditorCoordinator? = null
 ) {
-    val context = LocalContext.current
+    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
+
+    if (effectiveCoordinator == null) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = modifier
+        )
+        return
+    }
+
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
-
-    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current ?: remember {
-        val bridge = BridgeProvider.getAppServiceBridge(context)
-        AnimatedTextEditorCoordinator(context, bridge)
-    }
 
     val target = remember(targetId) {
         EditableTextTarget(
