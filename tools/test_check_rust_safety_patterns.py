@@ -38,6 +38,7 @@ fn aliases(app: &AppBackend) {
     let _ = Box::leak(Box::new(String::new()));
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {}));
     if expected_revision == 0 {}
+    let cmd = EditorCommand::SetSelection { expected_revision: 0 };
 }
 '''
         rules = self.rule_names(source)
@@ -276,8 +277,20 @@ fn qt_version() -> String {
     unsafe { std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned() }
 }
 '''
-        rules = self.rule_names(source)
+        rules = self.rule_names(source, path="apps/Linux_qt/src/editor/layout.rs")
         self.assertNotIn("cpp-unsafe-call", rules)
+
+    def test_flags_cpp_unsafe_empty_capture_in_disallowed_dir(self) -> None:
+        source = r'''
+fn qt_version() -> String {
+    let ptr = cpp!(unsafe [] -> *const std::ffi::c_char as "const char*" {
+        return qVersion();
+    });
+    unsafe { std::ffi::CStr::from_ptr(ptr).to_string_lossy().into_owned() }
+}
+'''
+        rules = self.rule_names(source, path="apps/Linux_qt/src/backend/some_backend.rs")
+        self.assertIn("cpp-unsafe-call", rules)
 
     def test_accepts_cpp_unsafe_in_test_context(self) -> None:
         source = r'''

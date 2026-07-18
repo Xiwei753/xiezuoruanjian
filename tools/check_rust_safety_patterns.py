@@ -79,7 +79,7 @@ RULES: tuple[PatternRule, ...] = (
     ),
     PatternRule(
         "revision-zero-bypass",
-        re.compile(r"\bexpected_revision\s*==\s*0\b"),
+        re.compile(r"\bexpected_revision\s*(?:==|:)\s*0\b"),
         "禁止使用 0 绕过编辑器版本校验",
     ),
     PatternRule(
@@ -104,8 +104,8 @@ RULES: tuple[PatternRule, ...] = (
     ),
     PatternRule(
         "cpp-unsafe-call",
-        re.compile(r"cpp!\s*\(\s*unsafe\s*\[(?!\s*\])"),
-        "cpp!(unsafe [...]) 捕获指针时必须说明来源、有效期、所属线程和 null 前提；空捕获列表 [] 不触发此规则",
+        re.compile(r"cpp!\s*\(\s*unsafe\s*\["),
+        "cpp!(unsafe [...]) 只允许出现在平台封装目录；业务代码禁止直接调用",
     ),
 )
 
@@ -186,6 +186,7 @@ _RULES_WITH_DEPRECATED = {
 
 _RULES_PRODUCTION_ONLY = {
     "production-lock-unwrap",
+    "revision-zero-bypass",
 }
 
 _CPP_UNSAFE_ALLOWED_DIRS = {

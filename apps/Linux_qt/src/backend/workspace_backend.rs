@@ -85,13 +85,13 @@ impl WorkspaceBackend {
         self.workspace_state_changed();
     }
     fn workspace_path(&self) -> QString {
-        self.with_app(|app| app.workspace_path()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.workspace_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn has_workspace(&self) -> bool {
         self.with_app(|app| app.has_workspace()).unwrap_or(false)
     }
     fn pending_github_init_path(&self) -> QString {
-        self.with_app(|app| app.pending_github_init_path()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.pending_github_init_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn try_restore_last_workspace(&mut self) {
         if self.with_app_mut(|app| app.try_restore_last_workspace()).is_ok() {
@@ -99,16 +99,21 @@ impl WorkspaceBackend {
         }
     }
     fn create_new_workspace(&mut self) -> QJsonObject {
-        let res = self.with_app_mut(|app| app.create_new_workspace())
-            .unwrap_or_else(|_| backend_link_broken_json());
-        self.emit_workspace_changed();
+        let result = self.with_app_mut(|app| app.create_new_workspace());
+        if result.is_ok() {
+            self.emit_workspace_changed();
+        }
+        let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn open_existing_workspace(&mut self) -> QJsonObject {
-        let res = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.open_existing_workspace()
-        }).unwrap_or_else(|_| backend_link_broken_json());
-        self.emit_workspace_changed();
+        });
+        if result.is_ok() {
+            self.emit_workspace_changed();
+        }
+        let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn create_workspace_with_path(&mut self, path: QString) -> QJsonObject {
@@ -123,21 +128,13 @@ impl WorkspaceBackend {
             "workspace_backend_create_workspace_called",
             &format!("path={}", path_str),
         );
-        let res = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.internal_open_workspace(&path_str, true)
-        }).unwrap_or_else(|_| backend_link_broken_json());
-        let has = self.has_workspace();
-        crate::backend::app_backend::debug_log_static(
-            "workspace",
-            "writer_core_create_workspace_result",
-            &format!("success={}", has),
-        );
-        self.emit_workspace_changed();
-        crate::backend::app_backend::debug_log_static(
-            "workspace",
-            "workspace_state_updated",
-            &format!("has_workspace={}", has),
-        );
+        });
+        if result.is_ok() {
+            self.emit_workspace_changed();
+        }
+        let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn open_workspace_with_path(&mut self, path: QString) -> QJsonObject {
@@ -152,21 +149,13 @@ impl WorkspaceBackend {
             "workspace_backend_open_workspace_called",
             &format!("path={}", path_str),
         );
-        let res = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.internal_open_workspace(&path_str, false)
-        }).unwrap_or_else(|_| backend_link_broken_json());
-        let has = self.has_workspace();
-        crate::backend::app_backend::debug_log_static(
-            "workspace",
-            "writer_core_open_workspace_result",
-            &format!("success={}", has),
-        );
-        self.emit_workspace_changed();
-        crate::backend::app_backend::debug_log_static(
-            "workspace",
-            "workspace_state_updated",
-            &format!("has_workspace={}", has),
-        );
+        });
+        if result.is_ok() {
+            self.emit_workspace_changed();
+        }
+        let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn close_workspace(&mut self) {
@@ -210,14 +199,8 @@ impl WorkspaceBackend {
             app.execute_github_init(path, remote_url, branch, token)
         }).is_ok() {
             self.emit_workspace_changed();
+            self.pending_github_init_path_changed();
         }
-        let has = self.has_workspace();
-        crate::backend::app_backend::debug_log_static(
-            "workspace",
-            "workspace_state_updated",
-            &format!("has_workspace={}", has),
-        );
-        self.pending_github_init_path_changed();
     }
     fn get_workspace_diagnostics(&self) -> QString {
         self.with_app(|app| {

@@ -112,7 +112,7 @@ impl SyncBackend {
         }
     }
     fn sync_backend_type(&self) -> QString {
-        self.with_app(|app| app.sync_backend_type()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.sync_backend_type()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_sync_backend_type(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_sync_backend_type(val)).is_ok() {
@@ -120,7 +120,7 @@ impl SyncBackend {
         }
     }
     fn sync_remote_url(&self) -> QString {
-        self.with_app(|app| app.sync_remote_url()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.sync_remote_url()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_sync_remote_url(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_sync_remote_url(val)).is_ok() {
@@ -128,7 +128,7 @@ impl SyncBackend {
         }
     }
     fn sync_branch(&self) -> QString {
-        self.with_app(|app| app.sync_branch()).unwrap_or_else(|_| "main".into())
+        self.with_app(|app| app.sync_branch()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_sync_branch(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_sync_branch(val)).is_ok() {
@@ -152,7 +152,7 @@ impl SyncBackend {
         }
     }
     fn sync_username(&self) -> QString {
-        self.with_app(|app| app.sync_username()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.sync_username()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_sync_username(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_sync_username(val)).is_ok() {
@@ -163,10 +163,10 @@ impl SyncBackend {
         self.with_app(|app| app.has_sync_token()).unwrap_or(false)
     }
     fn sync_operation_state(&self) -> QString {
-        self.with_app(|app| app.sync_operation_state()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.sync_operation_state()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn sync_status(&self) -> QString {
-        self.with_app(|app| app.sync_status()).unwrap_or_else(|_| "not_configured".into())
+        self.with_app(|app| app.sync_status()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn sync_in_progress(&self) -> bool {
         self.with_app(|app| app.sync_in_progress()).unwrap_or(false)
@@ -183,7 +183,7 @@ impl SyncBackend {
         self.with_app(|app| app.sync_can_run()).unwrap_or(false)
     }
     fn sync_block_reason(&self) -> QString {
-        self.with_app(|app| app.sync_block_reason()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.sync_block_reason()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_sync_token(&mut self, token: QString) {
         if self.with_app_mut(|app| app.set_sync_token(token)).is_ok() {
@@ -209,14 +209,14 @@ impl SyncBackend {
             self.sync_status_changed();
             self.sync_action_completed();
         }
-        result.unwrap_or_else(|_| "".into())
+        result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn perform_sync(&mut self) -> QString {
         let result = self.with_app_mut(|app| app.perform_sync());
         if result.is_ok() {
             self.sync_status_changed();
         }
-        result.unwrap_or_else(|_| "".into())
+        result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn perform_sync_diagnostics(&mut self) -> QString {
         let result = self.with_app_mut(|app| app.perform_sync_diagnostics());
@@ -224,7 +224,7 @@ impl SyncBackend {
             self.sync_status_changed();
             self.sync_action_completed();
         }
-        result.unwrap_or_else(|_| "".into())
+        result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn request_auto_sync(&mut self, reason: QString) {
         if self.with_app_mut(|app| app.request_auto_sync(reason)).is_ok() {

@@ -120,24 +120,24 @@ impl LinuxThemeController {
     }
 
     fn is_dark(&self) -> bool {
-        let mode = self.with_app(|app| app.setting_appearance_mode().to_string()).unwrap_or_else(|_| "system".into());
+        let mode = self.with_app(|app| app.setting_appearance_mode().to_string()).unwrap_or_default();
         Self::compute_is_dark(&mode, self.system_is_dark())
     }
 
     fn color_source(&self) -> QString {
-        self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| "built_in".into())
+        self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn selected_builtin_theme_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_builtin_theme_id()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.setting_selected_builtin_theme_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn selected_palette_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_palette_id()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.setting_selected_palette_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn appearance_mode(&self) -> QString {
-        self.with_app(|app| app.setting_appearance_mode()).unwrap_or_else(|_| "system".into())
+        self.with_app(|app| app.setting_appearance_mode()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn system_is_dark(&self) -> bool {
@@ -159,7 +159,7 @@ impl LinuxThemeController {
     fn set_color_source(&mut self, val: QString) {
         let source = val.to_string();
         if source == "saved_palette" {
-            let palette_id = self.with_app(|app| app.setting_selected_palette_id().to_string()).unwrap_or_else(|_| "".into());
+            let palette_id = self.with_app(|app| app.setting_selected_palette_id().to_string()).unwrap_or_default();
             if palette_id.is_empty() {
                 return;
             }

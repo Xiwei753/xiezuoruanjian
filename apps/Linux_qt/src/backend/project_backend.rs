@@ -133,7 +133,7 @@ impl ProjectBackend {
             Ok(arr) => arr,
             Err(_) => crate::backend::json_utils::serde_to_qjson_array(
                 serde_json::from_str(&crate::backend::json_utils::borrow_conflict_error_json())
-                    .unwrap_or(serde_json::json!([]))
+                    .unwrap_or_else(|_| serde_json::json!([{"success": false, "errorCode": "BORROW_CONFLICT"}]))
             ),
         }
     }

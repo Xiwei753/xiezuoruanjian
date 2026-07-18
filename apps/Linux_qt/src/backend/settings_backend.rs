@@ -194,16 +194,16 @@ impl SettingsBackend {
         }
     }
     fn setting_theme_mode(&self) -> QString {
-        self.with_app(|app| app.setting_theme_mode()).unwrap_or_else(|_| "system".into())
+        self.with_app(|app| app.setting_theme_mode()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn setting_monet_color(&self) -> QString {
-        self.with_app(|app| app.setting_monet_color()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.setting_monet_color()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn setting_theme_palette_json(&self) -> QString {
         self.with_app(|app| app.setting_theme_palette_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn setting_color_source(&self) -> QString {
-        self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| "built_in".into())
+        self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_setting_color_source(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_setting_color_source(val)).is_ok() {
@@ -211,7 +211,7 @@ impl SettingsBackend {
         }
     }
     fn setting_appearance_mode(&self) -> QString {
-        self.with_app(|app| app.setting_appearance_mode()).unwrap_or_else(|_| "system".into())
+        self.with_app(|app| app.setting_appearance_mode()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_setting_appearance_mode(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_setting_appearance_mode(val)).is_ok() {
@@ -227,7 +227,7 @@ impl SettingsBackend {
         }
     }
     fn setting_selected_palette_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_palette_id()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.setting_selected_palette_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_setting_selected_palette_id(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_setting_selected_palette_id(val)).is_ok() {
@@ -235,7 +235,7 @@ impl SettingsBackend {
         }
     }
     fn setting_selected_builtin_theme_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_builtin_theme_id()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.setting_selected_builtin_theme_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_setting_selected_builtin_theme_id(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val)).is_ok() {
@@ -267,7 +267,7 @@ impl SettingsBackend {
             } else {
                 "".into()
             }
-        }).unwrap_or_else(|_| "".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn resolved_builtin_themes_json(&self) -> QString {
         self.list_builtin_themes_json()
@@ -546,7 +546,7 @@ impl SettingsBackend {
             } else {
                 QString::from("")
             }
-        }).unwrap_or_else(|_| "".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
 
     fn refresh_theme_data(&mut self) {

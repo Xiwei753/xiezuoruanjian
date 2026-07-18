@@ -207,7 +207,7 @@ impl EditorBackend {
         self.app.with_app_mut(f)
     }
     fn save_status(&self) -> QString {
-        self.with_app(|app| app.save_status()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.save_status()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn set_save_status(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_save_status(val)).is_ok() {
@@ -223,16 +223,16 @@ impl EditorBackend {
         }
     }
     fn error_message(&self) -> QString {
-        self.with_app(|app| app.error_message()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.error_message()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn selected_item_id(&self) -> QString {
-        self.with_app(|app| app.selected_item_id()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.selected_item_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn has_selected_chapter_prop(&self) -> bool {
         self.with_app(|app| app.has_selected_chapter_prop()).unwrap_or(false)
     }
     fn chapter_path(&self) -> QString {
-        self.with_app(|app| app.chapter_path()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.chapter_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn setting_font_size(&self) -> f32 {
         self.with_app(|app| app.setting_font_size()).unwrap_or(16.0)
@@ -306,12 +306,14 @@ impl EditorBackend {
         volume_id: QString,
         chapter_id: QString,
     ) -> QString {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.open_chapter_json(project_id, volume_id, chapter_id)
-        }).unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()));
-        self.selected_item_changed();
-        self.chapter_path_changed();
-        out
+        });
+        if result.is_ok() {
+            self.selected_item_changed();
+            self.chapter_path_changed();
+        }
+        result.unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
     }
     fn open_chapter(
         &mut self,
@@ -336,7 +338,7 @@ impl EditorBackend {
     ) -> QString {
         self.with_app(|app| {
             app.get_chapter_content(project_id, volume_id, chapter_id)
-        }).unwrap_or_else(|_| "".into())
+        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn save_chapter(
         &mut self,
