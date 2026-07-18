@@ -3,15 +3,30 @@ package com.xiwei.sujian.editor.v2.input
 import android.content.Context
 import android.view.View
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
+import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputAdapter(
     context: Context,
     private val mirror: DisplayTextMirror,
-    private val editorView: SujianEditorView
+    private val pipeline: AndroidEditorPipeline
 ) : View(context) {
+
+    companion object {
+        fun placeholder(): AndroidInputAdapter {
+            val dummyContext = android.content.ContextWrapper(null)
+            val dummyMirror = DisplayTextMirror()
+            val dummyPipeline = AndroidEditorPipeline.createPlaceholder()
+            return AndroidInputAdapter(dummyContext, dummyMirror, dummyPipeline)
+        }
+    }
+
+    private var hostView: View? = null
+
+    fun setHostView(view: View) {
+        hostView = view
+    }
 
     private var currentCompositionText: String = ""
     private var previousCompositionText: String = ""
@@ -20,12 +35,13 @@ class AndroidInputAdapter(
     private var isComposing: Boolean = false
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
+        val host = hostView ?: return null
         if (outAttrs != null) {
             outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT or
                     android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
             outAttrs.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION or
                     android.view.inputmethod.EditorInfo.IME_ACTION_NONE
-            return AndroidInputConnection(this, mirror, editorView)
+            return AndroidInputConnection(this, mirror, pipeline, host)
         }
         return null
     }
@@ -33,30 +49,30 @@ class AndroidInputAdapter(
     override fun onCheckIsTextEditor(): Boolean = true
 
     fun sendInsertToKernel(byteOffset: Int, text: String, cause: EditorTransactionCauseDto) {
-        editorView.insertText(byteOffset, text, cause)
+        pipeline.insertText(byteOffset, text, cause)
     }
 
     fun sendDeleteToKernel(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto) {
-        editorView.deleteRange(byteStart, byteEndExclusive, cause)
+        pipeline.deleteRange(byteStart, byteEndExclusive, cause)
     }
 
     fun sendReplaceToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
-        editorView.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+        pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
     }
 
     fun sendSetSelectionToKernel(anchorByteOffset: Int, headByteOffset: Int) {
-        editorView.setSelectionTyped(anchorByteOffset, headByteOffset)
+        pipeline.setSelectionTyped(anchorByteOffset, headByteOffset)
     }
 
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
         if (!isComposing) {
-            val selStart = mirror.getSelectionStartUtf8()
-            val selEnd = mirror.getSelectionEndUtf8()
+            val selStart = mirror.getCommittedSelectionStartUtf8()
+            val selEnd = mirror.getCommittedSelectionEndUtf8()
             if (selStart != selEnd) {
                 compositionReplaceStartUtf8 = selStart
                 compositionReplaceEndUtf8 = selEnd
             } else {
-                compositionReplaceStartUtf8 = mirror.getCursorUtf8()
+                compositionReplaceStartUtf8 = mirror.getCommittedCursorUtf8()
                 compositionReplaceEndUtf8 = compositionReplaceStartUtf8
             }
             isComposing = true
@@ -64,7 +80,7 @@ class AndroidInputAdapter(
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
 
-        val bridge = editorView.kernelBridge
+        val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val intentDto = bridge.compositionUpdateVisualIntent(
                 compositionReplaceStartUtf8.toUInt(),
@@ -74,7 +90,7 @@ class AndroidInputAdapter(
             )
             if (intentDto != null) {
                 val visualIntent = com.xiwei.sujian.editor.v2.mirror.VisualIntent.fromDto(intentDto)
-                editorView.applyCompositionUpdate(visualIntent) {
+                pipeline.applyCompositionUpdate(visualIntent) {
                     mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
                 }
                 applyNewCursorPositionInComposition(newCursorPosition, preeditText)
@@ -84,7 +100,7 @@ class AndroidInputAdapter(
 
         mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
         applyNewCursorPositionInComposition(newCursorPosition, preeditText)
-        editorView.onCompositionUpdated()
+        pipeline.onCompositionUpdated()
     }
 
     private fun applyNewCursorPositionInComposition(newCursorPosition: Int, preeditText: String) {
@@ -135,7 +151,7 @@ class AndroidInputAdapter(
         if (isComposing) {
             mirror.setSelectionInternal(targetUtf8, targetUtf8)
         } else {
-            editorView.setSelectionTyped(targetUtf8, targetUtf8)
+            pipeline.setSelectionTyped(targetUtf8, targetUtf8)
         }
     }
 
@@ -150,16 +166,16 @@ class AndroidInputAdapter(
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
 
-        val bridge = editorView.kernelBridge
+        val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, "")
             if (dto != null) {
-                editorView.applyCompositionCommit(dto)
+                pipeline.applyCompositionCommit(dto)
                 return
             }
         }
 
-        editorView.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+        pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, "", EditorTransactionCauseDto.TYPING_COMMIT)
     }
 
     fun handleCompositionCommitWithText(finalText: String, newCursorPosition: Int) {
@@ -172,11 +188,11 @@ class AndroidInputAdapter(
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
 
-        val bridge = editorView.kernelBridge
+        val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, finalText, "")
             if (dto != null) {
-                editorView.applyCompositionCommit(dto)
+                pipeline.applyCompositionCommit(dto)
                 if (newCursorPosition != 0 && newCursorPosition != 1) {
                     applyNewCursorPosition(newCursorPosition)
                 }
@@ -184,7 +200,7 @@ class AndroidInputAdapter(
             }
         }
 
-        editorView.clearCompositionAndReplace(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+        pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
         if (newCursorPosition != 0 && newCursorPosition != 1) {
             applyNewCursorPosition(newCursorPosition)
         }
@@ -198,7 +214,7 @@ class AndroidInputAdapter(
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
 
-        editorView.applyCompositionUpdate(
+        pipeline.applyCompositionUpdate(
             com.xiwei.sujian.editor.v2.mirror.VisualIntent(
                 cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
                 operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL,

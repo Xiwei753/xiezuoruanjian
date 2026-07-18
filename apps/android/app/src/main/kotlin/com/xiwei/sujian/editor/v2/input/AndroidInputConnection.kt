@@ -2,13 +2,15 @@ package com.xiwei.sujian.editor.v2.input
 
 import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputConnection(
     private val adapter: AndroidInputAdapter,
     private val mirror: DisplayTextMirror,
-    private val editorView: com.xiwei.sujian.editor.v2.host.SujianEditorView
-) : BaseInputConnection(editorView, true) {
+    private val pipeline: AndroidEditorPipeline,
+    private val hostView: View
+) : BaseInputConnection(hostView, true) {
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text.isNullOrEmpty()) return true
@@ -147,13 +149,6 @@ class AndroidInputConnection(
         return true
     }
 
-    private fun isValidUtf8CharBoundary(byteOffset: Int): Boolean {
-        val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
-        if (byteOffset < 0 || byteOffset > textBytes.size) return false
-        if (byteOffset == 0 || byteOffset == textBytes.size) return true
-        return (textBytes[byteOffset].toInt() and 0xC0) != 0x80
-    }
-
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text == null) return true
         adapter.handleCompositionUpdate(text.toString(), newCursorPosition)
@@ -282,11 +277,6 @@ class AndroidInputConnection(
         return pos
     }
 
-    private fun isValidUtf8CharBoundary(byteOffset: Int): Boolean {
-        val textBytes = mirror.getText().toByteArray(Charsets.UTF_8)
-        return isValidUtf8CharBoundaryInBytes(textBytes, byteOffset)
-    }
-
     private fun isValidUtf8CharBoundaryInBytes(bytes: ByteArray, byteOffset: Int): Boolean {
         if (byteOffset < 0 || byteOffset > bytes.size) return false
         if (byteOffset == 0 || byteOffset == bytes.size) return true
@@ -294,12 +284,11 @@ class AndroidInputConnection(
     }
 
     private fun notifySelectionChanged() {
-        val imm = editorView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager ?: return
+        val imm = hostView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager ?: return
         val selStart = mirror.getSelectionStartUtf16()
         val selEnd = mirror.getSelectionEndUtf16()
         val candidatesStart = mirror.getCompositionRangeUtf16()?.first ?: -1
         val candidatesEnd = mirror.getCompositionRangeUtf16()?.second ?: -1
-        imm.updateSelection(editorView, selStart, selEnd, candidatesStart, candidatesEnd)
+        imm.updateSelection(hostView, selStart, selEnd, candidatesStart, candidatesEnd)
     }
-}
 }

@@ -15,7 +15,10 @@ import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.render.AndroidRenderFrame
 import com.xiwei.sujian.editor.v2.render.AndroidRenderer
 import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
+import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
+import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import android.view.View
+import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidEditorPipeline private constructor(
     val mirror: DisplayTextMirror,
@@ -24,7 +27,8 @@ class AndroidEditorPipeline private constructor(
     val resourceStore: VisualResourceStore,
     val coordinator: VisualTransactionCoordinator,
     val renderer: AndroidRenderer,
-    val inputAdapter: AndroidInputAdapter
+    var inputAdapter: AndroidInputAdapter,
+    var kernelBridge: EditorKernelBridge?
 ) {
 
     companion object {
@@ -34,9 +38,108 @@ class AndroidEditorPipeline private constructor(
             val resourceStore = VisualResourceStore()
             val coordinator = VisualTransactionCoordinator(resourceStore)
             val renderer = AndroidRenderer()
-            val inputAdapter = AndroidInputAdapter(hostView.context, mirror, hostView)
-            return AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, inputAdapter)
+            val pipeline = AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, AndroidInputAdapter.placeholder(), null)
+            val inputAdapter = AndroidInputAdapter(hostView.context, mirror, pipeline)
+            inputAdapter.setHostView(hostView)
+            pipeline.inputAdapter = inputAdapter
+            return pipeline
         }
+
+        internal fun createPlaceholder(): AndroidEditorPipeline {
+            val mirror = DisplayTextMirror()
+            val textPaint = Paint()
+            val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
+            val visualPlanner = AndroidVisualPlanner()
+            val resourceStore = VisualResourceStore()
+            val coordinator = VisualTransactionCoordinator(resourceStore)
+            val renderer = AndroidRenderer()
+            return AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, AndroidInputAdapter.placeholder(), null)
+        }
+    }
+
+    private var autoIndentEnabled: Boolean = false
+    private var autoIndentWidthSp: Float = 2f
+
+    fun loadText(text: String, cursorUtf8: Int): LoadTextResult {
+        val bridge = kernelBridge ?: return LoadTextResult.Failed
+        val dto = bridge.loadText(text, cursorUtf8) ?: return LoadTextResult.Failed
+        val result = EditResult.fromDto(dto)
+        mirror.loadFromSnapshot(text, cursorUtf8, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
+        resetAfterLoad()
+        return LoadTextResult.Loaded(result)
+    }
+
+    fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): EditResult? {
+        val bridge = kernelBridge ?: return null
+        if (autoIndentEnabled && text == "\n") {
+            val indentPrefix = computeAutoIndentPrefix()
+            val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return null
+            val result = EditResult.fromDto(dto)
+            applyEditResult(result)
+            return result
+        }
+        val dto = bridge.insert(byteOffset, text, cause, mirror.getRevision()) ?: return null
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result)
+        return result
+    }
+
+    fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE): EditResult? {
+        val bridge = kernelBridge ?: return null
+        val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return null
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result)
+        return result
+    }
+
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null): EditResult? {
+        val bridge = kernelBridge ?: return null
+        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return null
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result, beforePatch)
+        return result
+    }
+
+    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): EditResult? {
+        val bridge = kernelBridge ?: return null
+        val dto = bridge.setSelection(anchorByteOffset, headByteOffset, mirror.getRevision()) ?: return null
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result)
+        return result
+    }
+
+    fun performUndo(): EditResult? {
+        val bridge = kernelBridge ?: return null
+        val dto = bridge.undo(mirror.getRevision()) ?: return null
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result)
+        return result
+    }
+
+    fun performRedo(): EditResult? {
+        val bridge = kernelBridge ?: return null
+        val dto = bridge.redo(mirror.getRevision()) ?: return null
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result)
+        return result
+    }
+
+    fun replaceAll(searchStr: String, replaceStr: String): EditResult? {
+        val bridge = kernelBridge ?: return null
+        val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return null
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result)
+        return result
+    }
+
+    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto): EditResult {
+        val result = EditResult.fromDto(dto)
+        applyEditResult(result)
+        return result
+    }
+
+    fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto): EditResult? {
+        return replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
     }
 
     fun applyEditResult(
@@ -89,6 +192,10 @@ class AndroidEditorPipeline private constructor(
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
         coordinator.submitTransaction(transaction)
+    }
+
+    fun onCompositionUpdated() {
+        layoutEngine.requestLayout()
     }
 
     fun computeFrame(
@@ -164,9 +271,139 @@ class AndroidEditorPipeline private constructor(
         }
     }
 
+    fun reloadFromKernel(): Boolean {
+        val bridge = kernelBridge ?: return false
+        val snapshot = bridge.sessionSnapshot() ?: return false
+        val cursorUtf8 = snapshot.cursor.toInt()
+        val selAnchorUtf8 = snapshot.selectionAnchor.toInt()
+        val selHeadUtf8 = cursorUtf8
+        mirror.loadFromSnapshot(
+            snapshot.text,
+            cursorUtf8,
+            snapshot.revision.toLong(),
+            selAnchorUtf8,
+            selHeadUtf8
+        )
+        cancelActiveTransaction()
+        releaseAllResources()
+        return true
+    }
+
+    fun getText(): String = mirror.getText()
+
+    fun getRevision(): Long = mirror.getRevision()
+
+    fun getCursorUtf8(): Int = mirror.getCursorUtf8()
+
+    fun getCursorUtf16(): Int = mirror.getCursorUtf16()
+
+    fun getSelectionStartUtf8(): Int = mirror.getSelectionStartUtf8()
+
+    fun getSelectionEndUtf8(): Int = mirror.getSelectionEndUtf8()
+
+    fun getSelectionStartUtf16(): Int = mirror.getSelectionStartUtf16()
+
+    fun getSelectionEndUtf16(): Int = mirror.getSelectionEndUtf16()
+
+    fun getLengthUtf16(): Int = mirror.getLengthUtf16()
+
+    fun getCommittedCursorUtf8(): Int = mirror.getCommittedCursorUtf8()
+
+    fun getCommittedSelectionStartUtf8(): Int = mirror.getCommittedSelectionStartUtf8()
+
+    fun getCommittedSelectionEndUtf8(): Int = mirror.getCommittedSelectionEndUtf8()
+
+    fun getCommittedText(): String = mirror.getCommittedText()
+
+    fun setAutoIndent(enabled: Boolean, widthSp: Float) {
+        autoIndentEnabled = enabled
+        autoIndentWidthSp = widthSp
+    }
+
+    fun isAutoIndentEnabled(): Boolean = autoIndentEnabled
+
+    fun getAutoIndentWidthSp(): Float = autoIndentWidthSp
+
+    private fun computeAutoIndentPrefix(): String {
+        if (!autoIndentEnabled) return ""
+        val indexMap = AndroidTextIndexMap(mirror)
+        val cursorUtf8 = mirror.getCursorUtf8()
+        val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
+        val text = mirror.getText()
+        val safeCursorUtf16 = cursorUtf16.coerceIn(0, text.length)
+        val lineStartUtf16 = if (safeCursorUtf16 > 0) text.lastIndexOf('\n', safeCursorUtf16 - 1) + 1 else 0
+        val linePrefix = text.substring(lineStartUtf16, safeCursorUtf16)
+        val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
+        return indent
+    }
+
+    fun previousGraphemeByteLen(offset: Int): Int {
+        val indexMap = AndroidTextIndexMap(mirror)
+        val utf16Offset = indexMap.utf8ToUtf16(offset)
+        if (utf16Offset <= 0) return 0
+        val iter = android.icu.text.BreakIterator.getCharacterInstance()
+        iter.setText(mirror.getText())
+        val prev = iter.preceding(utf16Offset)
+        if (prev == android.icu.text.BreakIterator.DONE) return 0
+        val prevUtf8 = indexMap.utf16ToUtf8(prev)
+        return offset - prevUtf8
+    }
+
+    fun nextGraphemeByteLen(offset: Int): Int {
+        val indexMap = AndroidTextIndexMap(mirror)
+        val utf16Offset = indexMap.utf8ToUtf16(offset)
+        if (utf16Offset >= mirror.getLengthUtf16()) return 0
+        val iter = android.icu.text.BreakIterator.getCharacterInstance()
+        iter.setText(mirror.getText())
+        val next = iter.following(utf16Offset)
+        if (next == android.icu.text.BreakIterator.DONE) return 0
+        val nextUtf8 = indexMap.utf16ToUtf8(next)
+        return nextUtf8 - offset
+    }
+
+    fun getLayoutMaxScrollY(viewHeight: Int): Float {
+        val layout = layoutEngine.getLayout() ?: return 0f
+        return (layout.height - viewHeight).coerceAtLeast(0).toFloat()
+    }
+
+    fun getLayoutLineForVertical(y: Int): Int {
+        val layout = layoutEngine.getLayout() ?: return 0
+        return layout.getLineForVertical(y)
+    }
+
+    fun getLayoutOffsetForHorizontal(line: Int, x: Float): Int {
+        val layout = layoutEngine.getLayout() ?: return 0
+        return layout.getOffsetForHorizontal(line, x)
+    }
+
+    fun getLayoutLineTop(line: Int): Int {
+        val layout = layoutEngine.getLayout() ?: return 0
+        return layout.getLineTop(line)
+    }
+
+    fun getLayoutLineBottom(line: Int): Int {
+        val layout = layoutEngine.getLayout() ?: return 0
+        return layout.getLineBottom(line)
+    }
+
+    fun getLayoutLineForOffset(offsetUtf16: Int): Int {
+        val layout = layoutEngine.getLayout() ?: return 0
+        return layout.getLineForOffset(offsetUtf16)
+    }
+
+    fun getLayoutPrimaryHorizontal(offsetUtf16: Int): Float {
+        val layout = layoutEngine.getLayout() ?: return 0f
+        return layout.getPrimaryHorizontal(offsetUtf16)
+    }
+
     sealed class PipelineOutput {
         data class Edited(val result: EditResult) : PipelineOutput()
         object NeedReload : PipelineOutput()
         object StaleOrInvalid : PipelineOutput()
+    }
+
+    sealed class LoadTextResult {
+        data class Loaded(val result: EditResult) : LoadTextResult()
+        object Failed : LoadTextResult()
     }
 }
