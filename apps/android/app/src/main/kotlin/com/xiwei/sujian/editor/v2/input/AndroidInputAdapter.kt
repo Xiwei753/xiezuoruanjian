@@ -1,6 +1,5 @@
 package com.xiwei.sujian.editor.v2.input
 
-import android.content.Context
 import android.view.View
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
@@ -8,10 +7,9 @@ import com.xiwei.sujian.editor.v2.mirror.EditResult
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class AndroidInputAdapter(
-    context: Context,
     private val mirror: DisplayTextMirror,
     private val pipeline: AndroidEditorPipeline
-) : View(context) {
+) {
 
     var onPipelineOutput: ((AndroidEditorPipeline.PipelineOutput) -> Unit)? = null
     var onCompositionVisualUpdate: (() -> Unit)? = null
@@ -22,6 +20,8 @@ class AndroidInputAdapter(
         hostView = view
     }
 
+    fun getHostView(): View? = hostView
+
     private var currentCompositionText: String = ""
     private var previousCompositionText: String = ""
     private var compositionReplaceStartUtf8: Int = 0
@@ -29,7 +29,7 @@ class AndroidInputAdapter(
     private var isComposing: Boolean = false
     private var compositionCursorUtf16: Int = 0
 
-    override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
+    fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
         val host = hostView ?: return null
         if (outAttrs != null) {
             outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT or
@@ -40,8 +40,6 @@ class AndroidInputAdapter(
         }
         return null
     }
-
-    override fun onCheckIsTextEditor(): Boolean = true
 
     fun sendInsertToKernel(byteOffset: Int, text: String, cause: EditorTransactionCauseDto) {
         val output = pipeline.insertText(byteOffset, text, cause)

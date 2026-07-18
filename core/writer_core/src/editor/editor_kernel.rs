@@ -301,11 +301,17 @@ impl EditorKernel {
     }
 
     fn clamp_to_char_boundary(text: &str, offset: usize) -> usize {
-        let mut offset = offset.min(text.len());
-        while offset > 0 && !text.is_char_boundary(offset) {
-            offset -= 1;
+        if offset >= text.len() {
+            return text.len();
         }
-        offset
+        if text.is_char_boundary(offset) {
+            return offset;
+        }
+        let mut clamped = offset;
+        while clamped > 0 && !text.is_char_boundary(clamped) {
+            clamped -= 1;
+        }
+        clamped
     }
 
     pub fn set_animation_duration_ms(&mut self, duration_ms: u64) {
@@ -1229,9 +1235,14 @@ impl EditorKernel {
 
         let old_text = self.text.clone();
         self.text = text;
-        let cursor = Self::clamp_to_char_boundary(&self.text, cursor);
-        self.cursor = cursor;
-        self.selection_anchor = cursor;
+        let was_cursor_clamped = !self.text.is_char_boundary(cursor);
+        let resolved_cursor = if was_cursor_clamped {
+            Self::clamp_to_char_boundary(&self.text, cursor)
+        } else {
+            cursor
+        };
+        self.cursor = resolved_cursor;
+        self.selection_anchor = resolved_cursor;
         self.revision = self.revision.saturating_add(1);
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -1261,15 +1272,27 @@ impl EditorKernel {
             },
         };
 
-        EditorEditOutcome::Applied(EditorEditResult {
-            transaction_id: self.take_transaction_id(),
-            base_revision,
-            new_revision,
-            display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
-            visual_intent,
-        })
+        if was_cursor_clamped {
+            EditorEditOutcome::InvalidOffset(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision,
+                display_patches,
+                old_selection_byte_range: old_selection,
+                new_selection_byte_range: new_selection,
+                visual_intent,
+            })
+        } else {
+            EditorEditOutcome::Applied(EditorEditResult {
+                transaction_id: self.take_transaction_id(),
+                base_revision,
+                new_revision,
+                display_patches,
+                old_selection_byte_range: old_selection,
+                new_selection_byte_range: new_selection,
+                visual_intent,
+            })
+        }
     }
 
     /// 创建 CompositionUpdate 事务 — 预输入更新。

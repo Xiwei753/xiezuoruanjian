@@ -40,7 +40,7 @@ class AndroidEditorPipeline private constructor(
             val coordinator = VisualTransactionCoordinator(resourceStore)
             val renderer = AndroidRenderer()
             val pipeline = AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, null, null)
-            val inputAdapter = AndroidInputAdapter(hostView.context, mirror, pipeline)
+            val inputAdapter = AndroidInputAdapter(mirror, pipeline)
             inputAdapter.setHostView(hostView)
             pipeline.inputAdapter = inputAdapter
             return pipeline
@@ -394,7 +394,7 @@ class AndroidEditorPipeline private constructor(
         return inputAdapter?.onCreateInputConnection(outAttrs)
     }
 
-    fun getInputAdapterView(): View = inputAdapter ?: View(android.content.ContextWrapper(null))
+    fun getInputAdapterHostView(): View? = inputAdapter?.getHostView()
 
     sealed class PipelineOutput {
         data class Edited(val result: EditResult) : PipelineOutput()

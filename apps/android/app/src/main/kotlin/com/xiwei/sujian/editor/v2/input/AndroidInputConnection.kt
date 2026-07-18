@@ -127,15 +127,16 @@ class AndroidInputConnection(
     private fun handleCompositionDeleteCodePoints(beforeLength: Int, afterLength: Int): Boolean {
         val compositionText = adapter.getCompositionText()
         if (compositionText.isEmpty()) return true
+        val cursorInComposition = adapter.getCompositionCursorOffset() ?: compositionText.length
 
-        var deleteStart = compositionText.length
+        var deleteStart = cursorInComposition
         var count = beforeLength
         while (count > 0 && deleteStart > 0) {
             deleteStart = compositionText.offsetByCodePoints(deleteStart, -1)
             count--
         }
 
-        var deleteEnd = compositionText.length
+        var deleteEnd = cursorInComposition
         count = afterLength
         while (count > 0 && deleteEnd < compositionText.length) {
             deleteEnd = compositionText.offsetByCodePoints(deleteEnd, 1)
