@@ -4,10 +4,7 @@ use writer_core::editor::{
 };
 use super::buffer::{clamp_to_char_boundary, normalize_plain_text};
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
-use super::cursor_controller::CursorController;
 use super::texture_cache::TextureCache;
-use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::EditorLayoutSnapshot;
 use super::PreeditAttribute;
 use writer_core::editor::CompositionSession;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
@@ -139,11 +136,7 @@ pub(crate) struct LinuxEditorPipeline {
     composition: CompositionState,
     engine: writer_core::editor::EditorEngine,
     animation_coordinator: LinuxEditorAnimationCoordinator,
-    cursor_ctrl: CursorController,
     texture_cache: TextureCache,
-    layout_revision: LayoutRevision,
-    current_layout_snapshot: Option<EditorLayoutSnapshot>,
-    previous_layout_snapshot: Option<EditorLayoutSnapshot>,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
     text_revision: u64,
     visual_revision: u64,
@@ -163,11 +156,7 @@ impl LinuxEditorPipeline {
             composition: CompositionState::new(),
             engine: writer_core::editor::EditorEngine::new(),
             animation_coordinator: LinuxEditorAnimationCoordinator::new(),
-            cursor_ctrl: CursorController::new(),
             texture_cache: TextureCache::new(),
-            layout_revision: LayoutRevision::default(),
-            current_layout_snapshot: None,
-            previous_layout_snapshot: None,
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
             text_revision: 0,
             visual_revision: 0,
@@ -220,14 +209,6 @@ impl LinuxEditorPipeline {
         &mut self.animation_coordinator
     }
 
-    pub fn cursor_ctrl(&self) -> &CursorController {
-        &self.cursor_ctrl
-    }
-
-    pub fn cursor_ctrl_mut(&mut self) -> &mut CursorController {
-        &mut self.cursor_ctrl
-    }
-
     pub fn texture_cache(&self) -> &TextureCache {
         &self.texture_cache
     }
@@ -262,30 +243,6 @@ impl LinuxEditorPipeline {
 
     pub fn bump_text_revision(&mut self) {
         self.text_revision = self.text_revision.wrapping_add(1);
-    }
-
-    pub fn layout_revision(&self) -> &LayoutRevision {
-        &self.layout_revision
-    }
-
-    pub fn layout_revision_mut(&mut self) -> &mut LayoutRevision {
-        &mut self.layout_revision
-    }
-
-    pub fn current_layout_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
-        self.current_layout_snapshot.as_ref()
-    }
-
-    pub fn set_current_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {
-        self.current_layout_snapshot = snapshot;
-    }
-
-    pub fn previous_layout_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
-        self.previous_layout_snapshot.as_ref()
-    }
-
-    pub fn set_previous_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {
-        self.previous_layout_snapshot = snapshot;
     }
 
     pub fn animation_enabled(&self) -> bool {
