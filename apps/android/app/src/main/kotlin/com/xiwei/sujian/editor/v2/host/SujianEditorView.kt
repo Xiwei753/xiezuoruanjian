@@ -14,11 +14,8 @@ import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
-import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
-import com.xiwei.sujian.editor.v2.visual.VisualTransactionCoordinator
 import com.xiwei.sujian.editor.v2.render.AndroidRenderer
+import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import uniffi.writer_core.EditorEditResultDto
 
 class SujianEditorView @JvmOverloads constructor(
@@ -32,10 +29,7 @@ class SujianEditorView @JvmOverloads constructor(
         textSize = 48f
         isAntiAlias = true
     }
-    private val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
-    private val visualPlanner = AndroidVisualPlanner()
-    private val resourceStore = VisualResourceStore()
-    private val coordinator = VisualTransactionCoordinator(resourceStore)
+    private val pipeline = AndroidEditorPipeline.create(mirror, textPaint)
     private val renderer = AndroidRenderer()
     private val inputAdapter = AndroidInputAdapter(context, mirror, this)
 
@@ -54,9 +48,7 @@ class SujianEditorView @JvmOverloads constructor(
         val dto = bridge.loadText(text, cursorUtf8) ?: return
         val result = EditResult.fromDto(dto)
         mirror.loadFromSnapshot(text, cursorUtf8, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
-        coordinator.cancelActiveTransaction()
-        resourceStore.releaseAll()
-        visualPlanner.resetOldRevision()
+        pipeline.resetAfterLoad()
         if (width > 0) {
             updateLayoutConfig()
         } else {
@@ -114,43 +106,25 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun applyEditResultFull(result: EditResult, beforePatch: (() -> Unit)? = null, suppressContentCallback: Boolean = false) {
-        if (result.isStale() || result.isInvalid()) {
-            if (result.isStale()) {
+        val output = pipeline.applyEditResult(result, beforePatch)
+        when (output) {
+            is AndroidEditorPipeline.PipelineOutput.Edited -> {
+                updateMaxScroll()
+                scrollY = scrollY.coerceIn(0f, maxScrollY)
+                if (!suppressContentCallback && output.result.displayPatches.isNotEmpty()) {
+                    onContentChanged?.invoke(mirror.getText())
+                }
+                invalidate()
+            }
+            is AndroidEditorPipeline.PipelineOutput.NeedReload -> {
                 reloadFromKernel()
             }
-            return
+            is AndroidEditorPipeline.PipelineOutput.StaleOrInvalid -> {
+                if (result.isStale()) {
+                    reloadFromKernel()
+                }
+            }
         }
-        if (result.displayPatches.isEmpty() && result.baseRevision != result.newRevision) {
-            reloadFromKernel()
-            return
-        }
-        if (result.displayPatches.isEmpty() && result.baseRevision != mirror.getRevision()) {
-            reloadFromKernel()
-            return
-        }
-
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
-
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
-        if (beforePatch != null) {
-            beforePatch.invoke()
-        }
-        mirror.applyEditResult(result)
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
-        coordinator.submitTransaction(transaction)
-        updateMaxScroll()
-        scrollY = scrollY.coerceIn(0f, maxScrollY)
-        if (!suppressContentCallback && result.displayPatches.isNotEmpty()) {
-            onContentChanged?.invoke(mirror.getText())
-        }
-        invalidate()
     }
 
     private fun reloadFromKernel() {
@@ -166,8 +140,8 @@ class SujianEditorView @JvmOverloads constructor(
             selAnchorUtf8,
             selHeadUtf8
         )
-        coordinator.cancelActiveTransaction()
-        resourceStore.releaseAll()
+        pipeline.cancelActiveTransaction()
+        pipeline.releaseAllResources()
         updateLayoutConfig()
         if (mirror.getText().isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
@@ -175,25 +149,14 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun onCompositionUpdated() {
-        layoutEngine.requestLayout()
+        pipeline.layoutEngine.requestLayout()
         updateMaxScroll()
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
     }
 
     fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
-        mirrorUpdate?.invoke()
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
-        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
-        coordinator.submitTransaction(transaction)
+        pipeline.applyCompositionUpdate(visualIntent, mirrorUpdate)
         updateMaxScroll()
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
@@ -210,7 +173,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun setLineSpacingMultiplier(multiplier: Float) {
         lineSpacingMultiplier = multiplier
-        layoutEngine.setLineSpacingMultiplier(multiplier)
+        pipeline.layoutEngine.setLineSpacingMultiplier(multiplier)
         updateLayoutConfig()
     }
 
@@ -223,7 +186,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun scrollToSelection() {
-        val layout = layoutEngine.getLayout() ?: return
+        val layout = pipeline.layoutEngine.getLayout() ?: return
         val cursorUtf16 = mirror.getCursorUtf16()
         if (cursorUtf16 < 0 || cursorUtf16 > mirror.getLengthUtf16()) return
         val line = layout.getLineForOffset(cursorUtf16)
@@ -278,15 +241,14 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun updateMaxScroll() {
-        val layout = layoutEngine.getLayout()
+        val layout = pipeline.layoutEngine.getLayout()
         if (layout != null) {
             maxScrollY = (layout.height - height).coerceAtLeast(0).toFloat()
         }
     }
 
     private fun updateLayoutConfig() {
-        layoutEngine.setWidth(width.toFloat())
-        layoutEngine.requestLayout()
+        pipeline.updateLayout(width.toFloat())
         updateMaxScroll()
         scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
@@ -297,14 +259,14 @@ class SujianEditorView @JvmOverloads constructor(
         canvas.save()
         canvas.translate(-scrollX, -scrollY)
         val frameTimeMs = System.nanoTime() / 1_000_000
-        val layout = layoutEngine.getLayout()
+        val layout = pipeline.layoutEngine.getLayout()
         if (layout != null) {
-            val rev = layoutEngine.getCurrentRevision()
+            val rev = pipeline.layoutEngine.getCurrentRevision()
             val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
                 val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
                 Pair(indexMap.utf8ToUtf16(startUtf8), indexMap.utf8ToUtf16(endUtf8))
             }
-            val frame = coordinator.computeFrame(
+            val frame = pipeline.computeFrame(
                 frameTimeMs,
                 cursorUtf16 = rev?.cursorUtf16 ?: mirror.getCursorUtf16(),
                 cursorX = rev?.cursorX ?: 0f,
@@ -323,7 +285,7 @@ class SujianEditorView @JvmOverloads constructor(
             renderer.draw(canvas, layout, frame)
         }
         canvas.restore()
-        if (coordinator.hasActiveAnimation()) {
+        if (pipeline.hasActiveAnimation()) {
             invalidate()
         }
     }
@@ -379,7 +341,7 @@ class SujianEditorView @JvmOverloads constructor(
     private var isDragging: Boolean = false
 
     private fun handleTap(x: Float, y: Float) {
-        val layout = layoutEngine.getLayout() ?: return
+        val layout = pipeline.layoutEngine.getLayout() ?: return
         val line = layout.getLineForVertical(y.toInt())
         val offset = layout.getOffsetForHorizontal(line, x)
         val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
@@ -457,8 +419,8 @@ class SujianEditorView @JvmOverloads constructor(
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
         if (!hasWindowFocus) {
-            coordinator.cancelActiveTransaction()
-            resourceStore.releaseAll()
+            pipeline.cancelActiveTransaction()
+            pipeline.releaseAllResources()
         }
     }
 
@@ -467,7 +429,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun getMirror(): DisplayTextMirror = mirror
-    fun getLayoutEngine(): AndroidLayoutEngine = layoutEngine
+    fun getLayoutEngine(): AndroidLayoutEngine = pipeline.layoutEngine
     fun getRenderer(): AndroidRenderer = renderer
     fun getInputAdapter(): AndroidInputAdapter = inputAdapter
 
@@ -482,7 +444,7 @@ class SujianEditorView @JvmOverloads constructor(
         bridge.setAnimationEnabled(enabled)
         bridge.setAnimationDurationMs(durationMs)
         if (!enabled) {
-            coordinator.cancelActiveTransaction()
+            pipeline.cancelActiveTransaction()
         }
     }
 
@@ -549,7 +511,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun notifyCursorAnchorInfo() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
-        val layout = layoutEngine.getLayout() ?: return
+        val layout = pipeline.layoutEngine.getLayout() ?: return
         val cursorUtf16 = mirror.getCursorUtf16()
         if (cursorUtf16 < 0 || cursorUtf16 > mirror.getLengthUtf16()) return
 
