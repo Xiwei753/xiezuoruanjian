@@ -26,7 +26,9 @@ class AndroidInputConnection(
         val byteStart = selStart
         val byteEnd = selEnd
         val originalText = if (byteStart != byteEnd) extractCommittedUtf8Text(byteStart, byteEnd) else ""
-        val (resultingAnchor, resultingHead) = computeResultingSelectionUtf8(newCursorPosition, byteStart, byteEnd, commitStr)
+        val (resultingAnchor, resultingHead) = AndroidTextIndexMap.computeResultingSelectionUtf8(
+            mirror.getCommittedText(), newCursorPosition, byteStart, byteEnd, commitStr
+        )
         adapter.sendCommitTextToKernel(byteStart, byteEnd, commitStr, originalText, resultingAnchor, resultingHead, EditorTransactionCauseDto.TYPING)
         notifySelectionChanged()
         return true
