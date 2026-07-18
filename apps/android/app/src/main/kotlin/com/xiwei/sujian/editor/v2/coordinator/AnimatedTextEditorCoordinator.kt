@@ -124,6 +124,10 @@ class AnimatedTextEditorCoordinator(
 
     fun getSharedEditorView(): SujianEditorView? = sharedEditorView
 
+    fun setSharedEditorView(view: SujianEditorView) {
+        sharedEditorView = view
+    }
+
     fun releaseHost() {
         if (activeTargetId != null) {
             cancelActiveEdit()

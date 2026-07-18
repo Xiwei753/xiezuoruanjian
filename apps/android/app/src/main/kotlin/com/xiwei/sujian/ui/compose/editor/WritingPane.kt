@@ -10,6 +10,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -24,10 +25,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
-import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
+import com.xiwei.sujian.editor.v2.coordinator.EditingState
+import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
-import com.xiwei.sujian.editor.v2.host.UniFFIEditorKernelBridge
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
 import com.xiwei.sujian.ui.compose.theme.BindEditorThemeColors
@@ -54,6 +57,15 @@ fun WritingPane(
     var lastAutoIndentEnabled by remember { mutableStateOf(false) }
     var lastAutoIndentWidth by remember { mutableStateOf(0f) }
     var lastCoordinatedAnimEnabled by remember { mutableStateOf(false) }
+
+    val coordinator = remember {
+        val bridge = BridgeProvider.getAppServiceBridge(context)
+        AnimatedTextEditorCoordinator(context, bridge)
+    }
+
+    val targetId = remember(projectId, volumeId, chapterId) {
+        "chapter-body:$projectId:$volumeId:$chapterId"
+    }
 
     LaunchedEffect(projectId, volumeId, chapterId) {
         viewModel.switchChapter(projectId, volumeId, chapterId, chapterTitle)
@@ -94,6 +106,42 @@ fun WritingPane(
         }
     }
 
+    val target = remember(targetId) {
+        EditableTextTarget(
+            targetId = targetId,
+            profile = TextEditorProfile.DocumentBody,
+            initialText = "",
+            isPersistent = true,
+            onTextChanged = { newText ->
+                if (!isApplyingExternalContent) {
+                    viewModel.onContentChanged(newText)
+                }
+            },
+            onCommit = { finalText ->
+                if (!isApplyingExternalContent) {
+                    viewModel.onContentChanged(finalText)
+                }
+            },
+            onCancel = {}
+        )
+    }
+
+    DisposableEffect(targetId) {
+        coordinator.registerTarget(target)
+        onDispose {
+            coordinator.unregisterTarget(targetId)
+        }
+    }
+
+    LaunchedEffect(uiState.content, uiState.loading) {
+        if (!uiState.loading && uiState.content.isNotEmpty()) {
+            val view = editorView
+            if (view != null && coordinator.getEditingState() == EditingState.IDLE) {
+                coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+            }
+        }
+    }
+
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
@@ -131,27 +179,24 @@ fun WritingPane(
         } else {
             AndroidView(
                 factory = { ctx ->
-                    SujianEditorView(ctx).apply {
-                        layoutParams = android.widget.FrameLayout.LayoutParams(
-                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                            android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-                        )
-                        editorView = this
+                    val view = coordinator.getSharedEditorView()
+                        ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
+                    view.layoutParams = android.widget.FrameLayout.LayoutParams(
+                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                    editorView = view
 
-                        try {
-                            val appServiceBridge = BridgeProvider.getAppServiceBridge(ctx)
-                            kernelBridge = UniFFIEditorKernelBridge(appServiceBridge)
-                        } catch (_: Exception) { }
-
-                        onContentChanged = { newText ->
-                            if (!isApplyingExternalContent) {
-                                viewModel.onContentChanged(newText)
-                            }
+                    view.onContentChanged = { newText ->
+                        if (!isApplyingExternalContent) {
+                            viewModel.onContentChanged(newText)
                         }
                     }
+
+                    view
                 },
                 update = { view ->
-                    if (view.getText() != uiState.content) {
+                    if (view.getText() != uiState.content && uiState.content.isNotEmpty()) {
                         isApplyingExternalContent = true
                         view.setText(uiState.content)
                         isApplyingExternalContent = false
