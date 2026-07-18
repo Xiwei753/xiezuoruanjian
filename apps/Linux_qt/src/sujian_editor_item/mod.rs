@@ -259,7 +259,6 @@ pub struct SujianEditorItem {
 
     pipeline: pipeline::LinuxEditorPipeline,
     buffer: EditorBuffer,
-    engine: EditorEngine,
     current_content_height: f32,
     content_height_dirty: Cell<bool>,
     current_editor_enabled: bool,
@@ -399,7 +398,6 @@ impl Default for SujianEditorItem {
 
             pipeline: pipeline::LinuxEditorPipeline::new(),
             buffer: EditorBuffer::default(),
-            engine: EditorEngine::new(),
             current_content_height: 0.0,
             content_height_dirty: Cell::new(false),
             current_editor_enabled: true,

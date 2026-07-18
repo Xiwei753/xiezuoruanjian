@@ -130,7 +130,7 @@ impl SujianEditorItem {
                     })
                 });
 
-            let transaction = self.engine.create_transaction(
+            let transaction = self.pipeline.engine().create_transaction(
                 &old.text, &new.text,
                 EditorSelection {
                     anchor: EditorCursor::new(&old.text, old.selection_anchor),
@@ -347,7 +347,7 @@ impl SujianEditorItem {
                     })
                 });
 
-            let transaction = self.engine.create_transaction(
+            let transaction = self.pipeline.engine().create_transaction(
                 &old.text, &new.text,
                 EditorSelection {
                     anchor: EditorCursor::new(&old.text, old.selection_anchor),

@@ -11,7 +11,7 @@ impl SujianEditorItem {
         cause: EditorTransactionCause,
         emit: bool,
     ) -> Option<EditorVisualTransaction> {
-        let transaction = self.engine.create_transaction(
+        let transaction = self.pipeline.engine().create_transaction(
             &old.text,
             &new.text,
             EditorSelection {
@@ -24,7 +24,7 @@ impl SujianEditorItem {
             },
             cause,
         );
-        let mut vt = self.engine.visual_transaction(&transaction);
+        let mut vt = self.pipeline.engine_mut().visual_transaction(&transaction);
 
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref mut vt) = vt {
