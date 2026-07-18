@@ -223,15 +223,7 @@ class AndroidInputConnection(
                 val preeditCursorUtf16 = if (compRangeUtf16 != null) {
                     val compStartUtf16 = compRangeUtf16.first
                     val compEndUtf16 = compRangeUtf16.second
-                    val preeditUtf16Len = adapter.getCompositionText().let { text ->
-                        var count = 0; var i = 0
-                        while (i < text.length) {
-                            val cp = text.codePointAt(i)
-                            count += Character.charCount(cp)
-                            i += Character.charCount(cp)
-                        }
-                        count
-                    }
+                    val preeditUtf16Len = AndroidTextIndexMap.countUtf16CodeUnits(adapter.getCompositionText())
                     when {
                         start < compStartUtf16 -> 0
                         start > compEndUtf16 -> preeditUtf16Len
