@@ -512,6 +512,24 @@ pub struct EditorVisualIntentDto {
     pub coordinated_cursor: CoordinatedCursorDto,
 }
 
+impl EditorVisualIntentDto {
+    pub fn default_fallback() -> Self {
+        Self {
+            cause: EditorTransactionCauseDto::Programmatic,
+            operation_kind: EditorOperationKindDto::CursorOnly,
+            old_affected_byte_ranges: vec![],
+            new_affected_byte_ranges: vec![],
+            animation_mode: AnimationModeDto::SystemSuppressed,
+            duration_ms: 0,
+            coordinated_cursor: CoordinatedCursorDto {
+                old_byte_offset: 0,
+                new_byte_offset: 0,
+                should_animate: false,
+            },
+        }
+    }
+}
+
 impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {
     fn from(vi: crate::editor::EditorVisualIntent) -> Self {
         Self {
@@ -587,6 +605,24 @@ pub struct CompositionSessionDto {
     pub visual_intent: EditorVisualIntentDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_session: Option<CompositionSessionDto>,
+}
+
+impl EditorEditResultDto {
+    pub fn stale_fallback() -> Self {
+        Self {
+            outcome: EditorEditOutcomeDto::StaleRevision,
+            transaction_id: 0,
+            base_revision: 0,
+            new_revision: 0,
+            display_patches: vec![],
+            old_selection_start: 0,
+            old_selection_end: 0,
+            new_selection_start: 0,
+            new_selection_end: 0,
+            visual_intent: EditorVisualIntentDto::default_fallback(),
+            composition_session: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

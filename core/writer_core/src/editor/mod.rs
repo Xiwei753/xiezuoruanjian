@@ -27,11 +27,16 @@
 
 pub mod autocorrect;
 pub mod editor_kernel;
+pub mod text_edit_session;
 pub mod transaction;
 
 pub use editor_kernel::{
     CoordinatedCursor, DisplayPatch, EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel,
     EditorOperationKind, EditorVisualIntent,
+};
+
+pub use text_edit_session::{
+    TextEditSession, TextEditSessionId, TextEditSessionRegistry,
 };
 
 pub use transaction::{
