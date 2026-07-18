@@ -160,7 +160,6 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
-        self.last_preedit_visual_transaction_json = "".into();
         self.composition_session = None;
         self.update_ime_cursor_for_preedit();
     }

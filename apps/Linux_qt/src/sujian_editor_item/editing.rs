@@ -91,7 +91,6 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
-        self.last_preedit_visual_transaction_json = "".into();
 
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
@@ -181,7 +180,6 @@ impl SujianEditorItem {
             ));
 
             self.transaction_created();
-            self.visual_transaction_changed();
         } else {
             let _vt = self.record_transaction(old, new, cause, true);
         }
@@ -314,7 +312,6 @@ impl SujianEditorItem {
         self.preedit_old_text.clear();
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
-        self.last_preedit_visual_transaction_json = "".into();
 
         let old = self.buffer.snapshot();
         self.buffer.push_undo(old.clone());
@@ -391,7 +388,6 @@ impl SujianEditorItem {
             ).into();
 
             self.transaction_created();
-            self.visual_transaction_changed();
         } else {
             let _vt = self.record_transaction(old, new, cause, true);
         }
@@ -513,7 +509,6 @@ impl SujianEditorItem {
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
         self.pending_preedit_cursor_rect = None;
-        self.last_preedit_visual_transaction_json = "".into();
         self.cursor_position_changed();
         self.selection_changed();
         self.cursor_ctrl.dirty = true;

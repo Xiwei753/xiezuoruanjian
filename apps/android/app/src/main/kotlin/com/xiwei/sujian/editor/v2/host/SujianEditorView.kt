@@ -10,11 +10,8 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.mirror.EditResult
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.render.AndroidRenderer
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import uniffi.writer_core.EditorEditResultDto
 
@@ -24,14 +21,15 @@ class SujianEditorView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    private val mirror = DisplayTextMirror()
     private val textPaint = TextPaint().apply {
         textSize = 48f
         isAntiAlias = true
     }
-    private val pipeline = AndroidEditorPipeline.create(mirror, textPaint)
-    private val renderer = AndroidRenderer()
-    private val inputAdapter = AndroidInputAdapter(context, mirror, this)
+    private val pipeline = AndroidEditorPipeline.create(
+        com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
+        textPaint,
+        this
+    )
 
     private var scrollX: Float = 0f
     private var scrollY: Float = 0f
@@ -42,6 +40,9 @@ class SujianEditorView @JvmOverloads constructor(
     var kernelBridge: EditorKernelBridge? = null
 
     private var themeBackgroundColor: Int = Color.WHITE
+
+    private val mirror: com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+        get() = pipeline.mirror
 
     fun loadText(text: String, cursorUtf8: Int) {
         val bridge = kernelBridge ?: return
@@ -213,7 +214,7 @@ class SujianEditorView @JvmOverloads constructor(
         applyEditResultFull(result)
     }
 
-    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
+    fun applyCompositionCommit(dto: EditorEditResultDto) {
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
@@ -258,32 +259,11 @@ class SujianEditorView @JvmOverloads constructor(
         super.onDraw(canvas)
         canvas.save()
         canvas.translate(-scrollX, -scrollY)
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val layout = pipeline.layoutEngine.getLayout()
-        if (layout != null) {
-            val rev = pipeline.layoutEngine.getCurrentRevision()
-            val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
-                val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
-                Pair(indexMap.utf8ToUtf16(startUtf8), indexMap.utf8ToUtf16(endUtf8))
-            }
-            val frame = pipeline.computeFrame(
-                frameTimeMs,
-                cursorUtf16 = rev?.cursorUtf16 ?: mirror.getCursorUtf16(),
-                cursorX = rev?.cursorX ?: 0f,
-                cursorY = rev?.cursorY ?: 0f,
-                cursorHeight = rev?.cursorHeight ?: 0f,
-                selectionStartUtf16 = rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16(),
-                selectionEndUtf16 = rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16(),
-                compositionStartUtf16 = rev?.compositionStartUtf16 ?: -1,
-                compositionEndUtf16 = rev?.compositionEndUtf16 ?: -1,
-                searchHighlightsUtf16 = searchHighlightsUtf16,
-                viewportWidth = width,
-                viewportHeight = height,
-                scrollX = scrollX,
-                scrollY = scrollY
-            )
-            renderer.draw(canvas, layout, frame)
+        val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
+            val indexMap = AndroidTextIndexMap(mirror)
+            Pair(indexMap.utf8ToUtf16(startUtf8), indexMap.utf8ToUtf16(endUtf8))
         }
+        pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
         canvas.restore()
         if (pipeline.hasActiveAnimation()) {
             invalidate()
@@ -291,7 +271,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
-        return inputAdapter.onCreateInputConnection(outAttrs)
+        return pipeline.inputAdapter.onCreateInputConnection(outAttrs)
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
@@ -344,7 +324,7 @@ class SujianEditorView @JvmOverloads constructor(
         val layout = pipeline.layoutEngine.getLayout() ?: return
         val line = layout.getLineForVertical(y.toInt())
         val offset = layout.getOffsetForHorizontal(line, x)
-        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val indexMap = AndroidTextIndexMap(mirror)
         val byteOffset = indexMap.utf16ToUtf8(offset)
         setSelectionTyped(byteOffset, byteOffset)
         showSoftInput()
@@ -386,7 +366,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun previousGraphemeByteLen(offset: Int): Int {
-        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val indexMap = AndroidTextIndexMap(mirror)
         val utf16Offset = indexMap.utf8ToUtf16(offset)
         if (utf16Offset <= 0) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
@@ -398,7 +378,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     private fun nextGraphemeByteLen(offset: Int): Int {
-        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val indexMap = AndroidTextIndexMap(mirror)
         val utf16Offset = indexMap.utf8ToUtf16(offset)
         if (utf16Offset >= mirror.getLengthUtf16()) return 0
         val iter = android.icu.text.BreakIterator.getCharacterInstance()
@@ -428,10 +408,11 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun getMirror(): DisplayTextMirror = mirror
-    fun getLayoutEngine(): AndroidLayoutEngine = pipeline.layoutEngine
-    fun getRenderer(): AndroidRenderer = renderer
-    fun getInputAdapter(): AndroidInputAdapter = inputAdapter
+    fun getMirror(): com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror = pipeline.mirror
+    fun getLayoutEngine(): com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine = pipeline.layoutEngine
+    fun getRenderer(): com.xiwei.sujian.editor.v2.render.AndroidRenderer = pipeline.renderer
+    fun getInputAdapter(): com.xiwei.sujian.editor.v2.input.AndroidInputAdapter = pipeline.inputAdapter
+    fun getPipeline(): AndroidEditorPipeline = pipeline
 
     var onContentChanged: ((String) -> Unit)? = null
 
@@ -480,7 +461,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     private fun computeAutoIndentPrefix(): String {
         if (!autoIndentEnabled) return ""
-        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val indexMap = AndroidTextIndexMap(mirror)
         val cursorUtf8 = mirror.getCursorUtf8()
         val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
         val text = mirror.getText()
@@ -494,7 +475,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         themeBackgroundColor = colors.background
         textPaint.color = colors.text
-        renderer.setThemeColors(
+        pipeline.renderer.setThemeColors(
             textColor = colors.text,
             cursorColor = colors.cursor,
             selectionColor = colors.selection,

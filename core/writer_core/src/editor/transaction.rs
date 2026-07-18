@@ -277,13 +277,13 @@ pub struct GlyphRect {
 /// **DEPRECATED**: 已被 `EditorVisualTransaction` + `visual_transaction()` 替代。
 /// 保留仅为现有测试覆盖；生产代码不得调用此类型。
 /// 当前主链是 `EditorVisualTransaction`，见 `visual_transaction()` 方法。
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[deprecated(
     since = "0.12.0",
     note = "Use EditorVisualTransaction instead. This will be removed in a future version."
 )]
-#[allow(dead_code)] // SAFETY: deprecated struct kept for backward compatibility until migration complete
 pub(crate) struct EditorAnimationEvent {
     pub id: u64,
     pub kind: EditorAnimationKind,
@@ -1484,11 +1484,12 @@ impl EditorEngine {
     /// **DEPRECATED**: 已被 `visual_transaction()` 替代。
     /// 保留仅为现有测试覆盖；生产代码不得调用此方法。
     /// 当前主链是 `visual_transaction()`，见该方法文档。
+    #[cfg(test)]
     #[deprecated(
         since = "0.12.0",
         note = "Use visual_transaction() instead. This will be removed in a future version."
     )]
-    #[allow(deprecated, dead_code)] // SAFETY: deprecated method kept for backward compatibility
+    #[allow(deprecated)]
     pub(crate) fn animation_events(
         &mut self,
         transaction: &EditorTransaction,

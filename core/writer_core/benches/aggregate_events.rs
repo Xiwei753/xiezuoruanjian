@@ -7,9 +7,10 @@ fn criterion_benchmark(c: &mut Criterion) {
     for i in 0..1000 {
         events.push(WritingInputEvent {
             event_id: i.to_string(),
-            timestamp_ms: 1717800000000 + (i * 1000), // Some arbitrary time
+            timestamp_ms: 1717800000000 + (i * 1000),
             device_id: format!("device_{}", i % 5),
             platform: Platform::Desktop,
+            device_class: "desktop".to_string(),
             project_id: "project_1".to_string(),
             volume_id: "volume_1".to_string(),
             chapter_id: "chapter_1".to_string(),

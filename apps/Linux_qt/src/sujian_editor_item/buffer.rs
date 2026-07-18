@@ -207,7 +207,7 @@ pub fn byte_to_char_index(text: &str, byte_index: usize) -> usize {
         .count()
 }
 
-#[allow(dead_code)] // SAFETY: utility function kept for future cursor/selection offset conversion
+#[cfg(test)]
 pub fn byte_index_at_char_offset_in_range(
     text: &str,
     start: usize,

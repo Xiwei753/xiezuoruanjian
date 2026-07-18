@@ -5,7 +5,6 @@ impl SujianEditorItem {
         if self.preedit_text.is_empty() {
             self.preedit_visual_transaction = None;
             self.preedit_cursor_rect = None;
-            self.last_preedit_visual_transaction_json = "".into();
             return;
         }
 
@@ -15,7 +14,6 @@ impl SujianEditorItem {
         let new_text = self.preedit_text.clone();
 
         if old_text == new_text {
-            self.preedit_visual_transaction_changed();
             self.request_static_repaint();
             return;
         }
@@ -211,20 +209,7 @@ impl SujianEditorItem {
             new_text.len()
         ));
 
-        if let Some(ref vt) = self.preedit_visual_transaction {
-            match serde_json::to_string(vt) {
-                Ok(json) => {
-                    self.last_preedit_visual_transaction_json = json.into();
-                }
-                Err(e) => {
-                    editor_animation_debug_log(&format!(
-                        "update_preedit_visual_state: failed to serialize preedit visual transaction: {}",
-                        e
-                    ));
-                    self.last_preedit_visual_transaction_json = "{}".into();
-                }
-            }
-            self.preedit_visual_transaction_changed();
+        if let Some(ref _vt) = self.preedit_visual_transaction {
         }
     }
 

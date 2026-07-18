@@ -261,13 +261,6 @@ struct UndoEntry {
     new_text: String,
     old_cursor: usize,
     new_cursor: usize,
-    cause: EditorTransactionCause,
-}
-
-impl UndoEntry {
-    fn cause(&self) -> &EditorTransactionCause {
-        &self.cause
-    }
 }
 
 impl EditorKernel {
@@ -420,7 +413,6 @@ impl EditorKernel {
             new_text: self.text.clone(),
             old_cursor,
             new_cursor: self.cursor,
-            cause,
         });
         self.redo_stack.clear();
 
@@ -514,7 +506,6 @@ impl EditorKernel {
             new_text: self.text.clone(),
             old_cursor,
             new_cursor: self.cursor,
-            cause,
         });
         self.redo_stack.clear();
 

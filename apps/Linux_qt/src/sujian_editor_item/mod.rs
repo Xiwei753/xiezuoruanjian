@@ -194,8 +194,6 @@ pub struct SujianEditorItem {
     coordinated_text_cursor_animation_enabled: qt_property!(bool; READ coordinated_text_cursor_animation_enabled WRITE set_coordinated_text_cursor_animation_enabled NOTIFY visual_settings_changed),
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
-    visual_transaction_json: qt_property!(QString; READ visual_transaction_json NOTIFY visual_transaction_changed),
-    preedit_visual_transaction_json: qt_property!(QString; READ preedit_visual_transaction_json NOTIFY preedit_visual_transaction_changed), // legacy compat
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
@@ -227,8 +225,6 @@ pub struct SujianEditorItem {
     transaction_created: qt_signal!(),
     cursor_rect_changed: qt_signal!(),
     explicit_clear_requested: qt_signal!(),
-    visual_transaction_changed: qt_signal!(),
-    preedit_visual_transaction_changed: qt_signal!(),
     context_menu_requested: qt_signal!(x: f32, y: f32),
     hide_context_menu_requested: qt_signal!(),
 
@@ -259,8 +255,6 @@ pub struct SujianEditorItem {
     request_text_input_focus: qt_method!(fn(&mut self)),
     snap_next_cursor_update: qt_method!(fn(&mut self)),
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
-    on_insert_animation_finished_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)),
-    on_insert_animation_skipped_by_id: qt_method!(fn(&mut self, transaction_id: QString, range_id: QString, byte_start: i32, byte_end: i32)),
 
     buffer: EditorBuffer,
     engine: EditorEngine,
@@ -289,8 +283,6 @@ pub struct SujianEditorItem {
     current_is_applying_settings: bool,
     last_summary: QString,
     last_event_count: u32,
-    last_visual_transaction_json: QString,
-    last_preedit_visual_transaction_json: QString,
     preedit_text: String,
     preedit_cursor: usize,
     preedit_attributes: Vec<PreeditAttribute>,
@@ -341,8 +333,6 @@ impl Default for SujianEditorItem {
             coordinated_text_cursor_animation_enabled: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
-            visual_transaction_json: Default::default(),
-            preedit_visual_transaction_json: Default::default(),
             scroll_y: Default::default(),
             viewport_height: Default::default(),
             is_scrolling: Default::default(),
@@ -374,8 +364,6 @@ impl Default for SujianEditorItem {
             transaction_created: Default::default(),
             cursor_rect_changed: Default::default(),
             explicit_clear_requested: Default::default(),
-            visual_transaction_changed: Default::default(),
-            preedit_visual_transaction_changed: Default::default(),
             context_menu_requested: Default::default(),
             hide_context_menu_requested: Default::default(),
 
@@ -406,8 +394,6 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
-            on_insert_animation_finished_by_id: Default::default(),
-            on_insert_animation_skipped_by_id: Default::default(),
 
             buffer: EditorBuffer::default(),
             engine: EditorEngine::new(),
@@ -436,8 +422,6 @@ impl Default for SujianEditorItem {
             current_is_applying_settings: false,
             last_summary: Default::default(),
             last_event_count: 0,
-            last_visual_transaction_json: "{}".into(),
-            last_preedit_visual_transaction_json: "".into(),
             preedit_text: String::new(),
             preedit_cursor: 0,
             preedit_attributes: Vec::new(),
@@ -490,38 +474,6 @@ impl SujianEditorItem {
             self.request_static_repaint();
             self.cursor_rect_changed();
         }
-    }
-
-    pub(crate) fn on_insert_animation_finished_by_id(
-        &mut self,
-        transaction_id: QString,
-        range_id: QString,
-        byte_start: i32,
-        byte_end: i32,
-    ) {
-        self.finish_insert_animation(
-            Self::positive_id_string_to_u64(&transaction_id.to_string()),
-            Self::positive_id_string_to_u64(&range_id.to_string()),
-            byte_start,
-            byte_end,
-            false,
-        );
-    }
-
-    pub(crate) fn on_insert_animation_skipped_by_id(
-        &mut self,
-        transaction_id: QString,
-        range_id: QString,
-        byte_start: i32,
-        byte_end: i32,
-    ) {
-        self.finish_insert_animation(
-            Self::positive_id_string_to_u64(&transaction_id.to_string()),
-            Self::positive_id_string_to_u64(&range_id.to_string()),
-            byte_start,
-            byte_end,
-            true,
-        );
     }
 
     pub(crate) fn positive_id_string_to_u64(value: &str) -> Option<u64> {

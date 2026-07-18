@@ -35,10 +35,6 @@ impl LinuxQtCursorAnchorAdapter {
         }
     }
 
-    pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
-        self.item_ptr.set(ptr);
-    }
-
     pub fn last_request(&self) -> Option<CursorAnchorRequest> {
         self.last_request.take()
     }

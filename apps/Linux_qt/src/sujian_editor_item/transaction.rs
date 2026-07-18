@@ -193,17 +193,8 @@ impl SujianEditorItem {
             self.current_typing_animation_enabled,
             self.current_is_scrolling,
         ));
-        if let Some(ref vt) = vt {
-            let _ = vt;
-            self.last_visual_transaction_json = "{}".into();
-        } else {
-            self.last_visual_transaction_json = "{}".into();
-        }
         if emit {
             self.transaction_created();
-            if vt.is_some() {
-                self.visual_transaction_changed();
-            }
         }
         vt
     }

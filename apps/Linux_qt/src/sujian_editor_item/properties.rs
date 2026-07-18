@@ -38,7 +38,6 @@ impl SujianEditorItem {
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
         self.pending_preedit_cursor_rect = None;
-        self.last_preedit_visual_transaction_json = "".into();
         self.composition_session = None;
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
@@ -68,7 +67,6 @@ impl SujianEditorItem {
         self.preedit_visual_transaction = None;
         self.preedit_cursor_rect = None;
         self.pending_preedit_cursor_rect = None;
-        self.last_preedit_visual_transaction_json = "".into();
         self.composition_session = None;
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
@@ -442,51 +440,15 @@ impl SujianEditorItem {
         self.last_event_count
     }
 
-    pub(crate) fn visual_transaction_json(&self) -> QString {
-        self.last_visual_transaction_json.clone()
-    }
-
-    pub(crate) fn preedit_visual_transaction_json(&self) -> QString {
-        self.last_preedit_visual_transaction_json.clone()
-    }
-
     pub(crate) fn verify_animation_signal_meta_object(&self) -> bool {
         let obj = self.get_cpp_object();
-        let missing = if obj.is_null() {
-            "<null QObject>".into()
-        } else {
-            cpp!(unsafe [obj as "QObject*"] -> QString as "QString" {
-                const QMetaObject* meta = obj->metaObject();
-                QStringList missing;
-                if (!meta) {
-                    missing << QStringLiteral("<null metaObject>");
-                } else {
-                    const QByteArray visual = QMetaObject::normalizedSignature("visual_transaction_changed()");
-                    const QByteArray preedit = QMetaObject::normalizedSignature("preedit_visual_transaction_changed()");
-                    if (meta->indexOfSignal(visual.constData()) < 0) {
-                        missing << QStringLiteral("visual_transaction_changed");
-                    }
-                    if (meta->indexOfSignal(preedit.constData()) < 0) {
-                        missing << QStringLiteral("preedit_visual_transaction_changed");
-                    }
-                }
-                return missing.join(QStringLiteral(","));
-            })
-        };
-        if missing.is_empty() {
-            editor_animation_debug_log(
-                "[SujianEditorItemMetaObject] required animation signals present",
-            );
-            true
-        } else {
-            let message = format!(
-                "SujianEditorItem metaObject missing required animation signals: {}",
-                missing
-            );
-            eprintln!("[ERROR][SujianEditorItemMetaObject] {}", message);
-            crate::backend::diagnostics::log_to_file("ERROR", "editor", "sujian_editor_metaobject_missing_signal", &message);
-            false
+        if obj.is_null() {
+            return false;
         }
+        cpp!(unsafe [obj as "QObject*"] -> bool as "bool" {
+            const QMetaObject* meta = obj->metaObject();
+            return meta != nullptr;
+        })
     }
 
     #[cfg(test)]

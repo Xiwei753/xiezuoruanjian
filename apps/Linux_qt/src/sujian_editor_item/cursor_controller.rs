@@ -267,7 +267,6 @@ impl CursorController {
         false
     }
 
-    #[allow(dead_code)] // SAFETY: utility method kept for cursor blink reset on focus events
     pub fn reset_blink(&mut self) {
         self.blink_visible = true;
         self.blink_last_toggle = Instant::now();

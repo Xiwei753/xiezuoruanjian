@@ -33,10 +33,6 @@ impl LinuxQtAnimationDriver {
             item_ptr: Rc::new(Cell::new(std::ptr::null_mut())),
         }
     }
-
-    pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
-        self.item_ptr.set(ptr);
-    }
 }
 
 impl Default for LinuxQtAnimationDriver {
