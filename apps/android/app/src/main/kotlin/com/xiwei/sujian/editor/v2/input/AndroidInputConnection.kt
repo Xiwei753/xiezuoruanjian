@@ -306,39 +306,6 @@ class AndroidInputConnection(
         return String(textBytes, safeStart, safeEnd - safeStart, Charsets.UTF_8)
     }
 
-    private fun computeResultingSelectionUtf8(newCursorPosition: Int, replaceStartUtf8: Int, replaceEndUtf8: Int, replacementText: String): Pair<Int, Int> {
-        val committedText = mirror.getCommittedText()
-        val committedBytes = committedText.toByteArray(Charsets.UTF_8)
-        val safeStart = replaceStartUtf8.coerceIn(0, committedBytes.size)
-        val safeEnd = replaceEndUtf8.coerceIn(safeStart, committedBytes.size)
-        val virtualText = String(committedBytes, 0, safeStart, Charsets.UTF_8) + replacementText + String(committedBytes, safeEnd, committedBytes.size - safeEnd, Charsets.UTF_8)
-        val virtualIndexMap = AndroidTextIndexMap.fromText(virtualText)
-        val replaceStartUtf16 = virtualIndexMap.utf8ToUtf16(safeStart)
-        val replacementUtf16Len = countUtf16CodeUnits(replacementText)
-        val replaceEndUtf16 = replaceStartUtf16 + replacementUtf16Len
-        val totalUtf16 = virtualIndexMap.getUtf16Length()
-
-        val targetUtf16: Int
-        if (newCursorPosition > 0) {
-            targetUtf16 = (replaceEndUtf16 + newCursorPosition - 1).coerceIn(0, totalUtf16)
-        } else {
-            targetUtf16 = (replaceStartUtf16 + newCursorPosition).coerceIn(0, totalUtf16)
-        }
-        val targetUtf8 = virtualIndexMap.utf16ToUtf8(targetUtf16)
-        return Pair(targetUtf8, targetUtf8)
-    }
-
-    private fun countUtf16CodeUnits(text: String): Int {
-        var count = 0
-        var i = 0
-        while (i < text.length) {
-            val codePoint = text.codePointAt(i)
-            count += Character.charCount(codePoint)
-            i += Character.charCount(codePoint)
-        }
-        return count
-    }
-
     private fun notifySelectionChanged() {
         val imm = hostView.context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager ?: return
         val selStart = mirror.getSelectionStartUtf16()
