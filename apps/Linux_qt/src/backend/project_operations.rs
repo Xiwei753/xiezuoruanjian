@@ -570,10 +570,6 @@ impl AppBackend {
         }
     }
 
-    pub(crate) fn get_tree_model(&self) -> QJsonArray {
-        self.cached_tree.clone()
-    }
-
     pub(crate) fn get_project_summaries_json(&self) -> QString {
         let mut summaries = Vec::new();
         if let Some(core) = self.core_api() {

@@ -22,7 +22,7 @@ pub struct ProjectBackend {
     refresh_app_state: qt_method!(fn(&mut self) -> QJsonObject),
     refresh_tree_model_json: qt_method!(fn(&mut self) -> QString),
     get_tree_model_json: qt_method!(fn(&self) -> QString),
-    get_tree_model: qt_method!(fn(&self) -> QJsonArray),
+    get_tree_model: qt_method!(fn(&self) -> QJsonObject),
     get_project_summaries_json: qt_method!(fn(&self) -> QString),
     create_project: qt_method!(fn(&mut self, title: QString, action_id: QString) -> QJsonObject),
     create_volume: qt_method!(
@@ -128,13 +128,10 @@ impl ProjectBackend {
     fn get_tree_model_json(&self) -> QString {
         self.with_app(|app| app.get_tree_model_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
-    fn get_tree_model(&self) -> QJsonArray {
-        match self.with_app(|app| app.get_tree_model()) {
-            Ok(arr) => arr,
-            Err(_) => crate::backend::json_utils::serde_to_qjson_array(
-                serde_json::from_str(&crate::backend::json_utils::borrow_conflict_error_json())
-                    .unwrap_or_else(|_| serde_json::json!([{"success": false, "errorCode": "BORROW_CONFLICT"}]))
-            ),
+    fn get_tree_model(&self) -> QJsonObject {
+        match self.with_app(|app| app.get_tree_model_json()) {
+            Ok(json_str) => qjson_object_from_json(&json_str.to_string()),
+            Err(_) => qjson_object_from_json(&crate::backend::json_utils::borrow_conflict_error_json()),
         }
     }
     fn get_project_summaries_json(&self) -> QString {
