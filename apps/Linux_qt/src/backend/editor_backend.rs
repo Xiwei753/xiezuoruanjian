@@ -213,6 +213,8 @@ struct EditorCached {
     has_workspace: bool,
     sync_enabled: bool,
     sync_auto_sync: bool,
+    has_selected_chapter: bool,
+    selected_chapter_exists: bool,
 }
 
 impl Default for EditorCached {
@@ -236,6 +238,8 @@ impl Default for EditorCached {
             has_workspace: false,
             sync_enabled: false,
             sync_auto_sync: false,
+            has_selected_chapter: false,
+            selected_chapter_exists: false,
         }
     }
 }
@@ -621,10 +625,16 @@ impl EditorBackend {
         }
     }
     fn has_selected_chapter(&self) -> bool {
-        self.with_app(|app| app.has_selected_chapter()).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.has_selected_chapter()) {
+            self.cached.borrow_mut().has_selected_chapter = val;
+        }
+        self.cached.borrow().has_selected_chapter
     }
     fn selected_chapter_exists(&self) -> bool {
-        self.with_app(|app| app.selected_chapter_exists()).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.selected_chapter_exists()) {
+            self.cached.borrow_mut().selected_chapter_exists = val;
+        }
+        self.cached.borrow().selected_chapter_exists
     }
     fn clear_editor_state(&mut self) {
         if self.with_app_mut(|app| app.clear_editor_state()).is_ok() {
@@ -641,7 +651,13 @@ impl EditorBackend {
         }
     }
     fn log_qml(&self, level: QString, module: QString, event: QString, message: QString) {
-        let _ = self.with_app(|app| app.log_qml(level, module, event, message));
+        if self.with_app(|app| app.log_qml(level, module, event, message)).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "editor_backend",
+                "BORROW_CONFLICT",
+                "log_qml skipped due to borrow conflict",
+            );
+        }
     }
     fn list_registered_actions(&mut self) -> QString {
         self.with_app_mut(|app| app.list_registered_actions()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())

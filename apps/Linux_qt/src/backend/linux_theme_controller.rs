@@ -177,7 +177,13 @@ impl LinuxThemeController {
 
     fn set_selected_builtin_theme_id(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val)).is_ok() {
-            let _ = self.with_app_mut(|app| app.set_setting_color_source("built_in".into()));
+            if self.with_app_mut(|app| app.set_setting_color_source("built_in".into())).is_err() {
+                crate::backend::app_backend::debug_error_static(
+                    "theme_controller",
+                    "BORROW_CONFLICT",
+                    "set_setting_color_source skipped due to borrow conflict",
+                );
+            }
             self.scheme_changed();
         }
     }
@@ -185,8 +191,20 @@ impl LinuxThemeController {
     fn set_selected_palette_id(&mut self, val: QString) {
         let palette_id = val.to_string();
         if !palette_id.is_empty() {
-            let _ = self.with_app_mut(|app| app.set_setting_selected_palette_id(val));
-            let _ = self.with_app_mut(|app| app.set_setting_color_source("saved_palette".into()));
+            if self.with_app_mut(|app| app.set_setting_selected_palette_id(val)).is_err() {
+                crate::backend::app_backend::debug_error_static(
+                    "theme_controller",
+                    "BORROW_CONFLICT",
+                    "set_setting_selected_palette_id skipped due to borrow conflict",
+                );
+            }
+            if self.with_app_mut(|app| app.set_setting_color_source("saved_palette".into())).is_err() {
+                crate::backend::app_backend::debug_error_static(
+                    "theme_controller",
+                    "BORROW_CONFLICT",
+                    "set_setting_color_source skipped due to borrow conflict",
+                );
+            }
         }
         self.scheme_changed();
     }
