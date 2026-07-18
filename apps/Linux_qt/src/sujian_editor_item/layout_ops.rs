@@ -42,7 +42,7 @@ impl SujianEditorItem {
     pub(crate) fn layout_snapshot(&mut self, width: f64) -> LayoutSnapshot {
         let params = self.layout_params(width);
         self.editor_layout
-            .snapshot(&self.buffer.text, params, self.text_revision)
+            .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
             .clone()
     }
 
@@ -72,7 +72,7 @@ impl SujianEditorItem {
 
         let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
             &self.buffer.text,
-            self.text_revision,
+            self.pipeline.text_revision(),
             font_size,
             font_family,
             line_spacing,
@@ -123,7 +123,7 @@ impl SujianEditorItem {
 
         let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
             virtual_text,
-            self.text_revision,
+            self.pipeline.text_revision(),
             font_size,
             font_family,
             line_spacing,
@@ -170,7 +170,7 @@ impl SujianEditorItem {
         let params = self.layout_params(width);
         &self
             .editor_layout
-            .snapshot(&self.buffer.text, params, self.text_revision)
+            .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
             .lines
     }
 

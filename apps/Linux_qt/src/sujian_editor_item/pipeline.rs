@@ -1,6 +1,6 @@
 use writer_core::editor::{
     EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorTransactionCause,
-    EditorVisualIntent, AnimationMode as CoreAnimationMode,
+    EditorVisualIntent, AnimationMode as CoreAnimationMode, CursorRect, PreeditVisualTransaction,
 };
 use super::buffer::{clamp_to_char_boundary, normalize_plain_text};
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
@@ -10,6 +10,7 @@ use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::EditorLayoutSnapshot;
 use super::PreeditAttribute;
 use writer_core::editor::CompositionSession;
+use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 
 pub(crate) struct CommittedTextMirror {
     text: String,
@@ -94,6 +95,10 @@ pub(crate) struct CompositionState {
     pub preedit_attributes: Vec<PreeditAttribute>,
     pub preedit_old_text: String,
     pub composition_session: Option<CompositionSession>,
+    pub preedit_visual_transaction: Option<PreeditVisualTransaction>,
+    pub preedit_cursor_rect: Option<CursorRect>,
+    pub pending_preedit_cursor_rect: Option<CursorRect>,
+    pub suppress_next_ime_commit: bool,
 }
 
 impl CompositionState {
@@ -104,6 +109,10 @@ impl CompositionState {
             preedit_attributes: Vec::new(),
             preedit_old_text: String::new(),
             composition_session: None,
+            preedit_visual_transaction: None,
+            preedit_cursor_rect: None,
+            pending_preedit_cursor_rect: None,
+            suppress_next_ime_commit: false,
         }
     }
 
@@ -117,6 +126,10 @@ impl CompositionState {
         self.preedit_attributes.clear();
         self.preedit_old_text.clear();
         self.composition_session = None;
+        self.preedit_visual_transaction = None;
+        self.preedit_cursor_rect = None;
+        self.pending_preedit_cursor_rect = None;
+        self.suppress_next_ime_commit = false;
     }
 }
 
@@ -131,6 +144,9 @@ pub(crate) struct LinuxEditorPipeline {
     layout_revision: LayoutRevision,
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
     previous_layout_snapshot: Option<EditorLayoutSnapshot>,
+    clipboard_adapter: LinuxQtClipboardFocusAdapter,
+    text_revision: u64,
+    visual_revision: u64,
     animation_enabled: bool,
     typing_animation_enabled: bool,
     typing_animation_duration_ms: u32,
@@ -152,6 +168,9 @@ impl LinuxEditorPipeline {
             layout_revision: LayoutRevision::default(),
             current_layout_snapshot: None,
             previous_layout_snapshot: None,
+            clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
+            text_revision: 0,
+            visual_revision: 0,
             animation_enabled: true,
             typing_animation_enabled: true,
             typing_animation_duration_ms: 160,
@@ -215,6 +234,34 @@ impl LinuxEditorPipeline {
 
     pub fn texture_cache_mut(&mut self) -> &mut TextureCache {
         &mut self.texture_cache
+    }
+
+    pub fn clipboard_adapter(&self) -> &LinuxQtClipboardFocusAdapter {
+        &self.clipboard_adapter
+    }
+
+    pub fn clipboard_adapter_mut(&mut self) -> &mut LinuxQtClipboardFocusAdapter {
+        &mut self.clipboard_adapter
+    }
+
+    pub fn text_revision(&self) -> u64 {
+        self.text_revision
+    }
+
+    pub fn set_text_revision(&mut self, rev: u64) {
+        self.text_revision = rev;
+    }
+
+    pub fn visual_revision(&self) -> u64 {
+        self.visual_revision
+    }
+
+    pub fn bump_visual_revision(&mut self) {
+        self.visual_revision = self.visual_revision.wrapping_add(1);
+    }
+
+    pub fn bump_text_revision(&mut self) {
+        self.text_revision = self.text_revision.wrapping_add(1);
     }
 
     pub fn layout_revision(&self) -> &LayoutRevision {

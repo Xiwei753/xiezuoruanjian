@@ -1,7 +1,5 @@
 use std::fmt;
 
-use super::layout_revision::CanonicalLayoutRevision;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct LineSnapshotId {
     pub layout_revision: u64,
@@ -13,14 +11,6 @@ impl LineSnapshotId {
     pub fn new(layout_revision: u64, paragraph_id: u64, visual_line_ordinal: u32) -> Self {
         Self {
             layout_revision,
-            paragraph_id,
-            visual_line_ordinal,
-        }
-    }
-
-    pub fn from_revision(revision: &CanonicalLayoutRevision, paragraph_id: u64, visual_line_ordinal: u32) -> Self {
-        Self {
-            layout_revision: revision.layout_revision,
             paragraph_id,
             visual_line_ordinal,
         }

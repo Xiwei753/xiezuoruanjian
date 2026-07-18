@@ -602,11 +602,11 @@ impl SujianEditorItem {
             return Some("layout_invalidated");
         }
 
-        if buf.text_revision != self.text_revision {
+        if buf.text_revision != self.pipeline.text_revision() {
             return Some("text_revision_changed");
         }
 
-        if buf.visual_revision != self.visual_revision {
+        if buf.visual_revision != self.pipeline.visual_revision() {
             return Some("visual_revision_changed");
         }
 
@@ -713,8 +713,8 @@ impl SujianEditorItem {
             buffer_content_h: content_h,
             buffer_logical_h: buffer_h,
             dpr,
-            text_revision: self.text_revision,
-            visual_revision: self.visual_revision,
+            text_revision: self.pipeline.text_revision(),
+            visual_revision: self.pipeline.visual_revision(),
         });
 
         let render_elapsed = render_start.elapsed();

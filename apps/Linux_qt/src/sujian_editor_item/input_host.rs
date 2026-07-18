@@ -12,8 +12,8 @@ impl SujianEditorItem {
         if self.composition_session.is_none() {
             let cursor = self.buffer.cursor;
             self.composition_session = Some(CompositionSession::new(
-                self.text_revision,
-                self.visual_revision,
+                self.pipeline.text_revision(),
+                self.pipeline.visual_revision(),
                 self.buffer.text.clone(),
                 cursor,
             ));

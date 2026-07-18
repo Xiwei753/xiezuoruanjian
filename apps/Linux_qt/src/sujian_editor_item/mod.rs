@@ -374,13 +374,10 @@ pub struct SujianEditorItem {
     suppress_next_ime_commit: bool,
     composition_session: Option<CompositionSession>,
     editor_layout: EditorLayout,
-    text_revision: u64,
-    visual_revision: u64,
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
-    clipboard_adapter: LinuxQtClipboardFocusAdapter,
     layout_revision: LayoutRevision,
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
     previous_layout_snapshot: Option<EditorLayoutSnapshot>,
@@ -511,13 +508,10 @@ impl Default for SujianEditorItem {
             suppress_next_ime_commit: false,
             composition_session: None,
             editor_layout: EditorLayout::default(),
-            text_revision: 0,
-            visual_revision: 0,
             render_dirty: true,
             scroll_buffer: None,
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
-            clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
             layout_revision: LayoutRevision::initial(),
             current_layout_snapshot: None,
             previous_layout_snapshot: None,
@@ -548,7 +542,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn bump_visual_revision(&mut self) {
-        self.visual_revision = self.visual_revision.wrapping_add(1);
+        self.pipeline.bump_visual_revision();
     }
 
     pub(crate) fn clear_active_text_animations(&mut self) {

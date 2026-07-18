@@ -649,7 +649,7 @@ impl SujianEditorItem {
             return false;
         }
         use writer_core::platform_interaction::clipboard_focus::{ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult};
-        let result = ClipboardAndFocusAdapter::execute_clipboard(&mut self.clipboard_adapter, ClipboardRequest::Copy { text });
+        let result = ClipboardAndFocusAdapter::execute_clipboard(self.pipeline.clipboard_adapter_mut(), ClipboardRequest::Copy { text });
         matches!(result, ClipboardResult::Copied)
     }
 
@@ -658,7 +658,7 @@ impl SujianEditorItem {
             return;
         }
         use writer_core::platform_interaction::clipboard_focus::{ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult};
-        let result = ClipboardAndFocusAdapter::execute_clipboard(&mut self.clipboard_adapter, ClipboardRequest::Paste);
+        let result = ClipboardAndFocusAdapter::execute_clipboard(self.pipeline.clipboard_adapter_mut(), ClipboardRequest::Paste);
         if let ClipboardResult::Pasted { text } = result {
             let normalized = normalize_plain_text(&text);
             self.insert_text_with_cause(normalized.into(), Some(EditorTransactionCause::Paste));

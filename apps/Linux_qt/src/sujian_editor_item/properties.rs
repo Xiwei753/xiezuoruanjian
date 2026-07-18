@@ -602,7 +602,7 @@ impl SujianEditorItem {
         if self.cursor_ctrl.force_snap_next {
             self.cursor_ctrl.animation = None;
         }
-        self.text_revision = self.text_revision.wrapping_add(1);
+        self.pipeline.bump_text_revision();
         self.recalculate_content_height_and_emit();
         self.plain_text_changed();
         self.text_changed();
