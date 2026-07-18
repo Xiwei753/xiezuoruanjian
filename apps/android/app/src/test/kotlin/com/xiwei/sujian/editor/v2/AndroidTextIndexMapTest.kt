@@ -180,4 +180,49 @@ class AndroidTextIndexMapTest {
         val utf8Range = map.utf16RangeToUtf8(1, 3)
         assertEquals(Pair(1, 5), utf8Range)
     }
+
+    @Test
+    fun computeResultingSelectionUtf8_insertChinese_position1() {
+        val committedText = "abc"
+        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
+            committedText, 1, 1, 1, "你"
+        )
+        assertEquals(Pair(4, 4), Pair(anchor, head))
+    }
+
+    @Test
+    fun computeResultingSelectionUtf8_insertChinese_position0() {
+        val committedText = "abc"
+        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
+            committedText, 0, 1, 1, "你"
+        )
+        assertEquals(Pair(1, 1), Pair(anchor, head))
+    }
+
+    @Test
+    fun computeResultingSelectionUtf8_replaceWithEmoji_position1() {
+        val committedText = "abc"
+        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
+            committedText, 1, 0, 1, "😀"
+        )
+        assertEquals(Pair(4, 4), Pair(anchor, head))
+    }
+
+    @Test
+    fun computeResultingSelectionUtf8_negativePosition() {
+        val committedText = "abc"
+        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
+            committedText, -1, 1, 1, "你"
+        )
+        assertEquals(Pair(0, 0), Pair(anchor, head))
+    }
+
+    @Test
+    fun computeResultingSelectionUtf8_replaceRangeWithChinese() {
+        val committedText = "a你好b"
+        val (anchor, head) = AndroidTextIndexMap.computeResultingSelectionUtf8(
+            committedText, 1, 1, 7, "世界"
+        )
+        assertEquals(Pair(7, 7), Pair(anchor, head))
+    }
 }
