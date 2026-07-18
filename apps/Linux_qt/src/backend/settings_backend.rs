@@ -151,7 +151,7 @@ impl SettingsBackend {
         self.with_app(|app| app.setting_monet_color()).unwrap_or_else(|_| "".into())
     }
     fn setting_theme_palette_json(&self) -> QString {
-        self.with_app(|app| app.setting_theme_palette_json()).unwrap_or_else(|_| "".into())
+        self.with_app(|app| app.setting_theme_palette_json()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn setting_color_source(&self) -> QString {
         self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| "built_in".into())
