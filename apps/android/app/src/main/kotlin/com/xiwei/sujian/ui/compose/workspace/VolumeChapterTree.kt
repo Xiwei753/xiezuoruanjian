@@ -20,7 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -284,9 +284,11 @@ private fun CreateVolumeDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(id = R.string.action_new_volume_short)) },
         text = {
-            OutlinedTextField(
+            AnimatedTextField(
+                targetId = "volume-title:new",
                 value = title,
                 onValueChange = { title = it },
+                onCommit = { },
                 label = { Text(stringResource(id = R.string.hint_volume_title_short)) },
                 singleLine = true
             )
@@ -314,9 +316,11 @@ private fun CreateChapterDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.create_chapter_in_volume, volumeTitle)) },
         text = {
-            OutlinedTextField(
+            AnimatedTextField(
+                targetId = "chapter-title:new",
                 value = title,
                 onValueChange = { title = it },
+                onCommit = { },
                 label = { Text(stringResource(id = R.string.hint_chapter_title_short)) },
                 singleLine = true
             )
@@ -423,9 +427,11 @@ private fun RenameDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            OutlinedTextField(
+            AnimatedTextField(
+                targetId = "rename:$initialValue",
                 value = newTitle,
                 onValueChange = { newTitle = it },
+                onCommit = { },
                 label = { Text(stringResource(id = R.string.hint_new_title)) },
                 singleLine = true
             )

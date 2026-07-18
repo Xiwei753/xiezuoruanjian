@@ -24,7 +24,8 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -162,17 +163,22 @@ private fun StarMapListScreen(
             title = { Text(stringResource(id = R.string.starmap_create_new)) },
             text = {
                 Column {
-                    OutlinedTextField(
+                    AnimatedTextField(
+                        targetId = "starmap-title:new",
                         value = title,
                         onValueChange = { title = it },
+                        onCommit = { },
                         label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                         singleLine = true
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
+                    AnimatedTextArea(
+                        targetId = "starmap-description:new",
                         value = description,
                         onValueChange = { description = it },
+                        onCommit = { },
                         label = { Text(stringResource(id = R.string.starmap_hint_description)) },
+                        minLines = 2,
                         maxLines = 3
                     )
                 }
@@ -358,9 +364,11 @@ private fun StarMapEditorScreen(
             title = { Text(stringResource(id = R.string.starmap_add_node)) },
             text = {
                 Column {
-                    OutlinedTextField(
+                    AnimatedTextField(
+                        targetId = "starmap-node-title:new",
                         value = nodeTitle,
                         onValueChange = { nodeTitle = it },
+                        onCommit = { },
                         label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                         singleLine = true
                     )
@@ -491,9 +499,11 @@ private fun NodeEditPanel(
         title = { Text(stringResource(id = R.string.starmap_edit_node)) },
         text = {
             Column {
-                OutlinedTextField(
+                AnimatedTextField(
+                    targetId = "starmap-node-title:edit",
                     value = editTitle,
                     onValueChange = { editTitle = it },
+                    onCommit = { },
                     label = { Text(stringResource(id = R.string.starmap_hint_title)) },
                     singleLine = true
                 )

@@ -27,7 +27,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -116,9 +116,11 @@ fun ProjectListScreen(
             onDismissRequest = { showCreateDialog = false },
             title = { Text(stringResource(id = R.string.dialog_new_project_title)) },
             text = {
-                OutlinedTextField(
+                AnimatedTextField(
+                    targetId = "project-title:new",
                     value = title,
                     onValueChange = { title = it },
+                    onCommit = { },
                     label = { Text(stringResource(id = R.string.hint_project_title_new)) },
                     singleLine = true
                 )
@@ -194,9 +196,11 @@ private fun ProjectMenuDialog(
             onDismissRequest = { showRename = false },
             title = { Text(stringResource(id = R.string.action_rename)) },
             text = {
-                OutlinedTextField(
+                AnimatedTextField(
+                    targetId = "project-title:rename:${project.id}",
                     value = newTitle,
                     onValueChange = { newTitle = it },
+                    onCommit = { },
                     label = { Text(stringResource(id = R.string.hint_new_title)) },
                     singleLine = true
                 )
