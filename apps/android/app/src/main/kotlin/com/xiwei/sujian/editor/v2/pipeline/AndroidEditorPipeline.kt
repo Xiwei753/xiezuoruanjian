@@ -1,6 +1,7 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
 import android.content.Context
+import android.graphics.Color
 import android.graphics.Paint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
@@ -395,6 +396,32 @@ class AndroidEditorPipeline private constructor(
         val layout = layoutEngine.getLayout() ?: return 0f
         return layout.getPrimaryHorizontal(offsetUtf16)
     }
+
+    fun setLineSpacingMultiplier(multiplier: Float) {
+        layoutEngine.setLineSpacingMultiplier(multiplier)
+    }
+
+    fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
+        renderer.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
+    }
+
+    fun utf16ToUtf8(offsetUtf16: Int): Int {
+        val indexMap = AndroidTextIndexMap(mirror)
+        return indexMap.utf16ToUtf8(offsetUtf16)
+    }
+
+    fun utf8ToUtf16(offsetUtf8: Int): Int {
+        val indexMap = AndroidTextIndexMap(mirror)
+        return indexMap.utf8ToUtf16(offsetUtf8)
+    }
+
+    fun getSpannable(): android.text.SpannableStringBuilder = mirror.getSpannable()
+
+    fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
+        return inputAdapter.onCreateInputConnection(outAttrs)
+    }
+
+    fun getInputAdapterView(): View = inputAdapter
 
     sealed class PipelineOutput {
         data class Edited(val result: EditResult) : PipelineOutput()

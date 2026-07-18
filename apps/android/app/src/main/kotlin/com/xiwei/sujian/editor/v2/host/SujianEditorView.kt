@@ -10,7 +10,6 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import uniffi.writer_core.EditorTransactionCauseDto
@@ -152,7 +151,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun setLineSpacingMultiplier(multiplier: Float) {
         lineSpacingMultiplier = multiplier
-        pipeline.layoutEngine.setLineSpacingMultiplier(multiplier)
+        pipeline.setLineSpacingMultiplier(multiplier)
         updateLayoutConfig()
     }
 
@@ -234,8 +233,7 @@ class SujianEditorView @JvmOverloads constructor(
         canvas.save()
         canvas.translate(-scrollX, -scrollY)
         val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
-            val indexMap = AndroidTextIndexMap(pipeline.mirror)
-            Pair(indexMap.utf8ToUtf16(startUtf8), indexMap.utf8ToUtf16(endUtf8))
+            Pair(pipeline.utf8ToUtf16(startUtf8), pipeline.utf8ToUtf16(endUtf8))
         }
         pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
         canvas.restore()
@@ -245,7 +243,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
-        return pipeline.inputAdapter.onCreateInputConnection(outAttrs)
+        return pipeline.onCreateInputConnection(outAttrs)
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
@@ -297,8 +295,7 @@ class SujianEditorView @JvmOverloads constructor(
     private fun handleTap(x: Float, y: Float) {
         val line = pipeline.getLayoutLineForVertical(y.toInt())
         val offset = pipeline.getLayoutOffsetForHorizontal(line, x)
-        val indexMap = AndroidTextIndexMap(pipeline.mirror)
-        val byteOffset = indexMap.utf16ToUtf8(offset)
+        val byteOffset = pipeline.utf16ToUtf8(offset)
         setSelectionTyped(byteOffset, byteOffset)
         showSoftInput()
     }
@@ -402,7 +399,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         themeBackgroundColor = colors.background
         textPaint.color = colors.text
-        pipeline.renderer.setThemeColors(
+        pipeline.setThemeColors(
             textColor = colors.text,
             cursorColor = colors.cursor,
             selectionColor = colors.selection,
