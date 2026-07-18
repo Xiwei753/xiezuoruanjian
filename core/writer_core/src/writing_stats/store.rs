@@ -91,20 +91,20 @@ impl DailyStats {
     pub fn apply_event(&mut self, event: &crate::writing_stats::WritingInputEvent) {
         match event.source {
             crate::writing_stats::EventSource::HumanTyped => {
-                self.total_human_typed_chars += event.inserted_chars as u64;
+                self.total_human_typed_chars += u64::from(event.inserted_chars);
             }
             crate::writing_stats::EventSource::Pasted => {
-                self.total_pasted_chars += event.pasted_chars as u64;
+                self.total_pasted_chars += u64::from(event.pasted_chars);
             }
             crate::writing_stats::EventSource::Deleted => {
-                self.total_deleted_chars += event.deleted_chars as u64;
+                self.total_deleted_chars += u64::from(event.deleted_chars);
             }
             crate::writing_stats::EventSource::AiInserted => {
-                self.total_ai_inserted_chars += event.ai_inserted_chars as u64;
+                self.total_ai_inserted_chars += u64::from(event.ai_inserted_chars);
             }
             _ => {}
         }
-        self.total_net_delta_chars += event.net_delta_chars as i64;
+        self.total_net_delta_chars += i64::from(event.net_delta_chars);
 
         let proj = self
             .per_project
@@ -112,38 +112,38 @@ impl DailyStats {
             .or_default();
         match event.source {
             crate::writing_stats::EventSource::HumanTyped => {
-                proj.human_typed_chars += event.inserted_chars as u64
+                proj.human_typed_chars += u64::from(event.inserted_chars)
             }
             crate::writing_stats::EventSource::Pasted => {
-                proj.pasted_chars += event.pasted_chars as u64
+                proj.pasted_chars += u64::from(event.pasted_chars)
             }
             crate::writing_stats::EventSource::Deleted => {
-                proj.deleted_chars += event.deleted_chars as u64
+                proj.deleted_chars += u64::from(event.deleted_chars)
             }
             crate::writing_stats::EventSource::AiInserted => {
-                proj.ai_inserted_chars += event.ai_inserted_chars as u64
+                proj.ai_inserted_chars += u64::from(event.ai_inserted_chars)
             }
             _ => {}
         }
-        proj.net_delta_chars += event.net_delta_chars as i64;
+        proj.net_delta_chars += i64::from(event.net_delta_chars);
 
         let vol = self.per_volume.entry(event.volume_id.clone()).or_default();
         match event.source {
             crate::writing_stats::EventSource::HumanTyped => {
-                vol.human_typed_chars += event.inserted_chars as u64
+                vol.human_typed_chars += u64::from(event.inserted_chars)
             }
             crate::writing_stats::EventSource::Pasted => {
-                vol.pasted_chars += event.pasted_chars as u64
+                vol.pasted_chars += u64::from(event.pasted_chars)
             }
             crate::writing_stats::EventSource::Deleted => {
-                vol.deleted_chars += event.deleted_chars as u64
+                vol.deleted_chars += u64::from(event.deleted_chars)
             }
             crate::writing_stats::EventSource::AiInserted => {
-                vol.ai_inserted_chars += event.ai_inserted_chars as u64
+                vol.ai_inserted_chars += u64::from(event.ai_inserted_chars)
             }
             _ => {}
         }
-        vol.net_delta_chars += event.net_delta_chars as i64;
+        vol.net_delta_chars += i64::from(event.net_delta_chars);
 
         let chap = self
             .per_chapter
@@ -151,20 +151,20 @@ impl DailyStats {
             .or_default();
         match event.source {
             crate::writing_stats::EventSource::HumanTyped => {
-                chap.human_typed_chars += event.inserted_chars as u64
+                chap.human_typed_chars += u64::from(event.inserted_chars)
             }
             crate::writing_stats::EventSource::Pasted => {
-                chap.pasted_chars += event.pasted_chars as u64
+                chap.pasted_chars += u64::from(event.pasted_chars)
             }
             crate::writing_stats::EventSource::Deleted => {
-                chap.deleted_chars += event.deleted_chars as u64
+                chap.deleted_chars += u64::from(event.deleted_chars)
             }
             crate::writing_stats::EventSource::AiInserted => {
-                chap.ai_inserted_chars += event.ai_inserted_chars as u64
+                chap.ai_inserted_chars += u64::from(event.ai_inserted_chars)
             }
             _ => {}
         }
-        chap.net_delta_chars += event.net_delta_chars as i64;
+        chap.net_delta_chars += i64::from(event.net_delta_chars);
     }
 }
 
@@ -403,6 +403,7 @@ impl StatsStore {
         Ok(all_stats)
     }
 
+    #[allow(clippy::cast_sign_loss)]
     pub fn aggregate_events(&self, events: &[WritingInputEvent]) -> Result<Vec<DailyStats>> {
         if events.is_empty() {
             return Ok(Vec::new());
@@ -519,7 +520,7 @@ impl StatsStore {
 
             let minutes = bucket_ms as f64 / 60_000.0;
             let chars_per_minute = if minutes > 0.0 {
-                chars_in_bucket as f64 / minutes
+                f64::from(chars_in_bucket) / minutes
             } else {
                 0.0
             };

@@ -121,11 +121,10 @@ pub fn delete_starmap_node(
                         keep = false;
                     }
                 }
-                StarMapEdgeEndpoint::Anchor { node_id: id, .. } => {
-                    if id == node_id {
+                StarMapEdgeEndpoint::Anchor { node_id: id, .. }
+                    if id == node_id => {
                         keep = false;
                     }
-                }
                 _ => {}
             }
         }
@@ -136,11 +135,10 @@ pub fn delete_starmap_node(
                         keep = false;
                     }
                 }
-                StarMapEdgeEndpoint::Anchor { node_id: id, .. } => {
-                    if id == node_id {
+                StarMapEdgeEndpoint::Anchor { node_id: id, .. }
+                    if id == node_id => {
                         keep = false;
                     }
-                }
                 _ => {}
             }
         }
@@ -161,11 +159,10 @@ pub fn delete_starmap_node(
                         keep = false;
                     }
                 }
-                StarMapEndpoint::Anchor { node_id: id, .. } => {
-                    if id == node_id {
+                StarMapEndpoint::Anchor { node_id: id, .. }
+                    if id == node_id => {
                         keep = false;
                     }
-                }
                 _ => {}
             }
         }
@@ -180,11 +177,10 @@ pub fn delete_starmap_node(
                     keep = false;
                 }
             }
-            StarMapEndpoint::Anchor { node_id: id, .. } => {
-                if id == node_id {
+            StarMapEndpoint::Anchor { node_id: id, .. }
+                if id == node_id => {
                     keep = false;
                 }
-            }
             _ => {}
         }
         keep

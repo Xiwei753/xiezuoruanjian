@@ -43,6 +43,7 @@ pub fn get_starmap_graph(workspace: &Path, starmap_id: &str) -> Result<StarMapGr
     Ok(graph)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 pub fn save_starmap_graph(workspace: &Path, starmap_id: &str, graph: &StarMapGraph) -> Result<()> {
     super::validation::validate_graph(workspace, graph)?;
 

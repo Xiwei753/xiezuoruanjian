@@ -66,6 +66,7 @@ impl WriterCoreApi {
         self.core().calculate_word_count(text)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn process_writing_event(
         &self,
         device_id: &str,

@@ -309,6 +309,7 @@ pub fn get_project_updated_at_aggregated(
     Ok(Utc::now().to_rfc3339())
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_projects(workspace_path: &Path, ordered_ids: &[String]) -> Result<()> {
     let mut projects = list_projects(workspace_path)?;
     let mut projects_map = std::collections::HashMap::new();

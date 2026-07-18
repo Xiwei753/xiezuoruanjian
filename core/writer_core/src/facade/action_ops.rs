@@ -13,6 +13,7 @@ impl super::WriterCore {
         Ok(registry.get_action(action_id))
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub fn execute_action(
         &self,
         action_id: &str,

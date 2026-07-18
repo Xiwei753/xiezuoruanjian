@@ -681,7 +681,8 @@ impl Timeline {
     /// 调整 first_visible_frame_time_ms 使得
     /// progress(resume_time) = paused_progress，即：
     ///   new_start = resume_time - paused_progress * duration
-    pub fn resume(&mut self, frame_time_ms: u64) {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+   pub fn resume(&mut self, frame_time_ms: u64) {
         if self.pause_started_at_ms.is_none() {
             return;
         }
@@ -693,7 +694,7 @@ impl Timeline {
         }
 
         let new_start = frame_time_ms
-            .saturating_sub(#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] (self.paused_progress * self.duration_ms as f64) as u64);
+            .saturating_sub((self.paused_progress * self.duration_ms as f64) as u64);
         self.first_visible_frame_time_ms = Some(new_start);
         self.accumulated_paused_duration_ms = 0;
         self.pause_started_at_ms = None;

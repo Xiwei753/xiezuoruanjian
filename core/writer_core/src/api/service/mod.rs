@@ -30,6 +30,7 @@ impl WriterCoreApi {
         serde_json::to_string(value).map_err(Into::into)
     }
 
+    #[allow(clippy::cast_sign_loss)]
     pub(crate) fn non_negative_counter(name: &str, value: i32) -> ApiResult<u32> {
         if value < 0 {
             return Err(WriterError::Other(format!(

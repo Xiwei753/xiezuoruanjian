@@ -290,7 +290,7 @@ pub(crate) fn perform_lww_sync(
     // However, force_sync=true bypasses this debounce for manual sync,
     // conflict resolution, and first configuration.
     if !force_sync {
-        let min_interval = config.sync_interval_seconds.max(60) as i64;
+        let min_interval = i64::from(config.sync_interval_seconds.max(60));
         if let Some(last_sync) = state.last_sync_time {
             let now = chrono::Utc::now().timestamp();
             let elapsed = now - last_sync;
@@ -375,6 +375,7 @@ pub(crate) fn perform_lww_sync(
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 fn execute_lww_sync_attempt(
     workspace_path: &Path,
     config: &SyncConfig,

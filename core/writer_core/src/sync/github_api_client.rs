@@ -21,8 +21,6 @@ pub(crate) fn github_api_error(
                 "repo_not_found_or_no_permission"
             } else if ctx.contains("get contents") {
                 "file_not_found"
-            } else if ctx.contains("put contents") || ctx.contains("delete contents") {
-                "repo_not_found_or_no_permission"
             } else {
                 "repo_not_found_or_no_permission"
             }

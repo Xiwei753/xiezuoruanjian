@@ -151,6 +151,7 @@ pub fn list_chapters(
     Ok(chapters)
 }
 
+#[allow(clippy::cast_possible_truncation)]
 pub fn calculate_word_count(text: &str) -> u32 {
     text.chars().filter(|c| !c.is_whitespace()).count() as u32
 }
@@ -520,6 +521,7 @@ pub fn delete_chapter(
     Ok(())
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_chapters(
     workspace_path: &Path,
     project_id: &str,

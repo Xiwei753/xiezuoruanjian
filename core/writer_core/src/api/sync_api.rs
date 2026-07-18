@@ -82,6 +82,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    #[allow(clippy::unwrap_used)]
     pub fn get_sync_capability(&self) -> ApiResult<SyncCapabilityDto> {
         let config = self.load_sync_config()?;
         let secrets = self.load_sync_secrets()?;

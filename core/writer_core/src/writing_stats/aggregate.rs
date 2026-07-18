@@ -94,7 +94,7 @@ impl StatsAggregator {
         let mut sorted = events;
         sorted.sort_by_key(|e| e.timestamp_ms);
 
-        let bucket_ms = bucket_minutes as i64 * 60 * 1000;
+        let bucket_ms = i64::from(bucket_minutes) * 60 * 1000;
         let Some(first) = sorted.first() else {
             return Ok(Vec::new());
         };
@@ -119,7 +119,7 @@ impl StatsAggregator {
 
             let minutes = bucket_ms as f64 / 60_000.0;
             let chars_per_minute = if minutes > 0.0 {
-                chars_in_bucket as f64 / minutes
+                f64::from(chars_in_bucket) / minutes
             } else {
                 0.0
             };

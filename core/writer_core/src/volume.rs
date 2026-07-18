@@ -184,6 +184,7 @@ pub fn delete_volume(workspace_path: &Path, project_id: &str, volume_id: &str) -
     Ok(())
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_volumes(
     workspace_path: &Path,
     project_id: &str,

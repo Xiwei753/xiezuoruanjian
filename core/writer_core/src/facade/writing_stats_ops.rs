@@ -4,6 +4,7 @@ use crate::writing_stats::{DateRange, EventSource, Platform, WritingInputEvent};
 use serde_json::Value;
 
 impl super::WriterCore {
+    #[allow(clippy::too_many_arguments, clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn process_writing_event(
         &self,
         device_id: &str,
@@ -16,7 +17,6 @@ impl super::WriterCore {
         duration_seconds: u32,
         session_id: &str,
     ) -> Result<()> {
-        // 尝试从 DeviceInfo 获取 device_class，否则根据 platform 推断
         let device_class = self
             .load_device_info()
             .map(|info| info.device_class)
@@ -70,6 +70,7 @@ impl super::WriterCore {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_writing_event(
         &self,
         device_id: &str,

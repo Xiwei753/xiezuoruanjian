@@ -82,6 +82,7 @@ pub struct ChapterSaveReceiptDto {
     pub word_count: u32,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::chapter::ChapterSaveReceipt> for ChapterSaveReceiptDto {
     fn from(r: crate::chapter::ChapterSaveReceipt) -> Self {
         Self {

@@ -2,7 +2,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SyncErrorCategory {
+    #[default]
     None,
     TokenMissing,
     TokenInvalid,
@@ -33,11 +35,6 @@ pub enum SyncErrorCategory {
     Other,
 }
 
-impl Default for SyncErrorCategory {
-    fn default() -> Self {
-        SyncErrorCategory::None
-    }
-}
 
 impl SyncErrorCategory {
     pub fn to_ui_status(&self) -> &'static str {
@@ -378,7 +375,7 @@ impl SyncResult {
     }
 
     pub fn error(status: SyncStatus, first_sync_mode: FirstSyncMode, error: String, error_category: Option<String>) -> Self {
-        let message_key = error_category.as_deref().map(|cat| sync_error_category_to_message_key(cat));
+        let message_key = error_category.as_deref().map(sync_error_category_to_message_key);
         Self {
             status,
             uploaded_files: Vec::new(),
@@ -408,7 +405,7 @@ impl SyncResult {
             commit_hash: None,
             error: Some(error),
             error_category: error_category.clone(),
-            message_key: error_category.as_deref().map(|cat| sync_error_category_to_message_key(cat)),
+            message_key: error_category.as_deref().map(sync_error_category_to_message_key),
             conflict_summary: None,
             first_sync_mode: FirstSyncMode::NotAttempted,
             settings_conflicts: None,

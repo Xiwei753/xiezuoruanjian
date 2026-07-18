@@ -94,6 +94,7 @@ pub struct WritingInputEvent {
 }
 
 impl WritingInputEvent {
+    #[allow(clippy::too_many_arguments, clippy::cast_possible_wrap)]
     pub fn new(
         device_id: &str,
         platform: Platform,
@@ -109,7 +110,9 @@ impl WritingInputEvent {
         duration_seconds: u32,
         session_id: &str,
     ) -> Self {
-        let net = inserted_chars as i32 + pasted_chars as i32 + ai_inserted_chars as i32
+        let net = inserted_chars as i32
+            + pasted_chars as i32
+            + ai_inserted_chars as i32
             - deleted_chars as i32;
         Self {
             event_id: Uuid::new_v4().to_string(),

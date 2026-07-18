@@ -118,6 +118,7 @@ impl WriterError {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::error::Error> for WriterError {
     fn from(e: crate::error::Error) -> Self {
         match e {

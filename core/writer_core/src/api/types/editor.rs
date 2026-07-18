@@ -212,6 +212,7 @@ pub struct EditorVisualTransactionDto {
     pub coordinate_mode: VisualCoordinateModeDto,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto {
     fn from(vt: crate::editor::EditorVisualTransaction) -> Self {
         let (inserted_range_start, inserted_range_end) = vt
@@ -471,6 +472,7 @@ pub struct CoordinatedCursorDto {
     pub should_animate: bool,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::CoordinatedCursor> for CoordinatedCursorDto {
     fn from(c: crate::editor::CoordinatedCursor) -> Self {
         Self {
@@ -488,6 +490,7 @@ pub struct EditorByteRangeDto {
     pub end_exclusive: u32,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<(usize, usize)> for EditorByteRangeDto {
     fn from((start, end): (usize, usize)) -> Self {
         Self {
@@ -546,6 +549,7 @@ pub struct DisplayPatchDto {
     pub resulting_selection_end: u32,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
     fn from(p: crate::editor::DisplayPatch) -> Self {
         Self {
@@ -585,6 +589,7 @@ pub enum EditorEditOutcomeDto {
     InvalidRange,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
     fn from(outcome: crate::editor::EditorEditOutcome) -> Self {
         let (outcome_dto, r) = match outcome {
@@ -609,6 +614,7 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
     }
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
     fn from(r: crate::editor::EditorEditResult) -> Self {
         Self {

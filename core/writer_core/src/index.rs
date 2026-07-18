@@ -90,6 +90,7 @@ pub(crate) struct IndexEntry {
 
 impl SearchIndex {
     /// 构建索引：扫描工作区中所有章节
+    #[allow(clippy::cast_possible_truncation)]
     pub fn build(workspace: &Path) -> Result<Self> {
         let start = std::time::Instant::now();
         let mut entries = Vec::new();
@@ -167,7 +168,7 @@ impl SearchIndex {
 
         let ac = match aho_corasick::AhoCorasick::builder()
             .ascii_case_insensitive(!options.case_sensitive)
-            .build(&[query])
+            .build([query])
         {
             Ok(ac) => ac,
             Err(_) => return hits, // Fallback for empty/invalid patterns, though build rarely fails for string slices
@@ -243,7 +244,7 @@ impl SearchIndex {
 
         let ac = match aho_corasick::AhoCorasick::builder()
             .ascii_case_insensitive(!options.case_sensitive)
-            .build(&[query])
+            .build([query])
         {
             Ok(ac) => ac,
             Err(_) => return hits,

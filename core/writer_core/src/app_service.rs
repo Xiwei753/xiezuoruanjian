@@ -354,6 +354,7 @@ impl WriterAppService {
         self.api.calculate_word_count(&text)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn process_writing_event(
         &self,
         device_id: String,
@@ -379,6 +380,7 @@ impl WriterAppService {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_writing_event(
         &self,
         device_id: String,
@@ -894,18 +896,21 @@ impl WriterAppService {
         })
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_get_cursor(&self) -> u32 {
         self.with_session(|s| {
             s.kernel.cursor() as u32
         })
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_get_selection_anchor(&self) -> u32 {
         self.with_session(|s| {
             s.kernel.selection_anchor() as u32
         })
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     pub fn editor_kernel_session_snapshot(&self) -> crate::api::EditorSessionSnapshotDto {
         self.with_session(|s| {
             crate::api::EditorSessionSnapshotDto {

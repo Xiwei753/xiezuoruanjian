@@ -63,6 +63,7 @@ pub struct StarMapIndex {
     pub updated_at: u64,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 pub(crate) fn now_epoch() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

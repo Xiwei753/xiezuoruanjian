@@ -105,6 +105,8 @@ impl StatsApi {
         &self.aggregator
     }
 
+    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation)]
     pub fn get_stats_summary(&self, range: &DateRange) -> Result<Value> {
         let daily_stats = self
             .aggregator

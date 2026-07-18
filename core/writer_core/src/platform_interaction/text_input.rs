@@ -65,6 +65,7 @@ pub enum NormalizedKey {
 /// 归一化修饰键
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct NormalizedModifiers {
     pub ctrl: bool,
     pub shift: bool,
@@ -72,16 +73,6 @@ pub struct NormalizedModifiers {
     pub meta: bool,
 }
 
-impl Default for NormalizedModifiers {
-    fn default() -> Self {
-        Self {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: false,
-        }
-    }
-}
 
 /// 归一化 preedit 属性
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

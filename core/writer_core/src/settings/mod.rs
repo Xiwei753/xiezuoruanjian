@@ -585,7 +585,7 @@ pub fn get_effective_font_size(workspace_path: &Path) -> f64 {
     let local = load_local_settings(workspace_path);
     if let Ok(s) = local {
         if s.editor_font_size > 0.0 {
-            return s.editor_font_size as f64;
+            return f64::from(s.editor_font_size);
         }
     }
     16.0
@@ -617,6 +617,7 @@ pub fn compute_palette_fingerprint(light: &ThemeColorScheme, dark: &ThemeColorSc
     let hash = sha2::Digest::finalize(hasher);
     let mut hex = String::with_capacity(16);
     for byte in &hash[..8] {
+        #[allow(clippy::unwrap_used)]
         write!(&mut hex, "{:02x}", byte).unwrap();
     }
     hex
@@ -676,7 +677,7 @@ pub fn list_palette_records(workspace_path: &Path) -> Result<Vec<ThemePaletteRec
             }
         }
     }
-    records.sort_by(|a, b| b.captured_at_ms.cmp(&a.captured_at_ms));
+    records.sort_by_key(|b| std::cmp::Reverse(b.captured_at_ms));
     Ok(records)
 }
 

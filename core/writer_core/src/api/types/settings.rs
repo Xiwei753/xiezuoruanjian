@@ -28,6 +28,7 @@ pub struct LocalSettingsDto {
     pub diagnostics_verbose: bool,
 }
 
+#[allow(clippy::cast_possible_truncation)]
 impl From<crate::settings::LocalSettings> for LocalSettingsDto {
     fn from(s: crate::settings::LocalSettings) -> Self {
         Self {
@@ -74,8 +75,8 @@ impl From<LocalSettingsDto> for crate::settings::LocalSettings {
             auto_save_enabled: s.auto_save_enabled,
             editor_font_size: s.editor_font_size,
             editor_line_spacing_multiplier: s.editor_line_spacing_multiplier,
-            window_width: s.window_width as f64,
-            window_height: s.window_height as f64,
+            window_width: f64::from(s.window_width),
+            window_height: f64::from(s.window_height),
             auto_save_delay_ms: s.auto_save_delay_ms,
             auto_indent_enabled: s.auto_indent_enabled,
             auto_indent_width: s.auto_indent_width,

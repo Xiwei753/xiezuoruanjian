@@ -2,6 +2,7 @@ use crate::sync::types::{SyncFileEntry, SyncKind, SyncPlan};
 use crate::sync::SyncService;
 use std::path::Path;
 
+#[allow(clippy::cast_possible_wrap)]
 pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
 
@@ -28,7 +29,8 @@ pub(crate) fn scan_workspace_for_sync(workspace_path: &Path) -> crate::Result<Ve
             .unwrap_or(std::time::SystemTime::now())
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as i64;
+            .as_secs();
+        let modified_time = modified_time as i64;
 
         let file_hash = SyncService::compute_file_hash(&absolute_path).unwrap_or_default();
 
