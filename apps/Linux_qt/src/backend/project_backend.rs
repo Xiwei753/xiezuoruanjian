@@ -119,10 +119,11 @@ impl ProjectBackend {
         qjson_object_from_json(&res.to_string())
     }
     fn refresh_tree_model_json(&mut self) -> QString {
-        let out = self.with_app_mut(|app| app.refresh_tree_model_json())
-            .unwrap_or_else(|_| "[]".into());
-        self.emit_changed();
-        out
+        let result = self.with_app_mut(|app| app.refresh_tree_model_json());
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        result.unwrap_or_else(|_| "[]".into())
     }
     fn get_tree_model_json(&self) -> QString {
         self.with_app(|app| app.get_tree_model_json()).unwrap_or_else(|_| "[]".into())
@@ -134,9 +135,11 @@ impl ProjectBackend {
         self.with_app(|app| app.get_project_summaries_json()).unwrap_or_else(|_| "[]".into())
     }
     fn create_project(&mut self, title: QString, action_id: QString) -> QJsonObject {
-        let out = self.with_app_mut(|app| app.create_project_json(title, action_id))
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        let result = self.with_app_mut(|app| app.create_project_json(title, action_id));
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn create_volume(
@@ -145,10 +148,13 @@ impl ProjectBackend {
         title: QString,
         action_id: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.create_volume_json(project_id, title, action_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn create_chapter(
@@ -158,10 +164,13 @@ impl ProjectBackend {
         title: QString,
         action_id: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.create_chapter_json(project_id, volume_id, title, action_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn select_tree_item(
@@ -191,10 +200,13 @@ impl ProjectBackend {
         bridge_success_object(serde_json::json!({}))
     }
     fn delete_project_result(&mut self, project_id: QString, action_id: QString) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.delete_project_json(project_id, action_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn delete_volume_result(
@@ -203,10 +215,13 @@ impl ProjectBackend {
         volume_id: QString,
         action_id: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.delete_volume_json(project_id, volume_id, action_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn delete_chapter_result(
@@ -216,10 +231,13 @@ impl ProjectBackend {
         chapter_id: QString,
         action_id: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.delete_chapter_json(project_id, volume_id, chapter_id, action_id)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn create_new_volume(&mut self, project_id: QString, title: QString) {
@@ -241,10 +259,13 @@ impl ProjectBackend {
         }
     }
     fn rename_project(&mut self, project_id: QString, new_title: QString) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.rename_project_json(project_id, new_title)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn delete_project(&mut self, project_id: QString) {
@@ -267,10 +288,13 @@ impl ProjectBackend {
         volume_id: QString,
         new_title: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.rename_volume_json(project_id, volume_id, new_title)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn delete_volume(&mut self, project_id: QString, volume_id: QString) {
@@ -296,10 +320,13 @@ impl ProjectBackend {
         chapter_id: QString,
         new_title: QString,
     ) -> QJsonObject {
-        let out = self.with_app_mut(|app| {
+        let result = self.with_app_mut(|app| {
             app.rename_chapter_json(project_id, volume_id, chapter_id, new_title)
-        }).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
-        self.emit_changed();
+        });
+        if result.is_ok() {
+            self.emit_changed();
+        }
+        let out = result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into());
         qjson_object_from_json(&out.to_string())
     }
     fn delete_chapter(&mut self, project_id: QString, volume_id: QString, chapter_id: QString) {
