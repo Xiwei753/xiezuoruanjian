@@ -635,7 +635,7 @@ impl SettingsBackend {
                 match core.list_palette_records() {
                     Ok(records) => {
                         let dtos: Vec<writer_core::api::types::ThemePaletteRecordDto> =
-                            records.into_iter().map(Into::into).collect();
+                            records.into_iter().collect();
                         QString::from(serde_json::to_string(&dtos).unwrap_or_else(|_| "[]".to_string()))
                     }
                     Err(_) => QString::from(crate::backend::json_utils::borrow_conflict_error_json()),
@@ -1058,15 +1058,15 @@ impl AppBackend {
             local.editor_font_size = self.current_setting_font_size;
             local.editor_line_spacing_multiplier = self.current_setting_line_spacing;
             local.auto_save_enabled = self.current_setting_auto_save_enabled;
-            local.auto_save_delay_ms = self.current_setting_auto_save_delay_ms as u64;
+            local.auto_save_delay_ms = u64::from(self.current_setting_auto_save_delay_ms);
             local.auto_indent_enabled = self.current_setting_auto_indent_enabled;
             local.auto_indent_width = self.current_setting_auto_indent_width;
             local.editor_typing_animation_enabled = self.current_setting_typing_animation_enabled;
             local.editor_smooth_cursor_enabled = self.current_setting_smooth_cursor_enabled;
             local.editor_typing_animation_duration_ms =
-                self.current_setting_typing_animation_duration_ms as u64;
+                u64::from(self.current_setting_typing_animation_duration_ms);
             local.editor_smooth_cursor_duration_ms =
-                self.current_setting_smooth_cursor_duration_ms as u64;
+                u64::from(self.current_setting_smooth_cursor_duration_ms);
             local.editor_coordinated_text_cursor_animation_enabled =
                 self.current_setting_coordinated_text_cursor_animation_enabled;
             local.ai_enabled = self.current_ai_enabled;
@@ -1113,7 +1113,7 @@ impl AppBackend {
                     writer_core::settings::SyncableSettings::default(),
                 )
             });
-            syncable.font_size = self.current_setting_font_size as f64;
+            syncable.font_size = f64::from(self.current_setting_font_size);
 
             let syncable_result = core.save_syncable_settings(syncable.clone());
             let syncable_envelope = match syncable_result {

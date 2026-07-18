@@ -195,10 +195,7 @@ impl AppBackend {
                                 _ => false,
                             };
                             if save_first {
-                                let save_outcome = match save_sync_configs(path, cfg_ref, sec_ref) {
-                                    Ok(()) => None,
-                                    Err(e) => Some(e),
-                                };
+                                let save_outcome = save_sync_configs(path, cfg_ref, sec_ref).err();
                                 match push_result {
                                     Ok(push_res) => {
                                         let category = push_res.error_category.clone();

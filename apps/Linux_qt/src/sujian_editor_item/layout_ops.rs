@@ -18,8 +18,8 @@ impl SujianEditorItem {
         let lines = self.ensure_layout_cached(width);
         let height = lines
             .last()
-            .map(|line| line.y + line.height + padding as f64)
-            .unwrap_or((font_size * line_spacing + padding * 2.0) as f64);
+            .map(|line| line.y + line.height + f64::from(padding))
+            .unwrap_or(f64::from(font_size * line_spacing + padding * 2.0));
         height.max(1.0) as f32
     }
 
@@ -52,13 +52,13 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn build_editor_layout_snapshot(&mut self, width: f64) -> EditorLayoutSnapshot {
-        let scroll_y = self.current_scroll_y as f64;
-        let viewport_h = self.current_viewport_height.max(1.0) as f64;
-        let font_size = self.current_font_pixel_size as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
+        let viewport_h = f64::from(self.current_viewport_height.max(1.0));
+        let font_size = f64::from(self.current_font_pixel_size);
         let font_family = &self.current_font_family.to_string();
-        let text_indent = self.current_text_indent as f64;
-        let line_spacing = self.current_line_spacing as f64;
-        let padding = self.current_padding as f64;
+        let text_indent = f64::from(self.current_text_indent);
+        let line_spacing = f64::from(self.current_line_spacing);
+        let padding = f64::from(self.current_padding);
         let dpr = {
             let item_ptr = self.get_cpp_object();
             if !item_ptr.is_null() {
@@ -103,13 +103,13 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn build_virtual_layout_snapshot(&mut self, virtual_text: &str, width: f64) -> EditorLayoutSnapshot {
-        let scroll_y = self.current_scroll_y as f64;
-        let viewport_h = self.current_viewport_height.max(1.0) as f64;
-        let font_size = self.current_font_pixel_size as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
+        let viewport_h = f64::from(self.current_viewport_height.max(1.0));
+        let font_size = f64::from(self.current_font_pixel_size);
         let font_family = &self.current_font_family.to_string();
-        let text_indent = self.current_text_indent as f64;
-        let line_spacing = self.current_line_spacing as f64;
-        let padding = self.current_padding as f64;
+        let text_indent = f64::from(self.current_text_indent);
+        let line_spacing = f64::from(self.current_line_spacing);
+        let padding = f64::from(self.current_padding);
         let dpr = {
             let item_ptr = self.get_cpp_object();
             if !item_ptr.is_null() {
@@ -203,14 +203,14 @@ impl SujianEditorItem {
             cursor_byte,
             affinity,
             scroll_y,
-            self.current_viewport_height.max(1.0) as f64,
+            f64::from(self.current_viewport_height.max(1.0)),
         )
     }
 
     pub(crate) fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
         let width = self.bounding_width();
         let snapshot = self.layout_snapshot(width);
-        let scroll_y = self.current_scroll_y as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
         let (index, affinity) = self.editor_layout.hit_test(&snapshot, x, y, scroll_y);
         editor_debug_log(&format!(
             "hit_test: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, clamped_index={}, affinity={:?}",

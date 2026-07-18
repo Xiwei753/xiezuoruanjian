@@ -164,7 +164,7 @@ impl crate::sync::SyncService {
                 }
             }
 
-            let mut default_state = SyncState { device_id: uuid::Uuid::new_v4().to_string(), ..Default::default() };
+            let default_state = SyncState { device_id: uuid::Uuid::new_v4().to_string(), ..Default::default() };
             return Ok(default_state);
         }
 

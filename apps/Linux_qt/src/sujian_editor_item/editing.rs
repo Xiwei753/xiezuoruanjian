@@ -131,7 +131,7 @@ impl SujianEditorItem {
             let visual_text_unchanged = !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text;
 
             let key = self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
-                self.current_typing_animation_duration_ms as u64,
+                u64::from(self.current_typing_animation_duration_ms),
                 &old_snapshot,
                 &new_snapshot,
                 commit.preedit_byte_start,
@@ -255,8 +255,8 @@ impl SujianEditorItem {
 
         let cursor_in_new_base = del_start + inserted.len();
 
-        let new_text = new_base;
-        let new_cursor = cursor_in_new_base;
+        let _new_text = new_base;
+        let _new_cursor = cursor_in_new_base;
 
         let preedit_len = commit.preedit_byte_end - commit.preedit_byte_start;
         let qt_replace_start_in_vt = if del_start <= commit.session_replace_start {
@@ -324,7 +324,7 @@ impl SujianEditorItem {
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
             let key = self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
-                self.current_typing_animation_duration_ms as u64,
+                u64::from(self.current_typing_animation_duration_ms),
                 &old_snapshot,
                 &new_snapshot,
                 commit.preedit_byte_start,
@@ -485,7 +485,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
-        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
         editor_debug_log(&format!(
@@ -504,7 +504,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn drag_select_at(&mut self, x: f32, y: f32) {
-        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
         let _ = self.pipeline.set_selection(self.buffer.selection_anchor, index);
@@ -517,7 +517,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn long_press_at(&mut self, x: f32, y: f32) {
-        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
         if !self.buffer.has_selection() {
@@ -532,7 +532,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {
-        let (index, affinity) = self.hit_test(x as f64, y as f64);
+        let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         self.cursor_ctrl.force_snap_next = true;
         self.select_word_at_impl(index);
@@ -661,7 +661,7 @@ impl SujianEditorItem {
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
             self.pipeline.animation_coordinator_mut().handle_cursor_only(
-                self.current_cursor_animation_duration_ms as u64,
+                u64::from(self.current_cursor_animation_duration_ms),
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -702,7 +702,7 @@ impl SujianEditorItem {
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
             self.pipeline.animation_coordinator_mut().handle_cursor_only(
-                self.current_cursor_animation_duration_ms as u64,
+                u64::from(self.current_cursor_animation_duration_ms),
                 old_cursor_rect,
                 new_cursor_rect,
             );
@@ -737,7 +737,7 @@ impl SujianEditorItem {
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
             self.pipeline.animation_coordinator_mut().handle_cursor_only(
-                self.current_cursor_animation_duration_ms as u64,
+                u64::from(self.current_cursor_animation_duration_ms),
                 old_cursor_rect,
                 new_cursor_rect,
             );

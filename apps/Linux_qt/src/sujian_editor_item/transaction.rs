@@ -29,13 +29,13 @@ impl SujianEditorItem {
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
             if let Some(ref mut vt) = vt {
                 let width = self.bounding_width();
-                let font_size = self.current_font_pixel_size as f64;
+                let font_size = f64::from(self.current_font_pixel_size);
                 let font_family = &self.current_font_family.to_string();
-                let scroll_y = self.current_scroll_y as f64;
-                let viewport_h = self.current_viewport_height.max(1.0) as f64;
-                let text_indent = self.current_text_indent as f64;
-                let line_spacing = self.current_line_spacing as f64;
-                let padding = self.current_padding as f64;
+                let scroll_y = f64::from(self.current_scroll_y);
+                let viewport_h = f64::from(self.current_viewport_height.max(1.0));
+                let text_indent = f64::from(self.current_text_indent);
+                let line_spacing = f64::from(self.current_line_spacing);
+                let padding = f64::from(self.current_padding);
                 let dpr = {
                     let item_ptr = self.get_cpp_object();
                     if !item_ptr.is_null() {
@@ -206,10 +206,10 @@ impl SujianEditorItem {
         old_text: &str,
     ) {
         let width = self.bounding_width();
-        let font_size = self.current_font_pixel_size as f64;
+        let _font_size = f64::from(self.current_font_pixel_size);
         let font_family = &self.current_font_family.to_string();
-        let scroll_y = self.current_scroll_y as f64;
-        let viewport_h = self.current_viewport_height.max(1.0) as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
+        let viewport_h = f64::from(self.current_viewport_height.max(1.0));
 
         match vt.kind {
             EditorAnimationKind::Insert => {
@@ -293,62 +293,59 @@ impl SujianEditorItem {
             .find(|t| t.key == key)
             .cloned();
 
-        match tx {
-            Some(t) => {
-                let snapshot_ids = t.snapshot_ids();
-                if snapshot_ids.is_empty() {
-                    self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
-                    return;
-                }
+        if let Some(t) = tx {
+            let snapshot_ids = t.snapshot_ids();
+            if snapshot_ids.is_empty() {
+                self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
+                return;
+            }
 
-                let mut all_found = true;
-                for id in &snapshot_ids {
-                    if !self.pipeline.texture_cache().contains_line(id) {
-                        all_found = false;
-                        break;
-                    }
-                }
-
-                if all_found {
-                    self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
-                    return;
-                }
-
-                if let Some(ref old_snap) = t.old_snapshot {
-                    for line in &old_snap.line_snapshots {
-                        if let Some(ref image) = line.image {
-                            self.pipeline.texture_cache_mut().insert_line(line.id, image.clone());
-                        }
-                    }
-                }
-                if let Some(ref new_snap) = t.new_snapshot {
-                    for line in &new_snap.line_snapshots {
-                        if let Some(ref image) = line.image {
-                            self.pipeline.texture_cache_mut().insert_line(line.id, image.clone());
-                        }
-                    }
-                }
-
-                let mut any_missing = false;
-                for id in &snapshot_ids {
-                    if !self.pipeline.texture_cache().contains_line(id) {
-                        any_missing = true;
-                        break;
-                    }
-                }
-
-                if any_missing {
-                    editor_animation_debug_log(&format!(
-                        "prepare_transaction_textures: some line textures missing for tid={}, cancelling",
-                        key.transaction_id
-                    ));
-                    self.pipeline.animation_coordinator_mut().cancel_by_key(key, "texture_failed");
-                    self.render_dirty = true;
-                } else {
-                    self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
+            let mut all_found = true;
+            for id in &snapshot_ids {
+                if !self.pipeline.texture_cache().contains_line(id) {
+                    all_found = false;
+                    break;
                 }
             }
-            None => {}
+
+            if all_found {
+                self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
+                return;
+            }
+
+            if let Some(ref old_snap) = t.old_snapshot {
+                for line in &old_snap.line_snapshots {
+                    if let Some(ref image) = line.image {
+                        self.pipeline.texture_cache_mut().insert_line(line.id, image.clone());
+                    }
+                }
+            }
+            if let Some(ref new_snap) = t.new_snapshot {
+                for line in &new_snap.line_snapshots {
+                    if let Some(ref image) = line.image {
+                        self.pipeline.texture_cache_mut().insert_line(line.id, image.clone());
+                    }
+                }
+            }
+
+            let mut any_missing = false;
+            for id in &snapshot_ids {
+                if !self.pipeline.texture_cache().contains_line(id) {
+                    any_missing = true;
+                    break;
+                }
+            }
+
+            if any_missing {
+                editor_animation_debug_log(&format!(
+                    "prepare_transaction_textures: some line textures missing for tid={}, cancelling",
+                    key.transaction_id
+                ));
+                self.pipeline.animation_coordinator_mut().cancel_by_key(key, "texture_failed");
+                self.render_dirty = true;
+            } else {
+                self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
+            }
         }
     }
 }
@@ -361,7 +358,7 @@ fn make_cursor_rect_from_caret(
 ) -> CursorRect {
     let line = snapshot.lines.iter().find(|l| l.id == caret.visual_line_id);
     let baseline_y = match line {
-        Some(l) => layout::text_baseline_y(l, snapshot.font_size as f64, font_family) - scroll_y,
+        Some(l) => layout::text_baseline_y(l, f64::from(snapshot.font_size), font_family) - scroll_y,
         None => caret.y + caret.h * 0.8,
     };
     CursorRect {

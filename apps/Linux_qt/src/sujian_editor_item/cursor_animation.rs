@@ -1,13 +1,17 @@
 use writer_core::editor::CursorRect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub(crate) enum CursorBlinkMode {
+    #[default]
     Normal,
     Suppressed,
 }
 
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub(crate) enum CursorTransition {
+    #[default]
     Snap,
     Tween {
         old_rect: CursorRect,
@@ -16,11 +20,6 @@ pub(crate) enum CursorTransition {
     },
 }
 
-impl Default for CursorTransition {
-    fn default() -> Self {
-        CursorTransition::Snap
-    }
-}
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct CursorAnimationPlan {
@@ -32,8 +31,3 @@ pub(crate) struct CursorAnimationPlan {
     pub cursor_h: f64,
 }
 
-impl Default for CursorBlinkMode {
-    fn default() -> Self {
-        CursorBlinkMode::Normal
-    }
-}

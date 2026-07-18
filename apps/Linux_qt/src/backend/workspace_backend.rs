@@ -67,17 +67,11 @@ pub struct WorkspaceBackend {
     app: AppRef,
 }
 
+#[derive(Default)]
 struct WorkspaceCached {
     has_workspace: bool,
 }
 
-impl Default for WorkspaceCached {
-    fn default() -> Self {
-        Self {
-            has_workspace: false,
-        }
-    }
-}
 
 impl WorkspaceBackend {
     pub fn new(app: AppRef) -> Self {
@@ -204,12 +198,12 @@ impl WorkspaceBackend {
         crate::backend::app_backend::debug_log_static(
             "workspace",
             "qml_click_import_workspace",
-            &format!("path={}, url={}", path.to_string(), remote_url.to_string()),
+            &format!("path={}, url={}", path, remote_url),
         );
         crate::backend::app_backend::debug_log_static(
             "workspace",
             "workspace_backend_import_workspace_called",
-            &format!("path={}", path.to_string()),
+            &format!("path={}", path),
         );
         if self.with_app_mut(|app| {
             app.execute_github_init(path, remote_url, branch, token)

@@ -137,7 +137,7 @@ impl SujianEditorItem {
             QBrush::from_color(QColor::from_rgba(0, 0, 0, 0)),
         );
 
-        let font_size = self.current_font_pixel_size as f64;
+        let font_size = f64::from(self.current_font_pixel_size);
         let font_family = self.current_font_family.to_string();
         let fs = font_size as f32;
         let ff: QString = font_family.clone().into();
@@ -208,7 +208,7 @@ impl SujianEditorItem {
 
             let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
             let line_top = line.y + paint_offset_y;
-            let line_bottom = line_top + line.height;
+            let _line_bottom = line_top + line.height;
 
             let line_hidden: Vec<(f64, f64, f64, f64)> = hidden_clip_rects
                 .iter()
@@ -216,7 +216,7 @@ impl SujianEditorItem {
                     *right > line.x && *left < line.x + line.width
                         && *bottom > line.y && *top < line.y + line.height
                 })
-                .map(|(left, top, right, _bottom)| {
+                .map(|(left, _top, right, _bottom)| {
                     let clip_left = (*left).max(line.x);
                     let clip_right = (*right).min(line.x + line.width);
                     (clip_left, line_top, clip_right - clip_left, line.height)
@@ -643,10 +643,10 @@ impl SujianEditorItem {
             1.0
         };
         let width = self.bounding_width();
-        let vp_h = self.current_viewport_height.max(1.0) as f64;
+        let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let img_w = (width as i32).max(1);
-        let scroll_y = self.current_scroll_y as f64;
-        let content_h = self.current_content_height as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
+        let content_h = f64::from(self.current_content_height);
 
         // Use larger overscan (3.5x viewport) to reduce buffer rebuilds
         // during scrolling, especially at large font sizes where content
@@ -673,7 +673,7 @@ impl SujianEditorItem {
                 miss_reason, scroll_y, content_h, vp_h
             ));
 
-        let phys_w = ((img_w as f64 * dpr) as i32).max(1);
+        let phys_w = ((f64::from(img_w) * dpr) as i32).max(1);
         let phys_h = ((buffer_h * dpr) as i32).max(1);
         let mut image = QImage::new(
             qmetaobject::QSize {
@@ -727,7 +727,7 @@ impl SujianEditorItem {
                     let start = c.lines.partition_point(|l| l.y + l.height < min_y);
                     let end = c.lines.len().min(
                         c.lines.partition_point(|l| {
-                            l.y < min_y + buffer_h + self.current_font_pixel_size as f64 * 2.0
+                            l.y < min_y + buffer_h + f64::from(self.current_font_pixel_size) * 2.0
                         }) + 1,
                     );
                     end.saturating_sub(start)
@@ -750,7 +750,7 @@ impl SujianEditorItem {
     /// **IMPORTANT**: This method MUST only be called from the GUI thread.
     /// It directly emits signals and calls inputMethod()->update().
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
-        let scroll_y = self.current_scroll_y as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
         let layout_res = self.editor_layout_cursor_rect(
             self.buffer.cursor,
             self.cursor_ctrl.affinity,
@@ -762,7 +762,7 @@ impl SujianEditorItem {
         let cursor_h = layout_res.h;
         let visual_line_id = layout_res.visual_line_id;
 
-        let vp_h = self.current_viewport_height.max(1.0) as f64;
+        let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let _is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let _is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
@@ -793,7 +793,7 @@ impl SujianEditorItem {
                         bottom: cursor_y + cursor_h,
                         baseline_y: cursor_y + cursor_h * 0.8,
                     },
-                    duration_ms: self.current_cursor_animation_duration_ms as u64,
+                    duration_ms: u64::from(self.current_cursor_animation_duration_ms),
                 }
             } else {
                 CursorTransition::Snap
@@ -832,7 +832,7 @@ impl SujianEditorItem {
             let mut line_info = String::new();
             if let Some(snapshot) = self.editor_layout.cache() {
                 if let Some(line) = snapshot.lines.iter().find(|l| l.id == visual_line_id) {
-                    let font_size = snapshot.font_size as f64;
+                    let font_size = f64::from(snapshot.font_size);
                     let font_family = &snapshot.font_family;
                     let ascent = if line.qt_ascent > 0.0 { line.qt_ascent } else { crate::editor::layout::get_font_ascent(font_family, snapshot.font_size) };
                     let descent = if line.qt_descent > 0.0 { line.qt_descent } else { crate::editor::layout::get_font_descent(font_family, snapshot.font_size) };

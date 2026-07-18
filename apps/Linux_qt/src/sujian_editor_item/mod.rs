@@ -56,7 +56,6 @@ use crate::editor::layout::{
 };
 use crate::editor::renderer;
 use crate::editor::scene_graph;
-use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use buffer::{
     byte_to_char_index, clamp_to_char_boundary, next_char_boundary, normalize_plain_text,
     prev_char_boundary, EditorBuffer, EditorSnapshot,
@@ -67,16 +66,14 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
-use animation_coordinator::LinuxEditorAnimationCoordinator;
 use layout_snapshot::EditorLayoutSnapshot;
-use texture_cache::TextureCache;
 use transaction_key::VisualTransactionKey;
 use layout_revision::LayoutRevision;
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CompositionSession, CursorRect, EditorAnimationKind,
-    EditorCursor, EditorEngine, EditorSelection, EditorTransactionCause, EditorVisualTransaction,
-    GlyphRect, PreeditVisualTransaction, ReflowGlyphRect,
+    EditorCursor, EditorSelection, EditorTransactionCause, EditorVisualTransaction,
+    GlyphRect, PreeditVisualTransaction,
 };
 
 use animation_coordinator::AnimationMode;
@@ -136,34 +133,34 @@ pub(crate) fn is_complex_grapheme(ch: char) -> bool {
     if cp == 0x200D {
         return true;
     }
-    if (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF) {
+    if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) {
         return true;
     }
-    if cp >= 0x0300 && cp <= 0x036F {
+    if (0x0300..=0x036F).contains(&cp) {
         return true;
     }
-    if cp >= 0x1AB0 && cp <= 0x1AFF {
+    if (0x1AB0..=0x1AFF).contains(&cp) {
         return true;
     }
-    if cp >= 0x1DC0 && cp <= 0x1DFF {
+    if (0x1DC0..=0x1DFF).contains(&cp) {
         return true;
     }
-    if cp >= 0x20D0 && cp <= 0x20FF {
+    if (0x20D0..=0x20FF).contains(&cp) {
         return true;
     }
-    if cp >= 0xFE20 && cp <= 0xFE2F {
+    if (0xFE20..=0xFE2F).contains(&cp) {
         return true;
     }
-    if cp >= 0x1F600 && cp <= 0x1F64F {
+    if (0x1F600..=0x1F64F).contains(&cp) {
         return true;
     }
-    if cp >= 0x1F300 && cp <= 0x1F5FF {
+    if (0x1F300..=0x1F5FF).contains(&cp) {
         return true;
     }
-    if cp >= 0x1F680 && cp <= 0x1F6FF {
+    if (0x1F680..=0x1F6FF).contains(&cp) {
         return true;
     }
-    if cp >= 0x1F900 && cp <= 0x1F9FF {
+    if (0x1F900..=0x1F9FF).contains(&cp) {
         return true;
     }
     false
@@ -630,10 +627,10 @@ impl SujianEditorItem {
         if self.buffer.has_selection() {
             plan.has_selection = true;
             let width = self.bounding_width();
-            let _font_size = self.current_font_pixel_size as f64;
+            let _font_size = f64::from(self.current_font_pixel_size);
             let _font_family = &self.current_font_family.to_string();
-            let scroll_y = self.current_scroll_y as f64;
-            let viewport_h = self.current_viewport_height.max(1.0) as f64;
+            let scroll_y = f64::from(self.current_scroll_y);
+            let viewport_h = f64::from(self.current_viewport_height.max(1.0));
             let snapshot = self.layout_snapshot(width);
 
             let anchor = self.buffer.selection_anchor.min(self.buffer.cursor);
@@ -682,9 +679,9 @@ impl SujianEditorItem {
             plan.has_preedit = true;
             if let Some(ref _preedit_rect) = self.pipeline.composition().preedit_cursor_rect {
                 let width = self.bounding_width();
-                let font_size = self.current_font_pixel_size as f64;
+                let font_size = f64::from(self.current_font_pixel_size);
                 let font_family = &self.current_font_family.to_string();
-                let scroll_y = self.current_scroll_y as f64;
+                let scroll_y = f64::from(self.current_scroll_y);
                 let snapshot = self.layout_snapshot(width);
                 let cursor_byte = self.buffer.cursor;
 

@@ -1,6 +1,5 @@
 use writer_core::editor::{
-    EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorTransactionCause,
-    EditorVisualIntent, AnimationMode as CoreAnimationMode, CursorRect, PreeditVisualTransaction,
+    EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorTransactionCause, CursorRect, PreeditVisualTransaction,
 };
 use super::buffer::{clamp_to_char_boundary, normalize_plain_text};
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
@@ -352,8 +351,8 @@ impl LinuxEditorPipeline {
 
     pub fn set_typing_animation_duration_ms(&mut self, ms: u32) {
         self.typing_animation_duration_ms = ms;
-        self.engine.set_animation_duration_ms(ms as u64);
-        self.kernel.set_animation_duration_ms(ms as u64);
+        self.engine.set_animation_duration_ms(u64::from(ms));
+        self.kernel.set_animation_duration_ms(u64::from(ms));
     }
 
     pub fn coordinated_cursor_animation_enabled(&self) -> bool {
@@ -410,7 +409,7 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
                         self.kernel.cursor(),
@@ -446,7 +445,7 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
                         self.kernel.cursor(),
@@ -483,7 +482,7 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
                         self.kernel.cursor(),
@@ -517,7 +516,7 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
                         self.kernel.cursor(),
@@ -549,7 +548,7 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
                         self.kernel.cursor(),
@@ -581,7 +580,7 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                if self.mirror.apply_edit_result(&result).is_err() {
                     self.mirror.load_from_snapshot(
                         self.kernel.text().to_string(),
                         self.kernel.cursor(),

@@ -38,8 +38,7 @@ pub(crate) use super::render_plan::{
     SelectionPreeditPlan, SelectionRange, PreeditRange,
     ImeUpdateKind, ImeUpdatePlan, RenderPlan,
 };
-pub(crate) use super::texture_cache::TextureCache;
-use super::animated_slice::{AnimatedSlice, AnimatedSliceFrame, AnimatedSliceKind};
+use super::animated_slice::AnimatedSlice;
 use super::text_visual_transaction::{
     PreparedTextVisualTransaction, PreparedTransactionQueue,
     TextVisualTransactionState, TextVisualOperationKind, TransactionTimeline,
@@ -191,7 +190,7 @@ impl LinuxEditorAnimationCoordinator {
                         }
                     }
 
-                    let reflow_start = range_end;
+                    let _reflow_start = range_end;
                     let insert_reflow_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                     for new_line in &new_snapshot.line_snapshots {
                         if new_line.byte_end <= range_end {
@@ -216,59 +215,56 @@ impl LinuxEditorAnimationCoordinator {
                             let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                             let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
-                            match (old_sr, new_sr) {
-                                (Some(old_src), Some(new_src)) => {
-                                    let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                                        && ol.clusters.iter()
-                                            .zip(new_line.clusters.iter())
-                                            .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                            if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
+                                let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                                    && ol.clusters.iter()
+                                        .zip(new_line.clusters.iter())
+                                        .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
 
-                                    let old_doc = ol.source_rect_to_document_rect(&old_src);
-                                    let new_doc = new_line.source_rect_to_document_rect(&new_src);
+                                let old_doc = ol.source_rect_to_document_rect(&old_src);
+                                let new_doc = new_line.source_rect_to_document_rect(&new_src);
 
-                                    if same_shaping {
-                                        slices.push(AnimatedSlice::reflow_move(
-                                            key,
-                                            ol.id,
-                                            old_src,
-                                            old_doc,
-                                            new_line.id,
-                                            new_src.clone(),
-                                            new_doc,
-                                            new_line.byte_start,
-                                            new_line.byte_end,
-                                            ol.clusters.first().map(|c| c.shaping_identity.clone()),
-                                        ));
-                                    } else {
-                                        slices.push(AnimatedSlice::reflow_crossfade_old(
-                                            key,
-                                            ol.id,
-                                            old_src.clone(),
-                                            old_doc.clone(),
-                                            new_doc.clone(),
-                                            new_line.byte_start,
-                                            new_line.byte_end,
-                                        ));
-                                        slices.push(AnimatedSlice::reflow_crossfade_new(
-                                            key,
-                                            new_line.id,
-                                            new_src.clone(),
-                                            old_doc,
-                                            new_doc,
-                                            new_line.byte_start,
-                                            new_line.byte_end,
-                                        ));
-                                    }
-
-                                    static_patches.push(StaticLinePatch::reflow_patch(
+                                if same_shaping {
+                                    slices.push(AnimatedSlice::reflow_move(
+                                        key,
+                                        ol.id,
+                                        old_src,
+                                        old_doc,
+                                        new_line.id,
+                                        new_src.clone(),
+                                        new_doc,
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                        ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                                    ));
+                                } else {
+                                    slices.push(AnimatedSlice::reflow_crossfade_old(
+                                        key,
+                                        ol.id,
+                                        old_src.clone(),
+                                        old_doc.clone(),
+                                        new_doc.clone(),
+                                        new_line.byte_start,
+                                        new_line.byte_end,
+                                    ));
+                                    slices.push(AnimatedSlice::reflow_crossfade_new(
                                         key,
                                         new_line.id,
-                                        vec![new_src],
+                                        new_src.clone(),
+                                        old_doc,
+                                        new_doc,
                                         new_line.byte_start,
                                         new_line.byte_end,
                                     ));
                                 }
-                                _ => {}
+
+                                static_patches.push(StaticLinePatch::reflow_patch(
+                                    key,
+                                    new_line.id,
+                                    vec![new_src],
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                ));
                             }
                         }
                     }
@@ -392,59 +388,56 @@ impl LinuxEditorAnimationCoordinator {
                         let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                         let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
-                        match (old_sr, new_sr) {
-                            (Some(old_src), Some(new_src)) => {
-                                let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                                    && ol.clusters.iter()
-                                        .zip(new_line.clusters.iter())
-                                        .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                        if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
+                            let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                                && ol.clusters.iter()
+                                    .zip(new_line.clusters.iter())
+                                    .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
 
-                                let old_doc = ol.source_rect_to_document_rect(&old_src);
-                                let new_doc = new_line.source_rect_to_document_rect(&new_src);
+                            let old_doc = ol.source_rect_to_document_rect(&old_src);
+                            let new_doc = new_line.source_rect_to_document_rect(&new_src);
 
-                                if same_shaping {
-                                    slices.push(AnimatedSlice::reflow_move(
-                                        key,
-                                        ol.id,
-                                        old_src,
-                                        old_doc,
-                                        new_line.id,
-                                        new_src.clone(),
-                                        new_doc,
-                                        new_line.byte_start,
-                                        new_line.byte_end,
-                                        ol.clusters.first().map(|c| c.shaping_identity.clone()),
-                                    ));
-                                } else {
-                                    slices.push(AnimatedSlice::reflow_crossfade_old(
-                                        key,
-                                        ol.id,
-                                        old_src.clone(),
-                                        old_doc.clone(),
-                                        new_doc.clone(),
-                                        new_line.byte_start,
-                                        new_line.byte_end,
-                                    ));
-                                    slices.push(AnimatedSlice::reflow_crossfade_new(
-                                        key,
-                                        new_line.id,
-                                        new_src.clone(),
-                                        old_doc,
-                                        new_doc,
-                                        new_line.byte_start,
-                                        new_line.byte_end,
-                                    ));
-                                }
-
-                                static_patches.push(StaticLinePatch::reflow_patch(
+                            if same_shaping {
+                                slices.push(AnimatedSlice::reflow_move(
+                                    key,
+                                    ol.id,
+                                    old_src,
+                                    old_doc,
+                                    new_line.id,
+                                    new_src.clone(),
+                                    new_doc,
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                    ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                                ));
+                            } else {
+                                slices.push(AnimatedSlice::reflow_crossfade_old(
+                                    key,
+                                    ol.id,
+                                    old_src.clone(),
+                                    old_doc.clone(),
+                                    new_doc.clone(),
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                ));
+                                slices.push(AnimatedSlice::reflow_crossfade_new(
                                     key,
                                     new_line.id,
-                                    vec![new_src],
+                                    new_src.clone(),
+                                    old_doc,
+                                    new_doc,
                                     new_line.byte_start,
                                     new_line.byte_end,
                                 ));
                             }
-                            _ => {}
+
+                            static_patches.push(StaticLinePatch::reflow_patch(
+                                key,
+                                new_line.id,
+                                vec![new_src],
+                                new_line.byte_start,
+                                new_line.byte_end,
+                            ));
                         }
                     }
                 }
@@ -613,7 +606,7 @@ impl LinuxEditorAnimationCoordinator {
             ));
         }
 
-        let reflow_start = composition_byte_end;
+        let _reflow_start = composition_byte_end;
         for new_line in &new_snapshot.line_snapshots {
             if new_line.byte_end <= composition_byte_end {
                 continue;
@@ -638,59 +631,56 @@ impl LinuxEditorAnimationCoordinator {
                 let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                 let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
-                match (old_sr, new_sr) {
-                    (Some(old_src), Some(new_src)) => {
-                        let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                            && ol.clusters.iter()
-                                .zip(new_line.clusters.iter())
-                                .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
+                    let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                        && ol.clusters.iter()
+                            .zip(new_line.clusters.iter())
+                            .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
 
-                        let old_doc = ol.source_rect_to_document_rect(&old_src);
-                        let new_doc = new_line.source_rect_to_document_rect(&new_src);
+                    let old_doc = ol.source_rect_to_document_rect(&old_src);
+                    let new_doc = new_line.source_rect_to_document_rect(&new_src);
 
-                        if same_shaping {
-                            slices.push(AnimatedSlice::reflow_move(
-                                key,
-                                ol.id,
-                                old_src,
-                                old_doc,
-                                new_line.id,
-                                new_src.clone(),
-                                new_doc,
-                                new_line.byte_start,
-                                new_line.byte_end,
-                                ol.clusters.first().map(|c| c.shaping_identity.clone()),
-                            ));
-                        } else {
-                            slices.push(AnimatedSlice::reflow_crossfade_old(
-                                key,
-                                ol.id,
-                                old_src.clone(),
-                                old_doc.clone(),
-                                new_doc.clone(),
-                                new_line.byte_start,
-                                new_line.byte_end,
-                            ));
-                            slices.push(AnimatedSlice::reflow_crossfade_new(
-                                key,
-                                new_line.id,
-                                new_src.clone(),
-                                old_doc,
-                                new_doc,
-                                new_line.byte_start,
-                                new_line.byte_end,
-                            ));
-                        }
-
-                        static_patches.push(StaticLinePatch::reflow_patch(
+                    if same_shaping {
+                        slices.push(AnimatedSlice::reflow_move(
+                            key,
+                            ol.id,
+                            old_src,
+                            old_doc,
+                            new_line.id,
+                            new_src.clone(),
+                            new_doc,
+                            new_line.byte_start,
+                            new_line.byte_end,
+                            ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                        ));
+                    } else {
+                        slices.push(AnimatedSlice::reflow_crossfade_old(
+                            key,
+                            ol.id,
+                            old_src.clone(),
+                            old_doc.clone(),
+                            new_doc.clone(),
+                            new_line.byte_start,
+                            new_line.byte_end,
+                        ));
+                        slices.push(AnimatedSlice::reflow_crossfade_new(
                             key,
                             new_line.id,
-                            vec![new_src],
+                            new_src.clone(),
+                            old_doc,
+                            new_doc,
                             new_line.byte_start,
                             new_line.byte_end,
                         ));
                     }
-                    _ => {}
+
+                    static_patches.push(StaticLinePatch::reflow_patch(
+                        key,
+                        new_line.id,
+                        vec![new_src],
+                        new_line.byte_start,
+                        new_line.byte_end,
+                    ));
                 }
             }
         }
@@ -986,59 +976,56 @@ impl LinuxEditorAnimationCoordinator {
                         let old_sr = ol.source_rect_for_byte_range(ol.byte_start, ol.byte_end);
                         let new_sr = new_line.source_rect_for_byte_range(new_line.byte_start, new_line.byte_end);
 
-                        match (old_sr, new_sr) {
-                            (Some(old_src), Some(new_src)) => {
-                                let same_shaping = ol.clusters.len() == new_line.clusters.len()
-                                    && ol.clusters.iter()
-                                        .zip(new_line.clusters.iter())
-                                        .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
+                        if let (Some(old_src), Some(new_src)) = (old_sr, new_sr) {
+                            let same_shaping = ol.clusters.len() == new_line.clusters.len()
+                                && ol.clusters.iter()
+                                    .zip(new_line.clusters.iter())
+                                    .all(|(oc, nc)| oc.shaping_identity.is_same_shaping(&nc.shaping_identity));
 
-                                let old_doc = ol.source_rect_to_document_rect(&old_src);
-                                let new_doc = new_line.source_rect_to_document_rect(&new_src);
+                            let old_doc = ol.source_rect_to_document_rect(&old_src);
+                            let new_doc = new_line.source_rect_to_document_rect(&new_src);
 
-                                if same_shaping {
-                                    slices.push(AnimatedSlice::reflow_move(
-                                        key,
-                                        ol.id,
-                                        old_src,
-                                        old_doc,
-                                        new_line.id,
-                                        new_src.clone(),
-                                        new_doc,
-                                        new_line.byte_start,
-                                        new_line.byte_end,
-                                        ol.clusters.first().map(|c| c.shaping_identity.clone()),
-                                    ));
-                                } else {
-                                    slices.push(AnimatedSlice::reflow_crossfade_old(
-                                        key,
-                                        ol.id,
-                                        old_src.clone(),
-                                        old_doc.clone(),
-                                        new_doc.clone(),
-                                        new_line.byte_start,
-                                        new_line.byte_end,
-                                    ));
-                                    slices.push(AnimatedSlice::reflow_crossfade_new(
-                                        key,
-                                        new_line.id,
-                                        new_src.clone(),
-                                        old_doc,
-                                        new_doc,
-                                        new_line.byte_start,
-                                        new_line.byte_end,
-                                    ));
-                                }
-
-                                static_patches.push(StaticLinePatch::reflow_patch(
+                            if same_shaping {
+                                slices.push(AnimatedSlice::reflow_move(
+                                    key,
+                                    ol.id,
+                                    old_src,
+                                    old_doc,
+                                    new_line.id,
+                                    new_src.clone(),
+                                    new_doc,
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                    ol.clusters.first().map(|c| c.shaping_identity.clone()),
+                                ));
+                            } else {
+                                slices.push(AnimatedSlice::reflow_crossfade_old(
+                                    key,
+                                    ol.id,
+                                    old_src.clone(),
+                                    old_doc.clone(),
+                                    new_doc.clone(),
+                                    new_line.byte_start,
+                                    new_line.byte_end,
+                                ));
+                                slices.push(AnimatedSlice::reflow_crossfade_new(
                                     key,
                                     new_line.id,
-                                    vec![new_src],
+                                    new_src.clone(),
+                                    old_doc,
+                                    new_doc,
                                     new_line.byte_start,
                                     new_line.byte_end,
                                 ));
                             }
-                            _ => {}
+
+                            static_patches.push(StaticLinePatch::reflow_patch(
+                                key,
+                                new_line.id,
+                                vec![new_src],
+                                new_line.byte_start,
+                                new_line.byte_end,
+                            ));
                         }
                     }
                 }
@@ -1109,7 +1096,7 @@ impl LinuxEditorAnimationCoordinator {
                 && t.state != TextVisualTransactionState::Cancelled
                 && t.state != TextVisualTransactionState::Completed)
             .filter_map(|t| t.new_snapshot.as_ref())
-            .last()
+            .next_back()
     }
 
     pub fn cancel_active_composition(&mut self, reason: &str) {
@@ -1346,7 +1333,7 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
-                    duration_ms: smooth_cursor_duration_ms as u64,
+                    duration_ms: u64::from(smooth_cursor_duration_ms),
                 }
             } else {
                 CursorTransition::Snap
@@ -1363,7 +1350,7 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Tween {
                         old_rect: old_cursor_rect.clone().unwrap(),
                         new_rect: new_cursor_rect.clone().unwrap(),
-                        duration_ms: smooth_cursor_duration_ms as u64,
+                        duration_ms: u64::from(smooth_cursor_duration_ms),
                     }
                 } else {
                     CursorTransition::Tween {
@@ -1379,7 +1366,7 @@ impl LinuxEditorAnimationCoordinator {
                             bottom: cursor_y + cursor_h,
                             baseline_y: cursor_y + cursor_h * 0.8,
                         },
-                        duration_ms: smooth_cursor_duration_ms as u64,
+                        duration_ms: u64::from(smooth_cursor_duration_ms),
                     }
                 }
             } else {
@@ -1396,7 +1383,7 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
-                    duration_ms: smooth_cursor_duration_ms as u64,
+                    duration_ms: u64::from(smooth_cursor_duration_ms),
                 }
             } else {
                 CursorTransition::Tween {
@@ -1412,7 +1399,7 @@ impl LinuxEditorAnimationCoordinator {
                         bottom: cursor_y + cursor_h,
                         baseline_y: cursor_y + cursor_h * 0.8,
                     },
-                    duration_ms: smooth_cursor_duration_ms as u64,
+                    duration_ms: u64::from(smooth_cursor_duration_ms),
                 }
             }
         } else {

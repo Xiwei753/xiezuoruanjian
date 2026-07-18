@@ -139,7 +139,7 @@ impl EditorInputHost for SujianEditorItem {
 
                 self.pipeline.animation_coordinator_mut().cancel_active_composition("clear_preedit");
                 self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
-                    self.current_typing_animation_duration_ms as u64,
+                    u64::from(self.current_typing_animation_duration_ms),
                     &old_snapshot,
                     &new_snapshot,
                     composition_byte_start,
@@ -190,7 +190,7 @@ impl EditorInputHost for SujianEditorItem {
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
             self.pipeline.animation_coordinator_mut().handle_composition_update(
-                self.current_typing_animation_duration_ms as u64,
+                u64::from(self.current_typing_animation_duration_ms),
                 &old_snapshot,
                 &new_snapshot,
                 data.composition_byte_start,
@@ -245,7 +245,7 @@ impl EditorInputHost for SujianEditorItem {
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
             self.pipeline.animation_coordinator_mut().handle_composition_update(
-                self.current_typing_animation_duration_ms as u64,
+                u64::from(self.current_typing_animation_duration_ms),
                 &old_snapshot,
                 &new_snapshot,
                 data.composition_byte_start,

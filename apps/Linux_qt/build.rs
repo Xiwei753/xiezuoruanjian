@@ -157,13 +157,9 @@ fn remap_host_path(path: &Path, qmake: &Path) -> PathBuf {
 }
 
 fn detect_qt6_from_qmake() -> Option<Qt6BuildInfo> {
-    let Some(qmake) = find_qt6_qmake() else {
-        return None;
-    };
+    let qmake = find_qt6_qmake()?;
     let version = qmake_query(&qmake, "QT_VERSION")?;
-    let Some(headers) = qmake_query(&qmake, "QT_INSTALL_HEADERS") else {
-        return None;
-    };
+    let headers = qmake_query(&qmake, "QT_INSTALL_HEADERS")?;
     let header_root = remap_host_path(&PathBuf::from(&headers), &qmake);
     let mut include_paths = vec![header_root.clone()];
     for module in QT6_MODULES {

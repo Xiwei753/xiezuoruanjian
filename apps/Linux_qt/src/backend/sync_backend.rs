@@ -482,7 +482,7 @@ impl AppBackend {
                 raw_error: Some("workspace_empty".to_string()),
             };
             self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default().into();
+                serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_diagnostics_failed", "workspace_empty");
             return op_id.into();
@@ -501,7 +501,7 @@ impl AppBackend {
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };
-        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default().into();
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {

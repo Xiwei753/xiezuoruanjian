@@ -1064,16 +1064,16 @@ impl EditorLayout {
             let lines = layout_lines(
                 text,
                 params.width,
-                params.font_size as f64,
-                params.line_spacing as f64,
-                params.padding as f64,
-                params.text_indent as f64,
+                f64::from(params.font_size),
+                f64::from(params.line_spacing),
+                f64::from(params.padding),
+                f64::from(params.text_indent),
                 &params.font_family,
             );
             let content_height = lines
                 .last()
-                .map(|l| (l.y + l.height + params.padding as f64) as f32)
-                .unwrap_or((params.font_size * params.line_spacing + params.padding * 2.0) as f32)
+                .map(|l| (l.y + l.height + f64::from(params.padding)) as f32)
+                .unwrap_or(params.font_size * params.line_spacing + params.padding * 2.0  )
                 .max(1.0);
             LayoutSnapshot {
                 text_revision,
@@ -1318,7 +1318,7 @@ pub fn layout_lines(
                 height: actual_line_h,
                 para_text: paragraph_text.to_string(),
                 para_start,
-                qtextline_idx: line_idx as i32,
+                qtextline_idx: line_idx,
                 para_qchar_start: qchar_off,
                 para_qchar_end: qchar_end,
                 line_wrap_width: if is_first {
@@ -1328,7 +1328,7 @@ pub fn layout_lines(
                 },
                 line_indent_x: if is_first { indent } else { 0.0 },
                 para_indent: indent,
-                x_end_trailing: x_end_trailing,
+                x_end_trailing,
                 qt_ascent,
                 qt_descent,
             });
@@ -1442,7 +1442,7 @@ pub fn hit_test(
         );
         debug_line_metrics(
             &line.para_text,
-            snapshot.font_size as f64,
+            f64::from(snapshot.font_size),
             &snapshot.font_family,
             line.line_wrap_width + line.line_indent_x,
             line.para_indent,
@@ -1507,7 +1507,7 @@ pub fn caret_rect(
                 x: 0.0,
                 y: 0.0,
                 width: 0.0,
-                height: snapshot.font_size as f64 * snapshot.line_spacing as f64,
+                height: f64::from(snapshot.font_size) * f64::from(snapshot.line_spacing),
                 para_text: String::new(),
                 para_start: 0,
                 qtextline_idx: 0,
@@ -1526,7 +1526,7 @@ pub fn caret_rect(
 
     let cursor_x = calculate_cursor_x_for_line(line, cursor_byte, affinity, snapshot);
     let (cursor_y_doc, cursor_h) =
-        cursor_rect_for_line(line, snapshot.font_size as f64, &snapshot.font_family);
+        cursor_rect_for_line(line, f64::from(snapshot.font_size), &snapshot.font_family);
     let cursor_y = cursor_y_doc - scroll_y;
     let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
@@ -1541,7 +1541,7 @@ pub fn caret_rect(
         } else {
             get_font_descent(&snapshot.font_family, snapshot.font_size)
         };
-        let text_baseline = text_baseline_y(line, snapshot.font_size as f64, &snapshot.font_family);
+        let text_baseline = text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
         let cursor_top_to_baseline = text_baseline - cursor_y_doc;
         let cursor_bottom_to_baseline = cursor_y_doc + cursor_h - text_baseline;
         eprintln!(
@@ -1571,7 +1571,7 @@ pub fn index_at_line_x(snapshot: &LayoutSnapshot, line: &VisualLine, x: f64) -> 
         &line.para_text,
         relative,
         line.para_start,
-        snapshot.font_size as f64,
+        f64::from(snapshot.font_size),
         &snapshot.font_family,
         paragraph_wrap_w,
         line.para_indent,
@@ -1623,7 +1623,7 @@ pub fn calculate_cursor_x_for_line(
                 &line.para_text,
                 cursor,
                 line.para_start,
-                snapshot.font_size as f64,
+                f64::from(snapshot.font_size),
                 &snapshot.font_family,
                 paragraph_wrap_w,
                 line.para_indent,
@@ -1678,7 +1678,7 @@ pub fn calculate_cursor_x_for_line(
             );
             debug_line_metrics(
                 &line.para_text,
-                snapshot.font_size as f64,
+                f64::from(snapshot.font_size),
                 &snapshot.font_family,
                 paragraph_wrap_w,
                 line.para_indent,
@@ -2633,7 +2633,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         let qchar_offset = paragraph_qchar_start as i64 - first_prev.qchar_start as i64 + first_prev.para_qchar_start as i64;
                         for mut vl in prev_lines {
                             vl.id = line_id;
-                            vl.y = vl.y + y_offset;
+                            vl.y += y_offset;
                             if byte_offset != 0 {
                                 let new_para_start = (vl.para_start as i64 + byte_offset) as usize;
                                 let new_byte_start = (vl.byte_start as i64 + byte_offset) as usize;

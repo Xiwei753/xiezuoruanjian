@@ -75,50 +75,50 @@ impl AppBackend {
                 for p in projects {
                     let mut p_map = QJsonObject::default();
                     p_map.insert(
-                        "title".into(),
+                        "title",
                         QJsonValue::from(QString::from(p.title.clone())),
                     );
-                    p_map.insert("id".into(), QJsonValue::from(QString::from(p.id.clone())));
-                    p_map.insert("type".into(), QJsonValue::from(QString::from("project")));
+                    p_map.insert("id", QJsonValue::from(QString::from(p.id.clone())));
+                    p_map.insert("type", QJsonValue::from(QString::from("project")));
                     list.push(QJsonValue::from(p_map));
 
                     if let Ok(volumes) = core.list_volumes(&p.id) {
                         for v in volumes {
                             let mut v_map = QJsonObject::default();
                             v_map.insert(
-                                "title".into(),
+                                "title",
                                 QJsonValue::from(QString::from(v.title.clone())),
                             );
                             v_map
-                                .insert("id".into(), QJsonValue::from(QString::from(v.id.clone())));
+                                .insert("id", QJsonValue::from(QString::from(v.id.clone())));
                             v_map.insert(
-                                "projectId".into(),
+                                "projectId",
                                 QJsonValue::from(QString::from(p.id.clone())),
                             );
-                            v_map.insert("type".into(), QJsonValue::from(QString::from("volume")));
+                            v_map.insert("type", QJsonValue::from(QString::from("volume")));
                             list.push(QJsonValue::from(v_map));
 
                             if let Ok(chapters) = core.list_chapters(&p.id, &v.id) {
                                 for c in chapters {
                                     let mut c_map = QJsonObject::default();
                                     c_map.insert(
-                                        "title".into(),
+                                        "title",
                                         QJsonValue::from(QString::from(c.title.clone())),
                                     );
                                     c_map.insert(
-                                        "id".into(),
+                                        "id",
                                         QJsonValue::from(QString::from(c.id.clone())),
                                     );
                                     c_map.insert(
-                                        "projectId".into(),
+                                        "projectId",
                                         QJsonValue::from(QString::from(p.id.clone())),
                                     );
                                     c_map.insert(
-                                        "volumeId".into(),
+                                        "volumeId",
                                         QJsonValue::from(QString::from(v.id.clone())),
                                     );
                                     c_map.insert(
-                                        "type".into(),
+                                        "type",
                                         QJsonValue::from(QString::from("chapter")),
                                     );
                                     list.push(QJsonValue::from(c_map));
@@ -353,8 +353,8 @@ impl AppBackend {
             &format!(
                 "[actionId={}] project_id={}, title={}",
                 action_id_str,
-                project_id.to_string(),
-                title.to_string()
+                project_id,
+                title
             ),
         );
         if let Some(api) = self.core_api() {
@@ -402,9 +402,9 @@ impl AppBackend {
             &format!(
                 "[actionId={}] project_id={}, volume_id={}, title={}",
                 action_id_str,
-                project_id.to_string(),
-                volume_id.to_string(),
-                title.to_string()
+                project_id,
+                volume_id,
+                title
             ),
         );
         if let Some(api) = self.core_api() {

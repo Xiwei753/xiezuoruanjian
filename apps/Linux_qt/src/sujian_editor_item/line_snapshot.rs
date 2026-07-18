@@ -1,7 +1,4 @@
-pub(crate) use super::layout_snapshot::{
-    EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId,
-    PreparedLineSnapshot, ShapingIdentity, SourceRect,
-};
+pub(crate) use super::layout_snapshot::LineSnapshotId;
 pub(crate) use super::layout_revision::LayoutRevision;
 
 use qmetaobject::QImage;

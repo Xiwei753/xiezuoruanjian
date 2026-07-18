@@ -11,7 +11,7 @@ pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
         if utf16_count >= utf16_offset {
             break;
         }
-        utf16_count += ch.len_utf16() as usize;
+        utf16_count += ch.len_utf16();
         if utf16_count > utf16_offset {
             break;
         }
@@ -33,7 +33,7 @@ pub fn utf8_to_utf16_offset(text: &str, utf8_offset: usize) -> usize {
             break;
         }
         remaining -= ch_len;
-        utf16_count += ch.len_utf16() as usize;
+        utf16_count += ch.len_utf16();
     }
     utf16_count
 }

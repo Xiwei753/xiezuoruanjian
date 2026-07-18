@@ -63,7 +63,7 @@ impl AppRef {
 
     pub fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, AppBorrowError> {
         match self.inner.try_borrow() {
-            Ok(guard) => Ok(f(&*guard)),
+            Ok(guard) => Ok(f(&guard)),
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(
                     "app_ref",
@@ -77,7 +77,7 @@ impl AppRef {
 
     pub fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, AppBorrowError> {
         match self.inner.try_borrow_mut() {
-            Ok(mut guard) => Ok(f(&mut *guard)),
+            Ok(mut guard) => Ok(f(&mut guard)),
             Err(_) => {
                 crate::backend::app_backend::debug_error_static(
                     "app_ref",

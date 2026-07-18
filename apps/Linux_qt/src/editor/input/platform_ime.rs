@@ -235,15 +235,15 @@ extern "C" fn sujian_get_ime_query_data(
         return false;
     }
     let data = SujianImeQueryData {
-        cursor_rect_x: item.cursor_rect_x() as f64,
-        cursor_rect_y: item.cursor_rect_y() as f64,
-        cursor_rect_w: item.cursor_rect_width() as f64,
-        cursor_rect_h: item.cursor_rect_height() as f64,
+        cursor_rect_x: f64::from(item.cursor_rect_x()),
+        cursor_rect_y: f64::from(item.cursor_rect_y()),
+        cursor_rect_w: f64::from(item.cursor_rect_width()),
+        cursor_rect_h: f64::from(item.cursor_rect_height()),
         has_anchor_rect: item.has_selection(),
-        anchor_rect_x: item.anchor_rect_x() as f64,
-        anchor_rect_y: item.anchor_rect_y() as f64,
-        anchor_rect_w: item.anchor_rect_width() as f64,
-        anchor_rect_h: item.anchor_rect_height() as f64,
+        anchor_rect_x: f64::from(item.anchor_rect_x()),
+        anchor_rect_y: f64::from(item.anchor_rect_y()),
+        anchor_rect_w: f64::from(item.anchor_rect_width()),
+        anchor_rect_h: f64::from(item.anchor_rect_height()),
         cursor_char_pos: item.cursor_position() as i32,
         anchor_char_pos: item.anchor_position() as i32,
         has_selection: item.has_selection(),

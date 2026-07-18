@@ -83,7 +83,7 @@ impl LinuxThemeController {
                     if parts.len() == 2 {
                         if let Some(core) = app.core_api() {
                             if let Ok(record) = core.load_palette_record(parts[0], parts[1]) {
-                                let dto: writer_core::api::types::ThemePaletteRecordDto = record.into();
+                                let dto: writer_core::api::types::ThemePaletteRecordDto = record;
                                 if is_dark {
                                     Some(dto.dark_scheme)
                                 } else {
@@ -116,9 +116,9 @@ impl LinuxThemeController {
                     };
                     theme.map(|t| {
                         if is_dark {
-                            t.dark_scheme.clone().into()
+                            t.dark_scheme.clone()
                         } else {
-                            t.light_scheme.clone().into()
+                            t.light_scheme.clone()
                         }
                     })
                 } else {

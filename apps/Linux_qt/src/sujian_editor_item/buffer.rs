@@ -6,6 +6,7 @@ pub struct EditorSnapshot {
 }
 
 #[derive(Clone, Debug)]
+#[derive(Default)]
 pub struct EditorBuffer {
     pub text: String,
     pub cursor: usize,
@@ -14,17 +15,6 @@ pub struct EditorBuffer {
     pub redo_stack: Vec<EditorSnapshot>,
 }
 
-impl Default for EditorBuffer {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            cursor: 0,
-            selection_anchor: 0,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-        }
-    }
-}
 
 impl EditorBuffer {
     pub fn snapshot(&self) -> EditorSnapshot {

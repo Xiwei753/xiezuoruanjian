@@ -143,7 +143,7 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default().into();
+                serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             return op_id.into();
         }
@@ -161,7 +161,7 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default().into();
+                serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             return op_id.into();
@@ -180,7 +180,7 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default().into();
+                serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             return op_id.into();
@@ -204,7 +204,7 @@ impl AppBackend {
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };
-        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default().into();
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
         let qptr = QPointer::from(&*self);
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
@@ -346,7 +346,7 @@ impl AppBackend {
         {
             return;
         }
-        let interval_secs = self.current_sync_interval.max(60) as i64;
+        let interval_secs = i64::from(self.current_sync_interval.max(60));
         let now = Self::now_epoch_seconds();
         let elapsed = now.saturating_sub(self.current_last_sync_time);
         if self.current_last_sync_time > 0 && elapsed < interval_secs {
@@ -387,7 +387,7 @@ impl AppBackend {
                     raw_error: None,
                 };
                 self.current_sync_operation_state =
-                    serde_json::to_string(&state).unwrap_or_default().into();
+                    serde_json::to_string(&state).unwrap_or_default();
                 self.sync_action_completed();
             }
             return self.current_sync_operation_id.clone().into();
@@ -415,7 +415,7 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default().into();
+                serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "workspace_empty");
             return op_id.into();
@@ -434,7 +434,7 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default().into();
+                serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "remote_url_empty");
@@ -454,7 +454,7 @@ impl AppBackend {
                 raw_error: None,
             };
             self.current_sync_operation_state =
-                serde_json::to_string(&state).unwrap_or_default().into();
+                serde_json::to_string(&state).unwrap_or_default();
             self.sync_status_changed();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "token_empty");
@@ -485,7 +485,7 @@ impl AppBackend {
             counts: writer_core::api::SyncOperationCountsDto::default(),
             raw_error: None,
         };
-        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default().into();
+        self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
         self.current_sync_status = "syncing".to_string();
         self.current_sync_in_progress = true;

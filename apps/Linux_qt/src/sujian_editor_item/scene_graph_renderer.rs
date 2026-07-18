@@ -1,7 +1,6 @@
 use crate::editor::scene_graph;
 use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
-use super::layout_snapshot::LineSnapshotId;
 
 pub(crate) fn render_frame(
     root_raw: *mut std::ffi::c_void,
@@ -141,11 +140,11 @@ fn render_selection_preedit_layer(
 
     fn parse_hex_color(hex: &str) -> (f64, f64, f64, f64) {
         if hex.starts_with('#') && hex.len() >= 7 {
-            let r = u8::from_str_radix(&hex[1..3], 16).unwrap_or(0) as f64 / 255.0;
-            let g = u8::from_str_radix(&hex[3..5], 16).unwrap_or(0) as f64 / 255.0;
-            let b = u8::from_str_radix(&hex[5..7], 16).unwrap_or(0) as f64 / 255.0;
+            let r = f64::from(u8::from_str_radix(&hex[1..3], 16).unwrap_or(0)) / 255.0;
+            let g = f64::from(u8::from_str_radix(&hex[3..5], 16).unwrap_or(0)) / 255.0;
+            let b = f64::from(u8::from_str_radix(&hex[5..7], 16).unwrap_or(0)) / 255.0;
             let a = if hex.len() >= 9 {
-                u8::from_str_radix(&hex[7..9], 16).unwrap_or(255) as f64 / 255.0
+                f64::from(u8::from_str_radix(&hex[7..9], 16).unwrap_or(255)) / 255.0
             } else {
                 1.0
             };

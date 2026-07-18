@@ -1,6 +1,4 @@
 #[cfg(feature = "git-https")]
-use crate::sync::conflict::build_conflict_summary;
-#[cfg(feature = "git-https")]
 use crate::sync::conflict::collect_git_status_summary;
 
 #[cfg(feature = "git-https")]
@@ -161,6 +159,7 @@ impl SyncService {
 }
 
 #[cfg(feature = "git-https")]
+#[allow(clippy::large_enum_variant)]
 enum PullOutcome {
     Continue,
     Return(SyncResult),
@@ -321,6 +320,7 @@ fn handle_merge_conflict(
                     .as_ref()
                     .map(|o| o.id.to_string())
                     .unwrap_or_default(),
+                #[allow(clippy::cast_possible_wrap)]
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
@@ -754,12 +754,14 @@ impl SyncService {
         let mut state = Self::load_sync_state(workspace_path).unwrap_or_default();
         state.remote_url = Some(config.remote_url.clone());
         state.transport = Some(config.transport.clone());
-        state.last_sync_time = Some(
-            std::time::SystemTime::now()
+        state.last_sync_time = Some({
+            #[allow(clippy::cast_possible_wrap)]
+            let ts = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_secs() as i64,
-        );
+                .as_secs() as i64;
+            ts
+        });
         if let Some(hash) = &result.commit_hash {
             state.last_synced_commit = Some(hash.clone());
         }

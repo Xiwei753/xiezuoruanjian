@@ -82,7 +82,7 @@ pub(crate) fn bridge_error_object(message_key: &str, code: &str, raw_error: &str
 
 pub(crate) fn bridge_success_object(data: serde_json::Value) -> QJsonObject {
     let envelope = writer_core::api::ResultEnvelope::success(data);
-    let value = serde_json::to_value(&envelope.into_value_envelope())
+    let value = serde_json::to_value(envelope.into_value_envelope())
         .unwrap_or_else(|_| serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
     serde_to_qjson_object(value)
 }

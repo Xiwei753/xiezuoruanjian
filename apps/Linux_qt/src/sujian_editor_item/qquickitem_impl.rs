@@ -1,6 +1,5 @@
 use super::input_host::is_left_button_pressed;
 use super::*;
-use super::transaction_key::VisualTransactionKey;
 
 use super::render_plan::{FrameContext, CursorStyle};
 use std::time::Instant;
@@ -61,9 +60,9 @@ impl QQuickItem for SujianEditorItem {
         };
         let root_raw = node.into_raw();
 
-        let vp_h = self.current_viewport_height.max(1.0) as f64;
-        let scroll_y = self.current_scroll_y as f64;
-        let content_h = self.current_content_height as f64;
+        let vp_h = f64::from(self.current_viewport_height.max(1.0));
+        let scroll_y = f64::from(self.current_scroll_y);
+        let content_h = f64::from(self.current_content_height);
 
         let mut force_rebuild = false;
         if let Some(ref buf) = self.scroll_buffer {
@@ -104,7 +103,7 @@ impl QQuickItem for SujianEditorItem {
                     } else {
                         (scroll_y - buf_scroll_y, vp_h)
                     };
-                    let logical_img_w = image.size().width as f64 / dpr;
+                    let logical_img_w = f64::from(image.size().width) / dpr;
                     final_root = scene_graph::update_texture_node(
                         root_raw,
                         item_ptr,
@@ -123,7 +122,7 @@ impl QQuickItem for SujianEditorItem {
                     if !root_raw.is_null() {
                         if let Some(ref buf) = self.scroll_buffer {
                             let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
-                            let logical_img_w = buf.image.size().width as f64 / dpr;
+                            let logical_img_w = f64::from(buf.image.size().width) / dpr;
                             scene_graph::update_source_rect(
                                 root_raw,
                                 item_ptr,
@@ -144,7 +143,7 @@ impl QQuickItem for SujianEditorItem {
             if !root_raw.is_null() {
                 if let Some(ref buf) = self.scroll_buffer {
                     let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
-                    let logical_img_w = buf.image.size().width as f64 / dpr;
+                    let logical_img_w = f64::from(buf.image.size().width) / dpr;
                     scene_graph::update_source_rect(
                         root_raw,
                         item_ptr,
@@ -184,14 +183,14 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_ctrl.visual_h,
                 self.current_editor_enabled,
                 self.buffer.has_selection(),
-                self.current_viewport_height as f64,
+                f64::from(self.current_viewport_height),
                 false,
                 false,
                 false,
                 self.current_smooth_cursor_enabled,
                 self.current_cursor_animation_duration_ms,
                 self.current_coordinated_text_cursor_animation_enabled,
-                self.current_scroll_y as f64,
+                f64::from(self.current_scroll_y),
                 self.cursor_ctrl.last_scroll_y,
                 self.cursor_ctrl.visible,
                 self.cursor_ctrl.blink_visible,
@@ -228,7 +227,7 @@ impl QQuickItem for SujianEditorItem {
                 final_root,
                 item_ptr,
                 &render_plan,
-                &self.pipeline.texture_cache(),
+                self.pipeline.texture_cache(),
             );
 
             for key in &render_plan.frame_context.keys_to_complete {

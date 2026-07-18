@@ -48,7 +48,7 @@ impl SujianEditorItem {
         let old_cursor = self.buffer.cursor;
         let old_anchor = self.buffer.selection_anchor;
         self.pipeline.load_text(normalized.clone(), old_cursor);
-        if self.pipeline.mirror().cursor() != clamp_to_char_boundary(&self.pipeline.mirror().text(), old_cursor) {
+        if self.pipeline.mirror().cursor() != clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor) {
             let _ = self.pipeline.set_selection(
                 clamp_to_char_boundary(self.pipeline.mirror().text(), old_anchor),
                 clamp_to_char_boundary(self.pipeline.mirror().text(), old_cursor),

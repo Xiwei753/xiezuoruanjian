@@ -110,16 +110,13 @@ pub(crate) struct PreeditRange {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Default)]
 pub(crate) enum ImeUpdateKind {
+    #[default]
     None,
     QueryInput,
 }
 
-impl Default for ImeUpdateKind {
-    fn default() -> Self {
-        ImeUpdateKind::None
-    }
-}
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ImeUpdatePlan {

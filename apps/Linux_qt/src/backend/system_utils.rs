@@ -94,9 +94,9 @@ fn parse_color_value(value: &str) -> Option<(f64, f64, f64)> {
     let trimmed = value.trim().trim_matches('"').trim_matches('\'');
     if let Some(hex) = trimmed.strip_prefix('#') {
         if hex.len() >= 6 {
-            let r = u8::from_str_radix(&hex[0..2], 16).ok()? as f64 / 255.0;
-            let g = u8::from_str_radix(&hex[2..4], 16).ok()? as f64 / 255.0;
-            let b = u8::from_str_radix(&hex[4..6], 16).ok()? as f64 / 255.0;
+            let r = f64::from(u8::from_str_radix(&hex[0..2], 16).ok()?) / 255.0;
+            let g = f64::from(u8::from_str_radix(&hex[2..4], 16).ok()?) / 255.0;
+            let b = f64::from(u8::from_str_radix(&hex[4..6], 16).ok()?) / 255.0;
             return Some((r, g, b));
         }
     }

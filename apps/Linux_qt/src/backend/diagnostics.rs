@@ -242,13 +242,13 @@ pub fn get_log_dir(workspace_path: &Path) -> PathBuf {
     if cfg!(target_os = "linux") {
         if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
             let dir = PathBuf::from(xdg_data).join("sujian/logs");
-            if dir.parent().map_or(false, |p| p.exists()) || dir.exists() {
+            if dir.parent().is_some_and(|p| p.exists()) || dir.exists() {
                 return dir;
             }
         }
         if let Ok(home) = std::env::var("HOME") {
             let dir = PathBuf::from(home).join(".local/share/sujian/logs");
-            if dir.parent().map_or(false, |p| p.exists()) || dir.exists() {
+            if dir.parent().is_some_and(|p| p.exists()) || dir.exists() {
                 return dir;
             }
         }
@@ -321,7 +321,7 @@ pub fn clear_logs(log_dir: &Path) -> Result<(), String> {
     let entries = fs::read_dir(log_dir).map_err(|e| format!("读取日志目录失败: {}", e))?;
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "log") {
+        if path.extension().is_some_and(|ext| ext == "log") {
             let _ = fs::remove_file(&path);
         }
     }
@@ -458,7 +458,7 @@ fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) {
     if let Ok(entries) = fs::read_dir(log_dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "log") {
+            if path.extension().is_some_and(|ext| ext == "log") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     let redacted = redact(&content);
                     let dest = logs_dest.join(path.file_name().unwrap_or_default());

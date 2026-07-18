@@ -19,9 +19,9 @@ impl SujianEditorItem {
         }
 
         let width = self.bounding_width();
-        let font_size = self.current_font_pixel_size as f64;
+        let font_size = f64::from(self.current_font_pixel_size);
         let font_family = &self.current_font_family.to_string();
-        let scroll_y = self.current_scroll_y as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
 
         let cursor_byte = self.buffer.cursor;
         let snapshot = self.layout_snapshot(width);
@@ -198,7 +198,7 @@ impl SujianEditorItem {
             deleted_preedit_glyph_rects,
             inserted_preedit_glyph_rects,
             preedit_cursor_rect: self.pipeline.composition().preedit_cursor_rect.clone(),
-            duration_ms: self.current_typing_animation_duration_ms as u64,
+            duration_ms: u64::from(self.current_typing_animation_duration_ms),
             coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
         };
 
@@ -220,9 +220,9 @@ impl SujianEditorItem {
         }
 
         let width = self.bounding_width();
-        let font_size = self.current_font_pixel_size as f64;
+        let font_size = f64::from(self.current_font_pixel_size);
         let font_family = &self.current_font_family.to_string();
-        let scroll_y = self.current_scroll_y as f64;
+        let scroll_y = f64::from(self.current_scroll_y);
 
         let cursor_byte = self.buffer.cursor;
         let snapshot = self.layout_snapshot(width);
