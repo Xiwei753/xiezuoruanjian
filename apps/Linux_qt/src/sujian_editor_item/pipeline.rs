@@ -69,10 +69,13 @@ impl CommittedTextMirror {
         self.revision = revision;
     }
 
-    pub fn apply_edit_result(&mut self, result: &EditorEditResult) {
+    pub fn apply_edit_result(&mut self, result: &EditorEditResult) -> Result<(), String> {
         for patch in &result.display_patches {
             if patch.base_revision != self.revision {
-                continue;
+                return Err(format!(
+                    "CommittedTextMirror revision discontinuity: expected {}, got {}. Must reload from kernel snapshot.",
+                    self.revision, patch.base_revision
+                ));
             }
             let (start, end) = patch.replace_byte_range;
             if start <= end && end <= self.text.len() && self.text.is_char_boundary(start) && self.text.is_char_boundary(end) {
@@ -83,6 +86,7 @@ impl CommittedTextMirror {
         let (anchor, head) = result.new_selection_byte_range;
         self.cursor = clamp_to_char_boundary(&self.text, head);
         self.selection_anchor = clamp_to_char_boundary(&self.text, anchor);
+        Ok(())
     }
 }
 
@@ -326,7 +330,14 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                self.mirror.apply_edit_result(&result);
+                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                    self.mirror.load_from_snapshot(
+                        self.kernel.text().to_string(),
+                        self.kernel.cursor(),
+                        self.kernel.revision(),
+                        self.kernel.selection_anchor(),
+                    );
+                }
                 Some(result)
             }
             EditorEditOutcome::NoChange(result) => Some(result),
@@ -355,7 +366,14 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                self.mirror.apply_edit_result(&result);
+                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                    self.mirror.load_from_snapshot(
+                        self.kernel.text().to_string(),
+                        self.kernel.cursor(),
+                        self.kernel.revision(),
+                        self.kernel.selection_anchor(),
+                    );
+                }
                 Some(result)
             }
             EditorEditOutcome::NoChange(result) => Some(result),
@@ -385,7 +403,14 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                self.mirror.apply_edit_result(&result);
+                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                    self.mirror.load_from_snapshot(
+                        self.kernel.text().to_string(),
+                        self.kernel.cursor(),
+                        self.kernel.revision(),
+                        self.kernel.selection_anchor(),
+                    );
+                }
                 Some(result)
             }
             EditorEditOutcome::NoChange(result) => Some(result),
@@ -412,7 +437,14 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                self.mirror.apply_edit_result(&result);
+                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                    self.mirror.load_from_snapshot(
+                        self.kernel.text().to_string(),
+                        self.kernel.cursor(),
+                        self.kernel.revision(),
+                        self.kernel.selection_anchor(),
+                    );
+                }
                 Some(result)
             }
             EditorEditOutcome::NoChange(result) => Some(result),
@@ -437,7 +469,14 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                self.mirror.apply_edit_result(&result);
+                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                    self.mirror.load_from_snapshot(
+                        self.kernel.text().to_string(),
+                        self.kernel.cursor(),
+                        self.kernel.revision(),
+                        self.kernel.selection_anchor(),
+                    );
+                }
                 Some(result)
             }
             EditorEditOutcome::NoChange(_) => None,
@@ -462,7 +501,14 @@ impl LinuxEditorPipeline {
         let outcome = self.kernel.apply(command);
         match outcome {
             EditorEditOutcome::Applied(result) => {
-                self.mirror.apply_edit_result(&result);
+                if let Err(_) = self.mirror.apply_edit_result(&result) {
+                    self.mirror.load_from_snapshot(
+                        self.kernel.text().to_string(),
+                        self.kernel.cursor(),
+                        self.kernel.revision(),
+                        self.kernel.selection_anchor(),
+                    );
+                }
                 Some(result)
             }
             EditorEditOutcome::NoChange(_) => None,

@@ -13,14 +13,8 @@ class AndroidInputAdapter(
     private val pipeline: AndroidEditorPipeline
 ) : View(context) {
 
-    companion object {
-        fun placeholder(): AndroidInputAdapter {
-            val dummyContext = android.content.ContextWrapper(null)
-            val dummyMirror = DisplayTextMirror()
-            val dummyPipeline = AndroidEditorPipeline.createPlaceholder()
-            return AndroidInputAdapter(dummyContext, dummyMirror, dummyPipeline)
-        }
-    }
+    var onPipelineOutput: ((AndroidEditorPipeline.PipelineOutput) -> Unit)? = null
+    var onCompositionVisualUpdate: (() -> Unit)? = null
 
     private var hostView: View? = null
 
@@ -33,6 +27,7 @@ class AndroidInputAdapter(
     private var compositionReplaceStartUtf8: Int = 0
     private var compositionReplaceEndUtf8: Int = 0
     private var isComposing: Boolean = false
+    private var compositionCursorUtf16: Int = 0
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
         val host = hostView ?: return null
@@ -49,19 +44,23 @@ class AndroidInputAdapter(
     override fun onCheckIsTextEditor(): Boolean = true
 
     fun sendInsertToKernel(byteOffset: Int, text: String, cause: EditorTransactionCauseDto) {
-        pipeline.insertText(byteOffset, text, cause)
+        val output = pipeline.insertText(byteOffset, text, cause)
+        onPipelineOutput?.invoke(output)
     }
 
     fun sendDeleteToKernel(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto) {
-        pipeline.deleteRange(byteStart, byteEndExclusive, cause)
+        val output = pipeline.deleteRange(byteStart, byteEndExclusive, cause)
+        onPipelineOutput?.invoke(output)
     }
 
     fun sendReplaceToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
-        pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+        val output = pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
+        onPipelineOutput?.invoke(output)
     }
 
     fun sendSetSelectionToKernel(anchorByteOffset: Int, headByteOffset: Int) {
-        pipeline.setSelectionTyped(anchorByteOffset, headByteOffset)
+        val output = pipeline.setSelectionTyped(anchorByteOffset, headByteOffset)
+        onPipelineOutput?.invoke(output)
     }
 
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
@@ -94,6 +93,7 @@ class AndroidInputAdapter(
                     mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
                 }
                 applyNewCursorPositionInComposition(newCursorPosition, preeditText)
+                onCompositionVisualUpdate?.invoke()
                 return
             }
         }
@@ -101,6 +101,7 @@ class AndroidInputAdapter(
         mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
         applyNewCursorPositionInComposition(newCursorPosition, preeditText)
         pipeline.onCompositionUpdated()
+        onCompositionVisualUpdate?.invoke()
     }
 
     private fun applyNewCursorPositionInComposition(newCursorPosition: Int, preeditText: String) {
@@ -113,45 +114,29 @@ class AndroidInputAdapter(
         } else {
             targetUtf16 = (compositionRangeUtf16.first + newCursorPosition).coerceAtLeast(0)
         }
-        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        compositionCursorUtf16 = targetUtf16 - compositionRangeUtf16.first
+        val indexMap = AndroidTextIndexMap(mirror)
         val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
         mirror.setSelectionInternal(targetUtf8, targetUtf8)
     }
 
-    fun applyNewCursorPosition(newCursorPosition: Int) {
-        val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
-        val committedBytes = mirror.getCommittedText().toByteArray(Charsets.UTF_8)
-        val cursorByteOffset = committedCursorUtf8.coerceIn(0, committedBytes.size)
-        val targetUtf8: Int
+    fun applyNewCursorPosition(newCursorPosition: Int, insertStartUtf8: Int, insertedText: String) {
+        val indexMap = AndroidTextIndexMap(mirror)
+        val insertStartUtf16 = indexMap.utf8ToUtf16(insertStartUtf8)
+        val insertEndUtf16 = indexMap.utf8ToUtf16(insertStartUtf8 + insertedText.toByteArray(Charsets.UTF_8).size)
+
+        val targetUtf16: Int
         if (newCursorPosition > 0) {
-            var pos = cursorByteOffset
-            var remaining = newCursorPosition - 1
-            while (remaining > 0 && pos < committedBytes.size) {
-                pos++
-                while (pos < committedBytes.size && (committedBytes[pos].toInt() and 0xC0) == 0x80) {
-                    pos++
-                }
-                remaining--
-            }
-            targetUtf8 = pos
-        } else if (newCursorPosition == 0) {
-            targetUtf8 = cursorByteOffset
+            targetUtf16 = (insertStartUtf16 + newCursorPosition - 1).coerceIn(insertStartUtf16, insertEndUtf16)
         } else {
-            var pos = cursorByteOffset
-            var remaining = -newCursorPosition
-            while (remaining > 0 && pos > 0) {
-                pos--
-                while (pos > 0 && (committedBytes[pos].toInt() and 0xC0) == 0x80) {
-                    pos--
-                }
-                remaining--
-            }
-            targetUtf8 = pos
+            targetUtf16 = (insertEndUtf16 + newCursorPosition).coerceIn(insertStartUtf16, insertEndUtf16)
         }
+        val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
         if (isComposing) {
             mirror.setSelectionInternal(targetUtf8, targetUtf8)
         } else {
-            pipeline.setSelectionTyped(targetUtf8, targetUtf8)
+            val output = pipeline.setSelectionTyped(targetUtf8, targetUtf8)
+            onPipelineOutput?.invoke(output)
         }
     }
 
@@ -165,17 +150,20 @@ class AndroidInputAdapter(
         isComposing = false
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
+        compositionCursorUtf16 = 0
 
         val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, "")
             if (dto != null) {
-                pipeline.applyCompositionCommit(dto)
+                val output = pipeline.applyCompositionCommit(dto)
+                onPipelineOutput?.invoke(output)
                 return
             }
         }
 
-        pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+        val output = pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+        onPipelineOutput?.invoke(output)
     }
 
     fun handleCompositionCommitWithText(finalText: String, newCursorPosition: Int) {
@@ -187,22 +175,25 @@ class AndroidInputAdapter(
         isComposing = false
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
+        compositionCursorUtf16 = 0
 
         val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val dto = bridge.compositionCommit(replaceStart, replaceEnd, finalText, "")
             if (dto != null) {
-                pipeline.applyCompositionCommit(dto)
-                if (newCursorPosition != 0 && newCursorPosition != 1) {
-                    applyNewCursorPosition(newCursorPosition)
+                val output = pipeline.applyCompositionCommit(dto)
+                onPipelineOutput?.invoke(output)
+                if (newCursorPosition != 1) {
+                    applyNewCursorPosition(newCursorPosition, replaceStart, finalText)
                 }
                 return
             }
         }
 
-        pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
-        if (newCursorPosition != 0 && newCursorPosition != 1) {
-            applyNewCursorPosition(newCursorPosition)
+        val output = pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
+        onPipelineOutput?.invoke(output)
+        if (newCursorPosition != 1) {
+            applyNewCursorPosition(newCursorPosition, replaceStart, finalText)
         }
     }
 
@@ -213,6 +204,7 @@ class AndroidInputAdapter(
         isComposing = false
         compositionReplaceStartUtf8 = 0
         compositionReplaceEndUtf8 = 0
+        compositionCursorUtf16 = 0
 
         pipeline.applyCompositionUpdate(
             com.xiwei.sujian.editor.v2.mirror.VisualIntent(
@@ -227,6 +219,7 @@ class AndroidInputAdapter(
         ) {
             mirror.clearComposition()
         }
+        onCompositionVisualUpdate?.invoke()
     }
 
     fun startComposingRegion(byteStart: Int, byteEnd: Int, selectedText: String) {
@@ -235,15 +228,15 @@ class AndroidInputAdapter(
         currentCompositionText = selectedText
         previousCompositionText = ""
         isComposing = true
+        compositionCursorUtf16 = selectedText.length
     }
 
     fun isComposing(): Boolean = isComposing
-
     fun getCompositionText(): String = currentCompositionText
 
     fun getCompositionCursorOffset(): Int? {
         if (!isComposing) return null
-        return currentCompositionText.length
+        return compositionCursorUtf16
     }
 
     fun getCompositionRangeUtf8(): Pair<Int, Int>? {

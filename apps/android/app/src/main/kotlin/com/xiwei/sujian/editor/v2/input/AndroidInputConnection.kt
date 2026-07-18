@@ -16,6 +16,7 @@ class AndroidInputConnection(
         if (text.isNullOrEmpty()) return true
         if (adapter.isComposing()) {
             adapter.handleCompositionCommitWithText(text.toString(), newCursorPosition)
+            notifySelectionChanged()
             return true
         }
         val selStart = mirror.getCommittedSelectionStartUtf8()
@@ -25,11 +26,16 @@ class AndroidInputConnection(
             val byteEnd = selEnd
             val originalText = extractCommittedUtf8Text(byteStart, byteEnd)
             adapter.sendReplaceToKernel(byteStart, byteEnd, text.toString(), originalText, EditorTransactionCauseDto.TYPING)
+            if (newCursorPosition != 1) {
+                adapter.applyNewCursorPosition(newCursorPosition, byteStart, text.toString())
+            }
         } else {
             val byteOffset = mirror.getCommittedCursorUtf8()
             adapter.sendInsertToKernel(byteOffset, text.toString(), EditorTransactionCauseDto.TYPING)
+            if (newCursorPosition != 1) {
+                adapter.applyNewCursorPosition(newCursorPosition, byteOffset, text.toString())
+            }
         }
-        adapter.applyNewCursorPosition(newCursorPosition)
         notifySelectionChanged()
         return true
     }
@@ -41,27 +47,21 @@ class AndroidInputConnection(
         }
         val committedText = mirror.getCommittedText()
         val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
-        val committedBytes = committedText.toByteArray(Charsets.UTF_8)
-        val cursorByteOffset = committedCursorUtf8.coerceIn(0, committedBytes.size)
 
-        var deleteStartByte = cursorByteOffset
-        var count = beforeLength
-        while (count > 0 && deleteStartByte > 0) {
-            deleteStartByte = findPrevCharBoundary(committedBytes, deleteStartByte)
-            count--
-        }
+        val utf8ToUtf16Map = buildUtf8ToUtf16Map(committedText)
+        val cursorUtf16 = utf8ToUtf16Map[committedCursorUtf8.coerceIn(0, committedText.toByteArray(Charsets.UTF_8).size)] ?: committedText.length
 
-        var deleteEndByte = cursorByteOffset
-        count = afterLength
-        while (count > 0 && deleteEndByte < committedBytes.size) {
-            deleteEndByte = findNextCharBoundary(committedBytes, deleteEndByte)
-            count--
-        }
+        val deleteStartUtf16 = (cursorUtf16 - beforeLength).coerceAtLeast(0)
+        val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(committedText.length)
 
-        if (deleteStartByte >= deleteEndByte) return false
-        if (!isValidUtf8CharBoundaryInBytes(committedBytes, deleteStartByte) || !isValidUtf8CharBoundaryInBytes(committedBytes, deleteEndByte)) return false
+        if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        adapter.sendDeleteToKernel(deleteStartByte, deleteEndByte, EditorTransactionCauseDto.DELETE)
+        val deleteStartUtf8 = utf16ToUtf8Offset(committedText, deleteStartUtf16)
+        val deleteEndUtf8 = utf16ToUtf8Offset(committedText, deleteEndUtf16)
+
+        if (deleteStartUtf8 >= deleteEndUtf8) return false
+
+        adapter.sendDeleteToKernel(deleteStartUtf8, deleteEndUtf8, EditorTransactionCauseDto.DELETE)
         notifySelectionChanged()
         return true
     }
@@ -73,27 +73,32 @@ class AndroidInputConnection(
         }
         val committedText = mirror.getCommittedText()
         val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
-        val committedBytes = committedText.toByteArray(Charsets.UTF_8)
-        val cursorByteOffset = committedCursorUtf8.coerceIn(0, committedBytes.size)
 
-        var deleteStartByte = cursorByteOffset
+        val utf8ToUtf16Map = buildUtf8ToUtf16Map(committedText)
+        val cursorUtf16 = utf8ToUtf16Map[committedCursorUtf8.coerceIn(0, committedText.toByteArray(Charsets.UTF_8).size)] ?: committedText.length
+
+        var deleteStartUtf16 = cursorUtf16
         var count = beforeLength
-        while (count > 0 && deleteStartByte > 0) {
-            deleteStartByte = findPrevCodePointBoundary(committedBytes, deleteStartByte)
+        while (count > 0 && deleteStartUtf16 > 0) {
+            deleteStartUtf16 = committedText.offsetByCodePoints(deleteStartUtf16, -1)
             count--
         }
 
-        var deleteEndByte = cursorByteOffset
+        var deleteEndUtf16 = cursorUtf16
         count = afterLength
-        while (count > 0 && deleteEndByte < committedBytes.size) {
-            deleteEndByte = findNextCodePointBoundary(committedBytes, deleteEndByte)
+        while (count > 0 && deleteEndUtf16 < committedText.length) {
+            deleteEndUtf16 = committedText.offsetByCodePoints(deleteEndUtf16, 1)
             count--
         }
 
-        if (deleteStartByte >= deleteEndByte) return false
-        if (!isValidUtf8CharBoundaryInBytes(committedBytes, deleteStartByte) || !isValidUtf8CharBoundaryInBytes(committedBytes, deleteEndByte)) return false
+        if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        adapter.sendDeleteToKernel(deleteStartByte, deleteEndByte, EditorTransactionCauseDto.DELETE)
+        val deleteStartUtf8 = utf16ToUtf8Offset(committedText, deleteStartUtf16)
+        val deleteEndUtf8 = utf16ToUtf8Offset(committedText, deleteEndUtf16)
+
+        if (deleteStartUtf8 >= deleteEndUtf8) return false
+
+        adapter.sendDeleteToKernel(deleteStartUtf8, deleteEndUtf8, EditorTransactionCauseDto.DELETE)
         notifySelectionChanged()
         return true
     }
@@ -239,48 +244,26 @@ class AndroidInputConnection(
         return String(textBytes, safeStart, safeEnd - safeStart, Charsets.UTF_8)
     }
 
-    private fun findPrevCharBoundary(bytes: ByteArray, offset: Int): Int {
-        var pos = offset
-        while (pos > 0 && (bytes[pos].toInt() and 0xC0) == 0x80) {
-            pos--
+    private fun buildUtf8ToUtf16Map(text: String): Map<Int, Int> {
+        val map = mutableMapOf<Int, Int>()
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        var utf8Pos = 0
+        var utf16Pos = 0
+        map[0] = 0
+        for (char in text) {
+            val charBytes = char.toString().toByteArray(Charsets.UTF_8).size
+            utf8Pos += charBytes
+            utf16Pos += if (char.isHighSurrogate()) 0 else 1
+            if (!map.containsKey(utf8Pos)) {
+                map[utf8Pos] = utf16Pos
+            }
         }
-        return pos
+        return map
     }
 
-    private fun findNextCharBoundary(bytes: ByteArray, offset: Int): Int {
-        var pos = offset
-        while (pos < bytes.size && (bytes[pos].toInt() and 0xC0) == 0x80) {
-            pos++
-        }
-        if (pos < bytes.size) pos++ else return bytes.size
-        return pos
-    }
-
-    private fun findPrevCodePointBoundary(bytes: ByteArray, offset: Int): Int {
-        var pos = offset
-        while (pos > 0 && (bytes[pos].toInt() and 0xC0) == 0x80) {
-            pos--
-        }
-        if (pos > 0) pos--
-        while (pos > 0 && (bytes[pos].toInt() and 0xC0) == 0x80) {
-            pos--
-        }
-        return pos
-    }
-
-    private fun findNextCodePointBoundary(bytes: ByteArray, offset: Int): Int {
-        var pos = offset
-        if (pos < bytes.size) pos++
-        while (pos < bytes.size && (bytes[pos].toInt() and 0xC0) == 0x80) {
-            pos++
-        }
-        return pos
-    }
-
-    private fun isValidUtf8CharBoundaryInBytes(bytes: ByteArray, byteOffset: Int): Boolean {
-        if (byteOffset < 0 || byteOffset > bytes.size) return false
-        if (byteOffset == 0 || byteOffset == bytes.size) return true
-        return (bytes[byteOffset].toInt() and 0xC0) != 0x80
+    private fun utf16ToUtf8Offset(text: String, utf16Offset: Int): Int {
+        val safeOffset = utf16Offset.coerceIn(0, text.length)
+        return text.substring(0, safeOffset).toByteArray(Charsets.UTF_8).size
     }
 
     private fun notifySelectionChanged() {

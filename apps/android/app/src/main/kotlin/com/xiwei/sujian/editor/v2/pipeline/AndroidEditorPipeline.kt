@@ -28,7 +28,7 @@ class AndroidEditorPipeline private constructor(
     val resourceStore: VisualResourceStore,
     val coordinator: VisualTransactionCoordinator,
     val renderer: AndroidRenderer,
-    var inputAdapter: AndroidInputAdapter,
+    var inputAdapter: AndroidInputAdapter?,
     var kernelBridge: EditorKernelBridge?
 ) {
 
@@ -39,22 +39,11 @@ class AndroidEditorPipeline private constructor(
             val resourceStore = VisualResourceStore()
             val coordinator = VisualTransactionCoordinator(resourceStore)
             val renderer = AndroidRenderer()
-            val pipeline = AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, AndroidInputAdapter.placeholder(), null)
+            val pipeline = AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, null, null)
             val inputAdapter = AndroidInputAdapter(hostView.context, mirror, pipeline)
             inputAdapter.setHostView(hostView)
             pipeline.inputAdapter = inputAdapter
             return pipeline
-        }
-
-        internal fun createPlaceholder(): AndroidEditorPipeline {
-            val mirror = DisplayTextMirror()
-            val textPaint = Paint()
-            val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
-            val visualPlanner = AndroidVisualPlanner()
-            val resourceStore = VisualResourceStore()
-            val coordinator = VisualTransactionCoordinator(resourceStore)
-            val renderer = AndroidRenderer()
-            return AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, AndroidInputAdapter.placeholder(), null)
         }
     }
 
@@ -73,76 +62,67 @@ class AndroidEditorPipeline private constructor(
         return LoadTextResult.Loaded(result)
     }
 
-    fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): EditResult? {
-        val bridge = kernelBridge ?: return null
+    fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): PipelineOutput {
+        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         if (autoIndentEnabled && text == "\n") {
             val indentPrefix = computeAutoIndentPrefix()
-            val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return null
+            val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
             val result = EditResult.fromDto(dto)
-            applyEditResult(result)
-            return result
+            return applyEditResult(result)
         }
-        val dto = bridge.insert(byteOffset, text, cause, mirror.getRevision()) ?: return null
+        val dto = bridge.insert(byteOffset, text, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
-        applyEditResult(result)
-        return result
+        return applyEditResult(result)
     }
 
-    fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE): EditResult? {
-        val bridge = kernelBridge ?: return null
-        val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return null
+    fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE): PipelineOutput {
+        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
-        applyEditResult(result)
-        return result
+        return applyEditResult(result)
     }
 
-    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null): EditResult? {
-        val bridge = kernelBridge ?: return null
-        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return null
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null): PipelineOutput {
+        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
-        applyEditResult(result, beforePatch)
-        return result
+        return applyEditResult(result, beforePatch)
     }
 
-    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): EditResult? {
-        val bridge = kernelBridge ?: return null
-        val dto = bridge.setSelection(anchorByteOffset, headByteOffset, mirror.getRevision()) ?: return null
+    fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int): PipelineOutput {
+        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        val dto = bridge.setSelection(anchorByteOffset, headByteOffset, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
-        applyEditResult(result)
-        return result
+        return applyEditResult(result)
     }
 
-    fun performUndo(): EditResult? {
-        val bridge = kernelBridge ?: return null
-        val dto = bridge.undo(mirror.getRevision()) ?: return null
+    fun performUndo(): PipelineOutput {
+        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        val dto = bridge.undo(mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
-        applyEditResult(result)
-        return result
+        return applyEditResult(result)
     }
 
-    fun performRedo(): EditResult? {
-        val bridge = kernelBridge ?: return null
-        val dto = bridge.redo(mirror.getRevision()) ?: return null
+    fun performRedo(): PipelineOutput {
+        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        val dto = bridge.redo(mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
-        applyEditResult(result)
-        return result
+        return applyEditResult(result)
     }
 
-    fun replaceAll(searchStr: String, replaceStr: String): EditResult? {
-        val bridge = kernelBridge ?: return null
-        val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return null
+    fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
+        val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
-        applyEditResult(result)
-        return result
+        return applyEditResult(result)
     }
 
-    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto): EditResult {
+    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto): PipelineOutput {
         val result = EditResult.fromDto(dto)
-        applyEditResult(result)
-        return result
+        return applyEditResult(result)
     }
 
-    fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto): EditResult? {
+    fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto): PipelineOutput {
         return replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
     }
 
@@ -297,29 +277,17 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun getText(): String = mirror.getText()
-
     fun getRevision(): Long = mirror.getRevision()
-
     fun getCursorUtf8(): Int = mirror.getCursorUtf8()
-
     fun getCursorUtf16(): Int = mirror.getCursorUtf16()
-
     fun getSelectionStartUtf8(): Int = mirror.getSelectionStartUtf8()
-
     fun getSelectionEndUtf8(): Int = mirror.getSelectionEndUtf8()
-
     fun getSelectionStartUtf16(): Int = mirror.getSelectionStartUtf16()
-
     fun getSelectionEndUtf16(): Int = mirror.getSelectionEndUtf16()
-
     fun getLengthUtf16(): Int = mirror.getLengthUtf16()
-
     fun getCommittedCursorUtf8(): Int = mirror.getCommittedCursorUtf8()
-
     fun getCommittedSelectionStartUtf8(): Int = mirror.getCommittedSelectionStartUtf8()
-
     fun getCommittedSelectionEndUtf8(): Int = mirror.getCommittedSelectionEndUtf8()
-
     fun getCommittedText(): String = mirror.getCommittedText()
 
     fun setAutoIndent(enabled: Boolean, widthSp: Float) {
@@ -328,7 +296,6 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun isAutoIndentEnabled(): Boolean = autoIndentEnabled
-
     fun getAutoIndentWidthSp(): Float = autoIndentWidthSp
 
     private fun computeAutoIndentPrefix(): String {
@@ -418,16 +385,16 @@ class AndroidEditorPipeline private constructor(
 
     fun utf8ToUtf16(offsetUtf8: Int): Int {
         val indexMap = AndroidTextIndexMap(mirror)
-        return indexMap.utf8ToUtf16(offsetUtf8)
+        return indexMap.utf8ToUtf8(offsetUtf8)
     }
 
     fun getSpannable(): android.text.SpannableStringBuilder = mirror.getSpannable()
 
     fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
-        return inputAdapter.onCreateInputConnection(outAttrs)
+        return inputAdapter?.onCreateInputConnection(outAttrs)
     }
 
-    fun getInputAdapterView(): View = inputAdapter
+    fun getInputAdapterView(): View = inputAdapter ?: View(android.content.ContextWrapper(null))
 
     sealed class PipelineOutput {
         data class Edited(val result: EditResult) : PipelineOutput()

@@ -42,6 +42,15 @@ class SujianEditorView @JvmOverloads constructor(
 
     private var themeBackgroundColor: Int = Color.WHITE
 
+    init {
+        pipeline.inputAdapter?.onPipelineOutput = { output -> handlePipelineOutput(output) }
+        pipeline.inputAdapter?.onCompositionVisualUpdate = {
+            updateMaxScroll()
+            scrollY = scrollY.coerceIn(0f, maxScrollY)
+            invalidate()
+        }
+    }
+
     fun loadText(text: String, cursorUtf8: Int) {
         val result = pipeline.loadText(text, cursorUtf8)
         if (result is AndroidEditorPipeline.LoadTextResult.Loaded) {
@@ -54,49 +63,36 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING) {
-        val result = pipeline.insertText(byteOffset, text, cause)
-        if (result != null) {
-            applyPipelineOutput(result)
-        }
+        val output = pipeline.insertText(byteOffset, text, cause)
+        handlePipelineOutput(output)
     }
 
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE) {
-        val result = pipeline.deleteRange(byteStart, byteEndExclusive, cause)
-        if (result != null) {
-            applyPipelineOutput(result)
-        }
+        val output = pipeline.deleteRange(byteStart, byteEndExclusive, cause)
+        handlePipelineOutput(output)
     }
 
     fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null) {
-        val result = pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, beforePatch)
-        if (result != null) {
-            applyPipelineOutput(result)
-        }
+        val output = pipeline.replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause, beforePatch)
+        handlePipelineOutput(output)
     }
 
     fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int) {
-        val result = pipeline.setSelectionTyped(anchorByteOffset, headByteOffset)
-        if (result != null) {
-            applyPipelineOutput(result)
-        }
+        val output = pipeline.setSelectionTyped(anchorByteOffset, headByteOffset)
+        handlePipelineOutput(output)
     }
 
     fun performUndo() {
-        val result = pipeline.performUndo()
-        if (result != null) {
-            applyPipelineOutput(result)
-        }
+        val output = pipeline.performUndo()
+        handlePipelineOutput(output)
     }
 
     fun performRedo() {
-        val result = pipeline.performRedo()
-        if (result != null) {
-            applyPipelineOutput(result)
-        }
+        val output = pipeline.performRedo()
+        handlePipelineOutput(output)
     }
 
-    private fun applyPipelineOutput(result: EditResult, suppressContentCallback: Boolean = false) {
-        val output = pipeline.applyEditResult(result)
+    private fun handlePipelineOutput(output: AndroidEditorPipeline.PipelineOutput, suppressContentCallback: Boolean = false) {
         when (output) {
             is AndroidEditorPipeline.PipelineOutput.Edited -> {
                 updateMaxScroll()
@@ -110,9 +106,7 @@ class SujianEditorView @JvmOverloads constructor(
                 reloadFromKernel()
             }
             is AndroidEditorPipeline.PipelineOutput.StaleOrInvalid -> {
-                if (result.isStale()) {
-                    reloadFromKernel()
-                }
+                reloadFromKernel()
             }
         }
     }
@@ -156,7 +150,6 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun getSelectionStart(): Int = pipeline.getSelectionStartUtf8()
-
     fun getSelectionEnd(): Int = pipeline.getSelectionEndUtf8()
 
     fun setSelectionRange(start: Int, end: Int) {
@@ -184,15 +177,13 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun replaceAll(searchStr: String, replaceStr: String) {
-        val result = pipeline.replaceAll(searchStr, replaceStr)
-        if (result != null) {
-            applyPipelineOutput(result)
-        }
+        val output = pipeline.replaceAll(searchStr, replaceStr)
+        handlePipelineOutput(output)
     }
 
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
-        val result = pipeline.applyCompositionCommit(dto)
-        applyPipelineOutput(result)
+        val output = pipeline.applyCompositionCommit(dto)
+        handlePipelineOutput(output)
     }
 
     fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
@@ -385,7 +376,6 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun isAutoIndentEnabled(): Boolean = pipeline.isAutoIndentEnabled()
-
     fun getAutoIndentWidthSp(): Float = pipeline.getAutoIndentWidthSp()
 
     private var coordinatedAnimationEnabled: Boolean = true
