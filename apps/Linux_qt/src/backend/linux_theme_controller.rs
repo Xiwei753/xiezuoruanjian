@@ -1,7 +1,8 @@
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 
-#[allow(non_snake_case, dead_code)]
+#[allow(non_snake_case)] // Qt QML naming convention
+#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct LinuxThemeController {
     base: qt_base_class!(trait QObject),
@@ -19,35 +20,27 @@ pub struct LinuxThemeController {
     set_selected_builtin_theme_id: qt_method!(fn(&mut self, val: QString)),
     set_selected_palette_id: qt_method!(fn(&mut self, val: QString)),
     set_system_is_dark: qt_method!(fn(&mut self, val: bool)),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl LinuxThemeController {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
         }
     }
 
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            unsafe { f(&*app) }
-        } else {
-            default
-        }
+    fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, super::AppBorrowError> {
+        self.app.with_app(f)
     }
 
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            unsafe { f(&mut *app) }
-        } else {
-            default
-        }
+    fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, super::AppBorrowError> {
+        self.app.with_app_mut(f)
     }
 
     fn resolved_scheme_json(&self) -> QString {
-        self.with_app("{}".into(), |app| {
+        self.with_app(|app| {
             let color_source = app.setting_color_source().to_string();
             let appearance_mode = app.setting_appearance_mode().to_string();
             let is_dark = Self::compute_is_dark(&appearance_mode, self.system_is_dark());
@@ -109,32 +102,32 @@ impl LinuxThemeController {
                 }
                 None => "{}".into(),
             }
-        })
+        }).unwrap_or_else(|_| "{}".into())
     }
 
     fn is_dark(&self) -> bool {
-        let mode = self.with_app("system".into(), |app| app.setting_appearance_mode().to_string());
+        let mode = self.with_app(|app| app.setting_appearance_mode().to_string()).unwrap_or_else(|_| "system".into());
         Self::compute_is_dark(&mode, self.system_is_dark())
     }
 
     fn color_source(&self) -> QString {
-        self.with_app("built_in".into(), |app| app.setting_color_source())
+        self.with_app(|app| app.setting_color_source()).unwrap_or_else(|_| "built_in".into())
     }
 
     fn selected_builtin_theme_id(&self) -> QString {
-        self.with_app("".into(), |app| app.setting_selected_builtin_theme_id())
+        self.with_app(|app| app.setting_selected_builtin_theme_id()).unwrap_or_else(|_| "".into())
     }
 
     fn selected_palette_id(&self) -> QString {
-        self.with_app("".into(), |app| app.setting_selected_palette_id())
+        self.with_app(|app| app.setting_selected_palette_id()).unwrap_or_else(|_| "".into())
     }
 
     fn appearance_mode(&self) -> QString {
-        self.with_app("system".into(), |app| app.setting_appearance_mode())
+        self.with_app(|app| app.setting_appearance_mode()).unwrap_or_else(|_| "system".into())
     }
 
     fn system_is_dark(&self) -> bool {
-        self.with_app(false, |app| app.current_system_is_dark)
+        self.with_app(|app| app.current_system_is_dark).unwrap_or(false)
     }
 
     fn compute_is_dark(mode: &str, sys_dark: bool) -> bool {
@@ -152,39 +145,43 @@ impl LinuxThemeController {
     fn set_color_source(&mut self, val: QString) {
         let source = val.to_string();
         if source == "saved_palette" {
-            let palette_id = self.with_app("".into(), |app| app.setting_selected_palette_id().to_string());
+            let palette_id = self.with_app(|app| app.setting_selected_palette_id().to_string()).unwrap_or_else(|_| "".into());
             if palette_id.is_empty() {
                 return;
             }
         }
-        self.with_app_mut((), |app| app.set_setting_color_source(val));
-        self.scheme_changed();
+        if self.with_app_mut(|app| app.set_setting_color_source(val)).is_ok() {
+            self.scheme_changed();
+        }
     }
 
     fn set_appearance_mode(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_appearance_mode(val));
-        self.scheme_changed();
+        if self.with_app_mut(|app| app.set_setting_appearance_mode(val)).is_ok() {
+            self.scheme_changed();
+        }
     }
 
     fn set_selected_builtin_theme_id(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_setting_selected_builtin_theme_id(val));
-        self.with_app_mut((), |app| app.set_setting_color_source("built_in".into()));
-        self.scheme_changed();
+        if self.with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val)).is_ok() {
+            let _ = self.with_app_mut(|app| app.set_setting_color_source("built_in".into()));
+            self.scheme_changed();
+        }
     }
 
     fn set_selected_palette_id(&mut self, val: QString) {
         let palette_id = val.to_string();
         if !palette_id.is_empty() {
-            self.with_app_mut((), |app| app.set_setting_selected_palette_id(val));
-            self.with_app_mut((), |app| app.set_setting_color_source("saved_palette".into()));
+            let _ = self.with_app_mut(|app| app.set_setting_selected_palette_id(val));
+            let _ = self.with_app_mut(|app| app.set_setting_color_source("saved_palette".into()));
         }
         self.scheme_changed();
     }
 
     fn set_system_is_dark(&mut self, val: bool) {
-        self.with_app_mut((), |app| {
+        if self.with_app_mut(|app| {
             app.current_system_is_dark = val;
-        });
-        self.scheme_changed();
+        }).is_ok() {
+            self.scheme_changed();
+        }
     }
 }

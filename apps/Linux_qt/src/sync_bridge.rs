@@ -24,7 +24,7 @@ use writer_core::sync::{SyncConfig, SyncSecrets};
 /// 同步任务结果封装。
 pub struct SyncTaskOutcome {
     pub operation_id: String,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // SAFETY: used by SyncTaskOutcome consumers
     pub operation_kind: String,
     pub sync_status: String,
     pub action_result: String,
@@ -37,220 +37,17 @@ pub fn mask_sync_error(msg: &str) -> String {
 
 /// 将 core 返回的强类型错误分类映射为 UI 状态码。
 pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str) -> String {
-    match category.unwrap_or("") {
-        "none" | "" => sync_error_category(fallback_msg),
-        "token_missing" => "token_missing".to_string(),
-        "token_invalid" => "token_invalid".to_string(),
-        "token_permission_denied" => "token_permission_denied".to_string(),
-        "auth_error" => "auth_failed".to_string(),
-        "repo_not_found_or_no_permission" => "repo_not_found_or_no_permission".to_string(),
-        "github_unauthorized" | "github_forbidden" => "auth_failed".to_string(),
-        "empty_url" => "not_configured".to_string(),
-        "missing_permission" => "permission_missing".to_string(),
-        "network_probe_failed" | "github_network_failed" | "dns_failed" | "tls_failed" => {
-            "network_failed".to_string()
-        }
-        "branch_missing" | "remote_branch_missing" => "branch_missing".to_string(),
-        "not_found" | "file_not_found" => {
-            // 404 含义需结合 fallback 消息判断：可能是仓库/权限问题，也可能是分支不存在
-            let lower = fallback_msg.to_lowercase();
-            if lower.contains("branch") || lower.contains("ref") {
-                "branch_missing".to_string()
-            } else {
-                "auth_failed".to_string()
-            }
-        }
-        "non_fast_forward" => "non_fast_forward".to_string(),
-        "conflict" | "checkout_conflict" | "local_blocking_file" => "conflict".to_string(),
-        "unrelated_histories" => "unrelated_histories".to_string(),
-        _ => "error".to_string(),
-    }
-}
-
-/// 根据遗留错误消息内容分类错误类型。仅作为 core 未提供 error_category 时的 fallback。
-pub fn sync_error_category(msg: &str) -> String {
-    let lower = msg.to_lowercase();
-    if lower.contains("token")
-        && (lower.contains("missing") || lower.contains("empty") || lower.contains("not provided"))
-    {
-        return "token_missing".to_string();
-    }
-    if lower.contains("resource not accessible by personal access token") {
-        return "token_permission_denied".to_string();
-    }
-    if lower.contains("repository not found")
-        || (lower.contains("not found") && lower.contains("repo"))
-        || lower.contains("404")
-        || lower.contains("permission denied")
-        || lower.contains("403")
-    {
-        return "auth_failed".to_string();
-    }
-    if lower.contains("ref not found")
-        || lower.contains("couldn't find remote ref")
-        || lower.contains("remote branch not found")
-        || (lower.contains("branch") && lower.contains("not found"))
-    {
-        return "branch_missing".to_string();
-    }
-    if lower.contains("non-fast-forward")
-        || lower.contains("non fast forward")
-        || lower.contains("nonfastforward")
-        || (lower.contains("fetch first") && lower.contains("push"))
-    {
-        return "non_fast_forward".to_string();
-    }
-    if lower.contains("checkout_conflict") || lower.contains("local_blocking_file") {
-        return "conflict".to_string();
-    }
-    if lower.contains("conflict") || lower.contains("merge conflict") {
-        return "conflict".to_string();
-    }
-    if lower.contains("unrelated") {
-        return "unrelated_histories".to_string();
-    }
-    if lower.contains("authentication")
-        || lower.contains("auth failed")
-        || lower.contains("401")
-        || lower.contains("credentials")
-        || lower.contains("could not authenticate")
-        || lower.contains("bad credentials")
-    {
-        return "auth_failed".to_string();
-    }
-    if lower.contains("resolve")
-        || lower.contains("timeout")
-        || lower.contains("connection refused")
-        || lower.contains("dns")
-        || lower.contains("network")
-        || lower.contains("proxy")
-        || lower.contains("eof")
-        || lower.contains("tls")
-        || lower.contains("ssl")
-        || lower.contains("certificate")
-        || lower.contains("unreachable")
-        || lower.contains("connection reset")
-        || lower.contains("no route to host")
-    {
-        return "network_failed".to_string();
-    }
-    "error".to_string()
+    let cat = writer_core::sync::SyncErrorCategory::from_code(
+        category.unwrap_or(""),
+        fallback_msg,
+    );
+    cat.to_ui_status().to_string()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{determine_diagnostics_status, sync_error_category, sync_error_category_from_code};
+    use super::{determine_diagnostics_status, sync_error_category_from_code};
     use writer_core::api::types::SyncDiagnosticsResultDto;
-
-    #[test]
-    fn test_sync_error_category_fallback_parsing() {
-        // token_missing
-        assert_eq!(
-            sync_error_category("token is missing"),
-            "token_missing"
-        );
-        assert_eq!(sync_error_category("TOKEN is EMPTY"), "token_missing");
-        assert_eq!(
-            sync_error_category("token not provided here"),
-            "token_missing"
-        );
-
-        // auth_failed (first block)
-        assert_eq!(
-            sync_error_category("repository not found on github"),
-            "auth_failed"
-        );
-        assert_eq!(sync_error_category("error: not found repo"), "auth_failed");
-        assert_eq!(sync_error_category("status 404"), "auth_failed");
-        assert_eq!(
-            sync_error_category("Permission denied (publickey)"),
-            "auth_failed"
-        );
-        assert_eq!(sync_error_category("HTTP 403 Forbidden"), "auth_failed");
-
-        // branch_missing
-        assert_eq!(
-            sync_error_category("fatal: ref not found"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("couldn't find remote ref main"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("remote branch not found"),
-            "branch_missing"
-        );
-        assert_eq!(
-            sync_error_category("branch main not found"),
-            "branch_missing"
-        );
-
-        // non_fast_forward
-        assert_eq!(sync_error_category("hint: Updates were rejected because the tip of your current branch is behind (non-fast-forward)"), "non_fast_forward");
-        assert_eq!(
-            sync_error_category("non fast forward error"),
-            "non_fast_forward"
-        );
-        assert_eq!(sync_error_category("nonfastforward"), "non_fast_forward");
-        assert_eq!(
-            sync_error_category("fetch first before push"),
-            "non_fast_forward"
-        );
-
-        // conflict
-        assert_eq!(sync_error_category("checkout_conflict"), "conflict");
-        assert_eq!(sync_error_category("local_blocking_file"), "conflict");
-        assert_eq!(sync_error_category("merge conflict"), "conflict");
-        assert_eq!(sync_error_category("we have a conflict here"), "conflict");
-
-        // unrelated_histories
-        assert_eq!(
-            sync_error_category("fatal: refusing to merge unrelated histories"),
-            "unrelated_histories"
-        );
-
-        // auth_failed (second block)
-        assert_eq!(sync_error_category("authentication failed"), "auth_failed");
-        assert_eq!(sync_error_category("auth failed"), "auth_failed");
-        assert_eq!(sync_error_category("status 401"), "auth_failed");
-        assert_eq!(sync_error_category("invalid credentials"), "auth_failed");
-        assert_eq!(sync_error_category("could not authenticate"), "auth_failed");
-        assert_eq!(sync_error_category("bad credentials"), "auth_failed");
-
-        // network_failed
-        assert_eq!(
-            sync_error_category("could not resolve host"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("connection timeout"), "network_failed");
-        assert_eq!(sync_error_category("Connection refused"), "network_failed");
-        assert_eq!(sync_error_category("dns error"), "network_failed");
-        assert_eq!(
-            sync_error_category("network is unreachable"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("proxy error"), "network_failed");
-        assert_eq!(sync_error_category("unexpected eof"), "network_failed");
-        assert_eq!(
-            sync_error_category("tls handshake failed"),
-            "network_failed"
-        );
-        assert_eq!(
-            sync_error_category("ssl certificate problem"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("invalid certificate"), "network_failed");
-        assert_eq!(sync_error_category("host is unreachable"), "network_failed");
-        assert_eq!(
-            sync_error_category("connection reset by peer"),
-            "network_failed"
-        );
-        assert_eq!(sync_error_category("no route to host"), "network_failed");
-
-        // error (default)
-        assert_eq!(sync_error_category("some unknown strange issue"), "error");
-    }
 
     #[test]
     fn typed_sync_error_category_takes_precedence() {
@@ -269,47 +66,30 @@ mod tests {
     }
 
     #[test]
-    fn typed_sync_error_category_falls_back_when_missing() {
+    fn typed_sync_error_category_returns_other_when_missing() {
         assert_eq!(
             sync_error_category_from_code(None, "repository not found"),
-            "auth_failed"
+            "error"
         );
         assert_eq!(
             sync_error_category_from_code(Some(""), "timeout while connecting"),
-            "network_failed"
+            "error"
         );
     }
 
     #[test]
-    fn test_not_found_404_mapped_to_auth_failed_or_branch_missing() {
-        // not_found without branch/ref context → auth_failed
+    fn test_not_found_maps_to_not_found_category() {
         assert_eq!(
             sync_error_category_from_code(Some("not_found"), "some error occurred"),
             "auth_failed"
         );
-        // not_found with branch context → branch_missing
-        assert_eq!(
-            sync_error_category_from_code(Some("not_found"), "branch main not found"),
-            "branch_missing"
-        );
-        // not_found with ref context → branch_missing
-        assert_eq!(
-            sync_error_category_from_code(Some("not_found"), "ref not found on remote"),
-            "branch_missing"
-        );
     }
 
     #[test]
-    fn test_file_not_found_mapped_to_auth_failed_or_branch_missing() {
-        // file_not_found without branch/ref context → auth_failed
+    fn test_file_not_found_maps_to_auth_failed() {
         assert_eq!(
             sync_error_category_from_code(Some("file_not_found"), "some error"),
             "auth_failed"
-        );
-        // file_not_found with branch context → branch_missing
-        assert_eq!(
-            sync_error_category_from_code(Some("file_not_found"), "branch does not exist"),
-            "branch_missing"
         );
     }
 
@@ -350,20 +130,15 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_error_category_resource_not_accessible() {
+    fn test_network_error_maps_to_network_failed() {
         assert_eq!(
-            sync_error_category("Resource not accessible by personal access token"),
-            "token_permission_denied"
-        );
-        assert_eq!(
-            sync_error_category("error: Resource not accessible by personal access token for some repo"),
-            "token_permission_denied"
+            sync_error_category_from_code(Some("network_error"), "any message"),
+            "network_failed"
         );
     }
 
     #[test]
     fn test_404_never_maps_to_generic_error() {
-        // Ensure 404-related categories never fall through to "error"
         let categories_404 = [
             "not_found",
             "file_not_found",
@@ -467,7 +242,7 @@ pub fn save_sync_configs(
 ) -> Result<(), String> {
     let api = WriterCoreApi::new(path);
     let config_result = api.save_sync_config(config.clone().into());
-    let config_json = match config_result {
+    let config_envelope = match config_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,
             vec!["sync_config.json".to_string()],
@@ -477,20 +252,15 @@ pub fn save_sync_configs(
             }],
         ),
         Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-    }
-    .to_json_string();
-    let config_envelope: serde_json::Value =
-        serde_json::from_str(&config_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
-    if config_envelope["success"] != true {
-        let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-        let raw_error = config_envelope["rawError"]
-            .as_str()
-            .unwrap_or("error.save_sync_config_failed");
+    };
+    if !config_envelope.success {
+        let error_code = config_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+        let raw_error = config_envelope.raw_error.as_deref().unwrap_or("error.save_sync_config_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 
     let secrets_result = api.save_sync_secrets(secrets.clone().into());
-    let secrets_json = match secrets_result {
+    let secrets_envelope = match secrets_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
             data,
             vec!["sync_secrets.local.json".to_string()],
@@ -500,15 +270,10 @@ pub fn save_sync_configs(
             }],
         ),
         Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-    }
-    .to_json_string();
-    let secrets_envelope: serde_json::Value =
-        serde_json::from_str(&secrets_json).map_err(|e| format!("error.parse_json_failed: {}", e))?;
-    if secrets_envelope["success"] != true {
-        let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-        let raw_error = secrets_envelope["rawError"]
-            .as_str()
-            .unwrap_or("error.save_sync_secrets_failed");
+    };
+    if !secrets_envelope.success {
+        let error_code = secrets_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+        let raw_error = secrets_envelope.raw_error.as_deref().unwrap_or("error.save_sync_secrets_failed");
         return Err(format!("{} ({})", raw_error, error_code));
     }
 

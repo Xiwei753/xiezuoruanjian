@@ -688,6 +688,7 @@ impl SujianEditorItem {
             return Some((image, min_y, buffer_h));
         }
 
+        // SAFETY: painter_ptr is null-checked above; sujian_create_painter_scaled returns a valid QPainter pointer that is deleted at the end of this scope.
         let painter: &mut QPainter = unsafe { &mut *painter_ptr };
         self.paint_onto(painter, min_y, buffer_h);
 

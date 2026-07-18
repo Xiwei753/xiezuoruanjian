@@ -10,6 +10,7 @@ class AndroidLayoutEngine(
     private val mirror: DisplayTextMirror,
     private val textPaint: TextPaint
 ) {
+    private val snapshotBuilder = AndroidLineSnapshotBuilder()
     private var layout: DynamicLayout? = null
     private var currentRevision: AndroidLayoutRevision? = null
     private var width: Float = 0f
@@ -37,7 +38,7 @@ class AndroidLayoutEngine(
 
         val currentConfigFp = computeConfigFingerprint()
 
-        if (currentConfigFp != lastConfigFingerprint) {
+        if (currentConfigFp != lastConfigFingerprint || layout == null) {
             layout = DynamicLayout.Builder.obtain(text, textPaint, width.toInt())
                 .setAlignment(Layout.Alignment.ALIGN_NORMAL)
                 .setLineSpacing(0f, lineSpacingMultiplier)
@@ -52,6 +53,32 @@ class AndroidLayoutEngine(
 
     fun captureImmutableRevision(): AndroidLayoutRevision? {
         return currentRevision?.copy()
+    }
+
+    fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
+        val l = layout ?: return emptyMap()
+        val rev = currentRevision ?: return emptyMap()
+        val result = mutableMapOf<Int, AndroidLineSnapshot>()
+        for (idx in lineIndices) {
+            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror)
+            if (snapshot != null) {
+                result[idx] = snapshot
+            }
+        }
+        return result
+    }
+
+    fun captureLineBitmapSnapshotsWithClusters(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
+        val l = layout ?: return emptyMap()
+        val rev = currentRevision ?: return emptyMap()
+        val result = mutableMapOf<Int, AndroidLineSnapshot>()
+        for (idx in lineIndices) {
+            val snapshot = snapshotBuilder.buildSnapshotForLineWithClusters(l, idx, rev, mirror)
+            if (snapshot != null) {
+                result[idx] = snapshot
+            }
+        }
+        return result
     }
 
     fun getLayout(): Layout? = layout
@@ -110,6 +137,14 @@ class AndroidLayoutEngine(
 
         val fontFingerprint = "${textPaint.textSize}_${textPaint.typeface?.hashCode() ?: 0}"
 
+        val cursorUtf16 = mirror.getCursorUtf16()
+        val cursorLine = if (cursorUtf16 in 0..mirror.getLengthUtf16()) l.getLineForOffset(cursorUtf16) else 0
+        val cursorX = if (cursorUtf16 in 0..mirror.getLengthUtf16()) l.getPrimaryHorizontal(cursorUtf16) else 0f
+        val cursorY = l.getLineTop(cursorLine).toFloat()
+        val cursorHeight = (l.getLineBottom(cursorLine) - l.getLineTop(cursorLine)).toFloat()
+
+        val compRange = mirror.getCompositionRangeUtf16()
+
         return AndroidLayoutRevision(
             revisionCounter,
             mirror.getRevision(),
@@ -118,7 +153,16 @@ class AndroidLayoutEngine(
             l.lineCount,
             lineRanges.toList(),
             mirror.getCursorUtf8(),
-            mirror.getCursorUtf16(),
+            cursorUtf16,
+            cursorX,
+            cursorY,
+            cursorHeight,
+            mirror.getSelectionAnchorUtf8(),
+            mirror.getSelectionHeadUtf8(),
+            mirror.getSelectionAnchorUtf16(),
+            mirror.getSelectionHeadUtf16(),
+            compRange?.first ?: -1,
+            compRange?.second ?: -1,
             emptyList()
         )
     }

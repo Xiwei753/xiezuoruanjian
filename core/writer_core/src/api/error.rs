@@ -162,6 +162,33 @@ impl From<crate::error::Error> for WriterError {
                 transaction_id,
                 missing_files.join(",")
             )),
+            Error::SyncCheckoutConflict { summary_json } => {
+                WriterError::SyncConflict(format!("checkout_conflict: {}", summary_json))
+            }
+            Error::SyncSettingsConflict { details_json } => {
+                WriterError::SyncConflict(format!("settings_conflict: {}", details_json))
+            }
+            Error::SyncConflictDetected => {
+                WriterError::SyncConflict("SyncConflict_Detected".to_string())
+            }
+            Error::SyncNonFastForward { detail } => {
+                WriterError::SyncFailed(format!("non_fast_forward: {}", detail))
+            }
+            Error::SyncUnrelatedHistories { detail } => {
+                WriterError::SyncFailed(format!("unrelated_histories: {}", detail))
+            }
+            Error::SyncRemoteBranchNotFound { detail } => {
+                WriterError::SyncFailed(format!("remote_branch_not_found: {}", detail))
+            }
+            Error::SyncGithubApiError {
+                category,
+                context,
+                status,
+                body_preview,
+            } => WriterError::SyncFailed(format!(
+                "github_api_error: category={} context={} status={} body={}",
+                category, context, status, body_preview
+            )),
             Error::DiskFull {
                 path,
                 required_bytes,

@@ -3,8 +3,6 @@ package com.xiwei.sujian.editor.v2.render
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 import com.xiwei.sujian.editor.v2.visual.SliceRole
 
@@ -14,13 +12,19 @@ class AndroidRenderFrame(
     val viewportWidth: Int,
     val viewportHeight: Int,
     val scrollX: Float,
-    val scrollY: Float
+    val scrollY: Float,
+    val cursorUtf16: Int,
+    val cursorX: Float,
+    val cursorY: Float,
+    val cursorHeight: Float,
+    val selectionStartUtf16: Int,
+    val selectionEndUtf16: Int,
+    val compositionStartUtf16: Int,
+    val compositionEndUtf16: Int,
+    val searchHighlightsUtf16: List<Pair<Int, Int>>
 )
 
-class AndroidRenderer(
-    private val mirror: DisplayTextMirror,
-    private val layoutEngine: AndroidLayoutEngine
-) {
+class AndroidRenderer {
     private var backgroundColor: Int = Color.WHITE
     private val cursorPaint = Paint().apply {
         color = Color.BLACK
@@ -49,25 +53,48 @@ class AndroidRenderer(
     fun draw(
         canvas: Canvas,
         layout: android.text.Layout,
-        frame: AndroidRenderFrame,
-        searchHighlights: List<Pair<Int, Int>> = emptyList()
+        frame: AndroidRenderFrame
     ) {
         canvas.drawColor(backgroundColor)
         val transaction = frame.transaction
         if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
-            renderStaticBackground(canvas, layout, transaction)
+            renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             renderSelectionDecoration(canvas, layout, transaction)
-            renderSearchHighlights(canvas, layout, searchHighlights)
-            renderAnimatedSlices(canvas, transaction, frame.progress)
+            val animatedRegions = computeAnimatedSliceRegions(transaction)
+            renderLayoutWithAnimatedHoles(canvas, layout, animatedRegions)
+            renderAnimatedSlices(canvas, layout, transaction, frame.progress)
             renderPreeditDecoration(canvas, layout, transaction)
-            renderCursorTransition(canvas, transaction, frame.progress)
+            renderCursorAlways(canvas, layout, frame, transaction)
         } else {
-            renderSearchHighlights(canvas, layout, searchHighlights)
-            renderSelectionHighlight(canvas, layout)
+            renderSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
+            renderSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
             layout.draw(canvas)
-            renderPreeditUnderline(canvas, layout)
-            renderCursor(canvas, layout)
+            renderPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16)
+            renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
         }
+    }
+
+    private fun computeAnimatedSliceRects(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
+        val rects = mutableListOf<android.graphics.RectF>()
+        for (slice in transaction.animatedSlices) {
+            val snapshot = slice.snapshot ?: continue
+            val srcRect = slice.sourceRect
+            if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
+            val destRect = if (slice.role == SliceRole.Move && slice.fromDestinationRect != null) {
+                val progress = 0f
+                val fromRect = slice.fromDestinationRect
+                android.graphics.RectF(
+                    fromRect.left + (slice.destinationRect.left - fromRect.left) * progress,
+                    fromRect.top + (slice.destinationRect.top - fromRect.top) * progress,
+                    fromRect.right + (slice.destinationRect.right - fromRect.right) * progress,
+                    fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
+                )
+            } else {
+                slice.destinationRect
+            }
+            rects.add(destRect)
+        }
+        return rects
     }
 
     private fun renderSearchHighlights(
@@ -76,10 +103,7 @@ class AndroidRenderer(
         highlights: List<Pair<Int, Int>>
     ) {
         if (highlights.isEmpty()) return
-        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
-        for ((startUtf8, endUtf8) in highlights) {
-            val startUtf16 = indexMap.utf8ToUtf16(startUtf8)
-            val endUtf16 = indexMap.utf8ToUtf16(endUtf8)
+        for ((startUtf16, endUtf16) in highlights) {
             val startLine = layout.getLineForOffset(startUtf16)
             val endLine = layout.getLineForOffset(endUtf16)
             for (line in startLine..endLine) {
@@ -94,36 +118,38 @@ class AndroidRenderer(
         }
     }
 
-    private fun renderStaticBackground(
-        canvas: Canvas,
-        layout: android.text.Layout,
+    private fun computeAnimatedSliceRegions(
         transaction: PreparedVisualTransaction
-    ) {
-        val hiddenLines = mutableSetOf<Int>()
-        for (patch in transaction.staticPatches) {
-            if (patch.visibleSourceRects.isEmpty()) {
-                hiddenLines.add(patch.lineIndex)
-            }
-        }
+    ): List<android.graphics.RectF> {
+        val regions = mutableListOf<android.graphics.RectF>()
         for (slice in transaction.animatedSlices) {
-            slice.snapshot?.lineIndex?.let { hiddenLines.add(it) }
+            val snapshot = slice.snapshot ?: continue
+            val bitmap = snapshot.bitmap ?: continue
+            val srcRect = slice.sourceRect
+            if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
+            regions.add(slice.destinationRect)
         }
-
-        for (i in 0 until layout.lineCount) {
-            if (i in hiddenLines) continue
-            val lineTop = layout.getLineTop(i)
-            val lineBottom = layout.getLineBottom(i)
-            canvas.save()
-            canvas.clipRect(
-                layout.getLineLeft(i), lineTop.toFloat(),
-                layout.getLineRight(i), lineBottom.toFloat()
-            )
-            layout.draw(canvas)
-            canvas.restore()
-        }
+        return regions
     }
 
-    private fun renderAnimatedSlices(canvas: Canvas, transaction: PreparedVisualTransaction, progress: Float) {
+    private fun renderLayoutWithAnimatedHoles(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        animatedLineRegions: List<android.graphics.RectF>
+    ) {
+        if (animatedLineRegions.isEmpty()) {
+            layout.draw(canvas)
+            return
+        }
+        canvas.save()
+        for (region in animatedLineRegions) {
+            canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
+        }
+        layout.draw(canvas)
+        canvas.restore()
+    }
+
+    private fun renderAnimatedSlices(canvas: Canvas, layout: android.text.Layout, transaction: PreparedVisualTransaction, progress: Float) {
         for (slice in transaction.animatedSlices) {
             val snapshot = slice.snapshot ?: continue
             val bitmap = snapshot.bitmap ?: continue
@@ -159,16 +185,27 @@ class AndroidRenderer(
         canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
     }
 
-    private fun renderCursor(canvas: Canvas, layout: android.text.Layout) {
-        val cursorUtf16 = mirror.getCursorUtf16()
-        if (cursorUtf16 < 0 || cursorUtf16 > mirror.getLengthUtf16()) return
+    private fun renderCursorAlways(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        frame: AndroidRenderFrame,
+        transaction: PreparedVisualTransaction
+    ) {
+        val ct = transaction.cursorTransition
+        if (ct != null && ct.shouldAnimate) {
+            val progress = frame.progress
+            val currentX = ct.fromX + (ct.toX - ct.fromX) * progress
+            val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
+            val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
+            canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
+        } else {
+            renderCursor(canvas, layout, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+        }
+    }
 
-        val line = layout.getLineForOffset(cursorUtf16)
-        val x = layout.getPrimaryHorizontal(cursorUtf16)
-        val top = layout.getLineTop(line).toFloat()
-        val bottom = layout.getLineBottom(line).toFloat()
-
-        canvas.drawRect(x, top, x + 2f, bottom, cursorPaint)
+    private fun renderCursor(canvas: Canvas, layout: android.text.Layout, cursorUtf16: Int, cursorX: Float, cursorY: Float, cursorHeight: Float) {
+        if (cursorUtf16 < 0) return
+        canvas.drawRect(cursorX, cursorY, cursorX + 2f, cursorY + cursorHeight, cursorPaint)
     }
 
     private fun renderSelectionDecoration(
@@ -200,9 +237,7 @@ class AndroidRenderer(
         }
     }
 
-    private fun renderSelectionHighlight(canvas: Canvas, layout: android.text.Layout) {
-        val selStart = mirror.getSelectionStartUtf16()
-        val selEnd = mirror.getSelectionEndUtf16()
+    private fun renderSelectionHighlight(canvas: Canvas, layout: android.text.Layout, selStart: Int, selEnd: Int) {
         if (selStart == selEnd) return
 
         val startLine = layout.getLineForOffset(selStart)
@@ -220,13 +255,13 @@ class AndroidRenderer(
         }
     }
 
-    private fun renderPreeditUnderline(canvas: Canvas, layout: android.text.Layout) {
-        val compRange = mirror.getCompositionRangeUtf16() ?: return
-        val startLine = layout.getLineForOffset(compRange.first)
-        val endLine = layout.getLineForOffset(compRange.second)
+    private fun renderPreeditUnderline(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {
+        if (compStart < 0 || compEnd < 0 || compStart >= compEnd) return
+        val startLine = layout.getLineForOffset(compStart)
+        val endLine = layout.getLineForOffset(compEnd)
         for (line in startLine..endLine) {
-            val lineStart = if (line == startLine) compRange.first else layout.getLineStart(line)
-            val lineEnd = if (line == endLine) compRange.second else layout.getLineEnd(line)
+            val lineStart = if (line == startLine) compStart else layout.getLineStart(line)
+            val lineEnd = if (line == endLine) compEnd else layout.getLineEnd(line)
             val startX = layout.getPrimaryHorizontal(lineStart)
             val endX = layout.getPrimaryHorizontal(lineEnd - 1)
             val bottom = layout.getLineBottom(line).toFloat()

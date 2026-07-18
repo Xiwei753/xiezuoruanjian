@@ -4,7 +4,7 @@
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新网络同步状态。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新网络同步状态。
 //
 // 干什么的：
 // - 实现 SyncBackend 结构体，作为 QML 中 "syncBackend" 对象的桥梁。
@@ -19,14 +19,15 @@
 mod sync_operations;
 
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 use crate::sync_bridge::{
-    determine_diagnostics_status, mask_sync_error, sync_error_category,
+    determine_diagnostics_status, mask_sync_error, sync_error_category_from_code,
     SyncTaskOutcome,
 };
 use writer_core::api::WriterCoreApi;
 
-#[allow(non_snake_case, dead_code)]
+#[allow(non_snake_case)] // Qt QML naming convention
+#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct SyncBackend {
     base: qt_base_class!(trait QObject),
@@ -58,162 +59,160 @@ pub struct SyncBackend {
     maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
     open_workspace_dir: qt_method!(fn(&mut self)),
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl SyncBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
         }
     }
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            // SAFETY: pointer was set from QObjectBox-pinned AppBackend in
-            // BackendRuntime::new; null-guarded above; single-threaded (Rc).
-            unsafe { f(&*app) }
-        } else {
-            crate::backend::app_backend::debug_error_static(
-                "sync",
-                "BACKEND_LINK_BROKEN",
-                "app pointer is null",
-            );
-            default
-        }
+    fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+        self.app.with_app(f)
     }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            // SAFETY: same as with_app; &mut is safe because callers hold
-            // &mut self, preventing aliasing within this backend.
-            unsafe { f(&mut *app) }
-        } else {
-            crate::backend::app_backend::debug_error_static(
-                "sync",
-                "BACKEND_LINK_BROKEN",
-                "app pointer is null",
-            );
-            default
-        }
+    fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+        self.app.with_app_mut(f)
     }
     fn sync_enabled(&self) -> bool {
-        self.with_app(false, |app| app.sync_enabled())
+        self.with_app(|app| app.sync_enabled()).unwrap_or(false)
     }
     fn set_sync_enabled(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_sync_enabled(val));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_enabled(val)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn sync_backend_type(&self) -> QString {
-        self.with_app("".into(), |app| app.sync_backend_type())
+        self.with_app(|app| app.sync_backend_type()).unwrap_or_else(|_| "".into())
     }
     fn set_sync_backend_type(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_sync_backend_type(val));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_backend_type(val)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn sync_remote_url(&self) -> QString {
-        self.with_app("".into(), |app| app.sync_remote_url())
+        self.with_app(|app| app.sync_remote_url()).unwrap_or_else(|_| "".into())
     }
     fn set_sync_remote_url(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_sync_remote_url(val));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_remote_url(val)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn sync_branch(&self) -> QString {
-        self.with_app("main".into(), |app| app.sync_branch())
+        self.with_app(|app| app.sync_branch()).unwrap_or_else(|_| "main".into())
     }
     fn set_sync_branch(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_sync_branch(val));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_branch(val)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn sync_auto_sync(&self) -> bool {
-        self.with_app(false, |app| app.sync_auto_sync())
+        self.with_app(|app| app.sync_auto_sync()).unwrap_or(false)
     }
     fn set_sync_auto_sync(&mut self, val: bool) {
-        self.with_app_mut((), |app| app.set_sync_auto_sync(val));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_auto_sync(val)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn sync_interval(&self) -> u32 {
-        self.with_app(300, |app| app.sync_interval())
+        self.with_app(|app| app.sync_interval()).unwrap_or(300)
     }
     fn set_sync_interval(&mut self, val: u32) {
-        self.with_app_mut((), |app| app.set_sync_interval(val));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_interval(val)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn sync_username(&self) -> QString {
-        self.with_app("".into(), |app| app.sync_username())
+        self.with_app(|app| app.sync_username()).unwrap_or_else(|_| "".into())
     }
     fn set_sync_username(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_sync_username(val));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_username(val)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn has_sync_token(&self) -> bool {
-        self.with_app(false, |app| app.has_sync_token())
+        self.with_app(|app| app.has_sync_token()).unwrap_or(false)
     }
     fn sync_operation_state(&self) -> QString {
-        self.with_app("".into(), |app| app.sync_operation_state())
+        self.with_app(|app| app.sync_operation_state()).unwrap_or_else(|_| "".into())
     }
     fn sync_status(&self) -> QString {
-        self.with_app("not_configured".into(), |app| app.sync_status())
+        self.with_app(|app| app.sync_status()).unwrap_or_else(|_| "not_configured".into())
     }
     fn sync_in_progress(&self) -> bool {
-        self.with_app(false, |app| app.sync_in_progress())
+        self.with_app(|app| app.sync_in_progress()).unwrap_or(false)
     }
     fn set_sync_status(&mut self, val: QString) {
-        self.with_app_mut((), |app| app.set_sync_status(val));
-        self.sync_status_changed();
+        if self.with_app_mut(|app| app.set_sync_status(val)).is_ok() {
+            self.sync_status_changed();
+        }
     }
     fn has_workspace(&self) -> bool {
-        self.with_app(false, |app| app.has_workspace())
+        self.with_app(|app| app.has_workspace()).unwrap_or(false)
     }
     fn sync_can_run(&self) -> bool {
-        self.with_app(false, |app| app.sync_can_run())
+        self.with_app(|app| app.sync_can_run()).unwrap_or(false)
     }
     fn sync_block_reason(&self) -> QString {
-        self.with_app("".into(), |app| app.sync_block_reason())
+        self.with_app(|app| app.sync_block_reason()).unwrap_or_else(|_| "".into())
     }
     fn set_sync_token(&mut self, token: QString) {
-        self.with_app_mut((), |app| app.set_sync_token(token));
-        self.sync_config_changed();
+        if self.with_app_mut(|app| app.set_sync_token(token)).is_ok() {
+            self.sync_config_changed();
+        }
     }
     fn load_sync_config(&mut self) {
-        self.with_app_mut((), |app| app.load_sync_config());
-        self.sync_config_changed();
-        self.sync_status_changed();
+        if self.with_app_mut(|app| app.load_sync_config()).is_ok() {
+            self.sync_config_changed();
+            self.sync_status_changed();
+        }
     }
     fn save_sync_config(&mut self) -> bool {
-        let ok = self.with_app_mut(false, |app| app.save_sync_config());
-        self.sync_config_changed();
-        ok
+        let result = self.with_app_mut(|app| app.save_sync_config());
+        if result.is_ok() {
+            self.sync_config_changed();
+        }
+        result.unwrap_or(false)
     }
     fn perform_sync_dry_run(&mut self) -> QString {
-        let id = self.with_app_mut("".into(), |app| app.perform_sync_dry_run());
-        self.sync_status_changed();
-        self.sync_action_completed();
-        id
+        let result = self.with_app_mut(|app| app.perform_sync_dry_run());
+        if result.is_ok() {
+            self.sync_status_changed();
+            self.sync_action_completed();
+        }
+        result.unwrap_or_else(|_| "".into())
     }
     fn perform_sync(&mut self) -> QString {
-        let id = self.with_app_mut("".into(), |app| app.perform_sync());
-        self.sync_status_changed();
-        id
+        let result = self.with_app_mut(|app| app.perform_sync());
+        if result.is_ok() {
+            self.sync_status_changed();
+        }
+        result.unwrap_or_else(|_| "".into())
     }
     fn perform_sync_diagnostics(&mut self) -> QString {
-        let id = self.with_app_mut("".into(), |app| app.perform_sync_diagnostics());
-        self.sync_status_changed();
-        self.sync_action_completed();
-        id
+        let result = self.with_app_mut(|app| app.perform_sync_diagnostics());
+        if result.is_ok() {
+            self.sync_status_changed();
+            self.sync_action_completed();
+        }
+        result.unwrap_or_else(|_| "".into())
     }
     fn request_auto_sync(&mut self, reason: QString) {
-        self.with_app_mut((), |app| app.request_auto_sync(reason));
-        self.sync_status_changed();
+        if self.with_app_mut(|app| app.request_auto_sync(reason)).is_ok() {
+            self.sync_status_changed();
+        }
     }
     fn maybe_auto_sync_on_foreground(&mut self) {
-        self.with_app_mut((), |app| app.maybe_auto_sync_on_foreground());
-        self.sync_status_changed();
+        if self.with_app_mut(|app| app.maybe_auto_sync_on_foreground()).is_ok() {
+            self.sync_status_changed();
+        }
     }
     fn open_workspace_dir(&mut self) {
-        self.with_app_mut((), |app| app.open_workspace_dir());
+        let _ = self.with_app_mut(|app| app.open_workspace_dir());
     }
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
-        self.with_app_mut("{}".into(), |app| app.copy_text_to_clipboard(text))
+        self.with_app_mut(|app| app.copy_text_to_clipboard(text)).unwrap_or_else(|_| "{}".into())
     }
 }
 
@@ -424,6 +423,7 @@ impl AppBackend {
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
+            // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
                 let mut config = match api.load_sync_config() {
@@ -478,7 +478,7 @@ impl AppBackend {
                         }
                     }
                     Err(e) => {
-                        let status = sync_error_category(&e.to_string());
+                        let status = sync_error_category_from_code(None, &e.to_string());
                         let state = writer_core::api::SyncOperationStateDto {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "diagnose".to_string(),
@@ -644,7 +644,7 @@ impl AppBackend {
             }
 
             let config_result = api.save_sync_config(c);
-            let config_json = match config_result {
+            let config_envelope = match config_result {
                 Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                     data,
                     vec!["sync_config.json".to_string()],
@@ -654,13 +654,10 @@ impl AppBackend {
                     }],
                 ),
                 Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-            }
-            .to_json_string();
-            let config_envelope: serde_json::Value = serde_json::from_str(&config_json)
-                .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
-            if config_envelope["success"] != true {
-                let error_code = config_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-                let message_key = config_envelope["messageKey"].as_str().unwrap_or("");
+            };
+            if !config_envelope.success {
+                let error_code = config_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+                let message_key = config_envelope.message_key.as_deref().unwrap_or("");
                 let resolved_key = if !message_key.is_empty() {
                     crate::backend::message_key_mapper::resolve_message_key(message_key).to_string()
                 } else {
@@ -678,7 +675,7 @@ impl AppBackend {
                 });
             } else {
                 let secrets_result = api.save_sync_secrets(s);
-                let secrets_json = match secrets_result {
+                let secrets_envelope = match secrets_result {
                     Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(
                         data,
                         vec!["sync_secrets.local.json".to_string()],
@@ -688,13 +685,10 @@ impl AppBackend {
                         }],
                     ),
                     Err(error) => writer_core::api::ResultEnvelope::<bool>::error(error),
-                }
-                .to_json_string();
-                let secrets_envelope: serde_json::Value = serde_json::from_str(&secrets_json)
-                    .unwrap_or(serde_json::json!({"success": false, "errorCode": "JSON_ERROR"}));
-                if secrets_envelope["success"] != true {
-                    let error_code = secrets_envelope["errorCode"].as_str().unwrap_or("UNKNOWN");
-                    let message_key = secrets_envelope["messageKey"].as_str().unwrap_or("");
+                };
+                if !secrets_envelope.success {
+                    let error_code = secrets_envelope.error_code.as_deref().unwrap_or("UNKNOWN");
+                    let message_key = secrets_envelope.message_key.as_deref().unwrap_or("");
                     let resolved_key = if !message_key.is_empty() {
                         crate::backend::message_key_mapper::resolve_message_key(message_key)
                             .to_string()

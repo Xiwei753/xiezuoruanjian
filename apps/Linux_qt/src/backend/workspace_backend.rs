@@ -4,7 +4,7 @@
 //
 // 引用了什么：
 // - super::*：引入 AppBackend 核心后端的全部方法与结构体。
-// - crate::backend::SafeAppPtr：用于安全访问全局 AppBackend 指针以读取/更新工作区状态。
+// - crate::backend::AppRef：用于安全访问全局 AppBackend 指针以读取/更新工作区状态。
 //
 // 干什么的：
 // - 实现 WorkspaceBackend 结构体，作为 QML 中 "workspaceBackend" 对象的桥梁。
@@ -17,19 +17,16 @@
 // =============================================================================
 
 use super::*;
-use crate::backend::SafeAppPtr;
+use crate::backend::AppRef;
 
-use super::super::json_utils::qjson_object_from_json;
+use crate::backend::json_utils::qjson_object_from_json;
 use qmetaobject::QJsonObject;
 
 #[path = "github_init_operations.rs"]
 mod github_init_operations;
 
 fn backend_link_broken_json() -> QString {
-    crate::backend::json_utils::envelope_error_json(writer_core::api::WriterError::Other(
-        "底层链接断开，请重启应用".to_string(),
-    ))
-    .into()
+    QString::from(crate::backend::json_utils::borrow_conflict_error_json())
 }
 
 fn workspace_success_json(data: &str) -> QString {
@@ -66,43 +63,21 @@ pub struct WorkspaceBackend {
     save_last_navigation_state: qt_method!(fn(&mut self, route: QString, project_id: QString, volume_id: QString, chapter_id: QString, starmap_id: QString)),
     get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
     clear_last_navigation_state: qt_method!(fn(&mut self)),
-    app: SafeAppPtr,
+    app: AppRef,
 }
 
 impl WorkspaceBackend {
-    pub fn new(app: SafeAppPtr) -> Self {
+    pub fn new(app: AppRef) -> Self {
         Self {
             app,
             ..Default::default()
         }
     }
-    fn with_app<R>(&self, default: R, f: impl FnOnce(&AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            // SAFETY: pointer was set from QObjectBox-pinned AppBackend in
-            // BackendRuntime::new; null-guarded above; single-threaded (Rc).
-            unsafe { f(&*app) }
-        } else {
-            crate::backend::app_backend::debug_error_static(
-                "workspace",
-                "BACKEND_LINK_BROKEN",
-                "app pointer is null",
-            );
-            default
-        }
+    fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+        self.app.with_app(f)
     }
-    fn with_app_mut<R>(&mut self, default: R, f: impl FnOnce(&mut AppBackend) -> R) -> R {
-        if let Some(app) = self.app.get() {
-            // SAFETY: same as with_app; &mut is safe because callers hold
-            // &mut self, preventing aliasing within this backend.
-            unsafe { f(&mut *app) }
-        } else {
-            crate::backend::app_backend::debug_error_static(
-                "workspace",
-                "BACKEND_LINK_BROKEN",
-                "app pointer is null",
-            );
-            default
-        }
+    fn with_app_mut<R>(&self, f: impl FnOnce(&mut AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
+        self.app.with_app_mut(f)
     }
     fn emit_workspace_changed(&mut self) {
         self.workspace_opened();
@@ -110,27 +85,29 @@ impl WorkspaceBackend {
         self.workspace_state_changed();
     }
     fn workspace_path(&self) -> QString {
-        self.with_app("".into(), |app| app.workspace_path())
+        self.with_app(|app| app.workspace_path()).unwrap_or_else(|_| "".into())
     }
     fn has_workspace(&self) -> bool {
-        self.with_app(false, |app| app.has_workspace())
+        self.with_app(|app| app.has_workspace()).unwrap_or(false)
     }
     fn pending_github_init_path(&self) -> QString {
-        self.with_app("".into(), |app| app.pending_github_init_path())
+        self.with_app(|app| app.pending_github_init_path()).unwrap_or_else(|_| "".into())
     }
     fn try_restore_last_workspace(&mut self) {
-        self.with_app_mut((), |app| app.try_restore_last_workspace());
-        self.emit_workspace_changed();
+        if self.with_app_mut(|app| app.try_restore_last_workspace()).is_ok() {
+            self.emit_workspace_changed();
+        }
     }
     fn create_new_workspace(&mut self) -> QJsonObject {
-        let res = self.with_app_mut(backend_link_broken_json(), |app| app.create_new_workspace());
+        let res = self.with_app_mut(|app| app.create_new_workspace())
+            .unwrap_or_else(|_| backend_link_broken_json());
         self.emit_workspace_changed();
         qjson_object_from_json(&res.to_string())
     }
     fn open_existing_workspace(&mut self) -> QJsonObject {
-        let res = self.with_app_mut(backend_link_broken_json(), |app| {
+        let res = self.with_app_mut(|app| {
             app.open_existing_workspace()
-        });
+        }).unwrap_or_else(|_| backend_link_broken_json());
         self.emit_workspace_changed();
         qjson_object_from_json(&res.to_string())
     }
@@ -146,9 +123,9 @@ impl WorkspaceBackend {
             "workspace_backend_create_workspace_called",
             &format!("path={}", path_str),
         );
-        let res = self.with_app_mut(backend_link_broken_json(), |app| {
+        let res = self.with_app_mut(|app| {
             app.internal_open_workspace(&path_str, true)
-        });
+        }).unwrap_or_else(|_| backend_link_broken_json());
         let has = self.has_workspace();
         crate::backend::app_backend::debug_log_static(
             "workspace",
@@ -175,9 +152,9 @@ impl WorkspaceBackend {
             "workspace_backend_open_workspace_called",
             &format!("path={}", path_str),
         );
-        let res = self.with_app_mut(backend_link_broken_json(), |app| {
+        let res = self.with_app_mut(|app| {
             app.internal_open_workspace(&path_str, false)
-        });
+        }).unwrap_or_else(|_| backend_link_broken_json());
         let has = self.has_workspace();
         crate::backend::app_backend::debug_log_static(
             "workspace",
@@ -193,20 +170,24 @@ impl WorkspaceBackend {
         qjson_object_from_json(&res.to_string())
     }
     fn close_workspace(&mut self) {
-        self.with_app_mut((), |app| app.close_workspace());
-        self.emit_workspace_changed();
+        if self.with_app_mut(|app| app.close_workspace()).is_ok() {
+            self.emit_workspace_changed();
+        }
     }
     fn clear_last_workspace(&mut self) {
-        self.with_app_mut((), |app| app.clear_last_workspace());
-        self.workspace_state_changed();
+        if self.with_app_mut(|app| app.clear_last_workspace()).is_ok() {
+            self.workspace_state_changed();
+        }
     }
     fn switch_workspace(&mut self) {
-        self.with_app_mut((), |app| app.switch_workspace());
-        self.emit_workspace_changed();
+        if self.with_app_mut(|app| app.switch_workspace()).is_ok() {
+            self.emit_workspace_changed();
+        }
     }
     fn init_workspace_from_github(&mut self) {
-        self.with_app_mut((), |app| app.init_workspace_from_github());
-        self.pending_github_init_path_changed();
+        if self.with_app_mut(|app| app.init_workspace_from_github()).is_ok() {
+            self.pending_github_init_path_changed();
+        }
     }
     fn execute_github_init(
         &mut self,
@@ -225,10 +206,11 @@ impl WorkspaceBackend {
             "workspace_backend_import_workspace_called",
             &format!("path={}", path.to_string()),
         );
-        self.with_app_mut((), |app| {
+        if self.with_app_mut(|app| {
             app.execute_github_init(path, remote_url, branch, token)
-        });
-        self.emit_workspace_changed();
+        }).is_ok() {
+            self.emit_workspace_changed();
+        }
         let has = self.has_workspace();
         crate::backend::app_backend::debug_log_static(
             "workspace",
@@ -238,12 +220,12 @@ impl WorkspaceBackend {
         self.pending_github_init_path_changed();
     }
     fn get_workspace_diagnostics(&self) -> QString {
-        self.with_app(backend_link_broken_json(), |app| {
+        self.with_app(|app| {
             app.get_workspace_diagnostics()
-        })
+        }).unwrap_or_else(|_| backend_link_broken_json())
     }
     fn open_workspace_dir(&mut self) {
-        self.with_app_mut((), |app| app.open_workspace_dir());
+        let _ = self.with_app_mut(|app| app.open_workspace_dir());
     }
     fn save_last_navigation_state(
         &mut self,

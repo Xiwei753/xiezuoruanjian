@@ -149,6 +149,7 @@ fn qt_runtime_version() -> String {
     if version_ptr.is_null() {
         return "unknown".to_string();
     }
+    // SAFETY: version_ptr was returned by Qt's qVersion() which returns a valid C string pointer; null check is above.
     unsafe { CStr::from_ptr(version_ptr).to_string_lossy().into_owned() }
 }
 
@@ -159,6 +160,7 @@ fn qt_build_version() -> String {
     if version_ptr.is_null() {
         return "unknown".to_string();
     }
+    // SAFETY: version_ptr is QT_VERSION_STR macro which is always a valid C string; null check is above.
     unsafe { CStr::from_ptr(version_ptr).to_string_lossy().into_owned() }
 }
 

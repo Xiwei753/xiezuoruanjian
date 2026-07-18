@@ -3,15 +3,14 @@
 //! QInputMethod::update 和 InputMethodQuery 收敛到此。
 //! SujianEditorItem 不直接调用 QInputMethod，只通过此适配器。
 //!
-//! 已完成迁移：
-//! - notify_cursor_anchor_update() 缓存 CursorAnchorRequest 数据
-//! - request_candidate_window_update() 触发 QInputMethod::update
-//! - is_input_method_visible() 查询 QInputMethod::isVisible()
-//! - qt_surface.rs handle_input_method_query() 已从 QML property 迁移到
-//!   Rust FFI 数据源（sujian_get_ime_query_data 等），等价于从此适配器读取
+//! 安全约束：
+//! - 本适配器持有 QQuickItem* 裸指针，仅限 GUI 线程使用。
+//! - 使用 Rc<Cell<>> 而非 Mutex，因为 GUI 单线程不需要跨线程同步；
+//!   Rc 不是 Send/Sync，编译器会阻止跨线程传播。
 
 use cpp::cpp;
-use std::sync::Mutex;
+use std::cell::Cell;
+use std::rc::Rc;
 use writer_core::platform_interaction::cursor_anchor::{
     CursorAnchorAdapter, CursorAnchorRequest, CursorAnchorUpdateReason,
     NormalizedCursorRect,
@@ -24,31 +23,26 @@ cpp! {{
 }}
 
 pub struct LinuxQtCursorAnchorAdapter {
-    item_ptr: Mutex<*mut std::ffi::c_void>,
-    last_request: Mutex<Option<CursorAnchorRequest>>,
+    item_ptr: Rc<Cell<*mut std::ffi::c_void>>,
+    last_request: Rc<Cell<Option<CursorAnchorRequest>>>,
 }
 
 impl LinuxQtCursorAnchorAdapter {
     pub fn new(item_ptr: *mut std::ffi::c_void) -> Self {
         Self {
-            item_ptr: Mutex::new(item_ptr),
-            last_request: Mutex::new(None),
+            item_ptr: Rc::new(Cell::new(item_ptr)),
+            last_request: Rc::new(Cell::new(None)),
         }
     }
 
     pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
-        if let Ok(mut guard) = self.item_ptr.lock() {
-            *guard = ptr;
-        }
+        self.item_ptr.set(ptr);
     }
 
     pub fn last_request(&self) -> Option<CursorAnchorRequest> {
-        self.last_request.lock().ok().and_then(|g| g.clone())
+        self.last_request.take()
     }
 }
-
-unsafe impl Send for LinuxQtCursorAnchorAdapter {}
-unsafe impl Sync for LinuxQtCursorAnchorAdapter {}
 
 impl CursorAnchorAdapter for LinuxQtCursorAnchorAdapter {
     fn notify_cursor_anchor_update(
@@ -56,34 +50,28 @@ impl CursorAnchorAdapter for LinuxQtCursorAnchorAdapter {
         request: &CursorAnchorRequest,
         _reason: CursorAnchorUpdateReason,
     ) {
-        if let Ok(mut guard) = self.last_request.lock() {
-            *guard = Some(request.clone());
-        }
+        self.last_request.set(Some(request.clone()));
 
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if !item_ptr.is_null() {
-                cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                    QInputMethod* im = QGuiApplication::inputMethod();
-                    if (im) {
-                        im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
-                    }
-                });
-            }
+        let item_ptr = self.item_ptr.get();
+        if !item_ptr.is_null() {
+            cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                QInputMethod* im = QGuiApplication::inputMethod();
+                if (im) {
+                    im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle | Qt::ImSurroundingText | Qt::ImCursorPosition | Qt::ImCurrentSelection);
+                }
+            });
         }
     }
 
     fn request_candidate_window_update(&self, _cursor_rect: &NormalizedCursorRect) {
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if !item_ptr.is_null() {
-                cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                    QInputMethod* im = QGuiApplication::inputMethod();
-                    if (im) {
-                        im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle);
-                    }
-                });
-            }
+        let item_ptr = self.item_ptr.get();
+        if !item_ptr.is_null() {
+            cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                QInputMethod* im = QGuiApplication::inputMethod();
+                if (im) {
+                    im->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle);
+                }
+            });
         }
     }
 

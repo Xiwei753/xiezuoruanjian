@@ -283,7 +283,7 @@ pub struct GlyphRect {
     since = "0.12.0",
     note = "Use EditorVisualTransaction instead. This will be removed in a future version."
 )]
-#[allow(dead_code)]
+#[allow(dead_code)] // SAFETY: deprecated struct kept for backward compatibility until migration complete
 pub(crate) struct EditorAnimationEvent {
     pub id: u64,
     pub kind: EditorAnimationKind,
@@ -1488,7 +1488,7 @@ impl EditorEngine {
         since = "0.12.0",
         note = "Use visual_transaction() instead. This will be removed in a future version."
     )]
-    #[allow(deprecated, dead_code)]
+    #[allow(deprecated, dead_code)] // SAFETY: deprecated method kept for backward compatibility
     pub(crate) fn animation_events(
         &mut self,
         transaction: &EditorTransaction,

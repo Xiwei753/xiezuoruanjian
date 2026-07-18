@@ -1129,12 +1129,12 @@ interface WriterAppService {
 
     // ── #535: Editor V2 Kernel ──
 
-    EditorEditResultDto editor_kernel_insert(u32 byte_offset, string text, EditorTransactionCauseDto cause);
-    EditorEditResultDto editor_kernel_delete(u32 byte_start, u32 byte_end_exclusive, EditorTransactionCauseDto cause);
-    EditorEditResultDto editor_kernel_replace(u32 byte_start, u32 byte_end_exclusive, string replacement_text, string original_text, EditorTransactionCauseDto cause);
-    EditorEditResultDto editor_kernel_set_selection(u32 anchor_byte_offset, u32 head_byte_offset);
-    EditorEditResultDto editor_kernel_undo();
-    EditorEditResultDto editor_kernel_redo();
+    EditorEditResultDto editor_kernel_insert(u32 byte_offset, string text, EditorTransactionCauseDto cause, u64 expected_revision);
+    EditorEditResultDto editor_kernel_delete(u32 byte_start, u32 byte_end_exclusive, EditorTransactionCauseDto cause, u64 expected_revision);
+    EditorEditResultDto editor_kernel_replace(u32 byte_start, u32 byte_end_exclusive, string replacement_text, string original_text, EditorTransactionCauseDto cause, u64 expected_revision);
+    EditorEditResultDto editor_kernel_set_selection(u32 anchor_byte_offset, u32 head_byte_offset, u64 expected_revision);
+    EditorEditResultDto editor_kernel_undo(u64 expected_revision);
+    EditorEditResultDto editor_kernel_redo(u64 expected_revision);
     EditorEditResultDto editor_kernel_load_text(string text, u32 cursor_byte_offset);
     EditorVisualIntentDto editor_kernel_composition_update_visual_intent(u32 composition_replace_start, u32 composition_replace_end_exclusive, string old_preedit_text, string new_preedit_text);
     EditorEditResultDto editor_kernel_composition_commit(u32 composition_replace_start, u32 composition_replace_end_exclusive, string committed_text, string original_text);
@@ -1145,6 +1145,8 @@ interface WriterAppService {
     u32 editor_kernel_get_cursor();
     u32 editor_kernel_get_selection_anchor();
     EditorSessionSnapshotDto editor_kernel_session_snapshot();
+    EditorEditResultDto editor_kernel_replace_all(string search, string replacement, u64 expected_revision);
+    EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, string auto_indent_prefix, EditorTransactionCauseDto cause, u64 expected_revision);
 };
 
 // ── Layout Policy DTOs ──
@@ -1423,7 +1425,16 @@ dictionary DisplayPatchDto {
     u32 resulting_selection_end;
 };
 
+enum EditorEditOutcomeDto {
+    "Applied",
+    "NoChange",
+    "StaleRevision",
+    "InvalidOffset",
+    "InvalidRange"
+};
+
 dictionary EditorEditResultDto {
+    EditorEditOutcomeDto outcome;
     u64 transaction_id;
     u64 base_revision;
     u64 new_revision;

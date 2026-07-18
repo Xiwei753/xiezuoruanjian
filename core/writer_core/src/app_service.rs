@@ -704,7 +704,7 @@ impl WriterAppService {
     where
         F: FnOnce(&mut EditorSession) -> R,
     {
-        let mut session = self.editor_session.lock().unwrap();
+        let mut session = self.editor_session.lock().unwrap_or_else(|e| e.into_inner());
         f(&mut session)
     }
 
@@ -713,6 +713,7 @@ impl WriterAppService {
         byte_offset: u32,
         text: String,
         cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
@@ -721,9 +722,9 @@ impl WriterAppService {
                 byte_offset: byte_offset as usize,
                 text,
                 cause: core_cause,
-                expected_revision: 0,
+                expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -732,6 +733,7 @@ impl WriterAppService {
         byte_start: u32,
         byte_end_exclusive: u32,
         cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
@@ -741,9 +743,9 @@ impl WriterAppService {
                 byte_end_exclusive: byte_end_exclusive as usize,
                 deleted_text: String::new(),
                 cause: core_cause,
-                expected_revision: 0,
+                expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -754,6 +756,7 @@ impl WriterAppService {
         replacement_text: String,
         original_text: String,
         cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         let core_cause: crate::editor::EditorTransactionCause = cause.into();
@@ -764,9 +767,9 @@ impl WriterAppService {
                 replacement_text,
                 original_text,
                 cause: core_cause,
-                expected_revision: 0,
+                expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -774,31 +777,32 @@ impl WriterAppService {
         &self,
         anchor_byte_offset: u32,
         head_byte_offset: u32,
+        expected_revision: u64,
     ) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
             let result = s.kernel.apply(EditorCommand::SetSelection {
                 anchor_byte_offset: anchor_byte_offset as usize,
                 head_byte_offset: head_byte_offset as usize,
-                expected_revision: 0,
+                expected_revision,
             });
-            result.into()
+            result.into_result().into()
         })
     }
 
-    pub fn editor_kernel_undo(&self) -> crate::api::EditorEditResultDto {
+    pub fn editor_kernel_undo(&self, expected_revision: u64) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
-            let result = s.kernel.apply(EditorCommand::Undo);
-            result.into()
+            let result = s.kernel.apply(EditorCommand::Undo { expected_revision });
+            result.into_result().into()
         })
     }
 
-    pub fn editor_kernel_redo(&self) -> crate::api::EditorEditResultDto {
+    pub fn editor_kernel_redo(&self, expected_revision: u64) -> crate::api::EditorEditResultDto {
         use crate::editor::EditorCommand;
         self.with_session(|s| {
-            let result = s.kernel.apply(EditorCommand::Redo);
-            result.into()
+            let result = s.kernel.apply(EditorCommand::Redo { expected_revision });
+            result.into_result().into()
         })
     }
 
@@ -810,7 +814,7 @@ impl WriterAppService {
         self.with_session(|s| {
             s.generation = s.generation.saturating_add(1);
             let result = s.kernel.load_text(text, cursor_byte_offset as usize);
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -846,16 +850,17 @@ impl WriterAppService {
         use crate::editor::{EditorCommand, EditorTransactionCause};
 
         self.with_session(|s| {
+            let expected_revision = s.kernel.revision();
             let command = EditorCommand::Replace {
                 byte_start: composition_replace_start as usize,
                 byte_end_exclusive: composition_replace_end_exclusive as usize,
                 replacement_text: committed_text,
                 original_text,
                 cause: EditorTransactionCause::TypingCommit,
-                expected_revision: 0,
+                expected_revision,
             };
             let result = s.kernel.apply(command);
-            result.into()
+            result.into_result().into()
         })
     }
 
@@ -911,6 +916,43 @@ impl WriterAppService {
                 generation: s.generation,
                 chapter_id: s.chapter_id.clone().unwrap_or_default(),
             }
+        })
+    }
+
+    pub fn editor_kernel_replace_all(
+        &self,
+        search: String,
+        replacement: String,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::ReplaceAll {
+                search,
+                replacement,
+                expected_revision,
+            });
+            result.into_result().into()
+        })
+    }
+
+    pub fn editor_kernel_insert_line_break(
+        &self,
+        byte_offset: u32,
+        auto_indent_prefix: String,
+        cause: crate::api::EditorTransactionCauseDto,
+        expected_revision: u64,
+    ) -> crate::api::EditorEditResultDto {
+        use crate::editor::EditorCommand;
+        let core_cause: crate::editor::EditorTransactionCause = cause.into();
+        self.with_session(|s| {
+            let result = s.kernel.apply(EditorCommand::InsertLineBreak {
+                byte_offset: byte_offset as usize,
+                auto_indent_prefix,
+                cause: core_cause,
+                expected_revision,
+            });
+            result.into_result().into()
         })
     }
 }

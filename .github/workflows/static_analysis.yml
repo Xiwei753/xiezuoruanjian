@@ -35,11 +35,20 @@ jobs:
           echo "PYTHONUTF8=1" >> "$GITHUB_ENV"
           echo "PYTHONIOENCODING=utf-8" >> "$GITHUB_ENV"
 
+      - name: Clippy on writer_core
+        run: cargo clippy --package writer_core --all-targets -- -D warnings
+
       - name: Check no binary artifacts in tracked files
         run: bash tools/check_no_binary_artifacts.sh
 
       - name: Check documentation links
         run: python3 tools/check_doc_links.py
+
+      - name: Test Rust safety pattern checker
+        run: python3 tools/test_check_rust_safety_patterns.py
+
+      - name: Run Rust safety pattern scan on repository
+        run: python3 tools/check_rust_safety_patterns.py .
 
       - name: Security audit Rust dependencies
         run: |

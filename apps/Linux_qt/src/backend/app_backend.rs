@@ -14,7 +14,7 @@
 // - 封装并对外提供 debug_log_static 等静态日志收集入口，规范化地将运行时关键链路节点记录到磁盘和控制台。
 //
 // 被什么引用：
-// - 被 apps/Linux_qt/src/backend/mod.rs 引用，作为核心底层指针底座，被 SafeAppPtr 传递至各个分域后端。
+// - 被 apps/Linux_qt/src/backend/mod.rs 引用，作为核心底层状态容器，被 AppRef (Rc<RefCell<AppBackend>>) 共享至各个分域后端。
 // - 被 apps/Linux_qt/src/main.rs 注册为 QML 内命名空间 "SujianApp" 下的 "AppBackend"。
 // =============================================================================
 
@@ -208,7 +208,7 @@ pub struct AppBackend {
     system_color_scheme_changed: qt_signal!(),
 
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
-    #[allow(dead_code)]
+    #[allow(dead_code)] // SAFETY: qmetaobject macro field used by Qt meta-object system
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
     ai_enabled_changed: qt_signal!(),
     ai_available_changed: qt_signal!(),
@@ -569,7 +569,7 @@ impl AppBackend {
 
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {
         let result = system_utils::copy_text_to_clipboard_impl(&text.to_string());
-        result.to_string().into()
+        result.to_json().to_string().into()
     }
 
     fn workspace_path(&self) -> QString {

@@ -10,16 +10,9 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
-import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.mirror.EditResult
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
-import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
-import com.xiwei.sujian.editor.v2.visual.VisualTransactionCoordinator
-import com.xiwei.sujian.editor.v2.render.AndroidRenderer
-import com.xiwei.sujian.editor.v2.render.AndroidRenderFrame
+import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import uniffi.writer_core.EditorEditResultDto
 
 class SujianEditorView @JvmOverloads constructor(
@@ -28,116 +21,145 @@ class SujianEditorView @JvmOverloads constructor(
     defStyleAttr: Int = 0
 ) : View(context, attrs, defStyleAttr) {
 
-    private val mirror = DisplayTextMirror()
     private val textPaint = TextPaint().apply {
         textSize = 48f
         isAntiAlias = true
     }
-    private val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
-    private val visualPlanner = AndroidVisualPlanner(mirror)
-    private val resourceStore = VisualResourceStore()
-    private val coordinator = VisualTransactionCoordinator(resourceStore)
-    private val renderer = AndroidRenderer(mirror, layoutEngine)
-    private val inputAdapter = AndroidInputAdapter(context, mirror, this)
+    private val pipeline = AndroidEditorPipeline.create(
+        com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
+        textPaint,
+        this
+    )
 
     private var scrollX: Float = 0f
     private var scrollY: Float = 0f
     private var maxScrollY: Float = 0f
     private var searchHighlights: List<Pair<Int, Int>> = emptyList()
+    private var pendingLayoutNeeded: Boolean = false
 
     var kernelBridge: EditorKernelBridge? = null
 
     private var themeBackgroundColor: Int = Color.WHITE
+
+    private val mirror: com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+        get() = pipeline.mirror
 
     fun loadText(text: String, cursorUtf8: Int) {
         val bridge = kernelBridge ?: return
         val dto = bridge.loadText(text, cursorUtf8) ?: return
         val result = EditResult.fromDto(dto)
         mirror.loadFromSnapshot(text, cursorUtf8, result.newRevision, result.newSelectionStart, result.newSelectionEnd)
-        layoutEngine.setWidth(width.toFloat())
-        layoutEngine.requestLayout()
-        visualPlanner.resetOldRevision()
-        invalidate()
+        pipeline.resetAfterLoad()
+        if (width > 0) {
+            updateLayoutConfig()
+        } else {
+            pendingLayoutNeeded = true
+        }
     }
 
     fun insertText(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.insert(byteOffset, text, cause) ?: return
-        val result = EditResult.fromDto(dto)
-        applyEditResultFull(result)
+        if (autoIndentEnabled && text == "\n") {
+            val indentPrefix = computeAutoIndentPrefix()
+            val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return
+            val result = EditResult.fromDto(dto)
+            applyEditResultFull(result)
+        } else {
+            val dto = bridge.insert(byteOffset, text, cause, mirror.getRevision()) ?: return
+            val result = EditResult.fromDto(dto)
+            applyEditResultFull(result)
+        }
     }
 
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.DELETE) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.delete(byteStart, byteEndExclusive, cause) ?: return
+        val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
-    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING) {
+    fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto = uniffi.writer_core.EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause) ?: return
+        val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
-        applyEditResultFull(result)
+        applyEditResultFull(result, beforePatch)
     }
 
     fun setSelectionTyped(anchorByteOffset: Int, headByteOffset: Int) {
         val bridge = kernelBridge ?: return
-        val dto = bridge.setSelection(anchorByteOffset, headByteOffset) ?: return
+        val dto = bridge.setSelection(anchorByteOffset, headByteOffset, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     fun performUndo() {
         val bridge = kernelBridge ?: return
-        val dto = bridge.undo() ?: return
+        val dto = bridge.undo(mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
     fun performRedo() {
         val bridge = kernelBridge ?: return
-        val dto = bridge.redo() ?: return
+        val dto = bridge.redo(mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         applyEditResultFull(result)
     }
 
-    private fun applyEditResultFull(result: EditResult) {
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        mirror.applyEditResult(result)
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore)
-        coordinator.submitTransaction(transaction)
-        if (result.displayPatches.isNotEmpty()) {
-            onContentChanged?.invoke(mirror.getText())
+    private fun applyEditResultFull(result: EditResult, beforePatch: (() -> Unit)? = null, suppressContentCallback: Boolean = false) {
+        val output = pipeline.applyEditResult(result, beforePatch)
+        when (output) {
+            is AndroidEditorPipeline.PipelineOutput.Edited -> {
+                updateMaxScroll()
+                scrollY = scrollY.coerceIn(0f, maxScrollY)
+                if (!suppressContentCallback && output.result.displayPatches.isNotEmpty()) {
+                    onContentChanged?.invoke(mirror.getText())
+                }
+                invalidate()
+            }
+            is AndroidEditorPipeline.PipelineOutput.NeedReload -> {
+                reloadFromKernel()
+            }
+            is AndroidEditorPipeline.PipelineOutput.StaleOrInvalid -> {
+                if (result.isStale()) {
+                    reloadFromKernel()
+                }
+            }
         }
-        invalidate()
     }
 
-    fun applyCommandResult(result: EditResult) {
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore)
-        coordinator.submitTransaction(transaction)
-        if (result.displayPatches.isNotEmpty()) {
+    private fun reloadFromKernel() {
+        val bridge = kernelBridge ?: return
+        val snapshot = bridge.sessionSnapshot() ?: return
+        val cursorUtf8 = snapshot.cursor.toInt()
+        val selAnchorUtf8 = snapshot.selectionAnchor.toInt()
+        val selHeadUtf8 = cursorUtf8
+        mirror.loadFromSnapshot(
+            snapshot.text,
+            cursorUtf8,
+            snapshot.revision.toLong(),
+            selAnchorUtf8,
+            selHeadUtf8
+        )
+        pipeline.cancelActiveTransaction()
+        pipeline.releaseAllResources()
+        updateLayoutConfig()
+        if (mirror.getText().isNotEmpty()) {
             onContentChanged?.invoke(mirror.getText())
         }
-        invalidate()
     }
 
     fun onCompositionUpdated() {
-        layoutEngine.requestLayout()
+        pipeline.layoutEngine.requestLayout()
+        updateMaxScroll()
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
     }
 
-    fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent) {
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore)
-        coordinator.submitTransaction(transaction)
+    fun applyCompositionUpdate(visualIntent: com.xiwei.sujian.editor.v2.mirror.VisualIntent, mirrorUpdate: (() -> Unit)? = null) {
+        pipeline.applyCompositionUpdate(visualIntent, mirrorUpdate)
+        updateMaxScroll()
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
         invalidate()
     }
 
@@ -145,18 +167,15 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun setFontSize(sizeSp: Float) {
         textPaint.textSize = sizeSp * resources.displayMetrics.scaledDensity
-        layoutEngine.setWidth(width.toFloat())
-        layoutEngine.requestLayout()
-        invalidate()
+        updateLayoutConfig()
     }
 
     private var lineSpacingMultiplier: Float = 1.0f
 
     fun setLineSpacingMultiplier(multiplier: Float) {
         lineSpacingMultiplier = multiplier
-        layoutEngine.setLineSpacingMultiplier(multiplier)
-        layoutEngine.requestLayout()
-        invalidate()
+        pipeline.layoutEngine.setLineSpacingMultiplier(multiplier)
+        updateLayoutConfig()
     }
 
     fun getSelectionStart(): Int = mirror.getSelectionStartUtf8()
@@ -168,7 +187,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun scrollToSelection() {
-        val layout = layoutEngine.getLayout() ?: return
+        val layout = pipeline.layoutEngine.getLayout() ?: return
         val cursorUtf16 = mirror.getCursorUtf16()
         if (cursorUtf16 < 0 || cursorUtf16 > mirror.getLengthUtf16()) return
         val line = layout.getLineForOffset(cursorUtf16)
@@ -189,12 +208,19 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     fun replaceAll(searchStr: String, replaceStr: String) {
-        val text = mirror.getText()
-        val newText = text.replace(searchStr, replaceStr)
-        if (newText != text) {
-            loadText(newText, mirror.getCursorUtf8())
-            onContentChanged?.invoke(newText)
-        }
+        val bridge = kernelBridge ?: return
+        val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return
+        val result = EditResult.fromDto(dto)
+        applyEditResultFull(result)
+    }
+
+    fun applyCompositionCommit(dto: EditorEditResultDto) {
+        val result = EditResult.fromDto(dto)
+        applyEditResultFull(result)
+    }
+
+    fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto) {
+        replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
     }
 
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
@@ -209,35 +235,43 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        layoutEngine.setWidth(w.toFloat())
-        updateMaxScroll()
+        if (w > 0) {
+            updateLayoutConfig()
+            pendingLayoutNeeded = false
+        }
     }
 
     private fun updateMaxScroll() {
-        val layout = layoutEngine.getLayout()
+        val layout = pipeline.layoutEngine.getLayout()
         if (layout != null) {
             maxScrollY = (layout.height - height).coerceAtLeast(0).toFloat()
         }
+    }
+
+    private fun updateLayoutConfig() {
+        pipeline.updateLayout(width.toFloat())
+        updateMaxScroll()
+        scrollY = scrollY.coerceIn(0f, maxScrollY)
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         canvas.save()
         canvas.translate(-scrollX, -scrollY)
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val frame = coordinator.computeFrame(frameTimeMs, width, height, scrollX, scrollY)
-        val layout = layoutEngine.getLayout()
-        if (layout != null) {
-            renderer.draw(canvas, layout, frame, searchHighlights)
+        val searchHighlightsUtf16 = searchHighlights.map { (startUtf8, endUtf8) ->
+            val indexMap = AndroidTextIndexMap(mirror)
+            Pair(indexMap.utf8ToUtf16(startUtf8), indexMap.utf8ToUtf16(endUtf8))
         }
+        pipeline.drawFrame(canvas, searchHighlightsUtf16, width, height, scrollX, scrollY)
         canvas.restore()
-        if (coordinator.hasActiveAnimation()) {
+        if (pipeline.hasActiveAnimation()) {
             invalidate()
         }
     }
 
     override fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): InputConnection? {
-        return inputAdapter.onCreateInputConnection(outAttrs)
+        return pipeline.inputAdapter.onCreateInputConnection(outAttrs)
     }
 
     override fun onCheckIsTextEditor(): Boolean = true
@@ -287,10 +321,10 @@ class SujianEditorView @JvmOverloads constructor(
     private var isDragging: Boolean = false
 
     private fun handleTap(x: Float, y: Float) {
-        val layout = layoutEngine.getLayout() ?: return
+        val layout = pipeline.layoutEngine.getLayout() ?: return
         val line = layout.getLineForVertical(y.toInt())
         val offset = layout.getOffsetForHorizontal(line, x)
-        val indexMap = com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap(mirror)
+        val indexMap = AndroidTextIndexMap(mirror)
         val byteOffset = indexMap.utf16ToUtf8(offset)
         setSelectionTyped(byteOffset, byteOffset)
         showSoftInput()
@@ -304,8 +338,10 @@ class SujianEditorView @JvmOverloads constructor(
                 if (selStart != selEnd) {
                     replaceRange(selStart, selEnd, "")
                 } else if (selEnd > 0) {
-                    val prevCharLen = previousCharByteLen(selEnd)
-                    replaceRange(selEnd - prevCharLen, selEnd, "")
+                    val prevGraphemeLen = previousGraphemeByteLen(selEnd)
+                    if (prevGraphemeLen > 0) {
+                        replaceRange(selEnd - prevGraphemeLen, selEnd, "")
+                    }
                 }
                 return true
             }
@@ -317,8 +353,10 @@ class SujianEditorView @JvmOverloads constructor(
                 } else {
                     val textLen = mirror.getText().toByteArray(Charsets.UTF_8).size
                     if (selEnd < textLen) {
-                        val nextCharLen = nextCharByteLen(selEnd)
-                        replaceRange(selEnd, selEnd + nextCharLen, "")
+                        val nextGraphemeLen = nextGraphemeByteLen(selEnd)
+                        if (nextGraphemeLen > 0) {
+                            replaceRange(selEnd, selEnd + nextGraphemeLen, "")
+                        }
                     }
                 }
                 return true
@@ -327,21 +365,28 @@ class SujianEditorView @JvmOverloads constructor(
         return super.onKeyDown(keyCode, event)
     }
 
-    private fun previousCharByteLen(offset: Int): Int {
-        val bytes = mirror.getText().toByteArray(Charsets.UTF_8)
-        if (offset <= 0 || offset > bytes.size) return 0
-        var p = offset - 1
-        while (p > 0 && (bytes[p].toInt() and 0xC0) == 0x80) p--
-        return offset - p
+    private fun previousGraphemeByteLen(offset: Int): Int {
+        val indexMap = AndroidTextIndexMap(mirror)
+        val utf16Offset = indexMap.utf8ToUtf16(offset)
+        if (utf16Offset <= 0) return 0
+        val iter = android.icu.text.BreakIterator.getCharacterInstance()
+        iter.setText(mirror.getText())
+        val prev = iter.preceding(utf16Offset)
+        if (prev == android.icu.text.BreakIterator.DONE) return 0
+        val prevUtf8 = indexMap.utf16ToUtf8(prev)
+        return offset - prevUtf8
     }
 
-    private fun nextCharByteLen(offset: Int): Int {
-        val text = mirror.getText()
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        if (offset >= bytes.size) return 0
-        var len = 1
-        while (offset + len < bytes.size && (bytes[offset + len].toInt() and 0xC0) == 0x80) len++
-        return len
+    private fun nextGraphemeByteLen(offset: Int): Int {
+        val indexMap = AndroidTextIndexMap(mirror)
+        val utf16Offset = indexMap.utf8ToUtf16(offset)
+        if (utf16Offset >= mirror.getLengthUtf16()) return 0
+        val iter = android.icu.text.BreakIterator.getCharacterInstance()
+        iter.setText(mirror.getText())
+        val next = iter.following(utf16Offset)
+        if (next == android.icu.text.BreakIterator.DONE) return 0
+        val nextUtf8 = indexMap.utf16ToUtf8(next)
+        return nextUtf8 - offset
     }
 
     override fun onFocusChanged(gained: Boolean, direction: Int, previouslyFocusedRect: android.graphics.Rect?) {
@@ -353,8 +398,9 @@ class SujianEditorView @JvmOverloads constructor(
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (!hasWindowFocus && coordinator.hasActiveAnimation()) {
-            resourceStore.releaseAll()
+        if (!hasWindowFocus) {
+            pipeline.cancelActiveTransaction()
+            pipeline.releaseAllResources()
         }
     }
 
@@ -362,22 +408,25 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun getMirror(): DisplayTextMirror = mirror
-    fun getLayoutEngine(): AndroidLayoutEngine = layoutEngine
-    fun getRenderer(): AndroidRenderer = renderer
-    fun getInputAdapter(): AndroidInputAdapter = inputAdapter
+    fun getMirror(): com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror = pipeline.mirror
+    fun getLayoutEngine(): com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine = pipeline.layoutEngine
+    fun getRenderer(): com.xiwei.sujian.editor.v2.render.AndroidRenderer = pipeline.renderer
+    fun getInputAdapter(): com.xiwei.sujian.editor.v2.input.AndroidInputAdapter = pipeline.inputAdapter
+    fun getPipeline(): AndroidEditorPipeline = pipeline
 
     var onContentChanged: ((String) -> Unit)? = null
 
     fun setText(text: String) {
         loadText(text, 0)
-        onContentChanged?.invoke(text)
     }
 
     fun setTypingAnimationEnabled(enabled: Boolean, durationMs: Long) {
         val bridge = kernelBridge ?: return
         bridge.setAnimationEnabled(enabled)
         bridge.setAnimationDurationMs(durationMs)
+        if (!enabled) {
+            pipeline.cancelActiveTransaction()
+        }
     }
 
     private var smoothCursorEnabled: Boolean = true
@@ -387,6 +436,8 @@ class SujianEditorView @JvmOverloads constructor(
         smoothCursorEnabled = enabled
         smoothCursorDurationMs = durationMs
     }
+
+    fun isSmoothCursorEnabled(): Boolean = smoothCursorEnabled
 
     private var autoIndentEnabled: Boolean = false
     private var autoIndentWidthSp: Float = 2f
@@ -410,10 +461,13 @@ class SujianEditorView @JvmOverloads constructor(
 
     private fun computeAutoIndentPrefix(): String {
         if (!autoIndentEnabled) return ""
+        val indexMap = AndroidTextIndexMap(mirror)
+        val cursorUtf8 = mirror.getCursorUtf8()
+        val cursorUtf16 = indexMap.utf8ToUtf16(cursorUtf8)
         val text = mirror.getText()
-        val cursor = mirror.getCursorUtf8()
-        val lineStart = text.lastIndexOf('\n', cursor - 1) + 1
-        val linePrefix = text.substring(lineStart, cursor)
+        val safeCursorUtf16 = cursorUtf16.coerceIn(0, text.length)
+        val lineStartUtf16 = if (safeCursorUtf16 > 0) text.lastIndexOf('\n', safeCursorUtf16 - 1) + 1 else 0
+        val linePrefix = text.substring(lineStartUtf16, safeCursorUtf16)
         val indent = linePrefix.takeWhile { it == ' ' || it == '\t' }
         return indent
     }
@@ -421,7 +475,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         themeBackgroundColor = colors.background
         textPaint.color = colors.text
-        renderer.setThemeColors(
+        pipeline.renderer.setThemeColors(
             textColor = colors.text,
             cursorColor = colors.cursor,
             selectionColor = colors.selection,
@@ -438,7 +492,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun notifyCursorAnchorInfo() {
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager ?: return
-        val layout = layoutEngine.getLayout() ?: return
+        val layout = pipeline.layoutEngine.getLayout() ?: return
         val cursorUtf16 = mirror.getCursorUtf16()
         if (cursorUtf16 < 0 || cursorUtf16 > mirror.getLengthUtf16()) return
 
@@ -456,12 +510,12 @@ class SujianEditorView @JvmOverloads constructor(
 }
 
 interface EditorKernelBridge {
-    fun insert(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
-    fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
-    fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto): EditorEditResultDto?
-    fun setSelection(anchorByteOffset: Int, headByteOffset: Int): EditorEditResultDto?
-    fun undo(): EditorEditResultDto?
-    fun redo(): EditorEditResultDto?
+    fun insert(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun replace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun setSelection(anchorByteOffset: Int, headByteOffset: Int, expectedRevision: Long): EditorEditResultDto?
+    fun undo(expectedRevision: Long): EditorEditResultDto?
+    fun redo(expectedRevision: Long): EditorEditResultDto?
     fun loadText(text: String, cursorUtf8: Int): EditorEditResultDto?
     fun compositionCommit(
         compositionReplaceStart: Int,
@@ -477,4 +531,7 @@ interface EditorKernelBridge {
     ): uniffi.writer_core.EditorVisualIntentDto?
     fun setAnimationEnabled(enabled: Boolean)
     fun setAnimationDurationMs(durationMs: Long)
+    fun replaceAll(search: String, replacement: String, expectedRevision: Long): EditorEditResultDto?
+    fun insertLineBreak(byteOffset: Int, autoIndentPrefix: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): EditorEditResultDto?
+    fun sessionSnapshot(): uniffi.writer_core.EditorSessionSnapshotDto?
 }

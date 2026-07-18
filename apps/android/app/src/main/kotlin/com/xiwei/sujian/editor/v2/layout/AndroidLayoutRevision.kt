@@ -9,8 +9,22 @@ data class AndroidLayoutRevision(
     val lineRanges: List<LineRange>,
     val cursorUtf8: Int,
     val cursorUtf16: Int,
+    val cursorX: Float,
+    val cursorY: Float,
+    val cursorHeight: Float,
+    val selectionAnchorUtf8: Int,
+    val selectionHeadUtf8: Int,
+    val selectionAnchorUtf16: Int,
+    val selectionHeadUtf16: Int,
+    val compositionStartUtf16: Int,
+    val compositionEndUtf16: Int,
     val snapshotHandles: List<Long>
 ) {
+    val selectionStartUtf8: Int get() = minOf(selectionAnchorUtf8, selectionHeadUtf8)
+    val selectionEndUtf8: Int get() = maxOf(selectionAnchorUtf8, selectionHeadUtf8)
+    val selectionStartUtf16: Int get() = minOf(selectionAnchorUtf16, selectionHeadUtf16)
+    val selectionEndUtf16: Int get() = maxOf(selectionAnchorUtf16, selectionHeadUtf16)
+
     data class LineRange(
         val startUtf8: Int,
         val endUtf8: Int,

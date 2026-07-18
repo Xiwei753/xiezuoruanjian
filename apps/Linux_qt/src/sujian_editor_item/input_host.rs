@@ -27,26 +27,23 @@ impl SujianEditorItem {
         }
     }
 
-    fn prepare_composition_update(&mut self, text: String, cursor: usize) -> CompositionUpdateData {
+    fn prepare_composition_update(&mut self, text: String, cursor: usize) -> Option<CompositionUpdateData> {
         self.ensure_composition_session();
 
-        let (old_preedit, generation, composition_byte_start, composition_byte_end, virtual_text) = {
-            let session = self.composition_session.as_mut().unwrap();
-            let old_preedit = session.preedit_text.clone();
-            session.update_preedit(text, cursor);
-            let generation = session.last_submitted_generation;
-            let (start, end) = session.preedit_byte_range_in_virtual_text();
-            let vt = session.virtual_text();
-            (old_preedit, generation, start, end, vt)
-        };
+        let session = self.composition_session.as_mut()?;
+        let old_preedit = session.preedit_text.clone();
+        session.update_preedit(text, cursor);
+        let generation = session.last_submitted_generation;
+        let (composition_byte_start, composition_byte_end) = session.preedit_byte_range_in_virtual_text();
+        let virtual_text = session.virtual_text();
 
-        CompositionUpdateData {
+        Some(CompositionUpdateData {
             old_preedit,
             generation,
             composition_byte_start,
             composition_byte_end,
             virtual_text,
-        }
+        })
     }
 }
 
@@ -175,7 +172,7 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes.clear();
 
         if self.typing_animation_enabled && !text.is_empty() {
-            let data = self.prepare_composition_update(text, cursor);
+            if let Some(data) = self.prepare_composition_update(text, cursor) {
             let width = self.bounding_width();
 
             let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
@@ -207,6 +204,9 @@ impl EditorInputHost for SujianEditorItem {
                 old_cursor_rect,
                 new_cursor_rect,
             );
+            } else {
+                self.update_preedit_visual_state();
+            }
         } else {
             self.update_preedit_visual_state();
         }
@@ -227,7 +227,7 @@ impl EditorInputHost for SujianEditorItem {
         self.preedit_attributes = attributes;
 
         if self.typing_animation_enabled && !text.is_empty() {
-            let data = self.prepare_composition_update(text, cursor);
+            if let Some(data) = self.prepare_composition_update(text, cursor) {
             let width = self.bounding_width();
 
             let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
@@ -259,6 +259,9 @@ impl EditorInputHost for SujianEditorItem {
                 old_cursor_rect,
                 new_cursor_rect,
             );
+            } else {
+                self.update_preedit_visual_state();
+            }
         } else {
             self.update_preedit_visual_state();
         }

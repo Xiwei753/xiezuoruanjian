@@ -2,6 +2,11 @@
 //!
 //! QClipboard / QMenu / forceActiveFocus / 软键盘收敛到此。
 //!
+//! 安全约束：
+//! - 本适配器持有 QQuickItem* 裸指针，仅限 GUI 线程使用。
+//! - 使用 Rc<Cell<>> 而非 Mutex，因为 GUI 单线程不需要跨线程同步；
+//!   Rc 不是 Send/Sync，编译器会阻止跨线程传播。
+//!
 //! 已完成迁移：
 //! - execute_clipboard() 接入 QGuiApplication::clipboard()
 //! - execute_focus() 接入 QQuickItem::forceActiveFocus / QInputMethod::show/hide
@@ -11,7 +16,8 @@
 
 use cpp::cpp;
 use qmetaobject::QString;
-use std::sync::Mutex;
+use std::cell::Cell;
+use std::rc::Rc;
 use writer_core::platform_interaction::clipboard_focus::{
     ClipboardAndFocusAdapter, ClipboardRequest, ClipboardResult,
     ContextMenuRequest, FocusRequest, FocusState,
@@ -25,25 +31,23 @@ cpp! {{
 }}
 
 pub struct LinuxQtClipboardFocusAdapter {
-    item_ptr: Mutex<*mut std::ffi::c_void>,
-    focus_state: Mutex<FocusState>,
+    item_ptr: Rc<Cell<*mut std::ffi::c_void>>,
+    focus_state: FocusState,
 }
 
 impl LinuxQtClipboardFocusAdapter {
     pub fn new() -> Self {
         Self {
-            item_ptr: Mutex::new(std::ptr::null_mut()),
-            focus_state: Mutex::new(FocusState {
+            item_ptr: Rc::new(Cell::new(std::ptr::null_mut())),
+            focus_state: FocusState {
                 has_focus: false,
                 soft_input_visible: false,
-            }),
+            },
         }
     }
 
     pub fn set_item_ptr(&self, ptr: *mut std::ffi::c_void) {
-        if let Ok(mut guard) = self.item_ptr.lock() {
-            *guard = ptr;
-        }
+        self.item_ptr.set(ptr);
     }
 }
 
@@ -52,9 +56,6 @@ impl Default for LinuxQtClipboardFocusAdapter {
         Self::new()
     }
 }
-
-unsafe impl Send for LinuxQtClipboardFocusAdapter {}
-unsafe impl Sync for LinuxQtClipboardFocusAdapter {}
 
 impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
     fn execute_clipboard(&mut self, request: ClipboardRequest) -> ClipboardResult {
@@ -107,71 +108,58 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
     }
 
     fn execute_focus(&mut self, request: FocusRequest) {
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if item_ptr.is_null() {
-                return;
+        let item_ptr = self.item_ptr.get();
+        if item_ptr.is_null() {
+            return;
+        }
+        match request {
+            FocusRequest::RequestFocus | FocusRequest::RequestSoftInput => {
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    item_ptr->forceActiveFocus(Qt::MouseFocusReason);
+                    QInputMethod* im = QGuiApplication::inputMethod();
+                    if (im) {
+                        im->update(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle);
+                        im->show();
+                    }
+                });
+                self.focus_state.has_focus = true;
+                self.focus_state.soft_input_visible = true;
             }
-            match request {
-                FocusRequest::RequestFocus | FocusRequest::RequestSoftInput => {
-                    cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                        item_ptr->forceActiveFocus(Qt::MouseFocusReason);
-                        QInputMethod* im = QGuiApplication::inputMethod();
-                        if (im) {
-                            im->update(Qt::ImEnabled | Qt::ImCursorRectangle | Qt::ImAnchorRectangle);
-                            im->show();
-                        }
-                    });
-                    if let Ok(mut fs) = self.focus_state.lock() {
-                        fs.has_focus = true;
-                        fs.soft_input_visible = true;
+            FocusRequest::ReleaseFocus | FocusRequest::HideSoftInput => {
+                cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                    QInputMethod* im = QGuiApplication::inputMethod();
+                    if (im) {
+                        im->hide();
                     }
-                }
-                FocusRequest::ReleaseFocus | FocusRequest::HideSoftInput => {
-                    cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                        QInputMethod* im = QGuiApplication::inputMethod();
-                        if (im) {
-                            im->hide();
-                        }
-                    });
-                    if let Ok(mut fs) = self.focus_state.lock() {
-                        fs.soft_input_visible = false;
-                    }
-                }
+                });
+                self.focus_state.soft_input_visible = false;
             }
         }
     }
 
     fn focus_state(&self) -> FocusState {
-        self.focus_state.lock().map(|g| *g).unwrap_or(FocusState {
-            has_focus: false,
-            soft_input_visible: false,
-        })
+        self.focus_state
     }
 
     fn show_context_menu(&mut self, _request: ContextMenuRequest) {
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if !item_ptr.is_null() {
-                let x = _request.screen_x;
-                let y = _request.screen_y;
-                cpp!(unsafe [item_ptr as "QQuickItem*", x as "double", y as "double"] {
-                    QMetaObject::invokeMethod(item_ptr, "context_menu_requested",
-                        Q_ARG(QVariant, QVariant(x)),
-                        Q_ARG(QVariant, QVariant(y)));
-                });
-            }
+        let item_ptr = self.item_ptr.get();
+        if !item_ptr.is_null() {
+            let x = _request.screen_x;
+            let y = _request.screen_y;
+            cpp!(unsafe [item_ptr as "QQuickItem*", x as "double", y as "double"] {
+                QMetaObject::invokeMethod(item_ptr, "context_menu_requested",
+                    Q_ARG(QVariant, QVariant(x)),
+                    Q_ARG(QVariant, QVariant(y)));
+            });
         }
     }
 
     fn hide_context_menu(&mut self) {
-        if let Ok(guard) = self.item_ptr.lock() {
-            let item_ptr = *guard;
-            if !item_ptr.is_null() {
-                cpp!(unsafe [item_ptr as "QQuickItem*"] {
-                    QMetaObject::invokeMethod(item_ptr, "hide_context_menu_requested");
-                });
-            }
+        let item_ptr = self.item_ptr.get();
+        if !item_ptr.is_null() {
+            cpp!(unsafe [item_ptr as "QQuickItem*"] {
+                QMetaObject::invokeMethod(item_ptr, "hide_context_menu_requested");
+            });
         }
     }
 }

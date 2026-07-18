@@ -20,7 +20,7 @@ impl GitHubApiBackend {
             .timeout(std::time::Duration::from_secs(15))
             .no_proxy()
             .build()
-            .map_err(|e| crate::Error::Other(format!("Failed to build HTTP client: {}", e)))
+            .map_err(|e| crate::Error::SyncNetworkUnavailable { reason: format!("Failed to build HTTP client: {}", e) })
     }
 
     pub(crate) fn api_base_url(remote_url: &str) -> String {
@@ -136,18 +136,9 @@ impl SyncBackend for GitHubApiBackend {
                 }
             }
             Err(e) => {
-                let err_msg = e.to_string().to_lowercase();
                 result.raw_error = Some(e.to_string());
-                if err_msg.contains("dns")
-                    || err_msg.contains("resolve")
-                    || err_msg.contains("name resolution")
-                {
+                if e.is_connect() {
                     result.error_category = "dns_failed".to_string();
-                } else if err_msg.contains("ssl")
-                    || err_msg.contains("certificate")
-                    || err_msg.contains("tls")
-                {
-                    result.error_category = "tls_failed".to_string();
                 } else {
                     result.error_category = "github_network_failed".to_string();
                 }
@@ -191,6 +182,7 @@ impl SyncBackend for GitHubApiBackend {
             force_sync,
             mask_token_in_url(&sanitize_remote_url(&config.remote_url).sanitized_url)
         );
+        // SAFETY: AssertUnwindSafe needed for catch_unwind at sync boundary; the closure only calls perform_lww_sync with borrowed data; on panic, the error is caught and returned as a SyncResult::Error.
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             SyncService::perform_lww_sync(workspace_path, config, secrets, force_sync)
         })) {

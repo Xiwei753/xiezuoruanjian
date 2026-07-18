@@ -176,44 +176,26 @@ class AndroidLineSnapshotBuilder {
         return ranges
     }
 
-    fun buildSnapshotFromRevision(
-        lineRange: AndroidLayoutRevision.LineRange,
-        mirror: DisplayTextMirror
-    ): AndroidLineSnapshot? {
-        val left = lineRange.left
-        val right = lineRange.right
-        val top = lineRange.top
-        val bottom = lineRange.bottom
-
-        val width = (right - left).toInt().coerceAtLeast(1)
-        val height = (bottom - top).toInt().coerceAtLeast(1)
-
-        val snapshotId = nextSnapshotId()
-
-        return AndroidLineSnapshot(
-            snapshotId = snapshotId,
-            bitmap = null,
-            lineIndex = -1,
-            sourceRect = android.graphics.Rect(0, 0, width, height),
-            destinationRect = android.graphics.RectF(left, top, right, bottom),
-            clusters = emptyList(),
-            documentByteStart = lineRange.startUtf8,
-            documentByteEndExclusive = lineRange.endUtf8,
-            documentUtf16Start = lineRange.startUtf16,
-            documentUtf16EndExclusive = lineRange.endUtf16,
-            baseline = lineRange.baseline,
-            lineHeight = bottom - top
-        )
-    }
 
     private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
         if (clusterText.isEmpty()) return ""
         val codePoints = clusterText.codePoints().toArray()
         val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
-        val runCount = try {
-            layout.getPrimaryHorizontal(clusterStartUtf16)
-            1
+        val firstCp = codePoints.firstOrNull() ?: 0
+        val runIndex = try {
+            val lineStart = layout.getLineStart(lineIndex)
+            val lineEnd = layout.getLineEnd(lineIndex)
+            var runIdx = 0
+            var pos = lineStart
+            while (pos < lineEnd) {
+                val runEnd = (pos + 32).coerceAtMost(lineEnd)
+                if (clusterStartUtf16 in pos until runEnd) break
+                runIdx++
+                pos = runEnd
+            }
+            runIdx
         } catch (_: Exception) { 0 }
-        return "${clusterText}_${typeSummary}_${runCount}"
+        val paintHash = layout.paint?.hashCode() ?: 0
+        return "${codePoints.joinToString(",")}_${typeSummary}_${runIndex}_${paintHash}"
     }
 }

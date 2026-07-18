@@ -1,28 +1,18 @@
 # 项目文档
 
-Status: active
-Last verified: 2026-06-27
-Truth source: product decision / code
-Supersedes: docs/README.md (previous version)
+本目录只保存长期有效的架构约束和数据格式。具体实现步骤、历史迁移、阶段性审计和能力快照统一放在 GitHub Issue，不进入长期文档。
 
-本目录包含项目的各类技术文档和设计规范。
+## 活动文档
 
-## 活动文档 (Active Documents)
+- [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md)：全局技术路线与平台边界。
+- [workspace_format.md](workspace_format.md)：工作区磁盘格式。
+- [settings_schema.md](settings_schema.md)：设置项及同步属性。
+- [sync_rules.md](sync_rules.md)：同步与冲突规则。
+- [starmap_semantics.md](starmap_semantics.md)：星图对象、引用和语义约束。
 
-| 文档名称 | 用途说明 |
-|:---|:---|
-| [TECHNICAL_ROUTE.md](TECHNICAL_ROUTE.md) | 全局技术路线与架构约束（唯一事实来源） |
-| [editor_engine_route.md](editor_engine_route.md) | 自研编辑器渲染引擎路线（SujianEditorItem 唯一主路径） |
-| [workspace_format.md](workspace_format.md) | 工作区物理磁盘布局规范（权威定义，绝对禁止修改） |
-| [settings_schema.md](settings_schema.md) | 应用设置与偏好 JSON Schema 规范 |
-| [sync_rules.md](sync_rules.md) | 数据同步与多端冲突合并策略 |
-| [starmap_semantics.md](starmap_semantics.md) | 星图语义模型与独立引用安全机制 |
-| [starmap_canvas_model.md](starmap_canvas_model.md) | 星图画布模型契约（独立画布、节点、边、超链接定义） |
-| [starmap_implementation_route.md](starmap_implementation_route.md) | 星图实现路线（存储、渲染、交互、迁移） |
-| [ui_tokens.md](ui_tokens.md) | 跨端 UI Token 唯一事实来源 |
+## 维护规则
 
-## 使用说明
-
-- 修改任何底层业务逻辑，必须优先在 Rust Core 中设计并通过 FFI 暴露。
-- 修改自研编辑器逻辑前，必须查阅 `editor_engine_route.md` 与 `TECHNICAL_ROUTE.md`。
-- `workspace_format.md` 描述的文件与目录结构为最高优先级规范，绝对不能为了前端 UI 展现进行妥协修改。
+- 文档描述稳定的“谁负责什么”和“数据长什么样”，不记录某个类或函数如何实现。
+- 被代码替代的方案直接删除，不保留历史说明。
+- 已淘汰的平台、旧目录、旧编辑器和兼容路线不得继续出现在活动文档中。
+- 接口或磁盘格式变化时更新对应契约；普通重构不修改文档。

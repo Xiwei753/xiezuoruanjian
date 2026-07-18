@@ -37,6 +37,7 @@ unsafe fn item_from_ptr<'a>(rust_item: *mut c_void) -> Option<&'a mut SujianEdit
     if rust_item.is_null() {
         return None;
     }
+    // SAFETY: rust_item is null-checked above; the C++ caller guarantees the pointer is a valid SujianEditorItem for the duration of the FFI call; single-threaded GUI access only.
     Some(unsafe { &mut *(rust_item as *mut SujianEditorItem) })
 }
 
@@ -48,10 +49,12 @@ extern "C" fn sujian_handle_key_and_text(
     text: *const u16,
     text_len: i32,
 ) -> bool {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return false;
     };
     let text = decode_utf16_ptr(text, text_len);
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         handle_key_and_text(item, key, modifiers, text)
     })) {
@@ -67,10 +70,12 @@ extern "C" fn sujian_handle_key_and_text(
 
 #[no_mangle]
 extern "C" fn sujian_ime_commit(rust_item: *mut c_void, text: *const u16, text_len: i32) {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
     let text = decode_utf16_ptr(text, text_len);
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_commit(item, text);
     }));
@@ -84,10 +89,12 @@ extern "C" fn sujian_ime_replace_and_commit(
     replace_start: i32,
     replace_length: i32,
 ) {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
     let text = decode_utf16_ptr(text, text_len);
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_replace_and_commit(item, text, replace_start, replace_length);
     }));
@@ -100,11 +107,13 @@ extern "C" fn sujian_ime_preedit(
     text_len: i32,
     cursor: i32,
 ) {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
     let text = decode_utf16_ptr(text, text_len);
     let cursor_byte = utf16_code_unit_to_utf8_byte(&text, cursor.max(0) as usize) as i32;
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_preedit(item, text, cursor_byte);
     }));
@@ -126,6 +135,7 @@ extern "C" fn sujian_ime_preedit_attrs(
     attr_count: i32,
     attr_formats: *const i32,
 ) {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
@@ -133,10 +143,14 @@ extern "C" fn sujian_ime_preedit_attrs(
 
     let mut attributes = Vec::new();
     if !attr_types.is_null() && !attr_starts.is_null() && !attr_lengths.is_null() && attr_count > 0 {
+        // SAFETY: attr_types is null-checked above; attr_count is checked > 0 above; C++ caller guarantees valid pointers.
         let types_slice = unsafe { std::slice::from_raw_parts(attr_types, attr_count as usize) };
+        // SAFETY: attr_starts is null-checked above; attr_count is checked > 0 above.
         let starts_slice = unsafe { std::slice::from_raw_parts(attr_starts, attr_count as usize) };
+        // SAFETY: attr_lengths is null-checked above; attr_count is checked > 0 above.
         let lengths_slice = unsafe { std::slice::from_raw_parts(attr_lengths, attr_count as usize) };
         let formats_slice = if !attr_formats.is_null() {
+            // SAFETY: attr_formats is null-checked above; attr_count is checked > 0 above.
             unsafe { std::slice::from_raw_parts(attr_formats, attr_count as usize) }
         } else {
             &vec![0i32; attr_count as usize]
@@ -178,6 +192,7 @@ extern "C" fn sujian_ime_preedit_attrs(
 
     let cursor_byte = utf16_code_unit_to_utf8_byte(&text, cursor.max(0) as usize) as i32;
 
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_preedit_with_attrs(item, text, cursor_byte, attributes);
     }));
@@ -185,9 +200,11 @@ extern "C" fn sujian_ime_preedit_attrs(
 
 #[no_mangle]
 extern "C" fn sujian_ime_cancel(rust_item: *mut c_void) {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         ime_cancel(item);
     }));
@@ -195,9 +212,11 @@ extern "C" fn sujian_ime_cancel(rust_item: *mut c_void) {
 
 #[no_mangle]
 extern "C" fn sujian_request_repaint(rust_item: *mut c_void) {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         item.input_request_repaint();
     }));
@@ -208,6 +227,7 @@ extern "C" fn sujian_get_ime_query_data(
     rust_item: *mut c_void,
     out: *mut SujianImeQueryData,
 ) -> bool {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return false;
     };
@@ -228,6 +248,7 @@ extern "C" fn sujian_get_ime_query_data(
         anchor_char_pos: item.anchor_position() as i32,
         has_selection: item.has_selection(),
     };
+    // SAFETY: out is null-checked above; the C++ caller guarantees the pointer is valid.
     unsafe { *out = data };
     true
 }
@@ -238,6 +259,7 @@ extern "C" fn sujian_ime_query_text_before_cursor(
     buf: *mut u16,
     buf_capacity: i32,
 ) -> i32 {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return 0;
     };
@@ -247,6 +269,7 @@ extern "C" fn sujian_ime_query_text_before_cursor(
     let before_text = item.ime_query_text_before_cursor(100);
     let utf16: Vec<u16> = before_text.encode_utf16().collect();
     let copy_len = utf16.len().min(buf_capacity as usize);
+    // SAFETY: buf is null-checked above; buf_capacity is checked > 0 above; copy_len <= buf_capacity; utf16 data is valid.
     unsafe {
         std::ptr::copy_nonoverlapping(utf16.as_ptr(), buf, copy_len);
     }
@@ -259,6 +282,7 @@ extern "C" fn sujian_ime_query_text_after_cursor(
     buf: *mut u16,
     buf_capacity: i32,
 ) -> i32 {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return 0;
     };
@@ -268,6 +292,7 @@ extern "C" fn sujian_ime_query_text_after_cursor(
     let after_text = item.ime_query_text_after_cursor(100);
     let utf16: Vec<u16> = after_text.encode_utf16().collect();
     let copy_len = utf16.len().min(buf_capacity as usize);
+    // SAFETY: buf is null-checked above; buf_capacity is checked > 0 above; copy_len <= buf_capacity; utf16 data is valid.
     unsafe {
         std::ptr::copy_nonoverlapping(utf16.as_ptr(), buf, copy_len);
     }
@@ -280,6 +305,7 @@ extern "C" fn sujian_ime_query_selection_text(
     buf: *mut u16,
     buf_capacity: i32,
 ) -> i32 {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return 0;
     };
@@ -289,6 +315,7 @@ extern "C" fn sujian_ime_query_selection_text(
     let sel_text = item.ime_query_selected_text();
     let utf16: Vec<u16> = sel_text.encode_utf16().collect();
     let copy_len = utf16.len().min(buf_capacity as usize);
+    // SAFETY: buf is null-checked above; buf_capacity is checked > 0 above; copy_len <= buf_capacity; utf16 data is valid.
     unsafe {
         std::ptr::copy_nonoverlapping(utf16.as_ptr(), buf, copy_len);
     }

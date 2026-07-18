@@ -19,7 +19,7 @@
 
 use super::*;
 use crate::sync_bridge::{
-    mask_sync_error, sync_error_category, sync_error_category_from_code, SyncTaskOutcome,
+    mask_sync_error, sync_error_category_from_code, SyncTaskOutcome,
 };
 
 use writer_core::api::WriterCoreApi;
@@ -216,6 +216,7 @@ impl AppBackend {
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
+            // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
                 let mut config = match api.load_sync_config() {
@@ -505,6 +506,7 @@ impl AppBackend {
         let op_id_capture = op_id.clone();
         let trigger = trigger.to_string();
         thread::spawn(move || {
+            // SAFETY: AssertUnwindSafe is needed because catch_unwind requires UnwindSafe; the closure only accesses owned data (workspace_path, config copies) and the result is consumed immediately; no shared mutable state is left in an inconsistent state on panic.
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let api = WriterCoreApi::new(&workspace_path);
                 let mut config = match api.load_sync_config() {
@@ -605,7 +607,7 @@ impl AppBackend {
                     }
                     Err(e) => {
                         let err_str = e.to_string();
-                        let cat = sync_error_category(&err_str);
+                        let cat = sync_error_category_from_code(None, &err_str);
 
                         let summary_key = match cat.as_str() {
                             "token_missing" => "sync.result.token_missing",

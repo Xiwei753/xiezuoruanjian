@@ -7,7 +7,6 @@ class VisualTransactionCoordinator(
 ) {
     private var activeTransaction: PreparedVisualTransaction? = null
     private var timeline: AnimationTimeline? = null
-    private var lastFrameSnapshot: VisualFrameSnapshot? = null
 
     fun submitTransaction(transaction: PreparedVisualTransaction?) {
         if (transaction == null) return
@@ -16,65 +15,72 @@ class VisualTransactionCoordinator(
         val oldTimeline = timeline
 
         if (oldTransaction != null && oldTimeline != null) {
-            val frameTimeMs = System.nanoTime() / 1_000_000
-            val frameSnapshot = oldTimeline.currentVisualFrame(frameTimeMs)
-
-            if (frameSnapshot != null && frameSnapshot.state == TransactionState.Rendering) {
-                lastFrameSnapshot = frameSnapshot
-                rebaseFromOldTransaction(oldTransaction, frameSnapshot, transaction, oldTimeline)
-            } else {
-                cancelTransaction(oldTransaction)
-            }
+            completeTransaction(oldTransaction)
         }
 
         activeTransaction = transaction
         timeline = AnimationTimeline(transaction.durationMs)
     }
 
-    private fun rebaseFromOldTransaction(
-        oldTransaction: PreparedVisualTransaction,
-        frameSnapshot: VisualFrameSnapshot,
-        newTransaction: PreparedVisualTransaction,
-        oldTimeline: AnimationTimeline?
-    ) {
-        val newOwner = SnapshotOwner.OwnedByTransaction(newTransaction.transactionId)
-        val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
-
-        for (slice in oldTransaction.animatedSlices) {
-            val snapshot = slice.snapshot ?: continue
-            val currentOwner = resourceStore.getOwner(snapshot.snapshotId)
-            if (currentOwner == oldOwner) {
-                resourceStore.transferOwnership(snapshot.snapshotId, newOwner)
-            }
-        }
-
-        for (slice in oldTransaction.animatedSlices) {
-            val snapshot = slice.snapshot ?: continue
-            if (!newTransaction.animatedSlices.any { it.snapshot?.snapshotId == snapshot.snapshotId }) {
-                resourceStore.release(snapshot.snapshotId, newOwner)
-            }
-        }
-
-        if (frameSnapshot.progress > 0f) {
-            for (slice in newTransaction.animatedSlices) {
-                if (slice.role == SliceRole.Move && slice.fromDestinationRect != null) {
-                    val currentLeft = slice.fromDestinationRect.left + (slice.destinationRect.left - slice.fromDestinationRect.left) * frameSnapshot.progress
-                    val currentTop = slice.fromDestinationRect.top + (slice.destinationRect.top - slice.fromDestinationRect.top) * frameSnapshot.progress
-                    val currentRight = slice.fromDestinationRect.right + (slice.destinationRect.right - slice.fromDestinationRect.right) * frameSnapshot.progress
-                    val currentBottom = slice.fromDestinationRect.bottom + (slice.destinationRect.bottom - slice.fromDestinationRect.bottom) * frameSnapshot.progress
-                    slice.fromDestinationRect = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
-                } else if (slice.role == SliceRole.Insert) {
-                    slice.startAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress
-                } else if (slice.role == SliceRole.Delete) {
-                    slice.endAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * frameSnapshot.progress
-                }
-            }
-        }
-
-        oldTimeline.cancel()
+    fun captureCurrentFrame(frameTimeMs: Long): VisualFrameSnapshot? {
+        val transaction = activeTransaction ?: return null
+        val tl = timeline ?: return null
+        if (tl.getState() != TransactionState.Rendering && tl.getState() != TransactionState.Paused) return null
+        val p = tl.progress(frameTimeMs)
+        val sliceStates = computeSliceVisualStates(transaction, p)
+        return VisualFrameSnapshot(
+            progress = p,
+            state = tl.getState(),
+            sliceVisualStates = sliceStates
+        )
     }
 
-    fun computeFrame(frameTimeMs: Long, viewportWidth: Int = 0, viewportHeight: Int = 0, scrollX: Float = 0f, scrollY: Float = 0f): AndroidRenderFrame {
+    fun captureRebaseSnapshot(frameTimeMs: Long): VisualFrameSnapshot? {
+        return captureCurrentFrame(frameTimeMs)
+    }
+
+    private fun computeSliceVisualStates(
+        transaction: PreparedVisualTransaction,
+        progress: Float
+    ): List<SliceVisualState> {
+        return transaction.animatedSlices.map { slice ->
+            val fromRect = slice.fromDestinationRect ?: slice.destinationRect
+            val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
+            val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
+            val currentRight = fromRect.right + (slice.destinationRect.right - fromRect.right) * progress
+            val currentBottom = fromRect.bottom + (slice.destinationRect.bottom - fromRect.bottom) * progress
+            val currentAlpha = slice.startAlpha + (slice.endAlpha - slice.startAlpha) * progress
+            SliceVisualState(
+                snapshotId = slice.snapshot?.snapshotId ?: -1L,
+                role = slice.role,
+                lineIndex = slice.snapshot?.lineIndex ?: -1,
+                documentByteStart = slice.snapshot?.documentByteStart ?: -1,
+                documentByteEndExclusive = slice.snapshot?.documentByteEndExclusive ?: -1,
+                currentLeft = currentLeft,
+                currentTop = currentTop,
+                currentRight = currentRight,
+                currentBottom = currentBottom,
+                currentAlpha = currentAlpha
+            )
+        }
+    }
+
+    fun computeFrame(
+        frameTimeMs: Long,
+        cursorUtf16: Int,
+        cursorX: Float,
+        cursorY: Float,
+        cursorHeight: Float,
+        selectionStartUtf16: Int,
+        selectionEndUtf16: Int,
+        compositionStartUtf16: Int,
+        compositionEndUtf16: Int,
+        searchHighlightsUtf16: List<Pair<Int, Int>>,
+        viewportWidth: Int = 0,
+        viewportHeight: Int = 0,
+        scrollX: Float = 0f,
+        scrollY: Float = 0f
+    ): AndroidRenderFrame {
         val transaction = activeTransaction
         val tl = timeline
 
@@ -94,7 +100,16 @@ class VisualTransactionCoordinator(
                 viewportWidth = viewportWidth,
                 viewportHeight = viewportHeight,
                 scrollX = scrollX,
-                scrollY = scrollY
+                scrollY = scrollY,
+                cursorUtf16 = cursorUtf16,
+                cursorX = cursorX,
+                cursorY = cursorY,
+                cursorHeight = cursorHeight,
+                selectionStartUtf16 = selectionStartUtf16,
+                selectionEndUtf16 = selectionEndUtf16,
+                compositionStartUtf16 = compositionStartUtf16,
+                compositionEndUtf16 = compositionEndUtf16,
+                searchHighlightsUtf16 = searchHighlightsUtf16
             )
         }
 
@@ -104,7 +119,16 @@ class VisualTransactionCoordinator(
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
             scrollX = scrollX,
-            scrollY = scrollY
+            scrollY = scrollY,
+            cursorUtf16 = cursorUtf16,
+            cursorX = cursorX,
+            cursorY = cursorY,
+            cursorHeight = cursorHeight,
+            selectionStartUtf16 = selectionStartUtf16,
+            selectionEndUtf16 = selectionEndUtf16,
+            compositionStartUtf16 = compositionStartUtf16,
+            compositionEndUtf16 = compositionEndUtf16,
+            searchHighlightsUtf16 = searchHighlightsUtf16
         )
     }
 
@@ -125,4 +149,11 @@ class VisualTransactionCoordinator(
     }
 
     fun hasActiveAnimation(): Boolean = activeTransaction != null && timeline != null
+
+    fun cancelActiveTransaction() {
+        val transaction = activeTransaction ?: return
+        cancelTransaction(transaction)
+        activeTransaction = null
+        timeline = null
+    }
 }

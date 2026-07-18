@@ -1,68 +1,28 @@
-# Linux Qt 应用
+# Linux Qt 客户端
 
-本目录包含 Linux 原生客户端，使用 Rust 和 Qt6/QML 构建，提供 Linux 写作体验。
+本目录是素笺写作的 Linux 原生客户端，使用 Rust、Qt6 和 QML。
 
-## 主要文件
+## 职责
 
-| 文件 | 用途 |
-|------|------|
-| `Cargo.toml` | Rust 项目配置 |
-| `build.rs` | 构建脚本 |
-| `src/` | Rust 源代码，包含 QObject 绑定 |
-| `qml/` | QML 界面文件 |
-| `../../docs/TECHNICAL_ROUTE.md` | 技术路线文档 |
-| `.gitignore` | Git 忽略规则 |
+- 提供 Linux 界面、输入法、排版、渲染、动画和系统集成。
+- 通过 `writer_core` 使用工作区、作品、章节、设置、同步和统计能力。
+- 不在 QML 或平台适配层复制业务规则和磁盘格式。
+- Qt 对象只在所属线程访问，后台任务通过消息或 queued callback 返回结果。
 
-## 架构说明
+## 环境
 
-客户端**必须**通过 FFI 使用 `core/writer_core` Rust 核心库，严格禁止在 C++ 或 QML 中直接实现工作区格式、保存逻辑或同步功能。UI 使用 Qt 6 / QML 构建，所有业务逻辑依赖 Rust 核心。
+需要：
 
-路线收口：`apps/Linux_qt` 只服务 Linux Qt/QML 客户端，重点是 fcitx5、Wayland/X11、Qt6、AppImage、KDE 主题、渲染、动画、日志导出和 runtime profile；不混入 Windows 兼容逻辑。Windows 已走 `apps/windows` 原生 WinUI 3 / Windows App SDK + DirectWrite/Direct2D 路线（issue #433），不复用 Linux Qt/QML。如未来需要 GTK，可新增 Linux GTK 客户端目录。
+- Rust stable；
+- Qt 6 开发环境；
+- 支持 C++17 的编译器。
 
-## 依赖关系
-
-- 依赖 `core/writer_core` Rust 核心库
-- 需要 Qt 6 开发环境，Linux 二进制不应再链接 `libQt5Core` / `libQt5Qml` / `libQt5Quick`
-- 需要支持 C++17 的 C++ 编译器；Linux Qt 绑定会在 `build.rs` 中强制给 `cpp_build` 传入 `-std=c++17`
-- GitHub Actions 也只安装 Qt6 依赖；本地和 CI 不再维护 Qt5 构建链路
-
-## 使用说明
-
-### 安装依赖
-
-**Fedora / openSUSE：**
-```bash
-sudo dnf install gcc-c++ qt6-qtbase qt6-qtdeclarative qt6-qtquickcontrols2 qt6-qttools qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel
-```
-
-**Ubuntu / Debian：**
-```bash
-sudo apt install g++ qt6-base-dev qt6-declarative-dev qt6-tools-dev qt6-tools-dev-tools qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-window
-```
-
-### 构建运行
+运行：
 
 ```bash
-bash start.sh
+cargo run -p sujian-linux-qt
 ```
 
-`start.sh` 会自动优先检测 Qt6 qmake，并设置 Qt6 QML/plugin 路径：
+平台相关构建参数以 `Cargo.toml`、`build.rs` 和工作流为准，不在本文档维护发行版路径清单。
 
-```bash
-QML2_IMPORT_PATH=/usr/lib64/qt6/qml
-QT_PLUGIN_PATH=/usr/lib64/qt6/plugins
-```
-
-仓库根目录的 `.cargo/config.toml` 默认把 Linux 构建指向 Fedora Qt6 开发路径：`/usr/include/qt6` 和 `/usr/lib64`。如果你的发行版 Qt6 安装在其他位置，可以在执行 `cargo` 前显式覆盖 `QT_INCLUDE_PATH`、`QT_LIBRARY_PATH` 或 `QMAKE`。
-
-不要把 `/usr/lib64/qt5/qml` 或 `/usr/lib64/qt5/plugins` 混入启动路径，否则 Qt5 程序和 Qt6 QML 模块会互相污染。构建完成后可用以下命令确认链接结果：
-
-```bash
-ldd target/debug/sujian-linux-qt | grep -Ei 'Qt5|Qt6|qml|quick'
-```
-
-结果应出现 `libQt6Core`、`libQt6Qml`、`libQt6Quick`，不应出现 `libQt5Core`、`libQt5Qml`、`libQt5Quick`。
-
-自研写作区使用 Rust 自绘渲染，完全替代了传统的 QML `TextArea`，提供更可控的编辑体验。当前 `SujianEditorItem` 为唯一受支持的编辑器实现。
-
-吐字动画已通过 Core `EditorVisualTransaction` 与 `visual_transaction_json` 驱动，由 QML `EditorAnimationOverlay` 负责叠加渲染。insert 与 reflow hidden range 是自研渲染层的临时状态，完成/跳过时优先按稳定 transactionId / rangeId 清理，byte range 只作为旧数据兜底。
+全局架构见 [技术路线](../../docs/TECHNICAL_ROUTE.md)。

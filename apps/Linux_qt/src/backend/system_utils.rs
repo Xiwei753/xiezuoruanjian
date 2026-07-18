@@ -181,18 +181,68 @@ pub(crate) fn detect_system_theme_from_platform() -> String {
         .unwrap_or_else(|| "light".to_string())
 }
 
-pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
-    let mk_success = |backend: &str| -> serde_json::Value {
-        serde_json::json!({
-            "success": true,
-            "data": { "backend": backend },
+use std::sync::Mutex;
 
-            "warnings": [],
-            "changedPaths": [],
-            "changedEntities": [],
-        })
-    };
+static ARBOARD_CLIPBOARD: Mutex<Option<arboard::Clipboard>> = Mutex::new(None);
 
+fn get_or_create_arboard() -> Option<std::sync::MutexGuard<'static, Option<arboard::Clipboard>>> {
+    let mut guard = ARBOARD_CLIPBOARD.lock().ok()?;
+    if guard.is_none() {
+        match arboard::Clipboard::new() {
+            Ok(clip) => { *guard = Some(clip); }
+            Err(_) => return None,
+        }
+    }
+    Some(guard)
+}
+
+pub(crate) enum ClipboardBackend {
+    WlCopy,
+    Xclip,
+    Xsel,
+    Arboard,
+}
+
+pub(crate) enum ClipboardCopyResult {
+    Success { backend: ClipboardBackend },
+    Unavailable,
+}
+
+impl ClipboardCopyResult {
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            ClipboardCopyResult::Success { backend } => {
+                let backend_str = match backend {
+                    ClipboardBackend::WlCopy => "wl-copy",
+                    ClipboardBackend::Xclip => "xclip",
+                    ClipboardBackend::Xsel => "xsel",
+                    ClipboardBackend::Arboard => "arboard",
+                };
+                serde_json::json!({
+                    "success": true,
+                    "data": { "backend": backend_str },
+                    "warnings": [],
+                    "changedPaths": [],
+                    "changedEntities": [],
+                })
+            }
+            ClipboardCopyResult::Unavailable => {
+                serde_json::json!({
+                    "success": false,
+                    "errorCode": "CLIPBOARD_UNAVAILABLE",
+                    "messageKey": "error.clipboard_unavailable",
+                    "messageArgs": {},
+                    "rawError": "No clipboard backend available",
+                    "warnings": [],
+                    "changedPaths": [],
+                    "changedEntities": [],
+                })
+            }
+        }
+    }
+}
+
+pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> ClipboardCopyResult {
     // 1. Try wl-copy (Wayland)
     if let Ok(mut child) = std::process::Command::new("wl-copy")
         .stdin(std::process::Stdio::piped())
@@ -202,7 +252,7 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return mk_success("wl-copy"),
+            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::WlCopy },
             _ => {}
         }
     }
@@ -217,7 +267,7 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return mk_success("xclip"),
+            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::Xclip },
             _ => {}
         }
     }
@@ -232,29 +282,21 @@ pub(crate) fn copy_text_to_clipboard_impl(text_str: &str) -> serde_json::Value {
             let _ = stdin.write_all(text_str.as_bytes());
         }
         match child.wait() {
-            Ok(status) if status.success() => return mk_success("xsel"),
+            Ok(status) if status.success() => return ClipboardCopyResult::Success { backend: ClipboardBackend::Xsel },
             _ => {}
         }
     }
 
-    // 4. Last resort: arboard (Rust clipboard API)
-    if let Ok(mut clip) = arboard::Clipboard::new() {
-        if clip.set_text(text_str.to_string()).is_ok() {
-            Box::leak(Box::new(clip));
-            return mk_success("arboard");
+    // 4. Last resort: arboard (Rust clipboard API) — long-lived, reused, not leaked
+    if let Some(mut guard) = get_or_create_arboard() {
+        if let Some(ref mut clip) = *guard {
+            if clip.set_text(text_str.to_string()).is_ok() {
+                return ClipboardCopyResult::Success { backend: ClipboardBackend::Arboard };
+            }
         }
     }
 
-    serde_json::json!({
-        "success": false,
-        "errorCode": "CLIPBOARD_UNAVAILABLE",
-        "messageKey": "error.clipboard_unavailable",
-        "messageArgs": {},
-        "rawError": "No clipboard backend available",
-        "warnings": [],
-        "changedPaths": [],
-        "changedEntities": [],
-    })
+    ClipboardCopyResult::Unavailable
 }
 
 #[cfg(test)]
