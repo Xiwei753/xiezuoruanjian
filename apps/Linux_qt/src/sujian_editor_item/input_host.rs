@@ -126,7 +126,7 @@ impl EditorInputHost for SujianEditorItem {
                 let old_cursor_rect = self.preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
                 let new_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-                let old_snapshot = self.animation_coordinator
+                let old_snapshot = self.pipeline.animation_coordinator()
                     .active_composition_new_snapshot()
                     .cloned()
                     .unwrap_or_else(|| {
@@ -136,8 +136,8 @@ impl EditorInputHost for SujianEditorItem {
                     });
                 let new_snapshot = self.build_editor_layout_snapshot(width);
 
-                self.animation_coordinator.cancel_active_composition("clear_preedit");
-                self.animation_coordinator.handle_composition_commit_or_cancel(
+                self.pipeline.animation_coordinator_mut().cancel_active_composition("clear_preedit");
+                self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
                     self.current_typing_animation_duration_ms as u64,
                     &old_snapshot,
                     &new_snapshot,
@@ -179,7 +179,7 @@ impl EditorInputHost for SujianEditorItem {
                     self.build_editor_layout_snapshot(width)
                 })
             } else {
-                self.animation_coordinator
+                self.pipeline.animation_coordinator()
                     .active_composition_new_snapshot()
                     .cloned()
                     .unwrap_or_else(|| {
@@ -194,7 +194,7 @@ impl EditorInputHost for SujianEditorItem {
             let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-            self.animation_coordinator.handle_composition_update(
+            self.pipeline.animation_coordinator_mut().handle_composition_update(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
@@ -234,7 +234,7 @@ impl EditorInputHost for SujianEditorItem {
                     self.build_editor_layout_snapshot(width)
                 })
             } else {
-                self.animation_coordinator
+                self.pipeline.animation_coordinator()
                     .active_composition_new_snapshot()
                     .cloned()
                     .unwrap_or_else(|| {
@@ -249,7 +249,7 @@ impl EditorInputHost for SujianEditorItem {
             let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-            self.animation_coordinator.handle_composition_update(
+            self.pipeline.animation_coordinator_mut().handle_composition_update(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,

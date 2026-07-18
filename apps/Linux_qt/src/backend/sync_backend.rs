@@ -27,37 +27,65 @@ use crate::sync_bridge::{
 use writer_core::api::WriterCoreApi;
 
 #[allow(non_snake_case)] // Qt QML naming convention
-#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct SyncBackend {
+    #[allow(dead_code)]
     base: qt_base_class!(trait QObject),
+    #[allow(dead_code)]
     sync_enabled: qt_property!(bool; READ sync_enabled WRITE set_sync_enabled NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_backend_type: qt_property!(QString; READ sync_backend_type WRITE set_sync_backend_type NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_remote_url: qt_property!(QString; READ sync_remote_url WRITE set_sync_remote_url NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_branch: qt_property!(QString; READ sync_branch WRITE set_sync_branch NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_auto_sync: qt_property!(bool; READ sync_auto_sync WRITE set_sync_auto_sync NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_interval: qt_property!(u32; READ sync_interval WRITE set_sync_interval NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_username: qt_property!(QString; READ sync_username WRITE set_sync_username NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     has_sync_token: qt_property!(bool; READ has_sync_token NOTIFY sync_config_changed),
+    #[allow(dead_code)]
     sync_operation_state: qt_property!(QString; READ sync_operation_state NOTIFY sync_action_completed),
+    #[allow(dead_code)]
     sync_status: qt_property!(QString; READ sync_status WRITE set_sync_status NOTIFY sync_status_changed),
+    #[allow(dead_code)]
     sync_in_progress: qt_property!(bool; READ sync_in_progress NOTIFY sync_status_changed),
+    #[allow(dead_code)]
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
+    #[allow(dead_code)]
     sync_can_run: qt_property!(bool; READ sync_can_run NOTIFY sync_status_changed),
+    #[allow(dead_code)]
     sync_block_reason: qt_property!(QString; READ sync_block_reason NOTIFY sync_status_changed),
+    #[allow(dead_code)]
     sync_config_changed: qt_signal!(),
+    #[allow(dead_code)]
     sync_action_completed: qt_signal!(),
+    #[allow(dead_code)]
     sync_status_changed: qt_signal!(),
+    #[allow(dead_code)]
     workspace_state_changed: qt_signal!(),
+    #[allow(dead_code)]
     set_sync_token: qt_method!(fn(&mut self, token: QString)),
+    #[allow(dead_code)]
     load_sync_config: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     save_sync_config: qt_method!(fn(&mut self) -> bool),
+    #[allow(dead_code)]
     perform_sync_dry_run: qt_method!(fn(&mut self) -> QString),
+    #[allow(dead_code)]
     perform_sync: qt_method!(fn(&mut self) -> QString),
+    #[allow(dead_code)]
     perform_sync_diagnostics: qt_method!(fn(&mut self) -> QString),
+    #[allow(dead_code)]
     request_auto_sync: qt_method!(fn(&mut self, reason: QString)),
+    #[allow(dead_code)]
     maybe_auto_sync_on_foreground: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     open_workspace_dir: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     app: AppRef,
 }

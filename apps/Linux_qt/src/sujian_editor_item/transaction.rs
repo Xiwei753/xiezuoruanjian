@@ -140,7 +140,7 @@ impl SujianEditorItem {
                     viewport_h,
                 );
 
-                let key = self.animation_coordinator.process_transaction(
+                let key = self.pipeline.animation_coordinator_mut().process_transaction(
                     vt,
                     self.current_typing_animation_enabled,
                     self.current_is_scrolling,
@@ -166,7 +166,7 @@ impl SujianEditorItem {
                 editor_animation_debug_log(&format!(
                     "record_transaction: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",
                     vt.kind,
-                    self.animation_coordinator.has_active_insert()
+                    self.pipeline.animation_coordinator_mut().has_active_insert()
                 ));
             }
         } else {
@@ -288,7 +288,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
-        let tx = self.animation_coordinator.prepared_queue.active_transactions()
+        let tx = self.pipeline.animation_coordinator_mut().prepared_queue.active_transactions()
             .iter()
             .find(|t| t.key == key)
             .cloned();
@@ -297,7 +297,7 @@ impl SujianEditorItem {
             Some(t) => {
                 let snapshot_ids = t.snapshot_ids();
                 if snapshot_ids.is_empty() {
-                    self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                    self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
                     return;
                 }
 
@@ -310,7 +310,7 @@ impl SujianEditorItem {
                 }
 
                 if all_found {
-                    self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                    self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
                     return;
                 }
 
@@ -342,10 +342,10 @@ impl SujianEditorItem {
                         "prepare_transaction_textures: some line textures missing for tid={}, cancelling",
                         key.transaction_id
                     ));
-                    self.animation_coordinator.cancel_by_key(key, "texture_failed");
+                    self.pipeline.animation_coordinator_mut().cancel_by_key(key, "texture_failed");
                     self.render_dirty = true;
                 } else {
-                    self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                    self.pipeline.animation_coordinator_mut().prepared_queue.mark_texture_prepared(key);
                 }
             }
             None => {}

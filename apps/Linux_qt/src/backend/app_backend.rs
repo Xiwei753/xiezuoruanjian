@@ -183,41 +183,69 @@ mod system_utils;
 #[allow(non_snake_case)]
 #[derive(QObject, Default)]
 pub struct AppBackend {
+    #[allow(dead_code)]
     base: qt_base_class!(trait QObject),
 
+    #[allow(dead_code)]
     workspace_opened: qt_signal!(),
+    #[allow(dead_code)]
     workspace_content_changed: qt_signal!(),
+    #[allow(dead_code)]
     workspace_state_changed: qt_signal!(),
+    #[allow(dead_code)]
     projects_reloaded: qt_signal!(),
     #[allow(non_snake_case)]
+    #[allow(dead_code)]
     projectsReloaded: qt_signal!(),
+    #[allow(dead_code)]
     save_status_changed: qt_signal!(),
+    #[allow(dead_code)]
     word_count_changed: qt_signal!(),
+    #[allow(dead_code)]
     error_occurred: qt_signal!(),
+    #[allow(dead_code)]
     selected_item_changed: qt_signal!(),
+    #[allow(dead_code)]
     chapter_path_changed: qt_signal!(),
+    #[allow(dead_code)]
     clear_editor: qt_signal!(),
 
+    #[allow(dead_code)]
     sync_config_changed: qt_signal!(),
+    #[allow(dead_code)]
     sync_action_completed: qt_signal!(),
+    #[allow(dead_code)]
     sync_status_changed: qt_signal!(),
 
+    #[allow(dead_code)]
     settings_changed: qt_signal!(),
 
+    #[allow(dead_code)]
     system_color_scheme: qt_property!(QString; READ system_color_scheme NOTIFY system_color_scheme_changed),
+    #[allow(dead_code)]
     system_color_scheme_changed: qt_signal!(),
 
+    #[allow(dead_code)]
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
     #[allow(dead_code)] // SAFETY: qmetaobject macro field used by Qt meta-object system
+    #[allow(dead_code)]
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
+    #[allow(dead_code)]
     ai_enabled_changed: qt_signal!(),
+    #[allow(dead_code)]
     ai_available_changed: qt_signal!(),
 
+    #[allow(dead_code)]
     pending_github_init_path_changed: qt_signal!(),
+    #[allow(dead_code)]
     query_system_color_scheme: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     apply_window_dark_mode: qt_method!(fn(&mut self, is_dark: bool)),
+    #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
+    #[allow(dead_code)]
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
+    #[allow(dead_code)]
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
     log_qml:
         qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
@@ -285,9 +313,11 @@ pub struct AppBackend {
     pub(crate) current_setting_diagnostics_verbose: bool,
 
     // ── Layout Policy ──
+    #[allow(dead_code)]
     resolve_layout: qt_method!(fn(&self, width_dp: f64, height_dp: f64, safe_top_dp: f64, safe_bottom_dp: f64, keyboard_visible: bool, fold_state: QString, fold_orientation: QString, fold_is_separating: bool, fold_occlusion: QString, fold_bounds_left: f64, fold_bounds_top: f64, fold_bounds_right: f64, fold_bounds_bottom: f64, orientation: QString, pointer: QString) -> QJsonObject),
 
     // ── Screen Policy ──
+    #[allow(dead_code)]
     resolve_screen_policy: qt_method!(fn(&self, screen_role: QString, shell_mode: QString) -> QJsonObject),
 }
 

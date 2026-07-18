@@ -2,23 +2,37 @@ use super::*;
 use crate::backend::AppRef;
 
 #[allow(non_snake_case)] // Qt QML naming convention
-#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct LinuxThemeController {
+    #[allow(dead_code)]
     base: qt_base_class!(trait QObject),
+    #[allow(dead_code)]
     resolved_scheme_json: qt_property!(QString; READ resolved_scheme_json NOTIFY scheme_changed),
+    #[allow(dead_code)]
     is_dark: qt_property!(bool; READ is_dark NOTIFY scheme_changed),
+    #[allow(dead_code)]
     color_source: qt_property!(QString; READ color_source NOTIFY scheme_changed),
+    #[allow(dead_code)]
     selected_builtin_theme_id: qt_property!(QString; READ selected_builtin_theme_id NOTIFY scheme_changed),
+    #[allow(dead_code)]
     selected_palette_id: qt_property!(QString; READ selected_palette_id NOTIFY scheme_changed),
+    #[allow(dead_code)]
     appearance_mode: qt_property!(QString; READ appearance_mode NOTIFY scheme_changed),
+    #[allow(dead_code)]
     system_is_dark: qt_property!(bool; READ system_is_dark NOTIFY scheme_changed),
+    #[allow(dead_code)]
     scheme_changed: qt_signal!(),
+    #[allow(dead_code)]
     reload: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     set_color_source: qt_method!(fn(&mut self, val: QString)),
+    #[allow(dead_code)]
     set_appearance_mode: qt_method!(fn(&mut self, val: QString)),
+    #[allow(dead_code)]
     set_selected_builtin_theme_id: qt_method!(fn(&mut self, val: QString)),
+    #[allow(dead_code)]
     set_selected_palette_id: qt_method!(fn(&mut self, val: QString)),
+    #[allow(dead_code)]
     set_system_is_dark: qt_method!(fn(&mut self, val: bool)),
     app: AppRef,
 }

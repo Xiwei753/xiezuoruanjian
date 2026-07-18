@@ -148,7 +148,7 @@ def _has_nearby_deprecated(lines: list[str], index: int, lookback: int = 3) -> b
 
 _QMETA_MACRO_PATTERNS = [
     re.compile(r"\bqt_property!\s*\("),
-    re.compile(r"\bqt_signal!\s*\(\s*\)"),
+    re.compile(r"\bqt_signal!\s*\("),
     re.compile(r"\bqt_method!\s*\("),
     re.compile(r"\bqt_base_class!\s*\("),
 ]

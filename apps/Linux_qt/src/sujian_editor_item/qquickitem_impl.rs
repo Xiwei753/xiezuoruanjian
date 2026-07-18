@@ -162,21 +162,21 @@ impl QQuickItem for SujianEditorItem {
         }
 
         if !final_root.is_null() && !item_ptr.is_null() {
-            let has_active_txs = !self.animation_coordinator.prepared_queue.is_empty();
+            let has_active_txs = !self.pipeline.animation_coordinator_mut().prepared_queue.is_empty();
 
             if !has_active_txs {
                 self.pipeline.texture_cache_mut().clear();
                 scene_graph::clear_animation_layer(final_root, item_ptr);
             }
 
-            let old_cursor_rect = self.animation_coordinator.prepared_queue.active_transactions()
+            let old_cursor_rect = self.pipeline.animation_coordinator_mut().prepared_queue.active_transactions()
                 .first()
                 .and_then(|tx| tx.old_cursor_rect.clone());
-            let new_cursor_rect = self.animation_coordinator.prepared_queue.active_transactions()
+            let new_cursor_rect = self.pipeline.animation_coordinator_mut().prepared_queue.active_transactions()
                 .first()
                 .and_then(|tx| tx.new_cursor_rect.clone());
 
-            let cursor_plan = self.animation_coordinator.build_cursor_plan(
+            let cursor_plan = self.pipeline.animation_coordinator_mut().build_cursor_plan(
                 old_cursor_rect,
                 new_cursor_rect,
                 self.cursor_ctrl.visual_x,
@@ -200,7 +200,7 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_ctrl.force_snap_next,
                 self.cursor_ctrl.animation.as_ref(),
             );
-            let ime_plan = self.animation_coordinator.build_ime_plan(
+            let ime_plan = self.pipeline.animation_coordinator_mut().build_ime_plan(
                 has_active_txs,
                 false,
             );
@@ -219,7 +219,7 @@ impl QQuickItem for SujianEditorItem {
                 width: 2.0,
             };
 
-            let render_plan = self.animation_coordinator.build_render_plan_full(
+            let render_plan = self.pipeline.animation_coordinator_mut().build_render_plan_full(
                 cursor_plan, ime_plan, selection_preedit,
                 frame_context, cursor_style,
             );
@@ -232,7 +232,7 @@ impl QQuickItem for SujianEditorItem {
             );
 
             for key in &render_plan.frame_context.keys_to_complete {
-                if let Some(ids) = self.animation_coordinator.finish_by_key(*key) {
+                if let Some(ids) = self.pipeline.animation_coordinator_mut().finish_by_key(*key) {
                     self.pipeline.texture_cache_mut().remove_for_transaction(&ids);
                 }
                 editor_animation_debug_log(&format!(
@@ -242,14 +242,14 @@ impl QQuickItem for SujianEditorItem {
             }
 
             for key in &render_plan.frame_context.keys_to_cancel {
-                self.animation_coordinator.cancel_by_key(*key, "texture_failed");
+                self.pipeline.animation_coordinator_mut().cancel_by_key(*key, "texture_failed");
             }
 
             if !render_plan.frame_context.keys_to_complete.is_empty() {
                 self.render_dirty = true;
             }
 
-            if self.animation_coordinator.has_prepared_or_rendering()
+            if self.pipeline.animation_coordinator_mut().has_prepared_or_rendering()
                 || !render_plan.frame_context.keys_to_complete.is_empty()
             {
                 self.request_frame_update();
@@ -272,6 +272,6 @@ impl QQuickItem for SujianEditorItem {
 impl SujianEditorItem {
     pub(crate) fn tick_text_animations(&mut self) {
         let now = Instant::now();
-        self.animation_coordinator.tick(now);
+        self.pipeline.animation_coordinator_mut().tick(now);
     }
 }

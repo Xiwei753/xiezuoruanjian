@@ -192,7 +192,7 @@ impl SujianEditorItem {
         // the text rendering uses the same shaping data as cursorToX(),
         // fixing mixed-script cursor issues (e.g. "]\"" where cursor
         // lands inside the Chinese quote).
-        let render_plan = self.animation_coordinator.current_static_render_plan();
+        let render_plan = self.pipeline.animation_coordinator_mut().current_static_render_plan();
         let hidden_clip_rects = render_plan.merged_clip_rects();
         for line_idx in vis_start..vis_end {
             let line = &lines[line_idx];
@@ -369,7 +369,7 @@ impl SujianEditorItem {
         // This fallback only activates when animation is disabled or no Composition
         // transaction exists. It draws preedit on the committed layout as a last resort.
         // Issue #516: independent preedit overlay drawing is deleted as the main path.
-        if !self.preedit_text.is_empty() && !self.animation_coordinator.has_active_composition() {
+        if !self.preedit_text.is_empty() && !self.pipeline.animation_coordinator_mut().has_active_composition() {
             let pc = self.buffer.cursor;
             for (idx, line) in lines.iter().enumerate() {
                 if idx < vis_start || idx >= vis_end {
@@ -761,7 +761,7 @@ impl SujianEditorItem {
                 && cursor_y < vp_h
                 && !self.current_is_scrolling,
             blink_mode: if self.current_coordinated_text_cursor_animation_enabled
-                && self.animation_coordinator.has_active_insert()
+                && self.pipeline.animation_coordinator_mut().has_active_insert()
             {
                 CursorBlinkMode::Suppressed
             } else {

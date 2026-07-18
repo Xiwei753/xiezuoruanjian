@@ -169,92 +169,172 @@ pub(crate) fn is_complex_grapheme(ch: char) -> bool {
     false
 }
 
-#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject)]
 pub struct SujianEditorItem {
+    #[allow(dead_code)]
     base: qt_base_class!(trait QQuickItem),
 
+    #[allow(dead_code)]
     plain_text: qt_property!(QString; READ plain_text WRITE set_plain_text NOTIFY plain_text_changed),
+    #[allow(dead_code)]
     content_height: qt_property!(f32; READ content_height NOTIFY content_height_changed),
+    #[allow(dead_code)]
     cursor_position: qt_property!(u32; READ cursor_position NOTIFY cursor_position_changed),
+    #[allow(dead_code)]
     has_selection: qt_property!(bool; READ has_selection NOTIFY selection_changed),
+    #[allow(dead_code)]
     editor_enabled: qt_property!(bool; READ editor_enabled WRITE set_editor_enabled NOTIFY editor_enabled_changed),
+    #[allow(dead_code)]
     font_pixel_size: qt_property!(f32; READ font_pixel_size WRITE set_font_pixel_size NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     font_family: qt_property!(QString; READ font_family WRITE set_font_family NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     line_spacing: qt_property!(f32; READ line_spacing WRITE set_line_spacing NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     text_indent: qt_property!(f32; READ text_indent WRITE set_text_indent NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     padding: qt_property!(f32; READ padding WRITE set_padding NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     text_color: qt_property!(QString; READ text_color WRITE set_text_color NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     selection_color: qt_property!(QString; READ selection_color WRITE set_selection_color NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     selected_text_color: qt_property!(QString; READ selected_text_color WRITE set_selected_text_color NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     cursor_color: qt_property!(QString; READ cursor_color WRITE set_cursor_color NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     smooth_cursor_enabled: qt_property!(bool; READ smooth_cursor_enabled WRITE set_smooth_cursor_enabled NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     cursor_animation_duration_ms: qt_property!(u32; READ cursor_animation_duration_ms WRITE set_cursor_animation_duration_ms NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     typing_animation_enabled: qt_property!(bool; READ typing_animation_enabled WRITE set_typing_animation_enabled NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     coordinated_text_cursor_animation_enabled: qt_property!(bool; READ coordinated_text_cursor_animation_enabled WRITE set_coordinated_text_cursor_animation_enabled NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
+    #[allow(dead_code)]
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
+    #[allow(dead_code)]
     scroll_y: qt_property!(f32; READ scroll_y WRITE set_scroll_y NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     is_loading: qt_property!(bool; READ is_loading WRITE set_is_loading NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     is_applying_format: qt_property!(bool; READ is_applying_format WRITE set_is_applying_format NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     is_applying_settings: qt_property!(bool; READ is_applying_settings WRITE set_is_applying_settings NOTIFY visual_settings_changed),
+    #[allow(dead_code)]
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     cursor_blink_visible: qt_property!(bool; READ cursor_blink_visible NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     cursor_should_be_visible: qt_property!(bool; READ cursor_should_be_visible NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     cursor_blink_opacity: qt_property!(f32; READ cursor_blink_opacity NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
     anchor_rect_x: qt_property!(f32; READ anchor_rect_x NOTIFY selection_changed),
+    #[allow(dead_code)]
     anchor_rect_y: qt_property!(f32; READ anchor_rect_y NOTIFY selection_changed),
+    #[allow(dead_code)]
     anchor_rect_width: qt_property!(f32; READ anchor_rect_width NOTIFY selection_changed),
+    #[allow(dead_code)]
     anchor_rect_height: qt_property!(f32; READ anchor_rect_height NOTIFY selection_changed),
+    #[allow(dead_code)]
     anchor_position: qt_property!(u32; READ anchor_position NOTIFY selection_changed),
+    #[allow(dead_code)]
     current_selection_text: qt_property!(QString; READ current_selection_text NOTIFY selection_changed),
 
+    #[allow(dead_code)]
     plain_text_changed: qt_signal!(),
+    #[allow(dead_code)]
     text_changed: qt_signal!(),
+    #[allow(dead_code)]
     content_height_changed: qt_signal!(),
+    #[allow(dead_code)]
     cursor_position_changed: qt_signal!(),
+    #[allow(dead_code)]
     selection_changed: qt_signal!(),
+    #[allow(dead_code)]
     editor_enabled_changed: qt_signal!(),
+    #[allow(dead_code)]
     visual_settings_changed: qt_signal!(),
+    #[allow(dead_code)]
     transaction_created: qt_signal!(),
+    #[allow(dead_code)]
     cursor_rect_changed: qt_signal!(),
+    #[allow(dead_code)]
     explicit_clear_requested: qt_signal!(),
+    #[allow(dead_code)]
     context_menu_requested: qt_signal!(x: f32, y: f32),
+    #[allow(dead_code)]
     hide_context_menu_requested: qt_signal!(),
 
+    #[allow(dead_code)]
     get_plain_text: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     set_plain_text: qt_method!(fn(&mut self, text: QString)),
+    #[allow(dead_code)]
     reload_plain_text: qt_method!(fn(&mut self, text: QString)),
+    #[allow(dead_code)]
     clear_undo_stack: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     insert_text: qt_method!(fn(&mut self, text: QString)),
+    #[allow(dead_code)]
     delete_backward: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     delete_forward: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     delete_selection: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     select_all: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     selected_text: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     undo: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     redo: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     handle_key: qt_method!(fn(&mut self, key: i32, modifiers: i32) -> bool),
+    #[allow(dead_code)]
     click_at: qt_method!(fn(&mut self, x: f32, y: f32, extend: bool)),
+    #[allow(dead_code)]
     drag_select_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    #[allow(dead_code)]
     clipboard_copy: qt_method!(fn(&mut self) -> bool),
+    #[allow(dead_code)]
     clipboard_paste: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     insert_preedit: qt_method!(fn(&mut self, text: QString)),
+    #[allow(dead_code)]
     commit_preedit: qt_method!(fn(&mut self, text: QString)),
+    #[allow(dead_code)]
     cancel_preedit: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     flush_content_height: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     tick_cursor_animation: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     long_press_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    #[allow(dead_code)]
     select_word_at: qt_method!(fn(&mut self, x: f32, y: f32)),
+    #[allow(dead_code)]
     request_text_input_focus: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     snap_next_cursor_update: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     verify_animation_signal_meta_object: qt_method!(fn(&self) -> bool),
 
     pipeline: pipeline::LinuxEditorPipeline,
@@ -300,7 +380,6 @@ pub struct SujianEditorItem {
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
-    animation_coordinator: LinuxEditorAnimationCoordinator,
     clipboard_adapter: LinuxQtClipboardFocusAdapter,
     layout_revision: LayoutRevision,
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
@@ -438,7 +517,6 @@ impl Default for SujianEditorItem {
             scroll_buffer: None,
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
-            animation_coordinator: LinuxEditorAnimationCoordinator::new(),
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
             layout_revision: LayoutRevision::initial(),
             current_layout_snapshot: None,
@@ -474,7 +552,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn clear_active_text_animations(&mut self) {
-        if self.animation_coordinator.suppress_all() {
+        if self.pipeline.animation_coordinator_mut().suppress_all() {
             self.pipeline.texture_cache_mut().clear();
             self.current_layout_snapshot = None;
             self.previous_layout_snapshot = None;
@@ -514,13 +592,13 @@ impl SujianEditorItem {
                 transaction_id: tid,
                 generation: tid,
             };
-            let removed = self.animation_coordinator.finish_by_key(key);
+            let removed = self.pipeline.animation_coordinator_mut().finish_by_key(key);
             if let Some(ids) = removed {
                 editor_animation_debug_log(&format!(
                     "on_insert_animation_{}: tid={}, cleared, has_active_insert={}",
                     if skipped { "skipped" } else { "finished" },
                     tid,
-                    self.animation_coordinator.has_active_insert()
+                    self.pipeline.animation_coordinator_mut().has_active_insert()
                 ));
                 self.pipeline.texture_cache_mut().remove_for_transaction(&ids);
                 self.request_static_repaint();
@@ -530,15 +608,15 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn has_active_insert_animation(&self) -> bool {
-        self.animation_coordinator.has_active_insert()
+        self.pipeline.animation_coordinator().has_active_insert()
     }
 
     pub(crate) fn active_insert_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.animation_coordinator.insert_byte_ranges()
+        self.pipeline.animation_coordinator().insert_byte_ranges()
     }
 
     pub(crate) fn active_reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.animation_coordinator.reflow_byte_ranges()
+        self.pipeline.animation_coordinator().reflow_byte_ranges()
     }
 
     pub(crate) fn ime_query_text_before_cursor(&self, max_chars: usize) -> String {

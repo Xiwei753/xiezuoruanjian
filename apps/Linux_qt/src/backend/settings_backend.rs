@@ -19,61 +19,110 @@ use super::*;
 use crate::backend::AppRef;
 
 #[allow(non_snake_case)] // Qt QML naming convention
-#[allow(dead_code)] // SAFETY: qmetaobject macro fields used by Qt meta-object system
 #[derive(QObject, Default)]
 pub struct SettingsBackend {
+    #[allow(dead_code)]
     base: qt_base_class!(trait QObject),
+    #[allow(dead_code)]
     setting_font_size: qt_property!(f32; READ setting_font_size WRITE set_setting_font_size NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_line_spacing: qt_property!(f32; READ setting_line_spacing WRITE set_setting_line_spacing NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_auto_save_enabled: qt_property!(bool; READ setting_auto_save_enabled WRITE set_setting_auto_save_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_auto_save_delay_ms: qt_property!(u32; READ setting_auto_save_delay_ms WRITE set_setting_auto_save_delay_ms NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_theme_mode: qt_property!(QString; READ setting_theme_mode NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_monet_color: qt_property!(QString; READ setting_monet_color NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_theme_palette_json: qt_property!(QString; READ setting_theme_palette_json NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_color_source: qt_property!(QString; READ setting_color_source WRITE set_setting_color_source NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_appearance_mode: qt_property!(QString; READ setting_appearance_mode WRITE set_setting_appearance_mode NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_dynamic_color_enabled: qt_property!(bool; READ setting_dynamic_color_enabled WRITE set_setting_dynamic_color_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_selected_palette_id: qt_property!(QString; READ setting_selected_palette_id WRITE set_setting_selected_palette_id NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_selected_builtin_theme_id: qt_property!(QString; READ setting_selected_builtin_theme_id WRITE set_setting_selected_builtin_theme_id NOTIFY settings_changed),
+    #[allow(dead_code)]
     resolved_theme_palette_json: qt_property!(QString; READ resolved_theme_palette_json NOTIFY theme_data_changed),
+    #[allow(dead_code)]
     resolved_builtin_themes_json: qt_property!(QString; READ resolved_builtin_themes_json NOTIFY theme_data_changed),
+    #[allow(dead_code)]
     resolved_palette_records_json: qt_property!(QString; READ resolved_palette_records_json NOTIFY theme_data_changed),
+    #[allow(dead_code)]
     resolved_appearance_mode: qt_property!(QString; READ resolved_appearance_mode NOTIFY settings_changed),
+    #[allow(dead_code)]
     resolved_color_source: qt_property!(QString; READ resolved_color_source NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_smooth_cursor_enabled: qt_property!(bool; READ setting_smooth_cursor_enabled WRITE set_setting_smooth_cursor_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms WRITE set_setting_typing_animation_duration_ms NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms WRITE set_setting_smooth_cursor_duration_ms NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_coordinated_text_cursor_animation_enabled: qt_property!(bool; READ setting_coordinated_text_cursor_animation_enabled WRITE set_setting_coordinated_text_cursor_animation_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     ai_available: qt_property!(bool; READ ai_available NOTIFY ai_available_changed),
+    #[allow(dead_code)]
     ai_enabled: qt_property!(bool; READ ai_enabled WRITE set_ai_enabled NOTIFY ai_enabled_changed),
+    #[allow(dead_code)]
     setting_linux_qt_sidebar_width: qt_property!(f64; READ setting_linux_qt_sidebar_width WRITE set_setting_linux_qt_sidebar_width NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_linux_qt_editor_width: qt_property!(f64; READ setting_linux_qt_editor_width WRITE set_setting_linux_qt_editor_width NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_diagnostics_enabled: qt_property!(bool; READ setting_diagnostics_enabled WRITE set_setting_diagnostics_enabled NOTIFY settings_changed),
+    #[allow(dead_code)]
     setting_diagnostics_verbose: qt_property!(bool; READ setting_diagnostics_verbose WRITE set_setting_diagnostics_verbose NOTIFY settings_changed),
+    #[allow(dead_code)]
     settings_changed: qt_signal!(),
+    #[allow(dead_code)]
     theme_data_changed: qt_signal!(),
+    #[allow(dead_code)]
     save_requested: qt_signal!(),
+    #[allow(dead_code)]
     ai_enabled_changed: qt_signal!(),
+    #[allow(dead_code)]
     ai_available_changed: qt_signal!(),
+    #[allow(dead_code)]
     load_local_settings: qt_method!(fn(&mut self)),
+    #[allow(dead_code)]
     save_local_settings: qt_method!(fn(&mut self) -> bool),
     /// 标记设置已变更，需要保存。QML 层用 Timer 延迟调用 do_save_local_settings()
+    #[allow(dead_code)]
     debounced_save_local_settings: qt_method!(fn(&mut self)),
     /// 实际执行保存（由 QML Timer 触发或应用关闭时调用）
+    #[allow(dead_code)]
     do_save_local_settings: qt_method!(fn(&mut self) -> bool),
     /// 应用关闭前 flush pending save
+    #[allow(dead_code)]
     flush_pending_settings_save: qt_method!(fn(&mut self) -> bool),
+    #[allow(dead_code)]
     export_diagnostics_pack: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     clear_logs: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     copy_device_info: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     open_log_directory: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
+    #[allow(dead_code)]
     list_palette_records_json: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     list_builtin_themes_json: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     load_selected_palette_json: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     refresh_theme_data: qt_method!(fn(&mut self)),
     /// 标记是否有待保存的设置
     pending_save: bool,

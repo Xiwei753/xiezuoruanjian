@@ -26,14 +26,14 @@ impl SujianEditorItem {
     pub(crate) fn tick_cursor_animation(&mut self) {
         use animation_coordinator::CursorBlinkMode;
         let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-            && self.animation_coordinator.has_active_insert()
+            && self.pipeline.animation_coordinator_mut().has_active_insert()
         {
             CursorBlinkMode::Suppressed
         } else {
             CursorBlinkMode::Normal
         };
 
-        let active_progress = self.animation_coordinator.active_cursor_progress();
+        let active_progress = self.pipeline.animation_coordinator_mut().active_cursor_progress();
         let still_animating = if self.cursor_ctrl.animation.is_some() {
             if let Some(progress) = active_progress {
                 self.cursor_ctrl.update_animation_progress(progress)
@@ -121,7 +121,7 @@ impl SujianEditorItem {
             let width = self.bounding_width();
             let old_cursor_rect = pending_pcr.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
 
-            let old_snapshot = self.animation_coordinator
+            let old_snapshot = self.pipeline.animation_coordinator()
                 .active_composition_new_snapshot()
                 .cloned()
                 .unwrap_or_else(|| {
@@ -142,14 +142,14 @@ impl SujianEditorItem {
                 },
                 cause,
             );
-            self.animation_coordinator.cancel_active_composition("commit_insert");
+            self.pipeline.animation_coordinator_mut().cancel_active_composition("commit_insert");
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
             let visual_text_unchanged = !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
 
-            let key = self.animation_coordinator.handle_composition_commit_or_cancel(
+            let key = self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
@@ -338,7 +338,7 @@ impl SujianEditorItem {
             let width = self.bounding_width();
             let old_cursor_rect = pending_pcr.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
 
-            let old_snapshot = self.animation_coordinator
+            let old_snapshot = self.pipeline.animation_coordinator()
                 .active_composition_new_snapshot()
                 .cloned()
                 .unwrap_or_else(|| {
@@ -359,12 +359,12 @@ impl SujianEditorItem {
                 },
                 cause,
             );
-            self.animation_coordinator.cancel_active_composition("commit_replace");
+            self.pipeline.animation_coordinator_mut().cancel_active_composition("commit_replace");
 
             let new_snapshot = self.build_editor_layout_snapshot(width);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
-            let key = self.animation_coordinator.handle_composition_commit_or_cancel(
+            let key = self.pipeline.animation_coordinator_mut().handle_composition_commit_or_cancel(
                 self.current_typing_animation_duration_ms as u64,
                 &old_snapshot,
                 &new_snapshot,
@@ -707,7 +707,7 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
-            self.animation_coordinator.handle_cursor_only(
+            self.pipeline.animation_coordinator_mut().handle_cursor_only(
                 self.current_cursor_animation_duration_ms as u64,
                 old_cursor_rect,
                 new_cursor_rect,
@@ -748,7 +748,7 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
-            self.animation_coordinator.handle_cursor_only(
+            self.pipeline.animation_coordinator_mut().handle_cursor_only(
                 self.current_cursor_animation_duration_ms as u64,
                 old_cursor_rect,
                 new_cursor_rect,
@@ -783,7 +783,7 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         let new_cursor_rect = self.current_cursor_rect_for_transaction();
         if self.current_smooth_cursor_enabled && !extend {
-            self.animation_coordinator.handle_cursor_only(
+            self.pipeline.animation_coordinator_mut().handle_cursor_only(
                 self.current_cursor_animation_duration_ms as u64,
                 old_cursor_rect,
                 new_cursor_rect,

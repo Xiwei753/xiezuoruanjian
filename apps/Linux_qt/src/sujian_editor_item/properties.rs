@@ -361,14 +361,14 @@ impl SujianEditorItem {
         }
         self.current_is_scrolling = value;
         if value {
-            self.animation_coordinator.pause_all();
+            self.pipeline.animation_coordinator_mut().pause_all();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
             self.request_static_repaint();
             return;
         }
         if !value {
-            self.animation_coordinator.resume_all();
+            self.pipeline.animation_coordinator_mut().resume_all();
             self.cursor_ctrl.force_snap_next = true;
             self.update_cursor_visual_position();
             self.request_static_repaint();
@@ -558,7 +558,7 @@ impl SujianEditorItem {
     pub(crate) fn cursor_blink_opacity(&self) -> f32 {
         use animation_coordinator::CursorBlinkMode;
         let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-            && self.animation_coordinator.has_active_insert()
+            && self.pipeline.animation_coordinator().has_active_insert()
         {
             CursorBlinkMode::Suppressed
         } else {
