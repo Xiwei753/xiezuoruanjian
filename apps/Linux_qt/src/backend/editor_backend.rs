@@ -191,14 +191,61 @@ pub struct EditorBackend {
         fn(&mut self, action_id: QString, args_json: QString, context_json: QString) -> QString
     ),
     app: AppRef,
+    cached: std::cell::RefCell<EditorCached>,
+}
+
+struct EditorCached {
+    save_status: QString,
+    word_count: i32,
+    error_message: QString,
+    selected_item_id: QString,
+    has_selected_chapter_prop: bool,
+    chapter_path: QString,
+    setting_font_size: f32,
+    setting_line_spacing: f32,
+    setting_auto_save_enabled: bool,
+    setting_auto_save_delay_ms: u32,
+    setting_auto_indent_enabled: bool,
+    setting_smooth_cursor_enabled: bool,
+    setting_typing_animation_enabled: bool,
+    setting_smooth_cursor_duration_ms: u32,
+    setting_typing_animation_duration_ms: u32,
+    has_workspace: bool,
+    sync_enabled: bool,
+    sync_auto_sync: bool,
+}
+
+impl Default for EditorCached {
+    fn default() -> Self {
+        Self {
+            save_status: QString::default(),
+            word_count: 0,
+            error_message: QString::default(),
+            selected_item_id: QString::default(),
+            has_selected_chapter_prop: false,
+            chapter_path: QString::default(),
+            setting_font_size: 16.0,
+            setting_line_spacing: 1.5,
+            setting_auto_save_enabled: true,
+            setting_auto_save_delay_ms: 1500,
+            setting_auto_indent_enabled: true,
+            setting_smooth_cursor_enabled: true,
+            setting_typing_animation_enabled: true,
+            setting_smooth_cursor_duration_ms: 80,
+            setting_typing_animation_duration_ms: 100,
+            has_workspace: false,
+            sync_enabled: false,
+            sync_auto_sync: false,
+        }
+    }
 }
 
 impl EditorBackend {
     pub fn new(app: AppRef) -> Self {
-        Self {
-            app,
-            ..Default::default()
-        }
+        let mut s = Self::default();
+        s.app = app;
+        s.cached = std::cell::RefCell::new(EditorCached::default());
+        s
     }
     fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app(f)
@@ -207,7 +254,10 @@ impl EditorBackend {
         self.app.with_app_mut(f)
     }
     fn save_status(&self) -> QString {
-        self.with_app(|app| app.save_status()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        if let Ok(val) = self.with_app(|app| app.save_status()) {
+            self.cached.borrow_mut().save_status = val;
+        }
+        self.cached.borrow().save_status.clone()
     }
     fn set_save_status(&mut self, val: QString) {
         if self.with_app_mut(|app| app.set_save_status(val)).is_ok() {
@@ -215,7 +265,10 @@ impl EditorBackend {
         }
     }
     fn word_count(&self) -> i32 {
-        self.with_app(|app| app.word_count()).unwrap_or(0)
+        if let Ok(val) = self.with_app(|app| app.word_count()) {
+            self.cached.borrow_mut().word_count = val;
+        }
+        self.cached.borrow().word_count
     }
     fn set_word_count(&mut self, val: i32) {
         if self.with_app_mut(|app| app.set_word_count(val)).is_ok() {
@@ -223,77 +276,130 @@ impl EditorBackend {
         }
     }
     fn error_message(&self) -> QString {
-        self.with_app(|app| app.error_message()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        if let Ok(val) = self.with_app(|app| app.error_message()) {
+            self.cached.borrow_mut().error_message = val;
+        }
+        self.cached.borrow().error_message.clone()
     }
     fn selected_item_id(&self) -> QString {
-        self.with_app(|app| app.selected_item_id()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        if let Ok(val) = self.with_app(|app| app.selected_item_id()) {
+            self.cached.borrow_mut().selected_item_id = val;
+        }
+        self.cached.borrow().selected_item_id.clone()
     }
     fn has_selected_chapter_prop(&self) -> bool {
-        self.with_app(|app| app.has_selected_chapter_prop()).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.has_selected_chapter_prop()) {
+            self.cached.borrow_mut().has_selected_chapter_prop = val;
+        }
+        self.cached.borrow().has_selected_chapter_prop
     }
     fn chapter_path(&self) -> QString {
-        self.with_app(|app| app.chapter_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        if let Ok(val) = self.with_app(|app| app.chapter_path()) {
+            self.cached.borrow_mut().chapter_path = val;
+        }
+        self.cached.borrow().chapter_path.clone()
     }
     fn setting_font_size(&self) -> f32 {
-        self.with_app(|app| app.setting_font_size()).unwrap_or(16.0)
+        if let Ok(val) = self.with_app(|app| app.setting_font_size()) {
+            self.cached.borrow_mut().setting_font_size = val;
+        }
+        self.cached.borrow().setting_font_size
     }
     fn set_setting_font_size(&mut self, val: f32) {
         if self.with_app_mut(|app| app.set_setting_font_size(val)).is_ok() {
+            self.cached.borrow_mut().setting_font_size = val;
             self.settings_changed();
         }
     }
     fn setting_line_spacing(&self) -> f32 {
-        self.with_app(|app| app.setting_line_spacing()).unwrap_or(1.5)
+        if let Ok(val) = self.with_app(|app| app.setting_line_spacing()) {
+            self.cached.borrow_mut().setting_line_spacing = val;
+        }
+        self.cached.borrow().setting_line_spacing
     }
     fn set_setting_line_spacing(&mut self, val: f32) {
         if self.with_app_mut(|app| app.set_setting_line_spacing(val)).is_ok() {
+            self.cached.borrow_mut().setting_line_spacing = val;
             self.settings_changed();
         }
     }
     fn setting_auto_save_enabled(&self) -> bool {
-        self.with_app(|app| app.setting_auto_save_enabled()).unwrap_or(true)
+        if let Ok(val) = self.with_app(|app| app.setting_auto_save_enabled()) {
+            self.cached.borrow_mut().setting_auto_save_enabled = val;
+        }
+        self.cached.borrow().setting_auto_save_enabled
     }
     fn set_setting_auto_save_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_auto_save_enabled(val)).is_ok() {
+            self.cached.borrow_mut().setting_auto_save_enabled = val;
             self.settings_changed();
         }
     }
     fn setting_auto_save_delay_ms(&self) -> u32 {
-        self.with_app(|app| app.setting_auto_save_delay_ms()).unwrap_or(1500)
+        if let Ok(val) = self.with_app(|app| app.setting_auto_save_delay_ms()) {
+            self.cached.borrow_mut().setting_auto_save_delay_ms = val;
+        }
+        self.cached.borrow().setting_auto_save_delay_ms
     }
     fn set_setting_auto_save_delay_ms(&mut self, val: u32) {
         if self.with_app_mut(|app| app.set_setting_auto_save_delay_ms(val)).is_ok() {
+            self.cached.borrow_mut().setting_auto_save_delay_ms = val;
             self.settings_changed();
         }
     }
     fn setting_auto_indent_enabled(&self) -> bool {
-        self.with_app(|app| app.setting_auto_indent_enabled()).unwrap_or(true)
+        if let Ok(val) = self.with_app(|app| app.setting_auto_indent_enabled()) {
+            self.cached.borrow_mut().setting_auto_indent_enabled = val;
+        }
+        self.cached.borrow().setting_auto_indent_enabled
     }
     fn set_setting_auto_indent_enabled(&mut self, val: bool) {
         if self.with_app_mut(|app| app.set_setting_auto_indent_enabled(val)).is_ok() {
+            self.cached.borrow_mut().setting_auto_indent_enabled = val;
             self.settings_changed();
         }
     }
     fn setting_smooth_cursor_enabled(&self) -> bool {
-        self.with_app(|app| app.setting_smooth_cursor_enabled()).unwrap_or(true)
+        if let Ok(val) = self.with_app(|app| app.setting_smooth_cursor_enabled()) {
+            self.cached.borrow_mut().setting_smooth_cursor_enabled = val;
+        }
+        self.cached.borrow().setting_smooth_cursor_enabled
     }
     fn setting_typing_animation_enabled(&self) -> bool {
-        self.with_app(|app| app.setting_typing_animation_enabled()).unwrap_or(true)
+        if let Ok(val) = self.with_app(|app| app.setting_typing_animation_enabled()) {
+            self.cached.borrow_mut().setting_typing_animation_enabled = val;
+        }
+        self.cached.borrow().setting_typing_animation_enabled
     }
     fn setting_smooth_cursor_duration_ms(&self) -> u32 {
-        self.with_app(|app| app.setting_smooth_cursor_duration_ms()).unwrap_or(80)
+        if let Ok(val) = self.with_app(|app| app.setting_smooth_cursor_duration_ms()) {
+            self.cached.borrow_mut().setting_smooth_cursor_duration_ms = val;
+        }
+        self.cached.borrow().setting_smooth_cursor_duration_ms
     }
     fn setting_typing_animation_duration_ms(&self) -> u32 {
-        self.with_app(|app| app.setting_typing_animation_duration_ms()).unwrap_or(100)
+        if let Ok(val) = self.with_app(|app| app.setting_typing_animation_duration_ms()) {
+            self.cached.borrow_mut().setting_typing_animation_duration_ms = val;
+        }
+        self.cached.borrow().setting_typing_animation_duration_ms
     }
     fn has_workspace(&self) -> bool {
-        self.with_app(|app| app.has_workspace()).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.has_workspace()) {
+            self.cached.borrow_mut().has_workspace = val;
+        }
+        self.cached.borrow().has_workspace
     }
     fn sync_enabled(&self) -> bool {
-        self.with_app(|app| app.sync_enabled()).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.sync_enabled()) {
+            self.cached.borrow_mut().sync_enabled = val;
+        }
+        self.cached.borrow().sync_enabled
     }
     fn sync_auto_sync(&self) -> bool {
-        self.with_app(|app| app.sync_auto_sync()).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.sync_auto_sync()) {
+            self.cached.borrow_mut().sync_auto_sync = val;
+        }
+        self.cached.borrow().sync_auto_sync
     }
     fn calculate_word_count(&mut self, text: QString) {
         if self.with_app_mut(|app| app.calculate_word_count(text)).is_ok() {
