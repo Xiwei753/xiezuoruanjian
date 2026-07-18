@@ -34,15 +34,32 @@ pub struct LinuxThemeController {
     set_selected_palette_id: qt_method!(fn(&mut self, val: QString)),
     #[allow(dead_code)]
     set_system_is_dark: qt_method!(fn(&mut self, val: bool)),
+    cached: std::cell::RefCell<ThemeCached>,
     app: AppRef,
+}
+
+struct ThemeCached {
+    system_is_dark: bool,
+    appearance_mode: String,
+    selected_palette_id: String,
+}
+
+impl Default for ThemeCached {
+    fn default() -> Self {
+        Self {
+            system_is_dark: false,
+            appearance_mode: "system".to_string(),
+            selected_palette_id: String::new(),
+        }
+    }
 }
 
 impl LinuxThemeController {
     pub fn new(app: AppRef) -> Self {
-        Self {
-            app,
-            ..Default::default()
-        }
+        let mut s = Self::default();
+        s.app = app;
+        s.cached = std::cell::RefCell::new(ThemeCached::default());
+        s
     }
 
     fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, super::AppBorrowError> {
@@ -120,7 +137,10 @@ impl LinuxThemeController {
     }
 
     fn is_dark(&self) -> bool {
-        let mode = self.with_app(|app| app.setting_appearance_mode().to_string()).unwrap_or_default();
+        if let Ok(val) = self.with_app(|app| app.setting_appearance_mode().to_string()) {
+            self.cached.borrow_mut().appearance_mode = val;
+        }
+        let mode = self.cached.borrow().appearance_mode.clone();
         Self::compute_is_dark(&mode, self.system_is_dark())
     }
 
@@ -141,7 +161,10 @@ impl LinuxThemeController {
     }
 
     fn system_is_dark(&self) -> bool {
-        self.with_app(|app| app.current_system_is_dark).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.current_system_is_dark) {
+            self.cached.borrow_mut().system_is_dark = val;
+        }
+        self.cached.borrow().system_is_dark
     }
 
     fn compute_is_dark(mode: &str, sys_dark: bool) -> bool {
@@ -159,8 +182,10 @@ impl LinuxThemeController {
     fn set_color_source(&mut self, val: QString) {
         let source = val.to_string();
         if source == "saved_palette" {
-            let palette_id = self.with_app(|app| app.setting_selected_palette_id().to_string()).unwrap_or_default();
-            if palette_id.is_empty() {
+            if let Ok(pid) = self.with_app(|app| app.setting_selected_palette_id().to_string()) {
+                self.cached.borrow_mut().selected_palette_id = pid;
+            }
+            if self.cached.borrow().selected_palette_id.is_empty() {
                 return;
             }
         }

@@ -63,15 +63,28 @@ pub struct WorkspaceBackend {
     save_last_navigation_state: qt_method!(fn(&mut self, route: QString, project_id: QString, volume_id: QString, chapter_id: QString, starmap_id: QString)),
     get_last_navigation_state: qt_method!(fn(&self) -> QJsonObject),
     clear_last_navigation_state: qt_method!(fn(&mut self)),
+    cached: std::cell::RefCell<WorkspaceCached>,
     app: AppRef,
+}
+
+struct WorkspaceCached {
+    has_workspace: bool,
+}
+
+impl Default for WorkspaceCached {
+    fn default() -> Self {
+        Self {
+            has_workspace: false,
+        }
+    }
 }
 
 impl WorkspaceBackend {
     pub fn new(app: AppRef) -> Self {
-        Self {
-            app,
-            ..Default::default()
-        }
+        let mut s = Self::default();
+        s.app = app;
+        s.cached = std::cell::RefCell::new(WorkspaceCached::default());
+        s
     }
     fn with_app<R>(&self, f: impl FnOnce(&AppBackend) -> R) -> Result<R, crate::backend::AppBorrowError> {
         self.app.with_app(f)
@@ -88,7 +101,10 @@ impl WorkspaceBackend {
         self.with_app(|app| app.workspace_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn has_workspace(&self) -> bool {
-        self.with_app(|app| app.has_workspace()).unwrap_or(false)
+        if let Ok(val) = self.with_app(|app| app.has_workspace()) {
+            self.cached.borrow_mut().has_workspace = val;
+        }
+        self.cached.borrow().has_workspace
     }
     fn pending_github_init_path(&self) -> QString {
         self.with_app(|app| app.pending_github_init_path()).unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -208,7 +224,13 @@ impl WorkspaceBackend {
         }).unwrap_or_else(|_| backend_link_broken_json())
     }
     fn open_workspace_dir(&mut self) {
-        let _ = self.with_app_mut(|app| app.open_workspace_dir());
+        if self.with_app_mut(|app| app.open_workspace_dir()).is_err() {
+            crate::backend::app_backend::debug_error_static(
+                "workspace_backend",
+                "BORROW_CONFLICT",
+                "open_workspace_dir skipped due to borrow conflict",
+            );
+        }
     }
     fn save_last_navigation_state(
         &mut self,
