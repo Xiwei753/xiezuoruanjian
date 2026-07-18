@@ -475,6 +475,11 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    fun softResetForPersistentCommit() {
+        pipeline.cancelActiveTransaction()
+        pipeline.invalidateCompositionSession()
+    }
+
     fun release() {
         unbindSession("release")
         pipeline.releaseAllResources()

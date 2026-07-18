@@ -138,8 +138,12 @@ fun WritingPane(
     LaunchedEffect(uiState.content, uiState.loading) {
         if (!uiState.loading && uiState.content.isNotEmpty()) {
             val view = editorView
-            if (view != null && coordinator.editingState == EditingState.IDLE) {
-                coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+            if (view != null) {
+                if (coordinator.editingState == EditingState.IDLE) {
+                    coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
+                    coordinator.resetPersistentSession(targetId, uiState.content, uiState.content.toByteArray(Charsets.UTF_8).size)
+                }
             }
         }
     }
