@@ -1,5 +1,6 @@
 package com.xiwei.sujian.ui.compose
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
@@ -20,6 +21,10 @@ import com.xiwei.sujian.model.Orientation
 import com.xiwei.sujian.model.PointerKind
 import com.xiwei.sujian.model.WindowMetrics
 import com.xiwei.sujian.ui.compose.adaptive.rememberAdaptiveWindowState
+import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
+import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.ui.compose.navigation.SujianNavigationSuite
 import com.xiwei.sujian.ui.compose.theme.SujianTheme
 import com.xiwei.sujian.ui.compose.theme.ThemeStore
@@ -31,6 +36,11 @@ fun SujianApp() {
     val vm: SujianAppViewModel = viewModel()
     val appState = remember { SujianAppState(vm) }
     val themeController = rememberThemeController(context)
+
+    val coordinator = remember {
+        val bridge = BridgeProvider.getAppServiceBridge(context)
+        AnimatedTextEditorCoordinator(context, bridge)
+    }
 
     LaunchedEffect(Unit) {
         val workspaceRepo = WorkspaceRepository(context)
@@ -64,11 +74,21 @@ fun SujianApp() {
     val uiState by themeController.uiState.collectAsState()
 
     SujianTheme(uiState = uiState) {
-        Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-            SujianNavigationSuite(
-                appState = appState,
-                modifier = Modifier.padding(innerPadding)
-            )
+        androidx.compose.runtime.CompositionLocalProvider(
+            LocalAnimatedTextEditorCoordinator provides coordinator
+        ) {
+            Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
+                Box(modifier = Modifier.fillMaxSize()) {
+                    SujianNavigationSuite(
+                        appState = appState,
+                        modifier = Modifier.padding(innerPadding)
+                    )
+                    AnimatedTextEditorSlot(
+                        coordinator = coordinator,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
         }
     }
 }

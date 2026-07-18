@@ -26,6 +26,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
@@ -58,7 +59,7 @@ fun WritingPane(
     var lastAutoIndentWidth by remember { mutableStateOf(0f) }
     var lastCoordinatedAnimEnabled by remember { mutableStateOf(false) }
 
-    val coordinator = remember {
+    val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
         val bridge = BridgeProvider.getAppServiceBridge(context)
         AnimatedTextEditorCoordinator(context, bridge)
     }

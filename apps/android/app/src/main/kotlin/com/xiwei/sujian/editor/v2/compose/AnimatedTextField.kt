@@ -46,11 +46,9 @@ fun AnimatedTextField(
     var isEditing by remember { mutableStateOf(false) }
     val interactionSource = remember { MutableInteractionSource() }
 
-    val effectiveCoordinator = remember {
-        coordinator ?: run {
-            val bridge = BridgeProvider.getAppServiceBridge(context)
-            AnimatedTextEditorCoordinator(context, bridge)
-        }
+    val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current ?: remember {
+        val bridge = BridgeProvider.getAppServiceBridge(context)
+        AnimatedTextEditorCoordinator(context, bridge)
     }
 
     val target = remember(targetId) {

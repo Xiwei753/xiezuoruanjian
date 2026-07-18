@@ -12,7 +12,6 @@ import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.getValue
@@ -26,6 +25,8 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.xiwei.sujian.R
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
+import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import com.xiwei.sujian.data.WorkspaceRepository
 import kotlinx.coroutines.*
 
@@ -422,10 +423,16 @@ class ChapterListActivity : AppCompatActivity() {
                 onDismissRequest = { dialog?.dismiss() },
                 title = { Text(title) },
                 text = {
-                    OutlinedTextField(
+                    AnimatedTextField(
+                        targetId = "chapter-list-dialog:${title.hashCode()}",
                         value = text,
                         onValueChange = { text = it },
+                        onCommit = {
+                            onConfirm(it.trim())
+                            dialog?.dismiss()
+                        },
                         modifier = Modifier.fillMaxWidth(),
+                        profile = TextEditorProfile.ShortTitle,
                         placeholder = { Text(hint) },
                         singleLine = true
                     )
