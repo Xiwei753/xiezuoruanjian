@@ -5,8 +5,13 @@ import com.xiwei.sujian.editor.v2.visual.SnapshotOwner
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import org.junit.Assert.*
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import android.graphics.Bitmap
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class VisualResourceStoreTest {
 
     private fun makeSnapshot(id: Long, lineIndex: Int): AndroidLineSnapshot {
@@ -34,9 +39,10 @@ class VisualResourceStoreTest {
     @Test
     fun releaseRemovesSnapshot() {
         val store = VisualResourceStore()
+        val owner = SnapshotOwner.OwnedByTransaction(42)
         val snapshot = makeSnapshot(2, 0)
-        store.put(snapshot)
-        store.release(2, SnapshotOwner.OwnedByTransaction(System.nanoTime()))
+        store.put(snapshot, owner)
+        store.release(2, owner)
 
         assertNull(store.get(2))
     }
@@ -53,13 +59,15 @@ class VisualResourceStoreTest {
     }
 
     @Test
-    fun transferOwnershipMovesSnapshot() {
+    fun transferOwnershipChangesOwner() {
         val store = VisualResourceStore()
         val snapshot = makeSnapshot(1, 0)
         store.put(snapshot)
 
-        assertTrue(store.transferOwnership(1, SnapshotOwner.OwnedByTransaction(10)))
-        assertNull(store.get(1))
+        val newOwner = SnapshotOwner.OwnedByTransaction(10)
+        assertTrue(store.transferOwnership(1, newOwner))
+        assertNotNull(store.get(1))
+        assertEquals(newOwner, store.getOwner(1))
     }
 
     @Test
