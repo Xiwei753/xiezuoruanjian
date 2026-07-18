@@ -125,13 +125,13 @@ impl EditorInputHost for SujianEditorItem {
                 let (composition_byte_start, composition_byte_end) = self.preedit_byte_range_in_virtual_text();
                 let width = self.bounding_width();
                 let old_cursor_rect = self.pipeline.composition().preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
-                let new_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+                let new_cursor_rect = self.pipeline.current_layout_snapshot().as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
                 let old_snapshot = self.pipeline.animation_coordinator()
                     .active_composition_new_snapshot()
                     .cloned()
                     .unwrap_or_else(|| {
-                        self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                        self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
                             self.build_editor_layout_snapshot(width)
                         })
                     });
@@ -170,7 +170,7 @@ impl EditorInputHost for SujianEditorItem {
             let width = self.bounding_width();
 
             let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
-                self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
                     self.build_editor_layout_snapshot(width)
                 })
             } else {
@@ -178,7 +178,7 @@ impl EditorInputHost for SujianEditorItem {
                     .active_composition_new_snapshot()
                     .cloned()
                     .unwrap_or_else(|| {
-                        self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                        self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
                             self.build_editor_layout_snapshot(width)
                         })
                     })
@@ -186,7 +186,7 @@ impl EditorInputHost for SujianEditorItem {
 
             let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
 
-            let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+            let old_cursor_rect = self.pipeline.current_layout_snapshot().as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
             self.pipeline.animation_coordinator_mut().handle_composition_update(
@@ -225,7 +225,7 @@ impl EditorInputHost for SujianEditorItem {
             let width = self.bounding_width();
 
             let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
-                self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
                     self.build_editor_layout_snapshot(width)
                 })
             } else {
@@ -233,7 +233,7 @@ impl EditorInputHost for SujianEditorItem {
                     .active_composition_new_snapshot()
                     .cloned()
                     .unwrap_or_else(|| {
-                        self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                        self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
                             self.build_editor_layout_snapshot(width)
                         })
                     })
@@ -241,7 +241,7 @@ impl EditorInputHost for SujianEditorItem {
 
             let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
 
-            let old_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
+            let old_cursor_rect = self.pipeline.current_layout_snapshot().as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
             self.pipeline.animation_coordinator_mut().handle_composition_update(

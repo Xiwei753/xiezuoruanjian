@@ -1,4 +1,6 @@
 use super::*;
+use super::layout_snapshot::EditorLayoutSnapshot;
+use super::layout_revision::LayoutRevision;
 
 impl SujianEditorItem {
     pub(crate) fn recalculate_content_height_and_emit(&mut self) {
@@ -161,9 +163,10 @@ impl SujianEditorItem {
     pub(crate) fn update_current_layout_snapshot(&mut self) {
         let width = self.bounding_width();
         let new_snapshot = self.build_editor_layout_snapshot(width);
-        self.previous_layout_snapshot = self.current_layout_snapshot.take();
-        self.current_layout_snapshot = Some(new_snapshot);
-        self.layout_revision = LayoutRevision::next();
+        let prev = self.pipeline.current_layout_snapshot().clone();
+        self.pipeline.set_previous_layout_snapshot(prev);
+        self.pipeline.set_current_layout_snapshot(Some(new_snapshot));
+        self.pipeline.bump_layout_revision();
     }
 
     pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {

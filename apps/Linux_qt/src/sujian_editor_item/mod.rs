@@ -66,9 +66,7 @@ use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
 use rendering::ScrollBuffer;
 use std::cell::Cell;
 use std::time::Instant;
-use layout_snapshot::EditorLayoutSnapshot;
 use transaction_key::VisualTransactionKey;
-use layout_revision::LayoutRevision;
 
 use writer_core::editor::{
     AnimationMode as CoreAnimationMode, CompositionSession, CursorRect, EditorAnimationKind,
@@ -366,10 +364,6 @@ pub struct SujianEditorItem {
     scroll_buffer: Option<ScrollBuffer>,
     last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
-    layout_revision: LayoutRevision,
-    current_layout_snapshot: Option<EditorLayoutSnapshot>,
-    previous_layout_snapshot: Option<EditorLayoutSnapshot>,
-    previous_canonical_snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
 }
 
 impl Default for SujianEditorItem {
@@ -491,10 +485,6 @@ impl Default for SujianEditorItem {
             scroll_buffer: None,
             last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
-            layout_revision: LayoutRevision::initial(),
-            current_layout_snapshot: None,
-            previous_layout_snapshot: None,
-            previous_canonical_snapshot: None,
         }
     }
 }
@@ -527,9 +517,9 @@ impl SujianEditorItem {
     pub(crate) fn clear_active_text_animations(&mut self) {
         if self.pipeline.animation_coordinator_mut().suppress_all() {
             self.pipeline.texture_cache_mut().clear();
-            self.current_layout_snapshot = None;
-            self.previous_layout_snapshot = None;
-            self.previous_canonical_snapshot = None;
+            self.pipeline.set_current_layout_snapshot(None);
+            self.pipeline.set_previous_layout_snapshot(None);
+            self.pipeline.set_previous_canonical_snapshot(None);
             self.request_static_repaint();
             self.cursor_rect_changed();
         }

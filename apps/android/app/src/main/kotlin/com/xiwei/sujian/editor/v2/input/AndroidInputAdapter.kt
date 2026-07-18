@@ -104,14 +104,15 @@ class AndroidInputAdapter(
 
     private fun applyNewCursorPositionInComposition(newCursorPosition: Int, preeditText: String) {
         val compositionRangeUtf16 = mirror.getCompositionRangeUtf16() ?: return
+        val indexMap = AndroidTextIndexMap(mirror)
+        val totalUtf16 = indexMap.getUtf16Length()
         val targetUtf16: Int
         if (newCursorPosition > 0) {
-            targetUtf16 = (compositionRangeUtf16.first + (newCursorPosition - 1)).coerceIn(compositionRangeUtf16.first, compositionRangeUtf16.second)
+            targetUtf16 = (compositionRangeUtf16.second + newCursorPosition - 1).coerceIn(0, totalUtf16)
         } else {
-            targetUtf16 = (compositionRangeUtf16.second + newCursorPosition).coerceIn(compositionRangeUtf16.first, compositionRangeUtf16.second)
+            targetUtf16 = (compositionRangeUtf16.first + newCursorPosition).coerceIn(0, totalUtf16)
         }
         compositionCursorUtf16 = targetUtf16 - compositionRangeUtf16.first
-        val indexMap = AndroidTextIndexMap(mirror)
         val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
         mirror.setSelectionInternal(targetUtf8, targetUtf8)
     }
@@ -120,12 +121,13 @@ class AndroidInputAdapter(
         val indexMap = AndroidTextIndexMap(mirror)
         val insertStartUtf16 = indexMap.utf8ToUtf16(insertStartUtf8)
         val insertEndUtf16 = indexMap.utf8ToUtf16(insertStartUtf8 + insertedText.toByteArray(Charsets.UTF_8).size)
+        val totalUtf16 = indexMap.getUtf16Length()
 
         val targetUtf16: Int
         if (newCursorPosition > 0) {
-            targetUtf16 = (insertStartUtf16 + newCursorPosition - 1).coerceIn(insertStartUtf16, insertEndUtf16)
+            targetUtf16 = (insertEndUtf16 + newCursorPosition - 1).coerceIn(0, totalUtf16)
         } else {
-            targetUtf16 = (insertEndUtf16 + newCursorPosition).coerceIn(insertStartUtf16, insertEndUtf16)
+            targetUtf16 = (insertStartUtf16 + newCursorPosition).coerceIn(0, totalUtf16)
         }
         val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
         if (isComposing) {

@@ -385,7 +385,7 @@ class AndroidEditorPipeline private constructor(
 
     fun utf8ToUtf16(offsetUtf8: Int): Int {
         val indexMap = AndroidTextIndexMap(mirror)
-        return indexMap.utf8ToUtf8(offsetUtf8)
+        return indexMap.utf8ToUtf16(offsetUtf8)
     }
 
     fun getSpannable(): android.text.SpannableStringBuilder = mirror.getSpannable()

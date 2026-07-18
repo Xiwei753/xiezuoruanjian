@@ -1,11 +1,17 @@
 use writer_core::editor::{
     EditorCommand, EditorEditOutcome, EditorEditResult, EditorKernel, EditorTransactionCause, CursorRect, PreeditVisualTransaction,
+    EditorVisualTransaction, EditorSelection, EditorCursor, EditorAnimationKind,
 };
-use super::buffer::{clamp_to_char_boundary, normalize_plain_text};
+use super::buffer::{clamp_to_char_boundary, normalize_plain_text, EditorSnapshot};
 use super::animation_coordinator::LinuxEditorAnimationCoordinator;
 use super::texture_cache::TextureCache;
+use super::layout_snapshot::EditorLayoutSnapshot;
+use super::layout_revision::LayoutRevision;
+use super::line_snapshot_builder::LineSnapshotBuilder;
+use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use writer_core::editor::CompositionSession;
+use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 
 pub(crate) struct CommittedTextMirror {
@@ -213,6 +219,24 @@ impl CompositionState {
     }
 }
 
+pub(crate) struct VisualTransactionContext {
+    pub typing_animation_enabled: bool,
+    pub is_scrolling: bool,
+    pub is_loading: bool,
+    pub is_applying_format: bool,
+    pub is_applying_settings: bool,
+    pub bounding_width: f64,
+    pub font_pixel_size: f64,
+    pub font_family: String,
+    pub scroll_y: f64,
+    pub viewport_height: f64,
+    pub text_indent: f64,
+    pub line_spacing: f64,
+    pub padding: f64,
+    pub text_color: String,
+    pub dpr: f64,
+}
+
 pub(crate) struct LinuxEditorPipeline {
     kernel: EditorKernel,
     mirror: CommittedTextMirror,
@@ -229,6 +253,10 @@ pub(crate) struct LinuxEditorPipeline {
     coordinated_cursor_animation_enabled: bool,
     smooth_cursor_enabled: bool,
     cursor_animation_duration_ms: u32,
+    current_layout_snapshot: Option<EditorLayoutSnapshot>,
+    previous_layout_snapshot: Option<EditorLayoutSnapshot>,
+    previous_canonical_snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
+    layout_revision: LayoutRevision,
 }
 
 impl LinuxEditorPipeline {
@@ -249,6 +277,10 @@ impl LinuxEditorPipeline {
             coordinated_cursor_animation_enabled: false,
             smooth_cursor_enabled: true,
             cursor_animation_duration_ms: 120,
+            current_layout_snapshot: None,
+            previous_layout_snapshot: None,
+            previous_canonical_snapshot: None,
+            layout_revision: LayoutRevision::initial(),
         }
     }
 
@@ -673,5 +705,274 @@ impl LinuxEditorPipeline {
 
     pub fn finish_composition_commit(&mut self) {
         self.composition.finish_session();
+    }
+
+    pub fn current_layout_snapshot(&self) -> &Option<EditorLayoutSnapshot> {
+        &self.current_layout_snapshot
+    }
+
+    pub fn set_current_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {
+        self.current_layout_snapshot = snapshot;
+    }
+
+    pub fn previous_layout_snapshot(&self) -> &Option<EditorLayoutSnapshot> {
+        &self.previous_layout_snapshot
+    }
+
+    pub fn set_previous_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {
+        self.previous_layout_snapshot = snapshot;
+    }
+
+    pub fn previous_canonical_snapshot(&self) -> &Option<crate::editor::layout::CanonicalDocumentVisualSnapshot> {
+        &self.previous_canonical_snapshot
+    }
+
+    pub fn set_previous_canonical_snapshot(&mut self, snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>) {
+        self.previous_canonical_snapshot = snapshot;
+    }
+
+    pub fn layout_revision_val(&self) -> LayoutRevision {
+        self.layout_revision
+    }
+
+    pub fn set_layout_revision_val(&mut self, rev: LayoutRevision) {
+        self.layout_revision = rev;
+    }
+
+    pub fn bump_layout_revision(&mut self) -> LayoutRevision {
+        self.layout_revision = LayoutRevision::next();
+        self.layout_revision
+    }
+
+    pub fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
+        let tx = self.animation_coordinator.prepared_queue.active_transactions()
+            .iter()
+            .find(|t| t.key == key)
+            .cloned();
+
+        if let Some(t) = tx {
+            let snapshot_ids = t.snapshot_ids();
+            if snapshot_ids.is_empty() {
+                self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                return;
+            }
+
+            let mut all_found = true;
+            for id in &snapshot_ids {
+                if !self.texture_cache.contains_line(id) {
+                    all_found = false;
+                    break;
+                }
+            }
+
+            if all_found {
+                self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+                return;
+            }
+
+            if let Some(ref old_snap) = t.old_snapshot {
+                for line in &old_snap.line_snapshots {
+                    if let Some(ref image) = line.image {
+                        self.texture_cache.insert_line(line.id, image.clone());
+                    }
+                }
+            }
+            if let Some(ref new_snap) = t.new_snapshot {
+                for line in &new_snap.line_snapshots {
+                    if let Some(ref image) = line.image {
+                        self.texture_cache.insert_line(line.id, image.clone());
+                    }
+                }
+            }
+
+            let mut any_missing = false;
+            for id in &snapshot_ids {
+                if !self.texture_cache.contains_line(id) {
+                    any_missing = true;
+                    break;
+                }
+            }
+
+            if any_missing {
+                super::editor_animation_debug_log(&format!(
+                    "prepare_transaction_textures: some line textures missing for tid={}, cancelling",
+                    key.transaction_id
+                ));
+                self.animation_coordinator.cancel_by_key(key, "texture_failed");
+            } else {
+                self.animation_coordinator.prepared_queue.mark_texture_prepared(key);
+            }
+        }
+    }
+
+    pub fn record_visual_transaction(
+        &mut self,
+        ctx: &VisualTransactionContext,
+        old: &EditorSnapshot,
+        new: &EditorSnapshot,
+        cause: EditorTransactionCause,
+    ) -> Option<EditorVisualTransaction> {
+        let transaction = self.engine.create_transaction(
+            &old.text,
+            &new.text,
+            EditorSelection {
+                anchor: EditorCursor::new(&old.text, old.selection_anchor),
+                head: EditorCursor::new(&old.text, old.cursor),
+            },
+            EditorSelection {
+                anchor: EditorCursor::new(&new.text, new.selection_anchor),
+                head: EditorCursor::new(&new.text, new.cursor),
+            },
+            cause,
+        );
+        let mut vt = self.engine.visual_transaction(&transaction);
+
+        if ctx.typing_animation_enabled && vt.is_some() && !ctx.is_scrolling {
+            if let Some(ref mut vt) = vt {
+                let (affected_byte_start, affected_byte_end) = vt.inserted_range
+                    .or(vt.deleted_range)
+                    .unwrap_or_else(|| {
+                        let changes = writer_core::editor::diff_plain_text(&vt.old_text, &vt.new_text);
+                        let mut min_b = usize::MAX;
+                        let mut max_b = 0usize;
+                        for change in &changes {
+                            match change {
+                                writer_core::editor::EditorChange::Insert { index, text } => {
+                                    min_b = min_b.min(*index);
+                                    max_b = (*index + text.len()).max(max_b);
+                                }
+                                writer_core::editor::EditorChange::Delete { index, text } => {
+                                    min_b = min_b.min(*index);
+                                    max_b = (*index + text.len()).max(max_b);
+                                }
+                                _ => {}
+                            }
+                        }
+                        (min_b.min(max_b), max_b)
+                    });
+
+                let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
+
+                let old_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
+                    &vt.old_text,
+                    0,
+                    ctx.font_pixel_size,
+                    &ctx.font_family,
+                    ctx.line_spacing,
+                    ctx.padding,
+                    ctx.text_indent,
+                    ctx.bounding_width,
+                    ctx.dpr,
+                    &ctx.text_color,
+                    affected_byte_start,
+                    affected_byte_end,
+                    prev_new_snapshot,
+                );
+                let new_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
+                    &new.text,
+                    0,
+                    ctx.font_pixel_size,
+                    &ctx.font_family,
+                    ctx.line_spacing,
+                    ctx.padding,
+                    ctx.text_indent,
+                    ctx.bounding_width,
+                    ctx.dpr,
+                    &ctx.text_color,
+                    affected_byte_start,
+                    affected_byte_end,
+                    prev_new_snapshot,
+                );
+
+                let old_caret = old_doc_snapshot.cursor_rect(
+                    vt.old_selection.head.index,
+                    layout::CaretAffinity::Downstream,
+                    ctx.scroll_y,
+                    ctx.viewport_height,
+                );
+                let new_caret = new_doc_snapshot.cursor_rect(
+                    vt.new_selection.head.index,
+                    layout::CaretAffinity::Downstream,
+                    ctx.scroll_y,
+                    ctx.viewport_height,
+                );
+
+                vt.old_cursor_rect = Some(make_cursor_rect_from_caret_doc(&old_caret, &old_doc_snapshot, &ctx.font_family, ctx.scroll_y));
+                vt.new_cursor_rect = Some(make_cursor_rect_from_caret_doc(&new_caret, &new_doc_snapshot, &ctx.font_family, ctx.scroll_y));
+
+                match vt.kind {
+                    EditorAnimationKind::Insert => {
+                        vt.insert_glyph_rects = Some(Vec::new());
+                        vt.reflow_glyph_rects = None;
+                    }
+                    EditorAnimationKind::Delete => {
+                        vt.deleted_glyph_rects = None;
+                    }
+                    EditorAnimationKind::Cursor => {}
+                }
+
+                let old_revision = self.layout_revision;
+                let new_revision = LayoutRevision::next();
+
+                let (old_snap, new_snap) = LineSnapshotBuilder::build_old_new_from_canonical(
+                    &old_doc_snapshot,
+                    &new_doc_snapshot,
+                    old_revision,
+                    new_revision,
+                    ctx.scroll_y,
+                    ctx.viewport_height,
+                );
+
+                let key = self.animation_coordinator.process_transaction(
+                    vt,
+                    ctx.typing_animation_enabled,
+                    ctx.is_scrolling,
+                    ctx.is_loading,
+                    ctx.is_applying_format,
+                    ctx.is_applying_settings,
+                    vt.old_cursor_rect.clone(),
+                    vt.new_cursor_rect.clone(),
+                    &old_snap,
+                    &new_snap,
+                );
+                if let Some(key) = key {
+                    self.prepare_transaction_textures(key);
+                    self.layout_revision = new_revision;
+                }
+
+                self.previous_layout_snapshot = Some(self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                    EditorLayoutSnapshot::new(old_doc_snapshot.to_layout_snapshot(), Vec::new(), None, layout::CaretAffinity::Downstream)
+                }));
+                self.current_layout_snapshot = Some(new_snap);
+                self.previous_canonical_snapshot = Some(new_doc_snapshot);
+
+                super::editor_animation_debug_log(&format!(
+                    "record_visual_transaction: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",
+                    vt.kind,
+                    self.animation_coordinator.has_active_insert()
+                ));
+            }
+        }
+
+        vt
+    }
+}
+
+fn make_cursor_rect_from_caret_doc(
+    caret: &layout::CursorLayoutRect,
+    doc_snapshot: &layout::CanonicalDocumentVisualSnapshot,
+    font_family: &str,
+    scroll_y: f64,
+) -> CursorRect {
+    let line = doc_snapshot.visual_lines.iter().find(|l| l.id == caret.visual_line_id);
+    let baseline_y = match line {
+        Some(l) => layout::text_baseline_y(l, doc_snapshot.font_size, font_family) - scroll_y,
+        None => caret.y + caret.h * 0.8,
+    };
+    CursorRect {
+        x: caret.x,
+        top: caret.y,
+        bottom: caret.y + caret.h,
+        baseline_y,
     }
 }

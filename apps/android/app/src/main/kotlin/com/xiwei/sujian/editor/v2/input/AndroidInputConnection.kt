@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.input
 
+import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
@@ -45,19 +46,17 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             return handleCompositionDelete(beforeLength, afterLength)
         }
-        val committedText = mirror.getCommittedText()
+        val indexMap = AndroidTextIndexMap(mirror)
         val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
-
-        val utf8ToUtf16Map = buildUtf8ToUtf16Map(committedText)
-        val cursorUtf16 = utf8ToUtf16Map[committedCursorUtf8.coerceIn(0, committedText.toByteArray(Charsets.UTF_8).size)] ?: committedText.length
+        val cursorUtf16 = indexMap.utf8ToUtf16(committedCursorUtf8)
 
         val deleteStartUtf16 = (cursorUtf16 - beforeLength).coerceAtLeast(0)
-        val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(committedText.length)
+        val deleteEndUtf16 = (cursorUtf16 + afterLength).coerceAtMost(indexMap.getUtf16Length())
 
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        val deleteStartUtf8 = utf16ToUtf8Offset(committedText, deleteStartUtf16)
-        val deleteEndUtf8 = utf16ToUtf8Offset(committedText, deleteEndUtf16)
+        val deleteStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val deleteEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
 
         if (deleteStartUtf8 >= deleteEndUtf8) return false
 
@@ -71,30 +70,29 @@ class AndroidInputConnection(
         if (adapter.isComposing()) {
             return handleCompositionDeleteCodePoints(beforeLength, afterLength)
         }
-        val committedText = mirror.getCommittedText()
+        val indexMap = AndroidTextIndexMap(mirror)
         val committedCursorUtf8 = mirror.getCommittedCursorUtf8()
-
-        val utf8ToUtf16Map = buildUtf8ToUtf16Map(committedText)
-        val cursorUtf16 = utf8ToUtf16Map[committedCursorUtf8.coerceIn(0, committedText.toByteArray(Charsets.UTF_8).size)] ?: committedText.length
+        val cursorUtf16 = indexMap.utf8ToUtf16(committedCursorUtf8)
+        val fullText = mirror.getText()
 
         var deleteStartUtf16 = cursorUtf16
         var count = beforeLength
         while (count > 0 && deleteStartUtf16 > 0) {
-            deleteStartUtf16 = committedText.offsetByCodePoints(deleteStartUtf16, -1)
+            deleteStartUtf16 = fullText.offsetByCodePoints(deleteStartUtf16, -1)
             count--
         }
 
         var deleteEndUtf16 = cursorUtf16
         count = afterLength
-        while (count > 0 && deleteEndUtf16 < committedText.length) {
-            deleteEndUtf16 = committedText.offsetByCodePoints(deleteEndUtf16, 1)
+        while (count > 0 && deleteEndUtf16 < fullText.length) {
+            deleteEndUtf16 = fullText.offsetByCodePoints(deleteEndUtf16, 1)
             count--
         }
 
         if (deleteStartUtf16 >= deleteEndUtf16) return false
 
-        val deleteStartUtf8 = utf16ToUtf8Offset(committedText, deleteStartUtf16)
-        val deleteEndUtf8 = utf16ToUtf8Offset(committedText, deleteEndUtf16)
+        val deleteStartUtf8 = indexMap.utf16ToUtf8(deleteStartUtf16)
+        val deleteEndUtf8 = indexMap.utf16ToUtf8(deleteEndUtf16)
 
         if (deleteStartUtf8 >= deleteEndUtf8) return false
 
@@ -185,21 +183,14 @@ class AndroidInputConnection(
 
     override fun setSelection(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0) return false
-        if (adapter.isComposing()) {
-            val compositionRangeUtf16 = mirror.getCompositionRangeUtf16() ?: return false
-            val clampedStart = start.coerceIn(compositionRangeUtf16.first, compositionRangeUtf16.second)
-            val clampedEnd = end.coerceIn(compositionRangeUtf16.first, compositionRangeUtf16.second)
-            val indexMap = AndroidTextIndexMap(mirror)
-            val anchorUtf8 = indexMap.utf16ToUtf8(clampedStart)
-            val headUtf8 = indexMap.utf16ToUtf8(clampedEnd)
-            mirror.setSelectionInternal(anchorUtf8, headUtf8)
-            notifySelectionChanged()
-            return true
-        }
         val indexMap = AndroidTextIndexMap(mirror)
-        val anchorByte = indexMap.utf16ToUtf8(start)
-        val headByte = indexMap.utf16ToUtf8(end)
-        adapter.sendSetSelectionToKernel(anchorByte, headByte)
+        val anchorUtf8 = indexMap.utf16ToUtf8(start)
+        val headUtf8 = indexMap.utf16ToUtf8(end)
+        if (adapter.isComposing()) {
+            mirror.setSelectionInternal(anchorUtf8, headUtf8)
+        } else {
+            adapter.sendSetSelectionToKernel(anchorUtf8, headUtf8)
+        }
         notifySelectionChanged()
         return true
     }
@@ -243,28 +234,6 @@ class AndroidInputConnection(
         val safeEnd = byteEnd.coerceIn(safeStart, textBytes.size)
         if (safeStart >= safeEnd) return ""
         return String(textBytes, safeStart, safeEnd - safeStart, Charsets.UTF_8)
-    }
-
-    private fun buildUtf8ToUtf16Map(text: String): Map<Int, Int> {
-        val map = mutableMapOf<Int, Int>()
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        var utf8Pos = 0
-        var utf16Pos = 0
-        map[0] = 0
-        for (char in text) {
-            val charBytes = char.toString().toByteArray(Charsets.UTF_8).size
-            utf8Pos += charBytes
-            utf16Pos += if (char.isHighSurrogate()) 0 else 1
-            if (!map.containsKey(utf8Pos)) {
-                map[utf8Pos] = utf16Pos
-            }
-        }
-        return map
-    }
-
-    private fun utf16ToUtf8Offset(text: String, utf16Offset: Int): Int {
-        val safeOffset = utf16Offset.coerceIn(0, text.length)
-        return text.substring(0, safeOffset).toByteArray(Charsets.UTF_8).size
     }
 
     private fun notifySelectionChanged() {

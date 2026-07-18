@@ -106,7 +106,7 @@ impl SujianEditorItem {
                 .active_composition_new_snapshot()
                 .cloned()
                 .unwrap_or_else(|| {
-                    self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                    self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
                         self.build_editor_layout_snapshot(width)
                     })
                 });
@@ -149,8 +149,8 @@ impl SujianEditorItem {
             if let Some(key) = key {
                 self.prepare_transaction_textures(key);
             }
-            self.previous_layout_snapshot = Some(old_snapshot);
-            self.current_layout_snapshot = Some(new_snapshot);
+            self.pipeline.set_previous_layout_snapshot(Some(old_snapshot));
+            self.pipeline.set_current_layout_snapshot(Some(new_snapshot));
 
             self.last_event_count = 1;
             self.last_summary = format!(
@@ -301,7 +301,7 @@ impl SujianEditorItem {
                 .active_composition_new_snapshot()
                 .cloned()
                 .unwrap_or_else(|| {
-                    self.current_layout_snapshot.clone().unwrap_or_else(|| {
+                    self.pipeline.current_layout_snapshot().clone().unwrap_or_else(|| {
                         self.build_editor_layout_snapshot(width)
                     })
                 });
@@ -342,8 +342,8 @@ impl SujianEditorItem {
             if let Some(key) = key {
                 self.prepare_transaction_textures(key);
             }
-            self.previous_layout_snapshot = Some(old_snapshot);
-            self.current_layout_snapshot = Some(new_snapshot);
+            self.pipeline.set_previous_layout_snapshot(Some(old_snapshot));
+            self.pipeline.set_current_layout_snapshot(Some(new_snapshot));
 
             self.last_event_count = 1;
             self.last_summary = format!(

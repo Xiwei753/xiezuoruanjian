@@ -6,22 +6,27 @@ class AndroidTextIndexMap(
     private val mirror: DisplayTextMirror
 ) {
     private val text: String = mirror.getText()
-    private val utf8ToUtf16Cache: IntArray by lazy { buildUtf8ToUtf16Map() }
-    private val utf16ToUtf8Cache: IntArray by lazy { buildUtf16ToUtf8Map() }
+    private val byteBoundaries: IntArray by lazy { buildByteBoundaries() }
+    private val utf16Positions: IntArray by lazy { buildUtf16Positions() }
     private val _utf16Length: Int by lazy { countUtf16CodeUnits() }
+    private val _utf8Length: Int by lazy { text.toByteArray(Charsets.UTF_8).size }
 
     fun utf8ToUtf16(byteOffset: Int): Int {
         if (byteOffset <= 0) return 0
-        val maxByte = utf8ToUtf16Cache.lastOrNull() ?: 0
+        val maxByte = byteBoundaries.lastOrNull() ?: 0
         val safeOffset = byteOffset.coerceAtMost(maxByte)
-        val idx = utf8ToUtf16Cache.binarySearch(safeOffset)
-        return if (idx >= 0) idx else -(idx + 1) - 1
+        val idx = byteBoundaries.binarySearch(safeOffset)
+        val pos = if (idx >= 0) idx else -(idx + 1) - 1
+        return if (pos >= 0 && pos < utf16Positions.size) utf16Positions[pos] else _utf16Length
     }
 
     fun utf16ToUtf8(utf16Offset: Int): Int {
         if (utf16Offset <= 0) return 0
-        val safeOffset = utf16Offset.coerceAtMost(utf16ToUtf8Cache.lastIndex)
-        return utf16ToUtf8Cache[safeOffset]
+        val maxUtf16 = utf16Positions.lastOrNull() ?: 0
+        val safeOffset = utf16Offset.coerceAtMost(maxUtf16)
+        val idx = utf16Positions.binarySearch(safeOffset)
+        val pos = if (idx >= 0) idx else -(idx + 1) - 1
+        return if (pos >= 0 && pos < byteBoundaries.size) byteBoundaries[pos] else _utf8Length
     }
 
     fun utf8RangeToUtf16(startByte: Int, endByte: Int): IntRange {
@@ -34,66 +39,54 @@ class AndroidTextIndexMap(
 
     fun getUtf16Length(): Int = _utf16Length
 
+    fun getUtf8Length(): Int = _utf8Length
+
     private fun countUtf16CodeUnits(): Int {
         var count = 0
-        for (char in text) {
-            count += if (char.isSurrogate()) {
-                if (char.isHighSurrogate()) 2 else 0
-            } else {
-                1
-            }
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            count += Character.charCount(codePoint)
+            i += Character.charCount(codePoint)
         }
         return count
     }
 
-    private fun buildUtf8ToUtf16Map(): IntArray {
-        val byteBoundaryToUtf16 = mutableListOf(0)
-        var byteCount = 0
-        var utf16Count = 0
-        var i = 0
-        while (i < text.length) {
-            val char = text[i]
-            val utf8Len = char.toString().toByteArray(Charsets.UTF_8).size
-            val utf16Len = if (char.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) {
-                2
-            } else if (char.isLowSurrogate()) {
-                0
-            } else {
-                1
-            }
-            byteCount += utf8Len
-            utf16Count += utf16Len
-            byteBoundaryToUtf16.add(byteCount)
-            i++
+    private fun utf8ByteLength(codePoint: Int): Int {
+        return when {
+            codePoint <= 0x7F -> 1
+            codePoint <= 0x7FF -> 2
+            codePoint <= 0xFFFF -> 3
+            else -> 4
         }
-        return byteBoundaryToUtf16.toIntArray()
     }
 
-    private fun buildUtf16ToUtf8Map(): IntArray {
-        val utf16Boundaries = mutableListOf(0)
+    private fun buildByteBoundaries(): IntArray {
+        val boundaries = mutableListOf(0)
         var byteCount = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            val utf8Len = utf8ByteLength(codePoint)
+            val utf16Len = Character.charCount(codePoint)
+            byteCount += utf8Len
+            boundaries.add(byteCount)
+            i += utf16Len
+        }
+        return boundaries.toIntArray()
+    }
+
+    private fun buildUtf16Positions(): IntArray {
+        val positions = mutableListOf(0)
         var utf16Count = 0
         var i = 0
         while (i < text.length) {
-            val char = text[i]
-            val utf8Len = char.toString().toByteArray(Charsets.UTF_8).size
-            val utf16Len = if (char.isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) {
-                2
-            } else if (char.isLowSurrogate()) {
-                0
-            } else {
-                1
-            }
-            byteCount += utf8Len
+            val codePoint = text.codePointAt(i)
+            val utf16Len = Character.charCount(codePoint)
             utf16Count += utf16Len
-            if (utf16Len == 2) {
-                utf16Boundaries.add(byteCount)
-                utf16Boundaries.add(byteCount)
-            } else if (utf16Len == 1) {
-                utf16Boundaries.add(byteCount)
-            }
-            i++
+            positions.add(utf16Count)
+            i += utf16Len
         }
-        return utf16Boundaries.toIntArray()
+        return positions.toIntArray()
     }
 }

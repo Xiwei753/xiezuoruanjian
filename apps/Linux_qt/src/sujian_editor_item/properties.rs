@@ -30,7 +30,7 @@ impl SujianEditorItem {
         self.buffer.redo_stack.clear();
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
-        self.previous_canonical_snapshot = None;
+        self.pipeline.set_previous_canonical_snapshot(None);
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
@@ -57,7 +57,7 @@ impl SujianEditorItem {
         self.sync_buffer_from_pipeline();
         self.adjust_affinity_at_wrap_boundary();
         let new = self.buffer.snapshot();
-        self.previous_canonical_snapshot = None;
+        self.pipeline.set_previous_canonical_snapshot(None);
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
@@ -577,7 +577,7 @@ impl SujianEditorItem {
         self.invalidate_layout_cache();
         self.bump_visual_revision();
         self.clear_active_text_animations();
-        self.previous_canonical_snapshot = None;
+        self.pipeline.set_previous_canonical_snapshot(None);
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.recalculate_content_height_and_emit();
