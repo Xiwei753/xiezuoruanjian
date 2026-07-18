@@ -32,14 +32,7 @@ impl SujianEditorItem {
         let new = self.buffer.snapshot();
         self.previous_canonical_snapshot = None;
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
-        self.preedit_text.clear();
-        self.preedit_cursor = 0;
-        self.preedit_attributes.clear();
-        self.preedit_old_text.clear();
-        self.preedit_visual_transaction = None;
-        self.preedit_cursor_rect = None;
-        self.pending_preedit_cursor_rect = None;
-        self.composition_session = None;
+        self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -66,14 +59,7 @@ impl SujianEditorItem {
         let new = self.buffer.snapshot();
         self.previous_canonical_snapshot = None;
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
-        self.preedit_text.clear();
-        self.preedit_cursor = 0;
-        self.preedit_attributes.clear();
-        self.preedit_old_text.clear();
-        self.preedit_visual_transaction = None;
-        self.preedit_cursor_rect = None;
-        self.pending_preedit_cursor_rect = None;
-        self.composition_session = None;
+        self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
@@ -483,8 +469,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn cursor_rect_x(&self) -> f32 {
-        if !self.preedit_text.is_empty() {
-            if let Some(ref r) = self.preedit_cursor_rect {
+        if !self.pipeline.composition().preedit_text.is_empty() {
+            if let Some(ref r) = self.pipeline.composition().preedit_cursor_rect {
                 return r.x as f32;
             }
         }
@@ -496,8 +482,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn cursor_rect_y(&self) -> f32 {
-        if !self.preedit_text.is_empty() {
-            if let Some(ref r) = self.preedit_cursor_rect {
+        if !self.pipeline.composition().preedit_text.is_empty() {
+            if let Some(ref r) = self.pipeline.composition().preedit_cursor_rect {
                 return r.top as f32;
             }
         }

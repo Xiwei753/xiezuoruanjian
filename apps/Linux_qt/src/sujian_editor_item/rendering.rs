@@ -376,7 +376,7 @@ impl SujianEditorItem {
         // This fallback only activates when animation is disabled or no Composition
         // transaction exists. It draws preedit on the committed layout as a last resort.
         // Issue #516: independent preedit overlay drawing is deleted as the main path.
-        if !self.preedit_text.is_empty() && !self.pipeline.animation_coordinator_mut().has_active_composition() {
+        if !self.pipeline.composition().preedit_text.is_empty() && !self.pipeline.animation_coordinator_mut().has_active_composition() {
             let pc = self.buffer.cursor;
             for (idx, line) in lines.iter().enumerate() {
                 if idx < vis_start || idx >= vis_end {
@@ -405,32 +405,32 @@ impl SujianEditorItem {
                         baseline,
                         fs,
                         self.current_text_color.clone(),
-                        self.preedit_text.clone().into(),
+                        self.pipeline.composition().preedit_text.clone().into(),
                     );
 
                     let preedit_w =
                         self.editor_layout
-                            .text_width(&self.preedit_text, font_size, &font_family);
+                            .text_width(&self.pipeline.composition().preedit_text, font_size, &font_family);
 
-                    let has_text_format_attr = self.preedit_attributes.iter()
+                    let has_text_format_attr = self.pipeline.composition().preedit_attributes.iter()
                         .any(|a| matches!(a.kind, super::PreeditAttributeKind::Underline
                             | super::PreeditAttributeKind::FontUnderline
                             | super::PreeditAttributeKind::TextColor { .. }
                             | super::PreeditAttributeKind::BackgroundColor { .. }));
 
                     if has_text_format_attr {
-                        for attr in &self.preedit_attributes {
-                            let attr_start = attr.start.min(self.preedit_text.len());
-                            let attr_end = (attr.start + attr.length).min(self.preedit_text.len());
+                        for attr in &self.pipeline.composition().preedit_attributes {
+                            let attr_start = attr.start.min(self.pipeline.composition().preedit_text.len());
+                            let attr_end = (attr.start + attr.length).min(self.pipeline.composition().preedit_text.len());
                             if attr_start >= attr_end {
                                 continue;
                             }
                             let before_w = self.editor_layout.text_width(
-                                &self.preedit_text[..attr_start],
+                                &self.pipeline.composition().preedit_text[..attr_start],
                                 font_size,
                                 &font_family,
                             );
-                            let attr_text = &self.preedit_text[attr_start..attr_end];
+                            let attr_text = &self.pipeline.composition().preedit_text[attr_start..attr_end];
                             let attr_w = self.editor_layout.text_width(
                                 attr_text,
                                 font_size,
@@ -498,7 +498,7 @@ impl SujianEditorItem {
                                         baseline,
                                         fs,
                                         text_color,
-                                        self.preedit_text.clone().into(),
+                                        self.pipeline.composition().preedit_text.clone().into(),
                                     );
                                     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                                     cpp!(unsafe [painter as "QPainter*"] {
@@ -538,16 +538,16 @@ impl SujianEditorItem {
                         painter.draw_line(line_f);
                     }
 
-                    let preedit_cursor_pos = self.preedit_cursor;
-                    if preedit_cursor_pos > 0 && preedit_cursor_pos <= self.preedit_text.len()
-                        && self.preedit_text.is_char_boundary(preedit_cursor_pos)
+                    let preedit_cursor_pos = self.pipeline.composition().preedit_cursor;
+                    if preedit_cursor_pos > 0 && preedit_cursor_pos <= self.pipeline.composition().preedit_text.len()
+                        && self.pipeline.composition().preedit_text.is_char_boundary(preedit_cursor_pos)
                     {
-                        let has_cursor_attr = self.preedit_attributes.iter()
+                        let has_cursor_attr = self.pipeline.composition().preedit_attributes.iter()
                             .any(|a| a.kind == super::PreeditAttributeKind::Cursor);
 
                         if has_cursor_attr {
                             let before_cursor_w = self.editor_layout.text_width(
-                                &self.preedit_text[..preedit_cursor_pos],
+                                &self.pipeline.composition().preedit_text[..preedit_cursor_pos],
                                 font_size,
                                 &font_family,
                             );
@@ -764,7 +764,7 @@ impl SujianEditorItem {
 
         let vp_h = self.current_viewport_height.max(1.0) as f64;
         let _is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
-        let _is_preediting = !self.preedit_text.is_empty();
+        let _is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
         let cursor_plan = CursorAnimationPlan {
             should_be_visible: self.current_editor_enabled

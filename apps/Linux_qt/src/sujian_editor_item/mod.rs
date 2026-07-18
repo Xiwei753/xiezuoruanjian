@@ -364,15 +364,6 @@ pub struct SujianEditorItem {
     current_is_applying_settings: bool,
     last_summary: QString,
     last_event_count: u32,
-    preedit_text: String,
-    preedit_cursor: usize,
-    preedit_attributes: Vec<PreeditAttribute>,
-    preedit_old_text: String,
-    preedit_visual_transaction: Option<PreeditVisualTransaction>,
-    preedit_cursor_rect: Option<CursorRect>,
-    pending_preedit_cursor_rect: Option<CursorRect>,
-    suppress_next_ime_commit: bool,
-    composition_session: Option<CompositionSession>,
     editor_layout: EditorLayout,
     render_dirty: bool,
     scroll_buffer: Option<ScrollBuffer>,
@@ -498,15 +489,6 @@ impl Default for SujianEditorItem {
             current_is_applying_settings: false,
             last_summary: Default::default(),
             last_event_count: 0,
-            preedit_text: String::new(),
-            preedit_cursor: 0,
-            preedit_attributes: Vec::new(),
-            preedit_old_text: String::new(),
-            preedit_visual_transaction: None,
-            preedit_cursor_rect: None,
-            pending_preedit_cursor_rect: None,
-            suppress_next_ime_commit: false,
-            composition_session: None,
             editor_layout: EditorLayout::default(),
             render_dirty: true,
             scroll_buffer: None,
@@ -696,9 +678,9 @@ impl SujianEditorItem {
             }
         }
 
-        if !self.preedit_text.is_empty() {
+        if !self.pipeline.composition().preedit_text.is_empty() {
             plan.has_preedit = true;
-            if let Some(ref _preedit_rect) = self.preedit_cursor_rect {
+            if let Some(ref _preedit_rect) = self.pipeline.composition().preedit_cursor_rect {
                 let width = self.bounding_width();
                 let font_size = self.current_font_pixel_size as f64;
                 let font_family = &self.current_font_family.to_string();
@@ -710,7 +692,7 @@ impl SujianEditorItem {
                     let start_x = self.editor_layout.cursor_x_for_line(
                         &snapshot, line, cursor_byte, crate::editor::layout::CaretAffinity::Downstream,
                     );
-                    let preedit_w = self.editor_layout.text_width(&self.preedit_text, font_size, font_family);
+                    let preedit_w = self.editor_layout.text_width(&self.pipeline.composition().preedit_text, font_size, font_family);
 
                     let preedit_color = if selection_color.starts_with('#') && selection_color.len() >= 7 {
                         let r = u8::from_str_radix(&selection_color[1..3], 16).unwrap_or(0);

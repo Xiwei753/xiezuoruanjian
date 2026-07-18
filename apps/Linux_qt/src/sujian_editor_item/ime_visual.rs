@@ -2,16 +2,16 @@ use super::*;
 
 impl SujianEditorItem {
     pub(crate) fn update_preedit_visual_state(&mut self) {
-        if self.preedit_text.is_empty() {
-            self.preedit_visual_transaction = None;
-            self.preedit_cursor_rect = None;
+        if self.pipeline.composition().preedit_text.is_empty() {
+            self.pipeline.composition_mut().preedit_visual_transaction = None;
+            self.pipeline.composition_mut().preedit_cursor_rect = None;
             return;
         }
 
         self.compute_preedit_cursor_rect();
 
-        let old_text = self.preedit_old_text.clone();
-        let new_text = self.preedit_text.clone();
+        let old_text = self.pipeline.composition().preedit_old_text.clone();
+        let new_text = self.pipeline.composition().preedit_text.clone();
 
         if old_text == new_text {
             self.request_static_repaint();
@@ -193,29 +193,29 @@ impl SujianEditorItem {
             old_preedit_text: old_text.clone(),
             new_preedit_text: new_text.clone(),
             old_preedit_cursor_rect: None,
-            new_preedit_cursor_rect: self.preedit_cursor_rect.clone(),
+            new_preedit_cursor_rect: self.pipeline.composition().preedit_cursor_rect.clone(),
             preedit_glyph_rects: Some(preedit_glyph_rects),
             deleted_preedit_glyph_rects,
             inserted_preedit_glyph_rects,
-            preedit_cursor_rect: self.preedit_cursor_rect.clone(),
+            preedit_cursor_rect: self.pipeline.composition().preedit_cursor_rect.clone(),
             duration_ms: self.current_typing_animation_duration_ms as u64,
             coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
         };
 
-        self.preedit_visual_transaction = Some(vt);
+        self.pipeline.composition_mut().preedit_visual_transaction = Some(vt);
         editor_animation_debug_log(&format!(
             "[preedit] preedit_visual_transaction_created old_len={} new_len={}",
             old_text.len(),
             new_text.len()
         ));
 
-        if let Some(ref _vt) = self.preedit_visual_transaction {
+        if let Some(ref _vt) = self.pipeline.composition().preedit_visual_transaction {
         }
     }
 
     pub(crate) fn compute_preedit_cursor_rect(&mut self) {
-        if self.preedit_text.is_empty() {
-            self.preedit_cursor_rect = None;
+        if self.pipeline.composition().preedit_text.is_empty() {
+            self.pipeline.composition_mut().preedit_cursor_rect = None;
             return;
         }
 
@@ -233,7 +233,7 @@ impl SujianEditorItem {
             .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte);
 
         let Some(line) = cursor_line else {
-            self.preedit_cursor_rect = None;
+            self.pipeline.composition_mut().preedit_cursor_rect = None;
             return;
         };
 
@@ -244,9 +244,11 @@ impl SujianEditorItem {
             self.cursor_ctrl.affinity,
         );
 
+        let preedit_cursor = self.pipeline.composition().preedit_cursor;
+        let preedit_text = self.pipeline.composition().preedit_text.clone();
         let preedit_before_cursor =
-            if self.preedit_text.is_char_boundary(self.preedit_cursor.min(self.preedit_text.len())) {
-                &self.preedit_text[..self.preedit_cursor.min(self.preedit_text.len())]
+            if preedit_text.is_char_boundary(preedit_cursor.min(preedit_text.len())) {
+                &preedit_text[..preedit_cursor.min(preedit_text.len())]
             } else {
                 ""
             };
@@ -260,7 +262,7 @@ impl SujianEditorItem {
 
         let baseline_y = text_baseline_y(line, font_size, font_family) - scroll_y;
 
-        self.preedit_cursor_rect = Some(CursorRect {
+        self.pipeline.composition_mut().preedit_cursor_rect = Some(CursorRect {
             x: cursor_x,
             top: cursor_y,
             bottom: cursor_y + cursor_h,
@@ -269,7 +271,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn update_ime_cursor_for_preedit(&mut self) {
-        if self.preedit_cursor_rect.is_some() {
+        if self.pipeline.composition().preedit_cursor_rect.is_some() {
             self.cursor_rect_changed();
             let obj_ptr = self.get_cpp_object();
             if !obj_ptr.is_null() {

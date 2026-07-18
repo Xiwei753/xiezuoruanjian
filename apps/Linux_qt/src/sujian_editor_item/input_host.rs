@@ -9,9 +9,9 @@ pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
 
 impl SujianEditorItem {
     fn ensure_composition_session(&mut self) {
-        if self.composition_session.is_none() {
+        if self.pipeline.composition().composition_session.is_none() {
             let cursor = self.buffer.cursor;
-            self.composition_session = Some(CompositionSession::new(
+            self.pipeline.composition_mut().composition_session = Some(CompositionSession::new(
                 self.pipeline.text_revision(),
                 self.pipeline.visual_revision(),
                 self.buffer.text.clone(),
@@ -21,7 +21,7 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
-        if let Some(ref session) = self.composition_session {
+        if let Some(ref session) = self.pipeline.composition().composition_session {
             session.preedit_byte_range_in_virtual_text()
         } else {
             (self.buffer.cursor, self.buffer.cursor)
@@ -31,7 +31,7 @@ impl SujianEditorItem {
     fn prepare_composition_update(&mut self, text: String, cursor: usize) -> Option<CompositionUpdateData> {
         self.ensure_composition_session();
 
-        let session = self.composition_session.as_mut()?;
+        let session = self.pipeline.composition_mut().composition_session.as_mut()?;
         let old_preedit = session.preedit_text.clone();
         session.update_preedit(text, cursor);
         let generation = session.last_submitted_generation;
@@ -118,13 +118,13 @@ impl EditorInputHost for SujianEditorItem {
     }
 
     fn input_clear_preedit(&mut self) {
-        if !self.preedit_text.is_empty() || self.composition_session.is_some() {
-            self.pending_preedit_cursor_rect = self.preedit_cursor_rect.clone();
+        if !self.pipeline.composition().preedit_text.is_empty() || self.pipeline.composition().composition_session.is_some() {
+            self.pipeline.composition_mut().pending_preedit_cursor_rect = self.pipeline.composition().preedit_cursor_rect.clone();
 
             if self.typing_animation_enabled {
                 let (composition_byte_start, composition_byte_end) = self.preedit_byte_range_in_virtual_text();
                 let width = self.bounding_width();
-                let old_cursor_rect = self.preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
+                let old_cursor_rect = self.pipeline.composition().preedit_cursor_rect.as_ref().map(|c| CursorRect { x: c.x, top: c.top, bottom: c.bottom, baseline_y: c.baseline_y });
                 let new_cursor_rect = self.current_layout_snapshot.as_ref().and_then(|s| s.caret_rect.as_ref()).map(|c| CursorRect { x: c.x, top: c.y, bottom: c.y + c.h, baseline_y: c.y + c.h * 0.8 });
 
                 let old_snapshot = self.pipeline.animation_coordinator()
@@ -155,21 +155,15 @@ impl EditorInputHost for SujianEditorItem {
                 );
             }
         }
-        self.preedit_text.clear();
-        self.preedit_cursor = 0;
-        self.preedit_attributes.clear();
-        self.preedit_old_text.clear();
-        self.preedit_visual_transaction = None;
-        self.preedit_cursor_rect = None;
-        self.composition_session = None;
+        self.pipeline.composition_mut().clear();
         self.update_ime_cursor_for_preedit();
     }
 
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
-        self.preedit_old_text = self.preedit_text.clone();
-        self.preedit_text = text.clone();
-        self.preedit_cursor = cursor;
-        self.preedit_attributes.clear();
+        self.pipeline.composition_mut().preedit_old_text = self.pipeline.composition().preedit_text.clone();
+        self.pipeline.composition_mut().preedit_text = text.clone();
+        self.pipeline.composition_mut().preedit_cursor = cursor;
+        self.pipeline.composition_mut().preedit_attributes.clear();
 
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
@@ -221,10 +215,10 @@ impl EditorInputHost for SujianEditorItem {
         cursor: usize,
         attributes: Vec<PreeditAttribute>,
     ) {
-        self.preedit_old_text = self.preedit_text.clone();
-        self.preedit_text = text.clone();
-        self.preedit_cursor = cursor;
-        self.preedit_attributes = attributes;
+        self.pipeline.composition_mut().preedit_old_text = self.pipeline.composition().preedit_text.clone();
+        self.pipeline.composition_mut().preedit_text = text.clone();
+        self.pipeline.composition_mut().preedit_cursor = cursor;
+        self.pipeline.composition_mut().preedit_attributes = attributes;
 
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
@@ -271,12 +265,12 @@ impl EditorInputHost for SujianEditorItem {
     }
 
     fn input_set_suppress_next_ime_commit(&mut self, value: bool) {
-        self.suppress_next_ime_commit = value;
+        self.pipeline.composition_mut().suppress_next_ime_commit = value;
     }
 
     fn input_take_suppress_next_ime_commit(&mut self) -> bool {
-        let v = self.suppress_next_ime_commit;
-        self.suppress_next_ime_commit = false;
+        let v = self.pipeline.composition().suppress_next_ime_commit;
+        self.pipeline.composition_mut().suppress_next_ime_commit = false;
         v
     }
 

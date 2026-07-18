@@ -78,14 +78,36 @@ impl CommittedTextMirror {
                 ));
             }
             let (start, end) = patch.replace_byte_range;
-            if start <= end && end <= self.text.len() && self.text.is_char_boundary(start) && self.text.is_char_boundary(end) {
-                self.text.replace_range(start..end, &patch.inserted_text);
+            if start > self.text.len() || end > self.text.len() {
+                return Err(format!(
+                    "CommittedTextMirror patch range out of bounds: [{}, {}) vs text len {}. Must reload from kernel snapshot.",
+                    start, end, self.text.len()
+                ));
             }
+            if !self.text.is_char_boundary(start) || !self.text.is_char_boundary(end) {
+                return Err(format!(
+                    "CommittedTextMirror patch range not on char boundary: [{}, {}). Must reload from kernel snapshot.",
+                    start, end
+                ));
+            }
+            self.text.replace_range(start..end, &patch.inserted_text);
             self.revision = patch.new_revision;
         }
         let (anchor, head) = result.new_selection_byte_range;
-        self.cursor = clamp_to_char_boundary(&self.text, head);
-        self.selection_anchor = clamp_to_char_boundary(&self.text, anchor);
+        if anchor > self.text.len() || head > self.text.len() {
+            return Err(format!(
+                "CommittedTextMirror selection out of bounds: ({}, {}) vs text len {}. Must reload from kernel snapshot.",
+                anchor, head, self.text.len()
+            ));
+        }
+        if !self.text.is_char_boundary(anchor) || !self.text.is_char_boundary(head) {
+            return Err(format!(
+                "CommittedTextMirror selection not on char boundary: ({}, {}). Must reload from kernel snapshot.",
+                anchor, head
+            ));
+        }
+        self.cursor = head;
+        self.selection_anchor = anchor;
         Ok(())
     }
 }
