@@ -1,5 +1,6 @@
 package com.xiwei.sujian.ui.compose.starmap
 
+import android.graphics.Rect
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -20,6 +21,8 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import com.xiwei.sujian.model.StarMapData
 import com.xiwei.sujian.model.StarMapGraphNode
 import com.xiwei.sujian.model.StarMapLayoutNodeData
@@ -37,18 +40,29 @@ private data class NodeDragState(
     var currentLayoutY: Float
 )
 
+data class NodeTextGeometry(
+    val nodeId: String,
+    val windowRect: Rect,
+    val scale: Float,
+    val offsetX: Float,
+    val offsetY: Float
+)
+
 @Composable
 fun StarMapCanvas(
     data: StarMapData,
     onNodeDrag: ((nodeId: String, x: Float, y: Float) -> Unit)? = null,
     onViewportChange: ((viewport: StarMapViewportData) -> Unit)? = null,
     onNodeTap: ((nodeId: String) -> Unit)? = null,
+    onNodeDoubleTap: ((geometry: NodeTextGeometry) -> Unit)? = null,
+    editingNodeId: String? = null,
     modifier: Modifier = Modifier
 ) {
     var scale by remember { mutableFloatStateOf(data.viewport.scale.coerceIn(0.2f, 5f)) }
     var offsetX by remember { mutableFloatStateOf(data.viewport.offsetX) }
     var offsetY by remember { mutableFloatStateOf(data.viewport.offsetY) }
     var dragState by remember { mutableStateOf<NodeDragState?>(null) }
+    var canvasPositionInWindow by remember { mutableStateOf(Offset.Zero) }
 
     val nodeLayoutMap = remember(data.layout.nodes) {
         data.layout.nodes.associateBy { it.nodeId }
@@ -69,6 +83,9 @@ fun StarMapCanvas(
     Canvas(
         modifier = modifier
             .fillMaxSize()
+            .onGloballyPositioned { coordinates ->
+                canvasPositionInWindow = coordinates.positionInWindow()
+            }
             .pointerInput(data.graph.starmapId) {
                 detectTransformGestures { _, pan, zoom, _ ->
                     scale = (scale * zoom).coerceIn(0.2f, 5f)
@@ -124,18 +141,50 @@ fun StarMapCanvas(
                 )
             }
             .pointerInput(data.graph.starmapId) {
-                detectTapGestures { offset ->
-                    val hitNodeId = hitTestNode(
-                        nodeLayoutMap = nodeLayoutMap,
-                        offset = offset,
-                        scale = scale,
-                        offsetX = offsetX,
-                        offsetY = offsetY
-                    )
-                    if (hitNodeId != null) {
-                        onNodeTap?.invoke(hitNodeId)
+                detectTapGestures(
+                    onDoubleTap = { offset ->
+                        val hitNodeId = hitTestNode(
+                            nodeLayoutMap = nodeLayoutMap,
+                            offset = offset,
+                            scale = scale,
+                            offsetX = offsetX,
+                            offsetY = offsetY
+                        )
+                        if (hitNodeId != null) {
+                            val layoutNode = nodeLayoutMap[hitNodeId]
+                            if (layoutNode != null) {
+                                val geometry = computeNodeTextWindowRect(
+                                    layoutNode = layoutNode,
+                                    scale = scale,
+                                    offsetX = offsetX,
+                                    offsetY = offsetY,
+                                    canvasPositionInWindow = canvasPositionInWindow
+                                )
+                                onNodeDoubleTap?.invoke(
+                                    NodeTextGeometry(
+                                        nodeId = hitNodeId,
+                                        windowRect = geometry,
+                                        scale = scale,
+                                        offsetX = offsetX,
+                                        offsetY = offsetY
+                                    )
+                                )
+                            }
+                        }
+                    },
+                    onTap = { offset ->
+                        val hitNodeId = hitTestNode(
+                            nodeLayoutMap = nodeLayoutMap,
+                            offset = offset,
+                            scale = scale,
+                            offsetX = offsetX,
+                            offsetY = offsetY
+                        )
+                        if (hitNodeId != null) {
+                            onNodeTap?.invoke(hitNodeId)
+                        }
                     }
-                }
+                )
             }
     ) {
         val canvasWidth = size.width
@@ -161,10 +210,32 @@ fun StarMapCanvas(
                 offsetX = offsetX,
                 offsetY = offsetY,
                 canvasWidth = canvasWidth,
-                canvasHeight = canvasHeight
+                canvasHeight = canvasHeight,
+                hideText = layoutNode.nodeId == editingNodeId
             )
         }
     }
+}
+
+private fun computeNodeTextWindowRect(
+    layoutNode: StarMapLayoutNodeData,
+    scale: Float,
+    offsetX: Float,
+    offsetY: Float,
+    canvasPositionInWindow: Offset
+): Rect {
+    val screenX = (layoutNode.x + offsetX) * scale
+    val screenY = (layoutNode.y + offsetY) * scale
+    val w = layoutNode.width * scale
+    val h = layoutNode.height * scale
+    val windowX = canvasPositionInWindow.x + screenX - w / 2
+    val windowY = canvasPositionInWindow.y + screenY - h / 2
+    return Rect(
+        windowX.toInt(),
+        windowY.toInt(),
+        (windowX + w).toInt(),
+        (windowY + h).toInt()
+    )
 }
 
 private fun hitTestNode(
@@ -240,7 +311,8 @@ private fun DrawScope.drawNode(
     offsetX: Float,
     offsetY: Float,
     canvasWidth: Float,
-    canvasHeight: Float
+    canvasHeight: Float,
+    hideText: Boolean = false
 ) {
     val cx = (layoutNode.x + offsetX) * scale
     val cy = (layoutNode.y + offsetY) * scale
@@ -276,7 +348,7 @@ private fun DrawScope.drawNode(
         style = Stroke(width = 1.5f * scale)
     )
 
-    if (graphNode != null) {
+    if (graphNode != null && !hideText) {
         drawContext.canvas.nativeCanvas.drawText(
             graphNode.title,
             cx,

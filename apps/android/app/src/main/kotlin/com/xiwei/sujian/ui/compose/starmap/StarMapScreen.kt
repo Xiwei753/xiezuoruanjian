@@ -26,6 +26,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
+import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
+import com.xiwei.sujian.editor.v2.coordinator.EditingState
+import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -222,6 +227,12 @@ private fun StarMapEditorScreen(
     var showAddEdgeDialog by remember { mutableStateOf(false) }
     var selectedNodeId by remember { mutableStateOf<String?>(null) }
     var viewportSaveJob by remember { mutableStateOf<Job?>(null) }
+    var canvasEditingNodeId by remember { mutableStateOf<String?>(null) }
+
+    val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
+        val bridge = BridgeProvider.getAppServiceBridge(context)
+        AnimatedTextEditorCoordinator(context, bridge)
+    }
 
     suspend fun loadStarMap() {
         val data = withContext(Dispatchers.IO) {
@@ -311,8 +322,59 @@ private fun StarMapEditorScreen(
                     }
                 },
                 onNodeTap = { nodeId ->
-                    selectedNodeId = nodeId
+                    if (canvasEditingNodeId == null) {
+                        selectedNodeId = nodeId
+                    }
                 },
+                onNodeDoubleTap = { geometry ->
+                    val graphNode = starMapData?.graph?.nodes?.find { it.id == geometry.nodeId }
+                    if (graphNode != null) {
+                        val targetId = "starmap-node-title:${starmapId}:${geometry.nodeId}"
+                        val target = EditableTextTarget(
+                            targetId = targetId,
+                            profile = TextEditorProfile.CanvasLabel,
+                            initialText = graphNode.title,
+                            isPersistent = false,
+                            onCommit = { finalText ->
+                                if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
+                                    coroutineScope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            try {
+                                                val bridge = BridgeProvider.getStarmapBridge(context)
+                                                bridge.updateStarmapNode(starmapId, geometry.nodeId, title = finalText.trim(), kind = null)
+                                            } catch (_: Exception) { }
+                                        }
+                                        loadStarMap()
+                                    }
+                                }
+                                canvasEditingNodeId = null
+                            },
+                            onCancel = {
+                                canvasEditingNodeId = null
+                            },
+                            onEditingStateChanged = { state ->
+                                if (state == EditingState.IDLE || state == EditingState.RELEASED) {
+                                    canvasEditingNodeId = null
+                                }
+                            }
+                        )
+                        coordinator.registerTarget(target)
+                        coordinator.updateTargetGeometry(targetId, geometry.windowRect)
+                        coordinator.updateTargetTransform(
+                            targetId,
+                            com.xiwei.sujian.editor.v2.coordinator.Transform2D(
+                                translateX = 0f,
+                                translateY = 0f,
+                                scaleX = geometry.scale,
+                                scaleY = geometry.scale
+                            )
+                        )
+                        if (coordinator.beginEdit(targetId, graphNode.title.toByteArray(Charsets.UTF_8).size)) {
+                            canvasEditingNodeId = geometry.nodeId
+                        }
+                    }
+                },
+                editingNodeId = canvasEditingNodeId,
                 modifier = Modifier.weight(1f).fillMaxWidth()
             )
         } else {
