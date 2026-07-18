@@ -486,7 +486,7 @@ fn theme_palette_dto_round_trip() {
 #[test]
 fn syncable_settings_persistence_round_trip() {
     use crate::settings::{SyncableSettings, ThemePalette};
-    
+
     #[allow(deprecated)]
     let original = SyncableSettings {
         font_size: 18.0,
@@ -549,10 +549,10 @@ fn syncable_settings_persistence_round_trip() {
             dark_outline_variant: "#434750".to_string(),
         },
     };
-    
+
     let json_str = serde_json::to_string_pretty(&original).unwrap();
     let restored: SyncableSettings = serde_json::from_str(&json_str).unwrap();
-    
+
     assert_eq!(restored.font_size, 18.0);
     assert_eq!(restored.theme_mode, "dark");
     assert_eq!(restored.monet_color, "#FF5722");
@@ -570,7 +570,7 @@ fn syncable_settings_persistence_round_trip() {
     assert_eq!(restored.theme_palette.dark_surface_container, "#1E2125");
     assert_eq!(restored.theme_palette.dark_surface_container_high, "#282B30");
     assert_eq!(restored.theme_palette.dark_surface_container_highest, "#33363A");
-    
+
     let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     let tp = &json_val["themePalette"];
     assert!(tp.get("lightSurfaceContainerLowest").is_some(), "camelCase key lightSurfaceContainerLowest must exist in persisted JSON");
@@ -584,7 +584,7 @@ fn syncable_settings_persistence_round_trip() {
 #[test]
 fn theme_palette_dto_snake_case_round_trip_full() {
     use crate::api::types::ThemePaletteDto;
-    
+
     let original = ThemePaletteDto {
         source: "android_dynamic_color".to_string(),
         updated_at_ms: 1700000000000,
@@ -641,7 +641,7 @@ fn theme_palette_dto_snake_case_round_trip_full() {
         dark_outline: "#8D9199".to_string(),
         dark_outline_variant: "#434750".to_string(),
     };
-    
+
     let json_str = serde_json::to_string(&original).unwrap();
     let json_val: serde_json::Value = serde_json::from_str(&json_str).unwrap();
     assert!(json_val.get("light_surface_container_lowest").is_some(), "snake_case key light_surface_container_lowest must exist");
@@ -650,7 +650,7 @@ fn theme_palette_dto_snake_case_round_trip_full() {
     assert!(json_val.get("dark_surface_container_lowest").is_some(), "snake_case key dark_surface_container_lowest must exist");
     assert!(json_val.get("dark_surface_container_low").is_some(), "snake_case key dark_surface_container_low must exist");
     assert!(json_val.get("dark_surface_container_highest").is_some(), "snake_case key dark_surface_container_highest must exist");
-    
+
     let restored: ThemePaletteDto = serde_json::from_str(&json_str).unwrap();
     assert_eq!(restored.light_surface_container_lowest, "#FFFFFF");
     assert_eq!(restored.light_surface_container_low, "#F3F4FA");
@@ -662,115 +662,6 @@ fn theme_palette_dto_snake_case_round_trip_full() {
     assert_eq!(restored.dark_surface_container, "#1E2125");
     assert_eq!(restored.dark_surface_container_high, "#282B30");
     assert_eq!(restored.dark_surface_container_highest, "#33363A");
-}
-
-#[test]
-fn test_project_stats_dto_contract() {
-    let summary = crate::api::types::ProjectStatsSummaryDto {
-        range: crate::api::types::DateRangeDto {
-            start_date: "2024-02-01".to_string(),
-            end_date: "2024-02-02".to_string(),
-        },
-        projects: vec![
-            crate::api::types::ProjectStatsRecordDto {
-                project_id: "proj-1".to_string(),
-                human_typed_chars: 100,
-                pasted_chars: 50,
-                deleted_chars: 10,
-                ai_inserted_chars: 5,
-                net_delta_chars: 145,
-                active_seconds: 3600,
-            }
-        ],
-    };
-
-    let json = serde_json::to_value(&summary).unwrap();
-    assert!(json.get("range").is_some());
-    assert!(json.get("projects").is_some());
-
-    let record = &json["projects"][0];
-    assert_eq!(record["projectId"], "proj-1");
-    assert_eq!(record["humanTypedChars"], 100);
-    assert_eq!(record["pastedChars"], 50);
-    assert_eq!(record["deletedChars"], 10);
-    assert_eq!(record["aiInsertedChars"], 5);
-    assert_eq!(record["netDeltaChars"], 145);
-    assert_eq!(record["activeSeconds"], 3600);
-
-    // Round-trip
-    let restored: crate::api::types::ProjectStatsSummaryDto = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, summary);
-}
-
-#[test]
-fn test_chapter_stats_dto_contract() {
-    let summary = crate::api::types::ChapterStatsSummaryDto {
-        range: crate::api::types::DateRangeDto {
-            start_date: "2024-03-01".to_string(),
-            end_date: "2024-03-02".to_string(),
-        },
-        chapters: vec![
-            crate::api::types::ChapterStatsRecordDto {
-                chapter_id: "chap-1".to_string(),
-                human_typed_chars: 200,
-                pasted_chars: 100,
-                deleted_chars: 20,
-                ai_inserted_chars: 10,
-                net_delta_chars: 290,
-                active_seconds: 7200,
-            }
-        ],
-    };
-
-    let json = serde_json::to_value(&summary).unwrap();
-    assert!(json.get("range").is_some());
-    assert!(json.get("chapters").is_some());
-
-    let record = &json["chapters"][0];
-    assert_eq!(record["chapterId"], "chap-1");
-    assert_eq!(record["humanTypedChars"], 200);
-    assert_eq!(record["pastedChars"], 100);
-    assert_eq!(record["deletedChars"], 20);
-    assert_eq!(record["aiInsertedChars"], 10);
-    assert_eq!(record["netDeltaChars"], 290);
-    assert_eq!(record["activeSeconds"], 7200);
-
-    // Round-trip
-    let restored: crate::api::types::ChapterStatsSummaryDto = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, summary);
-}
-
-#[test]
-fn test_speed_curve_dto_contract() {
-    let summary = crate::api::types::SpeedCurveSummaryDto {
-        range: crate::api::types::DateRangeDto {
-            start_date: "2024-05-01".to_string(),
-            end_date: "2024-05-02".to_string(),
-        },
-        bucket_minutes: 5,
-        buckets: vec![
-            crate::api::types::SpeedCurvePointDto {
-                start_ms: 1714521600000,
-                end_ms: 1714521900000,
-                chars_typed: 150,
-                chars_per_minute: 30.0,
-            }
-        ],
-    };
-
-    let json = serde_json::to_value(&summary).unwrap();
-    assert!(json.get("range").is_some());
-    assert_eq!(json["bucketMinutes"], 5);
-    assert!(json.get("buckets").is_some());
-
-    let record = &json["buckets"][0];
-    assert_eq!(record["startMs"], 1714521600000_i64);
-    assert_eq!(record["endMs"], 1714521900000_i64);
-    assert_eq!(record["charsTyped"], 150);
-    assert_eq!(record["charsPerMinute"].as_f64().unwrap(), 30.0);
-
-    let restored: crate::api::types::SpeedCurveSummaryDto = serde_json::from_value(json).unwrap();
-    assert_eq!(restored, summary);
 }
 
 #[test]
