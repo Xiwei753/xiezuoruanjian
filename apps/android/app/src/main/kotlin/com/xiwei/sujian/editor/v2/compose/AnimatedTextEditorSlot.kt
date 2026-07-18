@@ -22,8 +22,8 @@ fun AnimatedTextEditorSlot(
 ) {
     var editorView by remember { mutableStateOf<SujianEditorView?>(null) }
 
-    val activeTargetId = coordinator.getActiveTargetId()
-    val editingState = coordinator.getEditingState()
+    val activeTargetId = coordinator.activeTargetId
+    val editingState = coordinator.editingState
     val isVisible = activeTargetId != null && editingState == EditingState.EDITING
 
     Box(modifier = modifier.fillMaxSize()) {

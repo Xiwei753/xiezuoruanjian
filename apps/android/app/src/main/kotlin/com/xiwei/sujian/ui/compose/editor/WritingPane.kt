@@ -137,7 +137,7 @@ fun WritingPane(
     LaunchedEffect(uiState.content, uiState.loading) {
         if (!uiState.loading && uiState.content.isNotEmpty()) {
             val view = editorView
-            if (view != null && coordinator.getEditingState() == EditingState.IDLE) {
+            if (view != null && coordinator.editingState == EditingState.IDLE) {
                 coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
             }
         }

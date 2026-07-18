@@ -222,8 +222,10 @@ class AndroidInputAdapter(
         if (bridge != null) {
             val updateOk = sendUpdateCompositionToKernel(preeditText, compositionCursorUtf16)
             if (!updateOk) {
+                mirror.clearComposition()
                 clearCompositionState()
                 pipeline.reloadFromKernel()
+                onCompositionVisualUpdate?.invoke()
                 return
             }
         }

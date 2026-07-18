@@ -3,6 +3,9 @@ package com.xiwei.sujian.editor.v2.coordinator
 import android.content.Context
 import android.graphics.Rect
 import android.widget.FrameLayout
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import com.xiwei.sujian.data.AppServiceBridge
 import com.xiwei.sujian.data.BridgeResult
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
@@ -13,10 +16,13 @@ class AnimatedTextEditorCoordinator(
     private val appServiceBridge: AppServiceBridge
 ) {
     private val targets = mutableMapOf<String, EditableTextTarget>()
-    private var activeTargetId: String? = null
     private var activeSessionId: ULong? = null
-    private var state: EditingState = EditingState.IDLE
     private var sharedEditorView: SujianEditorView? = null
+
+    var activeTargetId: String? by mutableStateOf(null)
+        private set
+    var editingState: EditingState by mutableStateOf(EditingState.IDLE)
+        private set
 
     fun registerTarget(target: EditableTextTarget) {
         targets[target.targetId] = target
@@ -31,7 +37,7 @@ class AnimatedTextEditorCoordinator(
 
     fun beginEdit(targetId: String, initialSelection: Int? = null): Boolean {
         val target = targets[targetId] ?: return false
-        if (activeTargetId == targetId && state == EditingState.EDITING) return true
+        if (activeTargetId == targetId && editingState == EditingState.EDITING) return true
 
         if (activeTargetId != null && activeTargetId != targetId) {
             if (!commitActiveEdit()) {
@@ -39,12 +45,12 @@ class AnimatedTextEditorCoordinator(
             }
         }
 
-        state = EditingState.BINDING
+        editingState = EditingState.BINDING
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
         val sel = initialSelection ?: target.initialSelection
         val sessionId = createSession(target, sel) ?: run {
-            state = EditingState.IDLE
+            editingState = EditingState.IDLE
             return false
         }
 
@@ -60,7 +66,7 @@ class AnimatedTextEditorCoordinator(
             positionViewOverTarget(view, geometry)
         }
 
-        state = EditingState.EDITING
+        editingState = EditingState.EDITING
         target.onEditingStateChanged?.invoke(EditingState.EDITING)
         return true
     }
@@ -70,7 +76,7 @@ class AnimatedTextEditorCoordinator(
         val target = targets[targetId] ?: return false
         val sessionId = activeSessionId ?: return false
 
-        state = EditingState.COMMITTING
+        editingState = EditingState.COMMITTING
         target.onEditingStateChanged?.invoke(EditingState.COMMITTING)
 
         val view = sharedEditorView
@@ -84,7 +90,7 @@ class AnimatedTextEditorCoordinator(
         activeTargetId = null
         activeSessionId = null
 
-        state = EditingState.IDLE
+        editingState = EditingState.IDLE
         target.onEditingStateChanged?.invoke(EditingState.IDLE)
         return true
     }
@@ -94,7 +100,7 @@ class AnimatedTextEditorCoordinator(
         val target = targets[targetId] ?: return false
         val sessionId = activeSessionId ?: return false
 
-        state = EditingState.CANCELLING
+        editingState = EditingState.CANCELLING
         target.onEditingStateChanged?.invoke(EditingState.CANCELLING)
 
         sharedEditorView?.unbindSession("cancel")
@@ -104,7 +110,7 @@ class AnimatedTextEditorCoordinator(
         activeTargetId = null
         activeSessionId = null
 
-        state = EditingState.IDLE
+        editingState = EditingState.IDLE
         target.onEditingStateChanged?.invoke(EditingState.IDLE)
         return true
     }
@@ -113,7 +119,7 @@ class AnimatedTextEditorCoordinator(
         targets[targetId]?.updateGeometry(geometry)
         if (targetId == activeTargetId) {
             val view = sharedEditorView
-            if (view != null && state == EditingState.EDITING) {
+            if (view != null && editingState == EditingState.EDITING) {
                 positionViewOverTarget(view, geometry)
             }
         }
@@ -122,10 +128,6 @@ class AnimatedTextEditorCoordinator(
     fun updateTargetTransform(targetId: String, transform: Transform2D) {
         targets[targetId]?.updateTransform(transform)
     }
-
-    fun getActiveTargetId(): String? = activeTargetId
-
-    fun getEditingState(): EditingState = state
 
     fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
 
@@ -143,7 +145,7 @@ class AnimatedTextEditorCoordinator(
             view.release()
         }
         sharedEditorView = null
-        state = EditingState.RELEASED
+        editingState = EditingState.RELEASED
     }
 
     fun positionActiveTargetView(view: SujianEditorView) {
