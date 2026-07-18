@@ -1802,13 +1802,19 @@ impl EditorKernel {
         self.revision = self.revision.saturating_add(1);
 
         let resulting_cursor = if preedit_cursor_utf16 > 0 {
-            let committed_text_before_cursor = match committed_text.char_indices().nth(preedit_cursor_utf16) {
-                Some((byte_idx, _)) => &committed_text[..byte_idx],
-                None => &committed_text,
-            };
-            replace_start + committed_text_before_cursor.len()
+            let mut utf16_count = 0usize;
+            let mut byte_offset = 0usize;
+            for ch in committed_text.chars() {
+                if utf16_count >= preedit_cursor_utf16 {
+                    break;
+                }
+                let ch_len_utf16 = ch.len_utf16();
+                utf16_count += ch_len_utf16;
+                byte_offset += ch.len_utf8();
+            }
+            replace_start + byte_offset
         } else {
-            replace_start + committed_text.len()
+            replace_start
         };
         let resulting_cursor = Self::clamp_to_char_boundary(&self.text, resulting_cursor);
         self.cursor = resulting_cursor;

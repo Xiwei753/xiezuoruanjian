@@ -71,9 +71,17 @@ class AndroidInputAdapter(
             cause, mirror.getRevision()
         )
         if (dto == null) {
+            clearCompositionState()
             pipeline.reloadFromKernel()
             return
         }
+        val result = EditResult.fromDto(dto)
+        if (!result.isApplied()) {
+            clearCompositionState()
+            pipeline.reloadFromKernel()
+            return
+        }
+        clearCompositionState()
         val output = pipeline.applyCompositionCommit(dto)
         onPipelineOutput?.invoke(output)
     }
@@ -120,6 +128,8 @@ class AndroidInputAdapter(
             compositionGeneration++
             return true
         }
+        clearCompositionState()
+        pipeline.reloadFromKernel()
         return false
     }
 
@@ -144,12 +154,21 @@ class AndroidInputAdapter(
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
         val dto = bridge.cancelComposition(sessionId, generation, mirror.getRevision())
+        if (dto == null) {
+            compositionSessionId = 0L
+            compositionBaseRevision = 0L
+            compositionGeneration = 0u
+            return false
+        }
+        val result = EditResult.fromDto(dto)
         compositionSessionId = 0L
         compositionBaseRevision = 0L
         compositionGeneration = 0u
-        if (dto == null) return false
-        val result = EditResult.fromDto(dto)
-        return result.isApplied()
+        if (!result.isApplied()) {
+            pipeline.reloadFromKernel()
+            return false
+        }
+        return true
     }
 
     private var compositionSessionId: Long = 0L
@@ -200,10 +219,11 @@ class AndroidInputAdapter(
         }
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
+        val preeditUtf16Len = countUtf16CodeUnits(preeditText)
         compositionCursorUtf16 = if (newCursorPosition > 0) {
-            (countUtf16CodeUnits(preeditText) + newCursorPosition - 1).coerceIn(0, countUtf16CodeUnits(preeditText))
+            (preeditUtf16Len + newCursorPosition - 1).coerceIn(0, preeditUtf16Len)
         } else {
-            newCursorPosition.coerceIn(0, countUtf16CodeUnits(preeditText))
+            (0 + newCursorPosition).coerceIn(0, preeditUtf16Len)
         }
 
         val bridge = pipeline.kernelBridge
@@ -333,8 +353,15 @@ class AndroidInputAdapter(
     fun handleCompositionCancel() {
         if (!isComposing) return
 
-        sendCancelCompositionToKernel()
+        val cancelOk = sendCancelCompositionToKernel()
         clearCompositionState()
+
+        if (!cancelOk) {
+            pipeline.reloadFromKernel()
+            mirror.clearComposition()
+            onCompositionVisualUpdate?.invoke()
+            return
+        }
 
         pipeline.applyCompositionUpdate(
             com.xiwei.sujian.editor.v2.mirror.VisualIntent(

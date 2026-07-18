@@ -68,8 +68,8 @@ class AndroidEditorPipeline private constructor(
 
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): PipelineOutput {
         val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        inputAdapter?.invalidateCompositionSession()
         if (autoIndentEnabled && text == "\n") {
-            inputAdapter?.invalidateCompositionSession()
             val indentPrefix = computeAutoIndentPrefix()
             val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
             val result = EditResult.fromDto(dto)

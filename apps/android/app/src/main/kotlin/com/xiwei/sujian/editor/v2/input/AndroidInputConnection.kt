@@ -3,6 +3,7 @@ package com.xiwei.sujian.editor.v2.input
 import android.view.View
 import android.view.inputmethod.BaseInputConnection
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
+import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import uniffi.writer_core.EditorTransactionCauseDto
 
@@ -195,9 +196,13 @@ class AndroidInputConnection(
         val byteStart = indexMap.utf16ToUtf8(start)
         val byteEnd = indexMap.utf16ToUtf8(end)
         val selectedText = extractUtf8Text(byteStart, byteEnd)
+        val beginOk = adapter.sendBeginCompositionToKernel(byteStart, byteEnd)
+        if (!beginOk) {
+            pipeline.reloadFromKernel()
+            return false
+        }
         adapter.startComposingRegion(byteStart, byteEnd, selectedText)
         mirror.updateComposition(byteStart, byteEnd, selectedText)
-        adapter.sendBeginCompositionToKernel(byteStart, byteEnd)
         notifySelectionChanged()
         return true
     }
@@ -213,11 +218,21 @@ class AndroidInputConnection(
             if (sessionId != 0L) {
                 val bridge = pipeline.kernelBridge ?: return true
                 val cursorUtf16 = start
-                bridge.updateComposition(
+                val dto = bridge.updateComposition(
                     sessionId, generation,
                     adapter.getCompositionText(), cursorUtf16,
                     mirror.getRevision()
                 )
+                if (dto != null) {
+                    val result = EditResult.fromDto(dto)
+                    if (!result.isApplied()) {
+                        adapter.invalidateCompositionSession()
+                        pipeline.reloadFromKernel()
+                    }
+                } else {
+                    adapter.invalidateCompositionSession()
+                    pipeline.reloadFromKernel()
+                }
             }
         } else {
             adapter.sendSetSelectionToKernel(anchorUtf8, headUtf8)
