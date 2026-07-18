@@ -24,7 +24,7 @@ fun AnimatedTextEditorSlot(
 
     val activeTargetId = coordinator.activeTargetId
     val editingState = coordinator.editingState
-    val isVisible = activeTargetId != null && editingState == EditingState.EDITING
+    val isVisible = activeTargetId != null && editingState == EditingState.EDITING && !coordinator.activeTargetOwnsEditorView()
 
     Box(modifier = modifier.fillMaxSize()) {
         if (isVisible) {

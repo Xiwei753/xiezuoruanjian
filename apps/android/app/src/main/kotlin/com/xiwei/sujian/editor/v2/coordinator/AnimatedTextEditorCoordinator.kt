@@ -57,13 +57,21 @@ class AnimatedTextEditorCoordinator(
         activeTargetId = targetId
         activeSessionId = sessionId
 
-        val view = getOrCreateEditorView()
-        val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
-        view.bindSession(bridge, target.profile, target.initialText, sel)
+        if (target.ownsEditorView) {
+            val view = sharedEditorView
+            if (view != null) {
+                val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
+                view.kernelBridge = bridge
+            }
+        } else {
+            val view = getOrCreateEditorView()
+            val bridge = TextEditSessionBridge(appServiceBridge, sessionId)
+            view.bindSession(bridge, target.profile, target.initialText, sel)
 
-        val geometry = target.currentGeometry
-        if (geometry.width() > 0 && geometry.height() > 0) {
-            positionViewOverTarget(view, geometry)
+            val geometry = target.currentGeometry
+            if (geometry.width() > 0 && geometry.height() > 0) {
+                positionViewOverTarget(view, geometry)
+            }
         }
 
         editingState = EditingState.EDITING
@@ -79,11 +87,20 @@ class AnimatedTextEditorCoordinator(
         editingState = EditingState.COMMITTING
         target.onEditingStateChanged?.invoke(EditingState.COMMITTING)
 
-        val view = sharedEditorView
-        if (view != null) {
-            val finalText = view.getText()
-            target.onCommit?.invoke(finalText)
-            view.unbindSession("commit")
+        if (target.ownsEditorView) {
+            val view = sharedEditorView
+            if (view != null) {
+                val finalText = view.getText()
+                target.onCommit?.invoke(finalText)
+                view.kernelBridge = null
+            }
+        } else {
+            val view = sharedEditorView
+            if (view != null) {
+                val finalText = view.getText()
+                target.onCommit?.invoke(finalText)
+                view.unbindSession("commit")
+            }
         }
 
         closeSession(sessionId)
@@ -103,7 +120,11 @@ class AnimatedTextEditorCoordinator(
         editingState = EditingState.CANCELLING
         target.onEditingStateChanged?.invoke(EditingState.CANCELLING)
 
-        sharedEditorView?.unbindSession("cancel")
+        if (target.ownsEditorView) {
+            sharedEditorView?.kernelBridge = null
+        } else {
+            sharedEditorView?.unbindSession("cancel")
+        }
         target.onCancel?.invoke()
 
         closeSession(sessionId)
@@ -130,6 +151,11 @@ class AnimatedTextEditorCoordinator(
     }
 
     fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
+
+    fun activeTargetOwnsEditorView(): Boolean {
+        val targetId = activeTargetId ?: return false
+        return targets[targetId]?.ownsEditorView == true
+    }
 
     fun getSharedEditorView(): SujianEditorView? = sharedEditorView
 

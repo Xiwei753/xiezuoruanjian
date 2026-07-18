@@ -113,6 +113,7 @@ fun WritingPane(
             profile = TextEditorProfile.DocumentBody,
             initialText = "",
             isPersistent = true,
+            ownsEditorView = true,
             onTextChanged = { newText ->
                 if (!isApplyingExternalContent) {
                     viewModel.onContentChanged(newText)

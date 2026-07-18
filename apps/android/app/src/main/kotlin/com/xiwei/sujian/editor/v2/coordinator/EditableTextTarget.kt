@@ -9,6 +9,7 @@ data class EditableTextTarget(
     val initialSelection: Int = initialText.toByteArray(Charsets.UTF_8).size,
     val isPersistent: Boolean = false,
     val commitPolicy: CommitPolicy = if (isPersistent) CommitPolicy.COMMIT_ON_EVERY_CHANGE else CommitPolicy.COMMIT_ON_CONFIRM,
+    val ownsEditorView: Boolean = false,
     val onTextChanged: ((String) -> Unit)? = null,
     val onCommit: ((String) -> Unit)? = null,
     val onCancel: (() -> Unit)? = null,
