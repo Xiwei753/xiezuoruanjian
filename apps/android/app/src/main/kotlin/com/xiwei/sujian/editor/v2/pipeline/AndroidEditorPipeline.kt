@@ -52,6 +52,7 @@ class AndroidEditorPipeline private constructor(
 
     fun loadText(text: String, cursorUtf8: Int): LoadTextResult {
         val bridge = kernelBridge ?: return LoadTextResult.Failed
+        inputAdapter?.invalidateCompositionSession()
         val dto = bridge.loadText(text, cursorUtf8) ?: return LoadTextResult.Failed
         val result = EditResult.fromDto(dto)
         if (result.isStale()) {
@@ -68,6 +69,7 @@ class AndroidEditorPipeline private constructor(
     fun insertText(byteOffset: Int, text: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING): PipelineOutput {
         val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
         if (autoIndentEnabled && text == "\n") {
+            inputAdapter?.invalidateCompositionSession()
             val indentPrefix = computeAutoIndentPrefix()
             val dto = bridge.insertLineBreak(byteOffset, indentPrefix, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
             val result = EditResult.fromDto(dto)
@@ -80,6 +82,7 @@ class AndroidEditorPipeline private constructor(
 
     fun deleteRange(byteStart: Int, byteEndExclusive: Int, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.DELETE): PipelineOutput {
         val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        inputAdapter?.invalidateCompositionSession()
         val dto = bridge.delete(byteStart, byteEndExclusive, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
         return applyEditResult(result)
@@ -87,6 +90,7 @@ class AndroidEditorPipeline private constructor(
 
     fun replaceRangeTyped(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto = EditorTransactionCauseDto.TYPING, beforePatch: (() -> Unit)? = null): PipelineOutput {
         val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        inputAdapter?.invalidateCompositionSession()
         val dto = bridge.replace(byteStart, byteEndExclusive, replacementText, originalText, cause, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
         return applyEditResult(result, beforePatch)
@@ -101,6 +105,7 @@ class AndroidEditorPipeline private constructor(
 
     fun performUndo(): PipelineOutput {
         val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        inputAdapter?.invalidateCompositionSession()
         val dto = bridge.undo(mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
         return applyEditResult(result)
@@ -108,6 +113,7 @@ class AndroidEditorPipeline private constructor(
 
     fun performRedo(): PipelineOutput {
         val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        inputAdapter?.invalidateCompositionSession()
         val dto = bridge.redo(mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
         return applyEditResult(result)
@@ -115,6 +121,7 @@ class AndroidEditorPipeline private constructor(
 
     fun replaceAll(searchStr: String, replaceStr: String): PipelineOutput {
         val bridge = kernelBridge ?: return PipelineOutput.StaleOrInvalid
+        inputAdapter?.invalidateCompositionSession()
         val dto = bridge.replaceAll(searchStr, replaceStr, mirror.getRevision()) ?: return PipelineOutput.StaleOrInvalid
         val result = EditResult.fromDto(dto)
         return applyEditResult(result)

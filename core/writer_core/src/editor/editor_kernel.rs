@@ -301,6 +301,7 @@ struct CompositionSessionState {
     replace_start: usize,
     replace_end_exclusive: usize,
     preedit_text: String,
+    preedit_cursor_utf16: usize,
 }
 
 /// undo 条目
@@ -898,6 +899,7 @@ impl EditorKernel {
         self.cursor = entry.old_cursor;
         self.selection_anchor = self.cursor;
         self.revision = self.revision.saturating_add(1);
+        self.composition_session = None;
 
         self.redo_stack.push(entry);
 
@@ -968,6 +970,7 @@ impl EditorKernel {
         self.cursor = entry.new_cursor;
         self.selection_anchor = self.cursor;
         self.revision = self.revision.saturating_add(1);
+        self.composition_session = None;
 
         self.undo_stack.push(entry);
 
@@ -1111,6 +1114,7 @@ impl EditorKernel {
         self.revision = self.revision.saturating_add(1);
         self.cursor = Self::clamp_to_char_boundary(&self.text, self.cursor);
         self.selection_anchor = self.cursor;
+        self.composition_session = None;
 
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
@@ -1177,6 +1181,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
         let text = format!("\n{}", auto_indent_prefix);
+
+        self.composition_session = None;
 
         self.text.insert_str(byte_offset, &text);
         self.revision = self.revision.saturating_add(1);
@@ -1452,6 +1458,7 @@ impl EditorKernel {
 
         let sel_anchor = Self::clamp_to_char_boundary(&self.text, resulting_selection_anchor);
         let sel_head = Self::clamp_to_char_boundary(&self.text, resulting_selection_head);
+        let selection_was_adjusted = sel_anchor != resulting_selection_anchor || sel_head != resulting_selection_head;
         self.selection_anchor = sel_anchor;
         self.cursor = sel_head;
 
@@ -1491,7 +1498,7 @@ impl EditorKernel {
             },
         };
 
-        EditorEditOutcome::Applied(EditorEditResult {
+        let edit_result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision,
@@ -1499,7 +1506,13 @@ impl EditorKernel {
             old_selection_byte_range: old_selection,
             new_selection_byte_range: new_selection,
             visual_intent,
-        })
+        };
+
+        if selection_was_adjusted {
+            EditorEditOutcome::AppliedWithAdjustedSelection(edit_result)
+        } else {
+            EditorEditOutcome::Applied(edit_result)
+        }
     }
 
     fn apply_delete_surrounding(
@@ -1661,6 +1674,7 @@ impl EditorKernel {
             replace_start,
             replace_end_exclusive,
             preedit_text: String::new(),
+            preedit_cursor_utf16: 0,
         });
 
         let new_selection = (self.selection_anchor, self.cursor);
@@ -1692,7 +1706,7 @@ impl EditorKernel {
         composition_session_id: u64,
         composition_generation: u64,
         new_preedit_text: &str,
-        _new_preedit_cursor_offset: usize,
+        new_preedit_cursor_offset: usize,
         base_revision: u64,
         old_cursor: usize,
         old_selection: (usize, usize),
@@ -1705,6 +1719,7 @@ impl EditorKernel {
         };
 
         session.preedit_text = new_preedit_text.to_string();
+        session.preedit_cursor_utf16 = new_preedit_cursor_offset;
         session.generation = session.generation.saturating_add(1);
 
         let new_selection = (self.selection_anchor, self.cursor);
@@ -1775,6 +1790,7 @@ impl EditorKernel {
         let replace_start = session.replace_start;
         let replace_end = session.replace_end_exclusive;
         let committed_text = session.preedit_text.clone();
+        let preedit_cursor_utf16 = session.preedit_cursor_utf16;
 
         if replace_start > self.text.len() || replace_end > self.text.len() {
             self.composition_session = None;
@@ -1784,7 +1800,18 @@ impl EditorKernel {
         let old_text = self.text.clone();
         self.text.replace_range(replace_start..replace_end, &committed_text);
         self.revision = self.revision.saturating_add(1);
-        self.cursor = replace_start + committed_text.len();
+
+        let resulting_cursor = if preedit_cursor_utf16 > 0 {
+            let committed_text_before_cursor = match committed_text.char_indices().nth(preedit_cursor_utf16) {
+                Some((byte_idx, _)) => &committed_text[..byte_idx],
+                None => &committed_text,
+            };
+            replace_start + committed_text_before_cursor.len()
+        } else {
+            replace_start + committed_text.len()
+        };
+        let resulting_cursor = Self::clamp_to_char_boundary(&self.text, resulting_cursor);
+        self.cursor = resulting_cursor;
         self.selection_anchor = self.cursor;
         self.composition_session = None;
 

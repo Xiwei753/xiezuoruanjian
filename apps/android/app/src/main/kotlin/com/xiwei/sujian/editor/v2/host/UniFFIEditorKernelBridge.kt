@@ -58,24 +58,6 @@ class UniFFIEditorKernelBridge(
         }
     }
 
-    @Deprecated("Use commitText with composition session validation instead")
-    override fun compositionCommit(
-        compositionReplaceStart: Int,
-        compositionReplaceEndExclusive: Int,
-        committedText: String,
-        originalText: String
-    ): EditorEditResultDto? {
-        return when (val result = appServiceBridge.editorKernelCompositionCommit(
-            compositionReplaceStart.toUInt(),
-            compositionReplaceEndExclusive.toUInt(),
-            committedText,
-            originalText
-        )) {
-            is BridgeResult.Success -> result.data
-            else -> null
-        }
-    }
-
     override fun commitText(
         byteStart: Int,
         byteEndExclusive: Int,

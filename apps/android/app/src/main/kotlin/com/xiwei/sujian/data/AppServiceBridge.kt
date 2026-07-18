@@ -170,19 +170,6 @@ class AppServiceBridge(workspacePath: String) {
         holder.service.editorKernelLoadText(text, cursorByteOffset)
     }
 
-    @Deprecated("Use editorKernelCommitText with composition session validation instead")
-    fun editorKernelCompositionCommit(
-        compositionReplaceStart: UInt,
-        compositionReplaceEndExclusive: UInt,
-        committedText: String,
-        originalText: String
-    ): BridgeResult<uniffi.writer_core.EditorEditResultDto> = holder.wrapResult {
-        holder.service.editorKernelCompositionCommit(
-            compositionReplaceStart, compositionReplaceEndExclusive,
-            committedText, originalText
-        )
-    }
-
     fun editorKernelSetAnimationEnabled(enabled: Boolean): BridgeResult<Unit> = holder.wrapResult {
         holder.service.editorKernelSetAnimationEnabled(if (enabled) 1u else 0u)
     }
