@@ -18,6 +18,7 @@ class AnimatedTextEditorCoordinator(
     private val targets = mutableMapOf<String, EditableTextTarget>()
     private var activeSessionId: ULong? = null
     private var sharedEditorView: SujianEditorView? = null
+    private val persistentSessionIds = mutableMapOf<String, ULong>()
 
     var activeTargetId: String? by mutableStateOf(null)
         private set
@@ -32,6 +33,10 @@ class AnimatedTextEditorCoordinator(
         if (activeTargetId == targetId && editingState != EditingState.COMMITTING && editingState != EditingState.CANCELLING) {
             cancelActiveEdit()
         }
+        val persistentSessionId = persistentSessionIds.remove(targetId)
+        if (persistentSessionId != null) {
+            closeSession(persistentSessionId)
+        }
         targets.remove(targetId)
     }
 
@@ -40,6 +45,10 @@ class AnimatedTextEditorCoordinator(
         if (activeTargetId == targetId && editingState == EditingState.EDITING) return true
 
         if (activeTargetId != null && activeTargetId != targetId) {
+            val oldTarget = targets[activeTargetId]
+            editingState = EditingState.REBINDING
+            oldTarget?.onEditingStateChanged?.invoke(EditingState.REBINDING)
+
             if (!commitActiveEdit()) {
                 cancelActiveEdit()
             }
@@ -49,7 +58,15 @@ class AnimatedTextEditorCoordinator(
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
         val sel = initialSelection ?: target.initialSelection
-        val sessionId = createSession(target, sel) ?: run {
+        val sessionId = if (target.isPersistent) {
+            persistentSessionIds[targetId] ?: createSession(target, sel)?.also {
+                persistentSessionIds[targetId] = it
+            }
+        } else {
+            createSession(target, sel)
+        }
+
+        if (sessionId == null) {
             editingState = EditingState.IDLE
             return false
         }
@@ -87,23 +104,20 @@ class AnimatedTextEditorCoordinator(
         editingState = EditingState.COMMITTING
         target.onEditingStateChanged?.invoke(EditingState.COMMITTING)
 
-        if (target.ownsEditorView) {
-            val view = sharedEditorView
-            if (view != null) {
-                val finalText = view.getText()
-                target.onCommit?.invoke(finalText)
-                view.kernelBridge = null
-            }
-        } else {
-            val view = sharedEditorView
-            if (view != null) {
-                val finalText = view.getText()
-                target.onCommit?.invoke(finalText)
+        val view = sharedEditorView
+        if (view != null) {
+            val finalText = view.getText()
+            target.onCommit?.invoke(finalText)
+            if (target.ownsEditorView) {
+                view.softResetForPersistentCommit()
+            } else {
                 view.unbindSession("commit")
             }
         }
 
-        closeSession(sessionId)
+        if (!target.isPersistent) {
+            closeSession(sessionId)
+        }
         activeTargetId = null
         activeSessionId = null
 
@@ -120,11 +134,7 @@ class AnimatedTextEditorCoordinator(
         editingState = EditingState.CANCELLING
         target.onEditingStateChanged?.invoke(EditingState.CANCELLING)
 
-        if (target.ownsEditorView) {
-            sharedEditorView?.kernelBridge = null
-        } else {
-            sharedEditorView?.unbindSession("cancel")
-        }
+        sharedEditorView?.unbindSession("cancel")
         target.onCancel?.invoke()
 
         closeSession(sessionId)
@@ -150,6 +160,17 @@ class AnimatedTextEditorCoordinator(
         targets[targetId]?.updateTransform(transform)
     }
 
+    fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int) {
+        val sessionId = persistentSessionIds[targetId] ?: return
+        when (appServiceBridge.textEditSessionReset(sessionId, text, cursorUtf8.toUInt())) {
+            is BridgeResult.Success -> { }
+            else -> { }
+        }
+        if (targetId == activeTargetId) {
+            sharedEditorView?.loadText(text, cursorUtf8)
+        }
+    }
+
     fun getTargetGeometry(targetId: String): Rect? = targets[targetId]?.currentGeometry
 
     fun activeTargetOwnsEditorView(): Boolean {
@@ -167,6 +188,10 @@ class AnimatedTextEditorCoordinator(
         if (activeTargetId != null) {
             cancelActiveEdit()
         }
+        persistentSessionIds.values.forEach { sessionId ->
+            closeSession(sessionId)
+        }
+        persistentSessionIds.clear()
         sharedEditorView?.let { view ->
             view.release()
         }
