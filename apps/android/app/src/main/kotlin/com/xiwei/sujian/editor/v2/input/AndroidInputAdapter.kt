@@ -70,20 +70,15 @@ class AndroidInputAdapter(
             sessionId, baseRev, generation,
             cause, mirror.getRevision()
         )
-        if (dto == null) {
+        val result = dto?.let { EditResult.fromDto(it) }
+        if (result != null && result.isApplied()) {
             clearCompositionState()
-            pipeline.reloadFromKernel()
-            return
-        }
-        val result = EditResult.fromDto(dto)
-        if (!result.isApplied()) {
-            clearCompositionState()
-            pipeline.reloadFromKernel()
+            val output = pipeline.applyCompositionCommit(dto)
+            onPipelineOutput?.invoke(output)
             return
         }
         clearCompositionState()
-        val output = pipeline.applyCompositionCommit(dto)
-        onPipelineOutput?.invoke(output)
+        pipeline.reloadFromKernel()
     }
 
     fun sendDeleteSurroundingToKernel(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto) {
@@ -136,15 +131,16 @@ class AndroidInputAdapter(
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
-        clearCompositionState()
         if (dto != null) {
             val result = EditResult.fromDto(dto)
             if (result.isApplied()) {
+                clearCompositionState()
                 val output = pipeline.applyCompositionCommit(dto)
                 onPipelineOutput?.invoke(output)
                 return
             }
         }
+        clearCompositionState()
         pipeline.reloadFromKernel()
     }
 
@@ -153,9 +149,6 @@ class AndroidInputAdapter(
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return false
         val dto = bridge.cancelComposition(sessionId, generation, mirror.getRevision())
-        compositionSessionId = 0L
-        compositionBaseRevision = 0L
-        compositionGeneration = 0u
         if (dto == null) {
             return false
         }
@@ -255,15 +248,16 @@ class AndroidInputAdapter(
                 sessionId, baseRev, generation,
                 EditorTransactionCauseDto.TYPING_COMMIT, mirror.getRevision()
             )
-            clearCompositionState()
             if (dto != null) {
                 val result = EditResult.fromDto(dto)
                 if (result.isApplied()) {
+                    clearCompositionState()
                     val output = pipeline.applyCompositionCommit(dto)
                     onPipelineOutput?.invoke(output)
                     return
                 }
             }
+            clearCompositionState()
             pipeline.reloadFromKernel()
             return
         }
