@@ -125,6 +125,7 @@ class AndroidEditorPipeline private constructor(
         return applyEditResult(result)
     }
 
+    @Deprecated("Composition commit failure must reload from kernel, not fallback to plain Replace")
     fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto): PipelineOutput {
         return replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
     }

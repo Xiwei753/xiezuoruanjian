@@ -430,6 +430,7 @@ interface EditorKernelBridge {
     fun undo(expectedRevision: Long): uniffi.writer_core.EditorEditResultDto?
     fun redo(expectedRevision: Long): uniffi.writer_core.EditorEditResultDto?
     fun loadText(text: String, cursorUtf8: Int): uniffi.writer_core.EditorEditResultDto?
+    @Deprecated("Use commitText with composition session validation instead")
     fun compositionCommit(
         compositionReplaceStart: Int,
         compositionReplaceEndExclusive: Int,

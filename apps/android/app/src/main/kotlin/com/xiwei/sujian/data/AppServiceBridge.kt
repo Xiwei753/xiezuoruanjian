@@ -170,6 +170,7 @@ class AppServiceBridge(workspacePath: String) {
         holder.service.editorKernelLoadText(text, cursorByteOffset)
     }
 
+    @Deprecated("Use editorKernelCommitText with composition session validation instead")
     fun editorKernelCompositionCommit(
         compositionReplaceStart: UInt,
         compositionReplaceEndExclusive: UInt,

@@ -69,7 +69,11 @@ class AndroidInputAdapter(
             resultingSelectionAnchor, resultingSelectionHead,
             sessionId, baseRev, generation,
             cause, mirror.getRevision()
-        ) ?: return
+        )
+        if (dto == null) {
+            pipeline.reloadFromKernel()
+            return
+        }
         val output = pipeline.applyCompositionCommit(dto)
         onPipelineOutput?.invoke(output)
     }
@@ -91,15 +95,18 @@ class AndroidInputAdapter(
         val dto = bridge.beginComposition(replaceStart, replaceEndExclusive, mirror.getRevision()) ?: return
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
-            compositionSessionId = result.transactionId
-            compositionBaseRevision = result.baseRevision
-            compositionGeneration = 0u
+            val sessionDto = dto.compositionSession
+            if (sessionDto != null) {
+                compositionSessionId = sessionDto.sessionId.toLong()
+                compositionBaseRevision = sessionDto.baseRevision.toLong()
+                compositionGeneration = sessionDto.generation.toLong().toUInt()
+            }
         }
     }
 
     fun sendUpdateCompositionToKernel(newPreeditText: String, newPreeditCursorOffset: Int) {
         val bridge = pipeline.kernelBridge ?: return
-        val (sessionId, baseRev, generation) = compositionSessionInfo()
+        val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         val dto = bridge.updateComposition(
             sessionId, generation,
@@ -114,11 +121,15 @@ class AndroidInputAdapter(
 
     fun sendFinishCompositionToKernel() {
         val bridge = pipeline.kernelBridge ?: return
-        val (sessionId, baseRev, generation) = compositionSessionInfo()
+        val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
-        val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision()) ?: return
-        val output = pipeline.applyCompositionCommit(dto)
-        onPipelineOutput?.invoke(output)
+        val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
+        if (dto != null) {
+            val output = pipeline.applyCompositionCommit(dto)
+            onPipelineOutput?.invoke(output)
+        } else {
+            pipeline.reloadFromKernel()
+        }
         compositionSessionId = 0L
         compositionBaseRevision = 0L
         compositionGeneration = 0u
@@ -126,7 +137,7 @@ class AndroidInputAdapter(
 
     fun sendCancelCompositionToKernel() {
         val bridge = pipeline.kernelBridge ?: return
-        val (sessionId, baseRev, generation) = compositionSessionInfo()
+        val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
         bridge.cancelComposition(sessionId, generation, mirror.getRevision())
         compositionSessionId = 0L
@@ -161,82 +172,7 @@ class AndroidInputAdapter(
 
         val bridge = pipeline.kernelBridge
         if (bridge != null) {
-            val intentDto = bridge.compositionUpdateVisualIntent(
-                compositionReplaceStartUtf8.toUInt(),
-                compositionReplaceEndUtf8.toUInt(),
-                previousCompositionText,
-                preeditText,
-            )
-            if (intentDto != null) {
-                val visualIntent = com.xiwei.sujian.editor.v2.mirror.VisualIntent.fromDto(intentDto)
-                pipeline.applyCompositionUpdate(visualIntent) {
-                    mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
-                }
-                applyNewCursorPositionInComposition(newCursorPosition, preeditText)
-                sendUpdateCompositionToKernel(preeditText, 0)
-                onCompositionVisualUpdate?.invoke()
-                return
-            }
-        }
-
-        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
-        applyNewCursorPositionInComposition(newCursorPosition, preeditText)
-        sendUpdateCompositionToKernel(preeditText, 0)
-        pipeline.onCompositionUpdated()
-        onCompositionVisualUpdate?.invoke()
-    }
-
-    private fun applyNewCursorPositionInComposition(newCursorPosition: Int, preeditText: String) {
-        val compositionRangeUtf16 = mirror.getCompositionRangeUtf16() ?: return
-        val indexMap = AndroidTextIndexMap(mirror)
-        val totalUtf16 = indexMap.getUtf16Length()
-        val targetUtf16: Int
-        if (newCursorPosition > 0) {
-            targetUtf16 = (compositionRangeUtf16.second + newCursorPosition - 1).coerceIn(0, totalUtf16)
-        } else {
-            targetUtf16 = (compositionRangeUtf16.first + newCursorPosition).coerceIn(0, totalUtf16)
-        }
-        compositionCursorUtf16 = targetUtf16 - compositionRangeUtf16.first
-        val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
-        mirror.setSelectionInternal(targetUtf8, targetUtf8)
-    }
-
-    fun applyNewCursorPosition(newCursorPosition: Int, insertStartUtf8: Int, insertedText: String) {
-        val indexMap = AndroidTextIndexMap(mirror)
-        val insertStartUtf16 = indexMap.utf8ToUtf16(insertStartUtf8)
-        val insertEndUtf16 = indexMap.utf8ToUtf16(insertStartUtf8 + insertedText.toByteArray(Charsets.UTF_8).size)
-        val totalUtf16 = indexMap.getUtf16Length()
-
-        val targetUtf16: Int
-        if (newCursorPosition > 0) {
-            targetUtf16 = (insertEndUtf16 + newCursorPosition - 1).coerceIn(0, totalUtf16)
-        } else {
-            targetUtf16 = (insertStartUtf16 + newCursorPosition).coerceIn(0, totalUtf16)
-        }
-        val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
-        if (isComposing) {
-            mirror.setSelectionInternal(targetUtf8, targetUtf8)
-        } else {
-            val output = pipeline.setSelectionTyped(targetUtf8, targetUtf8)
-            onPipelineOutput?.invoke(output)
-        }
-    }
-
-    fun handleCompositionFinish() {
-        if (!isComposing) return
-        val committedText = currentCompositionText
-        val replaceStart = compositionReplaceStartUtf8
-        val replaceEnd = compositionReplaceEndUtf8
-        currentCompositionText = ""
-        previousCompositionText = ""
-        isComposing = false
-        compositionReplaceStartUtf8 = 0
-        compositionReplaceEndUtf8 = 0
-        compositionCursorUtf16 = 0
-
-        val bridge = pipeline.kernelBridge
-        if (bridge != null) {
-            val (sessionId, baseRev, generation) = compositionSessionInfo()
+            val (sessionId, _baseRev, generation) = compositionSessionInfo()
             if (sessionId != 0L) {
                 val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
                 if (dto != null) {
@@ -247,11 +183,7 @@ class AndroidInputAdapter(
                     compositionGeneration = 0u
                     return
                 }
-            }
-            val dto = bridge.compositionCommit(replaceStart, replaceEnd, committedText, "")
-            if (dto != null) {
-                val output = pipeline.applyCompositionCommit(dto)
-                onPipelineOutput?.invoke(output)
+                pipeline.reloadFromKernel()
                 compositionSessionId = 0L
                 compositionBaseRevision = 0L
                 compositionGeneration = 0u
@@ -259,8 +191,7 @@ class AndroidInputAdapter(
             }
         }
 
-        val output = pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, committedText, "", EditorTransactionCauseDto.TYPING_COMMIT)
-        onPipelineOutput?.invoke(output)
+        pipeline.reloadFromKernel()
         compositionSessionId = 0L
         compositionBaseRevision = 0L
         compositionGeneration = 0u
@@ -277,20 +208,14 @@ class AndroidInputAdapter(
         compositionReplaceEndUtf8 = 0
         compositionCursorUtf16 = 0
 
-        val resultingHead = if (newCursorPosition > 0) {
-            replaceStart + finalText.toByteArray(Charsets.UTF_8).size + newCursorPosition - 1
-        } else if (newCursorPosition < 0) {
-            replaceStart + newCursorPosition
-        } else {
-            replaceStart + finalText.toByteArray(Charsets.UTF_8).size
-        }
+        val (resultingAnchor, resultingHead) = computeResultingSelectionUtf8(newCursorPosition, replaceStart, finalText)
 
         val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val (sessionId, baseRev, generation) = compositionSessionInfo()
             val dto = bridge.commitText(
                 replaceStart, replaceEnd, finalText,
-                resultingHead, resultingHead,
+                resultingAnchor, resultingHead,
                 sessionId, baseRev, generation,
                 EditorTransactionCauseDto.TYPING_COMMIT, mirror.getRevision()
             )
@@ -302,13 +227,81 @@ class AndroidInputAdapter(
                 compositionGeneration = 0u
                 return
             }
+            pipeline.reloadFromKernel()
+            compositionSessionId = 0L
+            compositionBaseRevision = 0L
+            compositionGeneration = 0u
+            return
         }
 
-        val output = pipeline.clearCompositionAndReplace(replaceStart, replaceEnd, finalText, "", EditorTransactionCauseDto.TYPING_COMMIT)
-        onPipelineOutput?.invoke(output)
+        pipeline.reloadFromKernel()
         compositionSessionId = 0L
         compositionBaseRevision = 0L
         compositionGeneration = 0u
+    }
+
+    fun handleCompositionFinish() {
+        if (!isComposing) return
+        currentCompositionText = ""
+        previousCompositionText = ""
+        isComposing = false
+        compositionReplaceStartUtf8 = 0
+        compositionReplaceEndUtf8 = 0
+        compositionCursorUtf16 = 0
+
+        val bridge = pipeline.kernelBridge
+        if (bridge != null) {
+            val (sessionId, _baseRev, generation) = compositionSessionInfo()
+            if (sessionId != 0L) {
+                val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
+                if (dto != null) {
+                    val output = pipeline.applyCompositionCommit(dto)
+                    onPipelineOutput?.invoke(output)
+                    compositionSessionId = 0L
+                    compositionBaseRevision = 0L
+                    compositionGeneration = 0u
+                    return
+                }
+                pipeline.reloadFromKernel()
+                compositionSessionId = 0L
+                compositionBaseRevision = 0L
+                compositionGeneration = 0u
+                return
+            }
+        }
+
+        pipeline.reloadFromKernel()
+        compositionSessionId = 0L
+        compositionBaseRevision = 0L
+        compositionGeneration = 0u
+    }
+
+    private fun countUtf16CodeUnits(text: String): Int {
+        var count = 0
+        var i = 0
+        while (i < text.length) {
+            val codePoint = text.codePointAt(i)
+            count += Character.charCount(codePoint)
+            i += Character.charCount(codePoint)
+        }
+        return count
+    }
+
+    private fun computeResultingSelectionUtf8(newCursorPosition: Int, insertStartUtf8: Int, insertedText: String): Pair<Int, Int> {
+        val indexMap = AndroidTextIndexMap(mirror)
+        val insertStartUtf16 = indexMap.utf8ToUtf16(insertStartUtf8)
+        val insertedUtf16Len = countUtf16CodeUnits(insertedText)
+        val insertEndUtf16 = insertStartUtf16 + insertedUtf16Len
+        val totalUtf16 = indexMap.getUtf16Length()
+
+        val targetUtf16: Int
+        if (newCursorPosition > 0) {
+            targetUtf16 = (insertEndUtf16 + newCursorPosition - 1).coerceIn(0, totalUtf16)
+        } else {
+            targetUtf16 = (insertStartUtf16 + newCursorPosition).coerceIn(0, totalUtf16)
+        }
+        val targetUtf8 = indexMap.utf16ToUtf8(targetUtf16)
+        return Pair(targetUtf8, targetUtf8)
     }
 
     fun handleCompositionCancel() {

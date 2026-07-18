@@ -1451,6 +1451,13 @@ dictionary EditorEditResultDto {
     u32 new_selection_start;
     u32 new_selection_end;
     EditorVisualIntentDto visual_intent;
+    CompositionSessionDto? composition_session;
+};
+
+dictionary CompositionSessionDto {
+    u64 session_id;
+    u64 base_revision;
+    u64 generation;
 };
 
 dictionary EditorSessionSnapshotDto {

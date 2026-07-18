@@ -942,7 +942,19 @@ impl WriterAppService {
                 replace_end_exclusive: replace_end_exclusive as usize,
                 expected_revision,
             });
-            result.into()
+            let mut dto: crate::api::EditorEditResultDto = result.into();
+            if dto.outcome == crate::api::EditorEditOutcomeDto::Applied
+                || dto.outcome == crate::api::EditorEditOutcomeDto::AppliedWithAdjustedSelection
+            {
+                if let Some((session_id, base_revision, generation)) = s.kernel.composition_session_info() {
+                    dto.composition_session = Some(crate::api::types::CompositionSessionDto {
+                        session_id,
+                        base_revision,
+                        generation,
+                    });
+                }
+            }
+            dto
         })
     }
 

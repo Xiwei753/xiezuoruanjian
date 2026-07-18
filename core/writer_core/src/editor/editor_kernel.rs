@@ -560,6 +560,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
 
+        self.composition_session = None;
+
         self.text.insert_str(byte_offset, text);
         self.revision = self.revision.saturating_add(1);
         self.cursor = byte_offset + text.len();
@@ -654,6 +656,8 @@ impl EditorKernel {
 
         let old_text = self.text.clone();
 
+        self.composition_session = None;
+
         self.text.replace_range(byte_start..byte_end_exclusive, "");
         self.revision = self.revision.saturating_add(1);
         self.cursor = byte_start;
@@ -747,6 +751,8 @@ impl EditorKernel {
         }
 
         let old_text = self.text.clone();
+
+        self.composition_session = None;
 
         self.text.replace_range(byte_start..byte_end_exclusive, replacement_text);
         self.revision = self.revision.saturating_add(1);
@@ -1554,6 +1560,7 @@ impl EditorKernel {
         let old_text = self.text.clone();
         self.text = text;
         self.revision = self.revision.saturating_add(1);
+        self.composition_session = None;
 
         let before_deleted_len: usize = if let Some((bs, be)) = before_range {
             be.saturating_sub(bs)
@@ -1561,10 +1568,18 @@ impl EditorKernel {
             0
         };
 
-        let new_sel_min = sel_min.saturating_sub(before_deleted_len);
-        let new_sel_max = sel_max.saturating_sub(before_deleted_len);
-        self.selection_anchor = new_sel_min;
-        self.cursor = new_sel_max;
+        let new_sel_anchor = if sel_anchor == sel_min {
+            sel_min.saturating_sub(before_deleted_len)
+        } else {
+            sel_max.saturating_sub(before_deleted_len)
+        };
+        let new_sel_head = if sel_head == sel_min {
+            sel_min.saturating_sub(before_deleted_len)
+        } else {
+            sel_max.saturating_sub(before_deleted_len)
+        };
+        self.selection_anchor = new_sel_anchor;
+        self.cursor = new_sel_head;
 
         self.undo_stack.push(UndoEntry {
             old_text: old_text.clone(),
@@ -1626,6 +1641,9 @@ impl EditorKernel {
         if self.composition_session.is_some() {
             return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
         }
+        if replace_start > replace_end_exclusive {
+            return EditorEditOutcome::InvalidRange(self.noop_result(base_revision, old_cursor, old_selection));
+        }
         if replace_start > self.text.len() || replace_end_exclusive > self.text.len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(base_revision, old_cursor, old_selection));
         }
@@ -1680,7 +1698,9 @@ impl EditorKernel {
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
         let session = match &mut self.composition_session {
-            Some(s) if s.session_id == composition_session_id && s.generation == composition_generation => s,
+            Some(s) if s.session_id == composition_session_id
+                && s.generation == composition_generation
+                && s.base_revision == base_revision => s,
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
@@ -1720,7 +1740,9 @@ impl EditorKernel {
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
         let session = match &self.composition_session {
-            Some(s) if s.session_id == composition_session_id && s.generation == composition_generation => s.clone(),
+            Some(s) if s.session_id == composition_session_id
+                && s.generation == composition_generation
+                && s.base_revision == base_revision => s.clone(),
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
@@ -1817,7 +1839,9 @@ impl EditorKernel {
         old_selection: (usize, usize),
     ) -> EditorEditOutcome {
         let session = match &self.composition_session {
-            Some(s) if s.session_id == composition_session_id && s.generation == composition_generation => s.clone(),
+            Some(s) if s.session_id == composition_session_id
+                && s.generation == composition_generation
+                && s.base_revision == base_revision => s.clone(),
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 

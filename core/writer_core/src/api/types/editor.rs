@@ -566,6 +566,14 @@ impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct CompositionSessionDto {
+    pub session_id: u64,
+    pub base_revision: u64,
+    pub generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
  pub struct EditorEditResultDto {
     pub outcome: EditorEditOutcomeDto,
     pub transaction_id: u64,
@@ -577,6 +585,8 @@ impl From<crate::editor::DisplayPatch> for DisplayPatchDto {
     pub new_selection_start: u32,
     pub new_selection_end: u32,
     pub visual_intent: EditorVisualIntentDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition_session: Option<CompositionSessionDto>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -612,6 +622,7 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
             new_selection_start: r.new_selection_byte_range.0 as u32,
             new_selection_end: r.new_selection_byte_range.1 as u32,
             visual_intent: r.visual_intent.into(),
+            composition_session: None,
         }
     }
 }
@@ -630,6 +641,7 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
             new_selection_start: r.new_selection_byte_range.0 as u32,
             new_selection_end: r.new_selection_byte_range.1 as u32,
             visual_intent: r.visual_intent.into(),
+            composition_session: None,
         }
     }
 }

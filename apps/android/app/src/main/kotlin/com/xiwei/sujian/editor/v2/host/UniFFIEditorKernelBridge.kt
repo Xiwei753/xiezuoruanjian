@@ -58,6 +58,7 @@ class UniFFIEditorKernelBridge(
         }
     }
 
+    @Deprecated("Use commitText with composition session validation instead")
     override fun compositionCommit(
         compositionReplaceStart: Int,
         compositionReplaceEndExclusive: Int,

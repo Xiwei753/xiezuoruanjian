@@ -75,7 +75,6 @@ class EditResultTest {
         assertEquals(3, result.newSelectionEnd)
         assertTrue(result.isApplied())
     }
-    }
 
     @Test
     fun coordinatedCursorDefaults() {
