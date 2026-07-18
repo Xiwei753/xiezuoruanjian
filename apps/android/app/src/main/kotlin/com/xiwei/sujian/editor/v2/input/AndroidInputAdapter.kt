@@ -83,6 +83,7 @@ class AndroidInputAdapter(
 
     fun sendDeleteSurroundingToKernel(beforeByteStart: Int, beforeByteEndExclusive: Int, afterByteStart: Int, afterByteEndExclusive: Int, cause: EditorTransactionCauseDto) {
         val bridge = pipeline.kernelBridge ?: return
+        invalidateCompositionSession()
         val dto = bridge.deleteSurrounding(
             beforeByteStart, beforeByteEndExclusive,
             afterByteStart, afterByteEndExclusive,

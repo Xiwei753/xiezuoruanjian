@@ -1529,6 +1529,7 @@ impl LinuxEditorAnimationCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
 
     #[test]
     fn test_coordinator_suppress_all() {
