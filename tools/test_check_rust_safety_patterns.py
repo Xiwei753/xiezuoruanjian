@@ -293,6 +293,29 @@ mod tests {
         rules = self.rule_names(source)
         self.assertNotIn("cpp-unsafe-call", rules)
 
+    def test_accepts_cpp_unsafe_with_safety_comment(self) -> None:
+        source = r'''
+fn call_qt(item: *mut c_void) {
+    // SAFETY: item is a QQuickItem* obtained from QML engine; valid for the lifetime of the scene graph node; GUI thread only; null-checked above.
+    cpp!(unsafe [item as "QQuickItem*"] {
+        item->update();
+    });
+}
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("cpp-unsafe-call", rules)
+
+    def test_flags_cpp_unsafe_without_safety_comment(self) -> None:
+        source = r'''
+fn call_qt(item: *mut c_void) {
+    cpp!(unsafe [item as "QQuickItem*"] {
+        item->update();
+    });
+}
+'''
+        rules = self.rule_names(source)
+        self.assertIn("cpp-unsafe-call", rules)
+
     def test_assert_unwind_safe_allowed_in_whitelisted_path(self) -> None:
         source = r'''
 fn ffi_boundary() {

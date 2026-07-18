@@ -273,6 +273,7 @@ impl SujianEditorItem {
             self.cursor_rect_changed();
             let obj_ptr = self.get_cpp_object();
             if !obj_ptr.is_null() {
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [obj_ptr as "QQuickItem*"] {
                     QGuiApplication::inputMethod()->update(Qt::ImCursorRectangle | Qt::ImAnchorRectangle);
                 });

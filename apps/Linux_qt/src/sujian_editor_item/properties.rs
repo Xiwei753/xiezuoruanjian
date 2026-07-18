@@ -451,6 +451,7 @@ impl SujianEditorItem {
         if obj.is_null() {
             return false;
         }
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         cpp!(unsafe [obj as "QObject*"] -> bool as "bool" {
             const QMetaObject* meta = obj->metaObject();
             return meta != nullptr;
@@ -463,6 +464,7 @@ impl SujianEditorItem {
         if obj.is_null() {
             return "<null>".into();
         }
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         cpp!(unsafe [obj as "QObject*"] -> QString as "QString" {
             const QMetaObject* meta = obj->metaObject();
             QStringList signal_list;

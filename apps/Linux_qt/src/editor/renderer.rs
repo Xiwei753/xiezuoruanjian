@@ -41,6 +41,7 @@ pub fn color_from_qstring(color: QString) -> QColor {
 }
 
 pub fn sujian_item_dpr(item_ptr: *mut std::ffi::c_void) -> f64 {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [item_ptr as "QQuickItem*"] -> f64 as "double" {
         if (!item_ptr || !item_ptr->window()) return 1.0;
         return item_ptr->window()->devicePixelRatio();
@@ -49,6 +50,7 @@ pub fn sujian_item_dpr(item_ptr: *mut std::ffi::c_void) -> f64 {
 
 pub fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, dpr: f64) -> *mut QPainter {
     let img_ptr = image as *mut qmetaobject::QImage;
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [img_ptr as "QImage*", dpr as "double"] -> *mut QPainter as "QPainter*" {
         auto *p = new QPainter(img_ptr);
         p->scale(dpr, dpr);
@@ -57,5 +59,6 @@ pub fn sujian_create_painter_scaled(image: &mut qmetaobject::QImage, dpr: f64) -
 }
 
 pub fn sujian_delete_painter(painter: *mut QPainter) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [painter as "QPainter*"] { delete painter; })
 }

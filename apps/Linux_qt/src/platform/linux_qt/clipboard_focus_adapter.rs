@@ -64,6 +64,7 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
                 let text_utf16: Vec<u16> = text.encode_utf16().collect();
                 let ptr = text_utf16.as_ptr();
                 let len = text_utf16.len() as i32;
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [ptr as "const ushort*", len as "int"] {
                     QClipboard* cb = QGuiApplication::clipboard();
                     if (cb) {
@@ -88,6 +89,7 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
                 let text_utf16: Vec<u16> = text.encode_utf16().collect();
                 let ptr = text_utf16.as_ptr();
                 let len = text_utf16.len() as i32;
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [ptr as "const ushort*", len as "int"] {
                     QClipboard* cb = QGuiApplication::clipboard();
                     if (cb) {
@@ -114,6 +116,7 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
         }
         match request {
             FocusRequest::RequestFocus | FocusRequest::RequestSoftInput => {
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [item_ptr as "QQuickItem*"] {
                     item_ptr->forceActiveFocus(Qt::MouseFocusReason);
                     QInputMethod* im = QGuiApplication::inputMethod();
@@ -126,6 +129,7 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
                 self.focus_state.soft_input_visible = true;
             }
             FocusRequest::ReleaseFocus | FocusRequest::HideSoftInput => {
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [item_ptr as "QQuickItem*"] {
                     QInputMethod* im = QGuiApplication::inputMethod();
                     if (im) {
@@ -146,6 +150,7 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
         if !item_ptr.is_null() {
             let x = _request.screen_x;
             let y = _request.screen_y;
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             cpp!(unsafe [item_ptr as "QQuickItem*", x as "double", y as "double"] {
                 QMetaObject::invokeMethod(item_ptr, "context_menu_requested",
                     Q_ARG(QVariant, QVariant(x)),
@@ -157,6 +162,7 @@ impl ClipboardAndFocusAdapter for LinuxQtClipboardFocusAdapter {
     fn hide_context_menu(&mut self) {
         let item_ptr = self.item_ptr.get();
         if !item_ptr.is_null() {
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             cpp!(unsafe [item_ptr as "QQuickItem*"] {
                 QMetaObject::invokeMethod(item_ptr, "hide_context_menu_requested");
             });

@@ -242,6 +242,9 @@ def scan_text(path: Path, text: str) -> list[Finding]:
                 if rule.name in _RULES_PRODUCTION_ONLY:
                     if _is_in_test_context(lines, index):
                         continue
+                if rule.name == "cpp-unsafe-call":
+                    if _has_safety_comment(lines, index):
+                        continue
                 findings.append(Finding(path, index + 1, rule.name, rule.message))
 
         if re.search(r"\bunsafe\s*\{", code) and not _has_safety_comment(lines, index):

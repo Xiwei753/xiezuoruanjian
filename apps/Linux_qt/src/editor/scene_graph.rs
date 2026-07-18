@@ -89,6 +89,7 @@ cpp! {{
 }}
 
 pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*"
@@ -112,6 +113,7 @@ pub fn update_texture_node(
     dpr: f64,
 ) -> *mut std::ffi::c_void {
     let img_ptr = image as *const qmetaobject::QImage;
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         old_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
@@ -190,6 +192,7 @@ pub fn update_source_rect(
     dest_h: f64,
     dpr: f64,
 ) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         old_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
@@ -245,6 +248,7 @@ pub fn update_cursor_node(
     color_str: *const u8,
     color_len: usize,
 ) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
@@ -318,6 +322,7 @@ pub fn update_animation_layer(
     texture_changed: *const bool,
     source_rects: *const f64,
 ) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
@@ -406,6 +411,7 @@ pub fn clear_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
 ) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*"
@@ -434,6 +440,7 @@ pub fn update_selection_preedit_layer(
     rect_count: i32,
     rect_data: *const f64,
 ) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",

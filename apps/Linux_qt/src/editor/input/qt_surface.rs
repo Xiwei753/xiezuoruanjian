@@ -396,12 +396,14 @@ cpp! {{
 }}
 
 pub(crate) fn install_event_filter(item: *mut c_void, rust_item: *mut c_void) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [item as "QQuickItem*", rust_item as "void*"] {
         sujian_install_event_filter(item, rust_item);
     });
 }
 
 pub(crate) fn focus_item(item: *mut c_void) {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [item as "QQuickItem*"] {
         sujian_focus_item(item);
     });

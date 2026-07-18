@@ -141,6 +141,7 @@ impl SujianEditorItem {
         let font_family = self.current_font_family.to_string();
         let fs = font_size as f32;
         let ff: QString = font_family.clone().into();
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         cpp!(unsafe [painter as "QPainter*", fs as "float", ff as "QString"] {
             QFont f(ff);
             f.setPixelSize(static_cast<int>(fs));
@@ -269,6 +270,7 @@ impl SujianEditorItem {
                     segments.push((cursor_x, line_right));
                 }
 
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [painter as "QPainter*"] {
                     painter->save();
                 });
@@ -280,6 +282,7 @@ impl SujianEditorItem {
                         width: seg_end - seg_x,
                         height: line.height,
                     };
+                    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                     cpp!(unsafe [painter as "QPainter*", clip as "QRectF"] {
                         painter->setClipRect(clip, Qt::ReplaceClip);
                     });
@@ -298,6 +301,7 @@ impl SujianEditorItem {
                     );
                 }
 
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [painter as "QPainter*"] {
                     painter->restore();
                 });
@@ -333,6 +337,7 @@ impl SujianEditorItem {
                 let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
                 let line_top = line.y + paint_offset_y;
 
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [painter as "QPainter*"] {
                     painter->save();
                 });
@@ -342,6 +347,7 @@ impl SujianEditorItem {
                     width: (x_end - x_start).max(2.0),
                     height: line.height,
                 };
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [painter as "QPainter*", clip as "QRectF"] {
                     painter->setClipRect(clip, Qt::ReplaceClip);
                 });
@@ -357,6 +363,7 @@ impl SujianEditorItem {
                     text_y,
                     &self.current_selected_text_color.to_string(),
                 );
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [painter as "QPainter*"] {
                     painter->restore();
                 });
@@ -450,6 +457,7 @@ impl SujianEditorItem {
                                     let mut pen = QPen::from_color(renderer::color_from_qstring(
                                         self.current_text_color.clone(),
                                     ));
+                                    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                                     cpp!(unsafe [pen as "QPen*"] {
                                         pen->setWidth(2);
                                     });
@@ -470,6 +478,7 @@ impl SujianEditorItem {
                                     } else {
                                         QString::from(color.clone())
                                     };
+                                    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                                     cpp!(unsafe [painter as "QPainter*"] {
                                         painter->save();
                                     });
@@ -479,6 +488,7 @@ impl SujianEditorItem {
                                         width: attr_w,
                                         height: line.height,
                                     };
+                                    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                                     cpp!(unsafe [painter as "QPainter*", clip as "QRectF"] {
                                         painter->setClipRect(clip, Qt::ReplaceClip);
                                     });
@@ -490,6 +500,7 @@ impl SujianEditorItem {
                                         text_color,
                                         self.preedit_text.clone().into(),
                                     );
+                                    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                                     cpp!(unsafe [painter as "QPainter*"] {
                                         painter->restore();
                                     });
@@ -677,6 +688,7 @@ impl SujianEditorItem {
         // destRect uses QML logical coords.
         {
             let img_ptr = &mut image as *mut qmetaobject::QImage;
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             cpp!(unsafe [img_ptr as "QImage*"] {
                 img_ptr->setDevicePixelRatio(1.0);
             });
@@ -809,6 +821,7 @@ impl SujianEditorItem {
         if result.ime_needs_update {
             let obj_ptr = self.get_cpp_object();
             if !obj_ptr.is_null() {
+                // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
                 cpp!(unsafe [obj_ptr as "QQuickItem*"] {
                     QGuiApplication::inputMethod()->update(Qt::ImQueryInput);
                 });

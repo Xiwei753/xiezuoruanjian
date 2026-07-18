@@ -1,6 +1,7 @@
 use super::*;
 
 pub(crate) fn is_left_button_pressed(event: &QMouseEvent) -> bool {
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [event as "const QMouseEvent*"] -> bool as "bool" {
         return event ? (event->buttons() & Qt::LeftButton) : false;
     })

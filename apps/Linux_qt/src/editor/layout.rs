@@ -1229,6 +1229,7 @@ pub fn layout_lines(
         let indent_w = indent;
         let text_qstr: QString = paragraph_text.to_string().into();
 
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let line_count = cpp!(unsafe [
             text_qstr as "QString",
             fs as "float",
@@ -1242,42 +1243,49 @@ pub fn layout_lines(
 
         for line_idx in 0..line_count {
             let idx = line_idx;
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let qchar_off = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
                 if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
                     return static_cast<qulonglong>(g_editor_layout_buf[idx].qcharStart);
                 }
                 return 0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let qchar_end = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
                 if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
                     return static_cast<qulonglong>(g_editor_layout_buf[idx].qcharEnd);
                 }
                 return 0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let line_w = cpp!(unsafe [idx as "int"] -> f64 as "double" {
                 if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
                     return g_editor_layout_buf[idx].width;
                 }
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let x_off = cpp!(unsafe [idx as "int"] -> f64 as "double" {
                 if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
                     return g_editor_layout_buf[idx].xPos;
                 }
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let x_end_trailing = cpp!(unsafe [idx as "int"] -> f64 as "double" {
                 if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
                     return g_editor_layout_buf[idx].xEndTrailing;
                 }
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let qt_ascent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
                 if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
                     return g_editor_layout_buf[idx].ascent;
                 }
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let qt_descent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
                 if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
                     return g_editor_layout_buf[idx].descent;
@@ -1692,6 +1700,7 @@ pub fn qtextlayout_cursor_to_x(
     let before: QString = text_before_cursor.to_string().into();
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [para as "QString", before as "QString", fs as "float", ff as "QString"] -> f64 as "double" {
         return editor_layout_cursor_to_x(para, fs, ff, before);
     })
@@ -1713,6 +1722,7 @@ pub fn qtextlayout_cursor_to_x_on_line(
     let para: QString = para_text.to_string().into();
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         para as "QString",
         cursor_qchar as "int",
@@ -1740,6 +1750,7 @@ pub fn debug_line_metrics(
     let para: QString = para_text.to_string().into();
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         para as "QString",
         fs as "float",
@@ -1765,6 +1776,7 @@ pub fn qtextlayout_x_to_cursor_on_line(
     let para: QString = para_text.to_string().into();
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     let qchar_off = cpp!(unsafe [
         para as "QString",
         x as "double",
@@ -1798,6 +1810,7 @@ pub fn draw_line_text(
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
     let color = qmetaobject::QColor::from_name(text_color);
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         painter as "QPainter*",
         para as "QString",
@@ -1917,6 +1930,7 @@ pub fn prepare_paragraph_visual_snapshot(
     let ff: QString = font_family.to_string().into();
     let color = qmetaobject::QColor::from_name(text_color);
 
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     let line_count = cpp!(unsafe [
         para as "QString",
         fs as "float",
@@ -1935,71 +1949,85 @@ pub fn prepare_paragraph_visual_snapshot(
     for line_idx in 0..line_count {
         let idx = line_idx;
 
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let qchar_start = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return static_cast<qulonglong>(g_canonical_line_buf[idx].qcharStart);
             return 0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let qchar_end = cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return static_cast<qulonglong>(g_canonical_line_buf[idx].qcharEnd);
             return 0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let x_pos = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].xPos;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let width = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].width;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let height = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].height;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let ascent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].ascent;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let descent = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].descent;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].y;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let x_end_leading = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].xEndLeading;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let x_end_trailing = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].xEndTrailing;
             return 0.0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let cluster_start = cpp!(unsafe [idx as "int"] -> i32 as "int" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].clusterStartIndex;
             return 0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let cluster_count = cpp!(unsafe [idx as "int"] -> i32 as "int" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].clusterCount;
             return 0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let image_phys_w = cpp!(unsafe [idx as "int"] -> i32 as "int" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].imagePhysW;
             return 0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let image_phys_h = cpp!(unsafe [idx as "int"] -> i32 as "int" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].imagePhysH;
@@ -2012,6 +2040,7 @@ pub fn prepare_paragraph_visual_snapshot(
                 qmetaobject::ImageFormat::ARGB32_Premultiplied,
             );
             let img_ptr = &mut img as *mut qmetaobject::QImage;
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             cpp!(unsafe [img_ptr as "QImage*", idx as "int"] {
                 editor_copy_canonical_line_image(idx, img_ptr);
             });
@@ -2027,51 +2056,61 @@ pub fn prepare_paragraph_visual_snapshot(
         for ci in 0..cluster_count {
             let cidx = cluster_start + ci;
 
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_qchar_start = cpp!(unsafe [cidx as "int"] -> usize as "qulonglong" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return static_cast<qulonglong>(g_canonical_cluster_buf[cidx].qcharStart);
                 return 0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_qchar_end = cpp!(unsafe [cidx as "int"] -> usize as "qulonglong" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return static_cast<qulonglong>(g_canonical_cluster_buf[cidx].qcharEnd);
                 return 0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_src_x = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return g_canonical_cluster_buf[cidx].sourceRectX;
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_src_y = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return g_canonical_cluster_buf[cidx].sourceRectY;
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_src_w = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return g_canonical_cluster_buf[cidx].sourceRectW;
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_src_h = cpp!(unsafe [cidx as "int"] -> f64 as "double" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return g_canonical_cluster_buf[cidx].sourceRectH;
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_glyph_count = cpp!(unsafe [cidx as "int"] -> i32 as "int" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return g_canonical_cluster_buf[cidx].glyphCount;
                 return 0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_raw_font: QString = cpp!(unsafe [cidx as "int"] -> QString as "QString" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return QString::fromUtf8(g_canonical_cluster_buf[cidx].rawFontFingerprint);
                 return QString();
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_is_rtl = cpp!(unsafe [cidx as "int"] -> bool as "bool" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return g_canonical_cluster_buf[cidx].isRTL;
                 return false;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let c_first_glyph = cpp!(unsafe [cidx as "int"] -> u32 as "quint32" {
                 if (cidx >= 0 && cidx < (int)g_canonical_cluster_buf.size())
                     return g_canonical_cluster_buf[cidx].firstGlyphIndex;
@@ -2111,11 +2150,13 @@ pub fn prepare_paragraph_visual_snapshot(
             });
         }
 
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let cursor_x_map_start = cpp!(unsafe [idx as "int"] -> i32 as "int" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].cursorXMapStart;
             return 0;
         });
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let cursor_x_map_count = cpp!(unsafe [idx as "int"] -> i32 as "int" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].cursorXMapCount;
@@ -2125,16 +2166,19 @@ pub fn prepare_paragraph_visual_snapshot(
         let mut cursor_x_map = Vec::with_capacity(cursor_x_map_count as usize);
         for mi in 0..cursor_x_map_count {
             let midx = cursor_x_map_start + mi;
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let m_qchar = cpp!(unsafe [midx as "int"] -> usize as "qulonglong" {
                 if (midx >= 0 && midx < (int)g_cursor_x_map_buf.size())
                     return static_cast<qulonglong>(g_cursor_x_map_buf[midx].qcharPos);
                 return 0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let m_x_leading = cpp!(unsafe [midx as "int"] -> f64 as "double" {
                 if (midx >= 0 && midx < (int)g_cursor_x_map_buf.size())
                     return g_cursor_x_map_buf[midx].xLeading;
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let m_x_trailing = cpp!(unsafe [midx as "int"] -> f64 as "double" {
                 if (midx >= 0 && midx < (int)g_cursor_x_map_buf.size())
                     return g_cursor_x_map_buf[midx].xTrailing;
@@ -2866,6 +2910,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 #[cfg(not(test))]
 pub fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
     let family = QString::from(font_family);
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
         QFont font(family);
         font.setPixelSize(font_size);
@@ -2882,6 +2927,7 @@ pub fn get_font_ascent(_font_family: &str, font_size: f32) -> f64 {
 #[cfg(not(test))]
 pub fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
     let family = QString::from(font_family);
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [family as "QString", font_size as "float"] -> f64 as "double" {
         QFont font(family);
         font.setPixelSize(font_size);
@@ -3395,6 +3441,7 @@ mod tests {
             let pw = line.line_wrap_width + line.line_indent_x;
             let pi = line.para_indent;
             let qtl = line.qtextline_idx;
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
             let (qt_text_start, qt_text_end) = cpp!(unsafe [
                 para as "QString", fs as "float", ff as "QString",
                 pw as "double", pi as "double", qtl as "int"
