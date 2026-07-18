@@ -245,7 +245,9 @@ class AndroidInputConnection(
                 )
                 if (dto != null) {
                     val result = EditResult.fromDto(dto)
-                    if (!result.isApplied()) {
+                    if (result.isApplied()) {
+                        adapter.syncCompositionGeneration()
+                    } else {
                         adapter.invalidateCompositionSession()
                         pipeline.reloadFromKernel()
                     }
@@ -309,7 +311,7 @@ class AndroidInputConnection(
         val safeEnd = replaceEndUtf8.coerceIn(safeStart, committedBytes.size)
         val virtualText = String(committedBytes, 0, safeStart, Charsets.UTF_8) + replacementText + String(committedBytes, safeEnd, committedBytes.size - safeEnd, Charsets.UTF_8)
         val virtualIndexMap = AndroidTextIndexMap.fromText(virtualText)
-        val replaceStartUtf16 = AndroidTextIndexMap.fromText(committedText).utf8ToUtf16(safeStart)
+        val replaceStartUtf16 = virtualIndexMap.utf8ToUtf16(safeStart)
         val replacementUtf16Len = countUtf16CodeUnits(replacementText)
         val replaceEndUtf16 = replaceStartUtf16 + replacementUtf16Len
         val totalUtf16 = virtualIndexMap.getUtf16Length()
