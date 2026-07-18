@@ -1,7 +1,6 @@
 package com.xiwei.sujian.editor.v2
 
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
-import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -9,9 +8,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun asciiTextUtf8EqualsUtf16() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("Hello", 5)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("Hello")
 
         for (i in 0..5) {
             assertEquals(i, map.utf8ToUtf16(i))
@@ -21,9 +18,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun chineseTextUtf8ToUtf16() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("你好", 6)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("你好")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(1, map.utf8ToUtf16(3))
@@ -32,9 +27,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun chineseTextUtf16ToUtf8() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("你好", 6)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("你好")
 
         assertEquals(0, map.utf16ToUtf8(0))
         assertEquals(3, map.utf16ToUtf8(1))
@@ -43,9 +36,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun mixedAsciiAndChinese() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("a你b", 5)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("a你b")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(1, map.utf8ToUtf16(1))
@@ -56,9 +47,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun outOfRangeReturnsLength() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("ab", 2)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("ab")
 
         assertEquals(2, map.utf8ToUtf16(100))
         assertEquals(2, map.utf16ToUtf8(100))
@@ -66,9 +55,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun emojiBasicMapping() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("a😀b", 6)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("a😀b")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(1, map.utf8ToUtf16(1))
@@ -81,9 +68,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun surrogatePairEmoji() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("🎉", 4)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("🎉")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(2, map.utf8ToUtf16(4))
@@ -93,9 +78,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun multipleEmoji() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("😀🎉", 8)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("😀🎉")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(2, map.utf8ToUtf16(4))
@@ -107,9 +90,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun combiningCharacter() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("e\u0301", 3)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("e\u0301")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(1, map.utf8ToUtf16(1))
@@ -121,9 +102,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun mixedChineseEmojiAscii() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("你😀好", 10)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("你😀好")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(1, map.utf8ToUtf16(3))
@@ -137,9 +116,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun utf16LengthWithEmoji() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("a😀b", 6)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("a😀b")
 
         assertEquals(4, map.getUtf16Length())
         assertEquals(6, map.getUtf8Length())
@@ -147,9 +124,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun utf16LengthChineseOnly() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("你好", 6)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("你好")
 
         assertEquals(2, map.getUtf16Length())
         assertEquals(6, map.getUtf8Length())
@@ -157,9 +132,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun zeroLengthText() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("", 0)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("")
 
         assertEquals(0, map.getUtf16Length())
         assertEquals(0, map.getUtf8Length())
@@ -169,9 +142,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun utf8NonBoundaryRoundsToNearest() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("你好", 6)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("你好")
 
         val at1 = map.utf8ToUtf16(1)
         val at2 = map.utf8ToUtf16(2)
@@ -181,9 +152,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun utf16SurrogateInteriorPosition() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("a😀b", 6)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("a😀b")
 
         val at1 = map.utf16ToUtf8(2)
         assertEquals(1, at1)
@@ -191,9 +160,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun flagEmoji() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("🇨🇳", 8)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("🇨🇳")
 
         assertEquals(0, map.utf8ToUtf16(0))
         assertEquals(4, map.utf8ToUtf16(8))
@@ -205,9 +172,7 @@ class AndroidTextIndexMapTest {
 
     @Test
     fun rangeConversions() {
-        val mirror = DisplayTextMirror()
-        mirror.loadText("a你b", 5)
-        val map = AndroidTextIndexMap(mirror)
+        val map = AndroidTextIndexMap.fromText("a你b")
 
         val utf16Range = map.utf8RangeToUtf16(1, 5)
         assertEquals(1..3, utf16Range)

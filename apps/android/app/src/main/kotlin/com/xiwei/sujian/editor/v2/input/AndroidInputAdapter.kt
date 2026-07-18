@@ -169,18 +169,28 @@ class AndroidInputAdapter(
         }
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
+        compositionCursorUtf16 = if (newCursorPosition > 0) {
+            (newCursorPosition - 1).coerceIn(0, preeditText.length)
+        } else {
+            (preeditText.length + newCursorPosition).coerceIn(0, preeditText.length)
+        }
 
         val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val (sessionId, _baseRev, generation) = compositionSessionInfo()
             if (sessionId != 0L) {
-                val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
+                val dto = bridge.updateComposition(
+                    sessionId, generation,
+                    preeditText, compositionCursorUtf16,
+                    mirror.getRevision()
+                )
                 if (dto != null) {
-                    val output = pipeline.applyCompositionCommit(dto)
-                    onPipelineOutput?.invoke(output)
-                    compositionSessionId = 0L
-                    compositionBaseRevision = 0L
-                    compositionGeneration = 0u
+                    val result = EditResult.fromDto(dto)
+                    if (result.isApplied()) {
+                        compositionGeneration++
+                    }
+                    mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
+                    onCompositionVisualUpdate?.invoke()
                     return
                 }
                 pipeline.reloadFromKernel()
@@ -191,10 +201,8 @@ class AndroidInputAdapter(
             }
         }
 
-        pipeline.reloadFromKernel()
-        compositionSessionId = 0L
-        compositionBaseRevision = 0L
-        compositionGeneration = 0u
+        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
+        onCompositionVisualUpdate?.invoke()
     }
 
     fun handleCompositionCommitWithText(finalText: String, newCursorPosition: Int) {

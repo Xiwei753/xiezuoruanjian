@@ -2,10 +2,14 @@ package com.xiwei.sujian.editor.v2.input
 
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 
-class AndroidTextIndexMap(
-    private val mirror: DisplayTextMirror
+class AndroidTextIndexMap private constructor(
+    private val text: String
 ) {
-    private val text: String = mirror.getText()
+    constructor(mirror: DisplayTextMirror) : this(mirror.getText())
+
+    companion object {
+        fun fromText(text: String): AndroidTextIndexMap = AndroidTextIndexMap(text)
+    }
     private val byteBoundaries: IntArray by lazy { buildByteBoundaries() }
     private val utf16Positions: IntArray by lazy { buildUtf16Positions() }
     private val _utf16Length: Int by lazy { countUtf16CodeUnits() }
