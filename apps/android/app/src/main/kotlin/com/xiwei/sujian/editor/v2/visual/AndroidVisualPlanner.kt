@@ -1105,16 +1105,22 @@ class AndroidVisualPlanner {
                     clusterByteEndExclusive = state.clusterByteEndExclusive
                 ))
             } else if (!isFadingOut && state.currentAlpha < 0.99f) {
+                val destRect = android.graphics.RectF(
+                    state.currentLeft, state.currentTop,
+                    state.currentRight, state.currentBottom
+                )
+                val endAlpha = when (state.role) {
+                    SliceRole.Insert, SliceRole.CrossfadeNew, SliceRole.Move -> 1f
+                    else -> state.currentAlpha
+                }
                 survivingOldSlices.add(PreparedVisualTransaction.AnimatedSlice(
                     role = state.role,
                     snapshot = snapshot,
                     sourceRect = sourceRect,
-                    destinationRect = android.graphics.RectF(
-                        state.currentLeft, state.currentTop,
-                        state.currentRight, state.currentBottom
-                    ),
+                    destinationRect = destRect,
                     startAlpha = state.currentAlpha,
-                    endAlpha = if (state.role == SliceRole.Insert || state.role == SliceRole.CrossfadeNew) 1f else state.currentAlpha,
+                    endAlpha = endAlpha,
+                    fromDestinationRect = if (state.role == SliceRole.Move) destRect else null,
                     clusterByteStart = state.clusterByteStart,
                     clusterByteEndExclusive = state.clusterByteEndExclusive
                 ))

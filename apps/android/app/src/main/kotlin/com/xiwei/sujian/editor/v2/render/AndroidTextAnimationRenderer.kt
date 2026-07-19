@@ -59,7 +59,12 @@ class AndroidTextAnimationRenderer {
         for (slice in transaction.animatedSlices) {
             val srcRect = slice.sourceRect
             if (srcRect.width() <= 0 || srcRect.height() <= 0) continue
-            regions.add(slice.destinationRect)
+            val fromRect = slice.fromDestinationRect ?: slice.destinationRect
+            val unionLeft = minOf(fromRect.left, slice.destinationRect.left)
+            val unionTop = minOf(fromRect.top, slice.destinationRect.top)
+            val unionRight = maxOf(fromRect.right, slice.destinationRect.right)
+            val unionBottom = maxOf(fromRect.bottom, slice.destinationRect.bottom)
+            regions.add(android.graphics.RectF(unionLeft, unionTop, unionRight, unionBottom))
         }
         return regions
     }
