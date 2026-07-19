@@ -95,10 +95,11 @@ private fun StarMapListScreen(
     var isLoading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
 
-    val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
-        val bridge = BridgeProvider.getAppServiceBridge(context)
-        AnimatedTextEditorCoordinator(context, bridge)
-    }
+    val coordinator = LocalAnimatedTextEditorCoordinator.current
+        ?: throw IllegalStateException(
+            "StarMapListScreen requires an AnimatedTextEditorCoordinator. " +
+            "Ensure the host Activity provides one via CompositionLocalProvider."
+        )
 
     suspend fun loadStarMaps() {
         val maps = withContext(Dispatchers.IO) {
@@ -246,10 +247,11 @@ private fun StarMapEditorScreen(
     var viewportSaveJob by remember { mutableStateOf<Job?>(null) }
     var canvasEditingNodeId by remember { mutableStateOf<String?>(null) }
 
-    val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
-        val bridge = BridgeProvider.getAppServiceBridge(context)
-        AnimatedTextEditorCoordinator(context, bridge)
-    }
+    val coordinator = LocalAnimatedTextEditorCoordinator.current
+        ?: throw IllegalStateException(
+            "StarMapCanvasScreen requires an AnimatedTextEditorCoordinator. " +
+            "Ensure the host Activity provides one via CompositionLocalProvider."
+        )
 
     suspend fun loadStarMap() {
         val data = withContext(Dispatchers.IO) {

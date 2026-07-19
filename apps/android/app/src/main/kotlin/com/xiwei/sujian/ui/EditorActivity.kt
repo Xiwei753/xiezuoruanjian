@@ -2,13 +2,23 @@ package com.xiwei.sujian.ui
 
 import android.os.Bundle
 import com.xiwei.sujian.diagnostics.DiagnosticsLogger
+import android.view.View
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.ComposeView
 import com.google.android.material.appbar.MaterialToolbar
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.SettingsRepository
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
+import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.model.LocalSettings
 import com.xiwei.sujian.model.ScreenRole
 import com.xiwei.sujian.model.ScreenPolicy
@@ -17,6 +27,10 @@ import com.xiwei.sujian.model.ActionSlot
 import com.xiwei.sujian.model.ActionRole
 import com.xiwei.sujian.model.ActionPlacement
 import com.xiwei.sujian.model.ShellMode
+import com.xiwei.sujian.ui.compose.theme.SujianTheme
+import com.xiwei.sujian.ui.compose.theme.ThemeStore
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 
@@ -41,8 +55,12 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
     private var editorFragment: EditorFragment? = null
     private var currentWritingPolicy: ScreenPolicy? = null
 
-    // ── SystemBarsController: 存为属性，供 EditorFragment 访问 ──
     val systemBarsController: SystemBarsController by lazy { SystemBarsController(this) }
+
+    val textEditorCoordinator: AnimatedTextEditorCoordinator by lazy {
+        val bridge = BridgeProvider.getAppServiceBridge(this)
+        AnimatedTextEditorCoordinator(this, bridge)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -61,6 +79,8 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
         }
 
         setContentView(R.layout.activity_editor)
+
+        installWindowLevelEditorSlot()
 
         // ── SystemBarsController: edge-to-edge + insets ──
         systemBarsController.setupEdgeToEdge()
@@ -255,5 +275,37 @@ class EditorActivity : AppCompatActivity(), EditorFragment.EditorFragmentCallbac
     fun isActionConfirmationRequired(role: ActionRole): Boolean {
         val slot = currentWritingPolicy?.actionSlots?.find { it.role == role }
         return slot?.requiresConfirmation ?: false
+    }
+
+    private fun installWindowLevelEditorSlot() {
+        val rootView = window.decorView as? ViewGroup ?: return
+        val contentRoot = rootView.findViewById<ViewGroup>(android.R.id.content) ?: return
+        val slotComposeView = ComposeView(this).apply {
+            id = View.generateViewId()
+            setViewCompositionStrategy(
+                androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed
+            )
+            setContent {
+                val themeController = com.xiwei.sujian.ui.compose.theme.rememberThemeController(this@EditorActivity)
+                val uiState by themeController.uiState.collectAsState()
+                SujianTheme(uiState = uiState) {
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        LocalAnimatedTextEditorCoordinator provides textEditorCoordinator
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            AnimatedTextEditorSlot(
+                                coordinator = textEditorCoordinator,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        val layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
+        contentRoot.addView(slotComposeView, layoutParams)
     }
 }

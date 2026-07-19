@@ -8,10 +8,12 @@ import android.view.MenuItem
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -82,6 +84,8 @@ class ChapterListActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_chapter_list)
+
+        installWindowLevelEditorSlot()
 
         window.decorView.post {
             UiFontUtil.applySansSerifFallback(window.decorView.rootView)
@@ -411,7 +415,7 @@ class ChapterListActivity : AppCompatActivity() {
             .show()
     }
 
-    private val dialogCoordinator by lazy {
+    private val textEditorCoordinator by lazy {
         val bridge = BridgeProvider.getAppServiceBridge(this)
         AnimatedTextEditorCoordinator(this, bridge)
     }
@@ -430,12 +434,12 @@ class ChapterListActivity : AppCompatActivity() {
 
         composeView.setContent {
             androidx.compose.runtime.CompositionLocalProvider(
-                LocalAnimatedTextEditorCoordinator provides dialogCoordinator
+                LocalAnimatedTextEditorCoordinator provides textEditorCoordinator
             ) {
                 Box {
                     androidx.compose.material3.AlertDialog(
                         onDismissRequest = {
-                            dialogCoordinator.cancelActiveEdit()
+                            textEditorCoordinator.cancelActiveEdit()
                             dialog?.dismiss()
                         },
                         title = { Text(title) },
@@ -455,8 +459,8 @@ class ChapterListActivity : AppCompatActivity() {
                         },
                         confirmButton = {
                             TextButton(onClick = {
-                                dialogCoordinator.commitActiveEdit()
-                                val finalText = dialogCoordinator.lastCommittedText?.trim() ?: text.trim()
+                                textEditorCoordinator.commitActiveEdit()
+                                val finalText = textEditorCoordinator.lastCommittedText?.trim() ?: text.trim()
                                 onConfirm(finalText)
                                 dialog?.dismiss()
                             }) {
@@ -465,15 +469,12 @@ class ChapterListActivity : AppCompatActivity() {
                         },
                         dismissButton = {
                             TextButton(onClick = {
-                                dialogCoordinator.cancelActiveEdit()
+                                textEditorCoordinator.cancelActiveEdit()
                                 dialog?.dismiss()
                             }) {
                                 Text(getString(R.string.action_cancel))
                             }
                         }
-                    )
-                    AnimatedTextEditorSlot(
-                        coordinator = dialogCoordinator
                     )
                 }
             }
@@ -652,5 +653,33 @@ class ChapterListActivity : AppCompatActivity() {
         }
 
         override fun getItemCount() = listItems.size
+    }
+
+    private fun installWindowLevelEditorSlot() {
+        val rootView = window.decorView as? ViewGroup ?: return
+        val contentRoot = rootView.findViewById<ViewGroup>(android.R.id.content) ?: return
+        val slotComposeView = ComposeView(this).apply {
+            id = View.generateViewId()
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                com.xiwei.sujian.ui.compose.theme.SujianTheme {
+                    androidx.compose.runtime.CompositionLocalProvider(
+                        LocalAnimatedTextEditorCoordinator provides textEditorCoordinator
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            AnimatedTextEditorSlot(
+                                coordinator = textEditorCoordinator,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        val layoutParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
+        contentRoot.addView(slotComposeView, layoutParams)
     }
 }

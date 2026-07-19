@@ -32,7 +32,6 @@ import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
-import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
 import com.xiwei.sujian.ui.compose.editor.WritingPane
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -104,10 +103,9 @@ class EditorFragment : Fragment() {
     private var lastAutoIndentWidth: Float? = null
     private var lastCoordinatedAnimEnabled: Boolean? = null
 
-    private val coordinator by lazy {
-        val bridge = BridgeProvider.getAppServiceBridge(requireContext())
-        AnimatedTextEditorCoordinator(requireContext(), bridge)
-    }
+    private val coordinator: AnimatedTextEditorCoordinator
+        get() = (activity as? EditorActivity)?.textEditorCoordinator
+            ?: throw IllegalStateException("EditorFragment must be hosted by EditorActivity")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -202,21 +200,13 @@ class EditorFragment : Fragment() {
             androidx.compose.runtime.CompositionLocalProvider(
                 LocalAnimatedTextEditorCoordinator provides coordinator
             ) {
-                Box(
+                WritingPane(
+                    projectId = pid,
+                    volumeId = vid,
+                    chapterId = cid,
+                    chapterTitle = title,
                     modifier = Modifier.fillMaxSize()
-                ) {
-                    WritingPane(
-                        projectId = pid,
-                        volumeId = vid,
-                        chapterId = cid,
-                        chapterTitle = title,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    AnimatedTextEditorSlot(
-                        coordinator = coordinator,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
+                )
             }
         }
     }
