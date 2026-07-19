@@ -14,6 +14,11 @@ class AndroidInputConnection(
     private val hostView: View
 ) : BaseInputConnection(hostView, true) {
 
+    override fun performEditorAction(actionCode: Int): Boolean {
+        adapter.onPerformEditorAction?.invoke(actionCode)
+        return true
+    }
+
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
         val commitStr = text?.toString() ?: ""
         if (adapter.isComposing()) {

@@ -187,10 +187,6 @@ class SujianEditorView @JvmOverloads constructor(
         handlePipelineOutput(output)
     }
 
-    fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto) {
-        replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
-    }
-
     fun setSearchHighlights(highlights: List<Pair<Int, Int>>) {
         searchHighlights = highlights
         invalidate()
@@ -331,6 +327,8 @@ class SujianEditorView @JvmOverloads constructor(
         super.onFocusChanged(gained, direction, previouslyFocusedRect)
         if (gained) {
             showSoftInput()
+        } else if (isSessionBound && currentProfile.commitOnFocusLoss) {
+            onCommitRequested?.invoke()
         }
     }
 
@@ -425,6 +423,8 @@ class SujianEditorView @JvmOverloads constructor(
     // ── #541: Session lifecycle for shared host ──
 
     private var isSessionBound: Boolean = false
+    private var currentProfile: TextEditorProfile = TextEditorProfile.DocumentBody
+    var onCommitRequested: (() -> Unit)? = null
 
     fun bindSession(
         sessionBridge: EditorKernelBridge,
@@ -436,11 +436,18 @@ class SujianEditorView @JvmOverloads constructor(
             unbindSession("rebind")
         }
         kernelBridge = sessionBridge
+        currentProfile = profile
         isSessionBound = true
+        pipeline.inputAdapter?.applyProfile(profile)
         pipeline.setAutoIndent(
             profile.autoIndentPolicy == com.xiwei.sujian.editor.v2.coordinator.AutoIndentPolicy.INDENT_ON_ENTER,
             2f
         )
+        pipeline.inputAdapter?.onPerformEditorAction = { actionCode ->
+            if (profile.commitOnImeAction) {
+                onCommitRequested?.invoke()
+            }
+        }
         loadText(initialText, initialCursorUtf8)
         requestFocus()
     }
@@ -449,8 +456,10 @@ class SujianEditorView @JvmOverloads constructor(
         if (!isSessionBound) return
         pipeline.cancelActiveTransaction()
         pipeline.invalidateCompositionSession()
+        pipeline.inputAdapter?.onPerformEditorAction = null
         kernelBridge = null
         isSessionBound = false
+        onCommitRequested = null
         clearFocus()
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(windowToken, 0)

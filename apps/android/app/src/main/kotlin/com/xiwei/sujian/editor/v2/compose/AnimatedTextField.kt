@@ -1,7 +1,6 @@
 package com.xiwei.sujian.editor.v2.compose
 
-import androidx.compose.foundation.interaction.FocusInteraction
-import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -15,6 +14,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -86,7 +86,9 @@ private fun AnimatedTextFieldWithCoordinator(
 ) {
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
-    val interactionSource = remember { MutableInteractionSource() }
+
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnCommit by rememberUpdatedState(onCommit)
 
     val target = remember(targetId) {
         EditableTextTarget(
@@ -94,15 +96,8 @@ private fun AnimatedTextFieldWithCoordinator(
             profile = profile,
             initialText = value,
             isPersistent = false,
-            onTextChanged = { newText ->
-                localValue = newText
-                onValueChange(newText)
-            },
-            onCommit = { finalText ->
-                localValue = finalText
-                isEditing = false
-                onCommit(finalText)
-            },
+            onTextChanged = null,
+            onCommit = null,
             onCancel = {
                 isEditing = false
             },
@@ -112,25 +107,37 @@ private fun AnimatedTextFieldWithCoordinator(
         )
     }
 
-    DisposableEffect(targetId) {
-        coordinator.registerTarget(target)
-        onDispose {
-            coordinator.unregisterTarget(targetId)
-        }
+    LaunchedEffect(targetId) {
+        coordinator.updateTargetSpec(
+            targetId,
+            onTextChanged = { newText ->
+                localValue = newText
+                currentOnValueChange(newText)
+            },
+            onCommit = { finalText ->
+                localValue = finalText
+                isEditing = false
+                currentOnCommit(finalText)
+            },
+            onCancel = { isEditing = false },
+            onEditingStateChanged = { state ->
+                isEditing = state == EditingState.EDITING || state == EditingState.BINDING
+            },
+            currentText = value
+        )
     }
 
     LaunchedEffect(value) {
         if (value != localValue) {
             localValue = value
+            coordinator.updateTargetText(targetId, value)
         }
     }
 
-    LaunchedEffect(interactionSource) {
-        interactionSource.interactions.collect { interaction ->
-            if (interaction is FocusInteraction.Focus && !isEditing && enabled) {
-                val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
-                coordinator.beginEdit(targetId, cursorUtf8)
-            }
+    DisposableEffect(targetId) {
+        coordinator.registerTarget(target)
+        onDispose {
+            coordinator.unregisterTarget(targetId)
         }
     }
 
@@ -146,6 +153,17 @@ private fun AnimatedTextFieldWithCoordinator(
                 )
                 coordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
             }
+            .then(
+                if (enabled && !isEditing) {
+                    Modifier.clickable {
+                        coordinator.updateTargetText(targetId, localValue)
+                        val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
+                        coordinator.beginEdit(targetId, cursorUtf8)
+                    }
+                } else {
+                    Modifier
+                }
+            )
     ) {
         OutlinedTextFieldDefaults.DecorationBox(
             value = localValue,
@@ -163,7 +181,7 @@ private fun AnimatedTextFieldWithCoordinator(
             enabled = enabled,
             singleLine = singleLine,
             visualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
-            interactionSource = interactionSource,
+            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
             label = label,
             placeholder = placeholder
         )

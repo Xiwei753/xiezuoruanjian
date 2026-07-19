@@ -1,6 +1,10 @@
 package com.xiwei.sujian.editor.v2.input
 
 import android.view.View
+import com.xiwei.sujian.editor.v2.coordinator.ImeAction
+import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
+import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
+import com.xiwei.sujian.editor.v2.coordinator.TextInputType
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.editor.v2.mirror.EditResult
@@ -13,14 +17,20 @@ class AndroidInputAdapter(
 
     var onPipelineOutput: ((AndroidEditorPipeline.PipelineOutput) -> Unit)? = null
     var onCompositionVisualUpdate: (() -> Unit)? = null
+    var onPerformEditorAction: ((Int) -> Unit)? = null
 
     private var hostView: View? = null
+    private var currentProfile: TextEditorProfile = TextEditorProfile.DocumentBody
 
     fun setHostView(view: View) {
         hostView = view
     }
 
     fun getHostView(): View? = hostView
+
+    fun applyProfile(profile: TextEditorProfile) {
+        currentProfile = profile
+    }
 
     private var currentCompositionText: String = ""
     private var previousCompositionText: String = ""
@@ -32,10 +42,29 @@ class AndroidInputAdapter(
     fun onCreateInputConnection(outAttrs: android.view.inputmethod.EditorInfo?): android.view.inputmethod.InputConnection? {
         val host = hostView ?: return null
         if (outAttrs != null) {
-            outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT or
-                    android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            outAttrs.imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION or
-                    android.view.inputmethod.EditorInfo.IME_ACTION_NONE
+            val inputType = when (currentProfile.inputType) {
+                TextInputType.NUMBER -> android.text.InputType.TYPE_CLASS_NUMBER
+                TextInputType.EMAIL -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                TextInputType.MULTI_LINE -> android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                TextInputType.TEXT -> android.text.InputType.TYPE_CLASS_TEXT
+            }
+            if (currentProfile.singleLine) {
+                outAttrs.inputType = inputType and android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE.inv()
+            } else {
+                outAttrs.inputType = inputType
+            }
+
+            val imeAction = when (currentProfile.imeAction) {
+                ImeAction.DONE -> android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+                ImeAction.SEARCH -> android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH
+                ImeAction.NEXT -> android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
+                ImeAction.GO -> android.view.inputmethod.EditorInfo.IME_ACTION_GO
+                ImeAction.NONE -> android.view.inputmethod.EditorInfo.IME_ACTION_NONE
+            }
+            outAttrs.imeOptions = imeAction
+            if (currentProfile.singleLine) {
+                outAttrs.imeOptions = outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION
+            }
             return AndroidInputConnection(this, mirror, pipeline, host)
         }
         return null
@@ -193,6 +222,17 @@ class AndroidInputAdapter(
     }
 
     fun handleCompositionUpdate(preeditText: String, newCursorPosition: Int) {
+        if (currentProfile.newlinePolicy == NewlinePolicy.FORBID && preeditText.contains('\n')) {
+            return
+        }
+        if (currentProfile.maxLength > 0) {
+            val currentLen = mirror.getCommittedText().toByteArray(Charsets.UTF_8).size
+            val preeditLen = preeditText.toByteArray(Charsets.UTF_8).size
+            val replaceLen = compositionReplaceEndUtf8 - compositionReplaceStartUtf8
+            if (currentLen - replaceLen + preeditLen > currentProfile.maxLength) {
+                return
+            }
+        }
         if (!isComposing) {
             val selStart = mirror.getCommittedSelectionStartUtf8()
             val selEnd = mirror.getCommittedSelectionEndUtf8()

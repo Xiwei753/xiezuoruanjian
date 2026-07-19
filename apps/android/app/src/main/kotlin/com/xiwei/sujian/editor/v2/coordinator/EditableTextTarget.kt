@@ -9,15 +9,16 @@ data class EditableTextTarget(
     val initialSelection: Int = initialText.toByteArray(Charsets.UTF_8).size,
     val isPersistent: Boolean = false,
     val commitPolicy: CommitPolicy = if (isPersistent) CommitPolicy.COMMIT_ON_EVERY_CHANGE else CommitPolicy.COMMIT_ON_CONFIRM,
-    val ownsEditorView: Boolean = false,
-    val onTextChanged: ((String) -> Unit)? = null,
-    val onCommit: ((String) -> Unit)? = null,
-    val onCancel: (() -> Unit)? = null,
-    val onEditingStateChanged: ((EditingState) -> Unit)? = null
+    var onTextChanged: ((String) -> Unit)? = null,
+    var onCommit: ((String) -> Unit)? = null,
+    var onCancel: (() -> Unit)? = null,
+    var onEditingStateChanged: ((EditingState) -> Unit)? = null
 ) {
     var currentGeometry: Rect = Rect()
         private set
     var currentTransform: Transform2D = Transform2D.IDENTITY
+        private set
+    var currentText: String = initialText
         private set
 
     fun updateGeometry(rect: Rect) {
@@ -26,6 +27,10 @@ data class EditableTextTarget(
 
     fun updateTransform(transform: Transform2D) {
         currentTransform = transform
+    }
+
+    fun updateText(text: String) {
+        currentText = text
     }
 }
 

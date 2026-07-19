@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -26,7 +27,11 @@ import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.xiwei.sujian.R
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
+import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
+import com.xiwei.sujian.data.BridgeProvider
 import com.xiwei.sujian.data.WorkspaceRepository
 import kotlinx.coroutines.*
 
@@ -406,6 +411,11 @@ class ChapterListActivity : AppCompatActivity() {
             .show()
     }
 
+    private val dialogCoordinator by lazy {
+        val bridge = BridgeProvider.getAppServiceBridge(this)
+        AnimatedTextEditorCoordinator(this, bridge)
+    }
+
     private fun showComposeTextDialog(
         title: String,
         hint: String,
@@ -419,38 +429,51 @@ class ChapterListActivity : AppCompatActivity() {
         var dialog: AlertDialog? = null
 
         composeView.setContent {
-            androidx.compose.material3.AlertDialog(
-                onDismissRequest = { dialog?.dismiss() },
-                title = { Text(title) },
-                text = {
-                    AnimatedTextField(
-                        targetId = "chapter-list-dialog:${title.hashCode()}",
-                        value = text,
-                        onValueChange = { text = it },
-                        onCommit = {
-                            onConfirm(it.trim())
-                            dialog?.dismiss()
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalAnimatedTextEditorCoordinator provides dialogCoordinator
+            ) {
+                Box {
+                    androidx.compose.material3.AlertDialog(
+                        onDismissRequest = { dialog?.dismiss() },
+                        title = { Text(title) },
+                        text = {
+                            AnimatedTextField(
+                                targetId = "chapter-list-dialog:${title.hashCode()}",
+                                value = text,
+                                onValueChange = { text = it },
+                                onCommit = {
+                                    onConfirm(it.trim())
+                                    dialog?.dismiss()
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                profile = TextEditorProfile.ShortTitle,
+                                placeholder = { Text(hint) },
+                                singleLine = true
+                            )
                         },
-                        modifier = Modifier.fillMaxWidth(),
-                        profile = TextEditorProfile.ShortTitle,
-                        placeholder = { Text(hint) },
-                        singleLine = true
+                        confirmButton = {
+                            TextButton(onClick = {
+                                dialogCoordinator.commitActiveEdit()
+                                onConfirm(text.trim())
+                                dialog?.dismiss()
+                            }) {
+                                Text(getString(R.string.action_ok))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                dialogCoordinator.cancelActiveEdit()
+                                dialog?.dismiss()
+                            }) {
+                                Text(getString(R.string.action_cancel))
+                            }
+                        }
                     )
-                },
-                confirmButton = {
-                    TextButton(onClick = {
-                        onConfirm(text.trim())
-                        dialog?.dismiss()
-                    }) {
-                        Text(getString(R.string.action_ok))
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { dialog?.dismiss() }) {
-                        Text(getString(R.string.action_cancel))
-                    }
+                    AnimatedTextEditorSlot(
+                        coordinator = dialogCoordinator
+                    )
                 }
-            )
+            }
         }
 
         dialog = AlertDialog.Builder(this)

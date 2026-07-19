@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
@@ -47,21 +48,17 @@ fun AnimatedInlineText(
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
 
+    val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnCommit by rememberUpdatedState(onCommit)
+
     val target = remember(targetId) {
         EditableTextTarget(
             targetId = targetId,
             profile = profile,
             initialText = value,
             isPersistent = false,
-            onTextChanged = { newText ->
-                localValue = newText
-                onValueChange(newText)
-            },
-            onCommit = { finalText ->
-                localValue = finalText
-                isEditing = false
-                onCommit(finalText)
-            },
+            onTextChanged = null,
+            onCommit = null,
             onCancel = {
                 isEditing = false
             },
@@ -71,16 +68,37 @@ fun AnimatedInlineText(
         )
     }
 
-    DisposableEffect(targetId) {
-        effectiveCoordinator.registerTarget(target)
-        onDispose {
-            effectiveCoordinator.unregisterTarget(targetId)
-        }
+    LaunchedEffect(targetId) {
+        effectiveCoordinator.updateTargetSpec(
+            targetId,
+            onTextChanged = { newText ->
+                localValue = newText
+                currentOnValueChange(newText)
+            },
+            onCommit = { finalText ->
+                localValue = finalText
+                isEditing = false
+                currentOnCommit(finalText)
+            },
+            onCancel = { isEditing = false },
+            onEditingStateChanged = { state ->
+                isEditing = state == EditingState.EDITING || state == EditingState.BINDING
+            },
+            currentText = value
+        )
     }
 
     LaunchedEffect(value) {
         if (value != localValue) {
             localValue = value
+            effectiveCoordinator.updateTargetText(targetId, value)
+        }
+    }
+
+    DisposableEffect(targetId) {
+        effectiveCoordinator.registerTarget(target)
+        onDispose {
+            effectiveCoordinator.unregisterTarget(targetId)
         }
     }
 
@@ -99,6 +117,7 @@ fun AnimatedInlineText(
             .then(
                 if (enabled && !isEditing) {
                     Modifier.clickable {
+                        effectiveCoordinator.updateTargetText(targetId, localValue)
                         val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
                         effectiveCoordinator.beginEdit(targetId, cursorUtf8)
                     }
@@ -107,19 +126,15 @@ fun AnimatedInlineText(
                 }
             )
     ) {
-        if (!isEditing) {
-            Text(
-                text = localValue,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        } else {
-            Text(
-                text = localValue,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0f)
-            )
-        }
+        Text(
+            text = localValue,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (isEditing) {
+                MaterialTheme.colorScheme.onSurface.copy(alpha = 0f)
+            } else {
+                MaterialTheme.colorScheme.onSurface
+            }
+        )
     }
 }
 

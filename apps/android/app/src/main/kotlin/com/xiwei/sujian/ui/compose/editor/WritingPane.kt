@@ -19,10 +19,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.xiwei.sujian.R
 import com.xiwei.sujian.data.BridgeProvider
@@ -30,11 +32,10 @@ import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
+import com.xiwei.sujian.editor.v2.coordinator.SessionResetSource
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
-import com.xiwei.sujian.editor.v2.host.SujianEditorView
 import com.xiwei.sujian.ui.EditorViewModel
 import com.xiwei.sujian.ui.SaveStatus
-import com.xiwei.sujian.ui.compose.theme.BindEditorThemeColors
 
 @Composable
 fun WritingPane(
@@ -46,18 +47,7 @@ fun WritingPane(
 ) {
     val context = LocalContext.current
     val viewModel: EditorViewModel = viewModel()
-    var editorView by remember { mutableStateOf<SujianEditorView?>(null) }
     var isApplyingExternalContent by remember { mutableStateOf(false) }
-
-    var lastFontSize by remember { mutableStateOf(-1f) }
-    var lastLineSpacing by remember { mutableStateOf(-1f) }
-    var lastTypingAnimEnabled by remember { mutableStateOf(false) }
-    var lastTypingAnimDuration by remember { mutableStateOf(0L) }
-    var lastSmoothCursorEnabled by remember { mutableStateOf(false) }
-    var lastSmoothCursorDuration by remember { mutableStateOf(0L) }
-    var lastAutoIndentEnabled by remember { mutableStateOf(false) }
-    var lastAutoIndentWidth by remember { mutableStateOf(0f) }
-    var lastCoordinatedAnimEnabled by remember { mutableStateOf(false) }
 
     val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
         val bridge = BridgeProvider.getAppServiceBridge(context)
@@ -74,46 +64,12 @@ fun WritingPane(
 
     val uiState by viewModel.uiState.collectAsState()
 
-    BindEditorThemeColors(editorView)
-
-    editorView?.let { view ->
-        val settings = uiState.settings
-        if (lastFontSize != settings.fontSize) {
-            lastFontSize = settings.fontSize
-            view.setFontSize(settings.fontSize)
-        }
-        if (lastLineSpacing != settings.lineSpacingMultiplier) {
-            lastLineSpacing = settings.lineSpacingMultiplier
-            view.setLineSpacingMultiplier(settings.lineSpacingMultiplier)
-        }
-        if (lastTypingAnimEnabled != settings.typingAnimationEnabled || lastTypingAnimDuration != settings.typingAnimationDurationMs) {
-            lastTypingAnimEnabled = settings.typingAnimationEnabled
-            lastTypingAnimDuration = settings.typingAnimationDurationMs
-            view.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
-        }
-        if (lastSmoothCursorEnabled != settings.smoothCursorEnabled || lastSmoothCursorDuration != settings.smoothCursorDurationMs) {
-            lastSmoothCursorEnabled = settings.smoothCursorEnabled
-            lastSmoothCursorDuration = settings.smoothCursorDurationMs
-            view.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
-        }
-        if (lastAutoIndentEnabled != settings.autoIndentEnabled || lastAutoIndentWidth != settings.autoIndentWidth) {
-            lastAutoIndentEnabled = settings.autoIndentEnabled
-            lastAutoIndentWidth = settings.autoIndentWidth
-            view.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
-        }
-        if (lastCoordinatedAnimEnabled != settings.coordinatedTextCursorAnimationEnabled) {
-            lastCoordinatedAnimEnabled = settings.coordinatedTextCursorAnimationEnabled
-            view.setCoordinatedAnimationEnabled(settings.coordinatedTextCursorAnimationEnabled)
-        }
-    }
-
     val target = remember(targetId) {
         EditableTextTarget(
             targetId = targetId,
             profile = TextEditorProfile.DocumentBody,
             initialText = "",
             isPersistent = true,
-            ownsEditorView = true,
             onTextChanged = { newText ->
                 if (!isApplyingExternalContent) {
                     viewModel.onContentChanged(newText)
@@ -135,15 +91,35 @@ fun WritingPane(
         }
     }
 
-    LaunchedEffect(uiState.content, uiState.loading) {
-        if (!uiState.loading && uiState.content.isNotEmpty()) {
-            val view = editorView
-            if (view != null) {
-                if (coordinator.editingState == EditingState.IDLE) {
-                    coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
-                } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
-                    coordinator.resetPersistentSession(targetId, uiState.content, uiState.content.toByteArray(Charsets.UTF_8).size)
+    LaunchedEffect(targetId) {
+        coordinator.updateTargetSpec(
+            targetId,
+            onTextChanged = { newText ->
+                if (!isApplyingExternalContent) {
+                    viewModel.onContentChanged(newText)
                 }
+            },
+            onCommit = { finalText ->
+                if (!isApplyingExternalContent) {
+                    viewModel.onContentChanged(finalText)
+                }
+            },
+            onCancel = {}
+        )
+    }
+
+    LaunchedEffect(uiState.content, uiState.loading) {
+        if (!uiState.loading) {
+            if (coordinator.editingState == EditingState.IDLE) {
+                coordinator.updateTargetText(targetId, uiState.content)
+                coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+            } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
+                coordinator.resetPersistentSession(
+                    targetId,
+                    uiState.content,
+                    uiState.content.toByteArray(Charsets.UTF_8).size,
+                    SessionResetSource.EXTERNAL
+                )
             }
         }
     }
@@ -183,32 +159,22 @@ fun WritingPane(
                 CircularProgressIndicator()
             }
         } else {
-            AndroidView(
-                factory = { ctx ->
-                    val view = coordinator.getSharedEditorView()
-                        ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
-                    view.layoutParams = android.widget.FrameLayout.LayoutParams(
-                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
-                        android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-                    )
-                    editorView = view
-
-                    view.onContentChanged = { newText ->
-                        if (!isApplyingExternalContent) {
-                            viewModel.onContentChanged(newText)
-                        }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        val position = coordinates.positionInWindow()
+                        val size = coordinates.size
+                        val rect = Rect(
+                            position.x, position.y,
+                            position.x + size.width, position.y + size.height
+                        )
+                        coordinator.updateTargetGeometry(targetId, android.graphics.Rect(
+                            rect.left.toInt(), rect.top.toInt(),
+                            rect.right.toInt(), rect.bottom.toInt()
+                        ))
                     }
-
-                    view
-                },
-                update = { view ->
-                    if (view.getText() != uiState.content && uiState.content.isNotEmpty()) {
-                        isApplyingExternalContent = true
-                        view.setText(uiState.content)
-                        isApplyingExternalContent = false
-                    }
-                },
-                modifier = Modifier.weight(1f).fillMaxWidth()
             )
         }
     }
