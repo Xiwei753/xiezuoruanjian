@@ -84,11 +84,12 @@ private fun AnimatedTextFieldWithCoordinator(
     val currentOnValueChange by rememberUpdatedState(onValueChange)
     val currentOnCommit by rememberUpdatedState(onCommit)
     val currentValue by rememberUpdatedState(value)
+    val currentProfile by rememberUpdatedState(profile)
 
     val target = remember(targetId) {
         EditableTextTarget(
             targetId = targetId,
-            profile = profile,
+            profile = currentProfile,
             isPersistent = false
         )
     }
@@ -106,7 +107,7 @@ private fun AnimatedTextFieldWithCoordinator(
     target.onEditingStateChanged = { state ->
         isEditing = state == EditingState.EDITING || state == EditingState.BINDING
     }
-    target.updateProfile(profile)
+    target.updateProfile(currentProfile)
     target.updatePersistent(false)
     target.updateText(currentValue)
 

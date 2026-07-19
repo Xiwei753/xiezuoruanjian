@@ -89,12 +89,13 @@ private fun AnimatedTextAreaWithCoordinator(
     val currentOnValueChange by rememberUpdatedState(onValueChange)
     val currentOnCommit by rememberUpdatedState(onCommit)
     val currentValue by rememberUpdatedState(value)
+    val currentProfile by rememberUpdatedState(profile)
 
     val target = remember(targetId) {
         EditableTextTarget(
             targetId = targetId,
-            profile = profile,
-            isPersistent = profile == TextEditorProfile.DocumentBody
+            profile = currentProfile,
+            isPersistent = currentProfile == TextEditorProfile.DocumentBody
         )
     }
 
@@ -111,8 +112,8 @@ private fun AnimatedTextAreaWithCoordinator(
     target.onEditingStateChanged = { state ->
         isEditing = state == EditingState.EDITING || state == EditingState.BINDING
     }
-    target.updateProfile(profile)
-    target.updatePersistent(profile == TextEditorProfile.DocumentBody)
+    target.updateProfile(currentProfile)
+    target.updatePersistent(currentProfile == TextEditorProfile.DocumentBody)
     target.updateText(currentValue)
 
     LaunchedEffect(value) {

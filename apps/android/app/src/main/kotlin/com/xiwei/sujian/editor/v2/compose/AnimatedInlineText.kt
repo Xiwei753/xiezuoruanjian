@@ -39,7 +39,7 @@ fun AnimatedInlineText(
     val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
         ?: throw IllegalStateException(
             "AnimatedInlineText($targetId) requires an AnimatedTextEditorCoordinator. " +
-            "Every Activity must provide one via CompositionLocal or the coordinator parameter."
+            "Ensure the host Activity provides one via CompositionLocalProvider."
         )
 
     var localValue by remember(value) { mutableStateOf(value) }
@@ -48,11 +48,12 @@ fun AnimatedInlineText(
     val currentOnValueChange by rememberUpdatedState(onValueChange)
     val currentOnCommit by rememberUpdatedState(onCommit)
     val currentValue by rememberUpdatedState(value)
+    val currentProfile by rememberUpdatedState(profile)
 
     val target = remember(targetId) {
         EditableTextTarget(
             targetId = targetId,
-            profile = profile,
+            profile = currentProfile,
             isPersistent = false
         )
     }
@@ -70,7 +71,7 @@ fun AnimatedInlineText(
     target.onEditingStateChanged = { state ->
         isEditing = state == EditingState.EDITING || state == EditingState.BINDING
     }
-    target.updateProfile(profile)
+    target.updateProfile(currentProfile)
     target.updatePersistent(false)
     target.updateText(currentValue)
 

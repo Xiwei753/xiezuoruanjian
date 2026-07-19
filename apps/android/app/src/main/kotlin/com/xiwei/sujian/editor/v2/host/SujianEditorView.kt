@@ -447,6 +447,9 @@ class SujianEditorView @JvmOverloads constructor(
         initialCursorUtf8: Int
     ) {
         if (isSessionBound) {
+            onContentChanged = null
+            onCommitRequested = null
+            onCancelRequested = null
             unbindSession("rebind")
         }
         kernelBridge = sessionBridge
@@ -488,10 +491,11 @@ class SujianEditorView @JvmOverloads constructor(
         pipeline.cancelActiveTransaction()
         pipeline.invalidateCompositionSession()
         pipeline.inputAdapter?.onPerformEditorAction = null
-        kernelBridge = null
-        isSessionBound = false
+        onContentChanged = null
         onCommitRequested = null
         onCancelRequested = null
+        kernelBridge = null
+        isSessionBound = false
         clearFocus()
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(windowToken, 0)

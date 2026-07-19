@@ -19,7 +19,6 @@ class AnimatedTextEditorCoordinator(
     private var activeSessionId: ULong? = null
     private var sharedEditorView: SujianEditorView? = null
     private val persistentSessionIds = mutableMapOf<String, ULong>()
-    private var callbackGeneration: Long = 0L
 
     var activeTargetId: String? by mutableStateOf(null)
         private set
@@ -312,12 +311,8 @@ class AnimatedTextEditorCoordinator(
     }
 
     private fun installContentCallback(view: SujianEditorView, target: EditableTextTarget) {
-        callbackGeneration++
-        val generation = callbackGeneration
         view.onContentChanged = { newText ->
-            if (generation == callbackGeneration) {
-                target.onTextChanged?.invoke(newText)
-            }
+            target.onTextChanged?.invoke(newText)
         }
     }
 
@@ -334,7 +329,6 @@ class AnimatedTextEditorCoordinator(
     }
 
     private fun clearActiveCallbacks() {
-        callbackGeneration++
         sharedEditorView?.let { view ->
             view.onContentChanged = null
             view.onCommitRequested = null
