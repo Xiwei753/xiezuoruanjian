@@ -23,15 +23,18 @@ class AndroidTextAnimationEngine(
     ): PreparedVisualTransaction {
         val transactionKey = System.nanoTime()
         val owner = SnapshotOwner.OwnedByTransaction(transactionKey)
+        val ownedSnapshotIds = mutableSetOf<Long>()
         for ((_, snapshot) in oldSnapshots) {
             resourceStore.put(snapshot, owner)
+            ownedSnapshotIds.add(snapshot.snapshotId)
         }
         for ((_, snapshot) in newSnapshots) {
             resourceStore.put(snapshot, owner)
+            ownedSnapshotIds.add(snapshot.snapshotId)
         }
         return visualPlanner.prepare(
             visualIntent, oldRevision, newRevision,
-            oldSnapshots, newSnapshots, rebaseFrame
+            oldSnapshots, newSnapshots, rebaseFrame, transactionKey, ownedSnapshotIds
         )
     }
 
@@ -173,16 +176,16 @@ class AndroidTextAnimationEngine(
 
     private fun completeTransaction(transaction: PreparedVisualTransaction) {
         val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
-        for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
+        for (snapshotId in transaction.ownedSnapshotIds) {
+            resourceStore.release(snapshotId, owner)
         }
         timeline?.complete()
     }
 
     private fun cancelTransaction(transaction: PreparedVisualTransaction) {
         val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
-        for (slice in transaction.animatedSlices) {
-            slice.snapshot?.let { resourceStore.release(it.snapshotId, owner) }
+        for (snapshotId in transaction.ownedSnapshotIds) {
+            resourceStore.release(snapshotId, owner)
         }
         timeline?.cancel()
     }
