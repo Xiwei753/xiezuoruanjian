@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.compose
 
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -139,16 +140,10 @@ private fun AnimatedTextFieldWithCoordinator(
                 if (enabled) {
                     Modifier
                         .pointerInput(targetId) {
-                            awaitPointerEventScope {
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    if (event.changes.any { it.pressed }) {
-                                        event.changes.forEach { it.consume() }
-                                        coordinator.updateTargetText(targetId, currentValue)
-                                        val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
-                                        coordinator.beginEdit(targetId, cursorUtf8)
-                                    }
-                                }
+                            detectTapGestures {
+                                coordinator.updateTargetText(targetId, currentValue)
+                                val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
+                                coordinator.beginEdit(targetId, cursorUtf8)
                             }
                         }
                         .onFocusEvent { focusState ->
