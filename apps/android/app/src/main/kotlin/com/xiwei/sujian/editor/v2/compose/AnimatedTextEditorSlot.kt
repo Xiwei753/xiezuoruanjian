@@ -40,21 +40,24 @@ fun AnimatedTextEditorSlot(
 
     val density = LocalDensity.current
 
+    val unscaledWidthPx = targetGeometry.width().toFloat()
+    val unscaledHeightPx = targetGeometry.height().toFloat()
+
+    val scaledWidthPx = unscaledWidthPx * targetTransform.scaleX
+    val scaledHeightPx = unscaledHeightPx * targetTransform.scaleY
+
     val targetRectInWindow = Rect(
         left = targetGeometry.left.toFloat() + targetTransform.translateX,
         top = targetGeometry.top.toFloat() + targetTransform.translateY,
-        right = targetGeometry.left.toFloat() + targetTransform.translateX + targetGeometry.width() * targetTransform.scaleX,
-        bottom = targetGeometry.top.toFloat() + targetTransform.translateY + targetGeometry.height() * targetTransform.scaleY
+        right = targetGeometry.left.toFloat() + targetTransform.translateX + scaledWidthPx,
+        bottom = targetGeometry.top.toFloat() + targetTransform.translateY + scaledHeightPx
     )
-
-    val unscaledWidthPx = targetGeometry.width().toFloat()
-    val unscaledHeightPx = targetGeometry.height().toFloat()
 
     val slotLocalLeft = targetRectInWindow.left - slotBoundsInWindow.left
     val slotLocalTop = targetRectInWindow.top - slotBoundsInWindow.top
 
-    val slotWidthPx = if (isVisible && unscaledWidthPx > 0f) unscaledWidthPx else 1f
-    val slotHeightPx = if (isVisible && unscaledHeightPx > 0f) unscaledHeightPx else 1f
+    val slotWidthPx = if (isVisible && scaledWidthPx > 0f) scaledWidthPx else 1f
+    val slotHeightPx = if (isVisible && scaledHeightPx > 0f) scaledHeightPx else 1f
 
     val slotWidthDp = with(density) { slotWidthPx.toDp() }
     val slotHeightDp = with(density) { slotHeightPx.toDp() }
@@ -82,7 +85,7 @@ fun AnimatedTextEditorSlot(
             },
             update = { view ->
                 EditorThemeAdapter.applyToView(view, themeColors)
-                if (isVisible && unscaledWidthPx > 0f && unscaledHeightPx > 0f) {
+                if (isVisible && scaledWidthPx > 0f && scaledHeightPx > 0f) {
                     view.visibility = android.view.View.VISIBLE
                     coordinator.updateHostGeometry(unscaledWidthPx, unscaledHeightPx)
                 } else {
@@ -97,7 +100,7 @@ fun AnimatedTextEditorSlot(
             },
             modifier = Modifier
                 .graphicsLayer {
-                    if (isVisible && unscaledWidthPx > 0f && unscaledHeightPx > 0f) {
+                    if (isVisible && scaledWidthPx > 0f && scaledHeightPx > 0f) {
                         translationX = slotLocalLeft
                         translationY = slotLocalTop
                         scaleX = targetTransform.scaleX

@@ -50,6 +50,7 @@ class AndroidEditorPipeline private constructor(
 
     private var autoIndentEnabled: Boolean = false
     private var autoIndentWidthSp: Float = 2f
+    private var maxLength: Int = 0
 
     fun loadText(text: String, cursorUtf8: Int): LoadTextResult {
         val bridge = kernelBridge ?: return LoadTextResult.Failed
@@ -150,22 +151,12 @@ class AndroidEditorPipeline private constructor(
             return PipelineOutput.NeedReload
         }
 
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val rebaseSnapshot = animationEngine.captureRebaseSnapshot(frameTimeMs)
-
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
-        if (beforePatch != null) {
-            beforePatch.invoke()
-        }
-        mirror.applyEditResult(result)
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
-        val transaction = animationEngine.prepare(result.visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
-        animationEngine.submit(transaction)
+        animationEngine.prepareAndSubmit(
+            visualIntent = result.visualIntent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = { mirror.applyEditResult(result) },
+            beforePatch = beforePatch
+        )
 
         return PipelineOutput.Edited(result)
     }
@@ -174,18 +165,11 @@ class AndroidEditorPipeline private constructor(
         visualIntent: VisualIntent,
         mirrorUpdate: (() -> Unit)? = null
     ) {
-        val frameTimeMs = System.nanoTime() / 1_000_000
-        val rebaseSnapshot = animationEngine.captureRebaseSnapshot(frameTimeMs)
-        val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
-        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
-        mirrorUpdate?.invoke()
-        layoutEngine.requestLayout()
-        val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
-        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
-        val transaction = animationEngine.prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
-        animationEngine.submit(transaction)
+        animationEngine.prepareAndSubmit(
+            visualIntent = visualIntent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = mirrorUpdate
+        )
     }
 
     fun onCompositionUpdated() {
@@ -456,4 +440,10 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun isSelectionAllowed(): Boolean = selectionAllowed
+
+    fun setMaxLength(max: Int) {
+        maxLength = max
+    }
+
+    fun getMaxLength(): Int = maxLength
 }

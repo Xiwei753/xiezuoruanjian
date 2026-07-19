@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.visual
 
+import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
@@ -36,6 +37,28 @@ class AndroidTextAnimationEngine(
 
         activeTransaction = preparedAnimation
         timeline = AnimationTimeline(preparedAnimation.durationMs)
+    }
+
+    fun prepareAndSubmit(
+        visualIntent: VisualIntent,
+        layoutEngine: AndroidLayoutEngine,
+        mirrorUpdate: (() -> Unit)? = null,
+        beforePatch: (() -> Unit)? = null
+    ) {
+        val frameTimeMs = System.nanoTime() / 1_000_000
+        val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
+
+        val oldRevision = layoutEngine.captureImmutableRevision()
+        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
+        val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
+        beforePatch?.invoke()
+        mirrorUpdate?.invoke()
+        layoutEngine.requestLayout()
+        val newRevision = layoutEngine.getCurrentRevision()
+        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
+        val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
+        val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
+        submit(transaction)
     }
 
     fun captureFrame(frameTimeMs: Long): VisualFrameSnapshot? {

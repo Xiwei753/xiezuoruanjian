@@ -1,7 +1,6 @@
 package com.xiwei.sujian.editor.v2.compose
 
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -17,7 +16,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -84,10 +82,10 @@ private fun AnimatedTextFieldWithCoordinator(
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
 
-    val currentOnValueChange by rememberUpdatedState(onValueChange)
-    val currentOnCommit by rememberUpdatedState(onCommit)
     val currentValue by rememberUpdatedState(value)
     val currentProfile by rememberUpdatedState(profile)
+    val refOnValueChanged by rememberUpdatedState(onValueChange)
+    val refOnCommit by rememberUpdatedState(onCommit)
 
     val target = remember(targetId) {
         EditableTextTarget(targetId = targetId)
@@ -95,12 +93,12 @@ private fun AnimatedTextFieldWithCoordinator(
 
     target.onTextChanged = { newText ->
         localValue = newText
-        currentOnValueChange(newText)
+        refOnValueChanged(newText)
     }
     target.onCommit = { finalText ->
         localValue = finalText
         isEditing = false
-        currentOnCommit(finalText)
+        refOnCommit(finalText)
     }
     target.onCancel = { isEditing = false }
     target.onEditingStateChanged = { state ->
@@ -138,22 +136,13 @@ private fun AnimatedTextFieldWithCoordinator(
             }
             .then(
                 if (enabled) {
-                    Modifier
-                        .pointerInput(targetId) {
-                            detectTapGestures {
-                                coordinator.updateTargetText(targetId, currentValue)
-                                val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
-                                coordinator.beginEdit(targetId, cursorUtf8)
-                            }
+                    Modifier.pointerInput(targetId) {
+                        detectTapGestures {
+                            coordinator.updateTargetText(targetId, currentValue)
+                            val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
+                            coordinator.beginEdit(targetId, cursorUtf8)
                         }
-                        .onFocusEvent { focusState ->
-                            if (focusState.hasFocus && coordinator.activeTargetId != targetId) {
-                                coordinator.updateTargetText(targetId, currentValue)
-                                val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
-                                coordinator.beginEdit(targetId, cursorUtf8)
-                            }
-                        }
-                        .focusable()
+                    }
                 } else {
                     Modifier
                 }

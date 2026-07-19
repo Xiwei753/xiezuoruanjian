@@ -337,7 +337,7 @@ class SujianEditorView @JvmOverloads constructor(
         super.onFocusChanged(gained, direction, previouslyFocusedRect)
         if (gained) {
             showSoftInput()
-        } else if (isSessionBound && currentProfile.commitOnFocusLoss) {
+        } else if (isSessionBound && commitOnFocusLoss) {
             onCommitRequested?.invoke()
         }
     }
@@ -437,6 +437,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     private var isSessionBound: Boolean = false
     private var currentProfile: TextEditorProfile = TextEditorProfile.DocumentBody
+    private var commitOnFocusLoss: Boolean = true
     var onCommitRequested: (() -> Unit)? = null
     var onCancelRequested: (() -> Unit)? = null
 
@@ -471,6 +472,7 @@ class SujianEditorView @JvmOverloads constructor(
                 onCommitRequested?.invoke()
             }
         }
+        commitOnFocusLoss = profile.commitOnFocusLoss
         if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
             pipeline.kernelBridge?.setAnimationEnabled(false)
             pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED)
@@ -488,6 +490,7 @@ class SujianEditorView @JvmOverloads constructor(
         } else {
             pipeline.setSelectionAllowed(true)
         }
+        pipeline.setMaxLength(profile.maxLength)
     }
 
     fun updateEditorProfile(profile: TextEditorProfile) {
