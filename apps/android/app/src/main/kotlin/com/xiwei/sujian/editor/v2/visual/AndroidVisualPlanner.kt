@@ -24,6 +24,19 @@ class AndroidVisualPlanner {
                 }
             }
         }
+        val editByteStart = if (useNewRanges) {
+            visualIntent.newAffectedByteRanges.firstOrNull()?.first
+        } else {
+            visualIntent.oldAffectedByteRanges.firstOrNull()?.first
+                ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
+        }
+        if (editByteStart != null) {
+            val editLine = findLineForUtf8(revision, editByteStart)
+            val expandEnd = (editLine + 3).coerceAtMost(revision.lineRanges.size)
+            for (i in editLine until expandEnd) {
+                affectedLines.add(i)
+            }
+        }
         return affectedLines
     }
 
@@ -34,8 +47,8 @@ class AndroidVisualPlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         rebaseSnapshot: VisualFrameSnapshot? = null,
-        transactionKey: Long = System.nanoTime(),
-        ownedSnapshotIds: Set<Long> = emptySet()
+        transactionKey: Long,
+        ownedSnapshotIds: Set<Long>
     ): PreparedVisualTransaction {
         val durationMs = visualIntent.durationMs
 
@@ -632,20 +645,53 @@ class AndroidVisualPlanner {
     ): List<Pair<LineClusterSnapshot, LineClusterSnapshot>> {
         if (oldSnapshot.clusters.isEmpty() || newSnapshot.clusters.isEmpty()) return emptyList()
         val offsetMap = buildOffsetMap(visualIntent, oldRev, newRev)
+        if (offsetMap.isNotEmpty()) {
+            val pairs = mutableListOf<Pair<LineClusterSnapshot, LineClusterSnapshot>>()
+            val newUsed = mutableSetOf<Int>()
+            for (oldCluster in oldSnapshot.clusters) {
+                val mappedStart = offsetMap[oldCluster.documentByteStart]
+                val mappedEnd = offsetMap[oldCluster.documentByteEndExclusive]
+                if (mappedStart != null) {
+                    val newIdx = newSnapshot.clusters.indices.firstOrNull { i ->
+                        i !in newUsed && newSnapshot.clusters[i].documentByteStart == mappedStart &&
+                            (mappedEnd == null || newSnapshot.clusters[i].documentByteEndExclusive == mappedEnd)
+                    }
+                    if (newIdx != null) {
+                        newUsed.add(newIdx)
+                        pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
+                    }
+                }
+            }
+            return pairs
+        }
+        return matchClustersByFingerprint(oldSnapshot, newSnapshot, visualIntent)
+    }
+
+    private fun matchClustersByFingerprint(
+        oldSnapshot: AndroidLineSnapshot,
+        newSnapshot: AndroidLineSnapshot,
+        visualIntent: VisualIntent
+    ): List<Pair<LineClusterSnapshot, LineClusterSnapshot>> {
         val pairs = mutableListOf<Pair<LineClusterSnapshot, LineClusterSnapshot>>()
         val newUsed = mutableSetOf<Int>()
+        val insertByteRanges = visualIntent.newAffectedByteRanges.toSet()
+        val deleteByteRanges = visualIntent.oldAffectedByteRanges.toSet()
         for (oldCluster in oldSnapshot.clusters) {
-            val mappedStart = offsetMap[oldCluster.documentByteStart]
-            val mappedEnd = offsetMap[oldCluster.documentByteEndExclusive]
-            if (mappedStart != null) {
-                val newIdx = newSnapshot.clusters.indices.firstOrNull { i ->
-                    i !in newUsed && newSnapshot.clusters[i].documentByteStart == mappedStart &&
-                        (mappedEnd == null || newSnapshot.clusters[i].documentByteEndExclusive == mappedEnd)
-                }
-                if (newIdx != null) {
-                    newUsed.add(newIdx)
-                    pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
-                }
+            val isDeleted = deleteByteRanges.any { (start, end) ->
+                oldCluster.documentByteStart >= start && oldCluster.documentByteEndExclusive <= end
+            }
+            if (isDeleted) continue
+            val newIdx = newSnapshot.clusters.indices.firstOrNull { i ->
+                i !in newUsed &&
+                    newSnapshot.clusters[i].shapingFingerprint == oldCluster.shapingFingerprint &&
+                    !insertByteRanges.any { (start, end) ->
+                        newSnapshot.clusters[i].documentByteStart >= start &&
+                        newSnapshot.clusters[i].documentByteEndExclusive <= end
+                    }
+            }
+            if (newIdx != null) {
+                newUsed.add(newIdx)
+                pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
             }
         }
         return pairs
@@ -731,6 +777,24 @@ class AndroidVisualPlanner {
             }
         }
 
+        val editByteStart = visualIntent.oldAffectedByteRanges.firstOrNull()?.first
+            ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
+        if (editByteStart != null) {
+            val oldEditLine = findLineForUtf8(oldRev, editByteStart)
+            val newEditLine = findLineForUtf8(newRev, editByteStart)
+            val minCommonLines = minOf(oldRev.lineRanges.size, newRev.lineRanges.size)
+            for (i in 0 until minCommonLines) {
+                val oldLine = oldRev.lineRanges[i]
+                val newLine = newRev.lineRanges[i]
+                if (i >= oldEditLine || i >= newEditLine) {
+                    if (oldLine.top != newLine.top || oldLine.bottom != newLine.bottom ||
+                        oldLine.left != newLine.left || oldLine.right != newLine.right) {
+                        affectedLines.add(i)
+                    }
+                }
+            }
+        }
+
         return affectedLines
     }
 
@@ -769,6 +833,7 @@ class AndroidVisualPlanner {
             val roleKey = "${slice.role}_${lineIndex}"
             val lineCandidates = rebaseByLineAndRole[roleKey]
             val rebaseState = lineCandidates?.firstOrNull()
+                ?: findClosestRebaseStateByByteRange(slice, rebaseSnapshot)
                 ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot)
             if (rebaseState != null) {
                 applyRebaseState(slice, rebaseState)
@@ -776,6 +841,19 @@ class AndroidVisualPlanner {
                 slice
             }
         }
+    }
+
+    private fun findClosestRebaseStateByByteRange(
+        slice: PreparedVisualTransaction.AnimatedSlice,
+        rebaseSnapshot: VisualFrameSnapshot
+    ): SliceVisualState? {
+        val sliceRole = slice.role
+        val byteStart = slice.snapshot?.documentByteStart ?: -1
+        val byteEnd = slice.snapshot?.documentByteEndExclusive ?: -1
+        if (byteStart < 0 || byteEnd < 0) return null
+        return rebaseSnapshot.sliceVisualStates
+            .filter { it.role == sliceRole && it.documentByteStart >= 0 && it.documentByteEndExclusive >= 0 }
+            .firstOrNull { it.documentByteStart == byteStart && it.documentByteEndExclusive == byteEnd }
     }
 
     private fun findClosestRebaseStateByPosition(
