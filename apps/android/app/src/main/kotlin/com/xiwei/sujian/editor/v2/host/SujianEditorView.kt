@@ -322,6 +322,9 @@ class SujianEditorView @JvmOverloads constructor(
             }
             KeyEvent.KEYCODE_ENTER -> {
                 if (currentProfile.newlinePolicy == NewlinePolicy.FORBID) {
+                    if (currentProfile.commitOnImeAction) {
+                        onCommitRequested?.invoke()
+                    }
                     return true
                 }
                 return super.onKeyDown(keyCode, event)

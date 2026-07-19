@@ -32,6 +32,8 @@ class AndroidInputAdapter(
         currentProfile = profile
     }
 
+    fun getCurrentProfile(): TextEditorProfile = currentProfile
+
     fun shouldForbidNewline(text: String): Boolean {
         return currentProfile.newlinePolicy == NewlinePolicy.FORBID && text.contains('\n')
     }

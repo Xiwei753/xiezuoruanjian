@@ -68,7 +68,7 @@ fun WritingPane(
     var lastSeenContentGeneration by remember { mutableLongStateOf(0L) }
     var lastChapterId by remember { mutableStateOf("") }
 
-    LaunchedEffect(uiState.content) {
+    LaunchedEffect(uiState.content, chapterId) {
         if (!uiState.loading) {
             if (localContentGeneration != lastSeenContentGeneration) {
                 lastSeenContentGeneration = localContentGeneration
@@ -78,7 +78,7 @@ fun WritingPane(
                     coordinator.updateTargetText(targetId, uiState.content)
                     val cursorUtf8 = uiState.content.toByteArray(Charsets.UTF_8).size
                     coordinator.beginEdit(targetId, cursorUtf8)
-                } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
+                } else if (coordinator.activeTargetId == targetId) {
                     coordinator.resetPersistentSession(
                         targetId,
                         uiState.content,

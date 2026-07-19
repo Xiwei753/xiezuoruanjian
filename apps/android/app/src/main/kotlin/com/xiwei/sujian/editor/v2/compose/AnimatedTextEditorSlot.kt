@@ -33,7 +33,7 @@ fun AnimatedTextEditorSlot(
 
     val activeTargetId = coordinator.activeTargetId
     val editingState = coordinator.editingState
-    val isVisible = activeTargetId != null && editingState == EditingState.EDITING
+    val isVisible = activeTargetId != null && (editingState == EditingState.BINDING || editingState == EditingState.EDITING)
 
     val targetGeometry = coordinator.activeTargetGeometry
     val targetTransform = coordinator.activeTargetTransform

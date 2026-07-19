@@ -139,8 +139,8 @@ class AnimatedTextEditorCoordinator(
 
         val view = sharedEditorView
         if (view != null) {
-            clearContentCallback(view)
             val finalText = view.getText()
+            clearContentCallback(view)
             target.onCommit?.invoke(finalText)
             target.updateText(finalText)
             if (target.isPersistent) {

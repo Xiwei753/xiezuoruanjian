@@ -15,6 +15,18 @@ class AndroidInputConnection(
 ) : BaseInputConnection(hostView, true) {
 
     override fun performEditorAction(actionCode: Int): Boolean {
+        val profile = adapter.getCurrentProfile()
+        if (profile.commitOnImeAction) {
+            when (actionCode) {
+                android.view.inputmethod.EditorInfo.IME_ACTION_DONE,
+                android.view.inputmethod.EditorInfo.IME_ACTION_GO,
+                android.view.inputmethod.EditorInfo.IME_ACTION_NEXT,
+                android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH -> {
+                    adapter.onPerformEditorAction?.invoke(actionCode)
+                    return true
+                }
+            }
+        }
         adapter.onPerformEditorAction?.invoke(actionCode)
         return true
     }
