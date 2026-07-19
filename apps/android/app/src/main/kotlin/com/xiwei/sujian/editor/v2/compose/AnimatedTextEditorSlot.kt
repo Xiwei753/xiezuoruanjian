@@ -67,7 +67,6 @@ fun AnimatedTextEditorSlot(
                 },
                 update = { view ->
                     view.visibility = android.view.View.VISIBLE
-                    view.updateHostGeometry(slotWidthPx, slotHeightPx)
                 },
                 onReset = { view ->
                     view.resetForReuse()

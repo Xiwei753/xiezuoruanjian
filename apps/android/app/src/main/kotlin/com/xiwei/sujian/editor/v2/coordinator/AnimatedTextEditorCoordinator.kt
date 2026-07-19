@@ -133,6 +133,7 @@ class AnimatedTextEditorCoordinator(
 
         val view = sharedEditorView
         if (view != null) {
+            clearContentCallback(view)
             val finalText = view.getText()
             target.onCommit?.invoke(finalText)
             target.updateText(finalText)
@@ -141,7 +142,6 @@ class AnimatedTextEditorCoordinator(
             } else {
                 view.unbindSession("commit")
             }
-            clearContentCallback(view)
         }
 
         if (!target.isPersistent) {
@@ -163,8 +163,10 @@ class AnimatedTextEditorCoordinator(
         editingState = EditingState.CANCELLING
         target.onEditingStateChanged?.invoke(EditingState.CANCELLING)
 
-        sharedEditorView?.unbindSession("cancel")
-        sharedEditorView?.let { clearContentCallback(it) }
+        sharedEditorView?.let { view ->
+            clearContentCallback(view)
+            view.unbindSession("cancel")
+        }
         target.onCancel?.invoke()
 
         closeSession(sessionId)

@@ -450,7 +450,7 @@ class SujianEditorView @JvmOverloads constructor(
             profile.autoIndentPolicy == com.xiwei.sujian.editor.v2.coordinator.AutoIndentPolicy.INDENT_ON_ENTER,
             2f
         )
-        pipeline.inputAdapter?.onPerformEditorAction = { actionCode ->
+        pipeline.inputAdapter?.onPerformEditorAction = { _ ->
             if (profile.commitOnImeAction) {
                 onCommitRequested?.invoke()
             }
@@ -460,11 +460,21 @@ class SujianEditorView @JvmOverloads constructor(
         } else {
             pipeline.kernelBridge?.setAnimationEnabled(true)
         }
+        if (profile.cursorPolicy == com.xiwei.sujian.editor.v2.coordinator.CursorPolicy.HIDDEN) {
+            pipeline.setCursorVisible(false)
+        } else {
+            pipeline.setCursorVisible(true)
+        }
+        if (profile.selectionPolicy == com.xiwei.sujian.editor.v2.coordinator.SelectionPolicy.CURSOR_ONLY) {
+            pipeline.setSelectionAllowed(false)
+        } else {
+            pipeline.setSelectionAllowed(true)
+        }
         loadText(initialText, initialCursorUtf8)
         requestFocus()
     }
 
-    fun unbindSession(reason: String) {
+    fun unbindSession(@Suppress("UNUSED_PARAMETER") reason: String) {
         if (!isSessionBound) return
         pipeline.cancelActiveTransaction()
         pipeline.invalidateCompositionSession()
@@ -487,13 +497,7 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun updateHostGeometry(width: Float, height: Float) {
-        val lp = layoutParams
-        if (lp != null) {
-            lp.width = if (width > 0) width.toInt() else android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-            lp.height = if (height > 0) height.toInt() else android.widget.FrameLayout.LayoutParams.MATCH_PARENT
-            layoutParams = lp
-        }
+    fun updateHostGeometry(@Suppress("UNUSED_PARAMETER") width: Float, @Suppress("UNUSED_PARAMETER") height: Float) {
     }
 
     fun softResetForPersistentCommit() {

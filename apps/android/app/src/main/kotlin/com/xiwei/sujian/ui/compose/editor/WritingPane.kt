@@ -14,7 +14,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,21 +63,25 @@ fun WritingPane(
 
     val uiState by viewModel.uiState.collectAsState()
 
-    var externalContentGeneration by remember { mutableLongStateOf(0L) }
+    var isLocalContentMirror by remember { mutableStateOf(false) }
 
     LaunchedEffect(uiState.content) {
         if (!uiState.loading) {
-            externalContentGeneration++
-            if (coordinator.editingState == EditingState.IDLE) {
+            if (isLocalContentMirror) {
+                isLocalContentMirror = false
                 coordinator.updateTargetText(targetId, uiState.content)
-                coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
-            } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
-                coordinator.resetPersistentSession(
-                    targetId,
-                    uiState.content,
-                    uiState.content.toByteArray(Charsets.UTF_8).size,
-                    SessionResetSource.EXTERNAL
-                )
+            } else {
+                if (coordinator.editingState == EditingState.IDLE) {
+                    coordinator.updateTargetText(targetId, uiState.content)
+                    coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
+                    coordinator.resetPersistentSession(
+                        targetId,
+                        uiState.content,
+                        uiState.content.toByteArray(Charsets.UTF_8).size,
+                        SessionResetSource.EXTERNAL
+                    )
+                }
             }
         }
     }
@@ -89,12 +92,8 @@ fun WritingPane(
             profile = TextEditorProfile.DocumentBody,
             initialText = "",
             isPersistent = true,
-            onTextChanged = { newText ->
-                viewModel.onContentChanged(newText)
-            },
-            onCommit = { finalText ->
-                viewModel.onContentChanged(finalText)
-            },
+            onTextChanged = null,
+            onCommit = null,
             onCancel = {}
         )
     }
@@ -110,6 +109,7 @@ fun WritingPane(
         coordinator.updateTargetSpec(
             targetId,
             onTextChanged = { newText ->
+                isLocalContentMirror = true
                 viewModel.onContentChanged(newText)
             },
             onCommit = { finalText ->

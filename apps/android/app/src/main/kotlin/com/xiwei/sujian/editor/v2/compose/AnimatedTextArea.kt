@@ -1,6 +1,7 @@
 package com.xiwei.sujian.editor.v2.compose
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -18,9 +19,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.semantics.editableText
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setText
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
@@ -93,15 +99,17 @@ private fun AnimatedTextAreaWithCoordinator(
 ) {
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
 
     val currentOnValueChange by rememberUpdatedState(onValueChange)
     val currentOnCommit by rememberUpdatedState(onCommit)
+    val currentValue by rememberUpdatedState(value)
 
     val target = remember(targetId) {
         EditableTextTarget(
             targetId = targetId,
             profile = profile,
-            initialText = value,
+            initialText = "",
             isPersistent = profile == TextEditorProfile.DocumentBody,
             onTextChanged = null,
             onCommit = null,
@@ -130,7 +138,8 @@ private fun AnimatedTextAreaWithCoordinator(
             onEditingStateChanged = { state ->
                 isEditing = state == EditingState.EDITING || state == EditingState.BINDING
             },
-            currentText = value
+            profile = profile,
+            currentText = currentValue
         )
     }
 
@@ -161,6 +170,8 @@ private fun AnimatedTextAreaWithCoordinator(
                 )
                 coordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
             }
+            .focusRequester(focusRequester)
+            .focusable(enabled = enabled)
             .then(
                 if (enabled && !isEditing) {
                     Modifier.clickable {
@@ -172,6 +183,14 @@ private fun AnimatedTextAreaWithCoordinator(
                     Modifier
                 }
             )
+            .semantics {
+                editableText = androidx.compose.ui.text.AnnotatedString(localValue)
+                setText {
+                    coordinator.updateTargetText(targetId, it.text)
+                    coordinator.beginEdit(targetId, it.text.toByteArray(Charsets.UTF_8).size)
+                    true
+                }
+            }
     ) {
         OutlinedTextFieldDefaults.DecorationBox(
             value = localValue,

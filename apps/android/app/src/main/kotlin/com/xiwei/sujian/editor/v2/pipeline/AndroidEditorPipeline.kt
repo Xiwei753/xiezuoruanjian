@@ -132,11 +132,6 @@ class AndroidEditorPipeline private constructor(
         return applyEditResult(result)
     }
 
-    @Deprecated("Composition commit failure must reload from kernel, not fallback to plain Replace")
-    fun clearCompositionAndReplace(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, cause: EditorTransactionCauseDto): PipelineOutput {
-        return replaceRangeTyped(byteStart, byteEndExclusive, replacementText, originalText, cause)
-    }
-
     fun applyEditResult(
         result: EditResult,
         beforePatch: (() -> Unit)? = null
@@ -249,14 +244,16 @@ class AndroidEditorPipeline private constructor(
         val layout = layoutEngine.getLayout()
         if (layout != null) {
             val rev = layoutEngine.getCurrentRevision()
+            val effectiveSelStart = if (selectionAllowed) (rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16()) else mirror.getCursorUtf16()
+            val effectiveSelEnd = if (selectionAllowed) (rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16()) else mirror.getCursorUtf16()
             val frame = computeFrame(
                 frameTimeMs,
-                cursorUtf16 = rev?.cursorUtf16 ?: mirror.getCursorUtf16(),
+                cursorUtf16 = if (cursorVisible) (rev?.cursorUtf16 ?: mirror.getCursorUtf16()) else -1,
                 cursorX = rev?.cursorX ?: 0f,
                 cursorY = rev?.cursorY ?: 0f,
                 cursorHeight = rev?.cursorHeight ?: 0f,
-                selectionStartUtf16 = rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16(),
-                selectionEndUtf16 = rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16(),
+                selectionStartUtf16 = effectiveSelStart,
+                selectionEndUtf16 = effectiveSelEnd,
                 compositionStartUtf16 = rev?.compositionStartUtf16 ?: -1,
                 compositionEndUtf16 = rev?.compositionEndUtf16 ?: -1,
                 searchHighlightsUtf16 = searchHighlightsUtf16,
@@ -427,4 +424,19 @@ class AndroidEditorPipeline private constructor(
     fun invalidateCompositionSession() {
         inputAdapter?.invalidateCompositionSession()
     }
+
+    private var cursorVisible: Boolean = true
+    private var selectionAllowed: Boolean = true
+
+    fun setCursorVisible(visible: Boolean) {
+        cursorVisible = visible
+    }
+
+    fun isCursorVisible(): Boolean = cursorVisible
+
+    fun setSelectionAllowed(allowed: Boolean) {
+        selectionAllowed = allowed
+    }
+
+    fun isSelectionAllowed(): Boolean = selectionAllowed
 }
