@@ -183,7 +183,7 @@ private fun AnimatedTextAreaWithCoordinator(
             .focusable(enabled = enabled)
             .then(
                 if (enabled) {
-                    Modifier.pointerInput(isEditing) {
+                    Modifier.pointerInput(Unit) {
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent()

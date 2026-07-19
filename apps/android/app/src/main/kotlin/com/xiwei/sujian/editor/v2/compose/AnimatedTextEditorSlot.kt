@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
@@ -39,13 +40,13 @@ fun AnimatedTextEditorSlot(
 
     val density = LocalDensity.current
 
-    val slotLocalLeft = (targetGeometry.left.toFloat() - slotPositionInWindow.x) * targetTransform.scaleX + targetTransform.translateX
-    val slotLocalTop = (targetGeometry.top.toFloat() - slotPositionInWindow.y) * targetTransform.scaleY + targetTransform.translateY
-    val slotWidthPx = targetGeometry.width().toFloat() * targetTransform.scaleX
-    val slotHeightPx = targetGeometry.height().toFloat() * targetTransform.scaleY
+    val slotLocalLeft = targetGeometry.left.toFloat() - slotPositionInWindow.x + targetTransform.translateX
+    val slotLocalTop = targetGeometry.top.toFloat() - slotPositionInWindow.y + targetTransform.translateY
+    val unscaledWidthPx = targetGeometry.width().toFloat()
+    val unscaledHeightPx = targetGeometry.height().toFloat()
 
-    val slotWidthDp = with(density) { slotWidthPx.toDp() }
-    val slotHeightDp = with(density) { slotHeightPx.toDp() }
+    val slotWidthDp = with(density) { unscaledWidthPx.toDp() }
+    val slotHeightDp = with(density) { unscaledHeightPx.toDp() }
 
     val themeColors = EditorThemeAdapter.extractColors()
 
@@ -61,7 +62,7 @@ fun AnimatedTextEditorSlot(
                 slotPositionInWindow = coordinates.positionInWindow()
             }
     ) {
-        if (isVisible && slotWidthPx > 0f && slotHeightPx > 0f) {
+        if (isVisible && unscaledWidthPx > 0f && unscaledHeightPx > 0f) {
             AndroidView(
                 factory = { ctx ->
                     val view = coordinator.getSharedEditorView()
@@ -72,7 +73,7 @@ fun AnimatedTextEditorSlot(
                 update = { view ->
                     EditorThemeAdapter.applyToView(view, themeColors)
                     view.visibility = android.view.View.VISIBLE
-                    coordinator.updateHostGeometry(slotWidthPx, slotHeightPx)
+                    coordinator.updateHostGeometry(unscaledWidthPx * targetTransform.scaleX, unscaledHeightPx * targetTransform.scaleY)
                 },
                 onReset = { view ->
                     view.resetForReuse()
@@ -86,6 +87,7 @@ fun AnimatedTextEditorSlot(
                         translationY = slotLocalTop
                         scaleX = targetTransform.scaleX
                         scaleY = targetTransform.scaleY
+                        transformOrigin = TransformOrigin(0f, 0f)
                         clip = true
                     }
                     .requiredSize(

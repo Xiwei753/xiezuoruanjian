@@ -17,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -73,10 +74,16 @@ fun WritingPane(
             if (localContentGeneration != lastSeenContentGeneration) {
                 lastSeenContentGeneration = localContentGeneration
                 coordinator.updateTargetText(targetId, uiState.content)
-            } else if (coordinator.editingState == EditingState.IDLE) {
-                coordinator.updateTargetText(targetId, uiState.content)
-                val cursorUtf8 = uiState.content.toByteArray(Charsets.UTF_8).size
-                coordinator.beginEdit(targetId, cursorUtf8)
+            } else {
+                coordinator.resetPersistentSession(
+                    targetId,
+                    uiState.content,
+                    uiState.content.toByteArray(Charsets.UTF_8).size,
+                    SessionResetSource.EXTERNAL
+                )
+                if (coordinator.activeTargetId != targetId) {
+                    coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                }
             }
         }
     }
@@ -117,16 +124,20 @@ fun WritingPane(
         }
     }
 
+    val currentViewModel by rememberUpdatedState(viewModel)
+
     LaunchedEffect(targetId) {
         coordinator.updateTargetSpec(
             targetId,
             onTextChanged = { newText ->
                 localContentGeneration++
-                viewModel.onContentChanged(newText)
+                lastSeenContentGeneration = localContentGeneration
+                currentViewModel.onContentChanged(newText)
             },
             onCommit = { finalText ->
                 localContentGeneration++
-                viewModel.onContentChanged(finalText)
+                lastSeenContentGeneration = localContentGeneration
+                currentViewModel.onContentChanged(finalText)
             },
             onCancel = {}
         )

@@ -204,8 +204,8 @@ private fun StarMapListScreen(
             confirmButton = {
                 TextButton(onClick = {
                     coordinator.commitActiveEdit()
-                    if (title.isNotBlank()) {
-                        val t = title.trim()
+                    val t = coordinator.lastCommittedText?.trim() ?: title.trim()
+                    if (t.isNotBlank()) {
                         val d = description.trim()
                         coroutineScope.launch {
                             withContext(Dispatchers.IO) {
@@ -480,8 +480,8 @@ private fun StarMapEditorScreen(
             confirmButton = {
                 TextButton(onClick = {
                     coordinator.commitActiveEdit()
-                    if (nodeTitle.isNotBlank()) {
-                        val t = nodeTitle.trim()
+                    val t = coordinator.lastCommittedText?.trim() ?: nodeTitle.trim()
+                    if (t.isNotBlank()) {
                         coroutineScope.launch {
                             withContext(Dispatchers.IO) {
                                 try {
@@ -636,8 +636,9 @@ private fun NodeEditPanel(
         confirmButton = {
             TextButton(onClick = {
                 coordinator.commitActiveEdit()
-                if (editTitle.isNotBlank()) {
-                    onUpdate(editTitle.trim(), editKind)
+                val finalTitle = coordinator.lastCommittedText?.trim() ?: editTitle.trim()
+                if (finalTitle.isNotBlank()) {
+                    onUpdate(finalTitle, editKind)
                 }
             }) { Text(stringResource(id = R.string.action_save)) }
         },

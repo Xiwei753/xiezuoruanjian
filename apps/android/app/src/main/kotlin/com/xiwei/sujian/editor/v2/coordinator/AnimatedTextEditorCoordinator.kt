@@ -72,11 +72,6 @@ class AnimatedTextEditorCoordinator(
             editingState = EditingState.REBINDING
             oldTarget?.onEditingStateChanged?.invoke(EditingState.REBINDING)
 
-            val oldView = sharedEditorView
-            if (oldView != null) {
-                clearContentCallback(oldView)
-            }
-
             if (!commitActiveEdit()) {
                 cancelActiveEdit()
             }
@@ -138,8 +133,9 @@ class AnimatedTextEditorCoordinator(
         target.onEditingStateChanged?.invoke(EditingState.COMMITTING)
 
         val view = sharedEditorView
+        var finalText: String? = null
         if (view != null) {
-            val finalText = view.getText()
+            finalText = view.getText()
             clearContentCallback(view)
             target.onCommit?.invoke(finalText)
             target.updateText(finalText)
@@ -161,8 +157,12 @@ class AnimatedTextEditorCoordinator(
 
         editingState = EditingState.IDLE
         target.onEditingStateChanged?.invoke(EditingState.IDLE)
+        lastCommittedText = finalText
         return true
     }
+
+    var lastCommittedText: String? = null
+        private set
 
     fun cancelActiveEdit(): Boolean {
         val targetId = activeTargetId ?: return false
