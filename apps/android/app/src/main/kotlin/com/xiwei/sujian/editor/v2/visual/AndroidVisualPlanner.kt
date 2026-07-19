@@ -103,6 +103,7 @@ class AndroidVisualPlanner {
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
                         visualIntent, oldRev, newRev,
                         collectExcludedNewByteRanges(animatedSlices),
+                        collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices
                     )
                 }
@@ -115,6 +116,7 @@ class AndroidVisualPlanner {
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
                         visualIntent, oldRev, newRev,
                         collectExcludedNewByteRanges(animatedSlices),
+                        collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices
                     )
                 }
@@ -127,6 +129,7 @@ class AndroidVisualPlanner {
                         preCapturedOldSnapshots, preCapturedNewSnapshots,
                         visualIntent, oldRev, newRev,
                         collectExcludedNewByteRanges(animatedSlices),
+                        collectExcludedOldByteRanges(animatedSlices),
                         animatedSlices
                     )
                 }
@@ -276,60 +279,6 @@ class AndroidVisualPlanner {
         }
     }
 
-    private fun addMoveSlicesForShiftedClusters(
-        oldSnapshot: AndroidLineSnapshot,
-        newSnapshot: AndroidLineSnapshot,
-        visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision,
-        excludedNewByteRanges: Set<Pair<Int, Int>>,
-        animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>
-    ) {
-        val matchedPairs = matchClustersByOffsetMap(oldSnapshot, newSnapshot, visualIntent, oldRev, newRev)
-        for ((oldCluster, newCluster) in matchedPairs) {
-            val isExcluded = excludedNewByteRanges.any { (start, end) ->
-                newCluster.documentByteStart < end && newCluster.documentByteEndExclusive > start
-            }
-            if (isExcluded) continue
-            val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
-            if (!positionChanged) continue
-            if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint) {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.Move,
-                    snapshot = newSnapshot,
-                    sourceRect = newCluster.sourceRectInLineImage,
-                    destinationRect = newCluster.visualRectInDocument,
-                    startAlpha = 1f,
-                    endAlpha = 1f,
-                    fromDestinationRect = oldCluster.visualRectInDocument,
-                    clusterByteStart = newCluster.documentByteStart,
-                    clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                ))
-            } else {
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.CrossfadeOld,
-                    snapshot = oldSnapshot,
-                    sourceRect = oldCluster.sourceRectInLineImage,
-                    destinationRect = oldCluster.visualRectInDocument,
-                    startAlpha = 1f,
-                    endAlpha = 0f,
-                    clusterByteStart = oldCluster.documentByteStart,
-                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
-                ))
-                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                    role = SliceRole.CrossfadeNew,
-                    snapshot = newSnapshot,
-                    sourceRect = newCluster.sourceRectInLineImage,
-                    destinationRect = newCluster.visualRectInDocument,
-                    startAlpha = 0f,
-                    endAlpha = 1f,
-                    clusterByteStart = newCluster.documentByteStart,
-                    clusterByteEndExclusive = newCluster.documentByteEndExclusive
-                ))
-            }
-        }
-    }
-
     private fun addMoveSlicesForShiftedClustersCrossLine(
         allOldSnapshots: Map<Int, AndroidLineSnapshot>,
         allNewSnapshots: Map<Int, AndroidLineSnapshot>,
@@ -337,6 +286,7 @@ class AndroidVisualPlanner {
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision,
         excludedNewByteRanges: Set<Pair<Int, Int>>,
+        excludedOldByteRanges: Set<Pair<Int, Int>>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>
     ) {
         val allOldClusters = mutableListOf<Pair<LineClusterSnapshot, Pair<Int, AndroidLineSnapshot>>>()
@@ -358,6 +308,10 @@ class AndroidVisualPlanner {
                 oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
             }
             if (isDeleted) continue
+            val isAlreadyHandled = excludedOldByteRanges.any { (start, end) ->
+                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
+            }
+            if (isAlreadyHandled) continue
             val mappedStart = offsetMapper(oldCluster.documentByteStart)
             val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
             var matchedNewIdx: Int? = null
@@ -637,30 +591,6 @@ class AndroidVisualPlanner {
         }
     }
 
-    /** Sparse map used by same-line matchers; backed by [buildOffsetMapper]. */
-    private fun buildOffsetMap(
-        visualIntent: VisualIntent,
-        oldRev: AndroidLayoutRevision,
-        newRev: AndroidLayoutRevision
-    ): Map<Int, Int> {
-        val mapper = buildOffsetMapper(visualIntent, oldRev, newRev)
-        val offsetMap = mutableMapOf<Int, Int>()
-        val candidates = mutableSetOf<Int>()
-        for (line in oldRev.lineRanges) {
-            candidates.add(line.startUtf8)
-            candidates.add(line.endUtf8)
-        }
-        for (line in newRev.lineRanges) {
-            candidates.add(line.startUtf8)
-            candidates.add(line.endUtf8)
-        }
-        for (offset in candidates) {
-            val mapped = mapper(offset) ?: continue
-            offsetMap[offset] = mapped
-        }
-        return offsetMap
-    }
-
     private fun mapThroughRanges(offset: Int, oldRanges: List<Pair<Int, Int>>, newRanges: List<Pair<Int, Int>>): Int {
         for (i in oldRanges.indices) {
             val (oldStart, oldEnd) = oldRanges[i]
@@ -895,7 +825,9 @@ class AndroidVisualPlanner {
                                     destinationRect = newCluster.visualRectInDocument,
                                     startAlpha = 1f,
                                     endAlpha = 1f,
-                                    fromDestinationRect = oldCluster.visualRectInDocument
+                                    fromDestinationRect = oldCluster.visualRectInDocument,
+                                    clusterByteStart = newCluster.documentByteStart,
+                                    clusterByteEndExclusive = newCluster.documentByteEndExclusive
                                 ))
                             } else {
                                 animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
@@ -904,7 +836,9 @@ class AndroidVisualPlanner {
                                     sourceRect = oldCluster.sourceRectInLineImage,
                                     destinationRect = oldCluster.visualRectInDocument,
                                     startAlpha = 1f,
-                                    endAlpha = 0f
+                                    endAlpha = 0f,
+                                    clusterByteStart = oldCluster.documentByteStart,
+                                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
                                 ))
                                 animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                                     role = SliceRole.CrossfadeNew,
@@ -912,7 +846,9 @@ class AndroidVisualPlanner {
                                     sourceRect = newCluster.sourceRectInLineImage,
                                     destinationRect = newCluster.visualRectInDocument,
                                     startAlpha = 0f,
-                                    endAlpha = 1f
+                                    endAlpha = 1f,
+                                    clusterByteStart = newCluster.documentByteStart,
+                                    clusterByteEndExclusive = newCluster.documentByteEndExclusive
                                 ))
                             }
                         }
@@ -1196,9 +1132,6 @@ class AndroidVisualPlanner {
         }
     }
 
-    fun resetOldRevision() {
-    }
-
     private fun applyRebaseToSlices(
         slices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot,
@@ -1349,19 +1282,6 @@ class AndroidVisualPlanner {
             .firstOrNull()
     }
 
-    private fun findClosestRebaseStateByByteRange(
-        slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseSnapshot: VisualFrameSnapshot
-    ): SliceVisualState? {
-        val compatibleRoles = compatibleRebaseRoles(slice.role)
-        val byteStart = slice.snapshot?.documentByteStart ?: -1
-        val byteEnd = slice.snapshot?.documentByteEndExclusive ?: -1
-        if (byteStart < 0 || byteEnd < 0) return null
-        return rebaseSnapshot.sliceVisualStates
-            .filter { it.role in compatibleRoles && it.documentByteStart >= 0 && it.documentByteEndExclusive >= 0 }
-            .firstOrNull { it.documentByteStart == byteStart && it.documentByteEndExclusive == byteEnd }
-    }
-
     private fun findClosestRebaseStateByPosition(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot
@@ -1485,6 +1405,20 @@ class AndroidVisualPlanner {
         val excluded = mutableSetOf<Pair<Int, Int>>()
         for (slice in slices) {
             if (slice.role == SliceRole.Insert || slice.role == SliceRole.CrossfadeNew || slice.role == SliceRole.Move) {
+                if (slice.clusterByteStart >= 0 && slice.clusterByteEndExclusive >= 0) {
+                    excluded.add(Pair(slice.clusterByteStart, slice.clusterByteEndExclusive))
+                }
+            }
+        }
+        return excluded
+    }
+
+    private fun collectExcludedOldByteRanges(
+        slices: List<PreparedVisualTransaction.AnimatedSlice>
+    ): Set<Pair<Int, Int>> {
+        val excluded = mutableSetOf<Pair<Int, Int>>()
+        for (slice in slices) {
+            if (slice.role == SliceRole.Delete || slice.role == SliceRole.CrossfadeOld) {
                 if (slice.clusterByteStart >= 0 && slice.clusterByteEndExclusive >= 0) {
                     excluded.add(Pair(slice.clusterByteStart, slice.clusterByteEndExclusive))
                 }
