@@ -2,14 +2,11 @@ package com.xiwei.sujian.editor.v2.visual
 
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshotBuilder
 import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import uniffi.writer_core.AnimationModeDto
 
-class AndroidVisualPlanner(
-) {
-    private val snapshotBuilder = AndroidLineSnapshotBuilder()
+class AndroidVisualPlanner {
 
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
@@ -34,7 +31,6 @@ class AndroidVisualPlanner(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
         newRevision: AndroidLayoutRevision?,
-        resourceStore: VisualResourceStore,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         rebaseSnapshot: VisualFrameSnapshot? = null
@@ -48,7 +44,6 @@ class AndroidVisualPlanner(
 
         val oldRev = oldRevision
         val newRev = newRevision
-        val snapshotOwner = SnapshotOwner.OwnedByTransaction(transactionKey)
 
         if (oldRev != null && newRev != null) {
             val affectedLines = computeAffectedLines(visualIntent, oldRev, newRev)
@@ -58,25 +53,25 @@ class AndroidVisualPlanner(
                 AnimationMode.GlyphAnimation, AnimationMode.ClusterAnimation -> {
                     planClusterLevelAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots
+                        affectedLines, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots
                     )
                 }
                 AnimationMode.RunAnimation -> {
                     planRunAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots
+                        affectedLines, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots
                     )
                 }
                 AnimationMode.LineReflowAnimation -> {
                     planLineReflowAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots
+                        affectedLines, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots
                     )
                 }
                 AnimationMode.SnapshotAnimation -> {
                     planCrossfadeAnimation(
                         visualIntent, oldRev, newRev,
-                        affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots
+                        affectedLines, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots
                     )
                 }
                 AnimationMode.SystemSuppressed -> {
@@ -139,8 +134,6 @@ class AndroidVisualPlanner(
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore,
-        snapshotOwner: SnapshotOwner,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
@@ -151,7 +144,7 @@ class AndroidVisualPlanner(
         if (isReplace) {
             planClusterReplaceAnimation(
                 visualIntent, oldRev, newRev,
-                affectedLines, animatedSlices, staticPatches, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots
+                affectedLines, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots
             )
             return
         }
@@ -161,7 +154,7 @@ class AndroidVisualPlanner(
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
 
             if (isInsert && newLineRange != null) {
-                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 if (newSnapshot != null) {
                     val insertClusters = newSnapshot.clusters.filter { cluster ->
                         visualIntent.newAffectedByteRanges.any { (start, end) ->
@@ -194,7 +187,7 @@ class AndroidVisualPlanner(
                     }
                 }
             } else if (isDelete && oldLineRange != null) {
-                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots)
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots)
                 if (oldSnapshot != null) {
                     val deleteClusters = oldSnapshot.clusters.filter { cluster ->
                         visualIntent.oldAffectedByteRanges.any { (start, end) ->
@@ -237,8 +230,6 @@ class AndroidVisualPlanner(
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore,
-        snapshotOwner: SnapshotOwner,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
@@ -248,8 +239,8 @@ class AndroidVisualPlanner(
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
-            val oldSnapshot = if (oldLineRange != null) createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots) else null
-            val newSnapshot = if (newLineRange != null) createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) else null
+            val oldSnapshot = if (oldLineRange != null) createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots) else null
+            val newSnapshot = if (newLineRange != null) createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) else null
 
             if (oldSnapshot != null && oldLineRange != null) {
                 if (oldSnapshot.clusters.isNotEmpty()) {
@@ -370,8 +361,6 @@ class AndroidVisualPlanner(
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore,
-        snapshotOwner: SnapshotOwner,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
@@ -380,8 +369,8 @@ class AndroidVisualPlanner(
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
             if (oldLineRange != null && newLineRange != null) {
-                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots)
-                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 if (oldSnapshot != null) {
                     val runClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
                     if (runClusters.isNotEmpty()) {
@@ -437,7 +426,7 @@ class AndroidVisualPlanner(
                     }
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -475,8 +464,6 @@ class AndroidVisualPlanner(
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore,
-        snapshotOwner: SnapshotOwner,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
@@ -485,8 +472,8 @@ class AndroidVisualPlanner(
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
             if (oldLineRange != null && newLineRange != null) {
-                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
-                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots)
                 if (newSnapshot != null && oldSnapshot != null) {
                     val matchedPairs = matchClustersByOffsetMap(
                         oldSnapshot, newSnapshot, visualIntent, oldRev, newRev
@@ -541,7 +528,7 @@ class AndroidVisualPlanner(
                     }
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -556,7 +543,7 @@ class AndroidVisualPlanner(
                     ))
                 }
             } else if (oldLineRange != null) {
-                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots)
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
@@ -609,8 +596,6 @@ class AndroidVisualPlanner(
         affectedLines: Set<Int>,
         animatedSlices: MutableList<PreparedVisualTransaction.AnimatedSlice>,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>,
-        resourceStore: VisualResourceStore,
-        snapshotOwner: SnapshotOwner,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
@@ -619,7 +604,7 @@ class AndroidVisualPlanner(
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
 
             if (oldLineRange != null && newLineRange != null) {
-                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots)
+                val oldSnapshot = createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots)
                 if (oldSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeOld,
@@ -634,7 +619,7 @@ class AndroidVisualPlanner(
                     ))
                 }
             } else if (newLineRange != null) {
-                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, resourceStore, snapshotOwner, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
+                val newSnapshot = createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true)
                 if (newSnapshot != null) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
@@ -781,8 +766,6 @@ class AndroidVisualPlanner(
     private fun createSnapshotFromRevision(
         revision: AndroidLayoutRevision,
         lineIndex: Int,
-        resourceStore: VisualResourceStore,
-        owner: SnapshotOwner,
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         isNewRevision: Boolean = false
@@ -790,13 +773,11 @@ class AndroidVisualPlanner(
         if (isNewRevision) {
             val preCapturedNew = preCapturedNewSnapshots[lineIndex]
             if (preCapturedNew != null) {
-                resourceStore.put(preCapturedNew, owner)
                 return preCapturedNew
             }
         }
         val preCaptured = preCapturedOldSnapshots[lineIndex]
         if (preCaptured != null) {
-            resourceStore.put(preCaptured, owner)
             return preCaptured
         }
         return null

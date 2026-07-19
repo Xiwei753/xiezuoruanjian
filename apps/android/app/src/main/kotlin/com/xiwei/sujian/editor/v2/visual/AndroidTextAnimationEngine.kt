@@ -21,9 +21,17 @@ class AndroidTextAnimationEngine(
         newSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         rebaseFrame: VisualFrameSnapshot? = null
     ): PreparedVisualTransaction {
+        val transactionKey = System.nanoTime()
+        val owner = SnapshotOwner.OwnedByTransaction(transactionKey)
+        for ((_, snapshot) in oldSnapshots) {
+            resourceStore.put(snapshot, owner)
+        }
+        for ((_, snapshot) in newSnapshots) {
+            resourceStore.put(snapshot, owner)
+        }
         return visualPlanner.prepare(
             visualIntent, oldRevision, newRevision,
-            resourceStore, oldSnapshots, newSnapshots, rebaseFrame
+            oldSnapshots, newSnapshots, rebaseFrame
         )
     }
 
@@ -59,6 +67,12 @@ class AndroidTextAnimationEngine(
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
         submit(transaction)
+    }
+
+    fun registerSnapshots(snapshots: Map<Int, AndroidLineSnapshot>, owner: SnapshotOwner) {
+        for ((_, snapshot) in snapshots) {
+            resourceStore.put(snapshot, owner)
+        }
     }
 
     fun captureFrame(frameTimeMs: Long): VisualFrameSnapshot? {

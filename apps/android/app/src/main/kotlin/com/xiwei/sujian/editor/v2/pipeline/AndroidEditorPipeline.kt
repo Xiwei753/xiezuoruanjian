@@ -230,12 +230,7 @@ class AndroidEditorPipeline private constructor(
 
             val ct = transaction.cursorTransition
             if (ct != null && ct.shouldAnimate) {
-                val cursorPaint = android.graphics.Paint().apply {
-                    color = android.graphics.Color.BLACK
-                    strokeWidth = 2f
-                    isAntiAlias = true
-                }
-                animationRenderer.drawAnimatedCursor(canvas, transaction, frame.progress, cursorPaint)
+                animationRenderer.drawAnimatedCursor(canvas, transaction, frame.progress, textRenderer.getCursorPaint())
             } else {
                 textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
             }

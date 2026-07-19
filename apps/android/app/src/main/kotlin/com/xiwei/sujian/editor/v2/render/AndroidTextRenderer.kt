@@ -101,6 +101,8 @@ class AndroidTextRenderer {
         canvas.drawRect(cursorX, cursorY, cursorX + 2f, cursorY + cursorHeight, cursorPaint)
     }
 
+    fun getCursorPaint(): Paint = cursorPaint
+
     fun setThemeColors(@Suppress("UNUSED_PARAMETER") textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
         cursorPaint.color = cursorColor
         selectionPaint.color = selectionColor
