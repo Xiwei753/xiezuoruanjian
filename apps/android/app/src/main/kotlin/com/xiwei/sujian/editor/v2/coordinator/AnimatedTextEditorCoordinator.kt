@@ -296,10 +296,7 @@ class AnimatedTextEditorCoordinator(
             cursorByteOffset.toUInt(),
             target.isPersistent
         )) {
-            is BridgeResult.Success -> {
-                val id = result.data
-                if (id == 0UL) null else id
-            }
+            is BridgeResult.Success -> result.data
             else -> null
         }
     }

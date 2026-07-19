@@ -1109,7 +1109,7 @@ impl WriterAppService {
         initial_text: String,
         initial_cursor_byte_offset: u32,
         is_persistent: u8,
-    ) -> u64 {
+    ) -> Option<u64> {
         let result = self.with_registry(|r| {
             r.create_session(
                 target_id,
@@ -1119,8 +1119,8 @@ impl WriterAppService {
             )
         });
         match result {
-            Ok(id) => id.0,
-            Err(_) => 0,
+            Ok(id) => Some(id.0),
+            Err(_) => None,
         }
     }
 

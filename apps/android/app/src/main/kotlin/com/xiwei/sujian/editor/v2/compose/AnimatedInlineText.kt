@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.compose
 
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.wrapContentSize
@@ -25,6 +26,8 @@ import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 
+private const val TAG = "AnimatedInlineText"
+
 @Composable
 fun AnimatedInlineText(
     targetId: String,
@@ -39,6 +42,11 @@ fun AnimatedInlineText(
     val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
 
     if (effectiveCoordinator == null) {
+        LaunchedEffect(targetId) {
+            Log.w(TAG, "AnimatedInlineText($targetId) has no AnimatedTextEditorCoordinator. " +
+                "Falling back to static Text. Provide a coordinator via CompositionLocal " +
+                "or the coordinator parameter for full animated text editing support.")
+        }
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,

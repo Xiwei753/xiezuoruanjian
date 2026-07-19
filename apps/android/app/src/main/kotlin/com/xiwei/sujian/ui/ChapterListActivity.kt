@@ -434,16 +434,18 @@ class ChapterListActivity : AppCompatActivity() {
             ) {
                 Box {
                     androidx.compose.material3.AlertDialog(
-                        onDismissRequest = { dialog?.dismiss() },
+                        onDismissRequest = {
+                            dialogCoordinator.cancelActiveEdit()
+                            dialog?.dismiss()
+                        },
                         title = { Text(title) },
                         text = {
                             AnimatedTextField(
                                 targetId = "chapter-list-dialog:${title.hashCode()}",
                                 value = text,
                                 onValueChange = { text = it },
-                                onCommit = {
-                                    onConfirm(it.trim())
-                                    dialog?.dismiss()
+                                onCommit = { finalText ->
+                                    text = finalText
                                 },
                                 modifier = Modifier.fillMaxWidth(),
                                 profile = TextEditorProfile.ShortTitle,
@@ -453,7 +455,10 @@ class ChapterListActivity : AppCompatActivity() {
                         },
                         confirmButton = {
                             TextButton(onClick = {
-                                dialogCoordinator.commitActiveEdit()
+                                val committed = dialogCoordinator.commitActiveEdit()
+                                if (!committed) {
+                                    text = text
+                                }
                                 onConfirm(text.trim())
                                 dialog?.dismiss()
                             }) {

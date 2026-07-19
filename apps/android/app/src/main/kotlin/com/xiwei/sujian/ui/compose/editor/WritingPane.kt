@@ -14,6 +14,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,13 +64,14 @@ fun WritingPane(
 
     val uiState by viewModel.uiState.collectAsState()
 
-    var isLocalContentMirror by remember { mutableStateOf(false) }
+    var localContentGeneration by remember { mutableLongStateOf(0L) }
+    var lastSeenContentGeneration by remember { mutableLongStateOf(0L) }
     var lastChapterId by remember { mutableStateOf("") }
 
     LaunchedEffect(uiState.content) {
         if (!uiState.loading) {
-            if (isLocalContentMirror) {
-                isLocalContentMirror = false
+            if (localContentGeneration != lastSeenContentGeneration) {
+                lastSeenContentGeneration = localContentGeneration
                 coordinator.updateTargetText(targetId, uiState.content)
             } else {
                 if (coordinator.editingState == EditingState.IDLE) {
@@ -93,6 +95,8 @@ fun WritingPane(
             if (coordinator.activeTargetId == targetId) {
                 coordinator.cancelActiveEdit()
             }
+            localContentGeneration = 0L
+            lastSeenContentGeneration = 0L
         }
         lastChapterId = chapterId
     }
@@ -120,11 +124,11 @@ fun WritingPane(
         coordinator.updateTargetSpec(
             targetId,
             onTextChanged = { newText ->
-                isLocalContentMirror = true
+                localContentGeneration++
                 viewModel.onContentChanged(newText)
             },
             onCommit = { finalText ->
-                isLocalContentMirror = true
+                localContentGeneration++
                 viewModel.onContentChanged(finalText)
             },
             onCancel = {}

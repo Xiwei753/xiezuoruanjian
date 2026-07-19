@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.compose
 
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +30,8 @@ import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
+
+private const val TAG = "AnimatedTextArea"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -64,6 +67,11 @@ fun AnimatedTextArea(
             coordinator = effectiveCoordinator
         )
     } else {
+        LaunchedEffect(targetId) {
+            Log.w(TAG, "AnimatedTextArea($targetId) has no AnimatedTextEditorCoordinator. " +
+                "Falling back to OutlinedTextField. Provide a coordinator via CompositionLocal " +
+                "or the coordinator parameter for full animated text editing support.")
+        }
         OutlinedTextField(
             value = value,
             onValueChange = onValueChange,

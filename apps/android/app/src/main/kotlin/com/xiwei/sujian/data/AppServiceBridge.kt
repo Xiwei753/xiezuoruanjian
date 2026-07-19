@@ -303,7 +303,7 @@ class AppServiceBridge(workspacePath: String) {
         initialText: String,
         initialCursorByteOffset: UInt,
         isPersistent: Boolean
-    ): BridgeResult<ULong> = holder.wrapResult {
+    ): BridgeResult<ULong?> = holder.wrapResult {
         holder.service.textEditSessionCreate(targetId, initialText, initialCursorByteOffset, if (isPersistent) 1u else 0u)
     }
 

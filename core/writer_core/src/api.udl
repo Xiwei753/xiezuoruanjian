@@ -1156,7 +1156,7 @@ interface WriterAppService {
 
     // ── #541: Text Edit Session API ──
 
-    u64 text_edit_session_create(string target_id, string initial_text, u32 initial_cursor_byte_offset, u8 is_persistent);
+    u64? text_edit_session_create(string target_id, string initial_text, u32 initial_cursor_byte_offset, u8 is_persistent);
     u8 text_edit_session_close(u64 session_id);
     u8 text_edit_session_reset(u64 session_id, string text, u32 cursor_byte_offset);
     EditorEditResultDto text_edit_session_insert(u64 session_id, u32 byte_offset, string text, EditorTransactionCauseDto cause, u64 expected_revision);

@@ -169,7 +169,10 @@ private fun StarMapListScreen(
         var title by remember { mutableStateOf("") }
         var description by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { showCreateDialog = false },
+            onDismissRequest = {
+                coordinator.cancelActiveEdit()
+                showCreateDialog = false
+            },
             title = { Text(stringResource(id = R.string.starmap_create_new)) },
             text = {
                 Column {
@@ -434,7 +437,10 @@ private fun StarMapEditorScreen(
         var nodeTitle by remember { mutableStateOf("") }
         var nodeKind by remember { mutableStateOf(StarMapNodeKind.Note) }
         AlertDialog(
-            onDismissRequest = { showAddNodeDialog = false },
+            onDismissRequest = {
+                coordinator.cancelActiveEdit()
+                showAddNodeDialog = false
+            },
             title = { Text(stringResource(id = R.string.starmap_add_node)) },
             text = {
                 Column {
@@ -501,7 +507,10 @@ private fun StarMapEditorScreen(
         var toNodeId by remember { mutableStateOf(nodes.drop(1).firstOrNull()?.id ?: "") }
 
         AlertDialog(
-            onDismissRequest = { showAddEdgeDialog = false },
+            onDismissRequest = {
+                coordinator.cancelActiveEdit()
+                showAddEdgeDialog = false
+            },
             title = { Text(stringResource(id = R.string.starmap_add_edge)) },
             text = {
                 Column {
@@ -574,7 +583,10 @@ private fun NodeEditPanel(
     var editKind by remember { mutableStateOf(node.kind) }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            coordinator.cancelActiveEdit()
+            onDismiss()
+        },
         title = { Text(stringResource(id = R.string.starmap_edit_node)) },
         text = {
             Column {
