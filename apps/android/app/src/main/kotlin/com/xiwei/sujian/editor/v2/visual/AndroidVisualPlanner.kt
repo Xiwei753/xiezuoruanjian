@@ -502,10 +502,13 @@ class AndroidVisualPlanner {
 
         val newMatched = mutableSetOf<Int>()
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
-            val matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+            val candidates = allNewAffectedClusters.indices.filter { i ->
                 i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
                     allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
                     oldCluster.documentByteEndExclusive - oldCluster.documentByteStart
+            }
+            val matchIdx = candidates.minByOrNull { i ->
+                kotlin.math.abs(allNewAffectedClusters[i].first.documentByteStart - oldCluster.documentByteStart)
             }
             if (matchIdx != null) {
                 newMatched.add(matchIdx)
@@ -770,10 +773,13 @@ class AndroidVisualPlanner {
 
         val newMatched = mutableSetOf<Int>()
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
-            val matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+            val candidates = allNewAffectedClusters.indices.filter { i ->
                 i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
                     allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
                     oldCluster.documentByteEndExclusive - oldCluster.documentByteStart
+            }
+            val matchIdx = candidates.minByOrNull { i ->
+                kotlin.math.abs(allNewAffectedClusters[i].first.documentByteStart - oldCluster.documentByteStart)
             }
             if (matchIdx != null) {
                 newMatched.add(matchIdx)
