@@ -24,29 +24,55 @@ class AndroidTextAnimationEngine(
         val transactionKey = System.nanoTime()
         val owner = SnapshotOwner.OwnedByTransaction(transactionKey)
         val ownedSnapshotIds = mutableSetOf<Long>()
+        val snapshotLookup = mutableMapOf<Long, AndroidLineSnapshot>()
         for ((_, snapshot) in oldSnapshots) {
             resourceStore.put(snapshot, owner)
             ownedSnapshotIds.add(snapshot.snapshotId)
+            snapshotLookup[snapshot.snapshotId] = snapshot
         }
         for ((_, snapshot) in newSnapshots) {
             resourceStore.put(snapshot, owner)
             ownedSnapshotIds.add(snapshot.snapshotId)
+            snapshotLookup[snapshot.snapshotId] = snapshot
+        }
+        if (rebaseFrame != null) {
+            for (state in rebaseFrame.sliceVisualStates) {
+                val snapshot = resourceStore.get(state.snapshotId)
+                if (snapshot != null) {
+                    snapshotLookup[state.snapshotId] = snapshot
+                }
+            }
         }
         return visualPlanner.prepare(
             visualIntent, oldRevision, newRevision,
-            oldSnapshots, newSnapshots, rebaseFrame, transactionKey, ownedSnapshotIds
+            oldSnapshots, newSnapshots, rebaseFrame, transactionKey, ownedSnapshotIds,
+            snapshotLookup
         )
     }
 
     fun submit(preparedAnimation: PreparedVisualTransaction) {
         val oldTransaction = activeTransaction
-        val oldTimeline = timeline
 
-        if (oldTransaction != null && oldTimeline != null) {
-            completeTransaction(oldTransaction)
+        if (oldTransaction != null) {
+            val inheritedIds = oldTransaction.ownedSnapshotIds - preparedAnimation.ownedSnapshotIds
+            val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
+            for (snapshotId in inheritedIds) {
+                resourceStore.transferOwnership(snapshotId, newOwner)
+            }
+            val mergedIds = if (inheritedIds.isNotEmpty()) {
+                preparedAnimation.ownedSnapshotIds + inheritedIds
+            } else {
+                preparedAnimation.ownedSnapshotIds
+            }
+            activeTransaction = if (mergedIds != preparedAnimation.ownedSnapshotIds) {
+                preparedAnimation.copy(ownedSnapshotIds = mergedIds)
+            } else {
+                preparedAnimation
+            }
+        } else {
+            activeTransaction = preparedAnimation
         }
 
-        activeTransaction = preparedAnimation
         timeline = AnimationTimeline(preparedAnimation.durationMs)
     }
 

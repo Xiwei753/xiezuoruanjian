@@ -132,6 +132,33 @@ class AndroidEditorPipeline private constructor(
 
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto): PipelineOutput {
         val result = EditResult.fromDto(dto)
+        if (result.visualIntent.animationMode == uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED &&
+            (result.visualIntent.oldAffectedByteRanges.isNotEmpty() || result.visualIntent.newAffectedByteRanges.isNotEmpty())) {
+            val oldAffected = result.visualIntent.oldAffectedByteRanges
+            val newAffected = result.visualIntent.newAffectedByteRanges
+            val byteCount = maxOf(
+                newAffected.sumOf { it.second - it.first },
+                oldAffected.sumOf { it.second - it.first }
+            )
+            val animationMode = when {
+                byteCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
+                byteCount <= 24 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
+                byteCount <= 96 -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
+                else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
+            }
+            if (animationMode != uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED) {
+                val animatedIntent = VisualIntent(
+                    cause = result.visualIntent.cause,
+                    operationKind = result.visualIntent.operationKind,
+                    oldAffectedByteRanges = oldAffected,
+                    newAffectedByteRanges = newAffected,
+                    animationMode = animationMode,
+                    durationMs = 200L,
+                    coordinatedCursor = CoordinatedCursor(0, 0, true)
+                )
+                return applyEditResultWithIntent(result, animatedIntent)
+            }
+        }
         return applyEditResult(result)
     }
 
@@ -154,6 +181,34 @@ class AndroidEditorPipeline private constructor(
 
         animationEngine.prepareAndSubmit(
             visualIntent = result.visualIntent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = { mirror.applyEditResult(result) },
+            beforePatch = beforePatch
+        )
+
+        return PipelineOutput.Edited(result)
+    }
+
+    private fun applyEditResultWithIntent(
+        result: EditResult,
+        visualIntent: VisualIntent,
+        beforePatch: (() -> Unit)? = null
+    ): PipelineOutput {
+        if (result.isStale()) {
+            return PipelineOutput.StaleOrInvalid
+        }
+        if (result.isInvalid() && result.displayPatches.isEmpty()) {
+            return PipelineOutput.StaleOrInvalid
+        }
+        if (result.displayPatches.isEmpty() && result.baseRevision != result.newRevision) {
+            return PipelineOutput.NeedReload
+        }
+        if (result.displayPatches.isEmpty() && result.baseRevision != mirror.getRevision()) {
+            return PipelineOutput.NeedReload
+        }
+
+        animationEngine.prepareAndSubmit(
+            visualIntent = visualIntent,
             layoutEngine = layoutEngine,
             mirrorUpdate = { mirror.applyEditResult(result) },
             beforePatch = beforePatch
