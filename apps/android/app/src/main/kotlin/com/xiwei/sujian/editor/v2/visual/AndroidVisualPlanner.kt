@@ -362,13 +362,16 @@ class AndroidVisualPlanner {
                 }
             }
             if (matchedNewIdx == null) {
-                matchedNewIdx = allNewClusters.indices.firstOrNull { i ->
+                val candidates = allNewClusters.indices.filter { i ->
                     val candidate = allNewClusters[i].first
                     i !in newUsed &&
                         candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
                         visualIntent.newAffectedByteRanges.none { (start, end) ->
                             candidate.documentByteStart >= start && candidate.documentByteEndExclusive <= end
                         }
+                }
+                matchedNewIdx = candidates.minByOrNull { i ->
+                    kotlin.math.abs(allNewClusters[i].first.documentByteStart - oldCluster.documentByteStart)
                 }
             }
             if (matchedNewIdx != null) {
@@ -1314,7 +1317,7 @@ class AndroidVisualPlanner {
     ): Set<Pair<Int, Int>> {
         val excluded = mutableSetOf<Pair<Int, Int>>()
         for (slice in slices) {
-            if (slice.role == SliceRole.Insert || slice.role == SliceRole.CrossfadeNew) {
+            if (slice.role == SliceRole.Insert || slice.role == SliceRole.CrossfadeNew || slice.role == SliceRole.Move) {
                 if (slice.clusterByteStart >= 0 && slice.clusterByteEndExclusive >= 0) {
                     excluded.add(Pair(slice.clusterByteStart, slice.clusterByteEndExclusive))
                 }

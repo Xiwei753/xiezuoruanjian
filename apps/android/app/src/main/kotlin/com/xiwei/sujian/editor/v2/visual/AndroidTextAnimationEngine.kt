@@ -69,6 +69,7 @@ class AndroidTextAnimationEngine(
             } else {
                 preparedAnimation
             }
+            timeline?.complete()
         } else {
             activeTransaction = preparedAnimation
         }
