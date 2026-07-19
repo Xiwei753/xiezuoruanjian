@@ -113,12 +113,7 @@ private fun AnimatedTextAreaWithCoordinator(
         EditableTextTarget(
             targetId = targetId,
             profile = profile,
-            initialText = "",
-            isPersistent = profile == TextEditorProfile.DocumentBody,
-            onTextChanged = null,
-            onCommit = null,
-            onCancel = null,
-            onEditingStateChanged = null
+            isPersistent = profile == TextEditorProfile.DocumentBody
         )
     }
 

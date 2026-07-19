@@ -350,9 +350,10 @@ private fun StarMapEditorScreen(
                         val target = EditableTextTarget(
                             targetId = targetId,
                             profile = TextEditorProfile.CanvasLabel,
-                            initialText = graphNode.title,
-                            isPersistent = false,
-                            onCommit = { finalText ->
+                            isPersistent = false
+                        )
+                        target.updateText(graphNode.title)
+                        target.onCommit = { finalText ->
                                 if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
                                     coroutineScope.launch {
                                         withContext(Dispatchers.IO) {
@@ -366,17 +367,16 @@ private fun StarMapEditorScreen(
                                 }
                                 canvasEditingNodeId = null
                                 coordinator.unregisterTarget(targetId)
-                            },
-                            onCancel = {
+                            }
+                        target.onCancel = {
                                 canvasEditingNodeId = null
                                 coordinator.unregisterTarget(targetId)
-                            },
-                            onEditingStateChanged = { state ->
+                            }
+                        target.onEditingStateChanged = { state ->
                                 if (state == EditingState.IDLE || state == EditingState.RELEASED) {
                                     canvasEditingNodeId = null
                                 }
                             }
-                        )
                         coordinator.registerTarget(target)
                         coordinator.updateTargetGeometry(targetId, geometry.windowRect)
                         coordinator.updateTargetTransform(

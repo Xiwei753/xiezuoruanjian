@@ -74,12 +74,7 @@ fun WritingPane(
         EditableTextTarget(
             targetId = targetId,
             profile = TextEditorProfile.DocumentBody,
-            initialText = "",
-            isPersistent = true,
-            onTextChanged = null,
-            onCommit = null,
-            onCancel = null,
-            onEditingStateChanged = null
+            isPersistent = true
         )
     }
 
@@ -113,7 +108,7 @@ fun WritingPane(
                 targetId,
                 uiState.content,
                 uiState.content.toByteArray(Charsets.UTF_8).size,
-                SessionResetSource.EXTERNAL
+                SessionResetSource.CHAPTER_SWITCH
             )
             localContentGeneration = 0L
             lastSeenContentGeneration = 0L

@@ -202,18 +202,9 @@ class AnimatedTextEditorCoordinator(
         }
         target.onCancel?.invoke()
 
-        if (target.isPersistent) {
-            if (validateSession(sessionId)) {
-                appServiceBridge.textEditSessionReset(sessionId, target.currentText, target.currentText.toByteArray(Charsets.UTF_8).size.toUInt())
-            } else {
-                Log.w(TAG, "cancelActiveEdit($targetId): persistent session $sessionId invalid, closing and removing")
-                persistentSessionIds.remove(targetId)
-                closeSession(sessionId)
-            }
-        } else {
-            closeSession(sessionId)
-            persistentSessionIds.remove(targetId)
-        }
+        closeSession(sessionId)
+        persistentSessionIds.remove(targetId)
+
         activeTargetId = null
         activeSessionId = null
         activeTargetGeometry = Rect()
@@ -389,5 +380,6 @@ class AnimatedTextEditorCoordinator(
 
 enum class SessionResetSource {
     LOCAL_CONTENT_CHANGED,
-    EXTERNAL
+    EXTERNAL,
+    CHAPTER_SWITCH
 }

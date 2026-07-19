@@ -1,24 +1,32 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
 import android.graphics.Rect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 
-data class EditableTextTarget(
+class EditableTextTarget(
     val targetId: String,
-    var profile: TextEditorProfile,
-    val initialText: String,
-    val initialSelection: Int = initialText.toByteArray(Charsets.UTF_8).size,
-    val isPersistent: Boolean = false,
-    val commitPolicy: CommitPolicy = if (isPersistent) CommitPolicy.COMMIT_ON_EVERY_CHANGE else CommitPolicy.COMMIT_ON_CONFIRM,
-    var onTextChanged: ((String) -> Unit)? = null,
-    var onCommit: ((String) -> Unit)? = null,
-    var onCancel: (() -> Unit)? = null,
-    var onEditingStateChanged: ((EditingState) -> Unit)? = null
+    profile: TextEditorProfile,
+    isPersistent: Boolean = false,
+    commitPolicy: CommitPolicy = if (isPersistent) CommitPolicy.COMMIT_ON_EVERY_CHANGE else CommitPolicy.COMMIT_ON_CONFIRM
 ) {
-    var currentGeometry: Rect = Rect()
+    var profile: TextEditorProfile by mutableStateOf(profile)
         private set
-    var currentTransform: Transform2D = Transform2D.IDENTITY
+    var isPersistent: Boolean by mutableStateOf(isPersistent)
         private set
-    var currentText: String = initialText
+    var commitPolicy: CommitPolicy by mutableStateOf(commitPolicy)
+        private set
+    var onTextChanged: ((String) -> Unit)? = null
+    var onCommit: ((String) -> Unit)? = null
+    var onCancel: (() -> Unit)? = null
+    var onEditingStateChanged: ((EditingState) -> Unit)? = null
+
+    var currentGeometry: Rect by mutableStateOf(Rect())
+        private set
+    var currentTransform: Transform2D by mutableStateOf(Transform2D.IDENTITY)
+        private set
+    var currentText: String by mutableStateOf("")
         private set
 
     fun updateGeometry(rect: Rect) {

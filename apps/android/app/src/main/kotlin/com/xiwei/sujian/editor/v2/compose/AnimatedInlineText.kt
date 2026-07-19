@@ -67,12 +67,7 @@ fun AnimatedInlineText(
         EditableTextTarget(
             targetId = targetId,
             profile = profile,
-            initialText = "",
-            isPersistent = false,
-            onTextChanged = null,
-            onCommit = null,
-            onCancel = null,
-            onEditingStateChanged = null
+            isPersistent = false
         )
     }
 

@@ -1,20 +1,18 @@
 package com.xiwei.sujian.editor.v2.pipeline
 
-import android.content.Context
 import android.graphics.Color
 import android.text.TextPaint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
-import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
-import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
+import com.xiwei.sujian.editor.v2.visual.AndroidTextAnimationEngine
 import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
 import com.xiwei.sujian.editor.v2.visual.VisualResourceStore
-import com.xiwei.sujian.editor.v2.visual.VisualTransactionCoordinator
-import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
-import com.xiwei.sujian.editor.v2.render.AndroidRenderFrame
-import com.xiwei.sujian.editor.v2.render.AndroidRenderer
+import com.xiwei.sujian.editor.v2.render.ComposedFrame
+import com.xiwei.sujian.editor.v2.render.EditorFrameComposer
+import com.xiwei.sujian.editor.v2.render.AndroidTextRenderer
+import com.xiwei.sujian.editor.v2.render.AndroidTextAnimationRenderer
 import com.xiwei.sujian.editor.v2.input.AndroidInputAdapter
 import com.xiwei.sujian.editor.v2.input.AndroidTextIndexMap
 import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
@@ -25,9 +23,10 @@ class AndroidEditorPipeline private constructor(
     val mirror: DisplayTextMirror,
     val layoutEngine: AndroidLayoutEngine,
     val visualPlanner: AndroidVisualPlanner,
-    val resourceStore: VisualResourceStore,
-    val coordinator: VisualTransactionCoordinator,
-    val renderer: AndroidRenderer,
+    val animationEngine: AndroidTextAnimationEngine,
+    val textRenderer: AndroidTextRenderer,
+    val animationRenderer: AndroidTextAnimationRenderer,
+    val frameComposer: EditorFrameComposer,
     var inputAdapter: AndroidInputAdapter?,
     var kernelBridge: EditorKernelBridge?
 ) {
@@ -37,9 +36,11 @@ class AndroidEditorPipeline private constructor(
             val layoutEngine = AndroidLayoutEngine(mirror, textPaint)
             val visualPlanner = AndroidVisualPlanner()
             val resourceStore = VisualResourceStore()
-            val coordinator = VisualTransactionCoordinator(resourceStore)
-            val renderer = AndroidRenderer()
-            val pipeline = AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, resourceStore, coordinator, renderer, null, null)
+            val animationEngine = AndroidTextAnimationEngine(visualPlanner, resourceStore)
+            val textRenderer = AndroidTextRenderer()
+            val animationRenderer = AndroidTextAnimationRenderer()
+            val frameComposer = EditorFrameComposer()
+            val pipeline = AndroidEditorPipeline(mirror, layoutEngine, visualPlanner, animationEngine, textRenderer, animationRenderer, frameComposer, null, null)
             val inputAdapter = AndroidInputAdapter(mirror, pipeline)
             inputAdapter.setHostView(hostView)
             pipeline.inputAdapter = inputAdapter
@@ -150,7 +151,7 @@ class AndroidEditorPipeline private constructor(
         }
 
         val frameTimeMs = System.nanoTime() / 1_000_000
-        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
+        val rebaseSnapshot = animationEngine.captureRebaseSnapshot(frameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, oldRevision, useNewRanges = false)
@@ -163,8 +164,8 @@ class AndroidEditorPipeline private constructor(
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(result.visualIntent, newRevision, useNewRanges = true)
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
-        val transaction = visualPlanner.prepare(result.visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
-        coordinator.submitTransaction(transaction)
+        val transaction = animationEngine.prepare(result.visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
+        animationEngine.submit(transaction)
 
         return PipelineOutput.Edited(result)
     }
@@ -174,7 +175,7 @@ class AndroidEditorPipeline private constructor(
         mirrorUpdate: (() -> Unit)? = null
     ) {
         val frameTimeMs = System.nanoTime() / 1_000_000
-        val rebaseSnapshot = coordinator.captureCurrentFrame(frameTimeMs)
+        val rebaseSnapshot = animationEngine.captureRebaseSnapshot(frameTimeMs)
         val oldRevision = layoutEngine.captureImmutableRevision()
         val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
@@ -183,60 +184,12 @@ class AndroidEditorPipeline private constructor(
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedNewLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, newRevision, useNewRanges = true)
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
-        val transaction = visualPlanner.prepare(visualIntent, oldRevision, newRevision, resourceStore, oldSnapshots, newSnapshots, rebaseSnapshot)
-        coordinator.submitTransaction(transaction)
+        val transaction = animationEngine.prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
+        animationEngine.submit(transaction)
     }
 
     fun onCompositionUpdated() {
         layoutEngine.requestLayout()
-    }
-
-    fun computeFrame(
-        frameTimeMs: Long,
-        cursorUtf16: Int,
-        cursorX: Float,
-        cursorY: Float,
-        cursorHeight: Float,
-        selectionStartUtf16: Int,
-        selectionEndUtf16: Int,
-        compositionStartUtf16: Int,
-        compositionEndUtf16: Int,
-        searchHighlightsUtf16: List<Pair<Int, Int>>,
-        viewportWidth: Int,
-        viewportHeight: Int,
-        scrollX: Float,
-        scrollY: Float
-    ): AndroidRenderFrame {
-        return coordinator.computeFrame(
-            frameTimeMs,
-            cursorUtf16, cursorX, cursorY, cursorHeight,
-            selectionStartUtf16, selectionEndUtf16,
-            compositionStartUtf16, compositionEndUtf16,
-            searchHighlightsUtf16,
-            viewportWidth, viewportHeight,
-            scrollX, scrollY
-        )
-    }
-
-    fun cancelActiveTransaction() {
-        coordinator.cancelActiveTransaction()
-    }
-
-    fun releaseAllResources() {
-        resourceStore.releaseAll()
-    }
-
-    fun hasActiveAnimation(): Boolean = coordinator.hasActiveAnimation()
-
-    fun updateLayout(width: Float) {
-        layoutEngine.setWidth(width)
-        layoutEngine.requestLayout()
-    }
-
-    fun resetAfterLoad() {
-        coordinator.cancelActiveTransaction()
-        resourceStore.releaseAll()
-        visualPlanner.resetOldRevision()
     }
 
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
@@ -246,8 +199,16 @@ class AndroidEditorPipeline private constructor(
             val rev = layoutEngine.getCurrentRevision()
             val effectiveSelStart = if (selectionAllowed) (rev?.selectionStartUtf16 ?: mirror.getSelectionStartUtf16()) else mirror.getCursorUtf16()
             val effectiveSelEnd = if (selectionAllowed) (rev?.selectionEndUtf16 ?: mirror.getSelectionEndUtf16()) else mirror.getCursorUtf16()
-            val frame = computeFrame(
-                frameTimeMs,
+
+            val transaction = animationEngine.getActiveTransaction()
+            val progress = animationEngine.getTimelineProgress(frameTimeMs)
+
+            animationEngine.markFirstVisibleFrame(frameTimeMs)
+
+            val composedFrame = frameComposer.compose(
+                layout = layout,
+                transaction = transaction,
+                progress = progress,
                 cursorUtf16 = if (cursorVisible) (rev?.cursorUtf16 ?: mirror.getCursorUtf16()) else -1,
                 cursorX = rev?.cursorX ?: 0f,
                 cursorY = rev?.cursorY ?: 0f,
@@ -262,8 +223,64 @@ class AndroidEditorPipeline private constructor(
                 scrollX = scrollX,
                 scrollY = scrollY
             )
-            renderer.draw(canvas, layout, frame)
+
+            renderComposedFrame(canvas, composedFrame)
+
+            animationEngine.completeIfFinished(frameTimeMs)
         }
+    }
+
+    private fun renderComposedFrame(canvas: android.graphics.Canvas, frame: ComposedFrame) {
+        val layout = frame.layout ?: return
+        val transaction = frame.transaction
+
+        textRenderer.drawBackground(canvas)
+
+        if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
+            textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
+            textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
+            val animatedRegions = animationRenderer.computeAnimatedSliceRegions(transaction)
+            textRenderer.drawStaticTextWithHoles(canvas, layout, animatedRegions)
+            animationRenderer.drawAnimatedSlices(canvas, transaction, frame.progress)
+            textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16)
+
+            val ct = transaction.cursorTransition
+            if (ct != null && ct.shouldAnimate) {
+                val cursorPaint = android.graphics.Paint().apply {
+                    color = android.graphics.Color.BLACK
+                    strokeWidth = 2f
+                    isAntiAlias = true
+                }
+                animationRenderer.drawAnimatedCursor(canvas, transaction, frame.progress, cursorPaint)
+            } else {
+                textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+            }
+        } else {
+            textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
+            textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
+            textRenderer.drawStaticText(canvas, layout)
+            textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16)
+            textRenderer.drawCursor(canvas, frame.cursorUtf16, frame.cursorX, frame.cursorY, frame.cursorHeight)
+        }
+    }
+
+    fun cancelActiveTransaction() {
+        animationEngine.cancel()
+    }
+
+    fun releaseAllResources() {
+        animationEngine.release()
+    }
+
+    fun hasActiveAnimation(): Boolean = animationEngine.hasActiveAnimation()
+
+    fun updateLayout(width: Float) {
+        layoutEngine.setWidth(width)
+        layoutEngine.requestLayout()
+    }
+
+    fun resetAfterLoad() {
+        animationEngine.cancel()
     }
 
     fun reloadFromKernel(): Boolean {
@@ -383,7 +400,7 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun setThemeColors(textColor: Int, cursorColor: Int, selectionColor: Int, preeditColor: Int, bgColor: Int = Color.WHITE) {
-        renderer.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
+        textRenderer.setThemeColors(textColor, cursorColor, selectionColor, preeditColor, bgColor)
     }
 
     fun utf16ToUtf8(offsetUtf16: Int): Int {
@@ -416,7 +433,7 @@ class AndroidEditorPipeline private constructor(
     }
 
     fun resetForReuse() {
-        cancelActiveTransaction()
+        animationEngine.cancel()
         mirror.loadFromSnapshot("", 0, 0, 0, 0)
         layoutEngine.requestLayout()
     }

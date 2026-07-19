@@ -346,7 +346,6 @@ class SujianEditorView @JvmOverloads constructor(
         super.onWindowFocusChanged(hasWindowFocus)
         if (!hasWindowFocus) {
             pipeline.cancelActiveTransaction()
-            pipeline.releaseAllResources()
         }
     }
 
@@ -368,6 +367,10 @@ class SujianEditorView @JvmOverloads constructor(
         if (!enabled) {
             pipeline.cancelActiveTransaction()
         }
+        pipeline.animationEngine.setAnimationPolicy(
+            if (enabled) com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.ENABLED
+            else com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED
+        )
     }
 
     private var smoothCursorEnabled: Boolean = true
@@ -398,7 +401,7 @@ class SujianEditorView @JvmOverloads constructor(
     fun applyThemeColorsFromAdapter(colors: com.xiwei.sujian.ui.compose.theme.EditorThemeColors) {
         themeBackgroundColor = colors.background
         textPaint.color = colors.text
-        pipeline.setThemeColors(
+        pipeline.textRenderer.setThemeColors(
             textColor = colors.text,
             cursorColor = colors.cursor,
             selectionColor = colors.selection,
@@ -460,8 +463,10 @@ class SujianEditorView @JvmOverloads constructor(
         }
         if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
             pipeline.kernelBridge?.setAnimationEnabled(false)
+            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.SYSTEM_SUPPRESSED)
         } else {
             pipeline.kernelBridge?.setAnimationEnabled(true)
+            pipeline.animationEngine.setAnimationPolicy(com.xiwei.sujian.editor.v2.visual.TextAnimationPolicy.INHERIT_GLOBAL)
         }
         if (profile.cursorPolicy == com.xiwei.sujian.editor.v2.coordinator.CursorPolicy.HIDDEN) {
             pipeline.setCursorVisible(false)
@@ -513,7 +518,7 @@ class SujianEditorView @JvmOverloads constructor(
 
     fun release() {
         unbindSession("release")
-        pipeline.releaseAllResources()
+        pipeline.animationEngine.release()
     }
 }
 
