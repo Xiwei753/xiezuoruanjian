@@ -455,6 +455,12 @@ class SujianEditorView @JvmOverloads constructor(
         kernelBridge = sessionBridge
         currentProfile = profile
         isSessionBound = true
+        applyProfileToPipeline(profile)
+        loadText(initialText, initialCursorUtf8)
+        requestFocus()
+    }
+
+    private fun applyProfileToPipeline(profile: TextEditorProfile) {
         pipeline.inputAdapter?.applyProfile(profile)
         pipeline.setAutoIndent(
             profile.autoIndentPolicy == com.xiwei.sujian.editor.v2.coordinator.AutoIndentPolicy.INDENT_ON_ENTER,
@@ -482,8 +488,13 @@ class SujianEditorView @JvmOverloads constructor(
         } else {
             pipeline.setSelectionAllowed(true)
         }
-        loadText(initialText, initialCursorUtf8)
-        requestFocus()
+    }
+
+    fun updateEditorProfile(profile: TextEditorProfile) {
+        currentProfile = profile
+        if (isSessionBound) {
+            applyProfileToPipeline(profile)
+        }
     }
 
     fun unbindSession(@Suppress("UNUSED_PARAMETER") reason: String) {

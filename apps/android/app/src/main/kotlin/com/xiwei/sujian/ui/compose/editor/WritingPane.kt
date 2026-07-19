@@ -71,11 +71,7 @@ fun WritingPane(
     var externalContentHash by remember { mutableLongStateOf(0L) }
 
     val target = remember(targetId) {
-        EditableTextTarget(
-            targetId = targetId,
-            profile = TextEditorProfile.DocumentBody,
-            isPersistent = true
-        )
+        EditableTextTarget(targetId = targetId)
     }
 
     val currentViewModel by rememberUpdatedState(viewModel)
@@ -91,6 +87,9 @@ fun WritingPane(
         currentViewModel.onContentChanged(finalText)
     }
     target.onCancel = {}
+    target.updateProfile(TextEditorProfile.DocumentBody)
+    target.updatePersistent(true)
+    target.updateText(uiState.content)
 
     DisposableEffect(targetId) {
         coordinator.registerTarget(target)

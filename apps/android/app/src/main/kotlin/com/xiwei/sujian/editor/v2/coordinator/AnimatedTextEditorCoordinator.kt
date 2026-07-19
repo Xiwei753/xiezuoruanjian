@@ -90,6 +90,9 @@ class AnimatedTextEditorCoordinator(
                 existing
             } else {
                 persistentSessionIds.remove(targetId)
+                if (existing != null) {
+                    closeSession(existing)
+                }
                 createSession(target, textForSession, sel)?.also {
                     persistentSessionIds[targetId] = it
                 }
@@ -181,7 +184,7 @@ class AnimatedTextEditorCoordinator(
         return true
     }
 
-    var lastCommittedText: String? = null
+    var lastCommittedText: String? by mutableStateOf(null)
         private set
 
     fun cancelActiveEdit(): Boolean {

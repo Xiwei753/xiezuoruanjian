@@ -1,5 +1,6 @@
 package com.xiwei.sujian.editor.v2.compose
 
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -15,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusEvent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -87,11 +89,7 @@ private fun AnimatedTextFieldWithCoordinator(
     val currentProfile by rememberUpdatedState(profile)
 
     val target = remember(targetId) {
-        EditableTextTarget(
-            targetId = targetId,
-            profile = currentProfile,
-            isPersistent = false
-        )
+        EditableTextTarget(targetId = targetId)
     }
 
     target.onTextChanged = { newText ->
@@ -139,19 +137,28 @@ private fun AnimatedTextFieldWithCoordinator(
             }
             .then(
                 if (enabled) {
-                    Modifier.pointerInput(targetId) {
-                        awaitPointerEventScope {
-                            while (true) {
-                                val event = awaitPointerEvent()
-                                if (event.changes.any { it.pressed }) {
-                                    event.changes.forEach { it.consume() }
-                                    coordinator.updateTargetText(targetId, currentValue)
-                                    val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
-                                    coordinator.beginEdit(targetId, cursorUtf8)
+                    Modifier
+                        .pointerInput(targetId) {
+                            awaitPointerEventScope {
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (event.changes.any { it.pressed }) {
+                                        event.changes.forEach { it.consume() }
+                                        coordinator.updateTargetText(targetId, currentValue)
+                                        val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
+                                        coordinator.beginEdit(targetId, cursorUtf8)
+                                    }
                                 }
                             }
                         }
-                    }
+                        .onFocusEvent { focusState ->
+                            if (focusState.hasFocus && coordinator.activeTargetId != targetId) {
+                                coordinator.updateTargetText(targetId, currentValue)
+                                val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
+                                coordinator.beginEdit(targetId, cursorUtf8)
+                            }
+                        }
+                        .focusable()
                 } else {
                     Modifier
                 }

@@ -7,7 +7,7 @@ import androidx.compose.runtime.setValue
 
 class EditableTextTarget(
     val targetId: String,
-    profile: TextEditorProfile,
+    profile: TextEditorProfile = TextEditorProfile(),
     isPersistent: Boolean = false,
     commitPolicy: CommitPolicy = if (isPersistent) CommitPolicy.COMMIT_ON_EVERY_CHANGE else CommitPolicy.COMMIT_ON_CONFIRM
 ) {
@@ -45,6 +45,10 @@ class EditableTextTarget(
 
     fun updatePersistent(persistent: Boolean) {
         isPersistent = persistent
+    }
+
+    fun updateCommitPolicy(newCommitPolicy: CommitPolicy) {
+        commitPolicy = newCommitPolicy
     }
 }
 

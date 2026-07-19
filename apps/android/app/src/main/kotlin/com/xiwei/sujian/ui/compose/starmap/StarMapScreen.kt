@@ -349,11 +349,9 @@ private fun StarMapEditorScreen(
                     val graphNode = starMapData?.graph?.nodes?.find { it.id == geometry.nodeId }
                     if (graphNode != null) {
                         val targetId = "starmap-node-title:${starmapId}:${geometry.nodeId}"
-                        val target = EditableTextTarget(
-                            targetId = targetId,
-                            profile = TextEditorProfile.CanvasLabel,
-                            isPersistent = false
-                        )
+                        val target = EditableTextTarget(targetId = targetId)
+                        target.updateProfile(TextEditorProfile.CanvasLabel)
+                        target.updatePersistent(false)
                         target.updateText(graphNode.title)
                         target.onCommit = { finalText ->
                                 if (finalText.isNotBlank() && finalText.trim() != graphNode.title) {
