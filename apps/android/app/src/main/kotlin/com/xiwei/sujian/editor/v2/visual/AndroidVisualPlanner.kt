@@ -594,7 +594,7 @@ class AndroidVisualPlanner {
     private fun mapThroughRanges(offset: Int, oldRanges: List<Pair<Int, Int>>, newRanges: List<Pair<Int, Int>>): Int {
         for (i in oldRanges.indices) {
             val (oldStart, oldEnd) = oldRanges[i]
-            if (offset in oldStart..oldEnd) {
+            if (offset >= oldStart && offset < oldEnd) {
                 val newRange = newRanges.getOrNull(i) ?: continue
                 val ratio = if (oldEnd == oldStart) 0f else (offset - oldStart).toFloat() / (oldEnd - oldStart)
                 return newRange.first + (ratio * (newRange.second - newRange.first)).toInt()
