@@ -1056,30 +1056,31 @@ class AndroidVisualPlanner {
         rebaseSnapshot: VisualFrameSnapshot,
         snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap()
     ): List<PreparedVisualTransaction.AnimatedSlice> {
-        val rebasedNewSlices = slices.map { slice ->
-            val rebaseState = findRebaseStateByClusterByteRange(slice, rebaseSnapshot)
+        val rebaseMatches = mutableMapOf<Int, SliceVisualState?>()
+        for ((idx, slice) in slices.withIndex()) {
+            val state = findRebaseStateByClusterByteRange(slice, rebaseSnapshot)
                 ?: findRebaseStateByLineAndRole(slice, rebaseSnapshot)
                 ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot)
+            rebaseMatches[idx] = state
+        }
+        val rebasedNewSlices = slices.mapIndexed { idx, slice ->
+            val rebaseState = rebaseMatches[idx]
             if (rebaseState != null) {
                 applyRebaseState(slice, rebaseState)
             } else {
                 slice
             }
         }
-        val matchedNewKeys = mutableSetOf<String>()
-        for (slice in slices) {
-            val rebaseState = findRebaseStateByClusterByteRange(slice, rebaseSnapshot)
-                ?: findRebaseStateByLineAndRole(slice, rebaseSnapshot)
-                ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot)
-            if (rebaseState != null) {
-                val key = "${rebaseState.role}_${rebaseState.lineIndex}_${rebaseState.clusterByteStart}_${rebaseState.clusterByteEndExclusive}"
-                matchedNewKeys.add(key)
+        val matchedRebaseIndices = mutableSetOf<Int>()
+        for ((_, state) in rebaseMatches) {
+            if (state != null) {
+                val idx = rebaseSnapshot.sliceVisualStates.indexOf(state)
+                if (idx >= 0) matchedRebaseIndices.add(idx)
             }
         }
         val survivingOldSlices = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()
-        for (state in rebaseSnapshot.sliceVisualStates) {
-            val key = "${state.role}_${state.lineIndex}_${state.clusterByteStart}_${state.clusterByteEndExclusive}"
-            if (key in matchedNewKeys) continue
+        for ((stateIdx, state) in rebaseSnapshot.sliceVisualStates.withIndex()) {
+            if (stateIdx in matchedRebaseIndices) continue
             val isFadingOut = state.role == SliceRole.Delete || state.role == SliceRole.CrossfadeOld
             val snapshot = snapshotLookup[state.snapshotId]
             val sourceRect = if (snapshot != null) {
@@ -1104,6 +1105,28 @@ class AndroidVisualPlanner {
                     clusterByteStart = state.clusterByteStart,
                     clusterByteEndExclusive = state.clusterByteEndExclusive
                 ))
+            } else if (state.role == SliceRole.Move) {
+                val currentRect = android.graphics.RectF(
+                    state.currentLeft, state.currentTop,
+                    state.currentRight, state.currentBottom
+                )
+                val destRect = android.graphics.RectF(
+                    state.destinationLeft, state.destinationTop,
+                    state.destinationRight, state.destinationBottom
+                )
+                if (currentRect != destRect) {
+                    survivingOldSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                        role = SliceRole.Move,
+                        snapshot = snapshot,
+                        sourceRect = sourceRect,
+                        destinationRect = destRect,
+                        startAlpha = 1f,
+                        endAlpha = 1f,
+                        fromDestinationRect = currentRect,
+                        clusterByteStart = state.clusterByteStart,
+                        clusterByteEndExclusive = state.clusterByteEndExclusive
+                    ))
+                }
             } else if (!isFadingOut && state.currentAlpha < 0.99f) {
                 val destRect = android.graphics.RectF(
                     state.currentLeft, state.currentTop,
@@ -1137,9 +1160,15 @@ class AndroidVisualPlanner {
         val cEnd = slice.clusterByteEndExclusive
         if (cStart < 0 || cEnd < 0) return null
         val lineIndex = slice.snapshot?.lineIndex ?: -1
-        return rebaseSnapshot.sliceVisualStates.firstOrNull {
+        val exactMatch = rebaseSnapshot.sliceVisualStates.firstOrNull {
             it.role == slice.role &&
                 it.lineIndex == lineIndex &&
+                it.clusterByteStart == cStart &&
+                it.clusterByteEndExclusive == cEnd
+        }
+        if (exactMatch != null) return exactMatch
+        return rebaseSnapshot.sliceVisualStates.firstOrNull {
+            it.role == slice.role &&
                 it.clusterByteStart == cStart &&
                 it.clusterByteEndExclusive == cEnd
         }
@@ -1177,8 +1206,9 @@ class AndroidVisualPlanner {
         val sliceLeft = slice.destinationRect.left
         val sliceRole = slice.role
         val lineIndex = slice.snapshot?.lineIndex ?: -1
+        val filterByLine = lineIndex >= 0 && sliceRole != SliceRole.Move
         return rebaseSnapshot.sliceVisualStates
-            .filter { it.role == sliceRole && (lineIndex < 0 || it.lineIndex == lineIndex) }
+            .filter { it.role == sliceRole && (!filterByLine || it.lineIndex == lineIndex) }
             .minByOrNull {
                 val dy = kotlin.math.abs(it.currentTop - sliceTop)
                 val dx = kotlin.math.abs(it.currentLeft - sliceLeft)

@@ -89,5 +89,9 @@ data class SliceVisualState(
     val currentTop: Float,
     val currentRight: Float,
     val currentBottom: Float,
-    val currentAlpha: Float
+    val currentAlpha: Float,
+    val destinationLeft: Float = currentLeft,
+    val destinationTop: Float = currentTop,
+    val destinationRight: Float = currentRight,
+    val destinationBottom: Float = currentBottom
 )

@@ -199,7 +199,11 @@ class AndroidTextAnimationEngine(
                 currentTop = currentTop,
                 currentRight = currentRight,
                 currentBottom = currentBottom,
-                currentAlpha = currentAlpha
+                currentAlpha = currentAlpha,
+                destinationLeft = slice.destinationRect.left,
+                destinationTop = slice.destinationRect.top,
+                destinationRight = slice.destinationRect.right,
+                destinationBottom = slice.destinationRect.bottom
             )
         }
     }
