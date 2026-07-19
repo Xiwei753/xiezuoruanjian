@@ -28,7 +28,6 @@ fun AnimatedTextEditorSlot(
     coordinator: AnimatedTextEditorCoordinator,
     modifier: Modifier = Modifier
 ) {
-    var editorView by remember { mutableStateOf<SujianEditorView?>(null) }
     var slotPositionInWindow by remember { mutableStateOf(Offset.Zero) }
 
     val activeTargetId = coordinator.activeTargetId
@@ -50,6 +49,12 @@ fun AnimatedTextEditorSlot(
 
     val themeColors = EditorThemeAdapter.extractColors()
 
+    DisposableEffect(Unit) {
+        onDispose {
+            coordinator.releaseHost()
+        }
+    }
+
     Box(
         modifier = modifier
             .onGloballyPositioned { coordinates ->
@@ -61,16 +66,13 @@ fun AnimatedTextEditorSlot(
                 factory = { ctx ->
                     val view = coordinator.getSharedEditorView()
                         ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
-                    editorView = view
                     EditorThemeAdapter.applyToView(view, themeColors)
                     view
                 },
                 update = { view ->
+                    EditorThemeAdapter.applyToView(view, themeColors)
                     view.visibility = android.view.View.VISIBLE
-                    coordinator.updateHostGeometry(
-                        slotWidthPx,
-                        slotHeightPx
-                    )
+                    coordinator.updateHostGeometry(slotWidthPx, slotHeightPx)
                 },
                 onReset = { view ->
                     view.resetForReuse()

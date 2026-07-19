@@ -85,8 +85,8 @@ class AnimatedTextEditorCoordinator(
         editingState = EditingState.BINDING
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
-        val sel = initialSelection ?: target.currentText.toByteArray(Charsets.UTF_8).size
         val textForSession = target.currentText
+        val sel = initialSelection ?: textForSession.toByteArray(Charsets.UTF_8).size
         val sessionId = if (target.isPersistent) {
             val existing = persistentSessionIds[targetId]
             if (existing != null && validateSession(existing)) {
@@ -152,6 +152,7 @@ class AnimatedTextEditorCoordinator(
 
         if (!target.isPersistent) {
             closeSession(sessionId)
+            persistentSessionIds.remove(targetId)
         }
         activeTargetId = null
         activeSessionId = null

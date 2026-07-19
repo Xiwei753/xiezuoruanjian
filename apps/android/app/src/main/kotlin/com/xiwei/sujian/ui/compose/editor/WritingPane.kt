@@ -73,19 +73,10 @@ fun WritingPane(
             if (localContentGeneration != lastSeenContentGeneration) {
                 lastSeenContentGeneration = localContentGeneration
                 coordinator.updateTargetText(targetId, uiState.content)
-            } else {
-                if (coordinator.editingState == EditingState.IDLE) {
-                    coordinator.updateTargetText(targetId, uiState.content)
-                    val cursorUtf8 = uiState.content.toByteArray(Charsets.UTF_8).size
-                    coordinator.beginEdit(targetId, cursorUtf8)
-                } else if (coordinator.activeTargetId == targetId) {
-                    coordinator.resetPersistentSession(
-                        targetId,
-                        uiState.content,
-                        uiState.content.toByteArray(Charsets.UTF_8).size,
-                        SessionResetSource.EXTERNAL
-                    )
-                }
+            } else if (coordinator.editingState == EditingState.IDLE) {
+                coordinator.updateTargetText(targetId, uiState.content)
+                val cursorUtf8 = uiState.content.toByteArray(Charsets.UTF_8).size
+                coordinator.beginEdit(targetId, cursorUtf8)
             }
         }
     }
@@ -95,6 +86,12 @@ fun WritingPane(
             if (coordinator.activeTargetId == targetId) {
                 coordinator.cancelActiveEdit()
             }
+            coordinator.resetPersistentSession(
+                targetId,
+                uiState.content,
+                uiState.content.toByteArray(Charsets.UTF_8).size,
+                SessionResetSource.EXTERNAL
+            )
             localContentGeneration = 0L
             lastSeenContentGeneration = 0L
         }

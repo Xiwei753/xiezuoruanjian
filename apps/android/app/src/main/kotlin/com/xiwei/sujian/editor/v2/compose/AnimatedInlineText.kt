@@ -1,7 +1,7 @@
 package com.xiwei.sujian.editor.v2.compose
 
 import android.util.Log
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material3.MaterialTheme
@@ -15,7 +15,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.semantics.editableText
@@ -115,6 +118,8 @@ fun AnimatedInlineText(
         }
     }
 
+    val focusRequester = remember { FocusRequester() }
+
     Box(
         modifier = modifier
             .wrapContentSize()
@@ -127,16 +132,26 @@ fun AnimatedInlineText(
                 )
                 effectiveCoordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
             }
+            .focusRequester(focusRequester)
+            .focusable(enabled = enabled)
             .then(
-                if (enabled && !isEditing) {
-                    Modifier.clickable {
-                        effectiveCoordinator.updateTargetText(targetId, localValue)
-                        val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
-                        effectiveCoordinator.beginEdit(targetId, cursorUtf8)
-                    }
-                } else if (enabled && isEditing) {
-                    Modifier.clickable {
-                        effectiveCoordinator.getSharedEditorView()?.requestFocus()
+                if (enabled) {
+                    Modifier.pointerInput(isEditing) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                if (event.changes.any { it.pressed }) {
+                                    event.changes.forEach { it.consume() }
+                                    if (!isEditing) {
+                                        effectiveCoordinator.updateTargetText(targetId, localValue)
+                                        val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
+                                        effectiveCoordinator.beginEdit(targetId, cursorUtf8)
+                                    } else {
+                                        effectiveCoordinator.getSharedEditorView()?.requestFocus()
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
                     Modifier
