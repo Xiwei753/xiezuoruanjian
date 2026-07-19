@@ -30,6 +30,7 @@ pub struct EdgeRender {
     pub arrow_right_y: f32,
     pub label_x: f32,
     pub label_y: f32,
+    pub label: Option<String>,
     pub has_bidirectional: bool,
 }
 
@@ -70,6 +71,7 @@ pub struct EdgeInput {
     pub id: String,
     pub from: String,
     pub to: String,
+    pub label: Option<String>,
 }
 
 pub fn compute_edge_renders(
@@ -137,6 +139,7 @@ pub fn compute_edge_renders(
                 arrow_right_y: ey - al * (angle + half_spread).sin(),
                 label_x: (sx + ex) / 2.0,
                 label_y: (sy + ey) / 2.0,
+                label: edge.label.clone(),
                 has_bidirectional: has_bi,
             })
         })
@@ -184,6 +187,7 @@ mod tests {
             id: "e1".into(),
             from: "a".into(),
             to: "b".into(),
+            label: None,
         }];
         let cs = centers((0.0, 0.0), (200.0, 0.0));
         let renders = compute_edge_renders(&edges, &cs, &EdgeRenderParams::default());
@@ -202,11 +206,13 @@ mod tests {
                 id: "e1".into(),
                 from: "a".into(),
                 to: "b".into(),
+                label: None,
             },
             EdgeInput {
                 id: "e2".into(),
                 from: "b".into(),
                 to: "a".into(),
+                label: None,
             },
         ];
         let cs = centers((0.0, 0.0), (200.0, 0.0));
@@ -226,6 +232,7 @@ mod tests {
             id: "e1".into(),
             from: "a".into(),
             to: "b".into(),
+            label: None,
         }];
         let cs = centers((0.0, 0.0), (200.0, 0.0));
         let renders = compute_edge_renders(&edges, &cs, &EdgeRenderParams::default());
@@ -240,6 +247,7 @@ mod tests {
             id: "e1".into(),
             from: "a".into(),
             to: "b".into(),
+            label: None,
         }];
         let cs = centers((0.0, 0.0), (200.0, 0.0));
         let renders = compute_edge_renders(&edges, &cs, &EdgeRenderParams::default());
@@ -253,6 +261,7 @@ mod tests {
             id: "e1".into(),
             from: "a".into(),
             to: "b".into(),
+            label: None,
         }];
         let cs = centers((0.0, 0.0), (200.0, 0.0));
         let renders = compute_edge_renders(&edges, &cs, &EdgeRenderParams::default());

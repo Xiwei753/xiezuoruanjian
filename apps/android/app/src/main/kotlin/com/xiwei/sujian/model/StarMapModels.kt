@@ -198,6 +198,7 @@ data class StarMapEdgeRenderData(
     val arrowRightY: Float,
     val labelX: Float,
     val labelY: Float,
+    val label: String? = null,
     val hasBidirectional: Boolean
 )
 

@@ -76,7 +76,7 @@ class AndroidInputAdapter(
                 ImeAction.NONE -> android.view.inputmethod.EditorInfo.IME_ACTION_NONE
             }
             outAttrs.imeOptions = imeAction
-            if (currentProfile.singleLine) {
+            if (currentProfile.singleLine && !currentProfile.commitOnImeAction) {
                 outAttrs.imeOptions = outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_ENTER_ACTION
             }
             return AndroidInputConnection(this, mirror, pipeline, host)

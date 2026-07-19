@@ -454,6 +454,7 @@ class ChapterListActivity : AppCompatActivity() {
                         confirmButton = {
                             TextButton(onClick = {
                                 dialogCoordinator.commitActiveEdit()
+                                onConfirm(text.trim())
                                 dialog?.dismiss()
                             }) {
                                 Text(getString(R.string.action_ok))

@@ -497,7 +497,10 @@ class SujianEditorView @JvmOverloads constructor(
         invalidate()
     }
 
-    fun updateHostGeometry(@Suppress("UNUSED_PARAMETER") width: Float, @Suppress("UNUSED_PARAMETER") height: Float) {
+    fun updateHostGeometry(width: Float, height: Float) {
+        if (width > 0 && height > 0 && (width.toInt() != this.width || height.toInt() != this.height)) {
+            requestLayout()
+        }
     }
 
     fun softResetForPersistentCommit() {

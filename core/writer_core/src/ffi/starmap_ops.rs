@@ -403,6 +403,7 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
                     id: edge.id,
                     from,
                     to,
+                    label: edge.label,
                 })
             })
             .collect();

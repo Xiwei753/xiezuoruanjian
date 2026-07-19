@@ -264,6 +264,7 @@ pub struct StarMapEdgeRenderDto {
     pub arrow_right_y: f32,
     pub label_x: f32,
     pub label_y: f32,
+    pub label: Option<String>,
     pub has_bidirectional: bool,
 }
 
@@ -289,6 +290,7 @@ impl From<crate::starmap::render::EdgeRender> for StarMapEdgeRenderDto {
             arrow_right_y: r.arrow_right_y,
             label_x: r.label_x,
             label_y: r.label_y,
+            label: r.label,
             has_bidirectional: r.has_bidirectional,
         }
     }

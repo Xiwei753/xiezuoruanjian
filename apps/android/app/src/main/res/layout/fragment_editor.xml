@@ -107,14 +107,10 @@
             app:cardElevation="0dp"
             app:cardCornerRadius="0dp">
 
-            <!-- V2 Editor (SujianEditorView) — #535 Editor V2 唯一主路径 -->
-            <com.xiwei.sujian.editor.v2.host.SujianEditorView
-                android:id="@+id/sujianEditorView"
+            <FrameLayout
+                android:id="@+id/editorComposeContainer"
                 android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:paddingHorizontal="24dp"
-                android:paddingTop="24dp"
-                android:paddingBottom="80dp" />
+                android:layout_height="match_parent" />
 
         </com.google.android.material.card.MaterialCardView>
 

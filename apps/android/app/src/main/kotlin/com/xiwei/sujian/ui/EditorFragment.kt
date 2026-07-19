@@ -27,32 +27,20 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.data.CoreSettingsEvents
 import com.xiwei.sujian.data.SyncChangeBus
 import com.xiwei.sujian.data.WorkspaceRepository
+import com.xiwei.sujian.data.BridgeProvider
+import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.host.SujianEditorView
-import com.xiwei.sujian.editor.v2.host.UniFFIEditorKernelBridge
+import com.xiwei.sujian.editor.v2.host.TextEditSessionBridge
+import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
+import com.xiwei.sujian.ui.compose.editor.WritingPane
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-/**
- * EditorFragment — 可嵌入的章节编辑器 Fragment
- *
- * 从 EditorActivity 提取编辑器核心逻辑，支持两种使用模式：
- * - **TwoPane 模式**：嵌入 MainActivity 右侧面板（detailContentContainer）
- * - **SinglePane 模式**：由 EditorActivity 包裹，提供独立 toolbar
- *
- * ## 架构定位
- * - EditorFragment → EditorViewModel → WorkspaceRepository → 领域 Bridge → Rust Core
- * - EditorFragment → SujianEditorView（自研写作区唯一主路径）
- *
- * ## 职责边界
- * - **做**：文本编辑、自动保存、搜索/替换、工具栏交互
- * - **不做**：文件 I/O（由 Rust Core 负责）、排版格式化（由 SujianEditorView 负责）
- *
- * ## 宿主通信
- * - 通过 `EditorFragmentCallback` 回调宿主（如 back 请求）
- * - 通过 `initChapter()` 由宿主初始化章节
- * - 通过 `requestSave()` 由宿主触发保存
- */
 class EditorFragment : Fragment() {
 
     companion object {
@@ -61,9 +49,6 @@ class EditorFragment : Fragment() {
         const val ARG_CHAPTER_ID = "CHAPTER_ID"
         const val ARG_CHAPTER_TITLE = "CHAPTER_TITLE"
 
-        /**
-         * 工厂方法：创建带参数的 EditorFragment 实例
-         */
         fun newInstance(
             projectId: String,
             volumeId: String,
@@ -81,22 +66,15 @@ class EditorFragment : Fragment() {
         }
     }
 
-    /**
-     * 宿主回调接口
-     */
     interface EditorFragmentCallback {
-        /** 用户请求返回（如 back 键、toolbar 导航按钮） */
         fun onBackRequested()
     }
 
-    // ── Views ──
-    private lateinit var sujianEditorView: SujianEditorView
     private lateinit var tvWordCount: TextView
     private lateinit var tvSessionAdded: TextView
     private lateinit var tvSpeed: TextView
     private lateinit var tvSaveStatus: TextView
 
-    // Search and Replace
     private lateinit var searchLayout: LinearLayout
     private lateinit var etSearch: EditText
     private lateinit var etReplace: EditText
@@ -105,7 +83,6 @@ class EditorFragment : Fragment() {
     private lateinit var btnReplace: Button
     private lateinit var btnReplaceAll: Button
 
-    // ── State ──
     private val viewModel: EditorViewModel by viewModels()
     private var projectId: String? = null
     private var volumeId: String? = null
@@ -117,7 +94,6 @@ class EditorFragment : Fragment() {
 
     private var callback: EditorFragmentCallback? = null
 
-    // ── Settings cache ──
     private var lastFontSize: Float? = null
     private var lastLineSpacing: Float? = null
     private var lastTypingAnimEnabled: Boolean? = null
@@ -128,11 +104,14 @@ class EditorFragment : Fragment() {
     private var lastAutoIndentWidth: Float? = null
     private var lastCoordinatedAnimEnabled: Boolean? = null
 
+    private val coordinator by lazy {
+        val bridge = BridgeProvider.getAppServiceBridge(requireContext())
+        AnimatedTextEditorCoordinator(requireContext(), bridge)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setHasOptionsMenu(true)
-
-        // 从 arguments 读取初始参数
         projectId = arguments?.getString(ARG_PROJECT_ID)
         volumeId = arguments?.getString(ARG_VOLUME_ID)
         chapterId = arguments?.getString(ARG_CHAPTER_ID)
@@ -151,8 +130,6 @@ class EditorFragment : Fragment() {
 
         workspaceRepository = WorkspaceRepository(requireContext())
 
-        // ── Bind views ──
-        sujianEditorView = view.findViewById(R.id.sujianEditorView)
         tvWordCount = view.findViewById(R.id.tvWordCount)
         tvSessionAdded = view.findViewById(R.id.tvSessionAdded)
         tvSpeed = view.findViewById(R.id.tvSpeed)
@@ -166,22 +143,17 @@ class EditorFragment : Fragment() {
         btnReplace = view.findViewById(R.id.btnReplace)
         btnReplaceAll = view.findViewById(R.id.btnReplaceAll)
 
-        // ── 设置自研写作区（唯一主路径） ──
-        setupSelfRenderEditor()
+        setupComposeEditor(view)
 
-        // ── Apply font fallback ──
         view.post {
             UiFontUtil.applySansSerifFallback(view)
         }
 
-        // ── Window insets: 通过宿主 Activity 的 SystemBarsController 统一管理 ──
         val editorStatusBar = view.findViewById<View>(R.id.editorStatusBar)
         val hostController = (activity as? EditorActivity)?.systemBarsController
         if (hostController != null) {
-            // SinglePane 模式：通过 SystemBarsController 统一管理
             hostController.addBottomMarginTarget(editorStatusBar)
         } else {
-            // TwoPane 模式（宿主是 MainActivity）：保留独立的 WindowInsets 处理，但保存原始 margin 叠加
             var originalBottomMargin = 0
             val params = editorStatusBar.layoutParams
             if (params is android.view.ViewGroup.MarginLayoutParams) {
@@ -203,7 +175,6 @@ class EditorFragment : Fragment() {
         setupSearchAndReplace()
         observeViewModel()
 
-        // ── Initialize chapter from arguments if available ──
         val chapterTitle = arguments?.getString(ARG_CHAPTER_TITLE) ?: ""
         if (projectId != null && volumeId != null && chapterId != null) {
             viewModel.initChapter(projectId!!, volumeId!!, chapterId!!, chapterTitle)
@@ -212,26 +183,45 @@ class EditorFragment : Fragment() {
         }
     }
 
-    /**
-     * 设置自研写作区 SujianEditorView
-     */
-    private fun setupSelfRenderEditor() {
-        DiagnosticsLogger.d("SujianEditor", "Setting up V2 editor (SujianEditorView)")
-
-        try {
-            val appServiceBridge = com.xiwei.sujian.data.BridgeProvider.getAppServiceBridge(requireContext())
-            sujianEditorView.kernelBridge = UniFFIEditorKernelBridge(appServiceBridge)
-            DiagnosticsLogger.d("SujianEditor", "EditorKernelBridge injected for V2 SujianEditorView")
-        } catch (e: Exception) {
-            DiagnosticsLogger.w("SujianEditor", "Failed to inject EditorKernelBridge for V2 SujianEditorView", e)
+    private fun setupComposeEditor(view: View) {
+        val container = view.findViewById<ViewGroup>(R.id.editorComposeContainer) ?: return
+        val composeView = androidx.compose.ui.platform.ComposeView(requireContext()).apply {
+            setViewCompositionStrategy(androidx.compose.ui.platform.ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
         }
+        container.addView(composeView, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        ))
 
-        sujianEditorView.onContentChanged = { newText ->
-            if (projectId != null && volumeId != null && chapterId != null) {
-                viewModel.onContentChanged(newText)
+        val pid = projectId ?: ""
+        val vid = volumeId ?: ""
+        val cid = chapterId ?: ""
+        val title = arguments?.getString(ARG_CHAPTER_TITLE) ?: ""
+
+        composeView.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                LocalAnimatedTextEditorCoordinator provides coordinator
+            ) {
+                Box(
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    WritingPane(
+                        projectId = pid,
+                        volumeId = vid,
+                        chapterId = cid,
+                        chapterTitle = title,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    AnimatedTextEditorSlot(
+                        coordinator = coordinator,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
         }
     }
+
+    private fun getEditorView(): SujianEditorView? = coordinator.getSharedEditorView()
 
     override fun onResume() {
         super.onResume()
@@ -255,11 +245,6 @@ class EditorFragment : Fragment() {
         }
     }
 
-    // ── Public API ──
-
-    /**
-     * 初始化/切换章节。TwoPane 模式下切换章节时调用。
-     */
     fun initChapter(projectId: String, volumeId: String, chapterId: String, chapterTitle: String) {
         this.projectId = projectId
         this.volumeId = volumeId
@@ -267,9 +252,6 @@ class EditorFragment : Fragment() {
         viewModel.initChapter(projectId, volumeId, chapterId, chapterTitle)
     }
 
-    /**
-     * 请求保存当前内容。返回 Deferred<Boolean>，true 表示保存成功。
-     */
     fun requestSave(): Deferred<Boolean> {
         return viewModel.requestSave()
     }
@@ -278,21 +260,12 @@ class EditorFragment : Fragment() {
         viewModel.clearChapterContent()
     }
 
-    /**
-     * 获取当前章节 ID
-     */
     fun getCurrentChapterId(): String? = chapterId
 
-    /**
-     * 设置宿主回调
-     */
     fun setCallback(callback: EditorFragmentCallback) {
         this.callback = callback
     }
 
-    /**
-     * 切换搜索栏可见性（供宿主 toolbar 菜单调用）
-     */
     fun toggleSearchBar() {
         if (searchLayout.visibility == View.VISIBLE) {
             searchLayout.visibility = View.GONE
@@ -304,9 +277,6 @@ class EditorFragment : Fragment() {
         }
     }
 
-    /**
-     * 显示章节备注对话框
-     */
     fun showChapterNoteDialog() {
         val pid = projectId
         val vid = volumeId
@@ -334,8 +304,6 @@ class EditorFragment : Fragment() {
             .setNegativeButton(R.string.action_cancel, null)
             .show()
     }
-
-    // ── Options Menu ──
 
     override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
         inflater.inflate(R.menu.menu_editor, menu)
@@ -366,8 +334,6 @@ class EditorFragment : Fragment() {
         }
     }
 
-    // ── ViewModel Observation ──
-
     private fun observeViewModel() {
         viewLifecycleOwner.lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -375,13 +341,6 @@ class EditorFragment : Fragment() {
                     if (state.loading) {
                         tvSaveStatus.text = ""
                         return@collectLatest
-                    }
-
-                    // 自研写作区：加载内容
-                    if (!sujianEditorView.hasFocus()) {
-                        if (sujianEditorView.getText() != state.content) {
-                            sujianEditorView.setText(state.content)
-                        }
                     }
 
                     when (state.saveStatus) {
@@ -418,52 +377,36 @@ class EditorFragment : Fragment() {
     }
 
     private fun applySettingsToEditor(settings: EditorSettingsState) {
-        val tag = "WriterSettings"
-        DiagnosticsLogger.d(tag, "applySettingsToEditor: fontSize=${settings.fontSize}, lineSpacing=${settings.lineSpacingMultiplier}, " +
-            "autoIndent=${settings.autoIndentEnabled}/${settings.autoIndentWidth}, " +
-            "typingAnim=${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms, " +
-            "smoothCursor=${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
+        val view = getEditorView() ?: return
 
-        // ── 自研写作区设置（唯一主路径） ──
         if (lastFontSize != settings.fontSize) {
             lastFontSize = settings.fontSize
-            sujianEditorView.setFontSize(settings.fontSize)
-            DiagnosticsLogger.d(tag, "  → fontSize applied to SujianEditorView: ${settings.fontSize}")
+            view.setFontSize(settings.fontSize)
         }
         if (lastLineSpacing != settings.lineSpacingMultiplier) {
             lastLineSpacing = settings.lineSpacingMultiplier
-            sujianEditorView.setLineSpacingMultiplier(settings.lineSpacingMultiplier)
-            DiagnosticsLogger.d(tag, "  → lineSpacing applied to SujianEditorView: ${settings.lineSpacingMultiplier}")
+            view.setLineSpacingMultiplier(settings.lineSpacingMultiplier)
         }
         if (lastTypingAnimEnabled != settings.typingAnimationEnabled || lastTypingAnimDuration != settings.typingAnimationDurationMs) {
             lastTypingAnimEnabled = settings.typingAnimationEnabled
             lastTypingAnimDuration = settings.typingAnimationDurationMs
-            sujianEditorView.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
-            DiagnosticsLogger.d(tag, "  → typingAnimation applied to SujianEditorView: ${settings.typingAnimationEnabled}/${settings.typingAnimationDurationMs}ms")
+            view.setTypingAnimationEnabled(settings.typingAnimationEnabled, settings.typingAnimationDurationMs)
         }
         if (lastSmoothCursorEnabled != settings.smoothCursorEnabled || lastSmoothCursorDuration != settings.smoothCursorDurationMs) {
             lastSmoothCursorEnabled = settings.smoothCursorEnabled
             lastSmoothCursorDuration = settings.smoothCursorDurationMs
-            sujianEditorView.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
-            DiagnosticsLogger.d(tag, "  → smoothCursor applied to SujianEditorView: ${settings.smoothCursorEnabled}/${settings.smoothCursorDurationMs}ms")
+            view.setSmoothCursorEnabled(settings.smoothCursorEnabled, settings.smoothCursorDurationMs)
         }
-        // autoIndent 同步到自研写作区
         if (lastAutoIndentEnabled != settings.autoIndentEnabled || lastAutoIndentWidth != settings.autoIndentWidth) {
             lastAutoIndentEnabled = settings.autoIndentEnabled
             lastAutoIndentWidth = settings.autoIndentWidth
-            sujianEditorView.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
-            DiagnosticsLogger.d(tag, "  → autoIndent applied to SujianEditorView: ${settings.autoIndentEnabled}/${settings.autoIndentWidth}")
+            view.setAutoIndent(settings.autoIndentEnabled, settings.autoIndentWidth)
         }
-        // 协调动画同步
         if (lastCoordinatedAnimEnabled != settings.coordinatedTextCursorAnimationEnabled) {
             lastCoordinatedAnimEnabled = settings.coordinatedTextCursorAnimationEnabled
-            sujianEditorView.setCoordinatedAnimationEnabled(settings.coordinatedTextCursorAnimationEnabled)
-            DiagnosticsLogger.d(tag, "  → coordinatedAnim applied to SujianEditorView: ${settings.coordinatedTextCursorAnimationEnabled}")
+            view.setCoordinatedAnimationEnabled(settings.coordinatedTextCursorAnimationEnabled)
         }
-        DiagnosticsLogger.d(tag, "applySettingsToEditor: SujianEditorView settings applied, typingAnim=${settings.typingAnimationEnabled}, smoothCursor=${settings.smoothCursorEnabled}")
     }
-
-    // ── Save Failed Dialog ──
 
     private fun showSaveFailedDialog(message: String) {
         AlertDialog.Builder(requireContext())
@@ -482,8 +425,6 @@ class EditorFragment : Fragment() {
             }
             .show()
     }
-
-    // ── Search and Replace ──
 
     private fun setupSearchAndReplace() {
         btnSearchClose.setOnClickListener {
@@ -507,18 +448,20 @@ class EditorFragment : Fragment() {
         }
 
         btnReplace.setOnClickListener {
+            val view = getEditorView() ?: return@setOnClickListener
             if (searchResults.isEmpty() || currentSearchIndex < 0) return@setOnClickListener
             val (start, end) = searchResults[currentSearchIndex]
             val replaceStr = etReplace.text.toString()
-            sujianEditorView.replaceRange(start, end, replaceStr)
+            view.replaceRange(start, end, replaceStr)
             performSearch()
         }
 
         btnReplaceAll.setOnClickListener {
+            val view = getEditorView() ?: return@setOnClickListener
             if (searchResults.isEmpty()) return@setOnClickListener
             val searchStr = etSearch.text.toString()
             val replaceStr = etReplace.text.toString()
-            sujianEditorView.replaceAll(searchStr, replaceStr)
+            view.replaceAll(searchStr, replaceStr)
             performSearch()
         }
     }
@@ -533,7 +476,8 @@ class EditorFragment : Fragment() {
         val searchStr = etSearch.text.toString()
         if (searchStr.isEmpty()) return
 
-        val content = sujianEditorView.getText()
+        val view = getEditorView() ?: return
+        val content = view.getText()
         var startIndex = content.indexOf(searchStr)
 
         while (startIndex >= 0) {
@@ -544,20 +488,21 @@ class EditorFragment : Fragment() {
 
         if (searchResults.isNotEmpty()) {
             currentSearchIndex = 0
-            sujianEditorView.setSearchHighlights(searchResults)
+            view.setSearchHighlights(searchResults)
             focusSearchResult()
         }
     }
 
     private fun focusSearchResult() {
+        val view = getEditorView() ?: return
         if (searchResults.isEmpty() || currentSearchIndex < 0) return
         val (start, end) = searchResults[currentSearchIndex]
-        sujianEditorView.setSelectionRange(start, end)
-        sujianEditorView.scrollToSelection()
+        view.setSelectionRange(start, end)
+        view.scrollToSelection()
     }
 
     private fun clearHighlights() {
-        sujianEditorView.clearSearchHighlights()
+        getEditorView()?.clearSearchHighlights()
         searchResults.clear()
         currentSearchIndex = -1
     }

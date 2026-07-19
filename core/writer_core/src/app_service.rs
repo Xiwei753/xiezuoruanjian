@@ -1110,17 +1110,18 @@ impl WriterAppService {
         initial_cursor_byte_offset: u32,
         is_persistent: u8,
     ) -> u64 {
-        self.with_registry(|r| {
-            match r.create_session(
+        let result = self.with_registry(|r| {
+            r.create_session(
                 target_id,
                 initial_text,
                 initial_cursor_byte_offset as usize,
                 is_persistent != 0,
-            ) {
-                Ok(id) => id.0,
-                Err(_) => 0,
-            }
-        })
+            )
+        });
+        match result {
+            Ok(id) => id.0,
+            Err(_) => 0,
+        }
     }
 
     pub fn text_edit_session_close(&self, session_id: u64) -> u8 {

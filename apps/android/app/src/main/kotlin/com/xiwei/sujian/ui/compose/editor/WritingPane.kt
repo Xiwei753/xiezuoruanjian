@@ -64,6 +64,7 @@ fun WritingPane(
     val uiState by viewModel.uiState.collectAsState()
 
     var isLocalContentMirror by remember { mutableStateOf(false) }
+    var lastChapterId by remember { mutableStateOf("") }
 
     LaunchedEffect(uiState.content) {
         if (!uiState.loading) {
@@ -73,7 +74,8 @@ fun WritingPane(
             } else {
                 if (coordinator.editingState == EditingState.IDLE) {
                     coordinator.updateTargetText(targetId, uiState.content)
-                    coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                    val cursorUtf8 = uiState.content.toByteArray(Charsets.UTF_8).size
+                    coordinator.beginEdit(targetId, cursorUtf8)
                 } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
                     coordinator.resetPersistentSession(
                         targetId,
@@ -84,6 +86,15 @@ fun WritingPane(
                 }
             }
         }
+    }
+
+    LaunchedEffect(chapterId) {
+        if (chapterId != lastChapterId && lastChapterId.isNotEmpty()) {
+            if (coordinator.activeTargetId == targetId) {
+                coordinator.cancelActiveEdit()
+            }
+        }
+        lastChapterId = chapterId
     }
 
     val target = remember(targetId) {
@@ -113,6 +124,7 @@ fun WritingPane(
                 viewModel.onContentChanged(newText)
             },
             onCommit = { finalText ->
+                isLocalContentMirror = true
                 viewModel.onContentChanged(finalText)
             },
             onCancel = {}

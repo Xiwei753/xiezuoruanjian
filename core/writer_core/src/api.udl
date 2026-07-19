@@ -645,6 +645,7 @@ dictionary StarMapEdgeRenderDto {
     float arrow_right_y;
     float label_x;
     float label_y;
+    string? label;
     boolean has_bidirectional;
 };
 

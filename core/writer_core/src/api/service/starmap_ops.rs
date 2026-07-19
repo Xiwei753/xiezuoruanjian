@@ -235,6 +235,7 @@ impl WriterCoreApi {
                     id: edge.id,
                     from,
                     to,
+                    label: edge.label,
                 })
             })
             .collect();

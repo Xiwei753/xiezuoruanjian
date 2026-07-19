@@ -48,6 +48,14 @@ data class NodeTextGeometry(
     val offsetY: Float
 )
 
+data class EdgeLabelGeometry(
+    val edgeId: String,
+    val windowRect: Rect,
+    val scale: Float,
+    val offsetX: Float,
+    val offsetY: Float
+)
+
 @Composable
 fun StarMapCanvas(
     data: StarMapData,
@@ -55,7 +63,9 @@ fun StarMapCanvas(
     onViewportChange: ((viewport: StarMapViewportData) -> Unit)? = null,
     onNodeTap: ((nodeId: String) -> Unit)? = null,
     onNodeDoubleTap: ((geometry: NodeTextGeometry) -> Unit)? = null,
+    onEdgeLabelDoubleTap: ((geometry: EdgeLabelGeometry) -> Unit)? = null,
     editingNodeId: String? = null,
+    editingEdgeId: String? = null,
     modifier: Modifier = Modifier
 ) {
     var scale by remember { mutableFloatStateOf(data.viewport.scale.coerceIn(0.2f, 5f)) }
@@ -265,7 +275,8 @@ private fun DrawScope.drawEdgeRender(
     offsetX: Float,
     offsetY: Float,
     canvasWidth: Float,
-    canvasHeight: Float
+    canvasHeight: Float,
+    hideLabel: Boolean = false
 ) {
     val startX = (edge.startX + offsetX) * scale
     val startY = (edge.startY + offsetY) * scale
@@ -300,6 +311,22 @@ private fun DrawScope.drawEdgeRender(
                 close()
             },
             color = Color(0xFF888888)
+        )
+    }
+
+    if (!hideLabel && edge.label != null) {
+        val lx = (edge.labelX + offsetX) * scale
+        val ly = (edge.labelY + offsetY) * scale
+        drawContext.canvas.nativeCanvas.drawText(
+            edge.label,
+            lx,
+            ly + 4f * scale,
+            android.graphics.Paint().apply {
+                color = Color(0xFF666666).toArgb()
+                textSize = 11f * scale
+                textAlign = android.graphics.Paint.Align.CENTER
+                isAntiAlias = true
+            }
         )
     }
 }
