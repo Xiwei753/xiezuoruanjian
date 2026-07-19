@@ -1133,13 +1133,13 @@ class AndroidVisualPlanner {
                     state.destinationLeft, state.destinationTop,
                     state.destinationRight, state.destinationBottom
                 )
-                if (currentRect != destRect) {
+                if (currentRect != destRect || state.currentAlpha < 0.99f) {
                     survivingOldSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Move,
                         snapshot = snapshot,
                         sourceRect = sourceRect,
                         destinationRect = destRect,
-                        startAlpha = 1f,
+                        startAlpha = state.currentAlpha,
                         endAlpha = 1f,
                         fromDestinationRect = currentRect,
                         clusterByteStart = state.clusterByteStart,
@@ -1263,13 +1263,8 @@ class AndroidVisualPlanner {
         )
         return when (slice.role) {
             SliceRole.Move -> {
-                val effectiveFrom = if (rebaseState.role == SliceRole.Insert || rebaseState.role == SliceRole.CrossfadeNew) {
-                    fromRect
-                } else {
-                    fromRect
-                }
                 slice.copy(
-                    fromDestinationRect = effectiveFrom,
+                    fromDestinationRect = fromRect,
                     startAlpha = rebaseState.currentAlpha
                 )
             }

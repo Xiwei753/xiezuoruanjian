@@ -140,7 +140,20 @@ class AndroidEditorPipeline private constructor(
                 old.first == new.first && old.second == new.second
             }
         if (isVisualSame) {
-            return applyEditResult(result)
+            val suppressedIntent = VisualIntent(
+                cause = result.visualIntent.cause,
+                operationKind = result.visualIntent.operationKind,
+                oldAffectedByteRanges = oldAffected,
+                newAffectedByteRanges = newAffected,
+                animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
+                durationMs = 0L,
+                coordinatedCursor = CoordinatedCursor(
+                    result.visualIntent.coordinatedCursor.oldByteOffset,
+                    result.visualIntent.coordinatedCursor.newByteOffset,
+                    false
+                )
+            )
+            return applyEditResultWithIntent(result, suppressedIntent)
         }
         if (result.visualIntent.animationMode == uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED &&
             (oldAffected.isNotEmpty() || newAffected.isNotEmpty())) {
@@ -243,8 +256,17 @@ class AndroidEditorPipeline private constructor(
         oldPreeditText: String,
         mirrorUpdate: (() -> Unit)? = null
     ) {
-        val oldAffected = if (oldPreeditText.isEmpty()) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditText.toByteArray(Charsets.UTF_8).size))
-        val newAffected = if (newPreeditText.isEmpty()) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditText.toByteArray(Charsets.UTF_8).size))
+        val oldPreeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
+        val newPreeditByteLen = newPreeditText.toByteArray(Charsets.UTF_8).size
+        val oldAffected = buildList {
+            if (replaceStartUtf8 < replaceEndUtf8 && oldPreeditText.isEmpty()) {
+                add(Pair(replaceStartUtf8, replaceEndUtf8))
+            }
+            if (oldPreeditByteLen > 0) {
+                add(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditByteLen))
+            }
+        }
+        val newAffected = if (newPreeditText.isEmpty()) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen))
         val combinedText = oldPreeditText + newPreeditText
         val clusterCount = maxOf(
             newPreeditText.codePointCount(0, newPreeditText.length),
@@ -287,7 +309,9 @@ class AndroidEditorPipeline private constructor(
         oldPreeditText: String,
         mirrorUpdate: (() -> Unit)? = null
     ) {
-        val oldAffected = if (replaceStartUtf8 == replaceEndUtf8 && oldPreeditText.isEmpty()) emptyList()
+        val preeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
+        val oldAffected = if (preeditByteLen == 0 && replaceStartUtf8 == replaceEndUtf8) emptyList()
+            else if (preeditByteLen > 0) listOf(Pair(replaceStartUtf8, replaceStartUtf8 + preeditByteLen))
             else listOf(Pair(replaceStartUtf8, replaceEndUtf8))
         val visualIntent = VisualIntent(
             cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
