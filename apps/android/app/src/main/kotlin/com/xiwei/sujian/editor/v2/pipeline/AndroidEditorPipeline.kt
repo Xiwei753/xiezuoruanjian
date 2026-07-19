@@ -285,14 +285,15 @@ class AndroidEditorPipeline private constructor(
     ) {
         val oldPreeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
         val newPreeditByteLen = newPreeditText.toByteArray(Charsets.UTF_8).size
+        val isVisualSame = oldPreeditText.isNotEmpty() && oldPreeditText == newPreeditText
         val oldAffected = buildList {
-            if (oldPreeditByteLen > 0) {
+            if (oldPreeditByteLen > 0 && !isVisualSame) {
                 add(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditByteLen))
-            } else if (replaceStartUtf8 < replaceEndUtf8) {
+            } else if (oldPreeditByteLen == 0 && replaceStartUtf8 < replaceEndUtf8) {
                 add(Pair(replaceStartUtf8, replaceEndUtf8))
             }
         }
-        val newAffected = if (newPreeditText.isEmpty()) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen))
+        val newAffected = if (newPreeditText.isEmpty() || isVisualSame) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen))
         val combinedText = oldPreeditText + newPreeditText
         val clusterCount = maxOf(
             newPreeditText.codePointCount(0, newPreeditText.length),
@@ -307,7 +308,7 @@ class AndroidEditorPipeline private constructor(
                 Character.isHighSurrogate(char) || Character.isLowSurrogate(char)
         }
         val animationMode = when {
-            clusterCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
+            isVisualSame || clusterCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
             containsNewline -> uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION
             containsComplexGrapheme -> uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION
             clusterCount <= 8 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
