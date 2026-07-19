@@ -21,6 +21,12 @@ class AndroidInputConnection(
 
     override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
         val commitStr = text?.toString() ?: ""
+        if (adapter.shouldForbidNewline(commitStr)) {
+            return true
+        }
+        if (adapter.wouldExceedMaxLength(commitStr)) {
+            return true
+        }
         if (adapter.isComposing()) {
             adapter.handleCompositionCommitWithText(commitStr, newCursorPosition)
             notifySelectionChanged()
@@ -182,6 +188,9 @@ class AndroidInputConnection(
 
     override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
         if (text == null) return true
+        if (adapter.shouldForbidNewline(text.toString())) {
+            return true
+        }
         adapter.handleCompositionUpdate(text.toString(), newCursorPosition)
         notifySelectionChanged()
         return true

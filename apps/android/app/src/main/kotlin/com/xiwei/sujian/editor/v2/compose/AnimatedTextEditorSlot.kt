@@ -9,10 +9,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.xiwei.sujian.data.BridgeProvider
@@ -27,7 +29,7 @@ fun AnimatedTextEditorSlot(
     modifier: Modifier = Modifier
 ) {
     var editorView by remember { mutableStateOf<SujianEditorView?>(null) }
-    var slotPositionInWindow by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    var slotPositionInWindow by remember { mutableStateOf(Offset.Zero) }
 
     val activeTargetId = coordinator.activeTargetId
     val editingState = coordinator.editingState
@@ -36,10 +38,15 @@ fun AnimatedTextEditorSlot(
     val targetGeometry = coordinator.activeTargetGeometry
     val targetTransform = coordinator.activeTargetTransform
 
+    val density = LocalDensity.current
+
     val slotLocalLeft = (targetGeometry.left.toFloat() - slotPositionInWindow.x) * targetTransform.scaleX + targetTransform.translateX
     val slotLocalTop = (targetGeometry.top.toFloat() - slotPositionInWindow.y) * targetTransform.scaleY + targetTransform.translateY
-    val slotWidth = targetGeometry.width().toFloat() * targetTransform.scaleX
-    val slotHeight = targetGeometry.height().toFloat() * targetTransform.scaleY
+    val slotWidthPx = targetGeometry.width().toFloat() * targetTransform.scaleX
+    val slotHeightPx = targetGeometry.height().toFloat() * targetTransform.scaleY
+
+    val slotWidthDp = with(density) { slotWidthPx.toDp() }
+    val slotHeightDp = with(density) { slotHeightPx.toDp() }
 
     val themeColors = EditorThemeAdapter.extractColors()
 
@@ -49,7 +56,7 @@ fun AnimatedTextEditorSlot(
                 slotPositionInWindow = coordinates.positionInWindow()
             }
     ) {
-        if (isVisible && slotWidth > 0f && slotHeight > 0f) {
+        if (isVisible && slotWidthPx > 0f && slotHeightPx > 0f) {
             AndroidView(
                 factory = { ctx ->
                     val view = coordinator.getSharedEditorView()
@@ -60,7 +67,7 @@ fun AnimatedTextEditorSlot(
                 },
                 update = { view ->
                     view.visibility = android.view.View.VISIBLE
-                    view.updateHostGeometry(slotWidth, slotHeight)
+                    view.updateHostGeometry(slotWidthPx, slotHeightPx)
                 },
                 onReset = { view ->
                     view.resetForReuse()
@@ -77,8 +84,8 @@ fun AnimatedTextEditorSlot(
                         clip = true
                     }
                     .requiredSize(
-                        width = slotWidth.dp.coerceAtLeast(1.dp),
-                        height = slotHeight.dp.coerceAtLeast(1.dp)
+                        width = slotWidthDp.coerceAtLeast(1.dp),
+                        height = slotHeightDp.coerceAtLeast(1.dp)
                     )
             )
         }

@@ -40,7 +40,7 @@ class AnimatedTextEditorCoordinator(
         onCommit: ((String) -> Unit)? = null,
         onCancel: (() -> Unit)? = null,
         onEditingStateChanged: ((EditingState) -> Unit)? = null,
-        @Suppress("UNUSED_PARAMETER") profile: TextEditorProfile? = null,
+        profile: TextEditorProfile? = null,
         currentText: String? = null
     ) {
         val target = targets[targetId] ?: return
@@ -48,6 +48,7 @@ class AnimatedTextEditorCoordinator(
         onCommit?.let { target.onCommit = it }
         onCancel?.let { target.onCancel = it }
         onEditingStateChanged?.let { target.onEditingStateChanged = it }
+        profile?.let { target.updateProfile(it) }
         currentText?.let { target.updateText(it) }
     }
 
@@ -79,7 +80,7 @@ class AnimatedTextEditorCoordinator(
         editingState = EditingState.BINDING
         target.onEditingStateChanged?.invoke(EditingState.BINDING)
 
-        val sel = initialSelection ?: target.initialSelection
+        val sel = initialSelection ?: target.currentText.toByteArray(Charsets.UTF_8).size
         val textForSession = target.currentText
         val sessionId = if (target.isPersistent) {
             val existing = persistentSessionIds[targetId]
@@ -110,6 +111,7 @@ class AnimatedTextEditorCoordinator(
         view.bindSession(bridge, target.profile, textForSession, sel)
 
         installContentCallback(view, target)
+        installCommitRequestedCallback(view)
 
         val geometry = target.currentGeometry
         if (geometry.width() > 0 && geometry.height() > 0) {
@@ -139,7 +141,7 @@ class AnimatedTextEditorCoordinator(
             } else {
                 view.unbindSession("commit")
             }
-            view.onContentChanged = null
+            clearContentCallback(view)
         }
 
         if (!target.isPersistent) {
@@ -162,7 +164,7 @@ class AnimatedTextEditorCoordinator(
         target.onEditingStateChanged?.invoke(EditingState.CANCELLING)
 
         sharedEditorView?.unbindSession("cancel")
-        sharedEditorView?.onContentChanged = null
+        sharedEditorView?.let { clearContentCallback(it) }
         target.onCancel?.invoke()
 
         closeSession(sessionId)
@@ -210,6 +212,7 @@ class AnimatedTextEditorCoordinator(
                         val bridge = TextEditSessionBridge(appServiceBridge, newSessionId)
                         view.bindSession(bridge, target.profile, text, cursorUtf8)
                         installContentCallback(view, target)
+                        installCommitRequestedCallback(view)
                     }
                 }
             }
@@ -266,6 +269,18 @@ class AnimatedTextEditorCoordinator(
         }
     }
 
+    private fun installCommitRequestedCallback(view: SujianEditorView) {
+        view.onCommitRequested = {
+            commitActiveEdit()
+        }
+    }
+
+    private fun clearContentCallback(view: SujianEditorView) {
+        contentGeneration++
+        view.onContentChanged = null
+        view.onCommitRequested = null
+    }
+
     private fun getOrCreateEditorView(): SujianEditorView {
         return sharedEditorView ?: SujianEditorView(context).also {
             sharedEditorView = it
@@ -288,6 +303,7 @@ class AnimatedTextEditorCoordinator(
     }
 
     private fun closeSession(sessionId: ULong) {
+        if (sessionId == 0UL) return
         when (appServiceBridge.textEditSessionClose(sessionId)) {
             is BridgeResult.Success -> { }
             else -> { }
@@ -295,6 +311,7 @@ class AnimatedTextEditorCoordinator(
     }
 
     private fun validateSession(sessionId: ULong): Boolean {
+        if (sessionId == 0UL) return false
         return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
             is BridgeResult.Success -> result.data != null
             else -> false

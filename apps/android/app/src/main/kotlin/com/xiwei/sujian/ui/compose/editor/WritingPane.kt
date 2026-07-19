@@ -14,6 +14,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -47,7 +48,6 @@ fun WritingPane(
 ) {
     val context = LocalContext.current
     val viewModel: EditorViewModel = viewModel()
-    var isApplyingExternalContent by remember { mutableStateOf(false) }
 
     val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
         val bridge = BridgeProvider.getAppServiceBridge(context)
@@ -64,6 +64,25 @@ fun WritingPane(
 
     val uiState by viewModel.uiState.collectAsState()
 
+    var externalContentGeneration by remember { mutableLongStateOf(0L) }
+
+    LaunchedEffect(uiState.content) {
+        if (!uiState.loading) {
+            externalContentGeneration++
+            if (coordinator.editingState == EditingState.IDLE) {
+                coordinator.updateTargetText(targetId, uiState.content)
+                coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+            } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
+                coordinator.resetPersistentSession(
+                    targetId,
+                    uiState.content,
+                    uiState.content.toByteArray(Charsets.UTF_8).size,
+                    SessionResetSource.EXTERNAL
+                )
+            }
+        }
+    }
+
     val target = remember(targetId) {
         EditableTextTarget(
             targetId = targetId,
@@ -71,14 +90,10 @@ fun WritingPane(
             initialText = "",
             isPersistent = true,
             onTextChanged = { newText ->
-                if (!isApplyingExternalContent) {
-                    viewModel.onContentChanged(newText)
-                }
+                viewModel.onContentChanged(newText)
             },
             onCommit = { finalText ->
-                if (!isApplyingExternalContent) {
-                    viewModel.onContentChanged(finalText)
-                }
+                viewModel.onContentChanged(finalText)
             },
             onCancel = {}
         )
@@ -95,33 +110,13 @@ fun WritingPane(
         coordinator.updateTargetSpec(
             targetId,
             onTextChanged = { newText ->
-                if (!isApplyingExternalContent) {
-                    viewModel.onContentChanged(newText)
-                }
+                viewModel.onContentChanged(newText)
             },
             onCommit = { finalText ->
-                if (!isApplyingExternalContent) {
-                    viewModel.onContentChanged(finalText)
-                }
+                viewModel.onContentChanged(finalText)
             },
             onCancel = {}
         )
-    }
-
-    LaunchedEffect(uiState.content, uiState.loading) {
-        if (!uiState.loading) {
-            if (coordinator.editingState == EditingState.IDLE) {
-                coordinator.updateTargetText(targetId, uiState.content)
-                coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
-            } else if (coordinator.editingState == EditingState.EDITING && coordinator.activeTargetId == targetId) {
-                coordinator.resetPersistentSession(
-                    targetId,
-                    uiState.content,
-                    uiState.content.toByteArray(Charsets.UTF_8).size,
-                    SessionResetSource.EXTERNAL
-                )
-            }
-        }
     }
 
     Column(modifier = modifier.fillMaxSize()) {

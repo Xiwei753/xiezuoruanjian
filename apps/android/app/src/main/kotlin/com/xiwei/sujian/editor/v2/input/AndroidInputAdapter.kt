@@ -32,6 +32,20 @@ class AndroidInputAdapter(
         currentProfile = profile
     }
 
+    fun shouldForbidNewline(text: String): Boolean {
+        return currentProfile.newlinePolicy == NewlinePolicy.FORBID && text.contains('\n')
+    }
+
+    fun wouldExceedMaxLength(newText: String): Boolean {
+        if (currentProfile.maxLength <= 0) return false
+        val currentLen = mirror.getCommittedText().toByteArray(Charsets.UTF_8).size
+        val newLen = newText.toByteArray(Charsets.UTF_8).size
+        val selStart = mirror.getCommittedSelectionStartUtf8()
+        val selEnd = mirror.getCommittedSelectionEndUtf8()
+        val replaceLen = selEnd - selStart
+        return currentLen - replaceLen + newLen > currentProfile.maxLength
+    }
+
     private var currentCompositionText: String = ""
     private var previousCompositionText: String = ""
     private var compositionReplaceStartUtf8: Int = 0

@@ -94,6 +94,11 @@ private fun StarMapListScreen(
     var isLoading by remember { mutableStateOf(true) }
     var showCreateDialog by remember { mutableStateOf(false) }
 
+    val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
+        val bridge = BridgeProvider.getAppServiceBridge(context)
+        AnimatedTextEditorCoordinator(context, bridge)
+    }
+
     suspend fun loadStarMaps() {
         val maps = withContext(Dispatchers.IO) {
             try {
@@ -190,6 +195,7 @@ private fun StarMapListScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    coordinator.commitActiveEdit()
                     if (title.isNotBlank()) {
                         val t = title.trim()
                         val d = description.trim()
@@ -207,7 +213,10 @@ private fun StarMapListScreen(
                 }) { Text(stringResource(id = R.string.action_create)) }
             },
             dismissButton = {
-                TextButton(onClick = { showCreateDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
+                TextButton(onClick = {
+                    coordinator.cancelActiveEdit()
+                    showCreateDialog = false
+                }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -391,6 +400,7 @@ private fun StarMapEditorScreen(
         if (graphNode != null) {
             NodeEditPanel(
                 node = graphNode,
+                coordinator = coordinator,
                 onUpdate = { newTitle, newKind ->
                     coroutineScope.launch {
                         withContext(Dispatchers.IO) {
@@ -454,6 +464,7 @@ private fun StarMapEditorScreen(
             },
             confirmButton = {
                 TextButton(onClick = {
+                    coordinator.commitActiveEdit()
                     if (nodeTitle.isNotBlank()) {
                         val t = nodeTitle.trim()
                         coroutineScope.launch {
@@ -476,7 +487,10 @@ private fun StarMapEditorScreen(
                 }) { Text(stringResource(id = R.string.starmap_action_add)) }
             },
             dismissButton = {
-                TextButton(onClick = { showAddNodeDialog = false }) { Text(stringResource(id = R.string.action_cancel)) }
+                TextButton(onClick = {
+                    coordinator.cancelActiveEdit()
+                    showAddNodeDialog = false
+                }) { Text(stringResource(id = R.string.action_cancel)) }
             }
         )
     }
@@ -551,6 +565,7 @@ private fun StarMapEditorScreen(
 @Composable
 private fun NodeEditPanel(
     node: StarMapGraphNode,
+    coordinator: AnimatedTextEditorCoordinator,
     onUpdate: (title: String, kind: StarMapNodeKind) -> Unit,
     onDelete: () -> Unit,
     onDismiss: () -> Unit
@@ -599,13 +614,17 @@ private fun NodeEditPanel(
         },
         confirmButton = {
             TextButton(onClick = {
+                coordinator.commitActiveEdit()
                 if (editTitle.isNotBlank()) {
                     onUpdate(editTitle.trim(), editKind)
                 }
             }) { Text(stringResource(id = R.string.action_save)) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(id = R.string.action_cancel)) }
+            TextButton(onClick = {
+                coordinator.cancelActiveEdit()
+                onDismiss()
+            }) { Text(stringResource(id = R.string.action_cancel)) }
         }
     )
 }

@@ -13,6 +13,7 @@ import android.view.inputmethod.InputMethodManager
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.pipeline.AndroidEditorPipeline
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
+import com.xiwei.sujian.editor.v2.coordinator.NewlinePolicy
 import uniffi.writer_core.EditorTransactionCauseDto
 
 class SujianEditorView @JvmOverloads constructor(
@@ -115,9 +116,7 @@ class SujianEditorView @JvmOverloads constructor(
     private fun reloadFromKernel() {
         if (pipeline.reloadFromKernel()) {
             updateLayoutConfig()
-            if (pipeline.getText().isNotEmpty()) {
-                onContentChanged?.invoke(pipeline.getText())
-            }
+            onContentChanged?.invoke(pipeline.getText())
         }
     }
 
@@ -234,7 +233,7 @@ class SujianEditorView @JvmOverloads constructor(
         return pipeline.onCreateInputConnection(outAttrs)
     }
 
-    override fun onCheckIsTextEditor(): Boolean = true
+    override fun onCheckIsTextEditor(): Boolean = isSessionBound
 
     override fun onInitializeAccessibilityNodeInfo(info: android.view.accessibility.AccessibilityNodeInfo?) {
         super.onInitializeAccessibilityNodeInfo(info)
@@ -243,6 +242,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!isSessionBound) return false
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
                 touchDownX = event.x + scrollX
@@ -257,7 +257,7 @@ class SujianEditorView @JvmOverloads constructor(
                 if (!isDragging && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
                     isDragging = true
                 }
-                if (isDragging) {
+                if (isDragging && currentProfile.verticalScroll) {
                     scrollY = (scrollY - dy).coerceIn(0f, maxScrollY)
                     touchDownX = event.x + scrollX
                     touchDownY = event.y + scrollY
@@ -289,6 +289,7 @@ class SujianEditorView @JvmOverloads constructor(
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (!isSessionBound) return super.onKeyDown(keyCode, event)
         when (keyCode) {
             KeyEvent.KEYCODE_DEL -> {
                 val selStart = pipeline.getSelectionStartUtf8()
@@ -318,6 +319,12 @@ class SujianEditorView @JvmOverloads constructor(
                     }
                 }
                 return true
+            }
+            KeyEvent.KEYCODE_ENTER -> {
+                if (currentProfile.newlinePolicy == NewlinePolicy.FORBID) {
+                    return true
+                }
+                return super.onKeyDown(keyCode, event)
             }
         }
         return super.onKeyDown(keyCode, event)
@@ -447,6 +454,11 @@ class SujianEditorView @JvmOverloads constructor(
             if (profile.commitOnImeAction) {
                 onCommitRequested?.invoke()
             }
+        }
+        if (profile.animationPolicy == com.xiwei.sujian.editor.v2.coordinator.AnimationPolicy.SYSTEM_SUPPRESSED) {
+            pipeline.kernelBridge?.setAnimationEnabled(false)
+        } else {
+            pipeline.kernelBridge?.setAnimationEnabled(true)
         }
         loadText(initialText, initialCursorUtf8)
         requestFocus()

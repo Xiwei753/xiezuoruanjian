@@ -4,7 +4,7 @@ import android.graphics.Rect
 
 data class EditableTextTarget(
     val targetId: String,
-    val profile: TextEditorProfile,
+    var profile: TextEditorProfile,
     val initialText: String,
     val initialSelection: Int = initialText.toByteArray(Charsets.UTF_8).size,
     val isPersistent: Boolean = false,
@@ -31,6 +31,10 @@ data class EditableTextTarget(
 
     fun updateText(text: String) {
         currentText = text
+    }
+
+    fun updateProfile(newProfile: TextEditorProfile) {
+        profile = newProfile
     }
 }
 
