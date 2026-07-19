@@ -15,8 +15,10 @@ class AndroidVisualPlanner {
     /**
      * Provisional capture lines for a single revision (before/after edit).
      * When the preferred ranges are empty (pure Insert old / pure Delete new),
-     * fall back to the other side's edit point and expand to document end so
-     * soft-wrap / reflow Move can still match clusters. No fixed line cap.
+     * fall back to the other side's edit point and expand forward.
+     * Expansion stops at the first paragraph boundary after the edit point
+     * (hard line break detected via byte-gap between consecutive visual lines),
+     * or at the end of the document. No fixed line cap.
      */
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
@@ -39,13 +41,21 @@ class AndroidVisualPlanner {
             ?: fallbackRanges.firstOrNull()?.first
         if (editByteStart != null) {
             val editLine = findLineForUtf8(revision, editByteStart)
-            // Expand from edit line to document end for provisional capture.
-            // Final animation set is refined later via stable-suffix comparison.
             for (i in editLine until revision.lineRanges.size) {
                 affectedLines.add(i)
+                if (i > editLine && isParagraphBoundary(revision, i)) {
+                    break
+                }
             }
         }
         return affectedLines
+    }
+
+    private fun isParagraphBoundary(revision: AndroidLayoutRevision, lineIndex: Int): Boolean {
+        if (lineIndex <= 0 || lineIndex >= revision.lineRanges.size) return false
+        val prev = revision.lineRanges[lineIndex - 1]
+        val curr = revision.lineRanges[lineIndex]
+        return curr.startUtf8 > prev.endUtf8
     }
 
     fun computeAffectedLineIndicesFromBothRevisions(
@@ -621,7 +631,7 @@ class AndroidVisualPlanner {
                 val insertClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)
                 for (cluster in insertClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeNew,
+                        role = SliceRole.Insert,
                         snapshot = newSnapshot,
                         sourceRect = cluster.sourceRectInLineImage,
                         destinationRect = cluster.visualRectInDocument,
@@ -635,7 +645,7 @@ class AndroidVisualPlanner {
                 val deleteClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
                 for (cluster in deleteClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeOld,
+                        role = SliceRole.Delete,
                         snapshot = oldSnapshot,
                         sourceRect = cluster.sourceRectInLineImage,
                         destinationRect = cluster.visualRectInDocument,
@@ -673,7 +683,7 @@ class AndroidVisualPlanner {
                 val oldRunClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
                 for (cluster in oldRunClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeOld,
+                        role = SliceRole.Delete,
                         snapshot = oldSnapshot,
                         sourceRect = cluster.sourceRectInLineImage,
                         destinationRect = cluster.visualRectInDocument,
@@ -689,7 +699,7 @@ class AndroidVisualPlanner {
                 val newRunClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)
                 for (cluster in newRunClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.CrossfadeNew,
+                        role = SliceRole.Insert,
                         snapshot = newSnapshot,
                         sourceRect = cluster.sourceRectInLineImage,
                         destinationRect = cluster.visualRectInDocument,
