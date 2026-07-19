@@ -286,11 +286,10 @@ class AndroidEditorPipeline private constructor(
         val oldPreeditByteLen = oldPreeditText.toByteArray(Charsets.UTF_8).size
         val newPreeditByteLen = newPreeditText.toByteArray(Charsets.UTF_8).size
         val oldAffected = buildList {
-            if (replaceStartUtf8 < replaceEndUtf8 && oldPreeditText.isEmpty()) {
-                add(Pair(replaceStartUtf8, replaceEndUtf8))
-            }
             if (oldPreeditByteLen > 0) {
                 add(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditByteLen))
+            } else if (replaceStartUtf8 < replaceEndUtf8) {
+                add(Pair(replaceStartUtf8, replaceEndUtf8))
             }
         }
         val newAffected = if (newPreeditText.isEmpty()) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen))
