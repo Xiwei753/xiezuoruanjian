@@ -20,7 +20,7 @@ FILE_PATTERN = re.compile(
 )
 
 WHITELIST_FILENAMES = {
-    'index.json', 'mind_map.json', 'workspace.json', 'starmap.json', 'writing_stats.json',
+    'index.json', 'workspace.json', 'starmap.json', 'writing_stats.json',
     'note.md', 'outline.md', 'scene.md', 'character_notes.md', 'timeline_notes.md', 'draft.md',
     'settings.sync.json', 'settings.local.json', 'sync_secrets.local.json', 'state.local.json',
     'conflicts.json', 'manifest.sync.json', 'sync_config.json',
