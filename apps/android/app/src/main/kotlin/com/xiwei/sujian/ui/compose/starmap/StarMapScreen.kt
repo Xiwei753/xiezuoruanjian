@@ -26,6 +26,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextField
 import com.xiwei.sujian.editor.v2.compose.AnimatedTextArea
+import com.xiwei.sujian.editor.v2.compose.AnimatedTextEditorSlot
 import com.xiwei.sujian.editor.v2.compose.LocalAnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.AnimatedTextEditorCoordinator
 import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
@@ -163,6 +164,10 @@ private fun StarMapListScreen(
         ) {
             Icon(Icons.Default.Add, contentDescription = stringResource(id = R.string.starmap_create_new))
         }
+
+        AnimatedTextEditorSlot(
+            coordinator = coordinator
+        )
     }
 
     if (showCreateDialog) {
@@ -397,6 +402,10 @@ private fun StarMapEditorScreen(
             }
         }
     }
+
+    AnimatedTextEditorSlot(
+        coordinator = coordinator
+    )
 
     selectedNodeId?.let { nodeId ->
         val graphNode = starMapData?.graph?.nodes?.find { it.id == nodeId }

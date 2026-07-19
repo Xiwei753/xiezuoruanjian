@@ -72,6 +72,11 @@ class AnimatedTextEditorCoordinator(
             editingState = EditingState.REBINDING
             oldTarget?.onEditingStateChanged?.invoke(EditingState.REBINDING)
 
+            val oldView = sharedEditorView
+            if (oldView != null) {
+                clearContentCallback(oldView)
+            }
+
             if (!commitActiveEdit()) {
                 cancelActiveEdit()
             }
@@ -96,7 +101,8 @@ class AnimatedTextEditorCoordinator(
             createSession(target, textForSession, sel)
         }
 
-        if (sessionId == null) {
+        if (sessionId == null || sessionId == 0UL) {
+            persistentSessionIds.remove(targetId)
             editingState = EditingState.IDLE
             return false
         }
@@ -149,6 +155,8 @@ class AnimatedTextEditorCoordinator(
         }
         activeTargetId = null
         activeSessionId = null
+        activeTargetGeometry = Rect()
+        activeTargetTransform = Transform2D.IDENTITY
 
         editingState = EditingState.IDLE
         target.onEditingStateChanged?.invoke(EditingState.IDLE)
@@ -173,6 +181,8 @@ class AnimatedTextEditorCoordinator(
         persistentSessionIds.remove(targetId)
         activeTargetId = null
         activeSessionId = null
+        activeTargetGeometry = Rect()
+        activeTargetTransform = Transform2D.IDENTITY
 
         editingState = EditingState.IDLE
         target.onEditingStateChanged?.invoke(EditingState.IDLE)
@@ -200,22 +210,23 @@ class AnimatedTextEditorCoordinator(
     fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL) {
         if (source == SessionResetSource.LOCAL_MIRROR) return
 
+        val target = targets[targetId] ?: return
+        if (!target.isPersistent) return
+
         val sessionId = persistentSessionIds[targetId]
         if (sessionId == null) {
-            if (targets[targetId]?.isPersistent == true) {
-                val target = targets[targetId] ?: return
-                target.updateText(text)
-                val newSessionId = createSession(target, text, cursorUtf8) ?: return
-                persistentSessionIds[targetId] = newSessionId
-                if (targetId == activeTargetId) {
-                    activeSessionId = newSessionId
-                    val view = sharedEditorView
-                    if (view != null) {
-                        val bridge = TextEditSessionBridge(appServiceBridge, newSessionId)
-                        view.bindSession(bridge, target.profile, text, cursorUtf8)
-                        installContentCallback(view, target)
-                        installCommitRequestedCallback(view)
-                    }
+            target.updateText(text)
+            val newSessionId = createSession(target, text, cursorUtf8)
+            if (newSessionId == null || newSessionId == 0UL) return
+            persistentSessionIds[targetId] = newSessionId
+            if (targetId == activeTargetId) {
+                activeSessionId = newSessionId
+                val view = sharedEditorView
+                if (view != null) {
+                    val bridge = TextEditSessionBridge(appServiceBridge, newSessionId)
+                    view.bindSession(bridge, target.profile, text, cursorUtf8)
+                    installContentCallback(view, target)
+                    installCommitRequestedCallback(view)
                 }
             }
             return
@@ -244,6 +255,10 @@ class AnimatedTextEditorCoordinator(
 
     fun setSharedEditorView(view: SujianEditorView) {
         sharedEditorView = view
+    }
+
+    fun updateHostGeometry(width: Float, height: Float) {
+        sharedEditorView?.updateHostGeometry(width, height)
     }
 
     fun releaseHost() {
@@ -296,7 +311,10 @@ class AnimatedTextEditorCoordinator(
             cursorByteOffset.toUInt(),
             target.isPersistent
         )) {
-            is BridgeResult.Success -> result.data
+            is BridgeResult.Success -> {
+                val id = result.data
+                if (id == null || id == 0UL) null else id
+            }
             else -> null
         }
     }
@@ -311,10 +329,7 @@ class AnimatedTextEditorCoordinator(
 
     private fun validateSession(sessionId: ULong): Boolean {
         if (sessionId == 0UL) return false
-        return when (val result = appServiceBridge.textEditSessionSnapshot(sessionId)) {
-            is BridgeResult.Success -> result.data != null
-            else -> false
-        }
+        return appServiceBridge.textEditSessionSnapshot(sessionId) is BridgeResult.Success
     }
 }
 

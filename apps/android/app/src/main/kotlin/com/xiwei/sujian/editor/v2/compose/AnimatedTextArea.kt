@@ -181,6 +181,10 @@ private fun AnimatedTextAreaWithCoordinator(
                         val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
                         coordinator.beginEdit(targetId, cursorUtf8)
                     }
+                } else if (enabled && isEditing) {
+                    Modifier.clickable {
+                        coordinator.getSharedEditorView()?.requestFocus()
+                    }
                 } else {
                     Modifier
                 }

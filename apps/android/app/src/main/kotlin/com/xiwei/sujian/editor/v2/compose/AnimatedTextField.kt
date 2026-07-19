@@ -173,6 +173,10 @@ private fun AnimatedTextFieldWithCoordinator(
                         val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
                         coordinator.beginEdit(targetId, cursorUtf8)
                     }
+                } else if (enabled && isEditing) {
+                    Modifier.clickable {
+                        coordinator.getSharedEditorView()?.requestFocus()
+                    }
                 } else {
                     Modifier
                 }
@@ -190,7 +194,7 @@ private fun AnimatedTextFieldWithCoordinator(
             value = localValue,
             innerTextField = {
                 Text(
-                    text = localValue,
+                    text = if (localValue.isEmpty() && placeholder != null) "" else localValue,
                     style = MaterialTheme.typography.bodyLarge,
                     color = if (isEditing) {
                         MaterialTheme.colorScheme.onSurface.copy(alpha = 0f)

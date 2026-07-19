@@ -134,6 +134,10 @@ fun AnimatedInlineText(
                         val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
                         effectiveCoordinator.beginEdit(targetId, cursorUtf8)
                     }
+                } else if (enabled && isEditing) {
+                    Modifier.clickable {
+                        effectiveCoordinator.getSharedEditorView()?.requestFocus()
+                    }
                 } else {
                     Modifier
                 }
