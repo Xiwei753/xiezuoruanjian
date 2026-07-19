@@ -132,10 +132,18 @@ class AndroidEditorPipeline private constructor(
 
     fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto): PipelineOutput {
         val result = EditResult.fromDto(dto)
+        val oldAffected = result.visualIntent.oldAffectedByteRanges
+        val newAffected = result.visualIntent.newAffectedByteRanges
+        val isVisualSame = oldAffected.isNotEmpty() && newAffected.isNotEmpty() &&
+            oldAffected.size == newAffected.size &&
+            oldAffected.zip(newAffected).all { (old, new) ->
+                old.first == new.first && old.second == new.second
+            }
+        if (isVisualSame) {
+            return applyEditResult(result)
+        }
         if (result.visualIntent.animationMode == uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED &&
-            (result.visualIntent.oldAffectedByteRanges.isNotEmpty() || result.visualIntent.newAffectedByteRanges.isNotEmpty())) {
-            val oldAffected = result.visualIntent.oldAffectedByteRanges
-            val newAffected = result.visualIntent.newAffectedByteRanges
+            (oldAffected.isNotEmpty() || newAffected.isNotEmpty())) {
             val byteCount = maxOf(
                 newAffected.sumOf { it.second - it.first },
                 oldAffected.sumOf { it.second - it.first }
