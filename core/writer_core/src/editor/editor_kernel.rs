@@ -590,9 +590,8 @@ impl EditorKernel {
 
         let is_loading = cause == EditorTransactionCause::Load;
         let is_format = cause == EditorTransactionCause::Format;
-        let is_ime = cause == EditorTransactionCause::ImeComposition;
 
-        let animation_mode = if !self.animation_enabled || is_loading || is_format || is_ime {
+        let animation_mode = if !self.animation_enabled || is_loading || is_format {
             AnimationMode::SystemSuppressed
         } else {
             let cluster_count = count_grapheme_clusters(text);
@@ -686,9 +685,8 @@ impl EditorKernel {
 
         let is_loading = cause == EditorTransactionCause::Load;
         let is_format = cause == EditorTransactionCause::Format;
-        let is_ime = cause == EditorTransactionCause::ImeComposition;
 
-        let animation_mode = if !self.animation_enabled || is_loading || is_format || is_ime {
+        let animation_mode = if !self.animation_enabled || is_loading || is_format {
             AnimationMode::SystemSuppressed
         } else {
             let deleted_text = &old_text[byte_start..byte_end_exclusive];
@@ -783,9 +781,8 @@ impl EditorKernel {
 
         let is_loading = cause == EditorTransactionCause::Load;
         let is_format = cause == EditorTransactionCause::Format;
-        let is_ime = cause == EditorTransactionCause::ImeComposition;
 
-        let animation_mode = if !self.animation_enabled || is_loading || is_format || is_ime {
+        let animation_mode = if !self.animation_enabled || is_loading || is_format {
             AnimationMode::SystemSuppressed
         } else {
             let diff_text = if !replacement_text.is_empty() {

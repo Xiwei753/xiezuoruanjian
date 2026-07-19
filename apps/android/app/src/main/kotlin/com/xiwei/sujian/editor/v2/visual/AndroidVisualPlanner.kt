@@ -123,6 +123,12 @@ class AndroidVisualPlanner {
                         visualIntent, oldRev, newRev,
                         affectedLines, animatedSlices, staticPatches, preCapturedOldSnapshots, preCapturedNewSnapshots
                     )
+                    addMoveSlicesForShiftedClustersCrossLine(
+                        preCapturedOldSnapshots, preCapturedNewSnapshots,
+                        visualIntent, oldRev, newRev,
+                        collectExcludedNewByteRanges(animatedSlices),
+                        animatedSlices
+                    )
                 }
                 AnimationMode.SnapshotAnimation -> {
                     planCrossfadeAnimation(
@@ -1141,9 +1147,13 @@ class AndroidVisualPlanner {
                     ))
                 }
             } else if (!isFadingOut && state.currentAlpha < 0.99f) {
-                val destRect = android.graphics.RectF(
+                val currentRect = android.graphics.RectF(
                     state.currentLeft, state.currentTop,
                     state.currentRight, state.currentBottom
+                )
+                val originalDestRect = android.graphics.RectF(
+                    state.destinationLeft, state.destinationTop,
+                    state.destinationRight, state.destinationBottom
                 )
                 val endAlpha = when (state.role) {
                     SliceRole.Insert, SliceRole.CrossfadeNew, SliceRole.Move -> 1f
@@ -1153,10 +1163,10 @@ class AndroidVisualPlanner {
                     role = state.role,
                     snapshot = snapshot,
                     sourceRect = sourceRect,
-                    destinationRect = destRect,
+                    destinationRect = originalDestRect,
                     startAlpha = state.currentAlpha,
                     endAlpha = endAlpha,
-                    fromDestinationRect = if (state.role == SliceRole.Move) destRect else null,
+                    fromDestinationRect = currentRect,
                     clusterByteStart = state.clusterByteStart,
                     clusterByteEndExclusive = state.clusterByteEndExclusive
                 ))
@@ -1173,17 +1183,29 @@ class AndroidVisualPlanner {
         val cEnd = slice.clusterByteEndExclusive
         if (cStart < 0 || cEnd < 0) return null
         val lineIndex = slice.snapshot?.lineIndex ?: -1
+        val compatibleRoles = compatibleRebaseRoles(slice.role)
         val exactMatch = rebaseSnapshot.sliceVisualStates.firstOrNull {
-            it.role == slice.role &&
+            it.role in compatibleRoles &&
                 it.lineIndex == lineIndex &&
                 it.clusterByteStart == cStart &&
                 it.clusterByteEndExclusive == cEnd
         }
         if (exactMatch != null) return exactMatch
         return rebaseSnapshot.sliceVisualStates.firstOrNull {
-            it.role == slice.role &&
+            it.role in compatibleRoles &&
                 it.clusterByteStart == cStart &&
                 it.clusterByteEndExclusive == cEnd
+        }
+    }
+
+    private fun compatibleRebaseRoles(role: SliceRole): Set<SliceRole> {
+        return when (role) {
+            SliceRole.Move -> setOf(SliceRole.Move, SliceRole.Insert, SliceRole.CrossfadeNew)
+            SliceRole.Insert -> setOf(SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew)
+            SliceRole.CrossfadeNew -> setOf(SliceRole.CrossfadeNew, SliceRole.Move, SliceRole.Insert)
+            SliceRole.Delete -> setOf(SliceRole.Delete, SliceRole.CrossfadeOld)
+            SliceRole.CrossfadeOld -> setOf(SliceRole.CrossfadeOld, SliceRole.Delete)
+            SliceRole.Static -> setOf(SliceRole.Static)
         }
     }
 
@@ -1192,9 +1214,9 @@ class AndroidVisualPlanner {
         rebaseSnapshot: VisualFrameSnapshot
     ): SliceVisualState? {
         val lineIndex = slice.snapshot?.lineIndex ?: -1
-        val roleKey = "${slice.role}_${lineIndex}"
+        val compatibleRoles = compatibleRebaseRoles(slice.role)
         return rebaseSnapshot.sliceVisualStates
-            .filter { "${it.role}_${it.lineIndex}" == roleKey }
+            .filter { it.role in compatibleRoles && it.lineIndex == lineIndex }
             .firstOrNull()
     }
 
@@ -1202,12 +1224,12 @@ class AndroidVisualPlanner {
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot
     ): SliceVisualState? {
-        val sliceRole = slice.role
+        val compatibleRoles = compatibleRebaseRoles(slice.role)
         val byteStart = slice.snapshot?.documentByteStart ?: -1
         val byteEnd = slice.snapshot?.documentByteEndExclusive ?: -1
         if (byteStart < 0 || byteEnd < 0) return null
         return rebaseSnapshot.sliceVisualStates
-            .filter { it.role == sliceRole && it.documentByteStart >= 0 && it.documentByteEndExclusive >= 0 }
+            .filter { it.role in compatibleRoles && it.documentByteStart >= 0 && it.documentByteEndExclusive >= 0 }
             .firstOrNull { it.documentByteStart == byteStart && it.documentByteEndExclusive == byteEnd }
     }
 
@@ -1217,11 +1239,11 @@ class AndroidVisualPlanner {
     ): SliceVisualState? {
         val sliceTop = slice.destinationRect.top
         val sliceLeft = slice.destinationRect.left
-        val sliceRole = slice.role
+        val compatibleRoles = compatibleRebaseRoles(slice.role)
         val lineIndex = slice.snapshot?.lineIndex ?: -1
-        val filterByLine = lineIndex >= 0 && sliceRole != SliceRole.Move
+        val filterByLine = lineIndex >= 0 && slice.role != SliceRole.Move
         return rebaseSnapshot.sliceVisualStates
-            .filter { it.role == sliceRole && (!filterByLine || it.lineIndex == lineIndex) }
+            .filter { it.role in compatibleRoles && (!filterByLine || it.lineIndex == lineIndex) }
             .minByOrNull {
                 val dy = kotlin.math.abs(it.currentTop - sliceTop)
                 val dx = kotlin.math.abs(it.currentLeft - sliceLeft)
@@ -1233,19 +1255,33 @@ class AndroidVisualPlanner {
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseState: SliceVisualState
     ): PreparedVisualTransaction.AnimatedSlice {
+        val fromRect = android.graphics.RectF(
+            rebaseState.currentLeft,
+            rebaseState.currentTop,
+            rebaseState.currentRight,
+            rebaseState.currentBottom
+        )
         return when (slice.role) {
             SliceRole.Move -> {
+                val effectiveFrom = if (rebaseState.role == SliceRole.Insert || rebaseState.role == SliceRole.CrossfadeNew) {
+                    fromRect
+                } else {
+                    fromRect
+                }
                 slice.copy(
-                    fromDestinationRect = android.graphics.RectF(
-                        rebaseState.currentLeft,
-                        rebaseState.currentTop,
-                        rebaseState.currentRight,
-                        rebaseState.currentBottom
-                    )
+                    fromDestinationRect = effectiveFrom,
+                    startAlpha = rebaseState.currentAlpha
                 )
             }
             SliceRole.Insert -> {
-                slice.copy(startAlpha = rebaseState.currentAlpha)
+                if (rebaseState.role == SliceRole.Move) {
+                    slice.copy(
+                        startAlpha = rebaseState.currentAlpha,
+                        fromDestinationRect = fromRect
+                    )
+                } else {
+                    slice.copy(startAlpha = rebaseState.currentAlpha)
+                }
             }
             SliceRole.Delete -> {
                 slice.copy(startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
@@ -1254,7 +1290,14 @@ class AndroidVisualPlanner {
                 slice.copy(startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
             }
             SliceRole.CrossfadeNew -> {
-                slice.copy(startAlpha = rebaseState.currentAlpha)
+                if (rebaseState.role == SliceRole.Move) {
+                    slice.copy(
+                        startAlpha = rebaseState.currentAlpha,
+                        fromDestinationRect = fromRect
+                    )
+                } else {
+                    slice.copy(startAlpha = rebaseState.currentAlpha)
+                }
             }
             SliceRole.Static -> slice
         }
