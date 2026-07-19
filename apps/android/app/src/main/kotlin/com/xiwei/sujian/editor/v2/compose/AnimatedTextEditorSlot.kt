@@ -9,11 +9,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -29,7 +29,7 @@ fun AnimatedTextEditorSlot(
     coordinator: AnimatedTextEditorCoordinator,
     modifier: Modifier = Modifier
 ) {
-    var slotPositionInWindow by remember { mutableStateOf(Offset.Zero) }
+    var slotBoundsInWindow by remember { mutableStateOf(Rect.Zero) }
 
     val activeTargetId = coordinator.activeTargetId
     val editingState = coordinator.editingState
@@ -40,13 +40,23 @@ fun AnimatedTextEditorSlot(
 
     val density = LocalDensity.current
 
-    val slotLocalLeft = targetGeometry.left.toFloat() - slotPositionInWindow.x + targetTransform.translateX
-    val slotLocalTop = targetGeometry.top.toFloat() - slotPositionInWindow.y + targetTransform.translateY
-    val unscaledWidthPx = targetGeometry.width().toFloat()
-    val unscaledHeightPx = targetGeometry.height().toFloat()
+    val targetRectInWindow = Rect(
+        left = targetGeometry.left.toFloat() + targetTransform.translateX,
+        top = targetGeometry.top.toFloat() + targetTransform.translateY,
+        right = targetGeometry.left.toFloat() + targetTransform.translateX + targetGeometry.width() * targetTransform.scaleX,
+        bottom = targetGeometry.top.toFloat() + targetTransform.translateY + targetGeometry.height() * targetTransform.scaleY
+    )
 
-    val slotWidthDp = with(density) { unscaledWidthPx.toDp() }
-    val slotHeightDp = with(density) { unscaledHeightPx.toDp() }
+    val slotLocalLeft = targetRectInWindow.left - slotBoundsInWindow.left
+    val slotLocalTop = targetRectInWindow.top - slotBoundsInWindow.top
+    val effectiveWidthPx = targetRectInWindow.width
+    val effectiveHeightPx = targetRectInWindow.height
+
+    val slotWidthPx = if (isVisible && effectiveWidthPx > 0f) effectiveWidthPx else 1f
+    val slotHeightPx = if (isVisible && effectiveHeightPx > 0f) effectiveHeightPx else 1f
+
+    val slotWidthDp = with(density) { slotWidthPx.toDp() }
+    val slotHeightDp = with(density) { slotHeightPx.toDp() }
 
     val themeColors = EditorThemeAdapter.extractColors()
 
@@ -59,43 +69,55 @@ fun AnimatedTextEditorSlot(
     Box(
         modifier = modifier
             .onGloballyPositioned { coordinates ->
-                slotPositionInWindow = coordinates.positionInWindow()
+                slotBoundsInWindow = coordinates.boundsInWindow()
             }
     ) {
-        if (isVisible && unscaledWidthPx > 0f && unscaledHeightPx > 0f) {
-            AndroidView(
-                factory = { ctx ->
-                    val view = coordinator.getSharedEditorView()
-                        ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
-                    EditorThemeAdapter.applyToView(view, themeColors)
-                    view
-                },
-                update = { view ->
-                    EditorThemeAdapter.applyToView(view, themeColors)
+        AndroidView(
+            factory = { ctx ->
+                val view = coordinator.getSharedEditorView()
+                    ?: SujianEditorView(ctx).also { coordinator.setSharedEditorView(it) }
+                EditorThemeAdapter.applyToView(view, themeColors)
+                view
+            },
+            update = { view ->
+                EditorThemeAdapter.applyToView(view, themeColors)
+                if (isVisible && effectiveWidthPx > 0f && effectiveHeightPx > 0f) {
                     view.visibility = android.view.View.VISIBLE
-                    coordinator.updateHostGeometry(unscaledWidthPx * targetTransform.scaleX, unscaledHeightPx * targetTransform.scaleY)
-                },
-                onReset = { view ->
-                    view.resetForReuse()
-                },
-                onRelease = { view ->
+                    coordinator.updateHostGeometry(effectiveWidthPx, effectiveHeightPx)
+                } else {
                     view.visibility = android.view.View.GONE
-                },
-                modifier = Modifier
-                    .graphicsLayer {
+                }
+            },
+            onReset = { view ->
+                view.resetForReuse()
+            },
+            onRelease = { view ->
+                view.visibility = android.view.View.GONE
+            },
+            modifier = Modifier
+                .graphicsLayer {
+                    if (isVisible && effectiveWidthPx > 0f && effectiveHeightPx > 0f) {
                         translationX = slotLocalLeft
                         translationY = slotLocalTop
                         scaleX = targetTransform.scaleX
                         scaleY = targetTransform.scaleY
                         transformOrigin = TransformOrigin(0f, 0f)
                         clip = true
+                        alpha = 1f
+                    } else {
+                        translationX = 0f
+                        translationY = 0f
+                        scaleX = 1f
+                        scaleY = 1f
+                        alpha = 0f
+                        clip = true
                     }
-                    .requiredSize(
-                        width = slotWidthDp.coerceAtLeast(1.dp),
-                        height = slotHeightDp.coerceAtLeast(1.dp)
-                    )
-            )
-        }
+                }
+                .requiredSize(
+                    width = slotWidthDp.coerceAtLeast(1.dp),
+                    height = slotHeightDp.coerceAtLeast(1.dp)
+                )
+        )
     }
 }
 

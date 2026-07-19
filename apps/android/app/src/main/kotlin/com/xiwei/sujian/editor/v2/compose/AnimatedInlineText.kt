@@ -1,7 +1,6 @@
 package com.xiwei.sujian.editor.v2.compose
 
 import android.util.Log
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material3.MaterialTheme
@@ -15,8 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -46,9 +43,9 @@ fun AnimatedInlineText(
 
     if (effectiveCoordinator == null) {
         LaunchedEffect(targetId) {
-            Log.w(TAG, "AnimatedInlineText($targetId) has no AnimatedTextEditorCoordinator. " +
-                "Falling back to static Text. Provide a coordinator via CompositionLocal " +
-                "or the coordinator parameter for full animated text editing support.")
+            Log.e(TAG, "AnimatedInlineText($targetId) has no AnimatedTextEditorCoordinator. " +
+                "Falling back to static Text. Every Activity must provide a coordinator " +
+                "via CompositionLocal or the coordinator parameter.")
         }
         Text(
             text = value,
@@ -74,35 +71,26 @@ fun AnimatedInlineText(
             isPersistent = false,
             onTextChanged = null,
             onCommit = null,
-            onCancel = {
-                isEditing = false
-            },
-            onEditingStateChanged = { state ->
-                isEditing = state == EditingState.EDITING || state == EditingState.BINDING
-            }
+            onCancel = null,
+            onEditingStateChanged = null
         )
     }
 
-    LaunchedEffect(targetId) {
-        effectiveCoordinator.updateTargetSpec(
-            targetId,
-            onTextChanged = { newText ->
-                localValue = newText
-                currentOnValueChange(newText)
-            },
-            onCommit = { finalText ->
-                localValue = finalText
-                isEditing = false
-                currentOnCommit(finalText)
-            },
-            onCancel = { isEditing = false },
-            onEditingStateChanged = { state ->
-                isEditing = state == EditingState.EDITING || state == EditingState.BINDING
-            },
-            profile = profile,
-            currentText = currentValue
-        )
+    target.onTextChanged = { newText ->
+        localValue = newText
+        currentOnValueChange(newText)
     }
+    target.onCommit = { finalText ->
+        localValue = finalText
+        isEditing = false
+        currentOnCommit(finalText)
+    }
+    target.onCancel = { isEditing = false }
+    target.onEditingStateChanged = { state ->
+        isEditing = state == EditingState.EDITING || state == EditingState.BINDING
+    }
+    target.updateProfile(profile)
+    target.updateText(currentValue)
 
     LaunchedEffect(value) {
         if (value != localValue) {
@@ -118,8 +106,6 @@ fun AnimatedInlineText(
         }
     }
 
-    val focusRequester = remember { FocusRequester() }
-
     Box(
         modifier = modifier
             .wrapContentSize()
@@ -132,23 +118,17 @@ fun AnimatedInlineText(
                 )
                 effectiveCoordinator.updateTargetGeometry(targetId, rect.toAndroidRect())
             }
-            .focusRequester(focusRequester)
-            .focusable(enabled = enabled)
             .then(
                 if (enabled) {
-                    Modifier.pointerInput(Unit) {
+                    Modifier.pointerInput(targetId) {
                         awaitPointerEventScope {
                             while (true) {
                                 val event = awaitPointerEvent()
                                 if (event.changes.any { it.pressed }) {
                                     event.changes.forEach { it.consume() }
-                                    if (!isEditing) {
-                                        effectiveCoordinator.updateTargetText(targetId, localValue)
-                                        val cursorUtf8 = localValue.toByteArray(Charsets.UTF_8).size
-                                        effectiveCoordinator.beginEdit(targetId, cursorUtf8)
-                                    } else {
-                                        effectiveCoordinator.getSharedEditorView()?.requestFocus()
-                                    }
+                                    effectiveCoordinator.updateTargetText(targetId, currentValue)
+                                    val cursorUtf8 = currentValue.toByteArray(Charsets.UTF_8).size
+                                    effectiveCoordinator.beginEdit(targetId, cursorUtf8)
                                 }
                             }
                         }

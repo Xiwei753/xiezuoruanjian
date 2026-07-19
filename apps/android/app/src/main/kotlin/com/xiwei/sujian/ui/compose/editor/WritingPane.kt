@@ -24,7 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
-import androidx.compose.ui.platform.LocalContext
+
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -47,13 +47,13 @@ fun WritingPane(
     chapterTitle: String,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     val viewModel: EditorViewModel = viewModel()
 
-    val coordinator = LocalAnimatedTextEditorCoordinator.current ?: remember {
-        val bridge = BridgeProvider.getAppServiceBridge(context)
-        AnimatedTextEditorCoordinator(context, bridge)
-    }
+    val coordinator = LocalAnimatedTextEditorCoordinator.current
+        ?: throw IllegalStateException(
+            "WritingPane requires an AnimatedTextEditorCoordinator in the CompositionLocal. " +
+            "Ensure the host Activity or Fragment provides one via CompositionLocalProvider."
+        )
 
     val targetId = remember(projectId, volumeId, chapterId) {
         "chapter-body:$projectId:$volumeId:$chapterId"
@@ -68,23 +68,39 @@ fun WritingPane(
     var localContentGeneration by remember { mutableLongStateOf(0L) }
     var lastSeenContentGeneration by remember { mutableLongStateOf(0L) }
     var lastChapterId by remember { mutableStateOf("") }
+    var externalContentHash by remember { mutableLongStateOf(0L) }
 
-    LaunchedEffect(uiState.content, chapterId) {
-        if (!uiState.loading) {
-            if (localContentGeneration != lastSeenContentGeneration) {
-                lastSeenContentGeneration = localContentGeneration
-                coordinator.updateTargetText(targetId, uiState.content)
-            } else {
-                coordinator.resetPersistentSession(
-                    targetId,
-                    uiState.content,
-                    uiState.content.toByteArray(Charsets.UTF_8).size,
-                    SessionResetSource.EXTERNAL
-                )
-                if (coordinator.activeTargetId != targetId) {
-                    coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
-                }
-            }
+    val target = remember(targetId) {
+        EditableTextTarget(
+            targetId = targetId,
+            profile = TextEditorProfile.DocumentBody,
+            initialText = "",
+            isPersistent = true,
+            onTextChanged = null,
+            onCommit = null,
+            onCancel = null,
+            onEditingStateChanged = null
+        )
+    }
+
+    val currentViewModel by rememberUpdatedState(viewModel)
+
+    target.onTextChanged = { newText ->
+        localContentGeneration++
+        lastSeenContentGeneration = localContentGeneration
+        currentViewModel.onContentChanged(newText)
+    }
+    target.onCommit = { finalText ->
+        localContentGeneration++
+        lastSeenContentGeneration = localContentGeneration
+        currentViewModel.onContentChanged(finalText)
+    }
+    target.onCancel = {}
+
+    DisposableEffect(targetId) {
+        coordinator.registerTarget(target)
+        onDispose {
+            coordinator.unregisterTarget(targetId)
         }
     }
 
@@ -101,46 +117,32 @@ fun WritingPane(
             )
             localContentGeneration = 0L
             lastSeenContentGeneration = 0L
+            externalContentHash = 0L
         }
         lastChapterId = chapterId
     }
 
-    val target = remember(targetId) {
-        EditableTextTarget(
-            targetId = targetId,
-            profile = TextEditorProfile.DocumentBody,
-            initialText = "",
-            isPersistent = true,
-            onTextChanged = null,
-            onCommit = null,
-            onCancel = {}
-        )
-    }
-
-    DisposableEffect(targetId) {
-        coordinator.registerTarget(target)
-        onDispose {
-            coordinator.unregisterTarget(targetId)
+    LaunchedEffect(uiState.content, chapterId) {
+        if (!uiState.loading) {
+            if (localContentGeneration != lastSeenContentGeneration) {
+                lastSeenContentGeneration = localContentGeneration
+                coordinator.updateTargetText(targetId, uiState.content)
+            } else {
+                val contentHash = uiState.content.hashCode().toLong()
+                if (externalContentHash != contentHash) {
+                    externalContentHash = contentHash
+                    coordinator.resetPersistentSession(
+                        targetId,
+                        uiState.content,
+                        uiState.content.toByteArray(Charsets.UTF_8).size,
+                        SessionResetSource.EXTERNAL
+                    )
+                    if (coordinator.activeTargetId != targetId) {
+                        coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+                    }
+                }
+            }
         }
-    }
-
-    val currentViewModel by rememberUpdatedState(viewModel)
-
-    LaunchedEffect(targetId) {
-        coordinator.updateTargetSpec(
-            targetId,
-            onTextChanged = { newText ->
-                localContentGeneration++
-                lastSeenContentGeneration = localContentGeneration
-                currentViewModel.onContentChanged(newText)
-            },
-            onCommit = { finalText ->
-                localContentGeneration++
-                lastSeenContentGeneration = localContentGeneration
-                currentViewModel.onContentChanged(finalText)
-            },
-            onCancel = {}
-        )
     }
 
     Column(modifier = modifier.fillMaxSize()) {
