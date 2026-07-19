@@ -287,7 +287,12 @@ class AndroidInputAdapter(
             }
         }
 
-        mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
+        pipeline.applyCompositionUpdateAnimated(
+            compositionReplaceStartUtf8, compositionReplaceEndUtf8,
+            preeditText, previousCompositionText
+        ) {
+            mirror.updateComposition(compositionReplaceStartUtf8, compositionReplaceEndUtf8, preeditText)
+        }
         onCompositionVisualUpdate?.invoke()
     }
 
@@ -336,7 +341,13 @@ class AndroidInputAdapter(
         if (!isComposing) return
 
         val cancelOk = sendCancelCompositionToKernel()
-        mirror.clearComposition()
+        val oldPreeditText = currentCompositionText
+        val replaceStart = compositionReplaceStartUtf8
+        val replaceEnd = compositionReplaceEndUtf8
+
+        pipeline.applyCompositionCancelAnimated(replaceStart, replaceEnd, oldPreeditText) {
+            mirror.clearComposition()
+        }
         clearCompositionState()
 
         if (!cancelOk) {
@@ -345,19 +356,6 @@ class AndroidInputAdapter(
             return
         }
 
-        pipeline.applyCompositionUpdate(
-            com.xiwei.sujian.editor.v2.mirror.VisualIntent(
-                cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
-                operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL,
-                oldAffectedByteRanges = emptyList(),
-                newAffectedByteRanges = emptyList(),
-                animationMode = uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED,
-                durationMs = 0L,
-                coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(0, 0, false)
-            )
-        ) {
-            mirror.clearComposition()
-        }
         onCompositionVisualUpdate?.invoke()
     }
 

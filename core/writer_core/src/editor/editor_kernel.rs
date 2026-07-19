@@ -1484,17 +1484,32 @@ impl EditorKernel {
             resulting_selection_byte_range: new_selection,
         }];
 
+        let cluster_count = count_grapheme_clusters(replacement_text);
+        let contains_newline = replacement_text.contains('\n');
+        let contains_complex = text_contains_complex_grapheme(replacement_text);
+        let animation_mode = if !self.animation_enabled {
+            AnimationMode::SystemSuppressed
+        } else {
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false, false, false, false,
+                self.animation_enabled,
+            )
+        };
+
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: EditorOperationKind::CompositionCommit,
             old_affected_byte_ranges: old_affected,
             new_affected_byte_ranges: new_affected,
-            animation_mode: AnimationMode::SystemSuppressed,
-            duration_ms: 0,
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
             coordinated_cursor: CoordinatedCursor {
                 old_byte_offset: old_cursor,
                 new_byte_offset: self.cursor,
-                should_animate: false,
+                should_animate: self.animation_enabled && old_cursor != self.cursor,
             },
         };
 
@@ -1718,9 +1733,43 @@ impl EditorKernel {
             _ => return EditorEditOutcome::StaleRevision(self.stale_session_result()),
         };
 
+        let old_preedit_text = session.preedit_text.clone();
+        let replace_start = session.replace_start;
+
         session.preedit_text = new_preedit_text.to_string();
         session.preedit_cursor_utf16 = new_preedit_cursor_offset;
         session.generation = session.generation.saturating_add(1);
+
+        let old_affected = if old_preedit_text.is_empty() {
+            vec![]
+        } else {
+            vec![(replace_start, replace_start + old_preedit_text.len())]
+        };
+        let new_affected = if new_preedit_text.is_empty() {
+            vec![]
+        } else {
+            vec![(replace_start, replace_start + new_preedit_text.len())]
+        };
+
+        let changed_text: &str = if new_preedit_text.len() >= old_preedit_text.len() {
+            new_preedit_text
+        } else {
+            &old_preedit_text
+        };
+        let cluster_count = count_grapheme_clusters(changed_text);
+        let contains_newline = changed_text.contains('\n');
+        let contains_complex = text_contains_complex_grapheme(changed_text);
+        let animation_mode = if !self.animation_enabled {
+            AnimationMode::SystemSuppressed
+        } else {
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false, false, false, false,
+                self.animation_enabled,
+            )
+        };
 
         let new_selection = (self.selection_anchor, self.cursor);
         EditorEditOutcome::Applied(EditorEditResult {
@@ -1733,14 +1782,14 @@ impl EditorKernel {
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionUpdate,
-                old_affected_byte_ranges: vec![],
-                new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
+                old_affected_byte_ranges: old_affected,
+                new_affected_byte_ranges: new_affected,
+                animation_mode,
+                duration_ms: self.animation_duration_ms,
                 coordinated_cursor: CoordinatedCursor {
                     old_byte_offset: old_cursor,
                     new_byte_offset: self.cursor,
-                    should_animate: false,
+                    should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
             },
         })
@@ -1845,6 +1894,21 @@ impl EditorKernel {
             resulting_selection_byte_range: new_selection,
         }];
 
+        let cluster_count = count_grapheme_clusters(&committed_text);
+        let contains_newline = committed_text.contains('\n');
+        let contains_complex = text_contains_complex_grapheme(&committed_text);
+        let animation_mode = if !self.animation_enabled {
+            AnimationMode::SystemSuppressed
+        } else {
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false, false, false, false,
+                self.animation_enabled,
+            )
+        };
+
         let edit_result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -1857,12 +1921,12 @@ impl EditorKernel {
                 operation_kind: EditorOperationKind::CompositionCommit,
                 old_affected_byte_ranges: vec![(replace_start, replace_end)],
                 new_affected_byte_ranges: vec![(replace_start, replace_start + committed_text.len())],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
+                animation_mode,
+                duration_ms: self.animation_duration_ms,
                 coordinated_cursor: CoordinatedCursor {
                     old_byte_offset: old_cursor,
                     new_byte_offset: self.cursor,
-                    should_animate: false,
+                    should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
             },
         };
@@ -1899,6 +1963,18 @@ impl EditorKernel {
 
         self.composition_session = None;
 
+        let old_affected = if replace_start != replace_end {
+            vec![(replace_start, replace_end)]
+        } else {
+            vec![]
+        };
+
+        let animation_mode = if !self.animation_enabled || old_affected.is_empty() {
+            AnimationMode::SystemSuppressed
+        } else {
+            AnimationMode::ClusterAnimation
+        };
+
         let new_selection = (self.selection_anchor, self.cursor);
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -1910,14 +1986,14 @@ impl EditorKernel {
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionCancel,
-                old_affected_byte_ranges: vec![],
+                old_affected_byte_ranges: old_affected,
                 new_affected_byte_ranges: vec![],
-                animation_mode: AnimationMode::SystemSuppressed,
-                duration_ms: 0,
+                animation_mode,
+                duration_ms: self.animation_duration_ms,
                 coordinated_cursor: CoordinatedCursor {
                     old_byte_offset: old_cursor,
                     new_byte_offset: self.cursor,
-                    should_animate: false,
+                    should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
             },
         })
@@ -1964,6 +2040,26 @@ impl EditorKernel {
             .unwrap_or(self.cursor);
         let new_end = replace_start + new_preedit_text.len();
 
+        let changed_text = if new_preedit_text.len() >= old_preedit_text.len() {
+            new_preedit_text
+        } else {
+            old_preedit_text
+        };
+        let cluster_count = count_grapheme_clusters(changed_text);
+        let contains_newline = changed_text.contains('\n');
+        let contains_complex = text_contains_complex_grapheme(changed_text);
+        let animation_mode = if !self.animation_enabled {
+            AnimationMode::SystemSuppressed
+        } else {
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false, false, false, false,
+                self.animation_enabled,
+            )
+        };
+
         EditorVisualIntent {
             cause: EditorTransactionCause::ImeComposition,
             operation_kind: EditorOperationKind::CompositionUpdate,
@@ -1977,12 +2073,12 @@ impl EditorKernel {
             } else {
                 vec![(replace_start, new_end)]
             },
-            animation_mode: AnimationMode::SystemSuppressed,
-            duration_ms: 0,
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
             coordinated_cursor: CoordinatedCursor {
                 old_byte_offset: self.cursor,
                 new_byte_offset: new_end,
-                should_animate: false,
+                should_animate: self.animation_enabled,
             },
         }
     }
@@ -2475,9 +2571,9 @@ mod tests {
         );
         assert_eq!(intent.cause, EditorTransactionCause::ImeComposition);
         assert_eq!(intent.operation_kind, EditorOperationKind::CompositionUpdate);
-        assert_eq!(intent.animation_mode, AnimationMode::SystemSuppressed);
-        assert_eq!(intent.duration_ms, 0);
-        assert!(!intent.coordinated_cursor.should_animate);
+        assert_eq!(intent.animation_mode, AnimationMode::GlyphAnimation);
+        assert_eq!(intent.duration_ms, 160);
+        assert!(intent.coordinated_cursor.should_animate);
         assert!(!intent.new_affected_byte_ranges.is_empty());
     }
 

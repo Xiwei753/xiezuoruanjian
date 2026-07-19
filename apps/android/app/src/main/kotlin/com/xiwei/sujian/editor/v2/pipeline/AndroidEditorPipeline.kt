@@ -5,6 +5,7 @@ import android.text.TextPaint
 import com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror
 import com.xiwei.sujian.editor.v2.mirror.EditResult
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
+import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.visual.AndroidTextAnimationEngine
 import com.xiwei.sujian.editor.v2.visual.AndroidVisualPlanner
@@ -165,6 +166,64 @@ class AndroidEditorPipeline private constructor(
         visualIntent: VisualIntent,
         mirrorUpdate: (() -> Unit)? = null
     ) {
+        animationEngine.prepareAndSubmit(
+            visualIntent = visualIntent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = mirrorUpdate
+        )
+    }
+
+    fun applyCompositionUpdateAnimated(
+        replaceStartUtf8: Int,
+        replaceEndUtf8: Int,
+        newPreeditText: String,
+        oldPreeditText: String,
+        mirrorUpdate: (() -> Unit)? = null
+    ) {
+        val oldAffected = if (oldPreeditText.isEmpty()) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + oldPreeditText.toByteArray(Charsets.UTF_8).size))
+        val newAffected = if (newPreeditText.isEmpty()) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditText.toByteArray(Charsets.UTF_8).size))
+        val clusterCount = maxOf(
+            newPreeditText.codePointCount(0, newPreeditText.length),
+            oldPreeditText.codePointCount(0, oldPreeditText.length)
+        )
+        val animationMode = when {
+            clusterCount == 0 -> uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED
+            clusterCount <= 8 -> uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION
+            else -> uniffi.writer_core.AnimationModeDto.RUN_ANIMATION
+        }
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_UPDATE,
+            oldAffectedByteRanges = oldAffected,
+            newAffectedByteRanges = newAffected,
+            animationMode = animationMode,
+            durationMs = 160L,
+            coordinatedCursor = CoordinatedCursor(0, 0, true)
+        )
+        animationEngine.prepareAndSubmit(
+            visualIntent = visualIntent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = mirrorUpdate
+        )
+    }
+
+    fun applyCompositionCancelAnimated(
+        replaceStartUtf8: Int,
+        replaceEndUtf8: Int,
+        oldPreeditText: String,
+        mirrorUpdate: (() -> Unit)? = null
+    ) {
+        val oldAffected = if (replaceStartUtf8 == replaceEndUtf8 && oldPreeditText.isEmpty()) emptyList()
+            else listOf(Pair(replaceStartUtf8, replaceEndUtf8))
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.IME_COMPOSITION,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_CANCEL,
+            oldAffectedByteRanges = oldAffected,
+            newAffectedByteRanges = emptyList(),
+            animationMode = uniffi.writer_core.AnimationModeDto.CLUSTER_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = CoordinatedCursor(0, 0, true)
+        )
         animationEngine.prepareAndSubmit(
             visualIntent = visualIntent,
             layoutEngine = layoutEngine,

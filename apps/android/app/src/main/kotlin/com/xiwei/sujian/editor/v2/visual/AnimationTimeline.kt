@@ -73,7 +73,8 @@ class AnimationTimeline(
 data class VisualFrameSnapshot(
     val progress: Float,
     val state: TransactionState,
-    val sliceVisualStates: List<SliceVisualState> = emptyList()
+    val sliceVisualStates: List<SliceVisualState> = emptyList(),
+    val cursorRect: android.graphics.RectF? = null
 )
 
 data class SliceVisualState(

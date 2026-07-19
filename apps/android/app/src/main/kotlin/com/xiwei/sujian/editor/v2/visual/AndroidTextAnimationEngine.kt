@@ -84,10 +84,12 @@ class AndroidTextAnimationEngine(
         if (tl.getState() != TransactionState.Rendering && tl.getState() != TransactionState.Paused) return null
         val p = tl.progress(frameTimeMs)
         val sliceStates = computeSliceVisualStates(transaction, p)
+        val cursorRect = computeCurrentCursorRect(transaction, p)
         return VisualFrameSnapshot(
             progress = p,
             state = tl.getState(),
-            sliceVisualStates = sliceStates
+            sliceVisualStates = sliceStates,
+            cursorRect = cursorRect
         )
     }
 
@@ -190,6 +192,18 @@ class AndroidTextAnimationEngine(
             resourceStore.release(snapshotId, owner)
         }
         timeline?.cancel()
+    }
+
+    private fun computeCurrentCursorRect(
+        transaction: PreparedVisualTransaction,
+        progress: Float
+    ): android.graphics.RectF? {
+        val ct = transaction.cursorTransition ?: return null
+        if (!ct.shouldAnimate) return null
+        val currentX = ct.fromX + (ct.toX - ct.fromX) * progress
+        val currentY = ct.fromY + (ct.toY - ct.fromY) * progress
+        val currentHeight = ct.fromHeight + (ct.toHeight - ct.fromHeight) * progress
+        return android.graphics.RectF(currentX, currentY, currentX + 2f, currentY + currentHeight)
     }
 }
 
