@@ -82,6 +82,8 @@ data class SliceVisualState(
     val lineIndex: Int,
     val documentByteStart: Int = -1,
     val documentByteEndExclusive: Int = -1,
+    val clusterByteStart: Int = -1,
+    val clusterByteEndExclusive: Int = -1,
     val currentLeft: Float,
     val currentTop: Float,
     val currentRight: Float,

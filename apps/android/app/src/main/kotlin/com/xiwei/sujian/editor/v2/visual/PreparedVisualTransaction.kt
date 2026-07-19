@@ -29,7 +29,9 @@ data class PreparedVisualTransaction(
         val destinationRect: android.graphics.RectF,
         val startAlpha: Float,
         val endAlpha: Float,
-        val fromDestinationRect: android.graphics.RectF? = null
+        val fromDestinationRect: android.graphics.RectF? = null,
+        val clusterByteStart: Int = -1,
+        val clusterByteEndExclusive: Int = -1
     )
 
     data class SelectionDecoration(

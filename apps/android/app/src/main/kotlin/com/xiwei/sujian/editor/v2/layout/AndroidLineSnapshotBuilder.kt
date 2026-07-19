@@ -12,7 +12,7 @@ class AndroidLineSnapshotBuilder {
 
     private fun nextSnapshotId(): Long {
         snapshotIdCounter++
-        return System.nanoTime() + snapshotIdCounter
+        return snapshotIdCounter
     }
 
     fun buildSnapshots(
@@ -181,21 +181,7 @@ class AndroidLineSnapshotBuilder {
         if (clusterText.isEmpty()) return ""
         val codePoints = clusterText.codePoints().toArray()
         val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
-        val firstCp = codePoints.firstOrNull() ?: 0
-        val runIndex = try {
-            val lineStart = layout.getLineStart(lineIndex)
-            val lineEnd = layout.getLineEnd(lineIndex)
-            var runIdx = 0
-            var pos = lineStart
-            while (pos < lineEnd) {
-                val runEnd = (pos + 32).coerceAtMost(lineEnd)
-                if (clusterStartUtf16 in pos until runEnd) break
-                runIdx++
-                pos = runEnd
-            }
-            runIdx
-        } catch (_: Exception) { 0 }
         val paintHash = layout.paint?.hashCode() ?: 0
-        return "${codePoints.joinToString(",")}_${typeSummary}_${runIndex}_${paintHash}"
+        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}"
     }
 }

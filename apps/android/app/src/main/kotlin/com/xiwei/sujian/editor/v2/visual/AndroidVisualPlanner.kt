@@ -8,6 +8,10 @@ import uniffi.writer_core.AnimationModeDto
 
 class AndroidVisualPlanner {
 
+    private companion object {
+        const val MAX_OLD_SNAPSHOT_EXPAND_LINES = 30
+    }
+
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
         revision: AndroidLayoutRevision?,
@@ -32,7 +36,8 @@ class AndroidVisualPlanner {
         }
         if (editByteStart != null) {
             val editLine = findLineForUtf8(revision, editByteStart)
-            for (i in editLine until revision.lineRanges.size) {
+            val expandEnd = (editLine + MAX_OLD_SNAPSHOT_EXPAND_LINES).coerceAtMost(revision.lineRanges.size)
+            for (i in editLine until expandEnd) {
                 affectedLines.add(i)
             }
         }
@@ -235,7 +240,9 @@ class AndroidVisualPlanner {
                             sourceRect = cluster.sourceRectInLineImage,
                             destinationRect = cluster.visualRectInDocument,
                             startAlpha = 0f,
-                            endAlpha = 1f
+                            endAlpha = 1f,
+                            clusterByteStart = cluster.documentByteStart,
+                            clusterByteEndExclusive = cluster.documentByteEndExclusive
                         ))
                     }
                 } else {
@@ -272,7 +279,9 @@ class AndroidVisualPlanner {
                             sourceRect = cluster.sourceRectInLineImage,
                             destinationRect = cluster.visualRectInDocument,
                             startAlpha = 1f,
-                            endAlpha = 0f
+                            endAlpha = 0f,
+                            clusterByteStart = cluster.documentByteStart,
+                            clusterByteEndExclusive = cluster.documentByteEndExclusive
                         ))
                     }
                 } else {
@@ -324,7 +333,9 @@ class AndroidVisualPlanner {
                     destinationRect = newCluster.visualRectInDocument,
                     startAlpha = 1f,
                     endAlpha = 1f,
-                    fromDestinationRect = oldCluster.visualRectInDocument
+                    fromDestinationRect = oldCluster.visualRectInDocument,
+                    clusterByteStart = newCluster.documentByteStart,
+                    clusterByteEndExclusive = newCluster.documentByteEndExclusive
                 ))
             } else {
                 animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
@@ -333,7 +344,9 @@ class AndroidVisualPlanner {
                     sourceRect = oldCluster.sourceRectInLineImage,
                     destinationRect = oldCluster.visualRectInDocument,
                     startAlpha = 1f,
-                    endAlpha = 0f
+                    endAlpha = 0f,
+                    clusterByteStart = oldCluster.documentByteStart,
+                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
                 ))
                 animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                     role = SliceRole.CrossfadeNew,
@@ -341,7 +354,9 @@ class AndroidVisualPlanner {
                     sourceRect = newCluster.sourceRectInLineImage,
                     destinationRect = newCluster.visualRectInDocument,
                     startAlpha = 0f,
-                    endAlpha = 1f
+                    endAlpha = 1f,
+                    clusterByteStart = newCluster.documentByteStart,
+                    clusterByteEndExclusive = newCluster.documentByteEndExclusive
                 ))
             }
         }
@@ -722,24 +737,25 @@ class AndroidVisualPlanner {
         visualIntent: VisualIntent
     ): List<Pair<LineClusterSnapshot, LineClusterSnapshot>> {
         val pairs = mutableListOf<Pair<LineClusterSnapshot, LineClusterSnapshot>>()
-        val newUsed = mutableSetOf<Int>()
         val insertByteRanges = visualIntent.newAffectedByteRanges.toSet()
         val deleteByteRanges = visualIntent.oldAffectedByteRanges.toSet()
+        val newByFp = mutableMapOf<String, MutableList<Int>>()
+        for (i in newSnapshot.clusters.indices) {
+            val cluster = newSnapshot.clusters[i]
+            val isInserted = insertByteRanges.any { (start, end) ->
+                cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+            }
+            if (isInserted) continue
+            newByFp.getOrPut(cluster.shapingFingerprint) { mutableListOf() }.add(i)
+        }
         for (oldCluster in oldSnapshot.clusters) {
             val isDeleted = deleteByteRanges.any { (start, end) ->
                 oldCluster.documentByteStart >= start && oldCluster.documentByteEndExclusive <= end
             }
             if (isDeleted) continue
-            val newIdx = newSnapshot.clusters.indices.firstOrNull { i ->
-                i !in newUsed &&
-                    newSnapshot.clusters[i].shapingFingerprint == oldCluster.shapingFingerprint &&
-                    !insertByteRanges.any { (start, end) ->
-                        newSnapshot.clusters[i].documentByteStart >= start &&
-                        newSnapshot.clusters[i].documentByteEndExclusive <= end
-                    }
-            }
-            if (newIdx != null) {
-                newUsed.add(newIdx)
+            val candidates = newByFp[oldCluster.shapingFingerprint]
+            if (candidates != null && candidates.isNotEmpty()) {
+                val newIdx = candidates.removeAt(0)
                 pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
             }
         }
@@ -880,15 +896,9 @@ class AndroidVisualPlanner {
         slices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot
     ): List<PreparedVisualTransaction.AnimatedSlice> {
-        val rebaseByLineAndRole = rebaseSnapshot.sliceVisualStates.groupBy {
-            "${it.role}_${it.lineIndex}"
-        }
         return slices.map { slice ->
-            val lineIndex = slice.snapshot?.lineIndex ?: -1
-            val roleKey = "${slice.role}_${lineIndex}"
-            val lineCandidates = rebaseByLineAndRole[roleKey]
-            val rebaseState = lineCandidates?.firstOrNull()
-                ?: findClosestRebaseStateByByteRange(slice, rebaseSnapshot)
+            val rebaseState = findRebaseStateByClusterByteRange(slice, rebaseSnapshot)
+                ?: findRebaseStateByLineAndRole(slice, rebaseSnapshot)
                 ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot)
             if (rebaseState != null) {
                 applyRebaseState(slice, rebaseState)
@@ -896,6 +906,33 @@ class AndroidVisualPlanner {
                 slice
             }
         }
+    }
+
+    private fun findRebaseStateByClusterByteRange(
+        slice: PreparedVisualTransaction.AnimatedSlice,
+        rebaseSnapshot: VisualFrameSnapshot
+    ): SliceVisualState? {
+        val cStart = slice.clusterByteStart
+        val cEnd = slice.clusterByteEndExclusive
+        if (cStart < 0 || cEnd < 0) return null
+        val lineIndex = slice.snapshot?.lineIndex ?: -1
+        return rebaseSnapshot.sliceVisualStates.firstOrNull {
+            it.role == slice.role &&
+                it.lineIndex == lineIndex &&
+                it.clusterByteStart == cStart &&
+                it.clusterByteEndExclusive == cEnd
+        }
+    }
+
+    private fun findRebaseStateByLineAndRole(
+        slice: PreparedVisualTransaction.AnimatedSlice,
+        rebaseSnapshot: VisualFrameSnapshot
+    ): SliceVisualState? {
+        val lineIndex = slice.snapshot?.lineIndex ?: -1
+        val roleKey = "${slice.role}_${lineIndex}"
+        return rebaseSnapshot.sliceVisualStates
+            .filter { "${it.role}_${it.lineIndex}" == roleKey }
+            .firstOrNull()
     }
 
     private fun findClosestRebaseStateByByteRange(
@@ -918,8 +955,9 @@ class AndroidVisualPlanner {
         val sliceTop = slice.destinationRect.top
         val sliceLeft = slice.destinationRect.left
         val sliceRole = slice.role
+        val lineIndex = slice.snapshot?.lineIndex ?: -1
         return rebaseSnapshot.sliceVisualStates
-            .filter { it.role == sliceRole }
+            .filter { it.role == sliceRole && (lineIndex < 0 || it.lineIndex == lineIndex) }
             .minByOrNull {
                 val dy = kotlin.math.abs(it.currentTop - sliceTop)
                 val dx = kotlin.math.abs(it.currentLeft - sliceLeft)

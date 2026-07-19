@@ -165,6 +165,8 @@ class AndroidTextAnimationEngine(
                 lineIndex = slice.snapshot?.lineIndex ?: -1,
                 documentByteStart = slice.snapshot?.documentByteStart ?: -1,
                 documentByteEndExclusive = slice.snapshot?.documentByteEndExclusive ?: -1,
+                clusterByteStart = slice.clusterByteStart,
+                clusterByteEndExclusive = slice.clusterByteEndExclusive,
                 currentLeft = currentLeft,
                 currentTop = currentTop,
                 currentRight = currentRight,
