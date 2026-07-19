@@ -239,7 +239,7 @@ class AndroidVisualPlanner {
             if (isInsert && newSnapshot != null && newLineRange != null) {
                 val insertClusters = newSnapshot.clusters.filter { cluster ->
                     visualIntent.newAffectedByteRanges.any { (start, end) ->
-                        cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                        cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
                     }
                 }
                 for (cluster in insertClusters) {
@@ -257,7 +257,7 @@ class AndroidVisualPlanner {
             } else if (isDelete && oldSnapshot != null && oldLineRange != null) {
                 val deleteClusters = oldSnapshot.clusters.filter { cluster ->
                     visualIntent.oldAffectedByteRanges.any { (start, end) ->
-                        cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                        cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
                     }
                 }
                 for (cluster in deleteClusters) {
@@ -288,7 +288,7 @@ class AndroidVisualPlanner {
         val matchedPairs = matchClustersByOffsetMap(oldSnapshot, newSnapshot, visualIntent, oldRev, newRev)
         for ((oldCluster, newCluster) in matchedPairs) {
             val isExcluded = excludedNewByteRanges.any { (start, end) ->
-                newCluster.documentByteStart >= start && newCluster.documentByteEndExclusive <= end
+                newCluster.documentByteStart < end && newCluster.documentByteEndExclusive > start
             }
             if (isExcluded) continue
             val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
@@ -355,7 +355,7 @@ class AndroidVisualPlanner {
         val newUsed = mutableSetOf<Int>()
         for ((oldCluster, oldInfo) in allOldClusters) {
             val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
-                oldCluster.documentByteStart >= start && oldCluster.documentByteEndExclusive <= end
+                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
             }
             if (isDeleted) continue
             val mappedStart = offsetMapper(oldCluster.documentByteStart)
@@ -373,7 +373,7 @@ class AndroidVisualPlanner {
                     i !in newUsed &&
                         candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
                         visualIntent.newAffectedByteRanges.none { (start, end) ->
-                            candidate.documentByteStart >= start && candidate.documentByteEndExclusive <= end
+                            candidate.documentByteStart < end && candidate.documentByteEndExclusive > start
                         }
                 }
                 matchedNewIdx = candidates.minByOrNull { i ->
@@ -384,7 +384,7 @@ class AndroidVisualPlanner {
                 newUsed.add(matchedNewIdx)
                 val (newCluster, newInfo) = allNewClusters[matchedNewIdx]
                 val isExcluded = excludedNewByteRanges.any { (start, end) ->
-                    newCluster.documentByteStart >= start && newCluster.documentByteEndExclusive <= end
+                    newCluster.documentByteStart < end && newCluster.documentByteEndExclusive > start
                 }
                 if (isExcluded) continue
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
@@ -450,7 +450,7 @@ class AndroidVisualPlanner {
                 if (oldSnapshot.clusters.isNotEmpty()) {
                     for (cluster in oldSnapshot.clusters) {
                         val inOldRange = visualIntent.oldAffectedByteRanges.any { (start, end) ->
-                            cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                            cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
                         }
                         if (inOldRange) {
                             animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
@@ -482,7 +482,7 @@ class AndroidVisualPlanner {
                 if (newSnapshot.clusters.isNotEmpty()) {
                     for (cluster in newSnapshot.clusters) {
                         val inNewRange = visualIntent.newAffectedByteRanges.any { (start, end) ->
-                            cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                            cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
                         }
                         if (inNewRange) {
                             animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
@@ -729,7 +729,7 @@ class AndroidVisualPlanner {
         if (clusters.isEmpty()) return emptyList()
         val affected = clusters.filter { cluster ->
             affectedRanges.any { (start, end) ->
-                cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
             }
         }
         return affected
@@ -852,7 +852,7 @@ class AndroidVisualPlanner {
         val newUsed = mutableSetOf<Int>()
         for (oldCluster in oldSnapshot.clusters) {
             val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
-                oldCluster.documentByteStart >= start && oldCluster.documentByteEndExclusive <= end
+                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
             }
             if (isDeleted) continue
             val mappedStart = mapper(oldCluster.documentByteStart) ?: continue
@@ -882,14 +882,14 @@ class AndroidVisualPlanner {
         for (i in newSnapshot.clusters.indices) {
             val cluster = newSnapshot.clusters[i]
             val isInserted = insertByteRanges.any { (start, end) ->
-                cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
+                cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
             }
             if (isInserted) continue
             newByFp.getOrPut(cluster.shapingFingerprint) { mutableListOf() }.add(i)
         }
         for (oldCluster in oldSnapshot.clusters) {
             val isDeleted = deleteByteRanges.any { (start, end) ->
-                oldCluster.documentByteStart >= start && oldCluster.documentByteEndExclusive <= end
+                oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
             }
             if (isDeleted) continue
             val candidates = newByFp[oldCluster.shapingFingerprint]
