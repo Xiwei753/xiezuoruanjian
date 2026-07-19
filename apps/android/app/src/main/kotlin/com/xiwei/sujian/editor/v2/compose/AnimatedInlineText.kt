@@ -1,6 +1,5 @@
 package com.xiwei.sujian.editor.v2.compose
 
-import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material3.MaterialTheme
@@ -26,8 +25,6 @@ import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 
-private const val TAG = "AnimatedInlineText"
-
 @Composable
 fun AnimatedInlineText(
     targetId: String,
@@ -40,21 +37,10 @@ fun AnimatedInlineText(
     coordinator: AnimatedTextEditorCoordinator? = null
 ) {
     val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
-
-    if (effectiveCoordinator == null) {
-        LaunchedEffect(targetId) {
-            Log.e(TAG, "AnimatedInlineText($targetId) has no AnimatedTextEditorCoordinator. " +
-                "Falling back to static Text. Every Activity must provide a coordinator " +
-                "via CompositionLocal or the coordinator parameter.")
-        }
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            modifier = modifier
+        ?: throw IllegalStateException(
+            "AnimatedInlineText($targetId) requires an AnimatedTextEditorCoordinator. " +
+            "Every Activity must provide one via CompositionLocal or the coordinator parameter."
         )
-        return
-    }
 
     var localValue by remember(value) { mutableStateOf(value) }
     var isEditing by remember { mutableStateOf(false) }
@@ -85,6 +71,7 @@ fun AnimatedInlineText(
         isEditing = state == EditingState.EDITING || state == EditingState.BINDING
     }
     target.updateProfile(profile)
+    target.updatePersistent(false)
     target.updateText(currentValue)
 
     LaunchedEffect(value) {

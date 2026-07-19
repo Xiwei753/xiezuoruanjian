@@ -1,11 +1,9 @@
 package com.xiwei.sujian.editor.v2.compose
 
-import android.util.Log
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,8 +27,6 @@ import com.xiwei.sujian.editor.v2.coordinator.EditableTextTarget
 import com.xiwei.sujian.editor.v2.coordinator.EditingState
 import com.xiwei.sujian.editor.v2.coordinator.TextEditorProfile
 
-private const val TAG = "AnimatedTextField"
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AnimatedTextField(
@@ -47,37 +43,24 @@ fun AnimatedTextField(
     coordinator: AnimatedTextEditorCoordinator? = null
 ) {
     val effectiveCoordinator = coordinator ?: LocalAnimatedTextEditorCoordinator.current
+        ?: throw IllegalStateException(
+            "AnimatedTextField($targetId) requires an AnimatedTextEditorCoordinator. " +
+            "Every Activity must provide one via CompositionLocal or the coordinator parameter."
+        )
 
-    if (effectiveCoordinator != null) {
-        AnimatedTextFieldWithCoordinator(
-            targetId = targetId,
-            value = value,
-            onValueChange = onValueChange,
-            onCommit = onCommit,
-            modifier = modifier,
-            profile = profile,
-            label = label,
-            placeholder = placeholder,
-            enabled = enabled,
-            singleLine = singleLine,
-            coordinator = effectiveCoordinator
-        )
-    } else {
-        LaunchedEffect(targetId) {
-            Log.e(TAG, "AnimatedTextField($targetId) has no AnimatedTextEditorCoordinator. " +
-                "Falling back to OutlinedTextField. Every Activity must provide a coordinator " +
-                "via CompositionLocal or the coordinator parameter.")
-        }
-        OutlinedTextField(
-            value = value,
-            onValueChange = onValueChange,
-            modifier = modifier,
-            label = label,
-            placeholder = placeholder,
-            enabled = enabled,
-            singleLine = singleLine
-        )
-    }
+    AnimatedTextFieldWithCoordinator(
+        targetId = targetId,
+        value = value,
+        onValueChange = onValueChange,
+        onCommit = onCommit,
+        modifier = modifier,
+        profile = profile,
+        label = label,
+        placeholder = placeholder,
+        enabled = enabled,
+        singleLine = singleLine,
+        coordinator = effectiveCoordinator
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -124,6 +107,7 @@ private fun AnimatedTextFieldWithCoordinator(
         isEditing = state == EditingState.EDITING || state == EditingState.BINDING
     }
     target.updateProfile(profile)
+    target.updatePersistent(false)
     target.updateText(currentValue)
 
     LaunchedEffect(value) {

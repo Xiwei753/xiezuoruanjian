@@ -438,6 +438,7 @@ class SujianEditorView @JvmOverloads constructor(
     private var isSessionBound: Boolean = false
     private var currentProfile: TextEditorProfile = TextEditorProfile.DocumentBody
     var onCommitRequested: (() -> Unit)? = null
+    var onCancelRequested: (() -> Unit)? = null
 
     fun bindSession(
         sessionBridge: EditorKernelBridge,
@@ -490,6 +491,7 @@ class SujianEditorView @JvmOverloads constructor(
         kernelBridge = null
         isSessionBound = false
         onCommitRequested = null
+        onCancelRequested = null
         clearFocus()
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
         imm?.hideSoftInputFromWindow(windowToken, 0)

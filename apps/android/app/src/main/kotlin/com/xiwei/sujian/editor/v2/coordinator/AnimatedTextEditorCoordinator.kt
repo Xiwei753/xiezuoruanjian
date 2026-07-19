@@ -118,6 +118,7 @@ class AnimatedTextEditorCoordinator(
 
         installContentCallback(view, target)
         installCommitRequestedCallback(view)
+        installCancelRequestedCallback(view)
 
         val geometry = target.currentGeometry
         if (geometry.width() > 0 && geometry.height() > 0) {
@@ -257,6 +258,7 @@ class AnimatedTextEditorCoordinator(
                     view.bindSession(bridge, target.profile, text, cursorUtf8)
                     installContentCallback(view, target)
                     installCommitRequestedCallback(view)
+                    installCancelRequestedCallback(view)
                 }
             }
             return
@@ -325,11 +327,18 @@ class AnimatedTextEditorCoordinator(
         }
     }
 
+    private fun installCancelRequestedCallback(view: SujianEditorView) {
+        view.onCancelRequested = {
+            cancelActiveEdit()
+        }
+    }
+
     private fun clearActiveCallbacks() {
         callbackGeneration++
         sharedEditorView?.let { view ->
             view.onContentChanged = null
             view.onCommitRequested = null
+            view.onCancelRequested = null
         }
     }
 

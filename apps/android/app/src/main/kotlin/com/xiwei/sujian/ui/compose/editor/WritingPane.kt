@@ -140,6 +140,12 @@ fun WritingPane(
         }
     }
 
+    LaunchedEffect(targetId) {
+        if (coordinator.activeTargetId != targetId && !uiState.loading) {
+            coordinator.beginEdit(targetId, uiState.content.toByteArray(Charsets.UTF_8).size)
+        }
+    }
+
     Column(modifier = modifier.fillMaxSize()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),

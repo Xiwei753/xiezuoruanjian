@@ -47,13 +47,14 @@ fun AnimatedTextEditorSlot(
         bottom = targetGeometry.top.toFloat() + targetTransform.translateY + targetGeometry.height() * targetTransform.scaleY
     )
 
+    val unscaledWidthPx = targetGeometry.width().toFloat()
+    val unscaledHeightPx = targetGeometry.height().toFloat()
+
     val slotLocalLeft = targetRectInWindow.left - slotBoundsInWindow.left
     val slotLocalTop = targetRectInWindow.top - slotBoundsInWindow.top
-    val effectiveWidthPx = targetRectInWindow.width
-    val effectiveHeightPx = targetRectInWindow.height
 
-    val slotWidthPx = if (isVisible && effectiveWidthPx > 0f) effectiveWidthPx else 1f
-    val slotHeightPx = if (isVisible && effectiveHeightPx > 0f) effectiveHeightPx else 1f
+    val slotWidthPx = if (isVisible && unscaledWidthPx > 0f) unscaledWidthPx else 1f
+    val slotHeightPx = if (isVisible && unscaledHeightPx > 0f) unscaledHeightPx else 1f
 
     val slotWidthDp = with(density) { slotWidthPx.toDp() }
     val slotHeightDp = with(density) { slotHeightPx.toDp() }
@@ -81,9 +82,9 @@ fun AnimatedTextEditorSlot(
             },
             update = { view ->
                 EditorThemeAdapter.applyToView(view, themeColors)
-                if (isVisible && effectiveWidthPx > 0f && effectiveHeightPx > 0f) {
+                if (isVisible && unscaledWidthPx > 0f && unscaledHeightPx > 0f) {
                     view.visibility = android.view.View.VISIBLE
-                    coordinator.updateHostGeometry(effectiveWidthPx, effectiveHeightPx)
+                    coordinator.updateHostGeometry(unscaledWidthPx, unscaledHeightPx)
                 } else {
                     view.visibility = android.view.View.GONE
                 }
@@ -96,7 +97,7 @@ fun AnimatedTextEditorSlot(
             },
             modifier = Modifier
                 .graphicsLayer {
-                    if (isVisible && effectiveWidthPx > 0f && effectiveHeightPx > 0f) {
+                    if (isVisible && unscaledWidthPx > 0f && unscaledHeightPx > 0f) {
                         translationX = slotLocalLeft
                         translationY = slotLocalTop
                         scaleX = targetTransform.scaleX

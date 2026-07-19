@@ -14,9 +14,7 @@ class EditableTextTarget(
     var profile: TextEditorProfile by mutableStateOf(profile)
         private set
     var isPersistent: Boolean by mutableStateOf(isPersistent)
-        private set
     var commitPolicy: CommitPolicy by mutableStateOf(commitPolicy)
-        private set
     var onTextChanged: ((String) -> Unit)? = null
     var onCommit: ((String) -> Unit)? = null
     var onCancel: (() -> Unit)? = null
@@ -43,6 +41,10 @@ class EditableTextTarget(
 
     fun updateProfile(newProfile: TextEditorProfile) {
         profile = newProfile
+    }
+
+    fun updatePersistent(persistent: Boolean) {
+        isPersistent = persistent
     }
 }
 
