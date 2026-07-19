@@ -32,8 +32,57 @@ class AndroidVisualPlanner {
         }
         if (editByteStart != null) {
             val editLine = findLineForUtf8(revision, editByteStart)
-            val expandEnd = (editLine + 3).coerceAtMost(revision.lineRanges.size)
-            for (i in editLine until expandEnd) {
+            for (i in editLine until revision.lineRanges.size) {
+                affectedLines.add(i)
+            }
+        }
+        return affectedLines
+    }
+
+    fun computeAffectedLineIndicesFromBothRevisions(
+        visualIntent: VisualIntent,
+        oldRevision: AndroidLayoutRevision?,
+        newRevision: AndroidLayoutRevision?
+    ): Set<Int> {
+        if (oldRevision == null || newRevision == null) {
+            return computeAffectedLineIndices(visualIntent, newRevision ?: oldRevision, useNewRanges = true)
+        }
+        val affectedLines = mutableSetOf<Int>()
+        for ((start, end) in visualIntent.oldAffectedByteRanges) {
+            for (i in oldRevision.lineRanges.indices) {
+                val lineRange = oldRevision.lineRanges[i]
+                if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
+                    affectedLines.add(i)
+                }
+            }
+        }
+        for ((start, end) in visualIntent.newAffectedByteRanges) {
+            for (i in newRevision.lineRanges.indices) {
+                val lineRange = newRevision.lineRanges[i]
+                if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
+                    affectedLines.add(i)
+                }
+            }
+        }
+        val editByteStart = visualIntent.oldAffectedByteRanges.firstOrNull()?.first
+            ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
+        if (editByteStart != null) {
+            val oldEditLine = findLineForUtf8(oldRevision, editByteStart)
+            val newEditLine = findLineForUtf8(newRevision, editByteStart)
+            val editLine = minOf(oldEditLine, newEditLine)
+            val minCommonLines = minOf(oldRevision.lineRanges.size, newRevision.lineRanges.size)
+            for (i in editLine until minCommonLines) {
+                val oldLine = oldRevision.lineRanges[i]
+                val newLine = newRevision.lineRanges[i]
+                if (oldLine.top != newLine.top || oldLine.bottom != newLine.bottom ||
+                    oldLine.left != newLine.left || oldLine.right != newLine.right) {
+                    affectedLines.add(i)
+                }
+            }
+            for (i in minCommonLines until oldRevision.lineRanges.size) {
+                affectedLines.add(i)
+            }
+            for (i in minCommonLines until newRevision.lineRanges.size) {
                 affectedLines.add(i)
             }
         }
@@ -792,6 +841,12 @@ class AndroidVisualPlanner {
                         affectedLines.add(i)
                     }
                 }
+            }
+            for (i in minCommonLines until oldRev.lineRanges.size) {
+                affectedLines.add(i)
+            }
+            for (i in minCommonLines until newRev.lineRanges.size) {
+                affectedLines.add(i)
             }
         }
 
