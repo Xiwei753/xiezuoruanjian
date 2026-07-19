@@ -12,6 +12,12 @@ class AndroidVisualPlanner {
         const val STABLE_SUFFIX_GEOMETRY_TOLERANCE = 1.0f
     }
 
+    /**
+     * Provisional capture lines for a single revision (before/after edit).
+     * When the preferred ranges are empty (pure Insert old / pure Delete new),
+     * fall back to the other side's edit point and expand to document end so
+     * soft-wrap / reflow Move can still match clusters. No fixed line cap.
+     */
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
         revision: AndroidLayoutRevision?,
@@ -19,13 +25,24 @@ class AndroidVisualPlanner {
     ): Set<Int> {
         if (revision == null) return emptySet()
         val affectedLines = mutableSetOf<Int>()
-        val ranges = if (useNewRanges) visualIntent.newAffectedByteRanges else visualIntent.oldAffectedByteRanges
-        for ((start, end) in ranges) {
+        val primaryRanges = if (useNewRanges) visualIntent.newAffectedByteRanges else visualIntent.oldAffectedByteRanges
+        val fallbackRanges = if (useNewRanges) visualIntent.oldAffectedByteRanges else visualIntent.newAffectedByteRanges
+        for ((start, end) in primaryRanges) {
             for (i in revision.lineRanges.indices) {
                 val lineRange = revision.lineRanges[i]
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
+            }
+        }
+        val editByteStart = primaryRanges.firstOrNull()?.first
+            ?: fallbackRanges.firstOrNull()?.first
+        if (editByteStart != null) {
+            val editLine = findLineForUtf8(revision, editByteStart)
+            // Expand from edit line to document end for provisional capture.
+            // Final animation set is refined later via stable-suffix comparison.
+            for (i in editLine until revision.lineRanges.size) {
+                affectedLines.add(i)
             }
         }
         return affectedLines
@@ -39,46 +56,7 @@ class AndroidVisualPlanner {
         if (oldRevision == null || newRevision == null) {
             return computeAffectedLineIndices(visualIntent, newRevision ?: oldRevision, useNewRanges = true)
         }
-        val affectedLines = mutableSetOf<Int>()
-        for ((start, end) in visualIntent.oldAffectedByteRanges) {
-            for (i in oldRevision.lineRanges.indices) {
-                val lineRange = oldRevision.lineRanges[i]
-                if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
-                    affectedLines.add(i)
-                }
-            }
-        }
-        for ((start, end) in visualIntent.newAffectedByteRanges) {
-            for (i in newRevision.lineRanges.indices) {
-                val lineRange = newRevision.lineRanges[i]
-                if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
-                    affectedLines.add(i)
-                }
-            }
-        }
-        val editByteStart = visualIntent.oldAffectedByteRanges.firstOrNull()?.first
-            ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
-        if (editByteStart != null) {
-            val oldEditLine = findLineForUtf8(oldRevision, editByteStart)
-            val newEditLine = findLineForUtf8(newRevision, editByteStart)
-            val editLine = minOf(oldEditLine, newEditLine)
-            val minCommonLines = minOf(oldRevision.lineRanges.size, newRevision.lineRanges.size)
-            for (i in editLine until minCommonLines) {
-                val oldLine = oldRevision.lineRanges[i]
-                val newLine = newRevision.lineRanges[i]
-                if (oldLine.top != newLine.top || oldLine.bottom != newLine.bottom ||
-                    oldLine.left != newLine.left || oldLine.right != newLine.right) {
-                    affectedLines.add(i)
-                }
-            }
-            for (i in minCommonLines until oldRevision.lineRanges.size) {
-                affectedLines.add(i)
-            }
-            for (i in minCommonLines until newRevision.lineRanges.size) {
-                affectedLines.add(i)
-            }
-        }
-        return affectedLines
+        return computeAffectedLines(visualIntent, oldRevision, newRevision)
     }
 
     fun prepare(
@@ -221,8 +199,11 @@ class AndroidVisualPlanner {
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         val isInsert = visualIntent.isInsert()
-        val isDelete = visualIntent.isDelete()
-        val isReplace = visualIntent.isReplace() || visualIntent.isCompositionCommit()
+        val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
+        // CompositionUpdate/Commit are replace-like: old preedit/range fades, new text appears, retained text Moves.
+        val isReplace = visualIntent.isReplace()
+            || visualIntent.isCompositionCommit()
+            || visualIntent.isCompositionUpdate()
 
         if (isReplace) {
             planClusterReplaceAnimation(
@@ -245,30 +226,16 @@ class AndroidVisualPlanner {
                         cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
                     }
                 }
-                if (insertClusters.isNotEmpty()) {
-                    for (cluster in insertClusters) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Insert,
-                            snapshot = newSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive
-                        ))
-                    }
-                } else {
+                for (cluster in insertClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Insert,
                         snapshot = newSnapshot,
-                        sourceRect = newSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            newLineRange.left, newLineRange.top,
-                            newLineRange.right, newLineRange.bottom
-                        ),
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
                         startAlpha = 0f,
-                        endAlpha = 1f
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
                     ))
                 }
             } else if (isDelete && oldSnapshot != null && oldLineRange != null) {
@@ -277,30 +244,16 @@ class AndroidVisualPlanner {
                         cluster.documentByteStart >= start && cluster.documentByteEndExclusive <= end
                     }
                 }
-                if (deleteClusters.isNotEmpty()) {
-                    for (cluster in deleteClusters) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.Delete,
-                            snapshot = oldSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive
-                        ))
-                    }
-                } else {
+                for (cluster in deleteClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Delete,
                         snapshot = oldSnapshot,
-                        sourceRect = oldSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            oldLineRange.left, oldLineRange.top,
-                            oldLineRange.right, oldLineRange.bottom
-                        ),
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
                         startAlpha = 1f,
-                        endAlpha = 0f
+                        endAlpha = 0f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
                     ))
                 }
             }
@@ -382,15 +335,15 @@ class AndroidVisualPlanner {
                 allNewClusters.add(Pair(cluster, Pair(lineIdx, snapshot)))
             }
         }
-        val offsetMap = buildOffsetMap(visualIntent, oldRev, newRev)
+        val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
         val newUsed = mutableSetOf<Int>()
         for ((oldCluster, oldInfo) in allOldClusters) {
             val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
                 oldCluster.documentByteStart >= start && oldCluster.documentByteEndExclusive <= end
             }
             if (isDeleted) continue
-            val mappedStart = offsetMap[oldCluster.documentByteStart]
-            val mappedEnd = offsetMap[oldCluster.documentByteEndExclusive]
+            val mappedStart = offsetMapper(oldCluster.documentByteStart)
+            val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
             var matchedNewIdx: Int? = null
             if (mappedStart != null) {
                 matchedNewIdx = allNewClusters.indices.firstOrNull { i ->
@@ -400,8 +353,12 @@ class AndroidVisualPlanner {
             }
             if (matchedNewIdx == null) {
                 matchedNewIdx = allNewClusters.indices.firstOrNull { i ->
-                    i !in newUsed && allNewClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
-                        allNewClusters[i].first.documentByteStart !in visualIntent.newAffectedByteRanges.map { r -> r.first..r.second }.flatten()
+                    val candidate = allNewClusters[i].first
+                    i !in newUsed &&
+                        candidate.shapingFingerprint == oldCluster.shapingFingerprint &&
+                        visualIntent.newAffectedByteRanges.none { (start, end) ->
+                            candidate.documentByteStart >= start && candidate.documentByteEndExclusive <= end
+                        }
                 }
             }
             if (matchedNewIdx != null) {
@@ -463,8 +420,6 @@ class AndroidVisualPlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
-        val offsetMap = buildOffsetMap(visualIntent, oldRev, newRev)
-
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
@@ -538,36 +493,83 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Map an old-document byte offset into the new document after this edit.
+     * Returns null for offsets inside a deleted/replaced range that has no retained identity.
+     * Pure Insert/Delete are first-class: retained text after the edit point shifts by delta.
+     */
+    private fun buildOffsetMapper(
+        visualIntent: VisualIntent,
+        oldRev: AndroidLayoutRevision,
+        newRev: AndroidLayoutRevision
+    ): (Int) -> Int? {
+        val oldRanges = visualIntent.oldAffectedByteRanges
+        val newRanges = visualIntent.newAffectedByteRanges
+
+        // Pure Insert: old empty, new non-empty.
+        if (oldRanges.isEmpty() && newRanges.isNotEmpty()) {
+            val insertStart = newRanges.first().first
+            val insertLen = newRanges.sumOf { (s, e) -> e - s }
+            return { offset ->
+                if (offset < insertStart) offset else offset + insertLen
+            }
+        }
+
+        // Pure Delete: new empty, old non-empty.
+        if (newRanges.isEmpty() && oldRanges.isNotEmpty()) {
+            val deleteStart = oldRanges.first().first
+            val deleteEnd = oldRanges.last().second
+            val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
+            return { offset ->
+                when {
+                    offset < deleteStart -> offset
+                    offset < deleteEnd -> null
+                    else -> offset - deleteLen
+                }
+            }
+        }
+
+        if (oldRanges.isEmpty() || newRanges.isEmpty()) {
+            return { offset -> offset }
+        }
+
+        val oldAffectedStart = oldRanges.first().first
+        val oldAffectedEnd = oldRanges.last().second
+        val newAffectedEnd = newRanges.last().second
+        val shift = newAffectedEnd - oldAffectedEnd
+
+        return { offset ->
+            when {
+                offset < oldAffectedStart -> offset
+                offset >= oldAffectedEnd -> offset + shift
+                else -> {
+                    val mapped = mapThroughRanges(offset, oldRanges, newRanges)
+                    if (mapped >= 0) mapped else null
+                }
+            }
+        }
+    }
+
+    /** Sparse map used by same-line matchers; backed by [buildOffsetMapper]. */
     private fun buildOffsetMap(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision
     ): Map<Int, Int> {
+        val mapper = buildOffsetMapper(visualIntent, oldRev, newRev)
         val offsetMap = mutableMapOf<Int, Int>()
-        val oldRanges = visualIntent.oldAffectedByteRanges
-        val newRanges = visualIntent.newAffectedByteRanges
-
-        if (oldRanges.isEmpty() || newRanges.isEmpty()) return offsetMap
-
-        val oldAffectedEnd = oldRanges.last().second
-        val newAffectedEnd = newRanges.last().second
-        val shift = newAffectedEnd - oldAffectedEnd
-
-        for (lineRange in oldRev.lineRanges) {
-            if (lineRange.startUtf8 >= oldAffectedEnd) {
-                offsetMap[lineRange.startUtf8] = lineRange.startUtf8 + shift
-                offsetMap[lineRange.endUtf8] = lineRange.endUtf8 + shift
-            } else if (lineRange.endUtf8 <= oldRanges.first().first) {
-                offsetMap[lineRange.startUtf8] = lineRange.startUtf8
-                offsetMap[lineRange.endUtf8] = lineRange.endUtf8
-            } else {
-                val overlapStart = lineRange.startUtf8.coerceAtLeast(oldRanges.first().first)
-                val overlapEnd = lineRange.endUtf8.coerceAtMost(oldAffectedEnd)
-                val newOverlapStart = mapThroughRanges(overlapStart, oldRanges, newRanges)
-                val newOverlapEnd = mapThroughRanges(overlapEnd, oldRanges, newRanges)
-                if (newOverlapStart >= 0) offsetMap[overlapStart] = newOverlapStart
-                if (newOverlapEnd >= 0) offsetMap[overlapEnd] = newOverlapEnd
-            }
+        val candidates = mutableSetOf<Int>()
+        for (line in oldRev.lineRanges) {
+            candidates.add(line.startUtf8)
+            candidates.add(line.endUtf8)
+        }
+        for (line in newRev.lineRanges) {
+            candidates.add(line.startUtf8)
+            candidates.add(line.endUtf8)
+        }
+        for (offset in candidates) {
+            val mapped = mapper(offset) ?: continue
+            offsetMap[offset] = mapped
         }
         return offsetMap
     }
@@ -595,8 +597,10 @@ class AndroidVisualPlanner {
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
         val isInsert = visualIntent.isInsert()
-        val isDelete = visualIntent.isDelete()
-        val isReplace = visualIntent.isReplace() || visualIntent.isCompositionCommit()
+        val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
+        val isReplace = visualIntent.isReplace()
+            || visualIntent.isCompositionCommit()
+            || visualIntent.isCompositionUpdate()
 
         if (isReplace) {
             planRunReplaceAnimation(
@@ -615,58 +619,30 @@ class AndroidVisualPlanner {
 
             if (isInsert && newSnapshot != null && newLineRange != null) {
                 val insertClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)
-                if (insertClusters.isNotEmpty()) {
-                    for (cluster in insertClusters) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeNew,
-                            snapshot = newSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive
-                        ))
-                    }
-                } else {
+                for (cluster in insertClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeNew,
                         snapshot = newSnapshot,
-                        sourceRect = newSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            newLineRange.left, newLineRange.top,
-                            newLineRange.right, newLineRange.bottom
-                        ),
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
                         startAlpha = 0f,
-                        endAlpha = 1f
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
                     ))
                 }
             } else if (isDelete && oldSnapshot != null && oldLineRange != null) {
                 val deleteClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
-                if (deleteClusters.isNotEmpty()) {
-                    for (cluster in deleteClusters) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeOld,
-                            snapshot = oldSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f,
-                            clusterByteStart = cluster.documentByteStart,
-                            clusterByteEndExclusive = cluster.documentByteEndExclusive
-                        ))
-                    }
-                } else {
+                for (cluster in deleteClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeOld,
                         snapshot = oldSnapshot,
-                        sourceRect = oldSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            oldLineRange.left, oldLineRange.top,
-                            oldLineRange.right, oldLineRange.bottom
-                        ),
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
                         startAlpha = 1f,
-                        endAlpha = 0f
+                        endAlpha = 0f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
                     ))
                 }
             }
@@ -690,58 +666,37 @@ class AndroidVisualPlanner {
             val oldSnapshot = if (oldLineRange != null) createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots) else null
             val newSnapshot = if (newLineRange != null) createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) else null
 
-            if (oldSnapshot != null && oldLineRange != null) {
+            // Only animate clusters inside the affected ranges. Never fall back to whole-line
+            // CrossfadeOld when oldAffected is empty (ordinary Insert / composition insert path);
+            // retained text is handled by cross-line Move after planRunAnimation returns.
+            if (oldSnapshot != null && oldLineRange != null && visualIntent.oldAffectedByteRanges.isNotEmpty()) {
                 val oldRunClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
-                if (oldRunClusters.isNotEmpty()) {
-                    for (cluster in oldRunClusters) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeOld,
-                            snapshot = oldSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 1f,
-                            endAlpha = 0f
-                        ))
-                    }
-                } else {
+                for (cluster in oldRunClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeOld,
                         snapshot = oldSnapshot,
-                        sourceRect = oldSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            oldLineRange.left, oldLineRange.top,
-                            oldLineRange.right, oldLineRange.bottom
-                        ),
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
                         startAlpha = 1f,
-                        endAlpha = 0f
+                        endAlpha = 0f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
                     ))
                 }
             }
 
-            if (newSnapshot != null && newLineRange != null) {
+            if (newSnapshot != null && newLineRange != null && visualIntent.newAffectedByteRanges.isNotEmpty()) {
                 val newRunClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)
-                if (newRunClusters.isNotEmpty()) {
-                    for (cluster in newRunClusters) {
-                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                            role = SliceRole.CrossfadeNew,
-                            snapshot = newSnapshot,
-                            sourceRect = cluster.sourceRectInLineImage,
-                            destinationRect = cluster.visualRectInDocument,
-                            startAlpha = 0f,
-                            endAlpha = 1f
-                        ))
-                    }
-                } else {
+                for (cluster in newRunClusters) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.CrossfadeNew,
                         snapshot = newSnapshot,
-                        sourceRect = newSnapshot.sourceRect,
-                        destinationRect = android.graphics.RectF(
-                            newLineRange.left, newLineRange.top,
-                            newLineRange.right, newLineRange.bottom
-                        ),
+                        sourceRect = cluster.sourceRectInLineImage,
+                        destinationRect = cluster.visualRectInDocument,
                         startAlpha = 0f,
-                        endAlpha = 1f
+                        endAlpha = 1f,
+                        clusterByteStart = cluster.documentByteStart,
+                        clusterByteEndExclusive = cluster.documentByteEndExclusive
                     ))
                 }
             }
@@ -873,26 +828,26 @@ class AndroidVisualPlanner {
         newRev: AndroidLayoutRevision
     ): List<Pair<LineClusterSnapshot, LineClusterSnapshot>> {
         if (oldSnapshot.clusters.isEmpty() || newSnapshot.clusters.isEmpty()) return emptyList()
-        val offsetMap = buildOffsetMap(visualIntent, oldRev, newRev)
-        if (offsetMap.isNotEmpty()) {
-            val pairs = mutableListOf<Pair<LineClusterSnapshot, LineClusterSnapshot>>()
-            val newUsed = mutableSetOf<Int>()
-            for (oldCluster in oldSnapshot.clusters) {
-                val mappedStart = offsetMap[oldCluster.documentByteStart]
-                val mappedEnd = offsetMap[oldCluster.documentByteEndExclusive]
-                if (mappedStart != null) {
-                    val newIdx = newSnapshot.clusters.indices.firstOrNull { i ->
-                        i !in newUsed && newSnapshot.clusters[i].documentByteStart == mappedStart &&
-                            (mappedEnd == null || newSnapshot.clusters[i].documentByteEndExclusive == mappedEnd)
-                    }
-                    if (newIdx != null) {
-                        newUsed.add(newIdx)
-                        pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
-                    }
-                }
+        val mapper = buildOffsetMapper(visualIntent, oldRev, newRev)
+        val pairs = mutableListOf<Pair<LineClusterSnapshot, LineClusterSnapshot>>()
+        val newUsed = mutableSetOf<Int>()
+        for (oldCluster in oldSnapshot.clusters) {
+            val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
+                oldCluster.documentByteStart >= start && oldCluster.documentByteEndExclusive <= end
             }
-            return pairs
+            if (isDeleted) continue
+            val mappedStart = mapper(oldCluster.documentByteStart) ?: continue
+            val mappedEnd = mapper(oldCluster.documentByteEndExclusive)
+            val newIdx = newSnapshot.clusters.indices.firstOrNull { i ->
+                i !in newUsed && newSnapshot.clusters[i].documentByteStart == mappedStart &&
+                    (mappedEnd == null || newSnapshot.clusters[i].documentByteEndExclusive == mappedEnd)
+            }
+            if (newIdx != null) {
+                newUsed.add(newIdx)
+                pairs.add(Pair(oldCluster, newSnapshot.clusters[newIdx]))
+            }
         }
+        if (pairs.isNotEmpty()) return pairs
         return matchClustersByFingerprint(oldSnapshot, newSnapshot, visualIntent)
     }
 
@@ -1012,38 +967,61 @@ class AndroidVisualPlanner {
         if (editByteStart != null) {
             val oldEditLine = findLineForUtf8(oldRev, editByteStart)
             val newEditLine = findLineForUtf8(newRev, editByteStart)
+            val scanStart = minOf(oldEditLine, newEditLine)
             val minCommonLines = minOf(oldRev.lineRanges.size, newRev.lineRanges.size)
-            var stableSuffixStart = minCommonLines
-            for (i in maxOf(oldEditLine, newEditLine) until minCommonLines) {
+
+            // Walk forward from the edit line using lightweight geometry metadata only.
+            // Stop at the first stable suffix line; no fixed 3/10/30 line cap.
+            var reachedStableSuffix = false
+            for (i in scanStart until minCommonLines) {
                 val oldLine = oldRev.lineRanges[i]
                 val newLine = newRev.lineRanges[i]
                 val geometryChanged = kotlin.math.abs(oldLine.top - newLine.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
                     kotlin.math.abs(oldLine.bottom - newLine.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
                     kotlin.math.abs(oldLine.left - newLine.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    kotlin.math.abs(oldLine.right - newLine.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE
+                    kotlin.math.abs(oldLine.right - newLine.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                    oldLine.startUtf8 != newLine.startUtf8 ||
+                    oldLine.endUtf8 != newLine.endUtf8
                 if (geometryChanged) {
                     affectedLines.add(i)
-                } else {
-                    stableSuffixStart = i
-                    break
+                } else if (i > scanStart || !geometryChanged) {
+                    // First unchanged line after the edit starts the stable suffix.
+                    // Keep scanning remaining common lines only if later geometry still differs
+                    // (rare multi-region reflow); otherwise stop.
+                    var laterUnstable = false
+                    for (j in (i + 1) until minCommonLines) {
+                        val ol = oldRev.lineRanges[j]
+                        val nl = newRev.lineRanges[j]
+                        val changed = kotlin.math.abs(ol.top - nl.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            kotlin.math.abs(ol.bottom - nl.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            kotlin.math.abs(ol.left - nl.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            kotlin.math.abs(ol.right - nl.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            ol.startUtf8 != nl.startUtf8 ||
+                            ol.endUtf8 != nl.endUtf8
+                        if (changed) {
+                            laterUnstable = true
+                            break
+                        }
+                    }
+                    if (!laterUnstable) {
+                        reachedStableSuffix = true
+                        break
+                    }
                 }
             }
-            for (i in stableSuffixStart until minCommonLines) {
-                val oldLine = oldRev.lineRanges[i]
-                val newLine = newRev.lineRanges[i]
-                val geometryChanged = kotlin.math.abs(oldLine.top - newLine.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    kotlin.math.abs(oldLine.bottom - newLine.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    kotlin.math.abs(oldLine.left - newLine.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    kotlin.math.abs(oldLine.right - newLine.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE
-                if (geometryChanged) {
-                    affectedLines.add(i)
-                }
-            }
+            // Lines present only on one side (soft wrap growth/shrink) always animate.
             for (i in minCommonLines until oldRev.lineRanges.size) {
                 affectedLines.add(i)
             }
             for (i in minCommonLines until newRev.lineRanges.size) {
                 affectedLines.add(i)
+            }
+            // If no stable suffix was found, the whole suffix from the edit is already in
+            // affectedLines (or was added as exclusive old/new lines). Nothing else to do.
+            if (!reachedStableSuffix) {
+                // Ensure edit-line itself is included even when range intersection missed it.
+                affectedLines.add(oldEditLine)
+                affectedLines.add(newEditLine)
             }
         }
 
