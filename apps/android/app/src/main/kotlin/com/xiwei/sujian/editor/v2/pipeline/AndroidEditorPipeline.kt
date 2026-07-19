@@ -189,7 +189,7 @@ class AndroidEditorPipeline private constructor(
             if (animationMode != uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED) {
                 val animatedIntent = VisualIntent(
                     cause = result.visualIntent.cause,
-                    operationKind = result.visualIntent.operationKind,
+                    operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
                     oldAffectedByteRanges = oldAffected,
                     newAffectedByteRanges = newAffected,
                     animationMode = animationMode,
@@ -201,7 +201,7 @@ class AndroidEditorPipeline private constructor(
         }
         return applyEditResultWithIntent(result, VisualIntent(
             cause = result.visualIntent.cause,
-            operationKind = result.visualIntent.operationKind,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.COMPOSITION_COMMIT,
             oldAffectedByteRanges = oldAffected,
             newAffectedByteRanges = newAffected,
             animationMode = result.visualIntent.animationMode,
