@@ -109,6 +109,7 @@ class AndroidInputAdapter(
     fun sendCommitTextToKernel(byteStart: Int, byteEndExclusive: Int, replacementText: String, originalText: String, resultingSelectionAnchor: Int, resultingSelectionHead: Int, cause: EditorTransactionCauseDto) {
         val bridge = pipeline.kernelBridge ?: return
         val (sessionId, baseRev, generation) = compositionSessionInfo()
+        val preeditAtCommit = currentCompositionText
         val dto = bridge.commitText(
             byteStart, byteEndExclusive, replacementText,
             resultingSelectionAnchor, resultingSelectionHead,
@@ -118,7 +119,7 @@ class AndroidInputAdapter(
         val result = dto?.let { EditResult.fromDto(it) }
         if (result != null && result.isApplied()) {
             clearCompositionState()
-            val output = pipeline.applyCompositionCommit(dto)
+            val output = pipeline.applyCompositionCommit(dto, preeditAtCommit)
             onPipelineOutput?.invoke(output)
             return
         }
@@ -176,12 +177,13 @@ class AndroidInputAdapter(
         val bridge = pipeline.kernelBridge ?: return
         val (sessionId, _baseRev, generation) = compositionSessionInfo()
         if (sessionId == 0L) return
+        val preeditAtFinish = currentCompositionText
         val dto = bridge.finishComposition(sessionId, generation, mirror.getRevision())
         if (dto != null) {
             val result = EditResult.fromDto(dto)
             if (result.isApplied()) {
                 clearCompositionState()
-                val output = pipeline.applyCompositionCommit(dto)
+                val output = pipeline.applyCompositionCommit(dto, preeditAtFinish)
                 onPipelineOutput?.invoke(output)
                 return
             }
@@ -308,6 +310,7 @@ class AndroidInputAdapter(
         val bridge = pipeline.kernelBridge
         if (bridge != null) {
             val (sessionId, baseRev, generation) = compositionSessionInfo()
+            val preeditAtCommit = currentCompositionText
             val dto = bridge.commitText(
                 replaceStart, replaceEnd, finalText,
                 resultingAnchor, resultingHead,
@@ -318,7 +321,7 @@ class AndroidInputAdapter(
                 val result = EditResult.fromDto(dto)
                 if (result.isApplied()) {
                     clearCompositionState()
-                    val output = pipeline.applyCompositionCommit(dto)
+                    val output = pipeline.applyCompositionCommit(dto, preeditAtCommit)
                     onPipelineOutput?.invoke(output)
                     return
                 }

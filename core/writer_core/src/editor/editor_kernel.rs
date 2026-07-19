@@ -1466,11 +1466,16 @@ impl EditorKernel {
             new_cursor: self.cursor,
         });
         self.redo_stack.clear();
+        let preedit_byte_len = self.composition_session.as_ref().map(|s| s.preedit_text.len()).unwrap_or(0);
         self.composition_session = None;
 
         let new_revision = self.revision;
         let new_selection = (self.selection_anchor, self.cursor);
-        let old_affected = vec![(byte_start, byte_end_exclusive)];
+        let old_affected = if preedit_byte_len > 0 {
+            vec![(byte_start, byte_start + preedit_byte_len)]
+        } else {
+            vec![(byte_start, byte_end_exclusive)]
+        };
         let new_affected = vec![(byte_start, byte_start + replacement_text.len())];
 
         let display_patches = vec![DisplayPatch {
@@ -1916,7 +1921,7 @@ impl EditorKernel {
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::TypingCommit,
                 operation_kind: EditorOperationKind::CompositionCommit,
-                old_affected_byte_ranges: vec![(replace_start, replace_end)],
+                old_affected_byte_ranges: vec![(replace_start, replace_start + committed_text.len())],
                 new_affected_byte_ranges: vec![(replace_start, replace_start + committed_text.len())],
                 animation_mode,
                 duration_ms: self.animation_duration_ms,
@@ -1960,7 +1965,10 @@ impl EditorKernel {
 
         self.composition_session = None;
 
-        let old_affected = if replace_start != replace_end {
+        let preedit_byte_len = session.preedit_text.len();
+        let old_affected = if preedit_byte_len > 0 {
+            vec![(replace_start, replace_start + preedit_byte_len)]
+        } else if replace_start != replace_end {
             vec![(replace_start, replace_end)]
         } else {
             vec![]

@@ -130,15 +130,34 @@ class AndroidEditorPipeline private constructor(
         return applyEditResult(result)
     }
 
-    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto): PipelineOutput {
+    fun applyCompositionCommit(
+        dto: uniffi.writer_core.EditorEditResultDto,
+        preeditText: String = ""
+    ): PipelineOutput {
         val result = EditResult.fromDto(dto)
-        val oldAffected = result.visualIntent.oldAffectedByteRanges
-        val newAffected = result.visualIntent.newAffectedByteRanges
-        val isVisualSame = oldAffected.isNotEmpty() && newAffected.isNotEmpty() &&
-            oldAffected.size == newAffected.size &&
-            oldAffected.zip(newAffected).all { (old, new) ->
-                old.first == new.first && old.second == new.second
-            }
+        val rustOldAffected = result.visualIntent.oldAffectedByteRanges
+        val rustNewAffected = result.visualIntent.newAffectedByteRanges
+
+        val committedText = result.displayPatches.firstOrNull()?.insertedText ?: ""
+        val replaceStart = rustOldAffected.firstOrNull()?.first
+            ?: rustNewAffected.firstOrNull()?.first
+            ?: 0
+
+        val preeditByteLen = preeditText.toByteArray(Charsets.UTF_8).size
+        val committedByteLen = committedText.toByteArray(Charsets.UTF_8).size
+
+        val oldAffected = if (preeditByteLen > 0) {
+            listOf(Pair(replaceStart, replaceStart + preeditByteLen))
+        } else {
+            rustOldAffected
+        }
+        val newAffected = if (committedByteLen > 0) {
+            listOf(Pair(replaceStart, replaceStart + committedByteLen))
+        } else {
+            rustNewAffected
+        }
+
+        val isVisualSame = preeditText.isNotEmpty() && preeditText == committedText
         if (isVisualSame) {
             val suppressedIntent = VisualIntent(
                 cause = result.visualIntent.cause,
@@ -180,7 +199,15 @@ class AndroidEditorPipeline private constructor(
                 return applyEditResultWithIntent(result, animatedIntent)
             }
         }
-        return applyEditResult(result)
+        return applyEditResultWithIntent(result, VisualIntent(
+            cause = result.visualIntent.cause,
+            operationKind = result.visualIntent.operationKind,
+            oldAffectedByteRanges = oldAffected,
+            newAffectedByteRanges = newAffected,
+            animationMode = result.visualIntent.animationMode,
+            durationMs = result.visualIntent.durationMs,
+            coordinatedCursor = result.visualIntent.coordinatedCursor
+        ))
     }
 
     fun applyEditResult(

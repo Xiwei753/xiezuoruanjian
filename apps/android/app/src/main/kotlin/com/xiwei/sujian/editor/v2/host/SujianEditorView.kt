@@ -181,8 +181,8 @@ class SujianEditorView @JvmOverloads constructor(
         handlePipelineOutput(output)
     }
 
-    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto) {
-        val output = pipeline.applyCompositionCommit(dto)
+    fun applyCompositionCommit(dto: uniffi.writer_core.EditorEditResultDto, preeditText: String = "") {
+        val output = pipeline.applyCompositionCommit(dto, preeditText)
         handlePipelineOutput(output)
     }
 
