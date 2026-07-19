@@ -439,6 +439,9 @@ class AndroidVisualPlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
+        val allOldAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+        val allNewAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
@@ -453,14 +456,7 @@ class AndroidVisualPlanner {
                             cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
                         }
                         if (inOldRange) {
-                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                                role = SliceRole.Delete,
-                                snapshot = oldSnapshot,
-                                sourceRect = cluster.sourceRectInLineImage,
-                                destinationRect = cluster.visualRectInDocument,
-                                startAlpha = 1f,
-                                endAlpha = 0f
-                            ))
+                            allOldAffectedClusters.add(Pair(cluster, oldSnapshot))
                         }
                     }
                 } else {
@@ -485,14 +481,7 @@ class AndroidVisualPlanner {
                             cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
                         }
                         if (inNewRange) {
-                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                                role = SliceRole.Insert,
-                                snapshot = newSnapshot,
-                                sourceRect = cluster.sourceRectInLineImage,
-                                destinationRect = cluster.visualRectInDocument,
-                                startAlpha = 0f,
-                                endAlpha = 1f
-                            ))
+                            allNewAffectedClusters.add(Pair(cluster, newSnapshot))
                         }
                     }
                 } else {
@@ -509,6 +498,82 @@ class AndroidVisualPlanner {
                     ))
                 }
             }
+        }
+
+        val newMatched = mutableSetOf<Int>()
+        for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
+            val matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+                i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
+                    allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
+                    oldCluster.documentByteEndExclusive - oldCluster.documentByteStart
+            }
+            if (matchIdx != null) {
+                newMatched.add(matchIdx)
+                val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
+                val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+                if (positionChanged) {
+                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint) {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Move,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 1f,
+                            fromDestinationRect = oldCluster.visualRectInDocument,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                        ))
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeOld,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldCluster.sourceRectInLineImage,
+                            destinationRect = oldCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 0f,
+                            clusterByteStart = oldCluster.documentByteStart,
+                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                        ))
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeNew,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 0f,
+                            endAlpha = 1f,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                        ))
+                    }
+                }
+            } else {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = oldSnapshot,
+                    sourceRect = oldCluster.sourceRectInLineImage,
+                    destinationRect = oldCluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 0f,
+                    clusterByteStart = oldCluster.documentByteStart,
+                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                ))
+            }
+        }
+
+        for ((i, pair) in allNewAffectedClusters.withIndex()) {
+            if (i in newMatched) continue
+            val (newCluster, newSnapshot) = pair
+            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = newSnapshot,
+                sourceRect = newCluster.sourceRectInLineImage,
+                destinationRect = newCluster.visualRectInDocument,
+                startAlpha = 0f,
+                endAlpha = 1f,
+                clusterByteStart = newCluster.documentByteStart,
+                clusterByteEndExclusive = newCluster.documentByteEndExclusive
+            ))
         }
     }
 
@@ -678,6 +743,9 @@ class AndroidVisualPlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
+        val allOldAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+        val allNewAffectedClusters = mutableListOf<Pair<LineClusterSnapshot, AndroidLineSnapshot>>()
+
         for (lineIndex in affectedLines) {
             val oldLineRange = oldRev.lineRanges.getOrNull(lineIndex)
             val newLineRange = newRev.lineRanges.getOrNull(lineIndex)
@@ -685,40 +753,95 @@ class AndroidVisualPlanner {
             val oldSnapshot = if (oldLineRange != null) createSnapshotFromRevision(oldRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots) else null
             val newSnapshot = if (newLineRange != null) createSnapshotFromRevision(newRev, lineIndex, preCapturedOldSnapshots, preCapturedNewSnapshots, isNewRevision = true) else null
 
-            // Only animate clusters inside the affected ranges. Never fall back to whole-line
-            // CrossfadeOld when oldAffected is empty (ordinary Insert / composition insert path);
-            // retained text is handled by cross-line Move after planRunAnimation returns.
             if (oldSnapshot != null && oldLineRange != null && visualIntent.oldAffectedByteRanges.isNotEmpty()) {
                 val oldRunClusters = groupClustersIntoRuns(oldSnapshot.clusters, visualIntent.oldAffectedByteRanges)
                 for (cluster in oldRunClusters) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Delete,
-                        snapshot = oldSnapshot,
-                        sourceRect = cluster.sourceRectInLineImage,
-                        destinationRect = cluster.visualRectInDocument,
-                        startAlpha = 1f,
-                        endAlpha = 0f,
-                        clusterByteStart = cluster.documentByteStart,
-                        clusterByteEndExclusive = cluster.documentByteEndExclusive
-                    ))
+                    allOldAffectedClusters.add(Pair(cluster, oldSnapshot))
                 }
             }
 
             if (newSnapshot != null && newLineRange != null && visualIntent.newAffectedByteRanges.isNotEmpty()) {
                 val newRunClusters = groupClustersIntoRuns(newSnapshot.clusters, visualIntent.newAffectedByteRanges)
                 for (cluster in newRunClusters) {
-                    animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                        role = SliceRole.Insert,
-                        snapshot = newSnapshot,
-                        sourceRect = cluster.sourceRectInLineImage,
-                        destinationRect = cluster.visualRectInDocument,
-                        startAlpha = 0f,
-                        endAlpha = 1f,
-                        clusterByteStart = cluster.documentByteStart,
-                        clusterByteEndExclusive = cluster.documentByteEndExclusive
-                    ))
+                    allNewAffectedClusters.add(Pair(cluster, newSnapshot))
                 }
             }
+        }
+
+        val newMatched = mutableSetOf<Int>()
+        for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
+            val matchIdx = allNewAffectedClusters.indices.firstOrNull { i ->
+                i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
+                    allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
+                    oldCluster.documentByteEndExclusive - oldCluster.documentByteStart
+            }
+            if (matchIdx != null) {
+                newMatched.add(matchIdx)
+                val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
+                val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
+                if (positionChanged) {
+                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint) {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.Move,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 1f,
+                            fromDestinationRect = oldCluster.visualRectInDocument,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                        ))
+                    } else {
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeOld,
+                            snapshot = oldSnapshot,
+                            sourceRect = oldCluster.sourceRectInLineImage,
+                            destinationRect = oldCluster.visualRectInDocument,
+                            startAlpha = 1f,
+                            endAlpha = 0f,
+                            clusterByteStart = oldCluster.documentByteStart,
+                            clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                        ))
+                        animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                            role = SliceRole.CrossfadeNew,
+                            snapshot = newSnapshot,
+                            sourceRect = newCluster.sourceRectInLineImage,
+                            destinationRect = newCluster.visualRectInDocument,
+                            startAlpha = 0f,
+                            endAlpha = 1f,
+                            clusterByteStart = newCluster.documentByteStart,
+                            clusterByteEndExclusive = newCluster.documentByteEndExclusive
+                        ))
+                    }
+                }
+            } else {
+                animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Delete,
+                    snapshot = oldSnapshot,
+                    sourceRect = oldCluster.sourceRectInLineImage,
+                    destinationRect = oldCluster.visualRectInDocument,
+                    startAlpha = 1f,
+                    endAlpha = 0f,
+                    clusterByteStart = oldCluster.documentByteStart,
+                    clusterByteEndExclusive = oldCluster.documentByteEndExclusive
+                ))
+            }
+        }
+
+        for ((i, pair) in allNewAffectedClusters.withIndex()) {
+            if (i in newMatched) continue
+            val (newCluster, newSnapshot) = pair
+            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = newSnapshot,
+                sourceRect = newCluster.sourceRectInLineImage,
+                destinationRect = newCluster.visualRectInDocument,
+                startAlpha = 0f,
+                endAlpha = 1f,
+                clusterByteStart = newCluster.documentByteStart,
+                clusterByteEndExclusive = newCluster.documentByteEndExclusive
+            ))
         }
     }
 
