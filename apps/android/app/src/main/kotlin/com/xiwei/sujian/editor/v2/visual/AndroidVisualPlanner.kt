@@ -1795,6 +1795,10 @@ class AndroidVisualPlanner {
             else if (newOffset < insertStart + insertLen) null
             else newOffset - insertLen
         }
+        // Pure Delete: no new bytes were created, so every new-document offset has an
+        // unambiguous old-document counterpart — there is no "newly created content" that
+        // would require returning null. Offsets before the delete are unchanged; offsets
+        // at or after the delete start map forward by the deleted length.
         if (newRanges.isEmpty()) {
             val deleteStart = oldRanges.first().first
             val deleteLen = oldRanges.sumOf { (s, e) -> e - s }
@@ -2202,7 +2206,7 @@ class AndroidVisualPlanner {
 
     /**
      * Rebase new BlockShifts onto the current visual state of the old transaction's
-     * BlockShifts.
+     * BlockShifts, with one-to-one matching invariant.
      *
      * When a new transaction arrives while a previous BlockShift is still animating,
      * the suffix text is at an intermediate Y position (currentTranslateY != 0).
@@ -2224,6 +2228,12 @@ class AndroidVisualPlanner {
      * new-layout position), so subtracting it adds a positive correction. This ensures
      * the new animation starts from the exact on-screen position of the old animation.
      *
+     * One-to-one matching invariant: each old [BlockShiftVisualState] can be matched
+     * to at most one new BlockShift, enforced by [usedRebaseIndices]. Without this,
+     * multiple new BlockShifts could all match the same old state (e.g. when a hard-break
+     * insertion splits one old suffix block into two new blocks), causing both to inherit
+     * the same currentTranslateY instead of each getting a unique rebase anchor.
+     *
      * Matching uses [startUtf8] (byte offset) as the primary identity rather than
      * [startLineIndex]. Line indices shift across revisions when hard breaks are
      * inserted/deleted — the old transaction's line N may become line N+1 in the new
@@ -2231,6 +2241,12 @@ class AndroidVisualPlanner {
      * offsets are stable across revisions (they identify the same paragraph regardless
      * of how many visual lines precede it), so [startUtf8]-based matching is correct
      * even after hard-break insertion/deletion.
+     *
+     * Matching tiers (with one-to-one constraint):
+     * 1. [startUtf8] exact match — most reliable across revisions.
+     * 2. Exact line-range match — fallback when startUtf8 is -1 or no byte match.
+     * 3. Largest line-range overlap — for partially overlapping blocks.
+     * 4. Nearest by gap — last resort for non-overlapping blocks.
      *
      * Fallback: when [startUtf8] is -1 (not tracked) or no byte-offset match exists,
      * falls back to line-index overlap and nearest-by-gap matching (legacy behavior).
@@ -2241,22 +2257,6 @@ class AndroidVisualPlanner {
      * or deleted — the old transaction's line N may become line N+1 in the new revision,
      * causing line-index-based matching to pair the wrong BlockShifts) but prevents the
      * suffix from jumping to the old position when no rebase data is available.
-     */
-    /**
-     * Rebase new BlockShifts onto the current visual state of the old transaction's
-     * BlockShifts, with one-to-one matching invariant.
-     *
-     * Each old [BlockShiftVisualState] can be matched to at most one new BlockShift,
-     * enforced by [usedRebaseIndices]. Without this, multiple new BlockShifts could
-     * all match the same old state (e.g. when a hard-break insertion splits one old
-     * suffix block into two new blocks), causing both to inherit the same
-     * currentTranslateY instead of each getting a unique rebase anchor.
-     *
-     * Matching tiers (same priority as before, now with one-to-one constraint):
-     * 1. [startUtf8] exact match — most reliable across revisions.
-     * 2. Exact line-range match — fallback when startUtf8 is -1 or no byte match.
-     * 3. Largest line-range overlap — for partially overlapping blocks.
-     * 4. Nearest by gap — last resort for non-overlapping blocks.
      */
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,
