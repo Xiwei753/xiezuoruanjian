@@ -174,7 +174,7 @@ class AndroidTextAnimationEngine(
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
         val affectedResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, newRevision)
-        val affectedNewLineIndices = affectedResult.lineIndices
+        val affectedNewLineIndices = affectedResult.newLineIndices
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
         submit(transaction)

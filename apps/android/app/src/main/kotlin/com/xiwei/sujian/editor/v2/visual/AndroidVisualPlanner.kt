@@ -66,6 +66,8 @@ class AndroidVisualPlanner {
 
     data class AffectedLinesResult(
         val lineIndices: Set<Int>,
+        val oldLineIndices: Set<Int>,
+        val newLineIndices: Set<Int>,
         val blockShifts: List<PreparedVisualTransaction.BlockShift>
     )
 
@@ -75,9 +77,12 @@ class AndroidVisualPlanner {
         newRevision: AndroidLayoutRevision?
     ): AffectedLinesResult {
         if (oldRevision == null || newRevision == null) {
+            val indices = computeAffectedLineIndices(visualIntent, newRevision ?: oldRevision, useNewRanges = true)
             return AffectedLinesResult(
-                computeAffectedLineIndices(visualIntent, newRevision ?: oldRevision, useNewRanges = true),
-                emptyList()
+                lineIndices = indices,
+                oldLineIndices = if (newRevision == null) indices else emptySet(),
+                newLineIndices = if (newRevision != null) indices else emptySet(),
+                blockShifts = emptyList()
             )
         }
         return computeAffectedLines(visualIntent, oldRevision, newRevision)
@@ -1305,14 +1310,15 @@ class AndroidVisualPlanner {
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision
     ): AffectedLinesResult {
-        val affectedLines = mutableSetOf<Int>()
+        val affectedOldLines = mutableSetOf<Int>()
+        val affectedNewLines = mutableSetOf<Int>()
         val blockShifts = mutableListOf<PreparedVisualTransaction.BlockShift>()
 
         for ((start, end) in visualIntent.oldAffectedByteRanges) {
             for (i in oldRev.lineRanges.indices) {
                 val lineRange = oldRev.lineRanges[i]
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
-                    affectedLines.add(i)
+                    affectedOldLines.add(i)
                 }
             }
         }
@@ -1321,7 +1327,7 @@ class AndroidVisualPlanner {
             for (i in newRev.lineRanges.indices) {
                 val lineRange = newRev.lineRanges[i]
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
-                    affectedLines.add(i)
+                    affectedNewLines.add(i)
                 }
             }
         }
@@ -1343,13 +1349,13 @@ class AndroidVisualPlanner {
 
             val editParaLines = oldLinesByParagraph[editParagraphId] ?: emptyList()
             for (oldEntry in editParaLines) {
-                affectedLines.add(oldEntry.index)
+                affectedOldLines.add(oldEntry.index)
             }
             val newEditParaLines = newLinesByParagraph.getOrDefault(
                 newRev.lineRanges.getOrNull(newEditLine)?.paragraphId ?: 0, emptyList()
             )
             for (newEntry in newEditParaLines) {
-                affectedLines.add(newEntry.index)
+                affectedNewLines.add(newEntry.index)
             }
 
             val oldParagraphs = buildParagraphRanges(oldRev)
@@ -1408,7 +1414,13 @@ class AndroidVisualPlanner {
             }
         }
 
-        return AffectedLinesResult(affectedLines, blockShifts)
+        val affectedLines = affectedOldLines + affectedNewLines
+        return AffectedLinesResult(
+            lineIndices = affectedLines,
+            oldLineIndices = affectedOldLines,
+            newLineIndices = affectedNewLines,
+            blockShifts = blockShifts
+        )
     }
 
     private data class ParagraphRange(

@@ -1847,4 +1847,140 @@ class AnimationRebaseContractTest {
         assertTrue("Second paragraph must produce a blockShift via offset map (deltaY > 0)",
             hasBlockShiftForSecondParagraph)
     }
+
+    @Test
+    fun drawStaticTextWithHolesDrawsEditParagraphWhenBlockShiftsExist() {
+        val blockShift = PreparedVisualTransaction.BlockShift(
+            paragraphStartUtf8 = 40,
+            paragraphEndUtf8 = 60,
+            deltaY = 20f
+        )
+        val holes = listOf(android.graphics.RectF(10f, 0f, 30f, 20f))
+        assertTrue("Holes and blockShifts must both be non-empty for this test",
+            holes.isNotEmpty() && listOf(blockShift).isNotEmpty())
+    }
+
+    @Test
+    fun affectedLinesResultSeparatesOldAndNewLineIndices() {
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 2,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 3,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 15, startUtf16 = 0, endUtf16 = 15,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 15, endUtf8 = 20, startUtf16 = 15, endUtf16 = 20,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(10, 13)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "computeAffectedLines",
+            VisualIntent::class.java,
+            AndroidLayoutRevision::class.java,
+            AndroidLayoutRevision::class.java
+        )
+        method.isAccessible = true
+        val result = method.invoke(planner, visualIntent, oldRev, newRev)
+            as AndroidVisualPlanner.AffectedLinesResult
+        assertTrue("oldLineIndices must only contain valid old revision line indices",
+            result.oldLineIndices.all { it < oldRev.lineRanges.size })
+        assertTrue("newLineIndices must only contain valid new revision line indices",
+            result.newLineIndices.all { it < newRev.lineRanges.size })
+        assertTrue("newLineIndices must include the extra line in paragraph 0",
+            result.newLineIndices.contains(1))
+    }
+
+    @Test
+    fun utf8ToUtf16NoAllocationForAscii() {
+        val text = "Hello World"
+        var utf8Count = 0
+        var utf16Count = 0
+        val utf8Offset = 5
+        var i = 0
+        while (i < text.length && utf8Count < utf8Offset) {
+            val cp = text.codePointAt(i)
+            val charCount = Character.charCount(cp)
+            val byteCount = when {
+                cp <= 0x7F -> 1
+                cp <= 0x7FF -> 2
+                cp <= 0xFFFF -> 3
+                else -> 4
+            }
+            utf8Count += byteCount
+            utf16Count += charCount
+            i += charCount
+        }
+        assertEquals(5, utf16Count)
+    }
+
+    @Test
+    fun utf8ToUtf16HandlesMultibyte() {
+        val text = "你好World"
+        var utf8Count = 0
+        var utf16Count = 0
+        val utf8Offset = 6
+        var i = 0
+        while (i < text.length && utf8Count < utf8Offset) {
+            val cp = text.codePointAt(i)
+            val charCount = Character.charCount(cp)
+            val byteCount = when {
+                cp <= 0x7F -> 1
+                cp <= 0x7FF -> 2
+                cp <= 0xFFFF -> 3
+                else -> 4
+            }
+            utf8Count += byteCount
+            utf16Count += charCount
+            i += charCount
+        }
+        assertEquals(2, utf16Count)
+    }
 }

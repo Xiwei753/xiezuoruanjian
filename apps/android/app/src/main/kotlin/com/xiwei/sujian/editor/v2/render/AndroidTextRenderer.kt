@@ -91,20 +91,35 @@ class AndroidTextRenderer {
             layout.draw(canvas)
             return
         }
-        canvas.save()
-        for (region in holes) {
-            canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
-        }
-        if (blockShifts.isNotEmpty()) {
-            val text = layout.text?.toString() ?: ""
-            for (shift in blockShifts) {
+        val text = layout.text?.toString() ?: ""
+        val shiftLineRanges = if (blockShifts.isNotEmpty()) {
+            blockShifts.map { shift ->
                 val startUtf16 = utf8ToUtf16(text, shift.paragraphStartUtf8)
                 val endUtf16 = utf8ToUtf16(text, shift.paragraphEndUtf8.coerceAtMost(
                     text.toByteArray(Charsets.UTF_8).size
                 ))
                 val startLine = layout.getLineForOffset(startUtf16.coerceIn(0, text.length))
                 val endLine = layout.getLineForOffset(endUtf16.coerceIn(0, text.length))
-                val currentDeltaY = shift.deltaY * progress
+                Triple(startLine, endLine, shift.deltaY)
+            }
+        } else emptyList()
+        canvas.save()
+        for (region in holes) {
+            canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
+        }
+        if (shiftLineRanges.isNotEmpty()) {
+            for ((startLine, endLine, _) in shiftLineRanges) {
+                canvas.clipOutRect(
+                    layout.getLineLeft(startLine), layout.getLineTop(startLine).toFloat(),
+                    layout.getLineRight(endLine), layout.getLineBottom(endLine).toFloat()
+                )
+            }
+        }
+        layout.draw(canvas)
+        canvas.restore()
+        if (shiftLineRanges.isNotEmpty()) {
+            for ((startLine, endLine, deltaY) in shiftLineRanges) {
+                val currentDeltaY = deltaY * progress
                 canvas.save()
                 canvas.translate(0f, currentDeltaY)
                 canvas.clipRect(
@@ -114,16 +129,28 @@ class AndroidTextRenderer {
                 layout.draw(canvas)
                 canvas.restore()
             }
-        } else {
-            layout.draw(canvas)
         }
-        canvas.restore()
     }
 
     private fun utf8ToUtf16(text: String, utf8Offset: Int): Int {
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        val safeOffset = utf8Offset.coerceIn(0, bytes.size)
-        return text.substring(0, String(bytes.copyOfRange(0, safeOffset), Charsets.UTF_8).length).length
+        var utf8Count = 0
+        var utf16Count = 0
+        val len = text.length
+        var i = 0
+        while (i < len && utf8Count < utf8Offset) {
+            val cp = text.codePointAt(i)
+            val charCount = Character.charCount(cp)
+            val byteCount = when {
+                cp <= 0x7F -> 1
+                cp <= 0x7FF -> 2
+                cp <= 0xFFFF -> 3
+                else -> 4
+            }
+            utf8Count += byteCount
+            utf16Count += charCount
+            i += charCount
+        }
+        return utf16Count
     }
 
     fun drawPreeditUnderline(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {
