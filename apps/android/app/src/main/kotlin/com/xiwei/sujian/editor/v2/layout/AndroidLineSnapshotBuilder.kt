@@ -54,6 +54,10 @@ class AndroidLineSnapshotBuilder {
         val width = kotlin.math.ceil(right - left).toInt().coerceAtLeast(1)
         val height = kotlin.math.ceil(bottom - top).toInt().coerceAtLeast(1)
 
+        // Bitmap dimensions use ceil() to ensure the bitmap covers the full sub-pixel
+        // extent of the line. Source rects (below) use floor/ceil and clamp to
+        // [0, bitmapWidth/Height], so ceil guarantees no cluster sourceRect overflows
+        // the bitmap even when line width/height has a fractional part.
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.translate(-left, -top)
@@ -126,6 +130,10 @@ class AndroidLineSnapshotBuilder {
                 layout.getLineRight(lineIndex)
             }
 
+            // RTL normalization: getPrimaryHorizontal(clusterEndUtf16) can be less than
+            // getPrimaryHorizontal(clusterStartUtf16) in RTL text. Using min/max ensures
+            // visualLeft <= visualRight and sourceLeft <= sourceRight, preventing zero-width
+            // or inverted rects that would cause the animation renderer to skip the slice.
             val visualLeft = kotlin.math.min(x0, x1)
             val visualRight = kotlin.math.max(x0, x1)
 
@@ -140,6 +148,14 @@ class AndroidLineSnapshotBuilder {
             val bitmapWidth = kotlin.math.ceil(lineRange.right - lineRange.left).toInt().coerceAtLeast(1)
             val bitmapHeight = kotlin.math.ceil(lineRange.bottom - lineRange.top).toInt().coerceAtLeast(1)
 
+            // Source rect geometry: floor for left/top, ceil for right/bottom, then clamp
+            // to [0, bitmapWidth/Height]. This ensures:
+            // 1. The source rect covers the full visual extent of the cluster (ceil rounds up
+            //    the sub-pixel boundary that floor might miss).
+            // 2. No sourceRect coordinate exceeds the Bitmap dimensions (which use ceil),
+            //    preventing Canvas.drawBitmap from reading out-of-bounds pixels.
+            // 3. sourceRectLeft is at least sourceRectLeft + 1 (minimum 1px width) so that
+            //    zero-width clusters (e.g. RTL boundary edge cases) are not silently dropped.
             val sourceRectLeft = kotlin.math.floor(sourceLeft).toInt().coerceIn(0, bitmapWidth)
             val sourceRectTop = kotlin.math.floor(sourceTop).toInt().coerceIn(0, bitmapHeight)
             val sourceRectRight = kotlin.math.ceil(sourceRight).toInt().coerceIn(sourceRectLeft + 1, bitmapWidth)

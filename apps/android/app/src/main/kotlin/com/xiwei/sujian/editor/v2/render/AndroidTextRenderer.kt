@@ -78,7 +78,13 @@ class AndroidTextRenderer {
      * [blockShifts] apply a uniform Y translation to paragraphs that shifted vertically
      * due to reflow in a preceding paragraph. These paragraphs do NOT have per-line Bitmaps —
      * the renderer translates the static new-layout text by the interpolated deltaY.
-     * [progress] interpolates from 0 (old position) to 1 (new position).
+     *
+     * BlockShift rendering: the shifted region is first clipped out of the base static draw
+     * (so it is not double-rendered), then re-drawn with canvas.translate(0, deltaY * (progress - 1)).
+     * At progress=0 the text appears at its old Y position; at progress=1 it aligns with
+     * the new layout (no translation). [paragraphEndUtf8] is exclusive; it is clamped to
+     * the document's UTF-8 length before UTF-16 conversion to prevent exclusive-end越界
+     * into the next paragraph's first line.
      */
     fun drawStaticTextWithHoles(
         canvas: Canvas,
@@ -132,6 +138,11 @@ class AndroidTextRenderer {
         canvas.restore()
         if (shiftLineRanges.isNotEmpty()) {
             for ((startLine, endLine, deltaY) in shiftLineRanges) {
+                // Interpolation: at progress=0 the text is at its old position (offset by
+                // -deltaY from the new layout), at progress=1 it rests at the new layout
+                // position (no offset). The base static draw already rendered the text at
+                // the new position (clipped out above), so we translate by deltaY*(progress-1)
+                // to gradually reveal it moving from old→new.
                 val currentDeltaY = deltaY * (progress - 1f)
                 canvas.save()
                 canvas.translate(0f, currentDeltaY)

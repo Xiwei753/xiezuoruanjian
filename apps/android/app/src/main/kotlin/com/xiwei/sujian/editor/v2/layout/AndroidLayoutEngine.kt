@@ -134,6 +134,12 @@ class AndroidLayoutEngine(
             // so the last character is at index lineEndUtf16 - 1. Checking text[lineEndUtf16]
             // would read the first character of the *next* line, producing a false positive
             // when the next line starts with `\n`.
+            //
+            // Invariant: this field is used by the animation planner to stop reflow scanning.
+            // Text reflow (soft-wrap changes) cannot propagate across a hard paragraph break,
+            // so the planner stops expanding the affected-line set at the first line where
+            // endsWithHardBreak is true. Subsequent paragraphs are handled via BlockShift
+            // (uniform Y translation) rather than per-line Bitmap snapshots.
             val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= text.length &&
                 text[lineEndUtf16 - 1] == '\n'
 
@@ -146,6 +152,13 @@ class AndroidLayoutEngine(
             } else {
                 currentParagraphLocalLineIndex++
             }
+            // NOTE: paragraphId is a sequential integer that changes when hard breaks are
+            // inserted or deleted (all subsequent paragraphs get new IDs). It is NOT a stable
+            // identity for cross-revision paragraph matching. The animation planner uses
+            // offset-map-based alignment (buildOffsetMapper) to match old/new paragraphs by
+            // their UTF-8 byte range, not by paragraphId. paragraphId is only used for
+            // grouping lines within a single revision (e.g. collecting all lines of the
+            // current edit paragraph for snapshot capture).
 
             lineRanges.add(AndroidLayoutRevision.LineRange(
                 startUtf8 = startUtf8,

@@ -98,6 +98,13 @@ data class VisualFrameSnapshot(
      *  [CursorTransition.fromX/fromY/fromHeight] from the on-screen position rather than
      *  the old logical endpoint — preventing cursor jumps during rapid consecutive input. */
     val cursorRect: android.graphics.RectF? = null
+    // NOTE: BlockShift current displacement is NOT captured here. When a new transaction
+    // arrives while the previous transaction's BlockShift is still animating, the new
+    // transaction recomputes BlockShifts from scratch using the new layout geometry.
+    // This means the shifted suffix paragraphs jump back to their old position and then
+    // re-animate to the new position. To fix this, VisualFrameSnapshot would need to
+    // capture each active BlockShift's current translateY and final deltaY, and the new
+    // transaction's rebase would interpolate from the current displacement.
 )
 
 data class SliceVisualState(

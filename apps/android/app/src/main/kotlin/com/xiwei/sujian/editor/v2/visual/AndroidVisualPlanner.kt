@@ -1304,6 +1304,14 @@ class AndroidVisualPlanner {
      * all subsequent paragraphIds (they are sequential integers), so ID-based matching would
      * pair different paragraphs. Offset-map matching ensures the same text paragraph is
      * aligned even after hard-break insertion/deletion.
+     *
+     * Hard-break insertion/deletion splits or merges paragraphs. The edit paragraph in the
+     * old revision may correspond to two paragraphs in the new revision (split), or two old
+     * paragraphs may merge into one new paragraph. Both the old and new "edit paragraph
+     * groups" are fully included in the affected line set, so the snapshot capture covers
+     * all structurally affected paragraphs. BlockShifts start only after the last paragraph
+     * in the edit group, preventing the same paragraph from appearing both as a Bitmap
+     * snapshot target and as a BlockShift target.
      */
     private fun computeAffectedLines(
         visualIntent: VisualIntent,

@@ -80,6 +80,24 @@ data class PreparedVisualTransaction(
         val shouldAnimate: Boolean
     )
 
+    /**
+     * Block-level vertical shift for a paragraph after the edit paragraph.
+     *
+     * Byte range convention: [paragraphStartUtf8] inclusive, [paragraphEndUtf8] exclusive
+     * (half-open). The renderer converts to UTF-16 via the layout text and clamps
+     * [paragraphEndUtf8] to the document length to avoid exclusive-end越界.
+     *
+     * [deltaY] is positive when the paragraph moved downward (newTop > oldTop).
+     * The renderer interpolates: translateY = deltaY * (progress - 1), so at progress=0
+     * the text is at its old position (shifted by -deltaY from the new layout) and at
+     * progress=1 it rests at the new layout position (no shift).
+     *
+     * Current limitation: each paragraph produces a separate BlockShift entry.
+     * Adjacent paragraphs with identical deltaY are NOT merged, so the renderer calls
+     * layout.draw() once per shifted paragraph per frame. For long documents this is
+     * acceptable because no per-line Bitmap is allocated — only the static layout is
+     * re-drawn with a Y translation.
+     */
     data class BlockShift(
         val paragraphStartUtf8: Int,
         val paragraphEndUtf8: Int,
