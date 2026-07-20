@@ -1941,6 +1941,22 @@ class AndroidVisualPlanner {
         return rebasedNewSlices + survivingOldSlices
     }
 
+    /**
+     * Tier-1 rebase matching: exact byte range + role compatibility.
+     *
+     * [clusterByteStart]/[clusterByteEndExclusive] are in the *new* revision's coordinate space
+     * (the new slice's byte range). The rebase snapshot's byte ranges are from the *old*
+     * transaction's revision. For retained text (not inserted/deleted), byte ranges are
+     * typically stable across revisions because the edit only changes text inside the affected
+     * ranges — clusters outside those ranges keep the same byte offsets. This makes exact
+     * byte-range matching reliable for the common case of retained text during rapid input.
+     *
+     * Two-pass matching: first try with lineIndex constraint (same visual line), then without.
+     * The lineIndex constraint is a performance optimization that avoids scanning all rebase
+     * states when the slice is on the same line as the old one. Removing it as a fallback
+     * handles cross-line Moves where the new slice's destination line differs from the old
+     * slice's source line.
+     */
     private fun findRebaseIndexByClusterByteRange(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot,

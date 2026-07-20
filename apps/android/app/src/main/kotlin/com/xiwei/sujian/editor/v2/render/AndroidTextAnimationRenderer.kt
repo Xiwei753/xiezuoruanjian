@@ -36,6 +36,10 @@ class AndroidTextAnimationRenderer {
                     //     old and new clusters, meaning the glyph pixels are visually identical.
                     //     Using the new Bitmap therefore produces no visual difference from using
                     //     the old Bitmap, while avoiding the need to store both snapshots.
+                    // (c) Move slices always have startAlpha = endAlpha = 1f (fully opaque
+                    //     throughout the animation) because the text content is unchanged — only
+                    //     its position transitions. Alpha variation would imply content change,
+                    //     which contradicts the Move invariant (same shaping identity).
                     val fromRect = slice.fromDestinationRect ?: slice.destinationRect
                     val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
                     val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress

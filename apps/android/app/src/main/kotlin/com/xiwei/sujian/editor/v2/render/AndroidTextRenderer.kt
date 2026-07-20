@@ -84,6 +84,13 @@ class AndroidTextRenderer {
      * At progress=0 the text appears at its old Y position; at progress=1 it aligns with
      * the new layout (no translation).
      *
+     * Coordinate semantics of the translate+clip sequence: canvas.translate shifts the
+     * coordinate system, so the subsequent clipRect(shift.left, shift.top, shift.right, shift.bottom)
+     * is in the *translated* coordinate frame. This means the clip region moves with the
+     * translation, keeping the visible area aligned with the block's new-layout geometry
+     * rather than the old-layout geometry. Without this, the clip would be at the wrong
+     * position after translation, cutting off the shifted text.
+     *
      * Merged BlockShifts: [AndroidVisualPlanner.mergeAdjacentBlockShifts] merges consecutive
      * paragraphs with identical deltaY into a single BlockShift entry. Each merged entry
      * triggers one [layout.draw] call per frame, so the total draw calls equal the number

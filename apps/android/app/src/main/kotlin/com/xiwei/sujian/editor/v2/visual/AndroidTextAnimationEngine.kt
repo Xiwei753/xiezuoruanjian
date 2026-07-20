@@ -365,6 +365,15 @@ class AndroidTextAnimationEngine(
         }
     }
 
+    /**
+     * Release all snapshots owned by this transaction and mark the timeline completed.
+     *
+     * Invariant: [transaction.ownedSnapshotIds] is the *precise* ownership set computed by
+     * [submit] — it contains only (a) newly captured snapshots referenced by slices/patches,
+     * and (b) old-transaction snapshots inherited via ownership transfer. Unreferenced snapshots
+     * were already released during [submit], so this method releases exactly the right set
+     * without scanning slices or patches.
+     */
     private fun completeTransaction(transaction: PreparedVisualTransaction) {
         val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
         for (snapshotId in transaction.ownedSnapshotIds) {
@@ -373,6 +382,7 @@ class AndroidTextAnimationEngine(
         timeline?.complete()
     }
 
+    /** Same ownership invariant as [completeTransaction]; timeline is cancelled instead. */
     private fun cancelTransaction(transaction: PreparedVisualTransaction) {
         val owner = SnapshotOwner.OwnedByTransaction(transaction.transactionId)
         for (snapshotId in transaction.ownedSnapshotIds) {

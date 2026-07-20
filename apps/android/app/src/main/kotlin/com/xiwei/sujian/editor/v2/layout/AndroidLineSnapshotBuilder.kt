@@ -95,6 +95,19 @@ class AndroidLineSnapshotBuilder {
         )
     }
 
+    /**
+     * Build a line snapshot including per-cluster geometry and shaping fingerprints.
+     *
+     * Cluster data (sourceRectInLineImage, visualRectInDocument, shapingFingerprint,
+     * shapingIdentityConfident) is required by the animation planner to generate
+     * Insert/Delete/Move/Crossfade slices at cluster granularity. Without cluster data,
+     * the planner can only produce whole-line crossfade, which is visually coarse for
+     * mid-paragraph edits where only a few characters change.
+     *
+     * The returned snapshot's [clusters] list is ordered by document position within the line.
+     * Each cluster represents one grapheme cluster (Unicode boundary), which is the smallest
+     * animation unit — splitting below grapheme level would break combining marks and ligatures.
+     */
     fun buildSnapshotForLineWithClusters(
         layout: Layout?,
         lineIndex: Int,
