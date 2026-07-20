@@ -195,17 +195,12 @@ class AndroidLineSnapshotBuilder {
         if (clusterText.isEmpty()) return ""
         val contextHash = computeContextHash(layout, lineIndex, clusterStartUtf16)
         if (android.os.Build.VERSION.SDK_INT >= 31) {
-            return buildShapingFingerprintApi31(clusterText, layout, lineIndex, clusterStartUtf16, contextHash)
+            return buildShapingFingerprintApi31(clusterText, layout, lineIndex, contextHash)
         }
         val codePoints = clusterText.codePoints().toArray()
         val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
-        val paintHash = layout.paint?.hashCode() ?: 0
-        val bidiDir = if (clusterStartUtf16 < layout.getLineEnd(lineIndex)) {
-            layout.getParagraphDirection(lineIndex)
-        } else {
-            Layout.DIR_LEFT_TO_RIGHT
-        }
-        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${bidiDir}_${contextHash}"
+        val paintHash = layout.paint.hashCode()
+        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${contextHash}"
     }
 
     private fun computeContextHash(layout: Layout, lineIndex: Int, clusterStartUtf16: Int): Int {
@@ -220,16 +215,17 @@ class AndroidLineSnapshotBuilder {
         val nextCodePoint = if (nextOffset < lineEnd && nextOffset < text.length) {
             Character.codePointAt(text, nextOffset)
         } else -1
+        val bidiDir = layout.getParagraphDirection(lineIndex)
         var result = 1
         result = 31 * result + prevCodePoint
         result = 31 * result + nextCodePoint
-        result = 31 * result + lineIndex
+        result = 31 * result + bidiDir
         return result
     }
 
-    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): String {
+    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, contextHash: Int): String {
         try {
-            val paint = layout.paint ?: return "${clusterText.hashCode()}_${contextHash}"
+            val paint = layout.paint
             val shaperClass = Class.forName("android.text.TextRunShaper")
             val shapeMethod = shaperClass.getMethod(
                 "shapeText",
