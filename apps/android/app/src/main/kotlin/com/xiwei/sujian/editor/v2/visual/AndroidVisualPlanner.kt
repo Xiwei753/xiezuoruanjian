@@ -886,6 +886,16 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Select clusters that overlap [affectedRanges] for run-level animation.
+     *
+     * Current implementation: returns the filtered set without merging adjacent clusters
+     * into contiguous runs. Each cluster is treated as an individual "run" — this is
+     * functionally equivalent to ClusterAnimation with a different entry path. True run
+     * grouping (merging adjacent affected clusters into a single visual unit for
+     * Insert/Delete/Crossfade) is a future enhancement; the current per-cluster approach
+     * already produces correct animation, just at finer granularity than intended.
+     */
     private fun groupClustersIntoRuns(
         clusters: List<LineClusterSnapshot>,
         affectedRanges: List<Pair<Int, Int>>
@@ -1143,6 +1153,11 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * No-animation path: produces no slices or static patches. When animation is suppressed
+     * (SystemSuppressed), the new layout is rendered directly without any transition — the
+     * static renderer draws the full text from the new layout, and no overlay animation is needed.
+     */
     private fun planNoAnimation(
         newRev: AndroidLayoutRevision,
         staticPatches: MutableList<PreparedVisualTransaction.StaticPatch>
@@ -1274,6 +1289,15 @@ class AndroidVisualPlanner {
         return affectedLines
     }
 
+    /**
+     * Find the visual line index containing [byteOffset].
+     *
+     * Boundary convention: uses `<=` (not `<`) against [LineRange.endUtf8], so an offset
+     * exactly at a line's endUtf8 still maps to that line rather than the next. This is
+     * intentional for edit-point detection — the edit byte offset may land on the exclusive
+     * boundary of the last affected line, and we must include that line in the affected set
+     * rather than accidentally starting the scan one line later.
+     */
     private fun findLineForUtf8(rev: AndroidLayoutRevision, byteOffset: Int): Int {
         for (i in rev.lineRanges.indices) {
             val range = rev.lineRanges[i]

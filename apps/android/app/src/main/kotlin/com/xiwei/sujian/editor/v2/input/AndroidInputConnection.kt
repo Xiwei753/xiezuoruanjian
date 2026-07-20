@@ -103,6 +103,12 @@ class AndroidInputConnection(
         return true
     }
 
+    /**
+     * Delete text around the cursor. [beforeLength]/[afterLength] are in code points
+     * (not UTF-16 code units like [deleteSurroundingText]). Each code point may span
+     * multiple UTF-16 surrogates; [String.offsetByCodePoints] handles the traversal.
+     * The resulting UTF-16 range is then converted to UTF-8 byte ranges for the kernel.
+     */
     override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
         if (beforeLength == 0 && afterLength == 0) return true
         if (adapter.isComposing()) {
@@ -222,6 +228,13 @@ class AndroidInputConnection(
         return true
     }
 
+    /**
+     * Enter composing mode on an existing text region (vs. setComposingText which starts
+     * from scratch). [start]/[end] are UTF-16 offsets from the InputConnection API;
+     * converted to UTF-8 byte offsets for the Rust kernel via [AndroidTextIndexMap].
+     * The selected text becomes the initial preedit, and the mirror's composition overlay
+     * is set up immediately so the IME sees the composing region.
+     */
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0 || start > end) return false
         // start/end are UTF-16 offsets from the InputConnection API; convert to UTF-8

@@ -303,6 +303,10 @@ class AndroidInputAdapter(
         previousCompositionText = currentCompositionText
         currentCompositionText = preeditText
         val preeditUtf16Len = AndroidTextIndexMap.countUtf16CodeUnits(preeditText)
+        // newCursorPosition sign convention (Android InputConnection API):
+        //   > 0 : 1-based offset from start of preedit → convert to 0-based: (n-1)
+        //   <= 0: 0-based offset from end of preedit → already 0-based from end
+        // Both paths coerce to [0, preeditUtf16Len] to stay within the preedit bounds.
         compositionCursorUtf16 = if (newCursorPosition > 0) {
             (preeditUtf16Len + newCursorPosition - 1).coerceIn(0, preeditUtf16Len)
         } else {

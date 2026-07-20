@@ -34,6 +34,9 @@ class AndroidTextAnimationRenderer {
                     val currentDest = android.graphics.RectF(currentLeft, currentTop, currentRight, currentBottom)
                     canvas.drawBitmap(bitmap, slice.sourceRect, currentDest, slicePaint)
                 }
+                // Insert/Delete/CrossfadeOld/CrossfadeNew: position does not change during
+                // animation — only alpha varies. The bitmap is drawn at its final destination
+                // with interpolated alpha; no positional interpolation is needed.
                 else -> {
                     canvas.drawBitmap(bitmap, slice.sourceRect, slice.destinationRect, slicePaint)
                 }

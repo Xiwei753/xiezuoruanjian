@@ -137,6 +137,10 @@ class AndroidTextAnimationEngine(
      * Ordering invariant: old snapshots must be captured *before* the mirror update,
      * and new snapshots *after*, so that old/new represent the exact before/after states.
      * [beforePatch] runs between old capture and mirror update (e.g. to hide static text).
+     *
+     * Timestamp: [System.nanoTime] / 1_000_000 provides a monotonic millisecond clock
+     * consistent with [AnimationTimeline]'s internal time base. Sub-millisecond precision
+     * is intentionally discarded — [AnimationTimeline.progress] operates in whole milliseconds.
      */
     fun prepareAndSubmit(
         visualIntent: VisualIntent,
@@ -252,6 +256,11 @@ class AndroidTextAnimationEngine(
         return false
     }
 
+    /**
+     * Interpolate each animated slice's position and alpha from its start/end values at [progress].
+     * For Move slices, [fromDestinationRect] is the pre-move position; for other roles it falls
+     * back to [destinationRect] (alpha-only animation).
+     */
     private fun computeSliceVisualStates(
         transaction: PreparedVisualTransaction,
         progress: Float
@@ -300,6 +309,10 @@ class AndroidTextAnimationEngine(
         timeline?.cancel()
     }
 
+    /**
+     * Interpolate the cursor rectangle from [CursorTransition] at [progress].
+     * Width is hardcoded to 2px (visual cursor bar width, not derived from layout).
+     */
     private fun computeCurrentCursorRect(
         transaction: PreparedVisualTransaction,
         progress: Float
