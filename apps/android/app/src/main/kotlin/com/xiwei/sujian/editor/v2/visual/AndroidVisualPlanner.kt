@@ -2201,54 +2201,79 @@ class AndroidVisualPlanner {
      * causing line-index-based matching to pair the wrong BlockShifts) but prevents the
      * suffix from jumping to the old position when no rebase data is available.
      */
+    /**
+     * Rebase new BlockShifts onto the current visual state of the old transaction's
+     * BlockShifts, with one-to-one matching invariant.
+     *
+     * Each old [BlockShiftVisualState] can be matched to at most one new BlockShift,
+     * enforced by [usedRebaseIndices]. Without this, multiple new BlockShifts could
+     * all match the same old state (e.g. when a hard-break insertion splits one old
+     * suffix block into two new blocks), causing both to inherit the same
+     * currentTranslateY instead of each getting a unique rebase anchor.
+     *
+     * Matching tiers (same priority as before, now with one-to-one constraint):
+     * 1. [startUtf8] exact match — most reliable across revisions.
+     * 2. Exact line-range match — fallback when startUtf8 is -1 or no byte match.
+     * 3. Largest line-range overlap — for partially overlapping blocks.
+     * 4. Nearest by gap — last resort for non-overlapping blocks.
+     */
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,
         rebaseSnapshot: VisualFrameSnapshot
     ): List<PreparedVisualTransaction.BlockShift> {
         if (rebaseSnapshot.blockShiftStates.isEmpty() || newBlockShifts.isEmpty()) return newBlockShifts
+        val usedRebaseIndices = mutableSetOf<Int>()
         return newBlockShifts.map { shift ->
-            val byteOffsetMatch = if (shift.startUtf8 >= 0) {
-                rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
-                    oldState.startUtf8 == shift.startUtf8
+            val byteOffsetMatchIdx = if (shift.startUtf8 >= 0) {
+                rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
+                    i !in usedRebaseIndices && rebaseSnapshot.blockShiftStates[i].startUtf8 == shift.startUtf8
                 }
             } else null
-            if (byteOffsetMatch != null) {
-                shift.copy(deltaY = shift.deltaY - byteOffsetMatch.currentTranslateY)
+            if (byteOffsetMatchIdx != null) {
+                usedRebaseIndices.add(byteOffsetMatchIdx)
+                shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[byteOffsetMatchIdx].currentTranslateY)
             } else {
-                val exactMatch = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
-                    oldState.startLineIndex == shift.startLineIndex &&
-                        oldState.endLineIndexExclusive == shift.endLineIndexExclusive
+                val exactMatchIdx = rebaseSnapshot.blockShiftStates.indices.firstOrNull { i ->
+                    i !in usedRebaseIndices &&
+                        rebaseSnapshot.blockShiftStates[i].startLineIndex == shift.startLineIndex &&
+                        rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive == shift.endLineIndexExclusive
                 }
-                if (exactMatch != null) {
-                    shift.copy(deltaY = shift.deltaY - exactMatch.currentTranslateY)
+                if (exactMatchIdx != null) {
+                    usedRebaseIndices.add(exactMatchIdx)
+                    shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[exactMatchIdx].currentTranslateY)
                 } else {
-                    val overlappingOlds = rebaseSnapshot.blockShiftStates.filter { oldState ->
-                        oldState.startLineIndex < shift.endLineIndexExclusive &&
-                            oldState.endLineIndexExclusive > shift.startLineIndex
+                    val overlappingIndices = rebaseSnapshot.blockShiftStates.indices.filter { i ->
+                        i !in usedRebaseIndices &&
+                            rebaseSnapshot.blockShiftStates[i].startLineIndex < shift.endLineIndexExclusive &&
+                            rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive > shift.startLineIndex
                     }
-                    if (overlappingOlds.isNotEmpty()) {
-                        // When no exact line-range match exists, find the old BlockShift
-                        // with the largest line-range overlap. Maximum overlap is preferred
-                        // over minimum gap because an overlapping old shift was actively
-                        // animating the same region — its currentTranslateY is the most
-                        // representative on-screen position for the new shift's starting point.
-                        val bestOld = overlappingOlds.maxByOrNull {
-                            val overlapStart = maxOf(it.startLineIndex, shift.startLineIndex)
-                            val overlapEnd = minOf(it.endLineIndexExclusive, shift.endLineIndexExclusive)
+                    if (overlappingIndices.isNotEmpty()) {
+                        val bestIdx = overlappingIndices.maxByOrNull { i ->
+                            val overlapStart = maxOf(rebaseSnapshot.blockShiftStates[i].startLineIndex, shift.startLineIndex)
+                            val overlapEnd = minOf(rebaseSnapshot.blockShiftStates[i].endLineIndexExclusive, shift.endLineIndexExclusive)
                             overlapEnd - overlapStart
                         }
-                        shift.copy(deltaY = shift.deltaY - (bestOld?.currentTranslateY ?: 0f))
-                    } else {
-                        val nearestOld = rebaseSnapshot.blockShiftStates.minByOrNull { oldState ->
-                            val gap = if (oldState.endLineIndexExclusive <= shift.startLineIndex) {
-                                shift.startLineIndex - oldState.endLineIndexExclusive
-                            } else {
-                                oldState.startLineIndex - shift.endLineIndexExclusive
-                            }
-                            kotlin.math.abs(gap)
+                        if (bestIdx != null) {
+                            usedRebaseIndices.add(bestIdx)
+                            shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[bestIdx].currentTranslateY)
+                        } else {
+                            shift
                         }
-                        if (nearestOld != null) {
-                            shift.copy(deltaY = shift.deltaY - nearestOld.currentTranslateY)
+                    } else {
+                        val nearestIdx = rebaseSnapshot.blockShiftStates.indices
+                            .filter { i -> i !in usedRebaseIndices }
+                            .minByOrNull { i ->
+                                val oldState = rebaseSnapshot.blockShiftStates[i]
+                                val gap = if (oldState.endLineIndexExclusive <= shift.startLineIndex) {
+                                    shift.startLineIndex - oldState.endLineIndexExclusive
+                                } else {
+                                    oldState.startLineIndex - shift.endLineIndexExclusive
+                                }
+                                kotlin.math.abs(gap)
+                            }
+                        if (nearestIdx != null) {
+                            usedRebaseIndices.add(nearestIdx)
+                            shift.copy(deltaY = shift.deltaY - rebaseSnapshot.blockShiftStates[nearestIdx].currentTranslateY)
                         } else {
                             shift
                         }

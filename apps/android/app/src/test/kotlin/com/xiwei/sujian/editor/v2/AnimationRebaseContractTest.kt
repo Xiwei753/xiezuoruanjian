@@ -3038,6 +3038,60 @@ class AnimationRebaseContractTest {
     }
 
     @Test
+    fun blockShiftRebaseOneToOneMatchingPreventsDuplicateReuse() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 3,
+                    endLineIndexExclusive = 6,
+                    startUtf8 = 100,
+                    currentTranslateY = -10f,
+                    targetTranslateY = 0f
+                )
+            )
+        )
+        val newShift1 = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 3,
+            endLineIndexExclusive = 5,
+            top = 60f,
+            bottom = 100f,
+            left = 0f,
+            right = 800f,
+            deltaY = 20f,
+            startUtf8 = 100
+        )
+        val newShift2 = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 5,
+            endLineIndexExclusive = 7,
+            top = 100f,
+            bottom = 140f,
+            left = 0f,
+            right = 800f,
+            deltaY = 20f,
+            startUtf8 = 200
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToBlockShifts",
+            List::class.java,
+            VisualFrameSnapshot::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val result = method.invoke(planner, listOf(newShift1, newShift2), rebaseSnapshot) as List<*>
+        val rebased1 = result[0] as PreparedVisualTransaction.BlockShift
+        val rebased2 = result[1] as PreparedVisualTransaction.BlockShift
+        assertTrue("First shift (startUtf8=100) must match the old state and get rebase adjustment",
+            kotlin.math.abs(rebased1.deltaY) > kotlin.math.abs(newShift1.deltaY))
+        assertEquals("Second shift (startUtf8=200) must NOT reuse the same old state — no byte match, no line-range match, no overlap",
+            newShift2.deltaY, rebased2.deltaY, 0.01f)
+    }
+
+    @Test
     fun blockShiftRendererUsesPrecomputedGeometryNoUtf8Lookup() {
         val shift = PreparedVisualTransaction.BlockShift(
             startLineIndex = 3,
