@@ -130,6 +130,12 @@ class AndroidLineSnapshotBuilder {
             val clusterEndUtf8 = indexMap.utf16ToUtf8(clusterEndUtf16)
 
             val x0 = layout.getPrimaryHorizontal(clusterStartUtf16)
+            // Line-end cluster right boundary: use getLineRight instead of
+            // getPrimaryHorizontal(clusterEndUtf16) when the cluster ends at the line end.
+            // getPrimaryHorizontal at the line-end offset can return an unreliable value
+            // (it may return the position of the next line's start character in RTL, or
+            // the cursor position after the last character which may differ from the
+            // visual right edge). getLineRight is the Layout's authoritative right bound.
             val x1 = if (clusterEndUtf16 < layout.getLineEnd(lineIndex)) {
                 layout.getPrimaryHorizontal(clusterEndUtf16)
             } else {

@@ -61,11 +61,18 @@ class AndroidTextAnimationEngine(
             snapshotLookup[snapshot.snapshotId] = snapshot
         }
         if (rebaseFrame != null) {
-            // Populate snapshotLookup from the rebase frame's surviving slices. If a snapshot
-            // was already released (e.g. old transaction completed before this prepare call),
-            // resourceStore.get returns null and the entry is skipped — the planner's
-            // applyRebaseToSlices will produce a surviving slice with a null snapshot, which
-            // the renderer safely ignores (drawAnimatedSlices skips null-bitmap slices).
+            // Populate snapshotLookup from the rebase frame's surviving slices. These
+            // snapshots belong to the OLD transaction and may not be in oldSnapshots/
+            // newSnapshots (which were captured fresh for this transaction). Without this
+            // step, surviving slices (e.g. a still-fading Delete) would reference snapshot
+            // IDs that the planner can't look up, producing null-bitmap slices that the
+            // renderer silently skips — losing the old animation's visual state.
+            //
+            // If a snapshot was already released (e.g. old transaction completed before
+            // this prepare call), resourceStore.get returns null and the entry is skipped —
+            // the planner's applyRebaseToSlices will produce a surviving slice with a null
+            // snapshot, which the renderer safely ignores (drawAnimatedSlices skips
+            // null-bitmap slices).
             for (state in rebaseFrame.sliceVisualStates) {
                 val snapshot = resourceStore.get(state.snapshotId)
                 if (snapshot != null) {

@@ -386,6 +386,19 @@ class AndroidVisualPlanner {
                 }
             }
             if (matchedNewIdx == null) {
+                // Fingerprint fallback: when offset mapper fails to produce an exact match
+                // (e.g. the cluster straddles an edit boundary so mappedStart is null, or
+                // the mapped position doesn't correspond to any new cluster), match by
+                // shaping fingerprint. This is less precise than offset mapping because
+                // identical fingerprints don't guarantee the same text (e.g. repeated
+                // characters), so it's only used when the primary matching path fails.
+                //
+                // Tiebreaker: closest documentByteStart distance (not visual position).
+                // Byte-start distance is preferred because (a) it's deterministic and
+                // independent of layout, (b) visual position can change due to reflow
+                // even when the text hasn't moved semantically, and (c) for same-line
+                // clusters with identical fingerprints, byte order is a stable proxy for
+                // visual order in LTR text and is at least consistent in RTL.
                 val candidates = allNewClusters.indices.filter { i ->
                     val candidate = allNewClusters[i].first
                     i !in newUsed &&
@@ -1408,6 +1421,13 @@ class AndroidVisualPlanner {
             structurallyAffectedOldParaIds.add(editParagraphId)
             structurallyAffectedNewParaIds.add(editNewParaId)
 
+            // Detect structurally affected paragraphs beyond the primary edit paragraph.
+            // An old paragraph is structurally affected if its boundaries changed after the edit:
+            // - mappedEnd == null: the old paragraph's end falls inside a deleted/replaced range,
+            //   meaning the paragraph was partially consumed by the edit and needs old snapshots.
+            // - mapped end matches a new paragraph but mapped start does not: the paragraph's
+            //   boundaries shifted (e.g. a hard break was inserted inside it), so both the old
+            //   and new paragraphs need snapshots to animate the boundary change.
             for (oldPara in oldParagraphs) {
                 if (oldPara.paragraphId == editParagraphId) continue
                 val mappedEnd = offsetMapper(oldPara.endUtf8Exclusive)
@@ -1439,6 +1459,15 @@ class AndroidVisualPlanner {
                     // snapshots for exit animation. Without this, the second half of a
                     // split paragraph would have no old snapshot and would jump to its
                     // final position without animation.
+                    //
+                    // The condition checks: (1) the old paragraph's mapped start falls
+                    // before the new paragraph's end, AND (2) the new paragraph's start
+                    // falls before the old paragraph's end plus the new paragraph's length.
+                    // Condition (2) is a relaxed overlap check that accounts for the byte
+                    // shift caused by the split — the old paragraph's endUtf8Exclusive is
+                    // in old-document coordinates, while the new paragraph's range is in
+                    // new-document coordinates, so direct comparison requires adding the
+                    // new paragraph's length as a tolerance for the edit delta.
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
@@ -1475,6 +1504,18 @@ class AndroidVisualPlanner {
             val matchedNewParagraphs = mutableSetOf<Int>()
             val rawBlockShifts = mutableListOf<PreparedVisualTransaction.BlockShift>()
 
+            // Three-tier paragraph matching for BlockShift generation:
+            // 1. Match by mapped startUtf8 (primary): the old paragraph's start maps to the
+            //    new paragraph's start via offsetMapper. This is the most reliable because
+            //    paragraph start offsets are preserved across edits (unless a hard break is
+            //    inserted/deleted at the paragraph boundary).
+            // 2. Match by mapped endUtf8Exclusive (secondary): when the start doesn't match
+            //    (e.g. text was inserted at the paragraph start), the end may still align.
+            //    This catches paragraphs whose start shifted but whose end is unchanged.
+            // 3. Match by paragraphId (fallback): when offset mapping fails entirely (e.g.
+            //    the paragraph was heavily modified), fall back to sequential ID matching.
+            //    This is unreliable after hard-break insertion/deletion (all subsequent IDs
+            //    change), but is the last resort for paragraphs that must still shift.
             for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
                 if (oldPara.paragraphId in structurallyAffectedOldParaIds) continue
 
