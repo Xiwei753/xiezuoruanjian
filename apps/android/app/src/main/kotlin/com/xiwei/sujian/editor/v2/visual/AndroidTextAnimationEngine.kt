@@ -430,11 +430,12 @@ class AndroidTextAnimationEngine(
      * transaction's deltaY so that consecutive inputs continue from the on-screen position.
      *
      * Rebase invariant: after [AndroidVisualPlanner.applyRebaseToBlockShifts] adjusts
-     * deltaY to (newDeltaY + oldCurrentTranslateY), the formula still produces the correct
-     * on-screen position at progress=0: translateY = -(newDeltaY + oldCurrentTranslateY).
-     * Since the new layout's static text is at its unshifted position and the old animation
-     * had currentTranslateY, this equals the old on-screen position. At progress=1 the
-     * text reaches the new layout position (translateY = 0) regardless of rebase.
+     * deltaY to (newDeltaY - oldCurrentTranslateY), the formula still produces the correct
+     * on-screen position at progress=0: translateY = -(newDeltaY - oldCurrentTranslateY).
+     * The old on-screen position = layout_1_Y + currentTranslateY_old. The new layout
+     * position = layout_2_Y. Continuity requires layout_2_Y - adjustedDeltaY =
+     * layout_1_Y + currentTranslateY_old, so adjustedDeltaY = newDeltaY - currentTranslateY_old.
+     * At progress=1 the text reaches the new layout position (translateY = 0) regardless of rebase.
      */
     private fun computeBlockShiftVisualStates(
         transaction: PreparedVisualTransaction,

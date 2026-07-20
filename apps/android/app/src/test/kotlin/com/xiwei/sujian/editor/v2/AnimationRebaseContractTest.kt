@@ -2484,8 +2484,8 @@ class AnimationRebaseContractTest {
         @Suppress("UNCHECKED_CAST")
         val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
-        assertTrue("Rebased deltaY must be smaller than original (continuing from mid-animation)",
-            kotlin.math.abs(rebasedShift.deltaY) < kotlin.math.abs(newShift.deltaY))
+        assertTrue("Rebased deltaY must be larger than original (extending from mid-animation to new position)",
+            kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
     }
 
     @Test
@@ -2533,7 +2533,7 @@ class AnimationRebaseContractTest {
         val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Rebased deltaY must incorporate old currentTranslateY",
-            kotlin.math.abs(rebasedShift.deltaY) < kotlin.math.abs(newShift.deltaY))
+            kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
     }
 
     @Test
@@ -2788,7 +2788,7 @@ class AnimationRebaseContractTest {
         val result = method.invoke(planner, listOf(newMergedShift), rebaseSnapshot) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Merged rebase must incorporate old translateY",
-            kotlin.math.abs(rebasedShift.deltaY) < kotlin.math.abs(newMergedShift.deltaY))
+            kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newMergedShift.deltaY))
     }
 
     @Test
@@ -2829,7 +2829,7 @@ class AnimationRebaseContractTest {
         val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Byte-offset match must find the old BlockShift even when line indices differ",
-            kotlin.math.abs(rebasedShift.deltaY) < kotlin.math.abs(newShift.deltaY))
+            kotlin.math.abs(rebasedShift.deltaY) > kotlin.math.abs(newShift.deltaY))
     }
 
     @Test
@@ -2877,6 +2877,56 @@ class AnimationRebaseContractTest {
         val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertEquals("Byte-offset match must select the correct old state (startUtf8=200, not 100)",
-            20f + (-12f), rebasedShift.deltaY, 0.01f)
+            20f - (-12f), rebasedShift.deltaY, 0.01f)
+    }
+
+    @Test
+    fun blockShiftRebaseProducesContinuousOnScreenPosition() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 2,
+                    endLineIndexExclusive = 4,
+                    startUtf8 = 100,
+                    currentTranslateY = -10f,
+                    targetTranslateY = 0f
+                )
+            )
+        )
+        val newShift = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 2,
+            endLineIndexExclusive = 4,
+            top = 120f,
+            bottom = 160f,
+            left = 0f,
+            right = 800f,
+            deltaY = 20f,
+            startUtf8 = 100
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToBlockShifts",
+            List::class.java,
+            VisualFrameSnapshot::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
+
+        val oldLayoutY = 100f
+        val newLayoutY = 120f
+        val oldOnScreenY = oldLayoutY + (-10f)
+        val newOnScreenYAtProgress0 = newLayoutY + rebasedShift.deltaY * (0f - 1f)
+        assertEquals("Rebased animation at progress=0 must match old on-screen position",
+            oldOnScreenY, newOnScreenYAtProgress0, 0.01f)
+
+        val newOnScreenYAtProgress1 = newLayoutY + rebasedShift.deltaY * (1f - 1f)
+        assertEquals("Rebased animation at progress=1 must reach new layout position",
+            newLayoutY, newOnScreenYAtProgress1, 0.01f)
     }
 }

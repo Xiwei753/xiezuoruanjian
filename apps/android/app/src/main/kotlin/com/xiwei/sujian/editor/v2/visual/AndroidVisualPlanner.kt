@@ -2086,20 +2086,19 @@ class AndroidVisualPlanner {
      * causing the suffix text to jump back to the old position before animating forward.
      *
      * Rebase adjusts deltaY so that the new animation starts from the on-screen position:
-     *   adjustedDeltaY = newDeltaY + oldCurrentTranslateY
+     *   adjustedDeltaY = newDeltaY - oldCurrentTranslateY
      *
      * Proof that progress=0 yields the old on-screen position:
-     *   translateY(0) = adjustedDeltaY * (0 - 1) = -(newDeltaY + oldCurrentTranslateY)
-     * The new layout's static text is at its unshifted position (translateY=0). The old
-     * animation had the text at currentTranslateY relative to the new layout. So the
-     * old on-screen position = 0 + currentTranslateY. The new animation at progress=0
-     * places the text at -(newDeltaY + oldCurrentTranslateY) relative to the new layout.
-     * When newDeltaY represents the full geometric shift from old to new layout, this
-     * equals the old position because the old position = -(newDeltaY) + currentTranslateY
-     * = -(newDeltaY + oldCurrentTranslateY) when the old currentTranslateY is negative
-     * (text still above its new-layout position). The sign convention is consistent
-     * because deltaY is positive when text moved downward and currentTranslateY is
-     * negative during the animation (text has not yet reached the new position).
+     *   translateY(0) = adjustedDeltaY * (0 - 1) = -(newDeltaY - oldCurrentTranslateY)
+     * The new layout's static text is at layout_2_Y. The old animation had the text at
+     * layout_1_Y + currentTranslateY_old on screen. For continuity:
+     *   layout_2_Y - adjustedDeltaY = layout_1_Y + currentTranslateY_old
+     *   adjustedDeltaY = layout_2_Y - layout_1_Y - currentTranslateY_old
+     *                  = newDeltaY - currentTranslateY_old
+     *
+     * currentTranslateY_old is negative during animation (text has not yet reached the
+     * new-layout position), so subtracting it adds a positive correction. This ensures
+     * the new animation starts from the exact on-screen position of the old animation.
      *
      * Matching uses [startUtf8] (byte offset) as the primary identity rather than
      * [startLineIndex]. Line indices shift across revisions when hard breaks are
@@ -2124,14 +2123,14 @@ class AndroidVisualPlanner {
                 }
             } else null
             if (byteOffsetMatch != null) {
-                shift.copy(deltaY = shift.deltaY + byteOffsetMatch.currentTranslateY)
+                shift.copy(deltaY = shift.deltaY - byteOffsetMatch.currentTranslateY)
             } else {
                 val exactMatch = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
                     oldState.startLineIndex == shift.startLineIndex &&
                         oldState.endLineIndexExclusive == shift.endLineIndexExclusive
                 }
                 if (exactMatch != null) {
-                    shift.copy(deltaY = shift.deltaY + exactMatch.currentTranslateY)
+                    shift.copy(deltaY = shift.deltaY - exactMatch.currentTranslateY)
                 } else {
                     val overlappingOlds = rebaseSnapshot.blockShiftStates.filter { oldState ->
                         oldState.startLineIndex < shift.endLineIndexExclusive &&
@@ -2148,7 +2147,7 @@ class AndroidVisualPlanner {
                             val overlapEnd = minOf(it.endLineIndexExclusive, shift.endLineIndexExclusive)
                             overlapEnd - overlapStart
                         }
-                        shift.copy(deltaY = shift.deltaY + (bestOld?.currentTranslateY ?: 0f))
+                        shift.copy(deltaY = shift.deltaY - (bestOld?.currentTranslateY ?: 0f))
                     } else {
                         val nearestOld = rebaseSnapshot.blockShiftStates.minByOrNull { oldState ->
                             val gap = if (oldState.endLineIndexExclusive <= shift.startLineIndex) {
@@ -2159,7 +2158,7 @@ class AndroidVisualPlanner {
                             kotlin.math.abs(gap)
                         }
                         if (nearestOld != null) {
-                            shift.copy(deltaY = shift.deltaY + nearestOld.currentTranslateY)
+                            shift.copy(deltaY = shift.deltaY - nearestOld.currentTranslateY)
                         } else {
                             shift
                         }
