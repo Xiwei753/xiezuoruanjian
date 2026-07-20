@@ -52,10 +52,15 @@ class AndroidTextAnimationEngine(
 
     fun submit(preparedAnimation: PreparedVisualTransaction) {
         val oldTransaction = activeTransaction
+        val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
+
+        val unreferencedNewIds = preparedAnimation.ownedSnapshotIds - preparedAnimation.referencedSnapshotIds
+        for (snapshotId in unreferencedNewIds) {
+            resourceStore.release(snapshotId, newOwner)
+        }
 
         if (oldTransaction != null) {
             val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
-            val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
             val referencedIds = preparedAnimation.referencedSnapshotIds
             val inheritedIds = oldTransaction.ownedSnapshotIds
@@ -70,11 +75,12 @@ class AndroidTextAnimationEngine(
                 resourceStore.release(snapshotId, oldOwner)
             }
 
-            val preciseOwnedIds = preparedAnimation.ownedSnapshotIds + inheritedIds
+            val preciseOwnedIds = (preparedAnimation.ownedSnapshotIds - unreferencedNewIds) + inheritedIds
             activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
             timeline?.complete()
         } else {
-            activeTransaction = preparedAnimation
+            val preciseOwnedIds = preparedAnimation.ownedSnapshotIds - unreferencedNewIds
+            activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
         }
 
         timeline = AnimationTimeline(preparedAnimation.durationMs)

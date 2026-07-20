@@ -181,8 +181,9 @@ class AndroidLineSnapshotBuilder {
 
     private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
         if (clusterText.isEmpty()) return ""
+        val contextHash = computeContextHash(layout, lineIndex, clusterStartUtf16)
         if (android.os.Build.VERSION.SDK_INT >= 31) {
-            return buildShapingFingerprintApi31(clusterText, layout, lineIndex, clusterStartUtf16)
+            return buildShapingFingerprintApi31(clusterText, layout, lineIndex, clusterStartUtf16, contextHash)
         }
         val codePoints = clusterText.codePoints().toArray()
         val typeSummary = codePoints.map { Character.getType(it) }.distinct().sorted().joinToString(",")
@@ -192,12 +193,31 @@ class AndroidLineSnapshotBuilder {
         } else {
             Layout.DIR_LEFT_TO_RIGHT
         }
-        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${bidiDir}"
+        return "${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${bidiDir}_${contextHash}"
     }
 
-    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
+    private fun computeContextHash(layout: Layout, lineIndex: Int, clusterStartUtf16: Int): Int {
+        val lineStart = layout.getLineStart(lineIndex)
+        val lineEnd = layout.getLineEnd(lineIndex)
+        val text = layout.text
+        val prevCodePoint = if (clusterStartUtf16 > lineStart && clusterStartUtf16 <= text.length) {
+            Character.codePointBefore(text, clusterStartUtf16)
+        } else -1
+        val clusterCharCount = if (clusterStartUtf16 < text.length) Character.charCount(Character.codePointAt(text, clusterStartUtf16)) else 1
+        val nextOffset = clusterStartUtf16 + clusterCharCount
+        val nextCodePoint = if (nextOffset < lineEnd && nextOffset < text.length) {
+            Character.codePointAt(text, nextOffset)
+        } else -1
+        var result = 1
+        result = 31 * result + prevCodePoint
+        result = 31 * result + nextCodePoint
+        result = 31 * result + lineIndex
+        return result
+    }
+
+    private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): String {
         try {
-            val paint = layout.paint ?: return clusterText.hashCode().toString()
+            val paint = layout.paint ?: return "${clusterText.hashCode()}_${contextHash}"
             val shaperClass = Class.forName("android.text.TextRunShaper")
             val shapeMethod = shaperClass.getMethod(
                 "shapeText",
@@ -212,7 +232,7 @@ class AndroidLineSnapshotBuilder {
                 clusterText, 0, clusterText.length,
                 layout.getParagraphDirection(lineIndex),
                 paint
-            ) ?: return clusterText.hashCode().toString()
+            ) ?: return "${clusterText.hashCode()}_${contextHash}"
 
             val glyphCountMethod = positionedGlyphs.javaClass.getMethod("getGlyphCount")
             val glyphCount = glyphCountMethod.invoke(positionedGlyphs) as Int
@@ -234,9 +254,11 @@ class AndroidLineSnapshotBuilder {
                 sb.append("_")
                 sb.append((getYMethod.invoke(positionedGlyphs, i) as Float).toInt())
             }
+            sb.append("_ctx_")
+            sb.append(contextHash)
             return sb.toString()
         } catch (_: Exception) {
-            return clusterText.hashCode().toString()
+            return "${clusterText.hashCode()}_${contextHash}"
         }
     }
 }
