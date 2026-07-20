@@ -26,6 +26,8 @@ workspace/
 │  ├─ stats/                     # 写作统计
 │  │  ├─ events.local/           # 本地写作事件（不同步）
 │  │  └─ cache/                  # 统计缓存（不同步）
+│  ├─ themes/                    # 主题数据
+│  │  └─ palettes/               # 调色板记录目录
 │  └─ logs/                      # 应用日志
 ├─ projects/
 │  └─ <project_id>/              # 项目目录

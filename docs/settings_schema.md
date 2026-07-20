@@ -41,8 +41,8 @@ Supersedes: None
 - `editorCoordinatedTextCursorAnimationEnabled`（布尔值，协同光标动画开关，默认 false）
 - `aiEnabled`（布尔值，AI 功能开关，默认 false）
 - `statsDeviceId`（字符串，统计设备 ID，默认自动生成 UUID）
-- `linuxQtSidebarWidth`（整数，Linux_qt 侧边栏宽度像素，默认 260；旧字段 `desktopSidebarWidth` 仍可读取）
-- `linuxQtEditorWidth`（整数，Linux_qt 编辑器宽度像素，默认 820；旧字段 `desktopEditorWidth` 仍可读取）
+- `linuxQtSidebarWidth`（浮点数，Linux_qt 侧边栏宽度像素，默认 0.0；旧字段 `desktopSidebarWidth` / `linux_sidebar_width` 仍可读取）
+- `linuxQtEditorWidth`（浮点数，Linux_qt 编辑器宽度像素，默认 0.0；旧字段 `desktopEditorWidth` 仍可读取）
 - `diagnosticsEnabled`（布尔值，本地诊断日志开关，默认 true，不进入同步、不含敏感数据）
 - `diagnosticsVerbose`（布尔值，本地诊断详细模式，默认 true，不进入同步、不含敏感数据）
 
@@ -53,7 +53,7 @@ Supersedes: None
 - 编辑器偏好（`fontSize`、缩进样式）
 - `themeMode`（字符串）[DEPRECATED — 使用 LocalSettings.appearanceMode]
 - `monetColor`（字符串）[DEPRECATED — 使用调色板目录]
-- `themePaletteJson`（字符串）[DEPRECATED — 使用调色板目录]
+- `themePalette`（对象）[DEPRECATED — 使用调色板目录]
 
 ### `app-meta/themes/palettes/<device_id>/<fingerprint>.json`
 不可变调色板记录目录。每个文件是一份完整的 Material 3 主题快照。
