@@ -74,9 +74,20 @@ class AndroidTextRenderer {
      * animated slices. Each hole must be the exact bounding box of the cluster(s) the
      * animation renderer will draw — not a merged bounding rect of source + destination,
      * which would erase non-animated text between them (especially for cross-line Moves).
+     *
+     * [blockShifts] apply a uniform Y translation to paragraphs that shifted vertically
+     * due to reflow in a preceding paragraph. These paragraphs do NOT have per-line Bitmaps —
+     * the renderer translates the static new-layout text by the interpolated deltaY.
+     * [progress] interpolates from 0 (old position) to 1 (new position).
      */
-    fun drawStaticTextWithHoles(canvas: Canvas, layout: android.text.Layout, holes: List<android.graphics.RectF>) {
-        if (holes.isEmpty()) {
+    fun drawStaticTextWithHoles(
+        canvas: Canvas,
+        layout: android.text.Layout,
+        holes: List<android.graphics.RectF>,
+        blockShifts: List<com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction.BlockShift> = emptyList(),
+        progress: Float = 1f
+    ) {
+        if (holes.isEmpty() && blockShifts.isEmpty()) {
             layout.draw(canvas)
             return
         }
@@ -84,8 +95,35 @@ class AndroidTextRenderer {
         for (region in holes) {
             canvas.clipOutRect(region.left, region.top, region.right, region.bottom)
         }
-        layout.draw(canvas)
+        if (blockShifts.isNotEmpty()) {
+            val text = layout.text?.toString() ?: ""
+            for (shift in blockShifts) {
+                val startUtf16 = utf8ToUtf16(text, shift.paragraphStartUtf8)
+                val endUtf16 = utf8ToUtf16(text, shift.paragraphEndUtf8.coerceAtMost(
+                    text.toByteArray(Charsets.UTF_8).size
+                ))
+                val startLine = layout.getLineForOffset(startUtf16.coerceIn(0, text.length))
+                val endLine = layout.getLineForOffset(endUtf16.coerceIn(0, text.length))
+                val currentDeltaY = shift.deltaY * progress
+                canvas.save()
+                canvas.translate(0f, currentDeltaY)
+                canvas.clipRect(
+                    layout.getLineLeft(startLine), layout.getLineTop(startLine).toFloat(),
+                    layout.getLineRight(endLine), layout.getLineBottom(endLine).toFloat()
+                )
+                layout.draw(canvas)
+                canvas.restore()
+            }
+        } else {
+            layout.draw(canvas)
+        }
         canvas.restore()
+    }
+
+    private fun utf8ToUtf16(text: String, utf8Offset: Int): Int {
+        val bytes = text.toByteArray(Charsets.UTF_8)
+        val safeOffset = utf8Offset.coerceIn(0, bytes.size)
+        return text.substring(0, String(bytes.copyOfRange(0, safeOffset), Charsets.UTF_8).length).length
     }
 
     fun drawPreeditUnderline(canvas: Canvas, layout: android.text.Layout, compStart: Int, compEnd: Int) {

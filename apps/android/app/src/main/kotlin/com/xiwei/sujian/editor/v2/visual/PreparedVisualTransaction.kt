@@ -17,7 +17,14 @@ data class PreparedVisualTransaction(
     val selectionDecoration: SelectionDecoration?,
     val preeditDecoration: PreeditDecoration?,
     val cursorTransition: CursorTransition?,
-    val durationMs: Long
+    val durationMs: Long,
+    /** Block-level vertical shifts for paragraphs after the edit paragraph whose Y geometry
+     *  changed but whose text content is identical. These paragraphs do NOT need per-line
+     *  Bitmap snapshots — the renderer applies a uniform Y translation to the visible
+     *  portion of the static new-layout text. This prevents unbounded Bitmap allocation
+     *  when editing near the top of a long document (every input would otherwise capture
+     *  all lines from the edit point to the document end). */
+    val blockShifts: List<BlockShift> = emptyList()
 ) {
     data class StaticPatch(
         val newSnapshotId: Long,
@@ -71,6 +78,12 @@ data class PreparedVisualTransaction(
         val toY: Float,
         val toHeight: Float,
         val shouldAnimate: Boolean
+    )
+
+    data class BlockShift(
+        val paragraphStartUtf8: Int,
+        val paragraphEndUtf8: Int,
+        val deltaY: Float
     )
 }
 

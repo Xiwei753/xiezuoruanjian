@@ -24,13 +24,16 @@ class AndroidVisualPlanner {
     }
 
     /**
-     * Provisional capture lines for a single revision (before/after edit).
-     * When the preferred ranges are empty (pure Insert old / pure Delete new),
-     * fall back to the other side's edit point and expand forward.
-     * Expansion stops at the first paragraph boundary after the edit point
-     * (detected via [AndroidLayoutRevision.LineRange.endsWithHardBreak] — a hard line break
-     * means the visual line ends at a paragraph boundary, so reflow cannot propagate past it),
-     * or at the end of the document. No fixed line cap.
+     * Capture lines for a single revision (before/after edit).
+     * Only returns lines within the edit paragraph — lines that may need per-cluster
+     * Bitmap snapshots for Insert/Delete/Move/Crossfade animation.
+     *
+     * Subsequent paragraphs that only shift vertically are handled via [BlockShift]
+     * (no Bitmap needed — the renderer applies a uniform Y translation to the static
+     * new-layout text). This prevents unbounded Bitmap allocation when editing near
+     * the top of a long document.
+     *
+     * Expansion stops at the first hard break after the edit point (paragraph boundary).
      */
     fun computeAffectedLineIndices(
         visualIntent: VisualIntent,
@@ -55,18 +58,27 @@ class AndroidVisualPlanner {
             val editLine = findLineForUtf8(revision, editByteStart)
             for (i in editLine until revision.lineRanges.size) {
                 affectedLines.add(i)
+                if (revision.lineRanges[i].endsWithHardBreak) break
             }
         }
         return affectedLines
     }
 
+    data class AffectedLinesResult(
+        val lineIndices: Set<Int>,
+        val blockShifts: List<PreparedVisualTransaction.BlockShift>
+    )
+
     fun computeAffectedLineIndicesFromBothRevisions(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
         newRevision: AndroidLayoutRevision?
-    ): Set<Int> {
+    ): AffectedLinesResult {
         if (oldRevision == null || newRevision == null) {
-            return computeAffectedLineIndices(visualIntent, newRevision ?: oldRevision, useNewRanges = true)
+            return AffectedLinesResult(
+                computeAffectedLineIndices(visualIntent, newRevision ?: oldRevision, useNewRanges = true),
+                emptyList()
+            )
         }
         return computeAffectedLines(visualIntent, oldRevision, newRevision)
     }
@@ -87,12 +99,15 @@ class AndroidVisualPlanner {
         val staticPatches = mutableListOf<PreparedVisualTransaction.StaticPatch>()
         val animatedSlices = mutableListOf<PreparedVisualTransaction.AnimatedSlice>()
         var cursorTransition: PreparedVisualTransaction.CursorTransition? = null
+        var blockShifts = listOf<PreparedVisualTransaction.BlockShift>()
 
         val oldRev = oldRevision
         val newRev = newRevision
 
         if (oldRev != null && newRev != null) {
-            val affectedLines = computeAffectedLines(visualIntent, oldRev, newRev)
+            val affectedResult = computeAffectedLines(visualIntent, oldRev, newRev)
+            val affectedLines = affectedResult.lineIndices
+            blockShifts = affectedResult.blockShifts
             val mode = parseAnimationMode(visualIntent.animationMode)
 
             when (mode) {
@@ -217,7 +232,8 @@ class AndroidVisualPlanner {
             selectionDecoration = buildSelectionDecoration(newRev),
             preeditDecoration = buildPreeditDecoration(newRev),
             cursorTransition = cursorTransition,
-            durationMs = durationMs
+            durationMs = durationMs,
+            blockShifts = blockShifts
         )
     }
 
@@ -877,6 +893,11 @@ class AndroidVisualPlanner {
      *
      * Clusters that are not adjacent to any other affected cluster form single-cluster runs.
      * Cross-line gaps break runs — each line produces its own run(s).
+     *
+     * Visual rect merging uses union of ALL cluster rects, not first/last concatenation.
+     * RTL or mixed bidi text does not guarantee visual left/right order matches logical
+     * first/last order — first.left + last.right may produce an inverted or incomplete rect.
+     * Union ensures the merged rect covers every cluster regardless of text direction.
      */
     private fun groupClustersIntoRuns(
         clusters: List<LineClusterSnapshot>,
@@ -904,18 +925,26 @@ class AndroidVisualPlanner {
                 } else {
                     val first = runClusters.first()
                     val last = runClusters.last()
-                    val mergedSourceRect = android.graphics.Rect(
-                        first.sourceRectInLineImage.left,
-                        first.sourceRectInLineImage.top,
-                        last.sourceRectInLineImage.right,
-                        last.sourceRectInLineImage.bottom
-                    )
-                    val mergedVisualRect = android.graphics.RectF(
-                        first.visualRectInDocument.left,
-                        first.visualRectInDocument.top,
-                        last.visualRectInDocument.right,
-                        last.visualRectInDocument.bottom
-                    )
+                    var minSrcL = runClusters[0].sourceRectInLineImage.left
+                    var minSrcT = runClusters[0].sourceRectInLineImage.top
+                    var maxSrcR = runClusters[0].sourceRectInLineImage.right
+                    var maxSrcB = runClusters[0].sourceRectInLineImage.bottom
+                    var minVisL = runClusters[0].visualRectInDocument.left
+                    var minVisT = runClusters[0].visualRectInDocument.top
+                    var maxVisR = runClusters[0].visualRectInDocument.right
+                    var maxVisB = runClusters[0].visualRectInDocument.bottom
+                    for (c in runClusters) {
+                        minSrcL = minOf(minSrcL, c.sourceRectInLineImage.left)
+                        minSrcT = minOf(minSrcT, c.sourceRectInLineImage.top)
+                        maxSrcR = maxOf(maxSrcR, c.sourceRectInLineImage.right)
+                        maxSrcB = maxOf(maxSrcB, c.sourceRectInLineImage.bottom)
+                        minVisL = minOf(minVisL, c.visualRectInDocument.left)
+                        minVisT = minOf(minVisT, c.visualRectInDocument.top)
+                        maxVisR = maxOf(maxVisR, c.visualRectInDocument.right)
+                        maxVisB = maxOf(maxVisB, c.visualRectInDocument.bottom)
+                    }
+                    val mergedSourceRect = android.graphics.Rect(minSrcL, minSrcT, maxSrcR, maxSrcB)
+                    val mergedVisualRect = android.graphics.RectF(minVisL, minVisT, maxVisR, maxVisB)
                     val allConfident = runClusters.all { it.shapingIdentityConfident }
                     val mergedFingerprint = runClusters.joinToString("|") { it.shapingFingerprint }
                     runs.add(LineClusterSnapshot(
@@ -941,14 +970,16 @@ class AndroidVisualPlanner {
      * Matches old→new clusters by offset map (primary) or fingerprint (fallback), then decides
      * Move vs Crossfade per pair. Lines only on one side become whole-line Insert/Delete.
      *
-     * Paragraph alignment: old/new lines are aligned by [paragraphId] + [paragraphLocalLineIndex],
-     * NOT by global lineIndex. When a paragraph gains or loses visual lines (e.g. soft-wrap reflow
-     * adds a line), global lineIndex alignment would pair old/new lines from different paragraphs,
-     * producing incorrect animation (e.g. moving a line from paragraph A to paragraph B's position).
-     * Paragraph-level alignment ensures:
-     * - Lines within the same paragraph are matched by their local index within that paragraph;
-     * - Extra lines on one side (paragraph grew/shrunk) become Insert/Delete;
-     * - Subsequent paragraphs that shifted vertically get block-level Move slices.
+     * Paragraph alignment: old/new paragraphs are matched by their UTF-8 byte range via
+     * [buildOffsetMapper], NOT by [paragraphId]. Inserting or deleting a hard break changes
+     * all subsequent paragraphIds (they are sequential integers), so ID-based matching would
+     * pair different paragraphs. Offset-map matching ensures the same text paragraph is
+     * aligned even after hard-break insertion/deletion.
+     *
+     * No reliable cluster identity match → CrossfadeOld + CrossfadeNew (not whole-line Move).
+     * Whole-line Move is only valid when the line content is confirmed identical; without
+     * cluster matching, the new text would appear at the old position, and the old text
+     * would have no exit animation.
      */
     private fun planLineReflowAnimation(
         visualIntent: VisualIntent,
@@ -960,18 +991,44 @@ class AndroidVisualPlanner {
         preCapturedOldSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         preCapturedNewSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap()
     ) {
-        val oldByParagraph = oldRev.lineRanges.withIndex()
-            .groupBy { it.value.paragraphId }
-        val newByParagraph = newRev.lineRanges.withIndex()
-            .groupBy { it.value.paragraphId }
-        val affectedParagraphs = mutableSetOf<Int>()
+        val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
+        val oldParagraphs = buildParagraphRanges(oldRev)
+        val newParagraphs = buildParagraphRanges(newRev)
+
+        val affectedOldParagraphIds = mutableSetOf<Int>()
+        val affectedNewParagraphIds = mutableSetOf<Int>()
         for (lineIndex in affectedLines) {
-            oldRev.lineRanges.getOrNull(lineIndex)?.paragraphId?.let { affectedParagraphs.add(it) }
-            newRev.lineRanges.getOrNull(lineIndex)?.paragraphId?.let { affectedParagraphs.add(it) }
+            oldRev.lineRanges.getOrNull(lineIndex)?.paragraphId?.let { affectedOldParagraphIds.add(it) }
+            newRev.lineRanges.getOrNull(lineIndex)?.paragraphId?.let { affectedNewParagraphIds.add(it) }
         }
-        for (pid in affectedParagraphs.sorted()) {
-            val oldParaLines = oldByParagraph[pid] ?: emptyList()
-            val newParaLines = newByParagraph[pid] ?: emptyList()
+
+        val matchedNewParaIndices = mutableSetOf<Int>()
+        for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
+            if (oldPara.paragraphId !in affectedOldParagraphIds) continue
+
+            var bestNewParaIdx: Int? = null
+            val mappedStart = offsetMapper(oldPara.startUtf8)
+            if (mappedStart != null) {
+                for ((newParaIdx, newPara) in newParagraphs.withIndex()) {
+                    if (newParaIdx in matchedNewParaIndices) continue
+                    if (newPara.startUtf8 == mappedStart) {
+                        bestNewParaIdx = newParaIdx
+                        break
+                    }
+                }
+            }
+            if (bestNewParaIdx == null && oldPara.paragraphId in affectedNewParagraphIds) {
+                bestNewParaIdx = newParagraphs.indexOfFirst { it.paragraphId == oldPara.paragraphId }
+                    .takeIf { it >= 0 && it !in matchedNewParaIndices }
+            }
+            if (bestNewParaIdx == null) continue
+            matchedNewParaIndices.add(bestNewParaIdx)
+
+            val newPara = newParagraphs[bestNewParaIdx]
+            val oldParaLines = oldRev.lineRanges.withIndex()
+                .filter { it.value.paragraphId == oldPara.paragraphId }
+            val newParaLines = newRev.lineRanges.withIndex()
+                .filter { it.value.paragraphId == newPara.paragraphId }
             val maxLocal = maxOf(oldParaLines.size, newParaLines.size)
             for (localIdx in 0 until maxLocal) {
                 val oldEntry = oldParaLines.getOrNull(localIdx)
@@ -1030,19 +1087,26 @@ class AndroidVisualPlanner {
                             }
                         } else {
                             animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
-                                role = SliceRole.Move,
+                                role = SliceRole.CrossfadeOld,
+                                snapshot = oldSnapshot,
+                                sourceRect = oldSnapshot.sourceRect,
+                                destinationRect = android.graphics.RectF(
+                                    oldLineRange.left, oldLineRange.top,
+                                    oldLineRange.right, oldLineRange.bottom
+                                ),
+                                startAlpha = 1f,
+                                endAlpha = 0f
+                            ))
+                            animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
+                                role = SliceRole.CrossfadeNew,
                                 snapshot = newSnapshot,
                                 sourceRect = newSnapshot.sourceRect,
                                 destinationRect = android.graphics.RectF(
                                     newLineRange.left, newLineRange.top,
                                     newLineRange.right, newLineRange.bottom
                                 ),
-                                startAlpha = 1f,
-                                endAlpha = 1f,
-                                fromDestinationRect = android.graphics.RectF(
-                                    oldLineRange.left, oldLineRange.top,
-                                    oldLineRange.right, oldLineRange.bottom
-                                )
+                                startAlpha = 0f,
+                                endAlpha = 1f
                             ))
                         }
                     }
@@ -1218,31 +1282,31 @@ class AndroidVisualPlanner {
 
     /**
      * Determine the set of visual line indices affected by an edit, using both old and new
-     * revisions. Scans forward from the edit point until reaching a stable suffix — a line
-     * whose geometry and byte range are identical in both revisions, and beyond which no
-     * further lines differ.
+     * revisions. Two-level result:
      *
-     * Paragraph alignment: old/new lines are aligned by [paragraphId] + [paragraphLocalLineIndex],
-     * NOT by global lineIndex. When a paragraph gains or loses visual lines (e.g. soft-wrap
-     * reflow adds a line), global lineIndex alignment would cause the scan to stop at the wrong
-     * position — old paragraph line N and new paragraph line N may refer to different text if
-     * the paragraph's line count changed. Paragraph-level alignment ensures:
-     * - The current paragraph is fully scanned for cluster reflow;
-     * - When the current paragraph's visual line count changes, subsequent paragraphs generate
-     *   block-level vertical Move slices (their Y geometry shifts even though their text is unchanged);
-     * - Hard line breaks still stop reflow propagation at paragraph boundaries.
+     * **Level 1 (lineIndices)**: lines within the edit paragraph that need per-cluster Bitmap
+     * snapshots for Insert/Delete/Move/Crossfade animation. Only the edit paragraph's lines
+     * are included — subsequent paragraphs do NOT get Bitmap snapshots.
      *
-     * Stable suffix detection: after the current paragraph, the scan continues into subsequent
-     * paragraphs until finding a line whose geometry and byte range are identical in both
-     * revisions AND no later line differs. This handles the case where a paragraph above
-     * changes line count, shifting all subsequent paragraphs down.
+     * **Level 2 (blockShifts)**: paragraphs after the edit paragraph whose Y geometry shifted
+     * but whose text content is identical. These are recorded as [BlockShift] entries with a
+     * uniform deltaY — the renderer applies a Y translation to the static new-layout text
+     * without creating per-line Bitmaps. This prevents unbounded Bitmap allocation when
+     * editing near the top of a long document.
+     *
+     * Paragraph alignment: old/new paragraphs are matched by their UTF-8 byte range via
+     * [buildOffsetMapper], NOT by [paragraphId]. Inserting or deleting a hard break changes
+     * all subsequent paragraphIds (they are sequential integers), so ID-based matching would
+     * pair different paragraphs. Offset-map matching ensures the same text paragraph is
+     * aligned even after hard-break insertion/deletion.
      */
     private fun computeAffectedLines(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
         newRev: AndroidLayoutRevision
-    ): Set<Int> {
+    ): AffectedLinesResult {
         val affectedLines = mutableSetOf<Int>()
+        val blockShifts = mutableListOf<PreparedVisualTransaction.BlockShift>()
 
         for ((start, end) in visualIntent.oldAffectedByteRanges) {
             for (i in oldRev.lineRanges.indices) {
@@ -1275,84 +1339,95 @@ class AndroidVisualPlanner {
             val newLinesByParagraph = newRev.lineRanges.withIndex()
                 .groupBy { it.value.paragraphId }
 
-            val allParagraphIds = (oldLinesByParagraph.keys + newLinesByParagraph.keys).sorted()
+            val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
 
-            var reachedStableSuffix = false
-            for (pid in allParagraphIds) {
-                if (pid < editParagraphId) continue
+            val editParaLines = oldLinesByParagraph[editParagraphId] ?: emptyList()
+            for (oldEntry in editParaLines) {
+                affectedLines.add(oldEntry.index)
+            }
+            val newEditParaLines = newLinesByParagraph.getOrDefault(
+                newRev.lineRanges.getOrNull(newEditLine)?.paragraphId ?: 0, emptyList()
+            )
+            for (newEntry in newEditParaLines) {
+                affectedLines.add(newEntry.index)
+            }
 
-                val oldParaLines = oldLinesByParagraph[pid] ?: emptyList()
-                val newParaLines = newLinesByParagraph[pid] ?: emptyList()
+            val oldParagraphs = buildParagraphRanges(oldRev)
+            val newParagraphs = buildParagraphRanges(newRev)
 
-                for (oldEntry in oldParaLines) {
-                    affectedLines.add(oldEntry.index)
-                }
-                for (newEntry in newParaLines) {
-                    affectedLines.add(newEntry.index)
-                }
+            val matchedNewParagraphs = mutableSetOf<Int>()
+            for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
+                if (oldPara.paragraphId == editParagraphId) continue
 
-                val maxLocalLines = maxOf(oldParaLines.size, newParaLines.size)
-                var paragraphHasGeometryChange = false
-                for (localIdx in 0 until maxLocalLines) {
-                    val oldLine = oldParaLines.getOrNull(localIdx)?.value
-                    val newLine = newParaLines.getOrNull(localIdx)?.value
-                    if (oldLine != null && newLine != null) {
-                        val geometryChanged = kotlin.math.abs(oldLine.top - newLine.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            kotlin.math.abs(oldLine.bottom - newLine.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            kotlin.math.abs(oldLine.left - newLine.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            kotlin.math.abs(oldLine.right - newLine.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            oldLine.startUtf8 != newLine.startUtf8 ||
-                            oldLine.endUtf8 != newLine.endUtf8
-                        if (geometryChanged) {
-                            paragraphHasGeometryChange = true
+                var bestNewParaIdx: Int? = null
+                val mappedStart = offsetMapper(oldPara.startUtf8)
+                if (mappedStart != null) {
+                    for ((newParaIdx, newPara) in newParagraphs.withIndex()) {
+                        if (newParaIdx in matchedNewParagraphs) continue
+                        if (newPara.startUtf8 == mappedStart) {
+                            bestNewParaIdx = newParaIdx
+                            break
                         }
-                    } else {
-                        paragraphHasGeometryChange = true
                     }
                 }
-
-                if (pid > editParagraphId && !paragraphHasGeometryChange) {
-                    var laterUnstable = false
-                    for (laterPid in allParagraphIds) {
-                        if (laterPid <= pid) continue
-                        val laterOld = oldLinesByParagraph[laterPid] ?: emptyList()
-                        val laterNew = newLinesByParagraph[laterPid] ?: emptyList()
-                        val laterMax = maxOf(laterOld.size, laterNew.size)
-                        for (localIdx in 0 until laterMax) {
-                            val ol = laterOld.getOrNull(localIdx)?.value
-                            val nl = laterNew.getOrNull(localIdx)?.value
-                            if (ol != null && nl != null) {
-                                val changed = kotlin.math.abs(ol.top - nl.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                                    kotlin.math.abs(ol.bottom - nl.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                                    kotlin.math.abs(ol.left - nl.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                                    kotlin.math.abs(ol.right - nl.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                                    ol.startUtf8 != nl.startUtf8 ||
-                                    ol.endUtf8 != nl.endUtf8
-                                if (changed) {
-                                    laterUnstable = true
-                                    break
-                                }
-                            } else {
-                                laterUnstable = true
+                if (bestNewParaIdx == null) {
+                    val mappedEnd = offsetMapper(oldPara.endUtf8Exclusive)
+                    if (mappedEnd != null) {
+                        for ((newParaIdx, newPara) in newParagraphs.withIndex()) {
+                            if (newParaIdx in matchedNewParagraphs) continue
+                            if (newPara.endUtf8Exclusive == mappedEnd) {
+                                bestNewParaIdx = newParaIdx
                                 break
                             }
                         }
-                        if (laterUnstable) break
-                    }
-                    if (!laterUnstable) {
-                        reachedStableSuffix = true
-                        break
                     }
                 }
-            }
+                if (bestNewParaIdx == null) {
+                    for ((newParaIdx, newPara) in newParagraphs.withIndex()) {
+                        if (newParaIdx in matchedNewParagraphs) continue
+                        if (newPara.paragraphId == oldPara.paragraphId) {
+                            bestNewParaIdx = newParaIdx
+                            break
+                        }
+                    }
+                }
+                if (bestNewParaIdx == null) continue
+                matchedNewParagraphs.add(bestNewParaIdx)
 
-            if (!reachedStableSuffix) {
-                affectedLines.add(oldEditLine)
-                affectedLines.add(newEditLine)
+                val newPara = newParagraphs[bestNewParaIdx]
+                val oldTop = oldPara.top
+                val newTop = newPara.top
+                val deltaY = newTop - oldTop
+                if (kotlin.math.abs(deltaY) > STABLE_SUFFIX_GEOMETRY_TOLERANCE) {
+                    blockShifts.add(PreparedVisualTransaction.BlockShift(
+                        paragraphStartUtf8 = newPara.startUtf8,
+                        paragraphEndUtf8 = newPara.endUtf8Exclusive,
+                        deltaY = deltaY
+                    ))
+                }
             }
         }
 
-        return affectedLines
+        return AffectedLinesResult(affectedLines, blockShifts)
+    }
+
+    private data class ParagraphRange(
+        val paragraphId: Int,
+        val startUtf8: Int,
+        val endUtf8Exclusive: Int,
+        val top: Float
+    )
+
+    private fun buildParagraphRanges(rev: AndroidLayoutRevision): List<ParagraphRange> {
+        val paragraphs = mutableListOf<ParagraphRange>()
+        val linesByParagraph = rev.lineRanges.withIndex().groupBy { it.value.paragraphId }
+        for ((pid, lines) in linesByParagraph.toSortedMap()) {
+            val startUtf8 = lines.first().value.startUtf8
+            val endUtf8Exclusive = lines.last().value.endUtf8
+            val top = lines.first().value.top
+            paragraphs.add(ParagraphRange(pid, startUtf8, endUtf8Exclusive, top))
+        }
+        return paragraphs
     }
 
     /**

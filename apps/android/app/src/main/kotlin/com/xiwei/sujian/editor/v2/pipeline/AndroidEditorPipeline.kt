@@ -470,7 +470,7 @@ class AndroidEditorPipeline private constructor(
             textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
             val animatedRegions = animationRenderer.computeAnimatedSliceRegions(transaction)
-            textRenderer.drawStaticTextWithHoles(canvas, layout, animatedRegions)
+            textRenderer.drawStaticTextWithHoles(canvas, layout, animatedRegions, frame.blockShifts, frame.progress)
             animationRenderer.drawAnimatedSlices(canvas, transaction, frame.progress)
             textRenderer.drawPreeditUnderline(canvas, layout, frame.compositionStartUtf16, frame.compositionEndUtf16)
 

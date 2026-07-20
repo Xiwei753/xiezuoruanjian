@@ -173,7 +173,8 @@ class AndroidTextAnimationEngine(
         mirrorUpdate?.invoke()
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        val affectedNewLineIndices = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, newRevision)
+        val affectedResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, newRevision)
+        val affectedNewLineIndices = affectedResult.lineIndices
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
         val transaction = prepare(visualIntent, oldRevision, newRevision, oldSnapshots, newSnapshots, rebaseSnapshot)
         submit(transaction)
