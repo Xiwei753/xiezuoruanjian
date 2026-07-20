@@ -1510,6 +1510,18 @@ class AndroidVisualPlanner {
         )
     }
 
+    /**
+     * Reverse-map a new-document byte offset back into the old document.
+     * Dual of [buildOffsetMapper]: given an offset in the new revision, returns the
+     * corresponding offset in the old revision, or null if the offset falls inside
+     * a range that was inserted (no old-document counterpart).
+     *
+     * Used by [computeAffectedLines] to detect new paragraphs created by a hard-break
+     * split: if a new paragraph's [startUtf8] has no reverse mapping (null), the paragraph
+     * was created by the split and must be included in [structurallyAffectedNewParaIds].
+     *
+     * Boundary convention: same half-open intervals as [buildOffsetMapper].
+     */
     private fun reverseMapOffset(
         newOffset: Int,
         visualIntent: VisualIntent,

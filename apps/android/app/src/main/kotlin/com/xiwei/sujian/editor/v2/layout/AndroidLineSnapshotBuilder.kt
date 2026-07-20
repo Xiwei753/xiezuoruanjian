@@ -239,6 +239,16 @@ class AndroidLineSnapshotBuilder {
         return Pair("${codePoints.joinToString(",")}_${typeSummary}_${paintHash}_${contextHash}", false)
     }
 
+    /**
+     * Compute a hash of the shaping context around a cluster for fingerprinting.
+     *
+     * Includes the bidi direction of the cluster itself via [Layout.isRtlCharAt],
+     * NOT the paragraph direction ([Layout.getParagraphDirection]). This distinction
+     * is critical for mixed-direction lines: an LTR paragraph with embedded Arabic
+     * has paragraph direction LTR but the Arabic cluster's direction is RTL. Using
+     * the paragraph direction would cause different bidi runs to share the same
+     * direction hash, producing false fingerprint matches and incorrect Move slices.
+     */
     private fun computeContextHash(layout: Layout, lineIndex: Int, clusterStartUtf16: Int): Int {
         val lineStart = layout.getLineStart(lineIndex)
         val lineEnd = layout.getLineEnd(lineIndex)
@@ -272,6 +282,12 @@ class AndroidLineSnapshotBuilder {
      * [Layout.isRtlCharAt]). This ensures correct contextual shaping for mixed-direction
      * lines (e.g. LTR paragraph with embedded Arabic) — shaping with full-line context
      * but the wrong direction would produce incorrect glyphs.
+     *
+     * [isRtl] is taken from [Layout.isRtlCharAt] (per-cluster bidi direction), not
+     * [Layout.getParagraphDirection] (paragraph-level direction). In a mixed bidi line,
+     * the paragraph direction is constant but individual runs alternate — using the
+     * paragraph direction would shape Arabic text with LTR direction or vice versa,
+     * producing incorrect glyphs while still returning confident=true.
      *
      * Returns [confident] = true when the shaping path succeeds and produces at least
      * one glyph AND the context is correctly bounded to the bidi run. Falls back to
@@ -344,6 +360,12 @@ class AndroidLineSnapshotBuilder {
      * mixed-direction line (e.g. LTR paragraph with embedded Arabic) are shaped with
      * the correct context and direction, enabling [shapingIdentityConfident] = true
      * even in mixed bidi lines.
+     *
+     * Uses [Layout.isRtlCharAt] (per-character bidi direction), not
+     * [Layout.getParagraphDirection] (paragraph-level direction). In a mixed bidi line,
+     * the paragraph direction is constant but individual runs alternate — using the
+     * paragraph direction would merge adjacent opposite-direction runs into one context,
+     * producing incorrect shaping and false [shapingIdentityConfident] = true.
      */
     private fun findBidiRunBounds(
         layout: Layout,

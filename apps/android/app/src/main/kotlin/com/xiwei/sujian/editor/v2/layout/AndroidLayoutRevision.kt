@@ -59,7 +59,14 @@ data class AndroidLayoutRevision(
          *  [paragraphId]; the first line after a hard break increments it. Used by
          *  [AndroidVisualPlanner.computeAffectedLines] to align old/new lines by paragraph
          *  rather than by global lineIndex — when a paragraph gains or loses visual lines,
-         *  global lineIndex alignment would truncate the affected range prematurely. */
+         *  global lineIndex alignment would truncate the affected range prematurely.
+         *
+         *  NOT a stable identity across edits: inserting or deleting a hard break renumbers
+         *  all subsequent paragraphs. Paragraph alignment across old/new revisions uses
+         *  offset-map matching (via [AndroidVisualPlanner.buildOffsetMapper]) rather than
+         *  paragraphId, so the same text paragraph is correctly paired even after hard-break
+         *  insertion/deletion. paragraphId is only used for grouping lines within a single
+         *  revision. */
         val paragraphId: Int = 0,
         /** Zero-based index of this visual line within its paragraph. The first visual line
          *  of each paragraph has [paragraphLocalLineIndex] = 0. Used alongside [paragraphId]
