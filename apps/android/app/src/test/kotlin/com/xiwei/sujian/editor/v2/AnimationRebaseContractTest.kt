@@ -2,6 +2,9 @@ package com.xiwei.sujian.editor.v2
 
 import com.xiwei.sujian.editor.v2.visual.*
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
+import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+import com.xiwei.sujian.editor.v2.mirror.VisualIntent
+import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -354,5 +357,45 @@ class AnimationRebaseContractTest {
         store.put(snapshot, owner1)
         store.release(1, owner2)
         assertNotNull("Wrong-owner release must not remove snapshot", store.get(1))
+    }
+
+    @Test
+    fun systemSuppressedPolicySkipsAnimationInPrepareAndSubmit() {
+        val engine = AndroidTextAnimationEngine(
+            AndroidVisualPlanner(),
+            VisualResourceStore()
+        )
+        engine.setAnimationPolicy(TextAnimationPolicy.SYSTEM_SUPPRESSED)
+
+        var mirrorUpdateCalled = false
+        val layoutEngine = AndroidLayoutEngine(
+            com.xiwei.sujian.editor.v2.mirror.DisplayTextMirror(),
+            android.text.TextPaint().apply { textSize = 48f }
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(0, 3)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(0, 0, true)
+        )
+        engine.prepareAndSubmit(
+            visualIntent = visualIntent,
+            layoutEngine = layoutEngine,
+            mirrorUpdate = { mirrorUpdateCalled = true }
+        )
+        assertTrue("mirrorUpdate must still be called under SYSTEM_SUPPRESSED", mirrorUpdateCalled)
+        assertNull("No active transaction under SYSTEM_SUPPRESSED", engine.getActiveTransaction())
+    }
+
+    @Test
+    fun shapingFingerprintExcludesGlyphPositions() {
+        val fp1 = "font1_42|font1_43_ctx_99"
+        val fp2 = "font1_42|font1_43_ctx_99"
+        assertEquals("Fingerprints without glyph positions must match", fp1, fp2)
+        assertFalse("Fingerprint must not contain glyph X/Y separator pattern _x_y",
+            fp1.contains(Regex("_\\d+_\\d+_\\d+")))
     }
 }

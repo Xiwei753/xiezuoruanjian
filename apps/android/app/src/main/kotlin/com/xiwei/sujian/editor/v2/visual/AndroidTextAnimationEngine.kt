@@ -157,6 +157,12 @@ class AndroidTextAnimationEngine(
         mirrorUpdate: (() -> Unit)? = null,
         beforePatch: (() -> Unit)? = null
     ) {
+        if (animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED) {
+            beforePatch?.invoke()
+            mirrorUpdate?.invoke()
+            layoutEngine.requestLayout()
+            return
+        }
         val frameTimeMs = System.nanoTime() / 1_000_000
         val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
 

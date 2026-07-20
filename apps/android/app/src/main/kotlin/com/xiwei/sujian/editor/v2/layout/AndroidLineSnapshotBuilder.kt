@@ -297,8 +297,6 @@ class AndroidLineSnapshotBuilder {
 
             val getFontMethod = positionedGlyphs.javaClass.getMethod("getFont", Int::class.javaPrimitiveType)
             val getGlyphIdMethod = positionedGlyphs.javaClass.getMethod("getGlyphId", Int::class.javaPrimitiveType)
-            val getGlyphXMethod = positionedGlyphs.javaClass.getMethod("getGlyphX", Int::class.javaPrimitiveType)
-            val getGlyphYMethod = positionedGlyphs.javaClass.getMethod("getGlyphY", Int::class.javaPrimitiveType)
 
             if (glyphCount == 0) {
                 return Pair("${clusterText.hashCode()}_${contextHash}", false)
@@ -311,10 +309,6 @@ class AndroidLineSnapshotBuilder {
                 sb.append(font?.hashCode()?.toString() ?: "null")
                 sb.append("_")
                 sb.append(getGlyphIdMethod.invoke(positionedGlyphs, i))
-                sb.append("_")
-                sb.append((getGlyphXMethod.invoke(positionedGlyphs, i) as Float).toInt())
-                sb.append("_")
-                sb.append((getGlyphYMethod.invoke(positionedGlyphs, i) as Float).toInt())
             }
 
             sb.append("_ctx_")
