@@ -29,6 +29,10 @@ data class AndroidLayoutRevision(
     val selectionHeadUtf16: Int,
     val compositionStartUtf16: Int,
     val compositionEndUtf16: Int,
+    /** Opaque handles from the Rust kernel identifying snapshots associated with this
+     *  revision. Currently unused by the Android animation pipeline (which manages its
+     *  own Bitmap snapshots via [VisualResourceStore]), but preserved for future
+     *  kernel-driven snapshot management. */
     val snapshotHandles: List<Long>
 ) {
     val selectionStartUtf8: Int get() = minOf(selectionAnchorUtf8, selectionHeadUtf8)

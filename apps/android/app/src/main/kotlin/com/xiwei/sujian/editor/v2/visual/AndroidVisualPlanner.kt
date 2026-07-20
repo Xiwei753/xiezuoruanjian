@@ -364,7 +364,9 @@ class AndroidVisualPlanner {
      * Design: old/new clusters are matched by [buildOffsetMapper] (which maps byte offsets
      * through the edit's affected ranges), not by same visual lineIndex. This is essential
      * because a soft-wrap reflow can move text from the end of one visual line to the
-     * beginning of the next — same lineIndex matching would miss these pairs.
+     * beginning of the next — same lineIndex matching would miss these pairs, causing
+     * retained text to appear at its new position instantly (no Move animation) while
+     * the cursor animates, producing the "cursor moves but text jumps" visual artifact.
      *
      * [excludedNewByteRanges]/[excludedOldByteRanges] prevent duplicate slices
      * for clusters already handled by the primary planner.
@@ -953,7 +955,11 @@ class AndroidVisualPlanner {
      * run granularity instead of per-cluster.
      *
      * Clusters that are not adjacent to any other affected cluster form single-cluster runs.
-     * Cross-line gaps break runs — each line produces its own run(s).
+     * Cross-line gaps break runs — each line produces its own run(s). Run boundaries are
+     * detected by byte-range contiguity AND same visual line (via top coordinate comparison),
+     * not by lineIndex — lineIndex is a global index that may differ between old and new
+     * revisions after reflow, while top coordinate is a visual property that reliably
+     * identifies same-line membership within a single revision.
      *
      * Visual rect merging uses union of ALL cluster rects, not first/last concatenation.
      * RTL or mixed bidi text does not guarantee visual left/right order matches logical
@@ -1518,7 +1524,11 @@ class AndroidVisualPlanner {
                     // length is an upper bound on how much the edit delta could have moved
                     // the old paragraph's end forward in the new document). This is conservative
                     // — it may include unrelated old paragraphs, but false positives only cause
-                    // extra Bitmap snapshots (not incorrect animation).
+                    // extra Bitmap snapshots (not incorrect animation). The approximation is
+                    // safe because the offset mapper's forward mapping (condition 1) already
+                    // constrains the result to paragraphs that genuinely overlap in the new
+                    // document; condition 2 merely widens the candidate set to avoid missing
+                    // paragraphs at the split boundary where forward mapping alone is insufficient.
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
@@ -1743,6 +1753,11 @@ class AndroidVisualPlanner {
     private data class ParagraphRange(
         val paragraphId: Int,
         val startUtf8: Int,
+        /** Exclusive UTF-8 end of the paragraph's last visual line. Half-open boundary:
+         *  the byte at [endUtf8Exclusive] itself belongs to the next paragraph (or is
+         *  one past the document end). This convention matches [LineRange.endUtf8] and
+         *  is critical for the offset mapper — using inclusive end would cause off-by-one
+         *  errors in paragraph boundary detection during split/merge analysis. */
         val endUtf8Exclusive: Int,
         val top: Float
     )
@@ -1760,6 +1775,10 @@ class AndroidVisualPlanner {
      * subsequent paragraphs. Paragraph alignment in the animation planner uses offset-map
      * matching (via [buildOffsetMapper]) rather than paragraphId, so that the same text
      * paragraph is correctly paired even after hard-break insertion/deletion.
+     *
+     * [top] is the Y coordinate of the paragraph's first visual line. Used by BlockShift
+     * computation to calculate deltaY = newTop - oldTop for paragraphs that shifted
+     * vertically but whose text content is unchanged.
      */
     private fun buildParagraphRanges(rev: AndroidLayoutRevision): List<ParagraphRange> {
         val paragraphs = mutableListOf<ParagraphRange>()

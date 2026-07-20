@@ -20,6 +20,12 @@ sealed class SnapshotOwner {
  *
  * Invariant: a Bitmap is recycled exactly once. Transfer (not duplicate release) is used
  * when a new transaction inherits snapshots from a prior transaction's rebase frame.
+ *
+ * Owner matching uses exact equality (not subtype/is-a check): [OwnedByTransaction]
+ * matches only when the transactionKey is identical. This is essential because each
+ * transaction has a unique key — a mismatch means a different transaction is attempting
+ * the release, which must be silently ignored to prevent premature recycling of Bitmaps
+ * still owned by the active transaction.
  */
 class VisualResourceStore {
     private val snapshots = mutableMapOf<Long, OwnedSnapshot>()
@@ -41,6 +47,13 @@ class VisualResourceStore {
      * release by a wrong transaction: e.g. if transaction A owns a snapshot and transaction B
      * tries to release it, the mismatch means B's [OwnedByTransaction] key differs from A's,
      * so the release is a no-op and the Bitmap survives until A completes.
+     *
+     * This exact-match policy is the foundation of the two-phase ownership model in
+     * [AndroidTextAnimationEngine.submit]: unreferenced snapshots are released by the
+     * transaction that captured them (same key), while referenced snapshots from a prior
+     * transaction are transferred (ownership change) before the old transaction releases
+     * the rest. Without exact-match, the old transaction's release would also free
+     * transferred snapshots, causing use-after-recycle in the new transaction.
      */
     fun release(snapshotId: Long, releaser: SnapshotOwner) {
         val entry = snapshots[snapshotId] ?: return

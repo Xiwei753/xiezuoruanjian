@@ -158,7 +158,9 @@ class AndroidTextAnimationEngine(
      *
      * Ordering invariant: old snapshots must be captured *before* the mirror update,
      * and new snapshots *after*, so that old/new represent the exact before/after states.
-     * [beforePatch] runs between old capture and mirror update (e.g. to hide static text).
+     * [beforePatch] runs between old capture and mirror update (e.g. to hide static text
+     * that would otherwise be visible alongside the old-snapshot animation during the
+     * brief window between mirror update and first animation frame).
      *
      * Timestamp: [System.nanoTime] / 1_000_000 provides a monotonic millisecond clock
      * consistent with [AnimationTimeline]'s internal time base. Sub-millisecond precision

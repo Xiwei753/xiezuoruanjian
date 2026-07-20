@@ -43,6 +43,15 @@ data class DisplayPatch(
 
 data class VisualIntent(
     val cause: EditorTransactionCauseDto,
+    /**
+     * Semantic category of the edit, used by the animation planner to select the correct
+     * slice-generation path. Composition operations are separate kinds (not just REPLACE)
+     * because the preedit text is a virtual overlay on the committed buffer — the planner
+     * must treat COMPOSITION_CANCEL as a Delete (preedit text fades out, retained text
+     * Moves back) and COMPOSITION_COMMIT/UPDATE as a Replace (old preedit fades out,
+     * new text fades in, retained text Moves). Using REPLACE for all three would lose
+     * the Delete semantics of cancel and the virtual-overlay semantics of update/commit.
+     */
     val operationKind: EditorOperationKindDto,
     /** Byte ranges in the old document affected by this edit. Half-open: [start, end).
      *  For pure Insert, this list is empty (no old bytes were affected). */
@@ -130,6 +139,14 @@ data class EditResult(
  * UnderlineSpan). The original text under the preedit range is saved in
  * [compositionOriginalText] and restored when the composition is cleared or committed.
  *
+ * Design intent: the overlay model exists because the Rust EditorKernel operates on
+ * committed text only — it never sees the preedit. The platform must maintain the
+ * committed-text view for the kernel (via [getCommittedText]/[getCommittedCursorUtf8])
+ * while simultaneously presenting the preedit to the IME and layout engine. Directly
+ * modifying the buffer with preedit text and then reverting on cancel would require
+ * the kernel to undo a non-existent edit; the overlay avoids this by keeping the
+ * committed buffer untouched and layering the preedit on top.
+ *
  * "Committed" accessors ([getCommittedCursorUtf8], [getCommittedText], etc.) return
  * values as if the active composition did not exist — they reflect the state that the
  * Rust kernel sees, which operates on committed text only. The IME sees the full buffer
@@ -149,9 +166,14 @@ class DisplayTextMirror {
     private var selectionAnchorUtf16: Int = 0
     private var selectionHeadUtf16: Int = 0
     /** Committed-text UTF-8 byte offset where the composition replacement starts.
-     *  In committed-text coordinates (not virtual text), matching the CompositionSession convention. */
+     *  In committed-text coordinates (not virtual/preedit coordinates), matching the
+     *  Rust CompositionSession convention. The kernel only knows committed text, so
+     *  all composition range parameters sent to the kernel must use these coordinates.
+     *  The virtual preedit range in the buffer ([compositionStartUtf16]/[compositionEndUtf16])
+     *  is in full-buffer coordinates (including the overlay) and must NOT be sent to the kernel. */
     private var compositionReplaceStartUtf8: Int = 0
-    /** Committed-text UTF-8 byte offset where the composition replacement ends (exclusive). */
+    /** Committed-text UTF-8 byte offset where the composition replacement ends (exclusive).
+     *  Same coordinate convention as [compositionReplaceStartUtf8] — committed-text space. */
     private var compositionReplaceEndUtf8: Int = 0
     private var compositionOriginalText: String = ""
     private var hasActiveComposition: Boolean = false
@@ -292,6 +314,11 @@ class DisplayTextMirror {
      * commit (applyCompositionCommit) or cancel (clearComposition). The original text under
      * the preedit range is saved in [compositionOriginalText] and restored on commit/cancel
      * before the actual text replacement is applied.
+     *
+     * Overlay invariant: [removeCompositionOverlay] is always called first to restore the
+     * committed text, ensuring the buffer is in a consistent committed-text state before
+     * the new preedit is overlaid. Without this, consecutive updateComposition calls would
+     * treat the previous preedit as committed text, corrupting [compositionOriginalText].
      */
     fun updateComposition(replaceStartUtf8: Int, replaceEndUtf8: Int, preeditText: String) {
         val indexMap = AndroidTextIndexMap(this)
@@ -333,6 +360,12 @@ class DisplayTextMirror {
      * Remove the composition overlay and restore the original committed text.
      * After removal, [compositionStartUtf16] is set to -1 (sentinel meaning "no active
      * composition") since 0 is a valid UTF-16 offset.
+     *
+     * Must be called before any edit that modifies the committed buffer (patches, composition
+     * update, composition commit, composition cancel) to ensure the buffer reflects committed
+     * text only. If the overlay were left in place, the patch would be applied to the virtual
+     * text (including preedit), producing incorrect UTF-8→UTF-16 offset mappings and
+     * corrupting the committed-text state that the kernel expects.
      */
     private fun removeCompositionOverlay() {
         if (!hasActiveComposition) return

@@ -155,7 +155,9 @@ class AndroidLineSnapshotBuilder {
             // getPrimaryHorizontal at the line-end offset can return an unreliable value
             // (it may return the position of the next line's start character in RTL, or
             // the cursor position after the last character which may differ from the
-            // visual right edge). getLineRight is the Layout's authoritative right bound.
+            // visual right edge). getLineRight is the Layout's authoritative right bound
+            // and is direction-independent — it always returns the visual right edge
+            // regardless of text direction.
             val x1 = if (clusterEndUtf16 < layout.getLineEnd(lineIndex)) {
                 layout.getPrimaryHorizontal(clusterEndUtf16)
             } else {
@@ -166,6 +168,9 @@ class AndroidLineSnapshotBuilder {
             // getPrimaryHorizontal(clusterStartUtf16) in RTL text. Using min/max ensures
             // visualLeft <= visualRight and sourceLeft <= sourceRight, preventing zero-width
             // or inverted rects that would cause the animation renderer to skip the slice.
+            // Without this normalization, RTL clusters would produce sourceRect.right ==
+            // sourceRect.left (zero width) because coerceAtLeast(sourceLeft) would collapse
+            // the rect, and the renderer silently skips zero-width slices.
             val visualLeft = kotlin.math.min(x0, x1)
             val visualRight = kotlin.math.max(x0, x1)
 
@@ -398,6 +403,12 @@ class AndroidLineSnapshotBuilder {
      * the paragraph direction is constant but individual runs alternate — using the
      * paragraph direction would merge adjacent opposite-direction runs into one context,
      * producing incorrect shaping and false [shapingIdentityConfident] = true.
+     *
+     * Scan termination: the scan stops at direction changes (isRtlCharAt returns a
+     * different value), not at the line boundary. This is correct because a single
+     * visual line can contain multiple bidi runs — the shaping context must not cross
+     * a direction boundary, as that would cause TextRunShaper to produce incorrect
+     * glyph positions for the target cluster.
      */
     private fun findBidiRunBounds(
         layout: Layout,

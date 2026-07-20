@@ -135,12 +135,18 @@ class AndroidLayoutEngine(
             // Source-text inspection: the visual line's last character is `\n`.
             // This is the only reliable way to detect paragraph boundaries because
             // Android Layout byte ranges are contiguous across `\n` — there is no
-            // byte gap between adjacent visual lines to detect.
+            // byte gap between adjacent visual lines to detect. A previous approach
+            // compared curr.startUtf8 > prev.endUtf8, but this never fires because
+            // Android Layout's lineEnd is the position after the last character,
+            // which is also the start of the next line — the ranges are contiguous
+            // even across hard breaks.
             //
             // getLineEnd() returns an *exclusive* boundary (one past the last character),
             // so the last character is at index lineEndUtf16 - 1. Checking text[lineEndUtf16]
             // would read the first character of the *next* line, producing a false positive
-            // when the next line starts with `\n`.
+            // when the next line starts with `\n`. The -1 adjustment is essential and
+            // must not be removed — it is the only correct way to inspect the line's own
+            // last character.
             //
             // Invariant: this field is used by the animation planner to stop reflow scanning.
             // Text reflow (soft-wrap changes) cannot propagate across a hard paragraph break,
