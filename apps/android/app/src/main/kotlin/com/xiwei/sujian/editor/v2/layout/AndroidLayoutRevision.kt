@@ -40,7 +40,14 @@ data class AndroidLayoutRevision(
     val selectionStartUtf16: Int get() = minOf(selectionAnchorUtf16, selectionHeadUtf16)
     val selectionEndUtf16: Int get() = maxOf(selectionAnchorUtf16, selectionHeadUtf16)
 
-    /** Byte ranges are half-open: [startUtf8, endUtf8). UTF-8 byte offsets. */
+    /** Byte ranges are half-open: [startUtf8, endUtf8). UTF-8 byte offsets.
+     *
+     *  [endUtf8] is derived from Android Layout's getLineEnd(), which returns an exclusive
+     *  boundary (one past the last character). For a line ending with `\n`, [endUtf8] points
+     *  to the byte *after* the `\n`, which is also [startUtf8] of the next visual line.
+     *  This means adjacent visual lines have contiguous byte ranges — there is no byte gap
+     *  even across hard paragraph breaks. The animation planner must not use byte gaps to
+     *  detect paragraph boundaries; [endsWithHardBreak] is the only reliable indicator. */
     data class LineRange(
         val startUtf8: Int,
         val endUtf8: Int,

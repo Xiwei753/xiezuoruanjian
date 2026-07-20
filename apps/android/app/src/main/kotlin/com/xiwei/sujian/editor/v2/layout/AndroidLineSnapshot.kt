@@ -36,6 +36,12 @@ data class AndroidLineSnapshot(
      *  Bitmap pixel coordinates; the corresponding document-coordinate destination is
      *  [destinationRect] (whole-line) or [LineClusterSnapshot.visualRectInDocument] (per-cluster). */
     val sourceRect: android.graphics.Rect,
+    /** Whole-line destination rect in document coordinates (no scroll offset).
+     *  Uses floating-point [android.graphics.RectF] rather than integer [android.graphics.Rect]
+     *  because layout coordinates are sub-pixel — truncating to integers would cause 1px
+     *  alignment drift between the snapshot and the live layout. Canvas.drawBitmap handles
+     *  pixel snapping at render time via its own anti-aliasing and rounding, so the source
+     *  (integer pixel) → destination (float layout) mapping remains geometrically correct. */
     val destinationRect: android.graphics.RectF,
     val clusters: List<LineClusterSnapshot> = emptyList(),
     /** Inclusive UTF-8 byte offset of this line's start in the document. */

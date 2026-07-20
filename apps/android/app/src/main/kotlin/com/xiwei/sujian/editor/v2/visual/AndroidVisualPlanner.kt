@@ -1573,6 +1573,13 @@ class AndroidVisualPlanner {
                     // genuinely overlap in the new document; condition (2) widens the
                     // candidate set to avoid missing paragraphs at the split boundary where
                     // forward mapping alone is insufficient.
+                    //
+                    // Why newParaLen is a valid upper bound: the split inserts at most
+                    // newParaLen bytes of new text (the paragraph's entire content), so
+                    // oldPara.endUtf8Exclusive + newParaLen >= any possible mapped position
+                    // of oldPara's end in the new document. If condition (2) fails, the old
+                    // paragraph's end is too far from the new paragraph's start for any
+                    // overlap to exist regardless of the edit delta.
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
@@ -2176,8 +2183,10 @@ class AndroidVisualPlanner {
      * This handles edge cases where the offset mapper cannot produce a match — e.g. when
      * a BlockShift's paragraph was created by a merge that the offset mapper does not
      * track, or when [startUtf8] was not populated in an earlier version. The fallback
-     * is less precise (line indices shift across revisions) but prevents the suffix from
-     * jumping to the old position when no rebase data is available.
+     * is less precise (line indices shift across revisions when hard breaks are inserted
+     * or deleted — the old transaction's line N may become line N+1 in the new revision,
+     * causing line-index-based matching to pair the wrong BlockShifts) but prevents the
+     * suffix from jumping to the old position when no rebase data is available.
      */
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,
