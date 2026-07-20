@@ -127,6 +127,10 @@ class AndroidTextRenderer {
         }
         layout.draw(canvas)
         canvas.restore()
+        // Group by deltaY so that all paragraphs shifting by the same amount share one
+        // canvas.save/translate/clip/draw/restore cycle. After mergeAdjacentBlockShifts,
+        // most edits produce a single group (all suffix paragraphs shift by the same deltaY),
+        // so this typically results in one additional layout.draw() call per frame.
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)

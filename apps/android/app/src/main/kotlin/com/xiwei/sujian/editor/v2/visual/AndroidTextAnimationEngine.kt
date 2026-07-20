@@ -311,6 +311,17 @@ class AndroidTextAnimationEngine(
         return tl.isCompleted(frameTimeMs)
     }
 
+    /**
+     * Transition the timeline from Pending to Rendering on the first onDraw after submit.
+     *
+     * Must be called from the host's draw path (e.g. View.onDraw / Compose draw callback)
+     * so that [AnimationTimeline.progress] uses a real frame timestamp rather than the
+     * submission time. Without this, [captureFrame] returns a Pending-state frame at
+     * progress=0f, which is correct for rebase but would never advance the animation.
+     *
+     * Idempotent: subsequent calls after the first are no-ops — the timeline stays in
+     * Rendering until paused, completed, or cancelled.
+     */
     fun markFirstVisibleFrame(frameTimeMs: Long) {
         timeline?.markFirstVisibleFrame(frameTimeMs)
     }

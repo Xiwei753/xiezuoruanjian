@@ -127,6 +127,25 @@ class AndroidVisualPlanner {
         return computeAffectedLines(visualIntent, oldRevision, newRevision)
     }
 
+    /**
+     * Build a [PreparedVisualTransaction] from visual intent, layout revisions, and snapshots.
+     *
+     * [transactionKey] is generated exactly once by [AndroidTextAnimationEngine.prepare] and
+     * passed here — the planner must NOT generate its own key. All snapshots registered by the
+     * engine are owned by [OwnedByTransaction(transactionKey)], and the planner must use this
+     * same key in the returned [PreparedVisualTransaction.transactionId] so that
+     * [AndroidTextAnimationEngine.completeTransaction]/[cancelTransaction] can release resources
+     * under the correct owner. A mismatched key would cause [VisualResourceStore.release] to
+     * silently ignore the release (owner check fails), leaking Bitmaps.
+     *
+     * [ownedSnapshotIds] is the optimistic set from the engine (all captured + rebase snapshots).
+     * [AndroidTextAnimationEngine.submit] trims it to the precise set referenced by slices/patches.
+     *
+     * [snapshotLookup] provides access to snapshots from both fresh captures and the rebase frame's
+     * surviving slices. The planner looks up snapshots by ID when constructing slices — without
+     * rebase entries, surviving slices would reference snapshot IDs that produce null lookups,
+     * causing the renderer to silently skip them (lost animation state).
+     */
     fun prepare(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
@@ -2261,6 +2280,22 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Look up a pre-captured line snapshot by revision type and line index.
+     *
+     * Pre-captured snapshots are always preferred over creating new ones because they
+     * contain the Bitmap and cluster data captured at the correct moment in the
+     * prepare-and-submit sequence (old snapshots before mirror update, new snapshots
+     * after). Creating a snapshot here would use the *current* layout state, which
+     * may have already been invalidated by a subsequent edit — the Bitmap would show
+     * the wrong text content.
+     *
+     * Returns null when no pre-captured snapshot exists for the requested line index,
+     * which causes the caller to skip that line (no slice is generated). This is
+     * intentional: if a snapshot wasn't captured during the prepare phase, the line
+     * is either outside the affected range or the capture failed, and generating a
+     * slice with stale data would produce incorrect animation.
+     */
     private fun createSnapshotFromRevision(
         revision: AndroidLayoutRevision,
         lineIndex: Int,
