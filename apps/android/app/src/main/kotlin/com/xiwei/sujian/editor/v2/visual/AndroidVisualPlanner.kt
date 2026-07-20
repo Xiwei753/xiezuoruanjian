@@ -1264,11 +1264,13 @@ class AndroidVisualPlanner {
                     }
                 }
                 // Safety fallback: hard break stops reflow at paragraph boundary.
-                // The two branches above already check endsWithHardBreak before breaking,
-                // but this loop-level guard ensures the scan cannot continue past a paragraph
+                // The two branches above check endsWithHardBreak conditionally (only when
+                // geometryChanged or !geometryChanged), but this loop-level guard is
+                // unconditional — it ensures the scan cannot continue past a paragraph
                 // boundary even if the branching logic is restructured or a new branch is
-                // added that omits the check. All three checks are logically redundant but
-                // serve as independent safety nets.
+                // added that omits the check. The three checks are not strictly redundant:
+                // the first two are conditional on geometry state, while this one fires
+                // regardless, making it a stronger safety net.
                 if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
                     break
                 }

@@ -76,9 +76,10 @@ class AndroidTextAnimationRenderer {
      * bounding box. When a Move slice spans from one line to the next, merging source
      * and destination into a single bounding rect can cover nearly two full lines,
      * causing non-animated text in between to disappear during the animation.
-     * Source-position holes ([slice.fromDestinationRect]) are intentionally NOT punched
-     * because the new layout's text at the source position should remain visible and
-     * will be gradually revealed as the Move slice slides away.
+     * For Move slices, only [slice.destinationRect] (the target position) punches a hole —
+     * the source position ([slice.fromDestinationRect]) is NOT punched because the new
+     * layout's text there should remain visible and will be gradually revealed as the
+     * slice slides away.
      */
     fun computeAnimatedSliceRegions(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
         val regions = mutableListOf<android.graphics.RectF>()

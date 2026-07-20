@@ -177,6 +177,11 @@ class AndroidTextAnimationEngine(
     /**
      * Capture the current visual state of the active transaction for rendering or rebase.
      *
+     * Returns null when no transaction is active, the timeline is null, or the timeline
+     * state is not Rendering/Paused (e.g. Pending, Completed, Cancelled). A null return
+     * from [captureRebaseSnapshot] means the next transaction starts from scratch without
+     * rebase — cursor and slices use their logical start/end positions directly.
+     *
      * During rapid consecutive input, the returned snapshot preserves the current cursor rect
      * and per-slice visual states (position, alpha) so the next transaction's rebase can
      * continue from the on-screen position rather than the logical endpoint — preventing
@@ -213,9 +218,11 @@ class AndroidTextAnimationEngine(
         timeline = null
     }
 
-    /** Cancel the active transaction and release ALL session-owned resources (snapshots,
-     *  timeline state). Used for session rebind — different from [cancel] which only aborts
-     *  the active transaction without releasing completed-but-not-yet-released snapshots. */
+    /** Cancel the active transaction and release ALL resources in [resourceStore] (not just
+     *  the active transaction's snapshots). Used for session rebind — [cancel] releases only
+     *  the active transaction's [ownedSnapshotIds], but the store may contain snapshots from
+     *  completed transactions that were not yet garbage-collected. [resetForSession] ensures
+     *  no Bitmaps survive across session boundaries. */
     fun resetForSession() {
         cancel()
         resourceStore.releaseAll()
