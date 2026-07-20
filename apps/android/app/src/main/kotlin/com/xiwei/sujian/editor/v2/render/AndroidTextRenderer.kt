@@ -69,6 +69,12 @@ class AndroidTextRenderer {
         layout.draw(canvas)
     }
 
+    /**
+     * Draw the static text layout, clipping out [holes] regions that are covered by
+     * animated slices. Each hole must be the exact bounding box of the cluster(s) the
+     * animation renderer will draw — not a merged bounding rect of source + destination,
+     * which would erase non-animated text between them (especially for cross-line Moves).
+     */
     fun drawStaticTextWithHoles(canvas: Canvas, layout: android.text.Layout, holes: List<android.graphics.RectF>) {
         if (holes.isEmpty()) {
             layout.draw(canvas)

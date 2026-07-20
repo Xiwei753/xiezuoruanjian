@@ -54,6 +54,19 @@ class AndroidTextAnimationRenderer {
         canvas.drawRect(currentX, currentY, currentX + 2f, currentY + currentHeight, cursorPaint)
     }
 
+    /**
+     * Collect the destination regions of all animated slices for static text hole-punching.
+     *
+     * Constraint: each region must be as small as possible — ideally the exact cluster
+     * bounding box — because the static renderer clips out these regions entirely.
+     * When a Move slice spans from one line to the next, merging source and destination
+     * into a single bounding rect can cover nearly two full lines, causing non-animated
+     * text in between to disappear during the animation.
+     *
+     * Currently returns only [slice.destinationRect]; for cross-line Moves this is the
+     * target position only (not the source), which is safe. If source-position holes are
+     * needed in the future, they must be separate small rects, never a merged bounding box.
+     */
     fun computeAnimatedSliceRegions(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
         val regions = mutableListOf<android.graphics.RectF>()
         for (slice in transaction.animatedSlices) {

@@ -53,6 +53,17 @@ class AndroidVisualPlanner {
         return affectedLines
     }
 
+    /**
+     * Detect whether [lineIndex] is the first visual line of a new paragraph
+     * (i.e. the previous visual line ended with a hard break).
+     *
+     * This relies on [AndroidLayoutRevision.LineRange.endsWithHardBreak], which is set
+     * during revision construction by inspecting the source text — not by detecting byte
+     * gaps between adjacent visual lines. Android Layout's visual line endUtf8 is the
+     * position after the last character, and the next line's startUtf8 is normally
+     * contiguous; a `\n` character belongs to the text range and does not create a byte
+     * gap, so byte-gap-based detection would never match.
+     */
     private fun isParagraphBoundary(revision: AndroidLayoutRevision, lineIndex: Int): Boolean {
         if (lineIndex <= 0 || lineIndex >= revision.lineRanges.size) return false
         return revision.lineRanges[lineIndex - 1].endsWithHardBreak
@@ -1089,6 +1100,23 @@ class AndroidVisualPlanner {
     ) {
     }
 
+    /**
+     * Determine the set of visual line indices affected by an edit, using both old and new
+     * revisions. Scans forward from the edit point until reaching a stable suffix — a line
+     * whose geometry and byte range are identical in both revisions, and beyond which no
+     * further lines differ.
+     *
+     * Paragraph boundary truncation: a hard line break ([LineRange.endsWithHardBreak]) means
+     * this visual line ends a paragraph; reflow cannot propagate into the next paragraph, so
+     * the forward scan stops. This check uses [endsWithHardBreak] from the revision metadata
+     * (set during construction by inspecting source text), not byte-gap heuristics — adjacent
+     * visual lines in Android Layout have contiguous byte ranges even across `\n`, so byte-gap
+     * detection would never identify a paragraph boundary.
+     *
+     * When geometry changes on a line that also has [endsWithHardBreak], the line itself is
+     * included in the affected set but the scan stops (reachedStableSuffix = true), preventing
+     * the next paragraph's lines from being unnecessarily captured.
+     */
     private fun computeAffectedLines(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,

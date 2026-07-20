@@ -183,13 +183,19 @@ class AndroidLineSnapshotBuilder {
      * Build a shaping fingerprint for a grapheme cluster.
      *
      * API 31+: Uses TextRunShaper.shapeText → PositionedGlyphs (glyph IDs, fonts, positions).
-     * This is reliable for Move vs Crossfade decisions.
+     * This is reliable for Move vs Crossfade decisions because PositionedGlyphs captures
+     * the actual glyph output including contextual shaping, ligatures, and font fallback.
      *
-     * API < 31: Falls back to codepoint Unicode categories + paint hash + bidi direction.
-     * This is a conservative approximation — different shapings may produce the same
-     * fingerprint, so [shapingIdentityConfident] is set to false, and the animation
-     * planner will use Crossfade instead of Move to avoid visual glitches from
-     * false positive fingerprint matches.
+     * API < 31: Falls back to codepoint Unicode categories + paint hash + bidi direction
+     * + adjacent codepoint context hash. This is a conservative approximation — different
+     * shapings may produce the same fingerprint (e.g. Arabic contextual forms, Indic
+     * conjuncts, ligatures that depend on surrounding characters). Therefore
+     * [shapingIdentityConfident] is set to false, and the animation planner will use
+     * Crossfade instead of Move to avoid visual glitches from false positive matches.
+     *
+     * When either the old or new cluster has [shapingIdentityConfident] == false, the
+     * planner must not assume visual identity even if fingerprints match — Crossfade is
+     * the only safe choice.
      */
     private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
         if (clusterText.isEmpty()) return ""

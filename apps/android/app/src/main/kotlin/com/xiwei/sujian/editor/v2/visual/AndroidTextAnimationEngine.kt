@@ -13,6 +13,14 @@ class AndroidTextAnimationEngine(
     private var timeline: AnimationTimeline? = null
     private var animationPolicy: TextAnimationPolicy = TextAnimationPolicy.INHERIT_GLOBAL
 
+    /**
+     * Create a prepared visual transaction from old/new layout revisions and line snapshots.
+     *
+     * Invariant: [transactionKey] is generated exactly once here and passed to the planner.
+     * All snapshots registered in this call are owned by [OwnedByTransaction(transactionKey)];
+     * the planner must use the same key in [PreparedVisualTransaction.transactionId] so that
+     * [completeTransaction]/[cancelTransaction] can release resources under the correct owner.
+     */
     fun prepare(
         visualIntent: VisualIntent,
         oldRevision: AndroidLayoutRevision?,
@@ -50,6 +58,18 @@ class AndroidTextAnimationEngine(
         )
     }
 
+    /**
+     * Submit a prepared animation as the new active transaction.
+     *
+     * Ownership invariant: after this method, [activeTransaction.ownedSnapshotIds] is the
+     * *precise* set of snapshot IDs whose Bitmaps this transaction must release on
+     * complete/cancel — it contains only (a) newly captured snapshots that are actually
+     * referenced by slices or static patches, and (b) old-transaction snapshots whose
+     * ownership was transferred because the new transaction references them.
+     *
+     * Unreferenced snapshots (newly captured but unused, or old snapshots no longer needed)
+     * are released immediately, preventing unbounded growth during rapid consecutive input.
+     */
     fun submit(preparedAnimation: PreparedVisualTransaction) {
         val oldTransaction = activeTransaction
         val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)

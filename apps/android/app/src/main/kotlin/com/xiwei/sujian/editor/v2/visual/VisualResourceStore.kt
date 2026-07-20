@@ -35,6 +35,13 @@ class VisualResourceStore {
 
     fun get(snapshotId: Long): AndroidLineSnapshot? = snapshots[snapshotId]?.snapshot
 
+    /**
+     * Release a snapshot. [releaser] must match the current owner exactly — mismatched
+     * owners are silently ignored (the Bitmap is not recycled). This prevents accidental
+     * release by a wrong transaction: e.g. if transaction A owns a snapshot and transaction B
+     * tries to release it, the mismatch means B's [OwnedByTransaction] key differs from A's,
+     * so the release is a no-op and the Bitmap survives until A completes.
+     */
     fun release(snapshotId: Long, releaser: SnapshotOwner) {
         val entry = snapshots[snapshotId] ?: return
         if (!isOwner(entry.owner, releaser)) {
