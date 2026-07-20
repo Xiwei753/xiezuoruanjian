@@ -1469,6 +1469,12 @@ class AndroidVisualPlanner {
         // editByteStart: primary source is oldAffectedByteRanges (the edit's origin in the
         // old document). Falls back to newAffectedByteRanges for pure-insert edits where
         // oldAffectedByteRanges is empty — the insert position is the only available anchor.
+        // editByteStart cross-revision invariant: this offset comes from oldAffectedByteRanges
+        // (or newAffectedByteRanges for pure-insert), but it is safe to use with BOTH revisions
+        // because it is the byte offset *before* any inserted text — text preceding the edit
+        // point is unchanged, so the same offset maps to the correct line in both old and new
+        // revisions. This allows a single editByteStart to anchor the edit paragraph in both
+        // coordinate spaces without separate old/new start offsets.
         val editByteStart = visualIntent.oldAffectedByteRanges.firstOrNull()?.first
             ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
         if (editByteStart != null) {
@@ -1695,6 +1701,13 @@ class AndroidVisualPlanner {
                             left = newParaLines.map { it.value.left }.minOrNull() ?: 0f,
                             right = newParaLines.map { it.value.right }.maxOrNull() ?: 0f,
                             deltaY = deltaY,
+                            // startUtf8 uses the NEW paragraph's byte offset (not the old
+                            // paragraph's) because BlockShifts translate new-layout text —
+                            // the renderer applies deltaY to the static new-layout drawing.
+                            // Rebase matching (applyRebaseToBlockShifts) uses startUtf8 to
+                            // find the corresponding old BlockShift; using the old paragraph's
+                            // startUtf8 would fail because the old offset may not exist in the
+                            // new revision after hard-break insertion/deletion.
                             startUtf8 = newPara.startUtf8
                         ))
                     }

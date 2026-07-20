@@ -173,6 +173,10 @@ class AndroidTextAnimationEngine(
      * Timestamp: [System.nanoTime] / 1_000_000 provides a monotonic millisecond clock
      * consistent with [AnimationTimeline]'s internal time base. Sub-millisecond precision
      * is intentionally discarded — [AnimationTimeline.progress] operates in whole milliseconds.
+     * Must use [System.nanoTime] rather than [System.currentTimeMillis]: the latter can jump
+     * backwards on NTP clock adjustments or wall-clock changes, which would cause
+     * [AnimationTimeline.progress] to return values < 0 or regress from a previously
+     * returned value, breaking the monotonic progress invariant that animation depends on.
      */
     fun prepareAndSubmit(
         visualIntent: VisualIntent,
