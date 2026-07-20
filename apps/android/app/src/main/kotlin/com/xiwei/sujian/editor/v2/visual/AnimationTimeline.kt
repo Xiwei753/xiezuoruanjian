@@ -107,8 +107,15 @@ data class VisualFrameSnapshot(
 
 data class BlockShiftVisualState(
     val startLineIndex: Int,
+    /** Exclusive end line index (half-open: [startLineIndex, endLineIndexExclusive)). */
     val endLineIndexExclusive: Int,
+    /** Current Y translation at the snapshot's progress point.
+     *  Negative = text is above its new-layout position (still moving down);
+     *  positive = text is below its new-layout position (still moving up);
+     *  zero = text is at the new-layout position (animation complete or no shift). */
     val currentTranslateY: Float,
+    /** Always 0 — the animation's final state is the new layout with no translation.
+     *  Included for API symmetry with [SliceVisualState.destinationLeft/Top/Right/Bottom]. */
     val targetTranslateY: Float
 )
 

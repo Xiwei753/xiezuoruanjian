@@ -1365,6 +1365,28 @@ class AndroidVisualPlanner {
             val oldParagraphs = buildParagraphRanges(oldRev)
             val newParagraphs = buildParagraphRanges(newRev)
 
+            /**
+             * Determine structurally affected paragraphs: those whose content or boundaries
+             * changed due to hard-break insertion/deletion, beyond the primary edit paragraph.
+             *
+             * Split (insert hard break): the old edit paragraph becomes two new paragraphs.
+             * The second new paragraph has no old counterpart at the same paragraphId, so it
+             * must be added to [structurallyAffectedNewParaIds] to ensure its lines get Bitmap
+             * snapshots for CrossfadeOld/Move exit animation.
+             *
+             * Merge (delete hard break): two old paragraphs merge into one new paragraph.
+             * The second old paragraph's text is absorbed into the merged paragraph, so it
+             * must be in [structurallyAffectedOldParaIds] to ensure its lines have old snapshots.
+             *
+             * Detection: if offset-mapping an old paragraph's start/end yields a new paragraph
+             * with different boundaries, both are structurally affected. If reverse-mapping a
+             * new paragraph's start returns null (no old offset maps to it), the new paragraph
+             * is structurally affected — it was created by a split.
+             *
+             * BlockShifts start only after the last paragraph in the combined edit group,
+             * preventing the same paragraph from appearing both as a Bitmap snapshot target
+             * and as a BlockShift target.
+             */
             val structurallyAffectedOldParaIds = mutableSetOf<Int>()
             val structurallyAffectedNewParaIds = mutableSetOf<Int>()
             structurallyAffectedOldParaIds.add(editParagraphId)
@@ -1520,6 +1542,20 @@ class AndroidVisualPlanner {
         return null
     }
 
+    /**
+     * Merge adjacent BlockShifts whose line ranges are contiguous and whose deltaY is
+     * identical into a single entry.
+     *
+     * Without merging, each paragraph produces a separate BlockShift, and the renderer
+     * calls [layout.draw] once per shifted paragraph per frame. For long documents with
+     * many paragraphs shifting by the same amount (e.g. inserting a line near the top),
+     * this would create O(paragraphs) draw calls per frame. Merging reduces this to
+     * O(distinct-deltaY-groups) — typically 1 for a simple insert/delete.
+     *
+     * Merged [left]/[right] use min/max across constituent paragraphs to ensure the
+     * clip rect covers the widest line in the block, preventing narrow intermediate lines
+     * from being clipped short.
+     */
     private fun mergeAdjacentBlockShifts(
         shifts: List<PreparedVisualTransaction.BlockShift>
     ): List<PreparedVisualTransaction.BlockShift> {
@@ -1552,6 +1588,20 @@ class AndroidVisualPlanner {
         val top: Float
     )
 
+    /**
+     * Build paragraph ranges from a layout revision.
+     *
+     * Groups visual lines by [paragraphId] and produces one [ParagraphRange] per paragraph.
+     * [endUtf8Exclusive] is the exclusive UTF-8 end of the paragraph's last visual line —
+     * this is a half-open boundary: the byte at [endUtf8Exclusive] itself belongs to the
+     * next paragraph (or is one past the document end).
+     *
+     * [paragraphId] is a sequential integer that increments at each hard break. It is NOT
+     * a stable identity across edits — inserting or deleting a hard break renumbers all
+     * subsequent paragraphs. Paragraph alignment in the animation planner uses offset-map
+     * matching (via [buildOffsetMapper]) rather than paragraphId, so that the same text
+     * paragraph is correctly paired even after hard-break insertion/deletion.
+     */
     private fun buildParagraphRanges(rev: AndroidLayoutRevision): List<ParagraphRange> {
         val paragraphs = mutableListOf<ParagraphRange>()
         val linesByParagraph = rev.lineRanges.withIndex().groupBy { it.value.paragraphId }
@@ -1772,6 +1822,18 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Tier-2 rebase matching: same visual line + compatible role.
+     *
+     * When exact byte-range matching fails (e.g. cluster boundaries shifted due to the
+     * new edit), this tier finds the closest rebase state on the same line with a
+     * compatible role, using byte-start distance as the tiebreaker.
+     *
+     * One-to-one invariant: [usedRebaseIndices] prevents multiple new slices from
+     * matching the same old state. Without this, two Insert slices on the same line
+     * could both inherit the same rebase position/alpha, causing them to start from
+     * identical on-screen coordinates instead of their respective positions.
+     */
     private fun findRebaseIndexByLineAndRole(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot,
@@ -1806,6 +1868,24 @@ class AndroidVisualPlanner {
             }
     }
 
+    /**
+     * Rebase new BlockShifts onto the current visual state of the old transaction's
+     * BlockShifts.
+     *
+     * When a new transaction arrives while a previous BlockShift is still animating,
+     * the suffix text is at an intermediate Y position (currentTranslateY != 0).
+     * Without rebase, the new transaction would start from translateY = -newDeltaY,
+     * causing the suffix text to jump back to the old position before animating forward.
+     *
+     * Rebase adjusts deltaY so that the new animation starts from the on-screen position:
+     *   adjustedDeltaY = newDeltaY + oldCurrentTranslateY
+     * This works because at progress=0: translateY = adjustedDeltaY * (0 - 1) = -(newDeltaY + oldCurrentTranslateY),
+     * which equals the old on-screen position when the new layout's static text is at its
+     * unshifted position and the old animation had currentTranslateY.
+     *
+     * Matching: first tries exact line-range match, then overlapping range. Unmatched
+     * new BlockShifts are left unchanged (they start from their natural -deltaY position).
+     */
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,
         rebaseSnapshot: VisualFrameSnapshot

@@ -81,22 +81,24 @@ data class PreparedVisualTransaction(
     )
 
     /**
-     * Block-level vertical shift for a paragraph after the edit paragraph.
+     * Block-level vertical shift for a contiguous range of paragraphs after the edit
+     * paragraph group whose Y geometry shifted but whose text content is identical.
      *
-     * Byte range convention: [paragraphStartUtf8] inclusive, [paragraphEndUtf8] exclusive
-     * (half-open). The renderer converts to UTF-16 via the layout text and clamps
-     * [paragraphEndUtf8] to the document length to avoid exclusive-end越界.
+     * Line range convention: [startLineIndex] inclusive, [endLineIndexExclusive] exclusive
+     * (half-open). The renderer uses these indices directly to clip and translate the
+     * static new-layout text, avoiding per-frame UTF-8→UTF-16 offset conversion that
+     * could land on the wrong line when the exclusive end coincides with a paragraph boundary.
      *
-     * [deltaY] is positive when the paragraph moved downward (newTop > oldTop).
+     * [deltaY] is positive when the block moved downward (newTop > oldTop).
      * The renderer interpolates: translateY = deltaY * (progress - 1), so at progress=0
      * the text is at its old position (shifted by -deltaY from the new layout) and at
      * progress=1 it rests at the new layout position (no shift).
      *
-     * Current limitation: each paragraph produces a separate BlockShift entry.
-     * Adjacent paragraphs with identical deltaY are NOT merged, so the renderer calls
-     * layout.draw() once per shifted paragraph per frame. For long documents this is
-     * acceptable because no per-line Bitmap is allocated — only the static layout is
-     * re-drawn with a Y translation.
+     * Merging: [AndroidVisualPlanner.mergeAdjacentBlockShifts] merges consecutive
+     * BlockShifts whose line ranges are adjacent and whose deltaY is identical into a
+     * single entry. This ensures the renderer performs at most one [layout.draw] per
+     * merged block per frame, not one per paragraph — critical for long documents where
+     * many paragraphs shift by the same amount.
      */
     data class BlockShift(
         val startLineIndex: Int,

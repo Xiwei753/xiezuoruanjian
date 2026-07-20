@@ -7,13 +7,17 @@ import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
  * decoration state (cursor, selection, composition, search highlights, viewport).
  * The composed frame is then passed to the renderers for drawing.
  *
- * Rendering pipeline: [AndroidTextRenderer.drawStaticTextWithHoles] draws the base
- * static text (clipping out animated-slice holes and block-shift regions), then
- * [AndroidTextRenderer.drawStaticTextWithHoles] re-draws shifted paragraphs with
- * interpolated Y translation, and finally [AndroidTextAnimationRenderer] draws
- * animated slices and cursor on top. [blockShifts] originate from
- * [AndroidVisualPlanner.computeAffectedLines] — they represent paragraphs after
- * the edit paragraph whose Y geometry shifted but whose text content is identical.
+ * Rendering pipeline:
+ * 1. [AndroidTextRenderer.drawStaticTextWithHoles] draws the base static text, clipping
+ *    out animated-slice holes and block-shift regions.
+ * 2. [AndroidTextRenderer.drawStaticTextWithHoles] re-draws each block-shifted region
+ *    with interpolated Y translation (merged adjacent paragraphs share one draw call).
+ * 3. [AndroidTextAnimationRenderer.drawAnimatedSlices] draws animated slices on top.
+ * 4. [AndroidTextAnimationRenderer.drawAnimatedCursor] draws the animated cursor.
+ *
+ * [blockShifts] originate from [AndroidVisualPlanner.computeAffectedLines] — they
+ * represent paragraphs after the edit paragraph whose Y geometry shifted but whose
+ * text content is identical.
  */
 class EditorFrameComposer {
     /**

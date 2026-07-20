@@ -368,6 +368,17 @@ class AndroidTextAnimationEngine(
         return android.graphics.RectF(currentX, currentY, currentX + 2f, currentY + currentHeight)
     }
 
+    /**
+     * Interpolate each BlockShift's vertical translation at [progress].
+     *
+     * Interpolation: translateY = deltaY * (progress - 1).
+     * - progress=0 → translateY = -deltaY (text at its old position, above the new layout).
+     * - progress=1 → translateY = 0 (text at the new layout position).
+     *
+     * [targetTranslateY] is always 0 because the animation's final state is the new layout
+     * with no translation. The rebase consumer uses [currentTranslateY] to adjust the next
+     * transaction's deltaY so that consecutive inputs continue from the on-screen position.
+     */
     private fun computeBlockShiftVisualStates(
         transaction: PreparedVisualTransaction,
         progress: Float
