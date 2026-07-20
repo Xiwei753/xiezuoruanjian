@@ -10,7 +10,8 @@ data class LineClusterSnapshot(
     val documentUtf16EndExclusive: Int,
     val sourceRectInLineImage: android.graphics.Rect,
     val visualRectInDocument: android.graphics.RectF,
-    val shapingFingerprint: String
+    val shapingFingerprint: String,
+    val shapingIdentityConfident: Boolean = true
 )
 
 data class AndroidLineSnapshot(

@@ -355,7 +355,10 @@ class AndroidVisualPlanner {
                 if (!positionChanged) continue
                 val newSnapshot = newInfo.second
                 val oldSnapshot = oldInfo.second
-                if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint) {
+                if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
+                    && oldCluster.shapingIdentityConfident
+                    && newCluster.shapingIdentityConfident
+                ) {
                     animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                         role = SliceRole.Move,
                         snapshot = newSnapshot,
@@ -479,7 +482,10 @@ class AndroidVisualPlanner {
                 val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
                 if (positionChanged) {
-                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint) {
+                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
+                    && oldCluster.shapingIdentityConfident
+                    && newCluster.shapingIdentityConfident
+                ) {
                         animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                             role = SliceRole.Move,
                             snapshot = newSnapshot,
@@ -726,7 +732,10 @@ class AndroidVisualPlanner {
                 val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
                 if (positionChanged) {
-                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint) {
+                    if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
+                        && oldCluster.shapingIdentityConfident
+                        && newCluster.shapingIdentityConfident
+                    ) {
                         animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                             role = SliceRole.Move,
                             snapshot = newSnapshot,
@@ -827,7 +836,10 @@ class AndroidVisualPlanner {
                     )
                     if (matchedPairs.isNotEmpty()) {
                         for ((oldCluster, newCluster) in matchedPairs) {
-                            if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint) {
+                            if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
+                                && oldCluster.shapingIdentityConfident
+                                && newCluster.shapingIdentityConfident
+                            ) {
                                 animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                                     role = SliceRole.Move,
                                     snapshot = newSnapshot,
@@ -1101,6 +1113,9 @@ class AndroidVisualPlanner {
                         reachedStableSuffix = true
                         break
                     }
+                }
+                if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
+                    break
                 }
             }
             // Lines present only on one side (soft wrap growth/shrink) always animate.

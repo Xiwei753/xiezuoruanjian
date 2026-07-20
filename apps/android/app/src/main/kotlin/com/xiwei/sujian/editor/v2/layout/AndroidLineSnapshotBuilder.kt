@@ -138,6 +138,7 @@ class AndroidLineSnapshotBuilder {
             val localEnd = end.coerceIn(0, lineText.length)
             val clusterText = lineText.substring(localStart, localEnd)
             val shapingFp = buildShapingFingerprint(clusterText, layout, lineIndex, clusterStartUtf16)
+            val isConfident = android.os.Build.VERSION.SDK_INT >= 31
 
             clusters.add(LineClusterSnapshot(
                 clusterId = clusterIdCounter++,
@@ -147,7 +148,8 @@ class AndroidLineSnapshotBuilder {
                 documentUtf16EndExclusive = clusterEndUtf16,
                 sourceRectInLineImage = android.graphics.Rect(sourceLeft.toInt(), sourceTop.toInt(), sourceRight.toInt(), sourceBottom.toInt()),
                 visualRectInDocument = android.graphics.RectF(x0, top, x1, bottom),
-                shapingFingerprint = shapingFp
+                shapingFingerprint = shapingFp,
+                shapingIdentityConfident = isConfident
             ))
         }
 

@@ -58,7 +58,9 @@ class AndroidTextAnimationEngine(
             val newOwner = SnapshotOwner.OwnedByTransaction(preparedAnimation.transactionId)
 
             val referencedIds = preparedAnimation.referencedSnapshotIds
-            val inheritedIds = oldTransaction.ownedSnapshotIds.intersect(referencedIds) - preparedAnimation.ownedSnapshotIds
+            val inheritedIds = oldTransaction.ownedSnapshotIds
+                .intersect(referencedIds)
+                .minus(preparedAnimation.ownedSnapshotIds)
             for (snapshotId in inheritedIds) {
                 resourceStore.transferOwnership(snapshotId, newOwner)
             }
@@ -68,12 +70,8 @@ class AndroidTextAnimationEngine(
                 resourceStore.release(snapshotId, oldOwner)
             }
 
-            val mergedIds = preparedAnimation.ownedSnapshotIds + inheritedIds
-            activeTransaction = if (mergedIds != preparedAnimation.ownedSnapshotIds) {
-                preparedAnimation.copy(ownedSnapshotIds = mergedIds)
-            } else {
-                preparedAnimation
-            }
+            val preciseOwnedIds = preparedAnimation.ownedSnapshotIds + inheritedIds
+            activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
             timeline?.complete()
         } else {
             activeTransaction = preparedAnimation
