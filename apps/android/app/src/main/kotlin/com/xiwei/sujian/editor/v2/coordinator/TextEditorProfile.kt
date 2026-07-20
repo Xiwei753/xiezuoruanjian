@@ -1,5 +1,16 @@
 package com.xiwei.sujian.editor.v2.coordinator
 
+/**
+ * Composable configuration for an editable text target's input and display behavior.
+ *
+ * Per #541: profile determines how the shared [SujianEditorView] configures itself for a
+ * given target — it does NOT determine where the text is saved (that is the domain command's
+ * responsibility). Multiple targets can share the same profile (e.g. project title and chapter
+ * title both use [ShortTitle]) while committing to different domain objects.
+ *
+ * Profile is applied to the pipeline via [SujianEditorView.applyProfileToPipeline] on each
+ * [bindSession] call, so switching targets reconfigures the shared host entirely.
+ */
 data class TextEditorProfile(
     val singleLine: Boolean = false,
     val minLines: Int = 1,
@@ -125,6 +136,16 @@ enum class SelectionPolicy {
     CURSOR_ONLY
 }
 
+/**
+ * Commit timing policy for an editable text target.
+ *
+ * Per #541: determines when the coordinator submits the current text to the domain model.
+ * - [COMMIT_ON_CONFIRM]: text is submitted only on explicit commit (IME action, focus loss,
+ *   or programmatic commitActiveEdit). Used for draft sessions (project title, search query)
+ *   where the domain model should not see intermediate states.
+ * - [COMMIT_ON_EVERY_CHANGE]: text is submitted on every content change callback. Used for
+ *   persistent sessions (chapter body) where the domain model must stay in sync with edits.
+ */
 enum class CommitPolicy {
     COMMIT_ON_CONFIRM,
     COMMIT_ON_EVERY_CHANGE

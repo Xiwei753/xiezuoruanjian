@@ -76,6 +76,21 @@ data class Transform2D(
     }
 }
 
+/**
+ * Lifecycle states of the shared editing host within the coordinator.
+ *
+ * Per #541: the shared [SujianEditorView] transitions through these states as the
+ * coordinator binds, rebinds, commits, or cancels editing targets. Only EDITING produces
+ * an active InputConnection; all other states either prepare or tear down the session.
+ *
+ * State transitions:
+ * - IDLE → BINDING (beginEdit called)
+ * - BINDING → EDITING (session created and host bound)
+ * - EDITING → COMMITTING / CANCELLING (user or programmatic action)
+ * - EDITING → REBINDING (beginEdit called for a different target while editing)
+ * - COMMITTING / CANCELLING / REBINDING → IDLE (action completed)
+ * - IDLE → RELEASED (releaseHost called — terminal, host cannot be reused)
+ */
 enum class EditingState {
     IDLE,
     BINDING,

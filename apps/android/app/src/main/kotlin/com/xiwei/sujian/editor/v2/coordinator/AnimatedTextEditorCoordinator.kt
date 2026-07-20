@@ -179,6 +179,12 @@ class AnimatedTextEditorCoordinator(
             finalText = view.getText()
             target.onCommit?.invoke(finalText)
             target.updateText(finalText)
+            // Per #541 session lifecycle: persistent sessions survive commit — the Undo/Redo
+            // stack and revision history are preserved across edit/commit cycles. Only
+            // transient animation and composition state are cleared (softResetForPersistentCommit).
+            // Draft sessions are fully closed on commit — the final text is submitted to the
+            // domain model in one shot, and the Rust session is destroyed to prevent draft
+            // Undo stacks from leaking between targets.
             if (target.isPersistent) {
                 view.softResetForPersistentCommit()
             } else {

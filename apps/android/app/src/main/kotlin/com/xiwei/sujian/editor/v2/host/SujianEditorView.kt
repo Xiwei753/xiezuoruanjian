@@ -578,6 +578,18 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Soft reset for persistent sessions on commit (per #541).
+     *
+     * Cancels any active animation and invalidates the composition session, but does NOT
+     * close the Rust EditorKernel session or reset the mirror. The Undo/Redo stack and
+     * revision history survive across commits — the persistent session remains bound and
+     * can continue editing. This contrasts with [unbindSession] (used for draft sessions),
+     * which detaches the bridge and closes the Rust session entirely.
+     *
+     * Animation cancellation is necessary because the composition overlay is being removed
+     * — any in-progress composition animation would reference stale preedit state.
+     */
     fun softResetForPersistentCommit() {
         pipeline.cancelActiveTransaction()
         pipeline.invalidateCompositionSession()
