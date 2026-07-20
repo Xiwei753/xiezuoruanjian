@@ -956,25 +956,26 @@ class AndroidVisualPlanner {
     }
 
     /**
-     * Select clusters that overlap [affectedRanges] and merge adjacent ones into contiguous runs.
+     * Group adjacent grapheme clusters into runs for RunAnimation mode.
      *
-     * A "run" is a maximal sequence of adjacent clusters on the same line that all overlap
-     * [affectedRanges]. Adjacent means their byte ranges are contiguous (no gap) and they
-     * share the same line. Each run produces a single [LineClusterSnapshot] whose byte range,
-     * sourceRect, and visualRect span the entire run, enabling Insert/Delete/Crossfade at
-     * run granularity instead of per-cluster.
+     * Run merging rules (visual continuity, not logical order):
+     * - Same visual line: clusters must be byte-adjacent (cluster[i].documentByteEndExclusive
+     *   == cluster[i+1].documentByteStart) AND share the same visual top (same line).
+     *   Byte adjacency alone is insufficient because soft-wrap breaks byte-adjacent clusters
+     *   across lines — merging them would produce a sourceRect/visualRect spanning two lines,
+     *   which the renderer cannot draw as a single Bitmap region.
+     * - Cross-line: runs are split at line boundaries (different visual top). Each run is
+     *   confined to a single visual line, ensuring sourceRect and visualRect are coherent.
      *
-     * Clusters that are not adjacent to any other affected cluster form single-cluster runs.
-     * Cross-line gaps break runs — each line produces its own run(s). Run boundaries are
-     * detected by byte-range contiguity AND same visual line (via top coordinate comparison),
-     * not by lineIndex — lineIndex is a global index that may differ between old and new
-     * revisions after reflow, while top coordinate is a visual property that reliably
-     * identifies same-line membership within a single revision.
+     * Merged geometry: sourceRect and visualRect use union (min/max) of all constituent
+     * clusters, not first/last logical rect. This is essential for RTL and mixed bidi:
+     * the logically "first" cluster may be visually rightmost, so first.left + last.right
+     * would produce an inverted or incomplete rect. Union guarantees the merged rect covers
+     * every cluster regardless of direction.
      *
-     * Visual rect merging uses union of ALL cluster rects, not first/last concatenation.
-     * RTL or mixed bidi text does not guarantee visual left/right order matches logical
-     * first/last order — first.left + last.right may produce an inverted or incomplete rect.
-     * Union ensures the merged rect covers every cluster regardless of text direction.
+     * Merged fingerprint: concatenates all constituent fingerprints with "|" separator.
+     * [shapingIdentityConfident] is true only when ALL constituent clusters are confident —
+     * a single unconfident cluster makes the whole run unconfident, forcing Crossfade.
      */
     private fun groupClustersIntoRuns(
         clusters: List<LineClusterSnapshot>,
@@ -1095,6 +1096,13 @@ class AndroidVisualPlanner {
                 }
             }
             if (bestNewParaIdx == null && oldPara.paragraphId in affectedNewParagraphIds) {
+                // paragraphId fallback: when offsetMapper cannot match (e.g. the paragraph
+                // start falls inside a replaced range so mappedStart is null), fall back to
+                // matching by paragraphId. This is unreliable after hard-break insertion/deletion
+                // (all subsequent IDs change), but within the affected-line set the IDs are
+                // typically still aligned because the affected lines were computed from the
+                // same revision. Without this fallback, paragraphs with no offset-map match
+                // would be skipped entirely, producing no animation for their lines.
                 bestNewParaIdx = newParagraphs.indexOfFirst { it.paragraphId == oldPara.paragraphId }
                     .takeIf { it >= 0 && it !in matchedNewParaIndices }
             }
@@ -1527,18 +1535,18 @@ class AndroidVisualPlanner {
                     // the new paragraph ends, so it overlaps.
                     //
                     // Condition (2): newPara.startUtf8 < oldPara.endUtf8Exclusive + newParaLen.
-                    // This is a cross-coordinate overlap approximation: oldPara.endUtf8Exclusive
-                    // is in old-document coordinates while newPara.startUtf8 is in new-document
+                    // Cross-coordinate overlap approximation: oldPara.endUtf8Exclusive is in
+                    // old-document coordinates while newPara.startUtf8 is in new-document
                     // coordinates, so they cannot be compared directly. Adding newParaLen
-                    // approximates the maximum byte shift from the split (the new paragraph's
-                    // length is an upper bound on how much the edit delta could have moved
-                    // the old paragraph's end forward in the new document). This is conservative
-                    // — it may include unrelated old paragraphs, but false positives only cause
-                    // extra Bitmap snapshots (not incorrect animation). The approximation is
-                    // safe because the offset mapper's forward mapping (condition 1) already
-                    // constrains the result to paragraphs that genuinely overlap in the new
-                    // document; condition 2 merely widens the candidate set to avoid missing
-                    // paragraphs at the split boundary where forward mapping alone is insufficient.
+                    // (the new paragraph's byte length) approximates the maximum forward shift
+                    // from the split — the edit delta cannot move the old paragraph's end
+                    // forward by more than the inserted text length, which is bounded by
+                    // newParaLen. This is conservative: it may include unrelated old paragraphs,
+                    // but false positives only cause extra Bitmap snapshots (not incorrect
+                    // animation). Condition (1) constrains the result to paragraphs that
+                    // genuinely overlap in the new document; condition (2) widens the
+                    // candidate set to avoid missing paragraphs at the split boundary where
+                    // forward mapping alone is insufficient.
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
@@ -1592,6 +1600,8 @@ class AndroidVisualPlanner {
             //    the paragraph was heavily modified), fall back to sequential ID matching.
             //    This is unreliable after hard-break insertion/deletion (all subsequent IDs
             //    change), but is the last resort for paragraphs that must still shift.
+            //    Without this fallback, paragraphs with no offset-map match would produce
+            //    no BlockShift at all, causing them to jump to the new position instantly.
             for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
                 if (oldPara.paragraphId in structurallyAffectedOldParaIds) continue
 
@@ -2128,6 +2138,11 @@ class AndroidVisualPlanner {
      *
      * Fallback: when [startUtf8] is -1 (not tracked) or no byte-offset match exists,
      * falls back to line-index overlap and nearest-by-gap matching (legacy behavior).
+     * This handles edge cases where the offset mapper cannot produce a match — e.g. when
+     * a BlockShift's paragraph was created by a merge that the offset mapper does not
+     * track, or when [startUtf8] was not populated in an earlier version. The fallback
+     * is less precise (line indices shift across revisions) but prevents the suffix from
+     * jumping to the old position when no rebase data is available.
      */
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,

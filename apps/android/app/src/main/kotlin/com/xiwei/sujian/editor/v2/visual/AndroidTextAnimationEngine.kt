@@ -190,6 +190,8 @@ class AndroidTextAnimationEngine(
         // First call: compute old affected lines using only the old revision (newRevision=null).
         // This identifies which lines need Bitmap snapshots BEFORE the mirror update, without
         // being influenced by the new layout's line indices (which may differ due to reflow).
+        // Using both revisions here would be incorrect because the new revision does not yet
+        // exist — the mirror has not been updated, so layoutEngine still holds the old layout.
         val preliminaryResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, null)
         val affectedOldLineIndices = preliminaryResult.oldLineIndices
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)

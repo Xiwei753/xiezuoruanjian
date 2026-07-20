@@ -113,7 +113,14 @@ data class PreparedVisualTransaction(
         /** UTF-8 byte offset of the first line in this block. Used by rebase matching
          *  instead of [startLineIndex] because line indices shift across revisions when
          *  hard breaks are inserted/deleted — the old transaction's line N may become
-         *  line N+1 in the new revision, causing line-index-based matching to fail. */
+         *  line N+1 in the new revision, causing line-index-based matching to fail.
+         *
+         *  Rebase continuity: [applyRebaseToBlockShifts] matches old/new BlockShifts by
+         *  [startUtf8] and adjusts deltaY to (newDeltaY - oldCurrentTranslateY). This
+         *  ensures the suffix text starts from the on-screen position of the old animation
+         *  rather than jumping back to the full -newDeltaY offset. Without [startUtf8],
+         *  line-index-based matching would pair the wrong BlockShifts after hard-break
+         *  insertion/deletion, producing incorrect rebase adjustments and visible jumps. */
         val startUtf8: Int = -1
     )
 }
