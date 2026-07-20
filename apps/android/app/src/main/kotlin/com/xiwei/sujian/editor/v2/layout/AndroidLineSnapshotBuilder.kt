@@ -55,9 +55,15 @@ class AndroidLineSnapshotBuilder {
         val height = kotlin.math.ceil(bottom - top).toInt().coerceAtLeast(1)
 
         // Bitmap dimensions use ceil() to ensure the bitmap covers the full sub-pixel
-        // extent of the line. Source rects (below) use floor/ceil and clamp to
-        // [0, bitmapWidth/Height], so ceil guarantees no cluster sourceRect overflows
-        // the bitmap even when line width/height has a fractional part.
+        // extent of the line. Source rects (in buildClustersForLine) use floor/ceil and
+        // clamp to [0, bitmapWidth/Height], so ceil guarantees no cluster sourceRect
+        // overflows the bitmap even when line width/height has a fractional part.
+        // Geometric consistency: Bitmap = ceil(right-left) × ceil(bottom-top);
+        // sourceRect = floor(left) to ceil(right) clamped to [0, bitmapSize];
+        // destinationRect = exact floating-point layout coordinates. This three-layer
+        // convention ensures that (a) the Bitmap is never smaller than any sourceRect,
+        // (b) sourceRect pixel coordinates never exceed Bitmap dimensions, and
+        // (c) the rendering canvas maps sourceRect pixels to destinationRect layout coords.
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         canvas.translate(-left, -top)

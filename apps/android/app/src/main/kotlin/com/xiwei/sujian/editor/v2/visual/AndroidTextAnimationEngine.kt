@@ -110,6 +110,12 @@ class AndroidTextAnimationEngine(
             // Ownership is transferred so they survive the old transaction's release.
             // Only snapshots in referencedSnapshotIds are transferred — unreferenced old
             // snapshots are released below, preventing unbounded accumulation during rapid input.
+            //
+            // .minus(preparedAnimation.ownedSnapshotIds) excludes snapshots that the new
+            // transaction already captured itself — these are already owned by the new
+            // transactionKey and must not be "transferred" (which would change their owner
+            // from the correct new key to the same new key, a no-op that would also
+            // incorrectly include them in inheritedIds, inflating preciseOwnedIds).
             val referencedIds = preparedAnimation.referencedSnapshotIds
             val inheritedIds = oldTransaction.ownedSnapshotIds
                 .intersect(referencedIds)
@@ -380,6 +386,15 @@ class AndroidTextAnimationEngine(
      * Interpolation: translateY = deltaY * (progress - 1).
      * - progress=0 → translateY = -deltaY (text at its old position, above the new layout).
      * - progress=1 → translateY = 0 (text at the new layout position).
+     *
+     * Sign convention for deltaY: positive when the block moved downward in the new layout
+     * (newTop > oldTop). During animation, currentTranslateY = deltaY * (progress - 1) is
+     * negative (text is above its final position, still moving down). At progress=0,
+     * currentTranslateY = -deltaY, which is the offset from the new-layout position to the
+     * old-layout position. This sign convention is consistent throughout the rebase chain:
+     * currentTranslateY < 0 means "text has not yet reached the new position" (animating
+     * downward), currentTranslateY > 0 means "text has overshot the new position" (animating
+     * upward), currentTranslateY = 0 means "text is at the new-layout position".
      *
      * [targetTranslateY] is always 0 because the animation's final state is the new layout
      * with no translation. The rebase consumer uses [currentTranslateY] to adjust the next

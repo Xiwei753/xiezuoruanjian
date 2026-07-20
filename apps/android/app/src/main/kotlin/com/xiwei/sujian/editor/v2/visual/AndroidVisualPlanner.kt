@@ -373,6 +373,9 @@ class AndroidVisualPlanner {
                 oldCluster.documentByteStart < end && oldCluster.documentByteEndExclusive > start
             }
             if (isAlreadyHandled) continue
+            // mappedEnd == null means the old cluster's end falls inside a deleted/replaced
+            // range — the cluster straddles the boundary of the edit. In this case the
+            // start may still map, allowing a partial match by start-only position.
             val mappedStart = offsetMapper(oldCluster.documentByteStart)
             val mappedEnd = offsetMapper(oldCluster.documentByteEndExclusive)
             var matchedNewIdx: Int? = null
@@ -1426,11 +1429,16 @@ class AndroidVisualPlanner {
                 if (newPara.paragraphId in structurallyAffectedNewParaIds) continue
                 val reverseMappedStart = reverseMapOffset(newPara.startUtf8, visualIntent, oldRev, newRev)
                 if (reverseMappedStart == null) {
-                    // New paragraph with no reverse mapping: created by a hard-break split.
+                    // New paragraph with no reverse mapping: its startUtf8 falls inside
+                    // the new-only affected range, meaning this paragraph was created by
+                    // a hard-break split and has no counterpart in the old revision.
                     structurallyAffectedNewParaIds.add(newPara.paragraphId)
-                    // Find old paragraphs that overlap the new paragraph's byte range
-                    // (mapped forward). These old paragraphs contributed text to the
-                    // split result and need old Bitmap snapshots for exit animation.
+                    // Cross-validate via forward offset mapping: find old paragraphs whose
+                    // mapped start falls within the new paragraph's byte range. These old
+                    // paragraphs contributed text to the split result and need old Bitmap
+                    // snapshots for exit animation. Without this, the second half of a
+                    // split paragraph would have no old snapshot and would jump to its
+                    // final position without animation.
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
