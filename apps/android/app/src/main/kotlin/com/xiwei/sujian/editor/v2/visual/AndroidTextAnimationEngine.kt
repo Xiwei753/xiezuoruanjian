@@ -123,6 +123,14 @@ class AndroidTextAnimationEngine(
             // transactionKey and must not be "transferred" (which would change their owner
             // from the correct new key to the same new key, a no-op that would also
             // incorrectly include them in inheritedIds, inflating preciseOwnedIds).
+            // This exclusion is necessary because preparedAnimation.ownedSnapshotIds contains
+            // ALL newly captured snapshots (referenced and unreferenced), while
+            // referencedSnapshotIds contains only those actually used. Without .minus, a
+            // newly captured but unreferenced snapshot that also happens to be in the old
+            // transaction's ownedSnapshotIds would be double-counted: once in the new
+            // transaction's ownedSnapshotIds and once in inheritedIds, leading to an
+            // inflated preciseOwnedIds and a failed release (owner mismatch) when the new
+            // transaction completes.
             val referencedIds = preparedAnimation.referencedSnapshotIds
             val inheritedIds = oldTransaction.ownedSnapshotIds
                 .intersect(referencedIds)

@@ -178,6 +178,12 @@ class AndroidLineSnapshotBuilder {
             val bottom = layout.getLineBottom(lineIndex).toFloat()
 
             val sourceLeft = (visualLeft - lineRange.left).coerceAtLeast(0f)
+            // coerceAtLeast(sourceLeft) ensures sourceRight >= sourceLeft after RTL
+            // normalization. This is a pre-condition for the floor/ceil/clamp logic below:
+            // sourceRectRight is coerced to at least sourceRectLeft + 1 (minimum 1px width),
+            // which requires sourceRight >= sourceLeft. Without this guarantee, a negative
+            // sourceRight - sourceLeft would produce sourceRectLeft > sourceRectRight after
+            // floor/ceil, violating the minimum-width invariant.
             val sourceRight = (visualRight - lineRange.left).coerceAtLeast(sourceLeft)
             val sourceTop = 0f
             val sourceBottom = bottom - top

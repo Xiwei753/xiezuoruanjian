@@ -1120,8 +1120,12 @@ class AndroidVisualPlanner {
                 // matching by paragraphId. This is unreliable after hard-break insertion/deletion
                 // (all subsequent IDs change), but within the affected-line set the IDs are
                 // typically still aligned because the affected lines were computed from the
-                // same revision. Without this fallback, paragraphs with no offset-map match
-                // would be skipped entirely, producing no animation for their lines.
+                // same revision. The guard `oldPara.paragraphId in affectedNewParagraphIds`
+                // further constrains the match: only paragraphs that appear in both old and
+                // new affected-line sets are eligible, reducing the risk of false matches
+                // caused by ID renumbering in paragraphs outside the edit region.
+                // Without this fallback, paragraphs with no offset-map match would be
+                // skipped entirely, producing no animation for their lines.
                 bestNewParaIdx = newParagraphs.indexOfFirst { it.paragraphId == oldPara.paragraphId }
                     .takeIf { it >= 0 && it !in matchedNewParaIndices }
             }
