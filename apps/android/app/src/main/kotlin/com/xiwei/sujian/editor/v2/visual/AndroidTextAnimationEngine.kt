@@ -182,26 +182,41 @@ class AndroidTextAnimationEngine(
     /**
      * Capture the current visual state of the active transaction for rendering or rebase.
      *
-     * Returns null when no transaction is active, the timeline is null, or the timeline
-     * state is not Rendering/Paused (e.g. Pending, Completed, Cancelled). A null return
-     * from [captureRebaseSnapshot] means the next transaction starts from scratch without
-     * rebase — cursor and slices use their logical start/end positions directly.
+     * Returns null when no transaction is active or the timeline is null.
      *
-     * During rapid consecutive input, the returned snapshot preserves the current cursor rect
-     * and per-slice visual states (position, alpha) so the next transaction's rebase can
-     * continue from the on-screen position rather than the logical endpoint — preventing
-     * cursor jumps and slice discontinuities.
+     * Supports three timeline states:
+     * - [TransactionState.Rendering] / [TransactionState.Paused]: normal frame capture at
+     *   the current progress, with interpolated slice positions/alphas and cursor rect.
+     * - [TransactionState.Pending]: the transaction was just submitted but has not yet
+     *   been drawn on screen. Returns a frame at progress=0f with all slices at their
+     *   start positions/alphas and the cursor at its start rect. This is essential for
+     *   rebase during rapid consecutive input — if a second edit arrives before the first
+     *   transaction's first onDraw, the rebase snapshot must capture the first transaction's
+     *   initial visual state rather than returning null (which would lose the first animation).
+     *
+     * Returns null for Completed/Cancelled states — these are terminal and produce no frames.
      */
     fun captureFrame(frameTimeMs: Long): VisualFrameSnapshot? {
         val transaction = activeTransaction ?: return null
         val tl = timeline ?: return null
-        if (tl.getState() != TransactionState.Rendering && tl.getState() != TransactionState.Paused) return null
+        val state = tl.getState()
+        if (state == TransactionState.Completed || state == TransactionState.Cancelled) return null
+        if (state == TransactionState.Pending) {
+            val sliceStates = computeSliceVisualStates(transaction, 0f)
+            val cursorRect = computeCurrentCursorRect(transaction, 0f)
+            return VisualFrameSnapshot(
+                progress = 0f,
+                state = TransactionState.Pending,
+                sliceVisualStates = sliceStates,
+                cursorRect = cursorRect
+            )
+        }
         val p = tl.progress(frameTimeMs)
         val sliceStates = computeSliceVisualStates(transaction, p)
         val cursorRect = computeCurrentCursorRect(transaction, p)
         return VisualFrameSnapshot(
             progress = p,
-            state = tl.getState(),
+            state = state,
             sliceVisualStates = sliceStates,
             cursorRect = cursorRect
         )

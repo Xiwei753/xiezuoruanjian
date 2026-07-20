@@ -1329,7 +1329,12 @@ class AndroidVisualPlanner {
     /**
      * Rebase new slices onto the current visual frame of the old transaction.
      *
-     * Three-tier matching (most precise first):
+     * One-to-one matching invariant: each old [SliceVisualState] can be matched to at most
+     * one new slice. The matching proceeds in three tiers (most precise first), and each
+     * tier respects the [usedRebaseIndices] set to prevent multiple new slices from reusing
+     * the same old state — which would cause them to all start from the same position/alpha
+     * instead of each continuing from a unique old slice.
+     *
      * 1. [findRebaseStateByClusterByteRange] — exact byte range + role compatibility.
      * 2. [findRebaseStateByLineAndRole] — same visual line + role; used when byte ranges
      *    don't match exactly (e.g. cluster boundaries shifted) but the slice is on the
@@ -1344,12 +1349,17 @@ class AndroidVisualPlanner {
         rebaseSnapshot: VisualFrameSnapshot,
         snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap()
     ): List<PreparedVisualTransaction.AnimatedSlice> {
+        val usedRebaseIndices = mutableSetOf<Int>()
         val rebaseMatches = mutableMapOf<Int, SliceVisualState?>()
         for ((idx, slice) in slices.withIndex()) {
-            val state = findRebaseStateByClusterByteRange(slice, rebaseSnapshot)
-                ?: findRebaseStateByLineAndRole(slice, rebaseSnapshot)
-                ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot)
+            val state = findRebaseStateByClusterByteRange(slice, rebaseSnapshot, usedRebaseIndices)
+                ?: findRebaseStateByLineAndRole(slice, rebaseSnapshot, usedRebaseIndices)
+                ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot, usedRebaseIndices)
             rebaseMatches[idx] = state
+            if (state != null) {
+                val rebaseIdx = rebaseSnapshot.sliceVisualStates.indexOf(state)
+                if (rebaseIdx >= 0) usedRebaseIndices.add(rebaseIdx)
+            }
         }
         val rebasedNewSlices = slices.mapIndexed { idx, slice ->
             val rebaseState = rebaseMatches[idx]
@@ -1459,25 +1469,28 @@ class AndroidVisualPlanner {
 
     private fun findRebaseStateByClusterByteRange(
         slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseSnapshot: VisualFrameSnapshot
+        rebaseSnapshot: VisualFrameSnapshot,
+        usedRebaseIndices: Set<Int> = emptySet()
     ): SliceVisualState? {
         val cStart = slice.clusterByteStart
         val cEnd = slice.clusterByteEndExclusive
         if (cStart < 0 || cEnd < 0) return null
         val lineIndex = slice.snapshot?.lineIndex ?: -1
         val compatibleRoles = compatibleRebaseRoles(slice.role)
-        val exactMatch = rebaseSnapshot.sliceVisualStates.firstOrNull {
-            it.role in compatibleRoles &&
-                it.lineIndex == lineIndex &&
-                it.clusterByteStart == cStart &&
-                it.clusterByteEndExclusive == cEnd
+        val exactMatch = rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
+            i !in usedRebaseIndices &&
+            rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles &&
+                rebaseSnapshot.sliceVisualStates[i].lineIndex == lineIndex &&
+                rebaseSnapshot.sliceVisualStates[i].clusterByteStart == cStart &&
+                rebaseSnapshot.sliceVisualStates[i].clusterByteEndExclusive == cEnd
         }
-        if (exactMatch != null) return exactMatch
-        return rebaseSnapshot.sliceVisualStates.firstOrNull {
-            it.role in compatibleRoles &&
-                it.clusterByteStart == cStart &&
-                it.clusterByteEndExclusive == cEnd
-        }
+        if (exactMatch != null) return rebaseSnapshot.sliceVisualStates[exactMatch]
+        return rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
+            i !in usedRebaseIndices &&
+            rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles &&
+                rebaseSnapshot.sliceVisualStates[i].clusterByteStart == cStart &&
+                rebaseSnapshot.sliceVisualStates[i].clusterByteEndExclusive == cEnd
+        }?.let { rebaseSnapshot.sliceVisualStates[it] }
     }
 
     /** Roles that can rebase onto each other. "Appearing" roles (Move/Insert/CrossfadeNew)
@@ -1496,31 +1509,35 @@ class AndroidVisualPlanner {
 
     private fun findRebaseStateByLineAndRole(
         slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseSnapshot: VisualFrameSnapshot
+        rebaseSnapshot: VisualFrameSnapshot,
+        usedRebaseIndices: Set<Int> = emptySet()
     ): SliceVisualState? {
         val lineIndex = slice.snapshot?.lineIndex ?: -1
         val compatibleRoles = compatibleRebaseRoles(slice.role)
-        return rebaseSnapshot.sliceVisualStates
-            .filter { it.role in compatibleRoles && it.lineIndex == lineIndex }
+        return rebaseSnapshot.sliceVisualStates.indices
+            .filter { i -> i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles && rebaseSnapshot.sliceVisualStates[i].lineIndex == lineIndex }
             .firstOrNull()
+            ?.let { rebaseSnapshot.sliceVisualStates[it] }
     }
 
     private fun findClosestRebaseStateByPosition(
         slice: PreparedVisualTransaction.AnimatedSlice,
-        rebaseSnapshot: VisualFrameSnapshot
+        rebaseSnapshot: VisualFrameSnapshot,
+        usedRebaseIndices: Set<Int> = emptySet()
     ): SliceVisualState? {
         val sliceTop = slice.destinationRect.top
         val sliceLeft = slice.destinationRect.left
         val compatibleRoles = compatibleRebaseRoles(slice.role)
         val lineIndex = slice.snapshot?.lineIndex ?: -1
         val filterByLine = lineIndex >= 0 && slice.role != SliceRole.Move
-        return rebaseSnapshot.sliceVisualStates
-            .filter { it.role in compatibleRoles && (!filterByLine || it.lineIndex == lineIndex) }
-            .minByOrNull {
-                val dy = kotlin.math.abs(it.currentTop - sliceTop)
-                val dx = kotlin.math.abs(it.currentLeft - sliceLeft)
+        return rebaseSnapshot.sliceVisualStates.indices
+            .filter { i -> i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles && (!filterByLine || rebaseSnapshot.sliceVisualStates[i].lineIndex == lineIndex) }
+            .minByOrNull { i ->
+                val dy = kotlin.math.abs(rebaseSnapshot.sliceVisualStates[i].currentTop - sliceTop)
+                val dx = kotlin.math.abs(rebaseSnapshot.sliceVisualStates[i].currentLeft - sliceLeft)
                 dy + dx
             }
+            ?.let { rebaseSnapshot.sliceVisualStates[it] }
     }
 
     private fun applyRebaseState(
