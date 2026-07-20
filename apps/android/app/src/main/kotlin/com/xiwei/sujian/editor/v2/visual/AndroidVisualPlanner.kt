@@ -611,6 +611,12 @@ class AndroidVisualPlanner {
 
         val newMatched = mutableSetOf<Int>()
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
+            // Byte-length equality is a necessary precondition for Move: clusters with
+            // different byte lengths represent different amounts of text (e.g. "a" vs "ab"),
+            // so they cannot be the same visual content even if their shaping fingerprints
+            // happen to match. Without this check, a 1-byte cluster could be paired with a
+            // 2-byte cluster that has the same fingerprint for the first byte, producing a
+            // Move slice that visually stretches or compresses the text.
             val candidates = allNewAffectedClusters.indices.filter { i ->
                 i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
                     allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
@@ -891,6 +897,9 @@ class AndroidVisualPlanner {
 
         val newMatched = mutableSetOf<Int>()
         for ((oldCluster, oldSnapshot) in allOldAffectedClusters) {
+            // Byte-length equality precondition: same rationale as planClusterReplaceAnimation —
+            // clusters with different byte lengths represent different amounts of text and must
+            // not be paired for Move even if shaping fingerprints happen to match.
             val candidates = allNewAffectedClusters.indices.filter { i ->
                 i !in newMatched && allNewAffectedClusters[i].first.shapingFingerprint == oldCluster.shapingFingerprint &&
                     allNewAffectedClusters[i].first.documentByteEndExclusive - allNewAffectedClusters[i].first.documentByteStart ==
@@ -1194,6 +1203,12 @@ class AndroidVisualPlanner {
                                 }
                             }
                         } else {
+                            // Invariant: no reliable cluster identity match → CrossfadeOld +
+                            // CrossfadeNew (never whole-line Move). Whole-line Move is only
+                            // valid when the line content is confirmed identical via cluster
+                            // matching; without it, new text would appear at the old position
+                            // while old text has no exit animation — a visual glitch where the
+                            // new content "teleports" from the old location.
                             animatedSlices.add(PreparedVisualTransaction.AnimatedSlice(
                                 role = SliceRole.CrossfadeOld,
                                 snapshot = oldSnapshot,
@@ -1520,6 +1535,12 @@ class AndroidVisualPlanner {
             val editNewPara = newParagraphs.firstOrNull { it.paragraphId == editNewParaId }
             val structurallyAffectedOldParaIds = mutableSetOf<Int>()
             val structurallyAffectedNewParaIds = mutableSetOf<Int>()
+            // The edit paragraph itself is always structurally affected: its lines need Bitmap
+            // snapshots for Insert/Delete/Move/Crossfade animation. This is unconditional —
+            // even a single-character insert within the edit paragraph changes the paragraph's
+            // visual line layout, and the animation must capture old/new snapshots to show the
+            // transition. Omitting the edit paragraph from the structurally-affected set would
+            // cause its lines to be skipped during snapshot capture, producing no animation.
             structurallyAffectedOldParaIds.add(editParagraphId)
             structurallyAffectedNewParaIds.add(editNewParaId)
 

@@ -58,7 +58,15 @@ class AndroidLayoutEngine(
     /** Capture line snapshots with per-cluster data. Both this method and
      *  [captureLineBitmapSnapshotsWithClusters] currently delegate to
      *  [AndroidLineSnapshotBuilder.buildSnapshotForLineWithClusters] — cluster data is
-     *  always included so that callers can switch animation modes without re-capturing. */
+     *  always included so that callers can switch animation modes without re-capturing.
+     *
+     *  Design intent: always capturing cluster data is a deliberate trade-off. The alternative
+     *  (cluster-less snapshots for SnapshotAnimation mode) would require re-capturing if the
+     *  animation mode changes or if [addMoveSlicesForShiftedClustersCrossLine] needs cluster
+     *  data for cross-line Move generation. Since cluster data adds negligible overhead (the
+     *  Bitmap is the expensive part, cluster rects are computed from Layout API calls), always
+     *  including it avoids a capture-mode mismatch that would silently produce whole-line
+     *  crossfade instead of cluster-level animation. */
     fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
         val l = layout ?: return emptyMap()
         val rev = currentRevision ?: return emptyMap()
