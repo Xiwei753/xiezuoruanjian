@@ -238,66 +238,43 @@ class AndroidLineSnapshotBuilder {
     /**
      * API 31+ shaping fingerprint using PositionedGlyphs.
      *
-     * Calls the public API [android.graphics.text.TextRunShaper.shapeTextRun] with full line
-     * context, then extracts glyphs belonging to the target cluster by matching their X
-     * positions against the cluster's expected horizontal span within the line.
+     * Calls the public API [android.graphics.text.TextRunShaper.shapeTextRun] directly
+     * (no reflection) with full line context. The target range is the cluster within the
+     * line text; the context range is the entire line text. This natively supports
+     * "target range + full context" shaping, so contextual forms (Arabic, Indic, ligatures)
+     * are correctly captured.
      *
-     * The public API signature is:
-     *   shapeTextRun(CharSequence text, int start, int count, int contextStart, int contextCount,
-     *                float xOffset, float yOffset, boolean isRtl, Paint paint)
-     * This natively supports "target range + full context" shaping, so contextual forms
-     * (Arabic, Indic, ligatures) are correctly captured without needing to shape the entire
-     * line and then guess which glyphs belong to the cluster.
-     *
-     * Returns [confident] = true ONLY when the full-line-context shaping path succeeds
-     * and extracts at least one matching glyph. Falls back to hash-based fingerprint
-     * (confident = false) on any failure — this fallback cannot guarantee visual identity
-     * and must not be used for Move decisions.
+     * Returns [confident] = true ONLY when the shaping path succeeds and produces at least
+     * one glyph. Falls back to hash-based fingerprint (confident = false) on any failure.
      */
     private fun buildShapingFingerprintApi31(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int, contextHash: Int): Pair<String, Boolean> {
+        if (android.os.Build.VERSION.SDK_INT < 31) {
+            return Pair("${clusterText.hashCode()}_${contextHash}", false)
+        }
         try {
             val paint = layout.paint
-            val shaperClass = Class.forName("android.graphics.text.TextRunShaper")
-            val shapeMethod = shaperClass.getMethod(
-                "shapeTextRun",
-                CharSequence::class.java,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Int::class.javaPrimitiveType,
-                Float::class.javaPrimitiveType,
-                Float::class.javaPrimitiveType,
-                Boolean::class.javaPrimitiveType,
-                android.graphics.Paint::class.java
-            )
             val lineStart = layout.getLineStart(lineIndex)
             val lineEnd = layout.getLineEnd(lineIndex)
             val text = layout.text
             val lineText = text.subSequence(lineStart.coerceAtLeast(0), lineEnd.coerceAtMost(text.length))
 
-            val clusterLocalStart = clusterStartUtf16 - lineStart
-            val clusterLocalEnd = clusterLocalStart + clusterText.length
+            val clusterLocalStart = (clusterStartUtf16 - lineStart).coerceIn(0, lineText.length)
+            val clusterCount = clusterText.length.coerceIn(0, lineText.length - clusterLocalStart)
             val isRtl = layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
 
-            val positionedGlyphs = shapeMethod.invoke(
-                null,
+            val positionedGlyphs = android.graphics.text.TextRunShaper.shapeTextRun(
                 lineText,
-                clusterLocalStart.coerceIn(0, lineText.length),
-                (clusterLocalEnd - clusterLocalStart).coerceIn(0, lineText.length - clusterLocalStart.coerceIn(0, lineText.length)),
+                clusterLocalStart,
+                clusterCount,
                 0,
                 lineText.length,
                 0f,
                 0f,
                 isRtl,
                 paint
-            ) ?: return Pair("${clusterText.hashCode()}_${contextHash}", false)
+            )
 
-            val glyphCountMethod = positionedGlyphs.javaClass.getMethod("glyphCount")
-            val glyphCount = glyphCountMethod.invoke(positionedGlyphs) as Int
-
-            val getFontMethod = positionedGlyphs.javaClass.getMethod("getFont", Int::class.javaPrimitiveType)
-            val getGlyphIdMethod = positionedGlyphs.javaClass.getMethod("getGlyphId", Int::class.javaPrimitiveType)
-
+            val glyphCount = positionedGlyphs.glyphCount()
             if (glyphCount == 0) {
                 return Pair("${clusterText.hashCode()}_${contextHash}", false)
             }
@@ -305,10 +282,10 @@ class AndroidLineSnapshotBuilder {
             val sb = StringBuilder()
             for (i in 0 until glyphCount) {
                 if (i > 0) sb.append("|")
-                val font = getFontMethod.invoke(positionedGlyphs, i)
+                val font = positionedGlyphs.getFont(i)
                 sb.append(font?.hashCode()?.toString() ?: "null")
                 sb.append("_")
-                sb.append(getGlyphIdMethod.invoke(positionedGlyphs, i))
+                sb.append(positionedGlyphs.getGlyphId(i))
             }
 
             sb.append("_ctx_")

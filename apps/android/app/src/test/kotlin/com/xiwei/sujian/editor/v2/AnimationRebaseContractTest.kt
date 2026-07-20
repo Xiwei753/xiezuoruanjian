@@ -783,4 +783,107 @@ class AnimationRebaseContractTest {
         assertEquals("Offset mapper matches by byte range, not line index",
             oldClusterByteStart, newClusterByteStart)
     }
+
+    @Test
+    fun animationTimelineCurrentVisualFrameSupportsPending() {
+        val timeline = AnimationTimeline(100)
+        val frame = timeline.currentVisualFrame(0)
+        assertNotNull("Pending timeline must return a valid frame", frame)
+        assertEquals(TransactionState.Pending, frame!!.state)
+        assertEquals(0f, frame.progress, 0.01f)
+    }
+
+    @Test
+    fun animationTimelineCurrentVisualFrameReturnsNullForCompleted() {
+        val timeline = AnimationTimeline(100)
+        timeline.markFirstVisibleFrame(1000)
+        timeline.complete()
+        val frame = timeline.currentVisualFrame(1050)
+        assertNull("Completed timeline must return null", frame)
+    }
+
+    @Test
+    fun animationTimelineCurrentVisualFrameReturnsNullForCancelled() {
+        val timeline = AnimationTimeline(100)
+        timeline.markFirstVisibleFrame(1000)
+        timeline.cancel()
+        val frame = timeline.currentVisualFrame(1050)
+        assertNull("Cancelled timeline must return null", frame)
+    }
+
+    @Test
+    fun rebaseIndexTrackingPreventsDuplicateAcrossIdenticalSlices() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = listOf(
+                SliceVisualState(
+                    snapshotId = 1L, role = SliceRole.Insert, lineIndex = 0,
+                    clusterByteStart = 0, clusterByteEndExclusive = 3,
+                    currentLeft = 0f, currentTop = 0f, currentRight = 20f, currentBottom = 20f,
+                    currentAlpha = 0.5f
+                ),
+                SliceVisualState(
+                    snapshotId = 2L, role = SliceRole.Insert, lineIndex = 0,
+                    clusterByteStart = 0, clusterByteEndExclusive = 3,
+                    currentLeft = 0f, currentTop = 0f, currentRight = 20f, currentBottom = 20f,
+                    currentAlpha = 0.5f
+                )
+            ),
+            cursorRect = null
+        )
+
+        val usedRebaseIndices = mutableSetOf<Int>()
+        val matchedIndices = mutableListOf<Int>()
+
+        for (query in 0 until 2) {
+            val match = rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
+                i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role == SliceRole.Insert
+            }
+            if (match != null) {
+                usedRebaseIndices.add(match)
+                matchedIndices.add(match)
+            }
+        }
+
+        assertEquals("Two queries must match two distinct indices", 2, matchedIndices.size)
+        assertNotEquals("Matched indices must be different even with identical content",
+            matchedIndices[0], matchedIndices[1])
+    }
+
+    @Test
+    fun rebaseIndexTrackingReturnsCorrectIndexNotObjectIdentity() {
+        val state0 = SliceVisualState(
+            snapshotId = 1L, role = SliceRole.Insert, lineIndex = 0,
+            clusterByteStart = 0, clusterByteEndExclusive = 5,
+            currentLeft = 0f, currentTop = 0f, currentRight = 30f, currentBottom = 20f,
+            currentAlpha = 0.5f
+        )
+        val state1 = SliceVisualState(
+            snapshotId = 1L, role = SliceRole.Insert, lineIndex = 0,
+            clusterByteStart = 0, clusterByteEndExclusive = 5,
+            currentLeft = 0f, currentTop = 0f, currentRight = 30f, currentBottom = 20f,
+            currentAlpha = 0.5f
+        )
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = listOf(state0, state1),
+            cursorRect = null
+        )
+
+        val usedRebaseIndices = mutableSetOf<Int>()
+        val firstIdx = rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
+            i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role == SliceRole.Insert
+        }
+        assertNotNull(firstIdx)
+        usedRebaseIndices.add(firstIdx!!)
+
+        val secondIdx = rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
+            i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role == SliceRole.Insert
+        }
+        assertNotNull("Second match must find a different index", secondIdx)
+        assertNotEquals("Indices must differ even when SliceVisualState content is identical",
+            firstIdx, secondIdx)
+    }
 }

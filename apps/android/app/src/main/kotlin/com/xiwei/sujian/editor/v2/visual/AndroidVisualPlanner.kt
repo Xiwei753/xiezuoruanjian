@@ -1350,30 +1350,28 @@ class AndroidVisualPlanner {
         snapshotLookup: Map<Long, AndroidLineSnapshot> = emptyMap()
     ): List<PreparedVisualTransaction.AnimatedSlice> {
         val usedRebaseIndices = mutableSetOf<Int>()
-        val rebaseMatches = mutableMapOf<Int, SliceVisualState?>()
+        val rebaseMatches = mutableMapOf<Int, Int?>()
         for ((idx, slice) in slices.withIndex()) {
-            val state = findRebaseStateByClusterByteRange(slice, rebaseSnapshot, usedRebaseIndices)
-                ?: findRebaseStateByLineAndRole(slice, rebaseSnapshot, usedRebaseIndices)
-                ?: findClosestRebaseStateByPosition(slice, rebaseSnapshot, usedRebaseIndices)
-            rebaseMatches[idx] = state
-            if (state != null) {
-                val rebaseIdx = rebaseSnapshot.sliceVisualStates.indexOf(state)
-                if (rebaseIdx >= 0) usedRebaseIndices.add(rebaseIdx)
+            val matchIdx = findRebaseIndexByClusterByteRange(slice, rebaseSnapshot, usedRebaseIndices)
+                ?: findRebaseIndexByLineAndRole(slice, rebaseSnapshot, usedRebaseIndices)
+                ?: findRebaseIndexClosestByPosition(slice, rebaseSnapshot, usedRebaseIndices)
+            rebaseMatches[idx] = matchIdx
+            if (matchIdx != null) {
+                usedRebaseIndices.add(matchIdx)
             }
         }
         val rebasedNewSlices = slices.mapIndexed { idx, slice ->
-            val rebaseState = rebaseMatches[idx]
-            if (rebaseState != null) {
-                applyRebaseState(slice, rebaseState)
+            val rebaseIdx = rebaseMatches[idx]
+            if (rebaseIdx != null) {
+                applyRebaseState(slice, rebaseSnapshot.sliceVisualStates[rebaseIdx])
             } else {
                 slice
             }
         }
         val matchedRebaseIndices = mutableSetOf<Int>()
-        for ((_, state) in rebaseMatches) {
-            if (state != null) {
-                val idx = rebaseSnapshot.sliceVisualStates.indexOf(state)
-                if (idx >= 0) matchedRebaseIndices.add(idx)
+        for ((_, matchIdx) in rebaseMatches) {
+            if (matchIdx != null) {
+                matchedRebaseIndices.add(matchIdx)
             }
         }
         // Surviving old slices: old-transaction slices that were NOT matched to any new slice.
@@ -1467,11 +1465,11 @@ class AndroidVisualPlanner {
         return rebasedNewSlices + survivingOldSlices
     }
 
-    private fun findRebaseStateByClusterByteRange(
+    private fun findRebaseIndexByClusterByteRange(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot,
         usedRebaseIndices: Set<Int> = emptySet()
-    ): SliceVisualState? {
+    ): Int? {
         val cStart = slice.clusterByteStart
         val cEnd = slice.clusterByteEndExclusive
         if (cStart < 0 || cEnd < 0) return null
@@ -1484,13 +1482,13 @@ class AndroidVisualPlanner {
                 rebaseSnapshot.sliceVisualStates[i].clusterByteStart == cStart &&
                 rebaseSnapshot.sliceVisualStates[i].clusterByteEndExclusive == cEnd
         }
-        if (exactMatch != null) return rebaseSnapshot.sliceVisualStates[exactMatch]
+        if (exactMatch != null) return exactMatch
         return rebaseSnapshot.sliceVisualStates.indices.firstOrNull { i ->
             i !in usedRebaseIndices &&
             rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles &&
                 rebaseSnapshot.sliceVisualStates[i].clusterByteStart == cStart &&
                 rebaseSnapshot.sliceVisualStates[i].clusterByteEndExclusive == cEnd
-        }?.let { rebaseSnapshot.sliceVisualStates[it] }
+        }
     }
 
     /** Roles that can rebase onto each other. "Appearing" roles (Move/Insert/CrossfadeNew)
@@ -1507,24 +1505,23 @@ class AndroidVisualPlanner {
         }
     }
 
-    private fun findRebaseStateByLineAndRole(
+    private fun findRebaseIndexByLineAndRole(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot,
         usedRebaseIndices: Set<Int> = emptySet()
-    ): SliceVisualState? {
+    ): Int? {
         val lineIndex = slice.snapshot?.lineIndex ?: -1
         val compatibleRoles = compatibleRebaseRoles(slice.role)
         return rebaseSnapshot.sliceVisualStates.indices
             .filter { i -> i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles && rebaseSnapshot.sliceVisualStates[i].lineIndex == lineIndex }
             .firstOrNull()
-            ?.let { rebaseSnapshot.sliceVisualStates[it] }
     }
 
-    private fun findClosestRebaseStateByPosition(
+    private fun findRebaseIndexClosestByPosition(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot,
         usedRebaseIndices: Set<Int> = emptySet()
-    ): SliceVisualState? {
+    ): Int? {
         val sliceTop = slice.destinationRect.top
         val sliceLeft = slice.destinationRect.left
         val compatibleRoles = compatibleRebaseRoles(slice.role)
@@ -1537,7 +1534,6 @@ class AndroidVisualPlanner {
                 val dx = kotlin.math.abs(rebaseSnapshot.sliceVisualStates[i].currentLeft - sliceLeft)
                 dy + dx
             }
-            ?.let { rebaseSnapshot.sliceVisualStates[it] }
     }
 
     private fun applyRebaseState(

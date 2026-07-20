@@ -88,4 +88,38 @@ class AnimationTimelineTest {
         assertTrue(timeline.isCompleted(1100))
         assertFalse(timeline.isCompleted(1050))
     }
+
+    @Test
+    fun currentVisualFrameReturnsFrameForPendingState() {
+        val timeline = AnimationTimeline(100)
+        val frame = timeline.currentVisualFrame(0)
+        assertNotNull("Pending state must return a valid frame", frame)
+        assertEquals(TransactionState.Pending, frame!!.state)
+        assertEquals(0f, frame.progress, 0.01f)
+    }
+
+    @Test
+    fun currentVisualFrameReturnsFrameForRenderingState() {
+        val timeline = AnimationTimeline(100)
+        timeline.markFirstVisibleFrame(1000)
+        val frame = timeline.currentVisualFrame(1050)
+        assertNotNull(frame)
+        assertEquals(TransactionState.Rendering, frame!!.state)
+    }
+
+    @Test
+    fun currentVisualFrameReturnsNullForCompletedState() {
+        val timeline = AnimationTimeline(100)
+        timeline.markFirstVisibleFrame(1000)
+        timeline.complete()
+        assertNull(timeline.currentVisualFrame(1050))
+    }
+
+    @Test
+    fun currentVisualFrameReturnsNullForCancelledState() {
+        val timeline = AnimationTimeline(100)
+        timeline.markFirstVisibleFrame(1000)
+        timeline.cancel()
+        assertNull(timeline.currentVisualFrame(1050))
+    }
 }
