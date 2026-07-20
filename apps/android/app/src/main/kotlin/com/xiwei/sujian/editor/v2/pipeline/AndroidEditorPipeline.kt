@@ -20,6 +20,17 @@ import com.xiwei.sujian.editor.v2.host.EditorKernelBridge
 import android.view.View
 import uniffi.writer_core.EditorTransactionCauseDto
 
+/**
+ * Central orchestrator of the Android editing pipeline.
+ *
+ * Holds all platform-side components: [DisplayTextMirror] (text truth), [AndroidLayoutEngine]
+ * (visual projection), [AndroidVisualPlanner] (pure planning), [AndroidTextAnimationEngine]
+ * (animation runtime owner), [AndroidTextRenderer]/[AndroidTextAnimationRenderer] (rendering),
+ * [EditorFrameComposer] (frame assembly), and [AndroidInputAdapter] (IME).
+ *
+ * Both normal text edits and IME composition update/commit/cancel go through the same
+ * [AndroidTextAnimationEngine] — composition animations are not a separate code path.
+ */
 class AndroidEditorPipeline private constructor(
     val mirror: DisplayTextMirror,
     val layoutEngine: AndroidLayoutEngine,
@@ -394,6 +405,14 @@ class AndroidEditorPipeline private constructor(
         layoutEngine.requestLayout()
     }
 
+    /**
+     * Render one frame. Layer order when animation is active:
+     * background → search highlights → selection → static text with holes → animated slices
+     * → preedit underline → animated cursor (or static cursor if no cursor transition).
+     *
+     * Without animation: background → search highlights → selection → static text
+     * → preedit underline → static cursor.
+     */
     fun drawFrame(canvas: android.graphics.Canvas, searchHighlightsUtf16: List<Pair<Int, Int>>, viewportWidth: Int, viewportHeight: Int, scrollX: Float, scrollY: Float) {
         val frameTimeMs = System.nanoTime() / 1_000_000
         val layout = layoutEngine.getLayout()

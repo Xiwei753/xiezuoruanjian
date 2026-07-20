@@ -2,7 +2,17 @@ package com.xiwei.sujian.editor.v2.render
 
 import com.xiwei.sujian.editor.v2.visual.PreparedVisualTransaction
 
+/**
+ * Assembles a [ComposedFrame] from layout, animation transaction, progress, and
+ * decoration state (cursor, selection, composition, search highlights, viewport).
+ * The composed frame is then passed to the renderers for drawing.
+ */
 class EditorFrameComposer {
+    /**
+     * Combine layout, animation, and decoration state into a single frame descriptor.
+     * Cursor/selection/composition offsets use UTF-16 (Android Layout convention);
+     * animation byte ranges use UTF-8 half-open intervals.
+     */
     fun compose(
         layout: android.text.Layout?,
         transaction: PreparedVisualTransaction?,
@@ -42,6 +52,10 @@ class EditorFrameComposer {
     }
 }
 
+/**
+ * Immutable frame descriptor consumed by the renderers.
+ * UTF-16 offsets are for Android Layout API; animation internals use UTF-8.
+ */
 data class ComposedFrame(
     val layout: android.text.Layout?,
     val transaction: PreparedVisualTransaction?,

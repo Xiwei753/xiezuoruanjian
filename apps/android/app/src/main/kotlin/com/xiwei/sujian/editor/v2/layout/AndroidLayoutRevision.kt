@@ -1,5 +1,16 @@
 package com.xiwei.sujian.editor.v2.layout
 
+/**
+ * Immutable snapshot of the Android Layout state at a point in time.
+ *
+ * [revisionId] is the layout engine's local monotonic counter, incremented on every
+ * [AndroidLayoutEngine.buildRevision] call. [editorRevision] is the Rust EditorKernel's
+ * edit revision that this layout was built from. They differ because layout may be
+ * rebuilt without a new edit (e.g. width change), and an edit may not change layout.
+ *
+ * [DisplayTextMirror] is the text truth; [AndroidLayoutRevision] is its visual projection.
+ * requestLayout() must be called after mirror updates to produce a consistent revision.
+ */
 data class AndroidLayoutRevision(
     val revisionId: Long,
     val editorRevision: Long,
@@ -25,6 +36,7 @@ data class AndroidLayoutRevision(
     val selectionStartUtf16: Int get() = minOf(selectionAnchorUtf16, selectionHeadUtf16)
     val selectionEndUtf16: Int get() = maxOf(selectionAnchorUtf16, selectionHeadUtf16)
 
+    /** Byte ranges are half-open: [startUtf8, endUtf8). UTF-8 byte offsets. */
     data class LineRange(
         val startUtf8: Int,
         val endUtf8: Int,

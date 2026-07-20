@@ -5,6 +5,19 @@ import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 
+/**
+ * Unified owner of the Android text animation runtime.
+ *
+ * Holds [AndroidVisualPlanner], [AnimationTimeline], [VisualResourceStore], and the current
+ * [PreparedVisualTransaction] with its rebase/continuation state. All animation cancellation,
+ * continuation, session switching, and resource release must go through this object — callers
+ * must not directly touch [VisualResourceStore] or [AnimationTimeline].
+ *
+ * Lifecycle: [cancel] is the only legal way to abort an active transaction (releases its
+ * snapshots and resets the timeline). [resetForSession] cancels + releases *all* session-owned
+ * resources (for session rebind). [release] is equivalent to [resetForSession] and is called
+ * when the host is permanently destroyed.
+ */
 class AndroidTextAnimationEngine(
     private val visualPlanner: AndroidVisualPlanner,
     private val resourceStore: VisualResourceStore
@@ -146,6 +159,14 @@ class AndroidTextAnimationEngine(
         }
     }
 
+    /**
+     * Capture the current visual state of the active transaction for rendering or rebase.
+     *
+     * During rapid consecutive input, the returned snapshot preserves the current cursor rect
+     * and per-slice visual states (position, alpha) so the next transaction's rebase can
+     * continue from the on-screen position rather than the logical endpoint — preventing
+     * cursor jumps and slice discontinuities.
+     */
     fun captureFrame(frameTimeMs: Long): VisualFrameSnapshot? {
         val transaction = activeTransaction ?: return null
         val tl = timeline ?: return null
@@ -161,6 +182,9 @@ class AndroidTextAnimationEngine(
         )
     }
 
+    /** Capture the rebase snapshot for the next transaction. Delegates to [captureFrame],
+     *  which includes the current cursor rect — essential for continuous cursor animation
+     *  across rapid consecutive inputs. */
     fun captureRebaseSnapshot(frameTimeMs: Long): VisualFrameSnapshot? {
         return captureFrame(frameTimeMs)
     }

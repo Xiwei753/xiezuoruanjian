@@ -1,5 +1,16 @@
 package com.xiwei.sujian.editor.v2.visual
 
+/**
+ * Monotonic timeline for a single animation transaction.
+ *
+ * Uses re-anchoring rather than accumulated pause duration: on [resume], the start time
+ * is shifted so that progress(frameTimeMs) immediately equals the paused progress value.
+ * This avoids floating-point drift from repeatedly adding/subtracting pause durations and
+ * simplifies the math — accumulatedPausedDurationMs resets to 0 after each re-anchor.
+ *
+ * [progress] returns values in [0f, 1f]. When [durationMs] == 0, progress is 1f
+ * (animation completes instantly — the final state should be shown immediately).
+ */
 class AnimationTimeline(
     private val durationMs: Long
 ) {

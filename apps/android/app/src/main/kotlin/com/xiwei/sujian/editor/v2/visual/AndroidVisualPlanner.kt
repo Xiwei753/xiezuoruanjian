@@ -6,6 +6,17 @@ import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import uniffi.writer_core.AnimationModeDto
 
+/**
+ * Pure visual planner: transforms (VisualIntent + old/new layout snapshots) into
+ * [PreparedVisualTransaction] without holding mutable state, advancing time, or
+ * releasing resources.
+ *
+ * Unified output model: every animation mode (Glyph/Cluster/Run/LineReflow/Snapshot)
+ * produces the same set of slice roles — Static, Insert, Delete, Move, CrossfadeOld,
+ * CrossfadeNew. The mode only determines the *granularity* of Insert/Delete/Crossfade
+ * grouping; retained text whose position changed always gets Move (if shaping identity
+ * is confident) or Crossfade (if not), regardless of mode.
+ */
 class AndroidVisualPlanner {
 
     private companion object {
@@ -307,7 +318,14 @@ class AndroidVisualPlanner {
     /**
      * After the primary animation planner creates Insert/Delete/Crossfade slices,
      * find retained clusters that shifted across lines and create Move or Crossfade slices
-     * for them. [excludedNewByteRanges]/[excludedOldByteRanges] prevent duplicate slices
+     * for them.
+     *
+     * Design: old/new clusters are matched by [buildOffsetMapper] (which maps byte offsets
+     * through the edit's affected ranges), not by same visual lineIndex. This is essential
+     * because a soft-wrap reflow can move text from the end of one visual line to the
+     * beginning of the next — same lineIndex matching would miss these pairs.
+     *
+     * [excludedNewByteRanges]/[excludedOldByteRanges] prevent duplicate slices
      * for clusters already handled by the primary planner.
      */
     private fun addMoveSlicesForShiftedClustersCrossLine(
@@ -652,6 +670,17 @@ class AndroidVisualPlanner {
         return -1
     }
 
+    /**
+     * Run-level animation: groups clusters into runs, then matches old→new runs
+     * by shaping fingerprint + byte length with closest-offset tiebreaker.
+     * Matched runs with same shaping + confident fingerprint → Move; otherwise → Crossfade pair.
+     * Unmatched old runs → Delete; unmatched new runs → Insert.
+     *
+     * RunAnimation is a *granularity* mode only — it groups clusters into larger visual units
+     * for Insert/Delete/Crossfade, but retained text with changed position still gets Move
+     * or Crossfade slices (via [addMoveSlicesForShiftedClustersCrossLine]), not whole-line
+     * crossfade. Long text mid-paragraph edits must not revert to full-line old crossfade.
+     */
     private fun planRunAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -1210,8 +1239,11 @@ class AndroidVisualPlanner {
             for (i in minCommonLines until newRev.lineRanges.size) {
                 affectedLines.add(i)
             }
-            // If no stable suffix was found, the whole suffix from the edit is already in
-            // affectedLines (or was added as exclusive old/new lines). Nothing else to do.
+            // If no stable suffix was found (e.g. edit at end of document with no matching
+            // suffix lines), the entire suffix from the edit line is already in affectedLines
+            // or was added as exclusive old/new lines above. As a safety fallback, ensure the
+            // edit line itself is included even when the byte-range intersection above missed it
+            // (possible when old/new revisions have different line counts at the edit position).
             if (!reachedStableSuffix) {
                 // Ensure edit-line itself is included even when range intersection missed it.
                 affectedLines.add(oldEditLine)
@@ -1247,7 +1279,9 @@ class AndroidVisualPlanner {
      *
      * Three-tier matching (most precise first):
      * 1. [findRebaseStateByClusterByteRange] — exact byte range + role compatibility.
-     * 2. [findRebaseStateByLineAndRole] — same visual line + role (byte range unknown).
+     * 2. [findRebaseStateByLineAndRole] — same visual line + role; used when byte ranges
+     *    don't match exactly (e.g. cluster boundaries shifted) but the slice is on the
+     *    same line with a compatible role.
      * 3. [findClosestRebaseStateByPosition] — nearest position with role compatibility (fallback).
      *
      * Unmatched old slices that are still fading out or mid-move become "surviving" slices
@@ -1452,9 +1486,13 @@ class AndroidVisualPlanner {
                 }
             }
             SliceRole.Delete -> {
+                // Rebase direction: Delete/CrossfadeOld interrupted mid-fade must continue
+                // fading from the current alpha to 0, not restart from 1. Setting startAlpha
+                // = currentAlpha ensures no flash-back; endAlpha = 0 ensures the fade completes.
                 slice.copy(startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
             }
             SliceRole.CrossfadeOld -> {
+                // Same rebase direction as Delete — fade from current to 0.
                 slice.copy(startAlpha = rebaseState.currentAlpha, endAlpha = 0f)
             }
             SliceRole.CrossfadeNew -> {

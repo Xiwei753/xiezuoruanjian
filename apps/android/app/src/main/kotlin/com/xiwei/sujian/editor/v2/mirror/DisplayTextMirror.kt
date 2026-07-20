@@ -12,6 +12,10 @@ import uniffi.writer_core.AnimationModeDto
 import uniffi.writer_core.EditorTransactionCauseDto
 import uniffi.writer_core.EditorOperationKindDto
 
+/**
+ * A single incremental text patch from the Rust kernel.
+ * Byte ranges are half-open: [replaceByteStart, replaceByteEndExclusive).
+ */
 data class DisplayPatch(
     val baseRevision: Long,
     val newRevision: Long,
@@ -274,6 +278,14 @@ class DisplayTextMirror {
         removeCompositionOverlay()
     }
 
+    /**
+     * Update or begin a composition overlay.
+     *
+     * Composition lifecycle: begin (first updateComposition) → update (subsequent calls) →
+     * commit (applyCompositionCommit) or cancel (clearComposition). The original text under
+     * the preedit range is saved in [compositionOriginalText] and restored on commit/cancel
+     * before the actual text replacement is applied.
+     */
     fun updateComposition(replaceStartUtf8: Int, replaceEndUtf8: Int, preeditText: String) {
         val indexMap = AndroidTextIndexMap(this)
         removeCompositionOverlay()
@@ -307,6 +319,11 @@ class DisplayTextMirror {
         removeCompositionOverlay()
     }
 
+    /**
+     * Remove the composition overlay and restore the original committed text.
+     * After removal, [compositionStartUtf16] is set to -1 (sentinel meaning "no active
+     * composition") since 0 is a valid UTF-16 offset.
+     */
     private fun removeCompositionOverlay() {
         if (!hasActiveComposition) return
         if (compositionStartUtf16 >= 0 && compositionEndUtf16 > compositionStartUtf16) {
