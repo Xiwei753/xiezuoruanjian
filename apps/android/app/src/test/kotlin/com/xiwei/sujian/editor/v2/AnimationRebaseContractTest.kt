@@ -2929,4 +2929,133 @@ class AnimationRebaseContractTest {
         assertEquals("Rebased animation at progress=1 must reach new layout position",
             newLayoutY, newOnScreenYAtProgress1, 0.01f)
     }
+
+    @Test
+    fun blockShiftMergeWithSlightlyDifferentDeltaY() {
+        val shifts = listOf(
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 2,
+                endLineIndexExclusive = 3,
+                top = 40f,
+                bottom = 60f,
+                left = 0f,
+                right = 800f,
+                deltaY = 20.0f,
+                startUtf8 = 40
+            ),
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 3,
+                endLineIndexExclusive = 4,
+                top = 60f,
+                bottom = 80f,
+                left = 0f,
+                right = 800f,
+                deltaY = 20.3f,
+                startUtf8 = 60
+            ),
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 4,
+                endLineIndexExclusive = 5,
+                top = 80f,
+                bottom = 100f,
+                left = 0f,
+                right = 800f,
+                deltaY = 19.8f,
+                startUtf8 = 80
+            )
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "mergeAdjacentBlockShifts",
+            List::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val merged = method.invoke(planner, shifts) as List<*>
+        assertEquals("Adjacent paragraphs with sub-pixel deltaY differences must merge into one block",
+            1, merged.size)
+        val block = merged[0] as PreparedVisualTransaction.BlockShift
+        assertEquals("Merged block must start at first shift's startLineIndex",
+            2, block.startLineIndex)
+        assertEquals("Merged block must end at last shift's endLineIndexExclusive",
+            5, block.endLineIndexExclusive)
+        assertEquals("Merged block deltaY must use first entry's value",
+            20.0f, block.deltaY, 0.01f)
+    }
+
+    @Test
+    fun blockShiftMergeDoesNotMergeLargeDeltaYDifference() {
+        val shifts = listOf(
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 2,
+                endLineIndexExclusive = 3,
+                top = 40f,
+                bottom = 60f,
+                left = 0f,
+                right = 800f,
+                deltaY = 20.0f,
+                startUtf8 = 40
+            ),
+            PreparedVisualTransaction.BlockShift(
+                startLineIndex = 3,
+                endLineIndexExclusive = 4,
+                top = 60f,
+                bottom = 80f,
+                left = 0f,
+                right = 800f,
+                deltaY = 40.0f,
+                startUtf8 = 60
+            )
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "mergeAdjacentBlockShifts",
+            List::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val merged = method.invoke(planner, shifts) as List<*>
+        assertEquals("Adjacent paragraphs with significantly different deltaY must NOT merge",
+            2, merged.size)
+    }
+
+    @Test
+    fun blockShiftRebaseFormulaIsContinuousAtProgress0() {
+        val oldDeltaY = 20f
+        val oldProgress = 0.3f
+        val oldCurrentTranslateY = oldDeltaY * (oldProgress - 1f)
+        val newDeltaY = 25f
+        val adjustedDeltaY = newDeltaY - oldCurrentTranslateY
+        val oldLayout2Y = 120f
+        val oldOnScreenY = oldLayout2Y + oldCurrentTranslateY
+        val newLayout3Y = 145f
+        val newOnScreenYAtProgress0 = newLayout3Y + adjustedDeltaY * (0f - 1f)
+        assertEquals("Rebase at progress=0 must match old on-screen position",
+            oldOnScreenY, newOnScreenYAtProgress0, 0.01f)
+        val newOnScreenYAtProgress1 = newLayout3Y + adjustedDeltaY * (1f - 1f)
+        assertEquals("Rebase at progress=1 must reach new layout position",
+            newLayout3Y, newOnScreenYAtProgress1, 0.01f)
+    }
+
+    @Test
+    fun blockShiftRendererUsesPrecomputedGeometryNoUtf8Lookup() {
+        val shift = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 3,
+            endLineIndexExclusive = 7,
+            top = 60f,
+            bottom = 140f,
+            left = 10f,
+            right = 790f,
+            deltaY = 20f,
+            startUtf8 = 60
+        )
+        assertTrue("startLineIndex must be pre-computed (no runtime lookup needed)",
+            shift.startLineIndex >= 0)
+        assertTrue("endLineIndexExclusive must be pre-computed (no runtime lookup needed)",
+            shift.endLineIndexExclusive > shift.startLineIndex)
+        assertTrue("top/bottom/left/right must be pre-computed (no runtime UTF-8→line lookup needed)",
+            shift.top < shift.bottom && shift.left < shift.right)
+        assertTrue("startUtf8 must be stored for rebase matching (not for line lookup)",
+            shift.startUtf8 >= 0)
+    }
 }

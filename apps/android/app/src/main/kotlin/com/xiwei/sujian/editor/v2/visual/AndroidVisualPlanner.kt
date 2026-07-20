@@ -27,6 +27,16 @@ class AndroidVisualPlanner {
         // during normal typing — animating it would create unnecessary BlockShift
         // entries and extra layout.draw() calls for no visual benefit.
         const val STABLE_SUFFIX_GEOMETRY_TOLERANCE = 1.0f
+
+        // Epsilon for merging adjacent BlockShifts with approximately equal deltaY.
+        // Sub-pixel deltaY differences (e.g. 20.0f vs 20.3f) arise from different
+        // paragraph line heights or floating-point rounding; they are visually
+        // indistinguishable and must not prevent merging into a single suffix block.
+        // 0.5f (half a pixel) is chosen because any shift difference below this
+        // threshold is imperceptible on screen — the merged block uses the first
+        // entry's deltaY, and the maximum visual error is < 0.5px throughout the
+        // animation, which is below the just-noticeable difference for motion.
+        const val BLOCK_SHIFT_DELTA_Y_EPSILON = 0.5f
     }
 
     /**
@@ -1712,13 +1722,20 @@ class AndroidVisualPlanner {
 
     /**
      * Merge adjacent BlockShifts whose line ranges are contiguous and whose deltaY is
-     * identical into a single entry.
+     * approximately equal (within [BLOCK_SHIFT_DELTA_Y_EPSILON]) into a single entry.
      *
      * Without merging, each paragraph produces a separate BlockShift, and the renderer
      * calls [layout.draw] once per shifted paragraph per frame. For long documents with
      * many paragraphs shifting by the same amount (e.g. inserting a line near the top),
      * this would create O(paragraphs) draw calls per frame. Merging reduces this to
      * O(distinct-deltaY-groups) — typically 1 for a simple insert/delete.
+     *
+     * Epsilon comparison: exact floating-point equality (`==`) fails when deltaY values
+     * differ by sub-pixel amounts due to different paragraph line heights or rounding.
+     * Using an epsilon of 0.5f (half a pixel) merges paragraphs whose visual shift is
+     * indistinguishable, ensuring the renderer performs at most one base draw + one
+     * suffix-block draw per frame for the common case of a single inserted/deleted line.
+     * The merged deltaY uses the first entry's value — the visual difference is negligible.
      *
      * Merged [left]/[right] use min/max across constituent paragraphs to ensure the
      * clip rect covers the widest line in the block, preventing narrow intermediate lines
@@ -1733,7 +1750,8 @@ class AndroidVisualPlanner {
         var current = sorted[0]
         for (i in 1 until sorted.size) {
             val next = sorted[i]
-            if (next.startLineIndex == current.endLineIndexExclusive && next.deltaY == current.deltaY) {
+            val deltaYClose = kotlin.math.abs(next.deltaY - current.deltaY) < BLOCK_SHIFT_DELTA_Y_EPSILON
+            if (next.startLineIndex == current.endLineIndexExclusive && deltaYClose) {
                 current = current.copy(
                     endLineIndexExclusive = next.endLineIndexExclusive,
                     bottom = next.bottom,
