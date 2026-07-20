@@ -1462,6 +1462,9 @@ class AndroidVisualPlanner {
             }
         }
 
+        // editByteStart: primary source is oldAffectedByteRanges (the edit's origin in the
+        // old document). Falls back to newAffectedByteRanges for pure-insert edits where
+        // oldAffectedByteRanges is empty — the insert position is the only available anchor.
         val editByteStart = visualIntent.oldAffectedByteRanges.firstOrNull()?.first
             ?: visualIntent.newAffectedByteRanges.firstOrNull()?.first
         if (editByteStart != null) {

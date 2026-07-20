@@ -131,6 +131,9 @@ class AndroidTextRenderer {
         // canvas.save/translate/clip/draw/restore cycle. After mergeAdjacentBlockShifts,
         // most edits produce a single group (all suffix paragraphs shift by the same deltaY),
         // so this typically results in one additional layout.draw() call per frame.
+        // Multiple groups are rare (different deltaY values arise only when paragraphs
+        // with different line heights shift by different amounts after an edit that
+        // changes the number of visual lines in the edit paragraph).
         val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
         for ((deltaY, group) in groupedByDeltaY) {
             val currentDeltaY = deltaY * (progress - 1f)

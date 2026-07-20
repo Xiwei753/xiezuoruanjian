@@ -187,11 +187,16 @@ class AndroidTextAnimationEngine(
         val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
-        // First call: compute old affected lines using only the old revision (newRevision=null).
-        // This identifies which lines need Bitmap snapshots BEFORE the mirror update, without
-        // being influenced by the new layout's line indices (which may differ due to reflow).
-        // Using both revisions here would be incorrect because the new revision does not yet
-        // exist — the mirror has not been updated, so layoutEngine still holds the old layout.
+        // Two-phase affected-line computation invariant:
+        // Phase 1 (newRevision=null): determines old snapshot lines BEFORE mirror update,
+        // using only the old layout. The new revision does not exist yet — the mirror
+        // has not been updated, so layoutEngine still holds the old layout.
+        // Phase 2 (both revisions): determines new snapshot lines AND BlockShifts AFTER
+        // mirror update and layout rebuild. BlockShifts require both revisions to compare
+        // paragraph Y positions; they cannot be computed in Phase 1.
+        // This split is essential: capturing old snapshots after mirrorUpdate would
+        // produce stale bitmaps (the layout has already changed), and computing
+        // BlockShifts with only one revision would miss the Y-delta information.
         val preliminaryResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, null)
         val affectedOldLineIndices = preliminaryResult.oldLineIndices
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
@@ -199,9 +204,11 @@ class AndroidTextAnimationEngine(
         mirrorUpdate?.invoke()
         layoutEngine.requestLayout()
         val newRevision = layoutEngine.getCurrentRevision()
-        // Second call: compute new affected lines and BlockShifts using both revisions.
+        // Phase 2: compute new affected lines and BlockShifts using both revisions.
         // BlockShifts can only be determined when both old and new revisions are available,
         // because they require comparing paragraph Y positions across revisions.
+        // New snapshot lines must be captured AFTER mirrorUpdate (the layout reflects
+        // the new text state); capturing them before would produce the old layout's bitmaps.
         val affectedResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, newRevision)
         val affectedNewLineIndices = affectedResult.newLineIndices
         val newSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedNewLineIndices)
