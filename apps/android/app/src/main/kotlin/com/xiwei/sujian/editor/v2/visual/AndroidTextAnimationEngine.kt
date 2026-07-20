@@ -46,6 +46,12 @@ class AndroidTextAnimationEngine(
         newSnapshots: Map<Int, AndroidLineSnapshot> = emptyMap(),
         rebaseFrame: VisualFrameSnapshot? = null
     ): PreparedVisualTransaction {
+        // System.nanoTime() as transaction key: monotonic guarantee is essential because
+        // the key doubles as SnapshotOwner.OwnedByTransaction(transactionKey) — two
+        // transactions with the same key would cause release() to free the wrong Bitmaps.
+        // System.nanoTime() is monotonic (unlike currentTimeMillis, which can regress on
+        // NTP adjustments) and has nanosecond granularity (collisions are practically
+        // impossible between sequential prepare() calls on the same thread).
         val transactionKey = System.nanoTime()
         val owner = SnapshotOwner.OwnedByTransaction(transactionKey)
         val ownedSnapshotIds = mutableSetOf<Long>()

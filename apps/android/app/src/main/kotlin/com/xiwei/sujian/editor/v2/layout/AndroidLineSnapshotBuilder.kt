@@ -107,6 +107,13 @@ class AndroidLineSnapshotBuilder {
      * The returned snapshot's [clusters] list is ordered by document position within the line.
      * Each cluster represents one grapheme cluster (Unicode boundary), which is the smallest
      * animation unit — splitting below grapheme level would break combining marks and ligatures.
+     *
+     * Design rationale for grapheme-cluster granularity: finer granularity (individual
+     * codepoints) would animate combining marks separately from their base characters,
+     * producing visual artifacts (e.g. an accent fading in after its letter). Coarser
+     * granularity (word or line) would prevent per-character Move/Crossfade decisions,
+     * causing unnecessary whole-line crossfade for single-character edits. Grapheme
+     * clusters are the natural visual unit that users perceive as "one character".
      */
     fun buildSnapshotForLineWithClusters(
         layout: Layout?,

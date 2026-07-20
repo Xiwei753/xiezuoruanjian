@@ -752,6 +752,11 @@ class AndroidVisualPlanner {
 
         return { offset ->
             when {
+                // Half-open boundary: offset < oldAffectedStart is before the edit
+                // (unchanged), offset >= oldAffectedEnd is after the edit (shifted by
+                // the edit delta). Using >= (not >) for oldAffectedEnd is correct because
+                // oldAffectedEnd is exclusive — the byte at oldAffectedEnd itself is the
+                // first byte after the affected range and must be shifted.
                 offset < oldAffectedStart -> offset
                 offset >= oldAffectedEnd -> offset + shift
                 else -> {
@@ -1669,6 +1674,14 @@ class AndroidVisualPlanner {
             //    change), but is the last resort for paragraphs that must still shift.
             //    Without this fallback, paragraphs with no offset-map match would produce
             //    no BlockShift at all, causing them to jump to the new position instantly.
+            //
+            //    Invariant: paragraphId fallback is only used within the non-structurally-
+            //    affected set (structurallyAffectedOldParaIds are excluded above), so the
+            //    risk of false matches is limited to paragraphs whose text content is
+            //    identical but whose paragraphId may have shifted due to a hard-break
+            //    change elsewhere. A false match produces an incorrect deltaY for one
+            //    BlockShift, which is a minor visual glitch (slight Y offset during
+            //    animation) compared to the alternative (no animation at all).
             for ((oldParaIdx, oldPara) in oldParagraphs.withIndex()) {
                 if (oldPara.paragraphId in structurallyAffectedOldParaIds) continue
 
