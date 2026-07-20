@@ -35,6 +35,13 @@ data class AndroidLayoutRevision(
         val baseline: Float,
         val left: Float,
         val right: Float,
+        /** Whether this visual line ends with a hard `\n` paragraph break.
+         *  Set during revision construction by inspecting the source text character at
+         *  [endUtf16 - 1], not by detecting byte gaps between adjacent visual lines.
+         *  Android Layout's visual line byte ranges are contiguous even across `\n`,
+         *  so byte-gap-based detection would never identify a paragraph boundary.
+         *  Used by the animation planner to stop reflow scanning — text reflow cannot
+         *  propagate into the next paragraph. */
         val endsWithHardBreak: Boolean = false
     )
 }

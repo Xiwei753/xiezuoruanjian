@@ -5,6 +5,17 @@ import com.xiwei.sujian.data.BridgeResult
 import uniffi.writer_core.EditorEditResultDto
 import uniffi.writer_core.EditorTransactionCauseDto
 
+/**
+ * UniFFI-based implementation of [EditorKernelBridge].
+ *
+ * Current limitation: all calls go through [AppServiceBridge]'s global singleton
+ * editor kernel, which has no session parameter. Per #541, this will be replaced by
+ * a session-scoped bridge (TextEditSessionBridge) that carries a session ID and
+ * dispatches to the correct EditorKernel via TextEditSessionRegistry.
+ *
+ * Thread constraint: all methods must be called on the UI thread. The underlying
+ * UniFFI calls are synchronous and block the caller.
+ */
 class UniFFIEditorKernelBridge(
     private val appServiceBridge: AppServiceBridge
 ) : EditorKernelBridge {

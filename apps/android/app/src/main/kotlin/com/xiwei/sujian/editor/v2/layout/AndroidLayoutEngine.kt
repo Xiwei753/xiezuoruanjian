@@ -123,6 +123,10 @@ class AndroidLayoutEngine(
             val startUtf8 = indexMap.utf16ToUtf8(lineStartUtf16)
             val endUtf8 = indexMap.utf16ToUtf8(lineEndUtf16)
 
+            // Source-text inspection: the visual line's last character is `\n`.
+            // This is the only reliable way to detect paragraph boundaries because
+            // Android Layout byte ranges are contiguous across `\n` — there is no
+            // byte gap between adjacent visual lines to detect.
             val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= text.length &&
                 text[lineEndUtf16 - 1] == '\n'
 

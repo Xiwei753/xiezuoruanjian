@@ -130,6 +130,25 @@ class AndroidEditorPipeline private constructor(
         return applyEditResult(result)
     }
 
+    /**
+     * Apply a composition commit with platform-side VisualIntent override.
+     *
+     * The Rust kernel returns a VisualIntent tailored for the raw edit, but the platform
+     * must adjust it for two reasons:
+     *
+     * 1. **Visual-same suppression**: when the committed text is identical to the old
+     *    preedit (e.g. IME confirms the same candidate), the visual text has not changed,
+     *    so all text animation is suppressed (SYSTEM_SUPPRESSED) — only the cursor animates.
+     *    This avoids a spurious fade-out + fade-in of unchanged text.
+     *
+     * 2. **Animation mode re-evaluation**: when Rust returns SYSTEM_SUPPRESSED but the
+     *    platform detects actual byte-level changes, the animation mode is re-selected
+     *    based on byte count (glyph/cluster/run) so the commit still animates properly.
+     *    The operationKind is overridden to COMPOSITION_COMMIT to route into the replace
+     *    animation path (which supports old→new matching via fingerprint).
+     *
+     * All byte ranges use half-open intervals [start, end).
+     */
     fun applyCompositionCommit(
         dto: uniffi.writer_core.EditorEditResultDto,
         preeditText: String = ""
@@ -276,6 +295,21 @@ class AndroidEditorPipeline private constructor(
         )
     }
 
+    /**
+     * Apply a composition update with platform-constructed VisualIntent.
+     *
+     * The platform constructs its own VisualIntent rather than using Rust's because:
+     * - The platform knows the exact old/new preedit text and can detect visual-same
+     *   (old preedit == new preedit) to suppress unnecessary animation.
+     * - Animation mode is selected by grapheme cluster count and content characteristics
+     *   (newlines → LineReflow, complex graphemes → Cluster, etc.), not by Rust's
+     *   generic byte-count heuristic.
+     * - oldAffected/newAffected are computed from the preedit byte ranges, ensuring
+     *   only the changed preedit region animates.
+     *
+     * When [isVisualSame] is true, animation is suppressed (SYSTEM_SUPPRESSED) and only
+     * the cursor animates — the preedit text has not visually changed.
+     */
     fun applyCompositionUpdateAnimated(
         replaceStartUtf8: Int,
         replaceEndUtf8: Int,
@@ -595,6 +629,15 @@ class AndroidEditorPipeline private constructor(
         object Failed : LoadTextResult()
     }
 
+    /**
+     * Reset the pipeline for reuse by a different editing target (session rebind).
+     *
+     * Clears target-specific transient state (active animation, mirror content, layout)
+     * but preserves the pipeline infrastructure (LayoutEngine, VisualPlanner, Renderer,
+     * ResourceStore, InputAdapter) so the shared host can be rebound without recreating
+     * the full pipeline. Per #541, this corresponds to the resetForReuse lifecycle step
+     * when the AnimatedTextEditorCoordinator switches between EditableTextTargets.
+     */
     fun resetForReuse() {
         animationEngine.cancel()
         mirror.loadFromSnapshot("", 0, 0, 0, 0)

@@ -42,8 +42,12 @@ class AnimationTimeline(
             state = TransactionState.Pending
             return
         }
-        // Re-anchor the virtual start time so that progress(frameTimeMs) == pausedProgress
-        // immediately after resume, then continues forward from there.
+        // Re-anchor: shift firstVisibleFrameTimeMs so that progress(frameTimeMs) equals
+        // pausedProgress immediately after resume. Solving for newStart:
+        //   pausedProgress = (frameTimeMs - newStart - 0) / durationMs
+        //   newStart = frameTimeMs - pausedProgress * durationMs
+        // Also reset accumulatedPausedDurationMs since the new anchor already accounts
+        // for all prior pause time.
         val newStart = frameTimeMs - (pausedProgress * durationMs).toLong()
         firstVisibleFrameTimeMs = newStart
         accumulatedPausedDurationMs = 0

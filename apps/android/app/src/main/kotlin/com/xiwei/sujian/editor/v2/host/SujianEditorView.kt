@@ -441,6 +441,15 @@ class SujianEditorView @JvmOverloads constructor(
     var onCommitRequested: (() -> Unit)? = null
     var onCancelRequested: (() -> Unit)? = null
 
+    /**
+     * Bind this shared host to a new editing session.
+     *
+     * If a session is already bound, unbinds it first (with reason "rebind"). Then sets
+     * the kernel bridge, applies the profile, loads the initial text, and requests focus.
+     *
+     * Per #541 lifecycle: bindSession → Editing. After this call, [isSessionBound] is true
+     * and the host can create a valid InputConnection.
+     */
     fun bindSession(
         sessionBridge: EditorKernelBridge,
         profile: TextEditorProfile,
@@ -500,6 +509,17 @@ class SujianEditorView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Unbind the current editing session.
+     *
+     * Cancels any active animation, invalidates the composition session, clears callbacks,
+     * detaches the kernel bridge, releases focus, and hides the soft keyboard.
+     * After this call, [isSessionBound] is false and [onCheckIsTextEditor] returns false,
+     * so the system will not offer an InputConnection.
+     *
+     * Per #541 lifecycle: Editing → Released. The host is idle but retains its pipeline
+     * infrastructure for later reuse via [bindSession].
+     */
     fun unbindSession(@Suppress("UNUSED_PARAMETER") reason: String) {
         if (!isSessionBound) return
         pipeline.cancelActiveTransaction()
@@ -515,6 +535,17 @@ class SujianEditorView @JvmOverloads constructor(
         imm?.hideSoftInputFromWindow(windowToken, 0)
     }
 
+    /**
+     * Reset transient state for reuse by a different target (session rebind).
+     *
+     * Clears scroll position, search highlights, and pending layout flags, then delegates
+     * to [AndroidEditorPipeline.resetForReuse] which cancels animations and resets the
+     * mirror. The pipeline infrastructure (Layout, Planner, Renderer, ResourceStore) is
+     * preserved — only target-specific state is cleared.
+     *
+     * Per #541: this corresponds to the Coordinator's rebind step, where the shared host
+     * switches from one EditableTextTarget to another without recreating the full pipeline.
+     */
     fun resetForReuse() {
         scrollX = 0f
         scrollY = 0f
@@ -536,12 +567,32 @@ class SujianEditorView @JvmOverloads constructor(
         pipeline.invalidateCompositionSession()
     }
 
+    /**
+     * Final resource release when the host leaves the composition tree permanently.
+     *
+     * Unbinds the session and releases all Bitmap resources in the VisualResourceStore.
+     * After this call the host cannot be reused — a new SujianEditorView must be created.
+     *
+     * Per #541: corresponds to Compose AndroidView's onRelease lifecycle, as opposed to
+     * onReset (which would call [resetForReuse] instead).
+     */
     fun release() {
         unbindSession("release")
         pipeline.animationEngine.release()
     }
 }
 
+/**
+ * Bridge contract between the platform pipeline and the Rust EditorKernel.
+ *
+ * Per #541: this interface will become session-scoped (TextEditSessionBridge) so that
+ * each bound EditableTextTarget carries its own session ID. All commands must implicitly
+ * or explicitly carry the current session ID; the bridge must not use a global singleton.
+ *
+ * Byte offset convention: all offsets are UTF-8 byte offsets using half-open intervals
+ * [start, endExclusive). The bridge is responsible for converting to the Rust FFI
+ * unsigned integer types (UInt/ULong) at the boundary.
+ */
 interface EditorKernelBridge {
     fun insert(byteOffset: Int, text: String, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): uniffi.writer_core.EditorEditResultDto?
     fun delete(byteStart: Int, byteEndExclusive: Int, cause: uniffi.writer_core.EditorTransactionCauseDto, expectedRevision: Long): uniffi.writer_core.EditorEditResultDto?

@@ -1195,8 +1195,10 @@ class AndroidVisualPlanner {
                         break
                     }
                 }
-                // A hard break means this visual line ends a paragraph — reflow cannot
-                // propagate into the next paragraph, so stop scanning here.
+                // Safety fallback: hard break stops reflow at paragraph boundary.
+                // This is logically redundant with the earlier checks inside both the
+                // geometryChanged and !geometryChanged branches, but serves as a guard
+                // in case the branching logic is restructured.
                 if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
                     break
                 }

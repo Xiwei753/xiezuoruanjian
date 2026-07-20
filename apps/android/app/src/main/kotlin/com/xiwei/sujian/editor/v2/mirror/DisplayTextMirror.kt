@@ -114,6 +114,21 @@ data class EditResult(
     fun isNoChange(): Boolean = outcome == uniffi.writer_core.EditorEditOutcomeDto.NO_CHANGE
 }
 
+/**
+ * Platform-side text buffer that mirrors the Rust EditorKernel's committed text state.
+ *
+ * Composition overlay model: when an IME composition is active, the preedit text is
+ * overlaid on top of the committed text in the SpannableStringBuilder (with an
+ * UnderlineSpan). The original text under the preedit range is saved in
+ * [compositionOriginalText] and restored when the composition is cleared or committed.
+ *
+ * "Committed" accessors ([getCommittedCursorUtf8], [getCommittedText], etc.) return
+ * values as if the active composition did not exist — they reflect the state that the
+ * Rust kernel sees, which operates on committed text only. The IME sees the full buffer
+ * including the preedit overlay.
+ *
+ * Thread constraint: this class is not thread-safe; all access must be on the UI thread.
+ */
 class DisplayTextMirror {
     private val buffer = SpannableStringBuilder()
     private var currentRevision: Long = 0
@@ -160,6 +175,9 @@ class DisplayTextMirror {
 
     fun hasComposition(): Boolean = hasActiveComposition
 
+    /** Cursor position in the committed text (excluding active composition overlay).
+     *  When a composition is active, returns the start of the composition range —
+     *  the Rust kernel's cursor is at the composition boundary, not inside the preedit. */
     fun getCommittedCursorUtf8(): Int {
         if (!hasActiveComposition) return cursorUtf8
         return compositionReplaceStartUtf8
@@ -175,6 +193,8 @@ class DisplayTextMirror {
         return compositionReplaceStartUtf8
     }
 
+    /** Full text as seen by the Rust kernel (committed text only, excluding preedit overlay).
+     *  Reconstructs the text by replacing the preedit range with [compositionOriginalText]. */
     fun getCommittedText(): String {
         if (!hasActiveComposition) return buffer.toString()
         val indexMap = AndroidTextIndexMap(this)
@@ -211,6 +231,16 @@ class DisplayTextMirror {
         selectionHeadUtf16 = indexMap.utf8ToUtf16(normEnd)
     }
 
+    /**
+     * Apply a sequence of display patches from the Rust kernel.
+     *
+     * Revision continuity invariant: each patch's [baseRevision] must equal the mirror's
+     * current [currentRevision]. A mismatch means patches were generated against an
+     * outdated revision and the mirror must be reloaded from the kernel snapshot instead.
+     *
+     * After each patch, the UTF-8→UTF-16 index map is rebuilt because the buffer
+     * content has changed — subsequent patches in the same batch must use updated offsets.
+     */
     fun applyPatches(patches: List<DisplayPatch>) {
         if (patches.isEmpty()) return
 
