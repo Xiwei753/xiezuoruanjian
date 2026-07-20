@@ -460,6 +460,18 @@ class AndroidEditorPipeline private constructor(
         }
     }
 
+    /**
+     * Render a composed frame onto [canvas].
+     *
+     * Layer order when animation is active (matches [EditorFrameComposer] pipeline docs):
+     * 1. Background
+     * 2. Search highlights
+     * 3. Selection highlight
+     * 4. [AndroidTextRenderer.drawStaticTextWithHoles] — base pass + block-shift pass
+     * 5. [AndroidTextAnimationRenderer.drawAnimatedSlices] — animated slices
+     * 6. Preedit underline
+     * 7. Animated cursor (or static cursor if no cursor transition)
+     */
     private fun renderComposedFrame(canvas: android.graphics.Canvas, frame: ComposedFrame) {
         val layout = frame.layout ?: return
         val transaction = frame.transaction

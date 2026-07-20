@@ -1511,6 +1511,10 @@ class AndroidVisualPlanner {
                             endLineIndexExclusive = lastLine.index + 1,
                             top = firstLine.value.top,
                             bottom = lastLine.value.bottom,
+                            // left/right use min/max across all lines in the paragraph (not
+                            // just first/last) to ensure the clip rect covers the widest line,
+                            // preventing narrow intermediate lines from being clipped short.
+                            // Same logic as mergeAdjacentBlockShifts's merged left/right.
                             left = newParaLines.map { it.value.left }.minOrNull() ?: 0f,
                             right = newParaLines.map { it.value.right }.maxOrNull() ?: 0f,
                             deltaY = deltaY

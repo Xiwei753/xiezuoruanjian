@@ -26,6 +26,11 @@ class AndroidTextAnimationRenderer {
                     // fromDestinationRect is the pre-move position; destinationRect is the
                     // post-move position. For cross-line Moves these can be on different lines;
                     // the interpolation moves the bitmap smoothly between them.
+                    //
+                    // sourceRect is always from the NEW layout's Bitmap (the slice's snapshot
+                    // belongs to the new revision). This is correct because the new Bitmap
+                    // contains the actual glyph pixels at the destination position — the old
+                    // Bitmap may have different sub-pixel rendering or font fallback.
                     val fromRect = slice.fromDestinationRect ?: slice.destinationRect
                     val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
                     val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
