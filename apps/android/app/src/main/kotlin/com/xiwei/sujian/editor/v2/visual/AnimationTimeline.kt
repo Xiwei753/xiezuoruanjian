@@ -104,6 +104,19 @@ class AnimationTimeline(
     }
 }
 
+/**
+ * Immutable snapshot of the visual state at a specific animation progress point.
+ *
+ * Primary consumer: [AndroidTextAnimationEngine.captureRebaseSnapshot], which captures
+ * the current frame before submitting a new transaction. The rebase snapshot carries
+ * interpolated positions/alphas/translations so that the next transaction can continue
+ * from the on-screen state rather than from the logical start/end — this is essential
+ * for visual continuity during rapid consecutive input.
+ *
+ * [AnimationTimeline.currentVisualFrame] produces a minimal version with only [progress]
+ * and [state]; the full version with slice/cursor/block data is assembled by
+ * [AndroidTextAnimationEngine.captureFrame].
+ */
 data class VisualFrameSnapshot(
     val progress: Float,
     val state: TransactionState,

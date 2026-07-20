@@ -1340,9 +1340,6 @@ class AndroidVisualPlanner {
      * is less intuitive but still deterministic, and the planner compensates by requiring
      * [shapingIdentityConfident] for Move — without confidence, Crossfade is used regardless
      * of pairing order, which is visually correct even if the pairing is suboptimal.
-     *
-     * The planner compensates by requiring [shapingIdentityConfident] for Move; without
-     * confidence, Crossfade is used, which is visually correct regardless of pairing order.
      */
     private fun matchClustersByFingerprint(
         oldSnapshot: AndroidLineSnapshot,
