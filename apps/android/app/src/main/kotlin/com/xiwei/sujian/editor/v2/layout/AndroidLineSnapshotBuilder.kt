@@ -292,13 +292,13 @@ class AndroidLineSnapshotBuilder {
                 paint
             ) ?: return Pair("${clusterText.hashCode()}_${contextHash}", false)
 
-            val glyphCountMethod = positionedGlyphs.javaClass.getMethod("getGlyphCount")
+            val glyphCountMethod = positionedGlyphs.javaClass.getMethod("glyphCount")
             val glyphCount = glyphCountMethod.invoke(positionedGlyphs) as Int
 
             val getFontMethod = positionedGlyphs.javaClass.getMethod("getFont", Int::class.javaPrimitiveType)
             val getGlyphIdMethod = positionedGlyphs.javaClass.getMethod("getGlyphId", Int::class.javaPrimitiveType)
-            val getXMethod = positionedGlyphs.javaClass.getMethod("getX", Int::class.javaPrimitiveType)
-            val getYMethod = positionedGlyphs.javaClass.getMethod("getY", Int::class.javaPrimitiveType)
+            val getGlyphXMethod = positionedGlyphs.javaClass.getMethod("getGlyphX", Int::class.javaPrimitiveType)
+            val getGlyphYMethod = positionedGlyphs.javaClass.getMethod("getGlyphY", Int::class.javaPrimitiveType)
 
             if (glyphCount == 0) {
                 return Pair("${clusterText.hashCode()}_${contextHash}", false)
@@ -312,9 +312,9 @@ class AndroidLineSnapshotBuilder {
                 sb.append("_")
                 sb.append(getGlyphIdMethod.invoke(positionedGlyphs, i))
                 sb.append("_")
-                sb.append((getXMethod.invoke(positionedGlyphs, i) as Float).toInt())
+                sb.append((getGlyphXMethod.invoke(positionedGlyphs, i) as Float).toInt())
                 sb.append("_")
-                sb.append((getYMethod.invoke(positionedGlyphs, i) as Float).toInt())
+                sb.append((getGlyphYMethod.invoke(positionedGlyphs, i) as Float).toInt())
             }
 
             sb.append("_ctx_")
