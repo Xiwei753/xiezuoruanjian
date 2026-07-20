@@ -66,7 +66,14 @@ class AndroidLineSnapshotBuilder {
         // (c) the rendering canvas maps sourceRect pixels to destinationRect layout coords.
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
+        // Translate so that document coordinate (left, top) maps to Bitmap pixel (0, 0).
+        // layout.draw() uses document coordinates, so this shift ensures the line's content
+        // lands inside the Bitmap rather than at a large positive offset.
         canvas.translate(-left, -top)
+        // clipRect is in the post-translate coordinate system, so (left, top, right, bottom)
+        // maps to Bitmap pixels (0, 0, right-left, bottom-top) — the full Bitmap area.
+        // This clip prevents layout.draw() from rendering outside the line's bounds (e.g.
+        // when a trailing space or line spacing extends beyond the measured line rect).
         canvas.clipRect(left, top, right, bottom)
         layout.draw(canvas)
 

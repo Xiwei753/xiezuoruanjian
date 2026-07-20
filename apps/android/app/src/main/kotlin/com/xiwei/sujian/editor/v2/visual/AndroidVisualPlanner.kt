@@ -1506,14 +1506,19 @@ class AndroidVisualPlanner {
                     // split paragraph would have no old snapshot and would jump to its
                     // final position without animation.
                     //
-                    // The condition checks: (1) the old paragraph's mapped start falls
-                    // before the new paragraph's end, AND (2) the new paragraph's start
-                    // falls before the old paragraph's end plus the new paragraph's length.
-                    // Condition (2) is a relaxed overlap check that accounts for the byte
-                    // shift caused by the split — the old paragraph's endUtf8Exclusive is
-                    // in old-document coordinates, while the new paragraph's range is in
-                    // new-document coordinates, so direct comparison requires adding the
-                    // new paragraph's length as a tolerance for the edit delta.
+                    // Condition (1): mappedStart < newPara.endUtf8Exclusive — the old
+                    // paragraph's content, when mapped to the new document, starts before
+                    // the new paragraph ends, so it overlaps.
+                    //
+                    // Condition (2): newPara.startUtf8 < oldPara.endUtf8Exclusive + newParaLen.
+                    // This is a cross-coordinate overlap approximation: oldPara.endUtf8Exclusive
+                    // is in old-document coordinates while newPara.startUtf8 is in new-document
+                    // coordinates, so they cannot be compared directly. Adding newParaLen
+                    // approximates the maximum byte shift from the split (the new paragraph's
+                    // length is an upper bound on how much the edit delta could have moved
+                    // the old paragraph's end forward in the new document). This is conservative
+                    // — it may include unrelated old paragraphs, but false positives only cause
+                    // extra Bitmap snapshots (not incorrect animation).
                     for (oldPara in oldParagraphs) {
                         val ms = offsetMapper(oldPara.startUtf8)
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
@@ -1526,6 +1531,11 @@ class AndroidVisualPlanner {
                     }
                 }
             }
+            // Merge detection: find old paragraphs whose mapped start falls inside the
+            // new edit paragraph's byte range. These old paragraphs were absorbed into the
+            // merged paragraph during a hard-break deletion — their text needs old Bitmap
+            // snapshots for exit animation (CrossfadeOld/Move) because it no longer exists
+            // as a separate paragraph in the new revision.
             if (editNewPara != null) {
                 for (oldPara in oldParagraphs) {
                     if (oldPara.paragraphId in structurallyAffectedOldParaIds) continue
