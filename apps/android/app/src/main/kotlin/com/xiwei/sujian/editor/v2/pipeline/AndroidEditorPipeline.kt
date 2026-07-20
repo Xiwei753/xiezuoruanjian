@@ -466,7 +466,7 @@ class AndroidEditorPipeline private constructor(
 
         textRenderer.drawBackground(canvas)
 
-        if (transaction != null && transaction.animatedSlices.isNotEmpty()) {
+        if (transaction != null && (transaction.animatedSlices.isNotEmpty() || transaction.blockShifts.isNotEmpty())) {
             textRenderer.drawSearchHighlights(canvas, layout, frame.searchHighlightsUtf16)
             textRenderer.drawSelectionHighlight(canvas, layout, frame.selectionStartUtf16, frame.selectionEndUtf16)
             val animatedRegions = animationRenderer.computeAnimatedSliceRegions(transaction)

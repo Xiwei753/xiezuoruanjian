@@ -1383,14 +1383,22 @@ class AndroidVisualPlanner {
              * new paragraph's start returns null (no old offset maps to it), the new paragraph
              * is structurally affected — it was created by a split.
              *
+             * Additionally, if reverse-mapping a new paragraph's start falls inside the old
+             * edit paragraph, that new paragraph was split off from the edit paragraph and
+             * must be structurally affected. Similarly, if an old paragraph's mapped start
+             * falls inside the new edit paragraph, that old paragraph was merged in.
+             *
              * BlockShifts start only after the last paragraph in the combined edit group,
              * preventing the same paragraph from appearing both as a Bitmap snapshot target
              * and as a BlockShift target.
              */
+            val editOldPara = oldParagraphs.firstOrNull { it.paragraphId == editParagraphId }
+            val editNewParaId = newRev.lineRanges.getOrNull(newEditLine)?.paragraphId ?: 0
+            val editNewPara = newParagraphs.firstOrNull { it.paragraphId == editNewParaId }
             val structurallyAffectedOldParaIds = mutableSetOf<Int>()
             val structurallyAffectedNewParaIds = mutableSetOf<Int>()
             structurallyAffectedOldParaIds.add(editParagraphId)
-            newRev.lineRanges.getOrNull(newEditLine)?.paragraphId?.let { structurallyAffectedNewParaIds.add(it) }
+            structurallyAffectedNewParaIds.add(editNewParaId)
 
             for (oldPara in oldParagraphs) {
                 if (oldPara.paragraphId == editParagraphId) continue
@@ -1419,6 +1427,19 @@ class AndroidVisualPlanner {
                         if (ms != null && ms < newPara.endUtf8Exclusive && newPara.startUtf8 < oldPara.endUtf8Exclusive + (newPara.endUtf8Exclusive - newPara.startUtf8)) {
                             structurallyAffectedOldParaIds.add(oldPara.paragraphId)
                         }
+                    }
+                } else if (editOldPara != null) {
+                    if (reverseMappedStart >= editOldPara.startUtf8 && reverseMappedStart < editOldPara.endUtf8Exclusive) {
+                        structurallyAffectedNewParaIds.add(newPara.paragraphId)
+                    }
+                }
+            }
+            if (editNewPara != null) {
+                for (oldPara in oldParagraphs) {
+                    if (oldPara.paragraphId in structurallyAffectedOldParaIds) continue
+                    val mappedStart = offsetMapper(oldPara.startUtf8)
+                    if (mappedStart != null && mappedStart >= editNewPara.startUtf8 && mappedStart < editNewPara.endUtf8Exclusive) {
+                        structurallyAffectedOldParaIds.add(oldPara.paragraphId)
                     }
                 }
             }
@@ -1904,21 +1925,38 @@ class AndroidVisualPlanner {
     ): List<PreparedVisualTransaction.BlockShift> {
         if (rebaseSnapshot.blockShiftStates.isEmpty() || newBlockShifts.isEmpty()) return newBlockShifts
         return newBlockShifts.map { shift ->
-            val matchingOld = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
+            val exactMatch = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
                 oldState.startLineIndex == shift.startLineIndex &&
                     oldState.endLineIndexExclusive == shift.endLineIndexExclusive
             }
-            if (matchingOld != null) {
-                shift.copy(deltaY = shift.deltaY + matchingOld.currentTranslateY)
+            if (exactMatch != null) {
+                shift.copy(deltaY = shift.deltaY + exactMatch.currentTranslateY)
             } else {
-                val overlappingOld = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
+                val overlappingOlds = rebaseSnapshot.blockShiftStates.filter { oldState ->
                     oldState.startLineIndex < shift.endLineIndexExclusive &&
                         oldState.endLineIndexExclusive > shift.startLineIndex
                 }
-                if (overlappingOld != null) {
-                    shift.copy(deltaY = shift.deltaY + overlappingOld.currentTranslateY)
+                if (overlappingOlds.isNotEmpty()) {
+                    val bestOld = overlappingOlds.maxByOrNull {
+                        val overlapStart = maxOf(it.startLineIndex, shift.startLineIndex)
+                        val overlapEnd = minOf(it.endLineIndexExclusive, shift.endLineIndexExclusive)
+                        overlapEnd - overlapStart
+                    }
+                    shift.copy(deltaY = shift.deltaY + (bestOld?.currentTranslateY ?: 0f))
                 } else {
-                    shift
+                    val nearestOld = rebaseSnapshot.blockShiftStates.minByOrNull { oldState ->
+                        val gap = if (oldState.endLineIndexExclusive <= shift.startLineIndex) {
+                            shift.startLineIndex - oldState.endLineIndexExclusive
+                        } else {
+                            oldState.startLineIndex - shift.endLineIndexExclusive
+                        }
+                        kotlin.math.abs(gap)
+                    }
+                    if (nearestOld != null) {
+                        shift.copy(deltaY = shift.deltaY + nearestOld.currentTranslateY)
+                    } else {
+                        shift
+                    }
                 }
             }
         }

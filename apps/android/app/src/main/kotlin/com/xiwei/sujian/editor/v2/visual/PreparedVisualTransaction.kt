@@ -98,7 +98,9 @@ data class PreparedVisualTransaction(
      * BlockShifts whose line ranges are adjacent and whose deltaY is identical into a
      * single entry. This ensures the renderer performs at most one [layout.draw] per
      * merged block per frame, not one per paragraph — critical for long documents where
-     * many paragraphs shift by the same amount.
+     * many paragraphs shift by the same amount. Geometric bounds (left/right) use the
+     * min/max across all merged lines to ensure the clip rect covers every intermediate
+     * line regardless of varying line widths.
      */
     data class BlockShift(
         val startLineIndex: Int,
