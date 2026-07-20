@@ -394,6 +394,10 @@ class AndroidVisualPlanner {
                 if (!positionChanged) continue
                 val newSnapshot = newInfo.second
                 val oldSnapshot = oldInfo.second
+                // Move requires BOTH clusters to have confident shaping fingerprints.
+                // A false Move (same fingerprint but different actual glyphs) causes visual
+                // glitches. On API < 31, shapingIdentityConfident is false, so Crossfade
+                // is always used as a safe fallback.
                 if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
                     && oldCluster.shapingIdentityConfident
                     && newCluster.shapingIdentityConfident
@@ -435,6 +439,16 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Replace-mode cluster animation: matches old→new clusters by shaping fingerprint +
+     * byte-length equality with closest-offset tiebreaker.
+     *
+     * This differs from [addMoveSlicesForShiftedClustersCrossLine] which uses the edit's
+     * OffsetMap for identity matching. Replace uses direct fingerprint matching because
+     * offset mapping is ambiguous when old/new ranges overlap differently (e.g. composition
+     * commit where the replaced range differs from the committed text length). The
+     * byte-length equality check prevents matching clusters of different visual width.
+     */
     private fun planClusterReplaceAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -522,6 +536,8 @@ class AndroidVisualPlanner {
                 val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
                 if (positionChanged) {
+                    // Move requires BOTH clusters to have confident shaping fingerprints;
+                    // see addMoveSlicesForShiftedClustersCrossLine for the full invariant.
                     if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
                     && oldCluster.shapingIdentityConfident
                     && newCluster.shapingIdentityConfident
@@ -800,6 +816,8 @@ class AndroidVisualPlanner {
                 val (newCluster, newSnapshot) = allNewAffectedClusters[matchIdx]
                 val positionChanged = oldCluster.visualRectInDocument != newCluster.visualRectInDocument
                 if (positionChanged) {
+                    // Move requires BOTH clusters to have confident shaping fingerprints;
+                    // see addMoveSlicesForShiftedClustersCrossLine for the full invariant.
                     if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
                         && oldCluster.shapingIdentityConfident
                         && newCluster.shapingIdentityConfident
@@ -909,6 +927,8 @@ class AndroidVisualPlanner {
                     )
                     if (matchedPairs.isNotEmpty()) {
                         for ((oldCluster, newCluster) in matchedPairs) {
+                            // Move requires BOTH clusters to have confident shaping fingerprints;
+                            // see addMoveSlicesForShiftedClustersCrossLine for the full invariant.
                             if (oldCluster.shapingFingerprint == newCluster.shapingFingerprint
                                 && oldCluster.shapingIdentityConfident
                                 && newCluster.shapingIdentityConfident

@@ -58,7 +58,9 @@ class AnimationTimeline(
         //   pausedProgress = (frameTimeMs - newStart - 0) / durationMs
         //   newStart = frameTimeMs - pausedProgress * durationMs
         // Also reset accumulatedPausedDurationMs since the new anchor already accounts
-        // for all prior pause time.
+        // for all prior pause time. Truncation to whole milliseconds via toLong() is
+        // acceptable because frame timestamps are millisecond-resolution; sub-ms precision
+        // would be lost in progress() anyway.
         val newStart = frameTimeMs - (pausedProgress * durationMs).toLong()
         firstVisibleFrameTimeMs = newStart
         accumulatedPausedDurationMs = 0
@@ -99,13 +101,13 @@ data class SliceVisualState(
     val snapshotId: Long,
     val role: SliceRole,
     val lineIndex: Int,
-    /** Inclusive UTF-8 byte offset. */
+    /** Inclusive UTF-8 byte offset of the entire visual line in the document. */
     val documentByteStart: Int = -1,
-    /** Exclusive UTF-8 byte offset (half-open: [start, end)). */
+    /** Exclusive UTF-8 byte offset of the entire visual line (half-open: [start, end)). */
     val documentByteEndExclusive: Int = -1,
-    /** Inclusive UTF-8 byte offset of the cluster within the line. */
+    /** Inclusive UTF-8 byte offset of the specific cluster within the line that this slice animates. */
     val clusterByteStart: Int = -1,
-    /** Exclusive UTF-8 byte offset of the cluster within the line. */
+    /** Exclusive UTF-8 byte offset of the cluster within the line (half-open: [start, end)). */
     val clusterByteEndExclusive: Int = -1,
     val currentLeft: Float,
     val currentTop: Float,

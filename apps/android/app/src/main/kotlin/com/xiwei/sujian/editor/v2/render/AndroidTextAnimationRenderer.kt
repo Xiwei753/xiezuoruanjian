@@ -23,6 +23,9 @@ class AndroidTextAnimationRenderer {
 
             when (slice.role) {
                 SliceRole.Move -> {
+                    // fromDestinationRect is the pre-move position; destinationRect is the
+                    // post-move position. For cross-line Moves these can be on different lines;
+                    // the interpolation moves the bitmap smoothly between them.
                     val fromRect = slice.fromDestinationRect ?: slice.destinationRect
                     val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
                     val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
@@ -64,8 +67,10 @@ class AndroidTextAnimationRenderer {
      * text in between to disappear during the animation.
      *
      * Currently returns only [slice.destinationRect]; for cross-line Moves this is the
-     * target position only (not the source), which is safe. If source-position holes are
-     * needed in the future, they must be separate small rects, never a merged bounding box.
+     * target position only (not the source), which is safe. Source-position holes are
+     * intentionally NOT punched because they would require separate small rects per source
+     * cluster — a merged source+destination bounding rect would swallow entire lines of
+     * non-animated text between the source and destination positions.
      */
     fun computeAnimatedSliceRegions(transaction: PreparedVisualTransaction): List<android.graphics.RectF> {
         val regions = mutableListOf<android.graphics.RectF>()

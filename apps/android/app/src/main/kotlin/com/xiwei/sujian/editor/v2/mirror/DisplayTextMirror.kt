@@ -144,7 +144,10 @@ class DisplayTextMirror {
     private var selectionHeadUtf8: Int = 0
     private var selectionAnchorUtf16: Int = 0
     private var selectionHeadUtf16: Int = 0
+    /** Committed-text UTF-8 byte offset where the composition replacement starts.
+     *  In committed-text coordinates (not virtual text), matching the CompositionSession convention. */
     private var compositionReplaceStartUtf8: Int = 0
+    /** Committed-text UTF-8 byte offset where the composition replacement ends (exclusive). */
     private var compositionReplaceEndUtf8: Int = 0
     private var compositionOriginalText: String = ""
     private var hasActiveComposition: Boolean = false
@@ -311,6 +314,9 @@ class DisplayTextMirror {
             UnderlineSpan(),
             compositionStartUtf16,
             compositionEndUtf16,
+            // SPAN_EXCLUSIVE_EXCLUSIVE: the span does not expand when text is inserted at
+            // its boundaries. This is correct for the preedit underline because the IME
+            // controls the exact range — adjacent insertions should not extend the underline.
             SpannableStringBuilder.SPAN_EXCLUSIVE_EXCLUSIVE
         )
     }

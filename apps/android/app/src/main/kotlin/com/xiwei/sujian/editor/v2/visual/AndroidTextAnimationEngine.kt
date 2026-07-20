@@ -33,6 +33,10 @@ class AndroidTextAnimationEngine(
      * All snapshots registered in this call are owned by [OwnedByTransaction(transactionKey)];
      * the planner must use the same key in [PreparedVisualTransaction.transactionId] so that
      * [completeTransaction]/[cancelTransaction] can release resources under the correct owner.
+     *
+     * Two-phase ownership: this method optimistically registers ALL old/new snapshots into
+     * [ownedSnapshotIds]. [submit] (Phase 2) trims this set to only the snapshots actually
+     * referenced by slices or static patches, releasing unreferenced ones immediately.
      */
     fun prepare(
         visualIntent: VisualIntent,
@@ -111,8 +115,11 @@ class AndroidTextAnimationEngine(
                 resourceStore.release(snapshotId, oldOwner)
             }
 
-            // Merge inherited IDs into the new transaction's owned set so they will be
-            // released when this transaction completes or is cancelled.
+            // preciseOwnedIds = (newly captured & referenced) + (inherited from old transaction).
+            // Subtracting unreferencedNewIds prevents Bitmaps from the old transaction that
+            // the new transaction never references from accumulating — without this, rapid
+            // consecutive inputs would grow ownedSnapshotIds unboundedly until the final
+            // transaction completes.
             val preciseOwnedIds = (preparedAnimation.ownedSnapshotIds - unreferencedNewIds) + inheritedIds
             activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
             timeline?.complete()
@@ -198,6 +205,9 @@ class AndroidTextAnimationEngine(
         timeline = null
     }
 
+    /** Cancel the active transaction and release ALL session-owned resources (snapshots,
+     *  timeline state). Used for session rebind — different from [cancel] which only aborts
+     *  the active transaction without releasing completed-but-not-yet-released snapshots. */
     fun resetForSession() {
         cancel()
         resourceStore.releaseAll()

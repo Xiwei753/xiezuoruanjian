@@ -12,6 +12,7 @@ use super::EditorKernel;
 use super::editor_kernel::EditorInputError;
 
 /// 文字编辑会话 ID — 全局唯一，标识一次独立的文字事务环境。
+/// 内部类型 u64 对应平台端 Kotlin ULong，通过 FFI 边界传递时保持无符号语义。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TextEditSessionId(pub u64);
 
@@ -27,6 +28,8 @@ impl TextEditSessionId {
 /// 失效——平台端持有的 composition generation 必须与会话当前 generation 匹配，
 /// 否则 updateComposition/finishComposition/cancelComposition 会被内核拒绝。
 /// 这防止了异步 composition 操作写入已被 reset 的会话。
+///
+/// [generation] 字段为 u64，对应平台端 Kotlin Long（通过 toULong() 恢复无符号语义）。
 pub struct TextEditSession {
     pub kernel: EditorKernel,
     pub session_id: TextEditSessionId,
@@ -121,6 +124,9 @@ impl TextEditSessionRegistry {
         cursor: usize,
     ) -> Result<(), EditorInputError> {
         if let Some(session) = self.sessions.get_mut(&session_id.0) {
+            // Generation is incremented BEFORE load_text so that any in-flight
+            // composition operations with the old generation will be rejected
+            // by the kernel — preventing stale composition writes to a reset session.
             session.generation = session.generation.saturating_add(1);
             let _ = session.kernel.load_text(text, cursor);
             Ok(())

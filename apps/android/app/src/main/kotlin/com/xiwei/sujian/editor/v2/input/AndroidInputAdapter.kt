@@ -145,6 +145,9 @@ class AndroidInputAdapter(
         val dto = bridge.beginComposition(replaceStart, replaceEndExclusive, mirror.getRevision()) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
+            // The kernel returns compositionSession (sessionId, baseRevision, generation) on
+            // successful BeginComposition. These must be preserved for subsequent
+            // UpdateComposition/FinishComposition/CancelComposition calls.
             val sessionDto = dto.compositionSession
             if (sessionDto != null) {
                 compositionSessionId = sessionDto.sessionId.toLong()
@@ -167,6 +170,9 @@ class AndroidInputAdapter(
         ) ?: return false
         val result = EditResult.fromDto(dto)
         if (result.isApplied()) {
+            // Generation is incremented locally after each successful update so the next
+            // update carries the correct expected generation. If the kernel rejects the
+            // generation (stale), the composition is invalidated and the pipeline reloads.
             compositionGeneration++
             return true
         }
@@ -216,6 +222,10 @@ class AndroidInputAdapter(
     //   All three are cleared atomically in [clearCompositionState] on commit/cancel/failure.
     private var compositionSessionId: Long = 0L
     private var compositionBaseRevision: Long = 0L
+    // compositionGeneration: stored as UInt because the Kotlin-side increment (line 170)
+    // is simpler with unsigned arithmetic; the toLong() widening in compositionSessionInfo()
+    // preserves the value because generation never exceeds UInt.MAX_VALUE in practice.
+    // The Rust side uses u64, and the FFI boundary handles UInt→u64 widening.
     private var compositionGeneration: UInt = 0u
 
     private fun clearCompositionState() {

@@ -200,6 +200,8 @@ class TextEditSessionBridge(
     }
 
     override fun compositionUpdateVisualIntent(
+        // UInt parameters (not Int like other methods) because these byte offsets go
+        // directly to the FFI boundary without signed arithmetic on the Kotlin side.
         compositionReplaceStart: UInt,
         compositionReplaceEndExclusive: UInt,
         oldPreeditText: String,

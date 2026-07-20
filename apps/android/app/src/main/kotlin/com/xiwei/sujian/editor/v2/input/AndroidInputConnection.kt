@@ -224,6 +224,8 @@ class AndroidInputConnection(
 
     override fun setComposingRegion(start: Int, end: Int): Boolean {
         if (start < 0 || end < 0 || start > end) return false
+        // start/end are UTF-16 offsets from the InputConnection API; convert to UTF-8
+        // byte offsets for the Rust kernel via AndroidTextIndexMap.
         if (adapter.isComposing()) {
             adapter.handleCompositionCancel()
         }

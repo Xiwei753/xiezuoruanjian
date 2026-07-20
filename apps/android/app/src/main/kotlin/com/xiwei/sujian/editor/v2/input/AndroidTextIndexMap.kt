@@ -30,6 +30,9 @@ class AndroidTextIndexMap private constructor(
             replaceEndUtf8: Int,
             replacementText: String
         ): Pair<Int, Int> {
+            // newCursorPosition follows Android's InputConnection convention:
+            // > 0: cursor is after the replacement, 1-indexed from replacement end.
+            // <= 0: cursor is before the replacement, 0-indexed from replacement start.
             val committedBytes = committedText.toByteArray(Charsets.UTF_8)
             val safeStart = replaceStartUtf8.coerceIn(0, committedBytes.size)
             val safeEnd = replaceEndUtf8.coerceIn(safeStart, committedBytes.size)
@@ -71,6 +74,9 @@ class AndroidTextIndexMap private constructor(
         val maxByte = byteBoundaries.lastOrNull() ?: 0
         val safeOffset = byteOffset.coerceAtMost(maxByte)
         val idx = byteBoundaries.binarySearch(safeOffset)
+        // If byteOffset falls inside a multi-byte UTF-8 sequence, binarySearch returns the
+        // insertion point; -(idx+1)-1 snaps to the nearest preceding code-point boundary,
+        // ensuring the result is always a valid UTF-16 offset.
         val pos = if (idx >= 0) idx else -(idx + 1) - 1
         return if (pos >= 0 && pos < utf16Positions.size) utf16Positions[pos] else _utf16Length
     }
@@ -80,6 +86,8 @@ class AndroidTextIndexMap private constructor(
         val maxUtf16 = utf16Positions.lastOrNull() ?: 0
         val safeOffset = utf16Offset.coerceAtMost(maxUtf16)
         val idx = utf16Positions.binarySearch(safeOffset)
+        // Same snap-to-code-point logic as utf8ToUtf16: falls back to the nearest
+        // preceding code-point boundary when the offset is inside a surrogate pair.
         val pos = if (idx >= 0) idx else -(idx + 1) - 1
         return if (pos >= 0 && pos < byteBoundaries.size) byteBoundaries[pos] else _utf8Length
     }

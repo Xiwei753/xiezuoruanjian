@@ -1280,6 +1280,9 @@ impl WriterAppService {
         .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
     }
 
+    /// Commit text with composition session validation. composition_session_id/base_revision/
+    /// generation allow the kernel to verify the commit corresponds to an active composition.
+    /// If the session has been reset (generation mismatch), the commit is rejected.
     pub fn text_edit_session_commit_text(
         &self,
         session_id: u64,
@@ -1340,6 +1343,9 @@ impl WriterAppService {
         .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
     }
 
+    /// Begin a composition session. Returns composition_session (sessionId, baseRevision,
+    /// generation) on success so the platform can track the composition lifecycle.
+    /// The kernel validates these on subsequent updateComposition/finishComposition/cancelComposition.
     pub fn text_edit_session_begin_composition(
         &self,
         session_id: u64,
@@ -1371,6 +1377,8 @@ impl WriterAppService {
         .unwrap_or_else(|| crate::api::EditorEditResultDto::stale_fallback())
     }
 
+    /// Update an active composition. composition_generation must match the kernel's current
+    /// composition generation; a mismatch results in STALE_REVISION outcome.
     pub fn text_edit_session_update_composition(
         &self,
         session_id: u64,

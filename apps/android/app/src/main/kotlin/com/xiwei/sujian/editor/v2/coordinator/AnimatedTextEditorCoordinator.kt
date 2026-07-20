@@ -36,6 +36,7 @@ class AnimatedTextEditorCoordinator(
     private val appServiceBridge: AppServiceBridge
 ) {
     private val targets = mutableMapOf<String, EditableTextTarget>()
+    // ULong matching Rust's u64 TextEditSessionId at the FFI boundary.
     private var activeSessionId: ULong? = null
     private var sharedEditorView: SujianEditorView? = null
     private val persistentSessionIds = mutableMapOf<String, ULong>()
@@ -257,6 +258,8 @@ class AnimatedTextEditorCoordinator(
     }
 
     fun resetPersistentSession(targetId: String, text: String, cursorUtf8: Int, source: SessionResetSource = SessionResetSource.EXTERNAL) {
+        // LOCAL_CONTENT_CHANGED resets are ignored because the local editor is the authority
+        // for its own content; only external resets (chapter switch, sync) are applied.
         if (source == SessionResetSource.LOCAL_CONTENT_CHANGED) return
 
         val target = targets[targetId] ?: return
