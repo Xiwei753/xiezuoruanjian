@@ -428,6 +428,7 @@ class AndroidTextAnimationEngine(
             BlockShiftVisualState(
                 startLineIndex = shift.startLineIndex,
                 endLineIndexExclusive = shift.endLineIndexExclusive,
+                startUtf8 = shift.startUtf8,
                 currentTranslateY = currentTranslateY,
                 targetTranslateY = 0f
             )

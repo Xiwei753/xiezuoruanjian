@@ -109,7 +109,12 @@ data class PreparedVisualTransaction(
         val bottom: Float,
         val left: Float,
         val right: Float,
-        val deltaY: Float
+        val deltaY: Float,
+        /** UTF-8 byte offset of the first line in this block. Used by rebase matching
+         *  instead of [startLineIndex] because line indices shift across revisions when
+         *  hard breaks are inserted/deleted — the old transaction's line N may become
+         *  line N+1 in the new revision, causing line-index-based matching to fail. */
+        val startUtf8: Int = -1
     )
 }
 

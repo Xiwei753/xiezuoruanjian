@@ -109,6 +109,11 @@ data class BlockShiftVisualState(
     val startLineIndex: Int,
     /** Exclusive end line index (half-open: [startLineIndex, endLineIndexExclusive)). */
     val endLineIndexExclusive: Int,
+    /** UTF-8 byte offset of the first line in this block. Used by rebase matching
+     *  instead of [startLineIndex] because line indices shift across revisions when
+     *  hard breaks are inserted/deleted — the old transaction's line N may become
+     *  line N+1 in the new revision, causing line-index-based matching to fail. */
+    val startUtf8: Int,
     /** Current Y translation at the snapshot's progress point.
      *  Negative = text is above its new-layout position (still moving down);
      *  positive = text is below its new-layout position (still moving up);

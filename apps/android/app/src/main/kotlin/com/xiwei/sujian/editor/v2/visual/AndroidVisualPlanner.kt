@@ -1614,7 +1614,8 @@ class AndroidVisualPlanner {
                             // Same logic as mergeAdjacentBlockShifts's merged left/right.
                             left = newParaLines.map { it.value.left }.minOrNull() ?: 0f,
                             right = newParaLines.map { it.value.right }.maxOrNull() ?: 0f,
-                            deltaY = deltaY
+                            deltaY = deltaY,
+                            startUtf8 = newPara.startUtf8
                         ))
                     }
                 }
@@ -1704,7 +1705,8 @@ class AndroidVisualPlanner {
                     endLineIndexExclusive = next.endLineIndexExclusive,
                     bottom = next.bottom,
                     left = minOf(current.left, next.left),
-                    right = maxOf(current.right, next.right)
+                    right = maxOf(current.right, next.right),
+                    startUtf8 = if (current.startUtf8 >= 0) current.startUtf8 else next.startUtf8
                 )
             } else {
                 merged.add(current)
@@ -2027,9 +2029,16 @@ class AndroidVisualPlanner {
      * because deltaY is positive when text moved downward and currentTranslateY is
      * negative during the animation (text has not yet reached the new position).
      *
-     * Matching: first tries exact line-range match, then overlapping range, then
-     * nearest by line-gap distance. Unmatched new BlockShifts are left unchanged
-     * (they start from their natural -deltaY position).
+     * Matching uses [startUtf8] (byte offset) as the primary identity rather than
+     * [startLineIndex]. Line indices shift across revisions when hard breaks are
+     * inserted/deleted — the old transaction's line N may become line N+1 in the new
+     * revision, causing line-index-based matching to pair the wrong BlockShifts. Byte
+     * offsets are stable across revisions (they identify the same paragraph regardless
+     * of how many visual lines precede it), so [startUtf8]-based matching is correct
+     * even after hard-break insertion/deletion.
+     *
+     * Fallback: when [startUtf8] is -1 (not tracked) or no byte-offset match exists,
+     * falls back to line-index overlap and nearest-by-gap matching (legacy behavior).
      */
     private fun applyRebaseToBlockShifts(
         newBlockShifts: List<PreparedVisualTransaction.BlockShift>,
@@ -2037,42 +2046,51 @@ class AndroidVisualPlanner {
     ): List<PreparedVisualTransaction.BlockShift> {
         if (rebaseSnapshot.blockShiftStates.isEmpty() || newBlockShifts.isEmpty()) return newBlockShifts
         return newBlockShifts.map { shift ->
-            val exactMatch = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
-                oldState.startLineIndex == shift.startLineIndex &&
-                    oldState.endLineIndexExclusive == shift.endLineIndexExclusive
-            }
-            if (exactMatch != null) {
-                shift.copy(deltaY = shift.deltaY + exactMatch.currentTranslateY)
-            } else {
-                val overlappingOlds = rebaseSnapshot.blockShiftStates.filter { oldState ->
-                    oldState.startLineIndex < shift.endLineIndexExclusive &&
-                        oldState.endLineIndexExclusive > shift.startLineIndex
+            val byteOffsetMatch = if (shift.startUtf8 >= 0) {
+                rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
+                    oldState.startUtf8 == shift.startUtf8
                 }
-                if (overlappingOlds.isNotEmpty()) {
-                    // When no exact line-range match exists, find the old BlockShift
-                    // with the largest line-range overlap. Maximum overlap is preferred
-                    // over minimum gap because an overlapping old shift was actively
-                    // animating the same region — its currentTranslateY is the most
-                    // representative on-screen position for the new shift's starting point.
-                    val bestOld = overlappingOlds.maxByOrNull {
-                        val overlapStart = maxOf(it.startLineIndex, shift.startLineIndex)
-                        val overlapEnd = minOf(it.endLineIndexExclusive, shift.endLineIndexExclusive)
-                        overlapEnd - overlapStart
-                    }
-                    shift.copy(deltaY = shift.deltaY + (bestOld?.currentTranslateY ?: 0f))
+            } else null
+            if (byteOffsetMatch != null) {
+                shift.copy(deltaY = shift.deltaY + byteOffsetMatch.currentTranslateY)
+            } else {
+                val exactMatch = rebaseSnapshot.blockShiftStates.firstOrNull { oldState ->
+                    oldState.startLineIndex == shift.startLineIndex &&
+                        oldState.endLineIndexExclusive == shift.endLineIndexExclusive
+                }
+                if (exactMatch != null) {
+                    shift.copy(deltaY = shift.deltaY + exactMatch.currentTranslateY)
                 } else {
-                    val nearestOld = rebaseSnapshot.blockShiftStates.minByOrNull { oldState ->
-                        val gap = if (oldState.endLineIndexExclusive <= shift.startLineIndex) {
-                            shift.startLineIndex - oldState.endLineIndexExclusive
-                        } else {
-                            oldState.startLineIndex - shift.endLineIndexExclusive
-                        }
-                        kotlin.math.abs(gap)
+                    val overlappingOlds = rebaseSnapshot.blockShiftStates.filter { oldState ->
+                        oldState.startLineIndex < shift.endLineIndexExclusive &&
+                            oldState.endLineIndexExclusive > shift.startLineIndex
                     }
-                    if (nearestOld != null) {
-                        shift.copy(deltaY = shift.deltaY + nearestOld.currentTranslateY)
+                    if (overlappingOlds.isNotEmpty()) {
+                        // When no exact line-range match exists, find the old BlockShift
+                        // with the largest line-range overlap. Maximum overlap is preferred
+                        // over minimum gap because an overlapping old shift was actively
+                        // animating the same region — its currentTranslateY is the most
+                        // representative on-screen position for the new shift's starting point.
+                        val bestOld = overlappingOlds.maxByOrNull {
+                            val overlapStart = maxOf(it.startLineIndex, shift.startLineIndex)
+                            val overlapEnd = minOf(it.endLineIndexExclusive, shift.endLineIndexExclusive)
+                            overlapEnd - overlapStart
+                        }
+                        shift.copy(deltaY = shift.deltaY + (bestOld?.currentTranslateY ?: 0f))
                     } else {
-                        shift
+                        val nearestOld = rebaseSnapshot.blockShiftStates.minByOrNull { oldState ->
+                            val gap = if (oldState.endLineIndexExclusive <= shift.startLineIndex) {
+                                shift.startLineIndex - oldState.endLineIndexExclusive
+                            } else {
+                                oldState.startLineIndex - shift.endLineIndexExclusive
+                            }
+                            kotlin.math.abs(gap)
+                        }
+                        if (nearestOld != null) {
+                            shift.copy(deltaY = shift.deltaY + nearestOld.currentTranslateY)
+                        } else {
+                            shift
+                        }
                     }
                 }
             }

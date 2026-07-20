@@ -2458,6 +2458,7 @@ class AnimationRebaseContractTest {
                 BlockShiftVisualState(
                     startLineIndex = 2,
                     endLineIndexExclusive = 4,
+                    startUtf8 = -1,
                     currentTranslateY = -10f,
                     targetTranslateY = 0f
                 )
@@ -2470,7 +2471,8 @@ class AnimationRebaseContractTest {
             bottom = 80f,
             left = 0f,
             right = 800f,
-            deltaY = 20f
+            deltaY = 20f,
+            startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
         val method = planner.javaClass.getDeclaredMethod(
@@ -2497,12 +2499,14 @@ class AnimationRebaseContractTest {
                 BlockShiftVisualState(
                     startLineIndex = 2,
                     endLineIndexExclusive = 5,
+                    startUtf8 = -1,
                     currentTranslateY = -10f,
                     targetTranslateY = 0f
                 ),
                 BlockShiftVisualState(
                     startLineIndex = 5,
                     endLineIndexExclusive = 8,
+                    startUtf8 = -1,
                     currentTranslateY = -10f,
                     targetTranslateY = 0f
                 )
@@ -2515,7 +2519,8 @@ class AnimationRebaseContractTest {
             bottom = 160f,
             left = 0f,
             right = 800f,
-            deltaY = 20f
+            deltaY = 20f,
+            startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
         val method = planner.javaClass.getDeclaredMethod(
@@ -2542,6 +2547,7 @@ class AnimationRebaseContractTest {
                 BlockShiftVisualState(
                     startLineIndex = 10,
                     endLineIndexExclusive = 15,
+                    startUtf8 = -1,
                     currentTranslateY = -15f,
                     targetTranslateY = 0f
                 )
@@ -2554,7 +2560,8 @@ class AnimationRebaseContractTest {
             bottom = 100f,
             left = 0f,
             right = 800f,
-            deltaY = 20f
+            deltaY = 20f,
+            startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
         val method = planner.javaClass.getDeclaredMethod(
@@ -2747,12 +2754,14 @@ class AnimationRebaseContractTest {
                 BlockShiftVisualState(
                     startLineIndex = 2,
                     endLineIndexExclusive = 4,
+                    startUtf8 = -1,
                     currentTranslateY = -14f,
                     targetTranslateY = 0f
                 ),
                 BlockShiftVisualState(
                     startLineIndex = 4,
                     endLineIndexExclusive = 6,
+                    startUtf8 = -1,
                     currentTranslateY = -14f,
                     targetTranslateY = 0f
                 )
@@ -2765,7 +2774,8 @@ class AnimationRebaseContractTest {
             bottom = 120f,
             left = 0f,
             right = 800f,
-            deltaY = 20f
+            deltaY = 20f,
+            startUtf8 = -1
         )
         val planner = AndroidVisualPlanner()
         val method = planner.javaClass.getDeclaredMethod(
@@ -2779,5 +2789,94 @@ class AnimationRebaseContractTest {
         val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
         assertTrue("Merged rebase must incorporate old translateY",
             kotlin.math.abs(rebasedShift.deltaY) < kotlin.math.abs(newMergedShift.deltaY))
+    }
+
+    @Test
+    fun blockShiftRebaseMatchesByStartUtf8AcrossLineIndexShift() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 3,
+                    endLineIndexExclusive = 6,
+                    startUtf8 = 100,
+                    currentTranslateY = -10f,
+                    targetTranslateY = 0f
+                )
+            )
+        )
+        val newShift = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 4,
+            endLineIndexExclusive = 7,
+            top = 80f,
+            bottom = 140f,
+            left = 0f,
+            right = 800f,
+            deltaY = 20f,
+            startUtf8 = 100
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToBlockShifts",
+            List::class.java,
+            VisualFrameSnapshot::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
+        assertTrue("Byte-offset match must find the old BlockShift even when line indices differ",
+            kotlin.math.abs(rebasedShift.deltaY) < kotlin.math.abs(newShift.deltaY))
+    }
+
+    @Test
+    fun blockShiftRebaseByteOffsetMatchTakesPriorityOverLineIndexMatch() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = null,
+            blockShiftStates = listOf(
+                BlockShiftVisualState(
+                    startLineIndex = 4,
+                    endLineIndexExclusive = 7,
+                    startUtf8 = 100,
+                    currentTranslateY = -8f,
+                    targetTranslateY = 0f
+                ),
+                BlockShiftVisualState(
+                    startLineIndex = 4,
+                    endLineIndexExclusive = 7,
+                    startUtf8 = 200,
+                    currentTranslateY = -12f,
+                    targetTranslateY = 0f
+                )
+            )
+        )
+        val newShift = PreparedVisualTransaction.BlockShift(
+            startLineIndex = 4,
+            endLineIndexExclusive = 7,
+            top = 80f,
+            bottom = 140f,
+            left = 0f,
+            right = 800f,
+            deltaY = 20f,
+            startUtf8 = 200
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToBlockShifts",
+            List::class.java,
+            VisualFrameSnapshot::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val result = method.invoke(planner, listOf(newShift), rebaseSnapshot) as List<*>
+        val rebasedShift = result[0] as PreparedVisualTransaction.BlockShift
+        assertEquals("Byte-offset match must select the correct old state (startUtf8=200, not 100)",
+            20f + (-12f), rebasedShift.deltaY, 0.01f)
     }
 }
