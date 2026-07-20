@@ -80,6 +80,11 @@ class AndroidVisualPlanner {
             ?: fallbackRanges.firstOrNull()?.first
         if (editByteStart != null) {
             val editLine = findLineForUtf8(revision, editByteStart)
+            // Paragraph expansion: even when the affected byte ranges only cover part of the
+            // paragraph, the entire paragraph may need reflow animation — e.g. inserting at
+            // the beginning of a paragraph causes all visual lines in the paragraph to shift.
+            // The expansion stops at the first hard break because text reflow cannot propagate
+            // across paragraph boundaries; subsequent paragraphs are handled via BlockShift.
             for (i in editLine until revision.lineRanges.size) {
                 affectedLines.add(i)
                 if (revision.lineRanges[i].endsWithHardBreak) break
@@ -423,6 +428,12 @@ class AndroidVisualPlanner {
             }
         }
         val offsetMapper = buildOffsetMapper(visualIntent, oldRev, newRev)
+        // One-to-one matching invariant: each new cluster can be matched by at most one old
+        // cluster. Without [newUsed], two old clusters with the same fingerprint could both
+        // match the same new cluster, producing duplicate Move/Crossfade slices for the same
+        // destination. This is the forward-matching counterpart of the rebase one-to-one
+        // invariant in [applyRebaseToSlices] (which prevents multiple new slices from reusing
+        // the same old SliceVisualState).
         val newUsed = mutableSetOf<Int>()
         for ((oldCluster, oldInfo) in allOldClusters) {
             val isDeleted = visualIntent.oldAffectedByteRanges.any { (start, end) ->
@@ -1323,11 +1334,13 @@ class AndroidVisualPlanner {
      * Fallback cluster matching: pair old→new clusters by shaping fingerprint,
      * excluding clusters inside affected (inserted/deleted) byte ranges.
      *
-     * First-match wins with no positional tiebreaker. This is intentional: when the
-     * offset map provides no identity information (all clusters mapped to null), there
-     * is no reliable way to determine which old cluster corresponds to which new cluster
-     * by position alone — the layout may have shifted entirely. First-match is deterministic
-     * and avoids the complexity of positional heuristics that would be unreliable anyway.
+     * FIFO matching via [MutableList.removeAt](0): when multiple new clusters share the same
+     * fingerprint, the first one in document order is consumed first. This is deterministic
+     * and consistent with visual order for LTR text. For RTL text the document-order match
+     * is less intuitive but still deterministic, and the planner compensates by requiring
+     * [shapingIdentityConfident] for Move — without confidence, Crossfade is used regardless
+     * of pairing order, which is visually correct even if the pairing is suboptimal.
+     *
      * The planner compensates by requiring [shapingIdentityConfident] for Move; without
      * confidence, Crossfade is used, which is visually correct regardless of pairing order.
      */

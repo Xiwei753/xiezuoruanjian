@@ -40,8 +40,18 @@ class AndroidTextRenderer {
             val endLine = layout.getLineForOffset(endUtf16)
             for (line in startLine..endLine) {
                 val hlStart = if (line == startLine) startUtf16 else layout.getLineStart(line)
+                // getLineEnd returns an exclusive boundary (one past the last character).
+                // For multi-line highlights, the intermediate lines use getLineEnd directly
+                // because the highlight covers the entire line. For the last line, hlEnd is
+                // the highlight's end offset, which is also exclusive — so hlEnd - 1 is the
+                // last character's index, which is what getPrimaryHorizontal expects.
                 val hlEnd = if (line == endLine) endUtf16 else layout.getLineEnd(line)
                 val left = layout.getPrimaryHorizontal(hlStart)
+                // -1 because hlEnd is exclusive (from getLineEnd or the highlight range):
+                // getPrimaryHorizontal expects a character index, not a boundary position.
+                // Using hlEnd directly would read the first character of the next line
+                // (for getLineEnd) or one past the highlighted range, producing an incorrect
+                // right edge that extends beyond the actual highlight.
                 val right = layout.getPrimaryHorizontal(hlEnd - 1)
                 val top = layout.getLineTop(line).toFloat()
                 val bottom = layout.getLineBottom(line).toFloat()
