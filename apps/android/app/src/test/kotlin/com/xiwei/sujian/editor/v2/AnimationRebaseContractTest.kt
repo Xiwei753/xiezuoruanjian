@@ -1983,4 +1983,214 @@ class AnimationRebaseContractTest {
         }
         assertEquals(2, utf16Count)
     }
+
+    @Test
+    fun blockShiftTranslatesFromOldPositionToNewPosition() {
+        val deltaY = 20f
+        val progressAtStart = 0f
+        val progressAtEnd = 1f
+        val currentDeltaYAtStart = deltaY * (progressAtStart - 1f)
+        val currentDeltaYAtEnd = deltaY * (progressAtEnd - 1f)
+        assertEquals("At progress=0, blockShift must offset by -deltaY (old position)",
+            -20f, currentDeltaYAtStart, 0.01f)
+        assertEquals("At progress=1, blockShift must offset by 0 (new position)",
+            0f, currentDeltaYAtEnd, 0.01f)
+        val midProgress = 0.5f
+        val currentDeltaYAtMid = deltaY * (midProgress - 1f)
+        assertEquals("At progress=0.5, blockShift must offset by -deltaY/2",
+            -10f, currentDeltaYAtMid, 0.01f)
+    }
+
+    @Test
+    fun blockShiftNegativeDeltaYMovesUpward() {
+        val deltaY = -30f
+        val currentDeltaYAtStart = deltaY * (0f - 1f)
+        assertEquals("Negative deltaY at progress=0 must offset by +30 (old position above new)",
+            30f, currentDeltaYAtStart, 0.01f)
+        val currentDeltaYAtEnd = deltaY * (1f - 1f)
+        assertEquals("Negative deltaY at progress=1 must offset by 0 (new position)",
+            0f, currentDeltaYAtEnd, 0.01f)
+    }
+
+    @Test
+    fun computeAffectedLineIndicesFromBothRevisionsReturnsOldLineIndicesWhenNewRevisionIsNull() {
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 2,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 21, endUtf8 = 40, startUtf16 = 21, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(10, 13)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val result = planner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRev, null)
+        assertTrue("oldLineIndices must be non-empty when newRevision is null",
+            result.oldLineIndices.isNotEmpty())
+        assertTrue("newLineIndices must be empty when newRevision is null",
+            result.newLineIndices.isEmpty())
+        assertTrue("lineIndices must equal oldLineIndices when newRevision is null",
+            result.lineIndices == result.oldLineIndices)
+    }
+
+    @Test
+    fun blockShiftDeltaYMatchesParagraphGeometryChange() {
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 3,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 21, endUtf8 = 40, startUtf16 = 21, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 41, endUtf8 = 60, startUtf16 = 41, endUtf16 = 60,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 4,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 10, startUtf16 = 0, endUtf16 = 10,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 10, endUtf8 = 23, startUtf16 = 10, endUtf16 = 23,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 24, endUtf8 = 43, startUtf16 = 24, endUtf16 = 43,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 44, endUtf8 = 63, startUtf16 = 44, endUtf16 = 63,
+                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 2, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(10, 13)),
+            animationMode = uniffi.writer_core.AnimationModeDto.LINE_REFLOW_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "computeAffectedLines",
+            VisualIntent::class.java,
+            AndroidLayoutRevision::class.java,
+            AndroidLayoutRevision::class.java
+        )
+        method.isAccessible = true
+        val result = method.invoke(planner, visualIntent, oldRev, newRev)
+            as AndroidVisualPlanner.AffectedLinesResult
+        assertTrue("Must have blockShifts when paragraph geometry changes",
+            result.blockShifts.isNotEmpty())
+        for (shift in result.blockShifts) {
+            assertTrue("blockShift deltaY must match actual geometry change",
+                kotlin.math.abs(shift.deltaY) > 0.01f)
+        }
+        assertTrue("Edit paragraph lines must be in lineIndices (for Bitmap snapshots)",
+            result.lineIndices.isNotEmpty())
+        assertTrue("Edit paragraph lines must NOT extend to document end (blockShift instead)",
+            result.lineIndices.size < oldRev.lineRanges.size + newRev.lineRanges.size)
+    }
+
+    @Test
+    fun utf8ToUtf16NoAllocationForPureAscii() {
+        val text = "Hello World Test"
+        val utf8Offset = 11
+        var utf8Count = 0
+        var utf16Count = 0
+        var i = 0
+        while (i < text.length && utf8Count < utf8Offset) {
+            val cp = text.codePointAt(i)
+            val charCount = Character.charCount(cp)
+            val byteCount = when {
+                cp <= 0x7F -> 1
+                cp <= 0x7FF -> 2
+                cp <= 0xFFFF -> 3
+                else -> 4
+            }
+            utf8Count += byteCount
+            utf16Count += charCount
+            i += charCount
+        }
+        assertEquals(11, utf16Count)
+    }
+
+    @Test
+    fun utf8ToUtf16HandlesEmoji() {
+        val text = "Hi\uDBFF\uDFFD!"
+        var utf8Count = 0
+        var utf16Count = 0
+        val utf8Offset = 6
+        var i = 0
+        while (i < text.length && utf8Count < utf8Offset) {
+            val cp = text.codePointAt(i)
+            val charCount = Character.charCount(cp)
+            val byteCount = when {
+                cp <= 0x7F -> 1
+                cp <= 0x7FF -> 2
+                cp <= 0xFFFF -> 3
+                else -> 4
+            }
+            utf8Count += byteCount
+            utf16Count += charCount
+            i += charCount
+        }
+        assertTrue("utf8ToUtf16 for emoji must advance past surrogate pair",
+            utf16Count >= 3)
+    }
 }

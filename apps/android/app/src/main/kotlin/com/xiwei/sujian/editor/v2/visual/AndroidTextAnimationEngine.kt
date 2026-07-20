@@ -167,7 +167,8 @@ class AndroidTextAnimationEngine(
         val rebaseSnapshot = captureRebaseSnapshot(frameTimeMs)
 
         val oldRevision = layoutEngine.captureImmutableRevision()
-        val affectedOldLineIndices = visualPlanner.computeAffectedLineIndices(visualIntent, oldRevision, useNewRanges = false)
+        val preliminaryResult = visualPlanner.computeAffectedLineIndicesFromBothRevisions(visualIntent, oldRevision, null)
+        val affectedOldLineIndices = preliminaryResult.oldLineIndices
         val oldSnapshots = layoutEngine.captureLineBitmapSnapshotsWithClusters(affectedOldLineIndices)
         beforePatch?.invoke()
         mirrorUpdate?.invoke()

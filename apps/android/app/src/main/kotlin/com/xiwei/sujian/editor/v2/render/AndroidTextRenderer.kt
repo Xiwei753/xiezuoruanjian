@@ -92,12 +92,25 @@ class AndroidTextRenderer {
             return
         }
         val text = layout.text?.toString() ?: ""
+        val textUtf8Length = if (blockShifts.isNotEmpty()) {
+            var len = 0
+            var i = 0
+            while (i < text.length) {
+                val cp = text.codePointAt(i)
+                len += when {
+                    cp <= 0x7F -> 1
+                    cp <= 0x7FF -> 2
+                    cp <= 0xFFFF -> 3
+                    else -> 4
+                }
+                i += Character.charCount(cp)
+            }
+            len
+        } else 0
         val shiftLineRanges = if (blockShifts.isNotEmpty()) {
             blockShifts.map { shift ->
                 val startUtf16 = utf8ToUtf16(text, shift.paragraphStartUtf8)
-                val endUtf16 = utf8ToUtf16(text, shift.paragraphEndUtf8.coerceAtMost(
-                    text.toByteArray(Charsets.UTF_8).size
-                ))
+                val endUtf16 = utf8ToUtf16(text, shift.paragraphEndUtf8.coerceAtMost(textUtf8Length))
                 val startLine = layout.getLineForOffset(startUtf16.coerceIn(0, text.length))
                 val endLine = layout.getLineForOffset(endUtf16.coerceIn(0, text.length))
                 Triple(startLine, endLine, shift.deltaY)
@@ -119,7 +132,7 @@ class AndroidTextRenderer {
         canvas.restore()
         if (shiftLineRanges.isNotEmpty()) {
             for ((startLine, endLine, deltaY) in shiftLineRanges) {
-                val currentDeltaY = deltaY * progress
+                val currentDeltaY = deltaY * (progress - 1f)
                 canvas.save()
                 canvas.translate(0f, currentDeltaY)
                 canvas.clipRect(
