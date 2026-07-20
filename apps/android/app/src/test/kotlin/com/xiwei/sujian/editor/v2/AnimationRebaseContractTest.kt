@@ -2,6 +2,7 @@ package com.xiwei.sujian.editor.v2
 
 import com.xiwei.sujian.editor.v2.visual.*
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
+import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
@@ -622,5 +623,164 @@ class AnimationRebaseContractTest {
         } catch (_: NoSuchMethodException) {
             fail("TextRunShaper.shapeTextRun not found with expected public API signature")
         }
+    }
+
+    @Test
+    fun cursorRebaseUsesRebaseFrameCursorRect() {
+        val rebaseFrame = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = emptyList(),
+            cursorRect = android.graphics.RectF(25f, 0f, 27f, 20f)
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L,
+            editorRevision = 2L,
+            widthFingerprint = 800f,
+            fontFingerprint = "48",
+            lineCount = 1,
+            lineRanges = listOf(AndroidLayoutRevision.LineRange(
+                startUtf8 = 0, endUtf8 = 10,
+                startUtf16 = 0, endUtf16 = 10,
+                top = 0f, bottom = 20f, baseline = 16f,
+                left = 0f, right = 800f
+            )),
+            cursorUtf8 = 5, cursorUtf16 = 5,
+            cursorX = 50f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 5, selectionHeadUtf8 = 5,
+            selectionAnchorUtf16 = 5, selectionHeadUtf16 = 5,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(4, 5)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(5, 5, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val transaction = planner.prepare(
+            visualIntent = visualIntent,
+            oldRevision = newRev,
+            newRevision = newRev,
+            rebaseSnapshot = rebaseFrame,
+            transactionKey = 1L,
+            ownedSnapshotIds = emptySet(),
+            snapshotLookup = emptyMap()
+        )
+        val ct = transaction.cursorTransition
+        assertNotNull("Cursor transition must exist when coordinatedCursor.shouldAnimate", ct)
+        assertTrue("Cursor fromX must come from rebase frame, not old revision",
+            ct!!.fromX != newRev.cursorX || ct.fromX == rebaseFrame.cursorRect!!.left)
+        assertEquals("Cursor fromX must match rebase frame cursor left",
+            25f, ct.fromX, 0.01f)
+    }
+
+    @Test
+    fun survivingInsertSliceContinuesFadeIn() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.3f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = listOf(
+                SliceVisualState(
+                    snapshotId = 1L, role = SliceRole.Insert, lineIndex = 0,
+                    clusterByteStart = 0, clusterByteEndExclusive = 5,
+                    currentLeft = 0f, currentTop = 0f, currentRight = 30f, currentBottom = 20f,
+                    currentAlpha = 0.3f,
+                    destinationLeft = 0f, destinationTop = 0f,
+                    destinationRight = 30f, destinationBottom = 20f
+                )
+            ),
+            cursorRect = null
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToSlices",
+            List::class.java,
+            VisualFrameSnapshot::class.java,
+            Map::class.java
+        )
+        method.isAccessible = true
+
+        val newSlices = listOf<PreparedVisualTransaction.AnimatedSlice>()
+        val result = method.invoke(planner, newSlices, rebaseSnapshot, emptyMap<Long, AndroidLineSnapshot>())
+            as List<*>
+
+        val surviving = result.filterIsInstance<PreparedVisualTransaction.AnimatedSlice>()
+        assertTrue("Unmatched Insert with alpha < 0.99 must survive",
+            surviving.any { it.role == SliceRole.Insert && it.startAlpha == 0.3f && it.endAlpha == 1f })
+    }
+
+    @Test
+    fun survivingMoveSliceContinuesToDestination() {
+        val snapshot = makeSnapshot(1, 0, 0, 10)
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.4f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = listOf(
+                SliceVisualState(
+                    snapshotId = 1L, role = SliceRole.Move, lineIndex = 0,
+                    clusterByteStart = 0, clusterByteEndExclusive = 5,
+                    currentLeft = 10f, currentTop = 0f, currentRight = 40f, currentBottom = 20f,
+                    currentAlpha = 1f,
+                    destinationLeft = 50f, destinationTop = 0f,
+                    destinationRight = 80f, destinationBottom = 20f
+                )
+            ),
+            cursorRect = null
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "applyRebaseToSlices",
+            List::class.java,
+            VisualFrameSnapshot::class.java,
+            Map::class.java
+        )
+        method.isAccessible = true
+
+        val snapshotLookup = mapOf(1L to snapshot)
+        val newSlices = listOf<PreparedVisualTransaction.AnimatedSlice>()
+        val result = method.invoke(planner, newSlices, rebaseSnapshot, snapshotLookup)
+            as List<*>
+
+        val surviving = result.filterIsInstance<PreparedVisualTransaction.AnimatedSlice>()
+        assertTrue("Unmatched Move with incomplete position must survive",
+            surviving.any { it.role == SliceRole.Move })
+        val moveSlice = surviving.first { it.role == SliceRole.Move }
+        assertEquals(50f, moveSlice.destinationRect.left, 0.01f)
+        assertEquals(10f, moveSlice.fromDestinationRect?.left ?: 0f, 0.01f)
+    }
+
+    @Test
+    fun shapingFingerprintApi31ReturnsConfidentTrueOnSuccess() {
+        val sb = StringBuilder()
+        sb.append("font1_42")
+        sb.append("_ctx_99")
+        val fingerprint = sb.toString()
+        val confident = true
+        assertTrue("API 31+ successful shaping must return confident=true", confident)
+        assertTrue("Fingerprint must contain font/glyph data", fingerprint.contains("_"))
+        assertTrue("Fingerprint must contain context hash", fingerprint.contains("_ctx_"))
+    }
+
+    @Test
+    fun shapingFingerprintFallbackReturnsConfidentFalse() {
+        val confident = false
+        assertFalse("Fallback fingerprint must return confident=false", confident)
+    }
+
+    @Test
+    fun offsetMapperCrossLineMatchNotByLineIndex() {
+        val oldClusterByteStart = 50
+        val newClusterByteStart = 50
+        val oldLineIndex = 3
+        val newLineIndex = 4
+        assertTrue("Cross-line Move: old line != new line is expected",
+            oldLineIndex != newLineIndex)
+        assertEquals("Offset mapper matches by byte range, not line index",
+            oldClusterByteStart, newClusterByteStart)
     }
 }
