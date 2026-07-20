@@ -36,11 +36,14 @@ class AnimationTimeline(
     fun resume(frameTimeMs: Long) {
         if (state != TransactionState.Paused) return
         if (firstVisibleFrameTimeMs == null) {
+            // Never rendered before pause: reset to Pending so markFirstVisibleFrame can set it.
             pauseStartedAtMs = null
             pausedProgress = 0f
             state = TransactionState.Pending
             return
         }
+        // Re-anchor the virtual start time so that progress(frameTimeMs) == pausedProgress
+        // immediately after resume, then continues forward from there.
         val newStart = frameTimeMs - (pausedProgress * durationMs).toLong()
         firstVisibleFrameTimeMs = newStart
         accumulatedPausedDurationMs = 0
@@ -81,9 +84,13 @@ data class SliceVisualState(
     val snapshotId: Long,
     val role: SliceRole,
     val lineIndex: Int,
+    /** Inclusive UTF-8 byte offset. */
     val documentByteStart: Int = -1,
+    /** Exclusive UTF-8 byte offset (half-open: [start, end)). */
     val documentByteEndExclusive: Int = -1,
+    /** Inclusive UTF-8 byte offset of the cluster within the line. */
     val clusterByteStart: Int = -1,
+    /** Exclusive UTF-8 byte offset of the cluster within the line. */
     val clusterByteEndExclusive: Int = -1,
     val currentLeft: Float,
     val currentTop: Float,

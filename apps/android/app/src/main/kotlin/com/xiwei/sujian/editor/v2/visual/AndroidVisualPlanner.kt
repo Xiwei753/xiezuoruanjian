@@ -17,7 +17,8 @@ class AndroidVisualPlanner {
      * When the preferred ranges are empty (pure Insert old / pure Delete new),
      * fall back to the other side's edit point and expand forward.
      * Expansion stops at the first paragraph boundary after the edit point
-     * (hard line break detected via byte-gap between consecutive visual lines),
+     * (detected via [AndroidLayoutRevision.LineRange.endsWithHardBreak] — a hard line break
+     * means the visual line ends at a paragraph boundary, so reflow cannot propagate past it),
      * or at the end of the document. No fixed line cap.
      */
     fun computeAffectedLineIndices(
@@ -32,6 +33,7 @@ class AndroidVisualPlanner {
         for ((start, end) in primaryRanges) {
             for (i in revision.lineRanges.indices) {
                 val lineRange = revision.lineRanges[i]
+                // Half-open overlap: [start, end) ∩ [lineRange.startUtf8, lineRange.endUtf8)
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
@@ -229,7 +231,9 @@ class AndroidVisualPlanner {
     ) {
         val isInsert = visualIntent.isInsert()
         val isDelete = visualIntent.isDelete() || visualIntent.isCompositionCancel()
-        // CompositionUpdate/Commit are replace-like: old preedit/range fades, new text appears, retained text Moves.
+        // CompositionUpdate/Commit are replace-like: old preedit/range fades out, new text
+        // fades in, retained text with same fingerprint Moves. This avoids unnecessary
+        // Crossfade when the visual text is identical (e.g. composition candidate unchanged).
         val isReplace = visualIntent.isReplace()
             || visualIntent.isCompositionCommit()
             || visualIntent.isCompositionUpdate()
@@ -289,6 +293,12 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * After the primary animation planner creates Insert/Delete/Crossfade slices,
+     * find retained clusters that shifted across lines and create Move or Crossfade slices
+     * for them. [excludedNewByteRanges]/[excludedOldByteRanges] prevent duplicate slices
+     * for clusters already handled by the primary planner.
+     */
     private fun addMoveSlicesForShiftedClustersCrossLine(
         allOldSnapshots: Map<Int, AndroidLineSnapshot>,
         allNewSnapshots: Map<Int, AndroidLineSnapshot>,
@@ -419,6 +429,7 @@ class AndroidVisualPlanner {
             if (oldSnapshot != null && oldLineRange != null) {
                 if (oldSnapshot.clusters.isNotEmpty()) {
                     for (cluster in oldSnapshot.clusters) {
+                        // Half-open overlap: cluster [start, end) ∩ affected [start, end)
                         val inOldRange = visualIntent.oldAffectedByteRanges.any { (start, end) ->
                             cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
                         }
@@ -554,6 +565,11 @@ class AndroidVisualPlanner {
      * Map an old-document byte offset into the new document after this edit.
      * Returns null for offsets inside a deleted/replaced range that has no retained identity.
      * Pure Insert/Delete are first-class: retained text after the edit point shifts by delta.
+     * Replace uses [mapThroughRanges] for proportional mapping within affected ranges.
+     *
+     * Boundary convention: all byte ranges are half-open [start, end).
+     * In [mapThroughRanges], `offset >= oldStart && offset < oldEnd` (not <= oldEnd)
+     * ensures adjacent ranges don't share a boundary offset.
      */
     private fun buildOffsetMapper(
         visualIntent: VisualIntent,
@@ -607,6 +623,12 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Proportionally map [offset] within paired old/new affected ranges.
+     * Half-open interval: `offset >= oldStart && offset < oldEnd` — the boundary
+     * offset at oldEnd belongs to the *next* range, not this one.
+     * Returns -1 if offset falls outside all old ranges.
+     */
     private fun mapThroughRanges(offset: Int, oldRanges: List<Pair<Int, Int>>, newRanges: List<Pair<Int, Int>>): Int {
         for (i in oldRanges.indices) {
             val (oldStart, oldEnd) = oldRanges[i]
@@ -682,6 +704,12 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Run-level replace animation: groups clusters into runs, then matches old→new runs
+     * by shaping fingerprint + byte length with closest-offset tiebreaker.
+     * Matched runs with same shaping + confident fingerprint → Move; otherwise → Crossfade pair.
+     * Unmatched old runs → Delete; unmatched new runs → Insert.
+     */
     private fun planRunReplaceAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -813,6 +841,11 @@ class AndroidVisualPlanner {
         return affected
     }
 
+    /**
+     * Line-level reflow animation for mid-paragraph inserts/deletes that cause line wrapping changes.
+     * Matches old→new clusters by offset map (primary) or fingerprint (fallback), then decides
+     * Move vs Crossfade per pair. Lines only on one side become whole-line Insert/Delete.
+     */
     private fun planLineReflowAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -926,6 +959,11 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Primary cluster matching: map old byte offsets to new via [buildOffsetMapper],
+     * then find new clusters at the mapped positions. Falls back to [matchClustersByFingerprint]
+     * if no offset-mapped pairs are found (e.g. when offset mapper returns null for all clusters).
+     */
     private fun matchClustersByOffsetMap(
         oldSnapshot: AndroidLineSnapshot,
         newSnapshot: AndroidLineSnapshot,
@@ -957,6 +995,11 @@ class AndroidVisualPlanner {
         return matchClustersByFingerprint(oldSnapshot, newSnapshot, visualIntent)
     }
 
+    /**
+     * Fallback cluster matching: pair old→new clusters by shaping fingerprint,
+     * excluding clusters inside affected (inserted/deleted) byte ranges.
+     * First-match wins; no positional tiebreaker since offset map was unavailable.
+     */
     private fun matchClustersByFingerprint(
         oldSnapshot: AndroidLineSnapshot,
         newSnapshot: AndroidLineSnapshot,
@@ -988,6 +1031,10 @@ class AndroidVisualPlanner {
         return pairs
     }
 
+    /**
+     * Whole-line crossfade for SnapshotAnimation mode: old line fades out, new line fades in.
+     * No per-cluster matching — used when layout is too complex for cluster-level animation.
+     */
     private fun planCrossfadeAnimation(
         visualIntent: VisualIntent,
         oldRev: AndroidLayoutRevision,
@@ -1031,7 +1078,6 @@ class AndroidVisualPlanner {
                         startAlpha = 0f,
                         endAlpha = 1f
                     ))
-                    // addStaticPatchForAnimatedLine removed
                 }
             }
         }
@@ -1053,6 +1099,7 @@ class AndroidVisualPlanner {
         for ((start, end) in visualIntent.oldAffectedByteRanges) {
             for (i in oldRev.lineRanges.indices) {
                 val lineRange = oldRev.lineRanges[i]
+                // Half-open overlap: [start, end) ∩ [lineRange.startUtf8, lineRange.endUtf8)
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
@@ -1062,6 +1109,7 @@ class AndroidVisualPlanner {
         for ((start, end) in visualIntent.newAffectedByteRanges) {
             for (i in newRev.lineRanges.indices) {
                 val lineRange = newRev.lineRanges[i]
+                // Half-open overlap: same convention as above.
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
@@ -1119,6 +1167,11 @@ class AndroidVisualPlanner {
                         break
                     }
                 }
+                // A hard break means this visual line ends a paragraph — reflow cannot
+                // propagate into the next paragraph, so stop scanning here.
+                if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
+                    break
+                }
             }
             // Lines present only on one side (soft wrap growth/shrink) always animate.
             for (i in minCommonLines until oldRev.lineRanges.size) {
@@ -1159,6 +1212,17 @@ class AndroidVisualPlanner {
         }
     }
 
+    /**
+     * Rebase new slices onto the current visual frame of the old transaction.
+     *
+     * Three-tier matching (most precise first):
+     * 1. [findRebaseStateByClusterByteRange] — exact byte range + role compatibility.
+     * 2. [findRebaseStateByLineAndRole] — same visual line + role (byte range unknown).
+     * 3. [findClosestRebaseStateByPosition] — nearest position with role compatibility (fallback).
+     *
+     * Unmatched old slices that are still fading out or mid-move become "surviving" slices
+     * appended after the rebased new slices, ensuring no visual discontinuity.
+     */
     private fun applyRebaseToSlices(
         slices: List<PreparedVisualTransaction.AnimatedSlice>,
         rebaseSnapshot: VisualFrameSnapshot,
@@ -1287,6 +1351,9 @@ class AndroidVisualPlanner {
         }
     }
 
+    /** Roles that can rebase onto each other. "Appearing" roles (Move/Insert/CrossfadeNew)
+     *  are interchangeable; "disappearing" roles (Delete/CrossfadeOld) are interchangeable.
+     *  This allows e.g. a new Move slice to continue from a rebase Insert's current position. */
     private fun compatibleRebaseRoles(role: SliceRole): Set<SliceRole> {
         return when (role) {
             SliceRole.Move -> setOf(SliceRole.Move, SliceRole.Insert, SliceRole.CrossfadeNew)
@@ -1426,6 +1493,9 @@ class AndroidVisualPlanner {
         )
     }
 
+    /** Collect byte ranges of "appearing" slices (Insert/CrossfadeNew/Move) to prevent
+     *  [addMoveSlicesForShiftedClustersCrossLine] from creating duplicate Move slices
+     *  for clusters already covered by the primary planner. */
     private fun collectExcludedNewByteRanges(
         slices: List<PreparedVisualTransaction.AnimatedSlice>
     ): Set<Pair<Int, Int>> {
@@ -1440,6 +1510,9 @@ class AndroidVisualPlanner {
         return excluded
     }
 
+    /** Collect byte ranges of "disappearing" slices (Delete/CrossfadeOld) to prevent
+     *  [addMoveSlicesForShiftedClustersCrossLine] from creating duplicate slices
+     *  for clusters already covered by the primary planner. */
     private fun collectExcludedOldByteRanges(
         slices: List<PreparedVisualTransaction.AnimatedSlice>
     ): Set<Pair<Int, Int>> {

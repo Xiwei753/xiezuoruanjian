@@ -62,6 +62,8 @@ class AndroidTextAnimationEngine(
         if (oldTransaction != null) {
             val oldOwner = SnapshotOwner.OwnedByTransaction(oldTransaction.transactionId)
 
+            // Snapshots referenced by the new transaction that were owned by the old transaction
+            // but not newly captured: transfer ownership so they survive the old transaction's release.
             val referencedIds = preparedAnimation.referencedSnapshotIds
             val inheritedIds = oldTransaction.ownedSnapshotIds
                 .intersect(referencedIds)
@@ -70,11 +72,14 @@ class AndroidTextAnimationEngine(
                 resourceStore.transferOwnership(snapshotId, newOwner)
             }
 
+            // Snapshots from the old transaction that are no longer referenced: release now.
             val unreferencedOldIds = oldTransaction.ownedSnapshotIds - referencedIds - preparedAnimation.ownedSnapshotIds
             for (snapshotId in unreferencedOldIds) {
                 resourceStore.release(snapshotId, oldOwner)
             }
 
+            // Merge inherited IDs into the new transaction's owned set so they will be
+            // released when this transaction completes or is cancelled.
             val preciseOwnedIds = (preparedAnimation.ownedSnapshotIds - unreferencedNewIds) + inheritedIds
             activeTransaction = preparedAnimation.copy(ownedSnapshotIds = preciseOwnedIds)
             timeline?.complete()
@@ -86,6 +91,13 @@ class AndroidTextAnimationEngine(
         timeline = AnimationTimeline(preparedAnimation.durationMs)
     }
 
+    /**
+     * Capture old layout → apply mirror update → capture new layout → prepare → submit.
+     *
+     * Ordering invariant: old snapshots must be captured *before* the mirror update,
+     * and new snapshots *after*, so that old/new represent the exact before/after states.
+     * [beforePatch] runs between old capture and mirror update (e.g. to hide static text).
+     */
     fun prepareAndSubmit(
         visualIntent: VisualIntent,
         layoutEngine: AndroidLayoutEngine,

@@ -8,6 +8,19 @@ sealed class SnapshotOwner {
     object Released : SnapshotOwner()
 }
 
+/**
+ * Ownership-tracked store for line snapshot bitmaps.
+ *
+ * Ownership model:
+ * - [OwnedBySession]: snapshots tied to an edit session lifetime (released on session reset).
+ * - [OwnedByTransaction]: snapshots tied to a single animation transaction's lifecycle.
+ *   Released when the transaction completes, is cancelled, or transfers ownership to a
+ *   successor transaction during rebase.
+ * - [Released]: sentinel; the entry has been removed.
+ *
+ * Invariant: a Bitmap is recycled exactly once. Transfer (not duplicate release) is used
+ * when a new transaction inherits snapshots from a prior transaction's rebase frame.
+ */
 class VisualResourceStore {
     private val snapshots = mutableMapOf<Long, OwnedSnapshot>()
 

@@ -179,6 +179,18 @@ class AndroidLineSnapshotBuilder {
     }
 
 
+    /**
+     * Build a shaping fingerprint for a grapheme cluster.
+     *
+     * API 31+: Uses TextRunShaper.shapeText → PositionedGlyphs (glyph IDs, fonts, positions).
+     * This is reliable for Move vs Crossfade decisions.
+     *
+     * API < 31: Falls back to codepoint Unicode categories + paint hash + bidi direction.
+     * This is a conservative approximation — different shapings may produce the same
+     * fingerprint, so [shapingIdentityConfident] is set to false, and the animation
+     * planner will use Crossfade instead of Move to avoid visual glitches from
+     * false positive fingerprint matches.
+     */
     private fun buildShapingFingerprint(clusterText: String, layout: Layout, lineIndex: Int, clusterStartUtf16: Int): String {
         if (clusterText.isEmpty()) return ""
         val contextHash = computeContextHash(layout, lineIndex, clusterStartUtf16)

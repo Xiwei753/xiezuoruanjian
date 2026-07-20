@@ -9,7 +9,10 @@ data class PreparedVisualTransaction(
     val newRevision: AndroidLayoutRevision?,
     val staticPatches: List<StaticPatch>,
     val animatedSlices: List<AnimatedSlice>,
+    /** Snapshot IDs whose Bitmap lifecycle this transaction owns (will release on complete/cancel). */
     val ownedSnapshotIds: Set<Long>,
+    /** All snapshot IDs referenced by slices or static patches (superset of ownedSnapshotIds;
+     *  may include IDs inherited from a prior transaction via rebase ownership transfer). */
     val referencedSnapshotIds: Set<Long>,
     val selectionDecoration: SelectionDecoration?,
     val preeditDecoration: PreeditDecoration?,
@@ -23,6 +26,19 @@ data class PreparedVisualTransaction(
         val visibleSourceRects: List<android.graphics.Rect>
     )
 
+    /**
+     * A single animated visual unit within a transaction.
+     *
+     * Coordinate contract:
+     * - [sourceRect]: crop region inside the snapshot's line bitmap (pixel coords).
+     * - [destinationRect]: final position in document coordinates (no scroll offset).
+     * - [fromDestinationRect]: starting position for Move slices; null means start equals
+     *   [destinationRect] (no movement) or the role uses alpha-only animation.
+     *
+     * Byte range contract (half-open intervals):
+     * - [clusterByteStart] inclusive, [clusterByteEndExclusive] exclusive.
+     * - Used for rebase matching and cross-line Move deduplication; -1 means untracked.
+     */
     data class AnimatedSlice(
         val role: SliceRole,
         val snapshot: AndroidLineSnapshot?,
@@ -58,10 +74,14 @@ data class PreparedVisualTransaction(
     )
 }
 
+/** Animation slice roles. Insert: fade in (0→1). Delete: fade out (1→0).
+ *  Move: same shaping, position shift (alpha stays 1).
+ *  CrossfadeOld/New: shaping changed, paired fade-out + fade-in. */
 enum class SliceRole {
     Insert, Delete, Move, CrossfadeOld, CrossfadeNew, Static
 }
 
+/** Lifecycle states of a visual transaction. Only Rendering/Paused produce frames. */
 enum class TransactionState {
     Pending, Prepared, Rendering, Paused, Completed, Cancelled
 }
