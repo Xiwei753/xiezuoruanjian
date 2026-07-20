@@ -20,6 +20,12 @@ import uniffi.writer_core.AnimationModeDto
 class AndroidVisualPlanner {
 
     private companion object {
+        // BlockShift deltaY threshold: shifts below this value are considered sub-pixel
+        // rounding noise and are not animated. 1.0f (one pixel) is chosen because
+        // (a) Android Layout.getLineTop/Bottom are integer-pixel, so any fractional
+        // shift rounds to 0 or 1px, and (b) a 1px vertical shift is imperceptible
+        // during normal typing — animating it would create unnecessary BlockShift
+        // entries and extra layout.draw() calls for no visual benefit.
         const val STABLE_SUFFIX_GEOMETRY_TOLERANCE = 1.0f
     }
 
@@ -1203,7 +1209,11 @@ class AndroidVisualPlanner {
     /**
      * Primary cluster matching: map old byte offsets to new via [buildOffsetMapper],
      * then find new clusters at the mapped positions. Falls back to [matchClustersByFingerprint]
-     * if no offset-mapped pairs are found (e.g. when offset mapper returns null for all clusters).
+     * if no offset-mapped pairs are found (e.g. when offset mapper returns null for all clusters
+     * because the edit fully replaced the line content). Fingerprint matching is less precise
+     * (identical fingerprints don't guarantee same text) but is the only option when the offset
+     * map provides no identity information — without it, retained text with no offset mapping
+     * would get no Move/Crossfade slices at all.
      *
      * Partial match semantics: when [mappedEnd] is null (the old cluster's end falls inside
      * a deleted/replaced range), the match is still attempted by [mappedStart] alone — a new
@@ -2039,6 +2049,11 @@ class AndroidVisualPlanner {
                         oldState.endLineIndexExclusive > shift.startLineIndex
                 }
                 if (overlappingOlds.isNotEmpty()) {
+                    // When no exact line-range match exists, find the old BlockShift
+                    // with the largest line-range overlap. Maximum overlap is preferred
+                    // over minimum gap because an overlapping old shift was actively
+                    // animating the same region — its currentTranslateY is the most
+                    // representative on-screen position for the new shift's starting point.
                     val bestOld = overlappingOlds.maxByOrNull {
                         val overlapStart = maxOf(it.startLineIndex, shift.startLineIndex)
                         val overlapEnd = minOf(it.endLineIndexExclusive, shift.endLineIndexExclusive)

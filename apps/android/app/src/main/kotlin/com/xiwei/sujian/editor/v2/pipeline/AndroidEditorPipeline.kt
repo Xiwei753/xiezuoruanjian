@@ -349,6 +349,11 @@ class AndroidEditorPipeline private constructor(
         }
         val newAffected = if (newPreeditText.isEmpty() || isVisualSame) emptyList() else listOf(Pair(replaceStartUtf8, replaceStartUtf8 + newPreeditByteLen))
         val combinedText = oldPreeditText + newPreeditText
+        // Both old and new preedit text are checked for newline/complex grapheme
+        // characteristics because either version could contain them — e.g. an IME
+        // candidate that introduces a newline or combining mark. Checking only the
+        // new text would miss cases where the old preedit had a newline that is now
+        // being removed (which still requires LineReflow for correct reflow animation).
         val clusterCount = maxOf(
             newPreeditText.codePointCount(0, newPreeditText.length),
             oldPreeditText.codePointCount(0, oldPreeditText.length)

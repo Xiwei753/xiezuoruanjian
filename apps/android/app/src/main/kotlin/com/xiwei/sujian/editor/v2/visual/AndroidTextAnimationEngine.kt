@@ -171,6 +171,11 @@ class AndroidTextAnimationEngine(
         beforePatch: (() -> Unit)? = null
     ) {
         if (animationPolicy == TextAnimationPolicy.SYSTEM_SUPPRESSED) {
+            // Animation suppressed, but mirror/layout must still update so the
+            // display reflects the new text state. beforePatch runs first (e.g.
+            // to hide stale static text), then mirrorUpdate applies the edit,
+            // then requestLayout rebuilds the visual layout. Skipping all three
+            // would leave the display showing stale text.
             beforePatch?.invoke()
             mirrorUpdate?.invoke()
             layoutEngine.requestLayout()

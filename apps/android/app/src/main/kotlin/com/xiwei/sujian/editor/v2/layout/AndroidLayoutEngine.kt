@@ -55,8 +55,10 @@ class AndroidLayoutEngine(
         return currentRevision?.copy()
     }
 
-    /** Capture line snapshots WITHOUT per-cluster data. Used for non-animated or
-     *  whole-line animation paths where cluster-level source rects are not needed. */
+    /** Capture line snapshots with per-cluster data. Both this method and
+     *  [captureLineBitmapSnapshotsWithClusters] currently delegate to
+     *  [AndroidLineSnapshotBuilder.buildSnapshotForLineWithClusters] — cluster data is
+     *  always included so that callers can switch animation modes without re-capturing. */
     fun captureLineBitmapSnapshots(lineIndices: Set<Int>): Map<Int, AndroidLineSnapshot> {
         val l = layout ?: return emptyMap()
         val rev = currentRevision ?: return emptyMap()
