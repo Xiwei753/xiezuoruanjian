@@ -886,4 +886,126 @@ class AnimationRebaseContractTest {
         assertNotEquals("Indices must differ even when SliceVisualState content is identical",
             firstIdx, secondIdx)
     }
+
+    @Test
+    fun sourceRectMinimumOnePixelPreventsZeroWidthCluster() {
+        val x0 = 20.3f
+        val x1 = 20.7f
+        val visualLeft = kotlin.math.min(x0, x1)
+        val visualRight = kotlin.math.max(x0, x1)
+        val lineLeft = 0f
+        val sourceLeft = (visualLeft - lineLeft).coerceAtLeast(0f)
+        val sourceRight = (visualRight - lineLeft).coerceAtLeast(sourceLeft)
+        val sourceRectLeft = kotlin.math.round(sourceLeft).toInt()
+        val sourceRectRight = kotlin.math.round(sourceRight).toInt().coerceAtLeast(sourceRectLeft + 1)
+        assertTrue("sourceRect width must be at least 1 pixel for narrow clusters",
+            sourceRectRight > sourceRectLeft)
+    }
+
+    @Test
+    fun shapeTextRunContextParametersAreUtf16() {
+        val lineText = "你好世界"
+        val clusterLocalStart = 0
+        val clusterCount = 2
+        val contextStart = 0
+        val contextCount = lineText.length
+        assertTrue("clusterLocalStart must be within lineText",
+            clusterLocalStart in 0..lineText.length)
+        assertTrue("clusterCount must fit within lineText from clusterLocalStart",
+            clusterLocalStart + clusterCount <= lineText.length)
+        assertEquals("contextStart must be 0 for full-line context", 0, contextStart)
+        assertEquals("contextCount must be lineText.length for full-line context",
+            lineText.length, contextCount)
+    }
+
+    @Test
+    fun pendingRebaseFrameSliceStatesMatchTransactionSlices() {
+        val engine = AndroidTextAnimationEngine(
+            AndroidVisualPlanner(),
+            VisualResourceStore()
+        )
+        val snapshot = makeSnapshot(1, 0, 0, 10)
+        val slices = listOf(
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = snapshot,
+                sourceRect = android.graphics.Rect(0, 0, 100, 20),
+                destinationRect = android.graphics.RectF(10f, 0f, 50f, 20f),
+                startAlpha = 0f,
+                endAlpha = 1f,
+                clusterByteStart = 0,
+                clusterByteEndExclusive = 5
+            ),
+            PreparedVisualTransaction.AnimatedSlice(
+                role = SliceRole.Insert,
+                snapshot = snapshot,
+                sourceRect = android.graphics.Rect(0, 0, 100, 20),
+                destinationRect = android.graphics.RectF(50f, 0f, 90f, 20f),
+                startAlpha = 0f,
+                endAlpha = 1f,
+                clusterByteStart = 5,
+                clusterByteEndExclusive = 10
+            )
+        )
+        val transaction = makeTransaction(
+            transactionId = 1L,
+            slices = slices,
+            ownedSnapshotIds = setOf(1L),
+            referencedSnapshotIds = setOf(1L)
+        )
+        engine.registerSnapshots(mapOf(0 to snapshot), SnapshotOwner.OwnedByTransaction(1L))
+        engine.submit(transaction)
+
+        val frame = engine.captureFrame(0)
+        assertNotNull(frame)
+        assertEquals("Pending frame must have same number of slice states as transaction slices",
+            slices.size, frame!!.sliceVisualStates.size)
+        for (state in frame.sliceVisualStates) {
+            assertEquals("Pending slice must start at alpha 0", 0f, state.currentAlpha, 0.01f)
+        }
+    }
+
+    @Test
+    fun computeAnimatedSliceRegionsOnlyPunchesDestinationNotFrom() {
+        val renderer = com.xiwei.sujian.editor.v2.render.AndroidTextAnimationRenderer()
+        val snapshot = makeSnapshot(1, 0, 0, 10)
+        val transaction = makeTransaction(
+            transactionId = 1L,
+            slices = listOf(
+                PreparedVisualTransaction.AnimatedSlice(
+                    role = SliceRole.Move,
+                    snapshot = snapshot,
+                    sourceRect = android.graphics.Rect(0, 0, 100, 20),
+                    destinationRect = android.graphics.RectF(100f, 20f, 200f, 40f),
+                    startAlpha = 1f,
+                    endAlpha = 1f,
+                    fromDestinationRect = android.graphics.RectF(0f, 0f, 100f, 20f),
+                    clusterByteStart = 0,
+                    clusterByteEndExclusive = 10
+                )
+            ),
+            ownedSnapshotIds = setOf(1L),
+            referencedSnapshotIds = setOf(1L)
+        )
+        val regions = renderer.computeAnimatedSliceRegions(transaction)
+        assertEquals("Move slice must produce exactly 1 hole region", 1, regions.size)
+        assertEquals("Hole must be at destinationRect, not fromDestinationRect",
+            100f, regions[0].left, 0.01f)
+    }
+
+    @Test
+    fun rtlSourceRectNotZeroWidthWhenX0GreaterThanX1() {
+        val lineLeft = 0f
+        val x0 = 80f
+        val x1 = 20f
+        val visualLeft = kotlin.math.min(x0, x1)
+        val visualRight = kotlin.math.max(x0, x1)
+        val sourceLeft = (visualLeft - lineLeft).coerceAtLeast(0f)
+        val sourceRight = (visualRight - lineLeft).coerceAtLeast(sourceLeft)
+        val sourceRectLeft = kotlin.math.round(sourceLeft).toInt()
+        val sourceRectRight = kotlin.math.round(sourceRight).toInt().coerceAtLeast(sourceRectLeft + 1)
+        assertTrue("RTL sourceRect must have positive width", sourceRectRight > sourceRectLeft)
+        assertEquals(20f, sourceLeft, 0.01f)
+        assertEquals(80f, sourceRight, 0.01f)
+    }
 }

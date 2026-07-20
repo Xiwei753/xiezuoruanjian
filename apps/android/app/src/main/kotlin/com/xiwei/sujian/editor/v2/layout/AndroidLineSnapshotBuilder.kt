@@ -137,6 +137,11 @@ class AndroidLineSnapshotBuilder {
             val sourceTop = 0f
             val sourceBottom = bottom - top
 
+            val sourceRectLeft = kotlin.math.round(sourceLeft).toInt()
+            val sourceRectTop = kotlin.math.round(sourceTop).toInt()
+            val sourceRectRight = (kotlin.math.round(sourceRight).toInt()).coerceAtLeast(sourceRectLeft + 1)
+            val sourceRectBottom = (kotlin.math.round(sourceBottom).toInt()).coerceAtLeast(sourceRectTop + 1)
+
             val localStart = start.coerceIn(0, lineText.length)
             val localEnd = end.coerceIn(0, lineText.length)
             val clusterText = lineText.substring(localStart, localEnd)
@@ -148,7 +153,7 @@ class AndroidLineSnapshotBuilder {
                 documentByteEndExclusive = clusterEndUtf8,
                 documentUtf16Start = clusterStartUtf16,
                 documentUtf16EndExclusive = clusterEndUtf16,
-                sourceRectInLineImage = android.graphics.Rect(sourceLeft.toInt(), sourceTop.toInt(), sourceRight.toInt(), sourceBottom.toInt()),
+                sourceRectInLineImage = android.graphics.Rect(sourceRectLeft, sourceRectTop, sourceRectRight, sourceRectBottom),
                 visualRectInDocument = android.graphics.RectF(visualLeft, top, visualRight, bottom),
                 shapingFingerprint = shapingResult.first,
                 shapingIdentityConfident = shapingResult.second
@@ -283,7 +288,7 @@ class AndroidLineSnapshotBuilder {
             for (i in 0 until glyphCount) {
                 if (i > 0) sb.append("|")
                 val font = positionedGlyphs.getFont(i)
-                sb.append(font?.hashCode()?.toString() ?: "null")
+                sb.append(font.hashCode().toString())
                 sb.append("_")
                 sb.append(positionedGlyphs.getGlyphId(i))
             }
