@@ -3,6 +3,8 @@ package com.xiwei.sujian.editor.v2.render
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 
 class AndroidTextRenderer {
     private var backgroundColor: Int = Color.WHITE
@@ -125,14 +127,16 @@ class AndroidTextRenderer {
         }
         layout.draw(canvas)
         canvas.restore()
-        for (shift in blockShifts) {
-            val currentDeltaY = shift.deltaY * (progress - 1f)
+        val groupedByDeltaY = blockShifts.groupBy { it.deltaY }
+        for ((deltaY, group) in groupedByDeltaY) {
+            val currentDeltaY = deltaY * (progress - 1f)
             canvas.save()
             canvas.translate(0f, currentDeltaY)
-            canvas.clipRect(
-                shift.left, shift.top,
-                shift.right, shift.bottom
-            )
+            val clipPath = Path()
+            for (shift in group) {
+                clipPath.addRect(shift.left, shift.top, shift.right, shift.bottom, Path.Direction.CW)
+            }
+            canvas.clipPath(clipPath)
             layout.draw(canvas)
             canvas.restore()
         }
