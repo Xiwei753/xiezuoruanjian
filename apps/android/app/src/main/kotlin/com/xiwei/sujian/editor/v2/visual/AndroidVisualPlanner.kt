@@ -1090,10 +1090,15 @@ class AndroidVisualPlanner {
                     oldLine.endUtf8 != newLine.endUtf8
                 if (geometryChanged) {
                     affectedLines.add(i)
-                } else if (i > scanStart || !geometryChanged) {
-                    // First unchanged line after the edit starts the stable suffix.
-                    // Keep scanning remaining common lines only if later geometry still differs
-                    // (rare multi-region reflow); otherwise stop.
+                    if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
+                        reachedStableSuffix = true
+                        break
+                    }
+                } else {
+                    if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
+                        reachedStableSuffix = true
+                        break
+                    }
                     var laterUnstable = false
                     for (j in (i + 1) until minCommonLines) {
                         val ol = oldRev.lineRanges[j]
@@ -1113,9 +1118,6 @@ class AndroidVisualPlanner {
                         reachedStableSuffix = true
                         break
                     }
-                }
-                if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
-                    break
                 }
             }
             // Lines present only on one side (soft wrap growth/shrink) always animate.
