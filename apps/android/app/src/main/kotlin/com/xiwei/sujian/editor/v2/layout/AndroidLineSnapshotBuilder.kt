@@ -51,8 +51,8 @@ class AndroidLineSnapshotBuilder {
         val top = lineRange.top
         val bottom = lineRange.bottom
 
-        val width = (right - left).toInt().coerceAtLeast(1)
-        val height = (bottom - top).toInt().coerceAtLeast(1)
+        val width = kotlin.math.ceil(right - left).toInt().coerceAtLeast(1)
+        val height = kotlin.math.ceil(bottom - top).toInt().coerceAtLeast(1)
 
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -137,10 +137,13 @@ class AndroidLineSnapshotBuilder {
             val sourceTop = 0f
             val sourceBottom = bottom - top
 
-            val sourceRectLeft = kotlin.math.round(sourceLeft).toInt()
-            val sourceRectTop = kotlin.math.round(sourceTop).toInt()
-            val sourceRectRight = (kotlin.math.round(sourceRight).toInt()).coerceAtLeast(sourceRectLeft + 1)
-            val sourceRectBottom = (kotlin.math.round(sourceBottom).toInt()).coerceAtLeast(sourceRectTop + 1)
+            val bitmapWidth = kotlin.math.ceil(lineRange.right - lineRange.left).toInt().coerceAtLeast(1)
+            val bitmapHeight = kotlin.math.ceil(lineRange.bottom - lineRange.top).toInt().coerceAtLeast(1)
+
+            val sourceRectLeft = kotlin.math.floor(sourceLeft).toInt().coerceIn(0, bitmapWidth)
+            val sourceRectTop = kotlin.math.floor(sourceTop).toInt().coerceIn(0, bitmapHeight)
+            val sourceRectRight = kotlin.math.ceil(sourceRight).toInt().coerceIn(sourceRectLeft + 1, bitmapWidth)
+            val sourceRectBottom = kotlin.math.ceil(sourceBottom).toInt().coerceIn(sourceRectTop + 1, bitmapHeight)
 
             val localStart = start.coerceIn(0, lineText.length)
             val localEnd = end.coerceIn(0, lineText.length)
@@ -232,7 +235,11 @@ class AndroidLineSnapshotBuilder {
         val nextCodePoint = if (nextOffset < lineEnd && nextOffset < text.length) {
             Character.codePointAt(text, nextOffset)
         } else -1
-        val bidiDir = layout.getParagraphDirection(lineIndex)
+        val bidiDir = if (clusterStartUtf16 < text.length) {
+            if (layout.isRtlCharAt(clusterStartUtf16)) 1 else 0
+        } else {
+            layout.getParagraphDirection(lineIndex)
+        }
         var result = 1
         result = 31 * result + prevCodePoint
         result = 31 * result + nextCodePoint
@@ -265,7 +272,11 @@ class AndroidLineSnapshotBuilder {
 
             val clusterLocalStart = (clusterStartUtf16 - lineStart).coerceIn(0, lineText.length)
             val clusterCount = clusterText.length.coerceIn(0, lineText.length - clusterLocalStart)
-            val isRtl = layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
+            val isRtl = if (clusterStartUtf16 < text.length) {
+                layout.isRtlCharAt(clusterStartUtf16)
+            } else {
+                layout.getParagraphDirection(lineIndex) == Layout.DIR_RIGHT_TO_LEFT
+            }
 
             val positionedGlyphs = android.graphics.text.TextRunShaper.shapeTextRun(
                 lineText,

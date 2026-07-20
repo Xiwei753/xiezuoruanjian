@@ -54,6 +54,16 @@ data class AndroidLayoutRevision(
          *  so byte-gap-based detection would never identify a paragraph boundary.
          *  Used by the animation planner to stop reflow scanning — text reflow cannot
          *  propagate into the next paragraph. */
-        val endsWithHardBreak: Boolean = false
+        val endsWithHardBreak: Boolean = false,
+        /** Monotonic paragraph identifier. Lines within the same paragraph share the same
+         *  [paragraphId]; the first line after a hard break increments it. Used by
+         *  [AndroidVisualPlanner.computeAffectedLines] to align old/new lines by paragraph
+         *  rather than by global lineIndex — when a paragraph gains or loses visual lines,
+         *  global lineIndex alignment would truncate the affected range prematurely. */
+        val paragraphId: Int = 0,
+        /** Zero-based index of this visual line within its paragraph. The first visual line
+         *  of each paragraph has [paragraphLocalLineIndex] = 0. Used alongside [paragraphId]
+         *  for old/new line alignment in the animation planner. */
+        val paragraphLocalLineIndex: Int = 0
     )
 }

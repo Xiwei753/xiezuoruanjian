@@ -887,14 +887,16 @@ class AndroidVisualPlanner {
     }
 
     /**
-     * Select clusters that overlap [affectedRanges] for run-level animation.
+     * Select clusters that overlap [affectedRanges] and merge adjacent ones into contiguous runs.
      *
-     * Current implementation: returns the filtered set without merging adjacent clusters
-     * into contiguous runs. Each cluster is treated as an individual "run" — this is
-     * functionally equivalent to ClusterAnimation with a different entry path. True run
-     * grouping (merging adjacent affected clusters into a single visual unit for
-     * Insert/Delete/Crossfade) is a future enhancement; the current per-cluster approach
-     * already produces correct animation, just at finer granularity than intended.
+     * A "run" is a maximal sequence of adjacent clusters on the same line that all overlap
+     * [affectedRanges]. Adjacent means their byte ranges are contiguous (no gap) and they
+     * share the same line. Each run produces a single [LineClusterSnapshot] whose byte range,
+     * sourceRect, and visualRect span the entire run, enabling Insert/Delete/Crossfade at
+     * run granularity instead of per-cluster.
+     *
+     * Clusters that are not adjacent to any other affected cluster form single-cluster runs.
+     * Cross-line gaps break runs — each line produces its own run(s).
      */
     private fun groupClustersIntoRuns(
         clusters: List<LineClusterSnapshot>,
@@ -906,7 +908,50 @@ class AndroidVisualPlanner {
                 cluster.documentByteStart < end && cluster.documentByteEndExclusive > start
             }
         }
-        return affected
+        if (affected.isEmpty()) return emptyList()
+        if (affected.size == 1) return affected
+
+        val runs = mutableListOf<LineClusterSnapshot>()
+        var runStart = 0
+        for (i in 1..affected.size) {
+            val isEndOfRun = i == affected.size ||
+                affected[i].documentByteStart != affected[i - 1].documentByteEndExclusive ||
+                affected[i].visualRectInDocument.top != affected[i - 1].visualRectInDocument.top
+            if (isEndOfRun) {
+                val runClusters = affected.subList(runStart, i)
+                if (runClusters.size == 1) {
+                    runs.add(runClusters[0])
+                } else {
+                    val first = runClusters.first()
+                    val last = runClusters.last()
+                    val mergedSourceRect = android.graphics.Rect(
+                        first.sourceRectInLineImage.left,
+                        first.sourceRectInLineImage.top,
+                        last.sourceRectInLineImage.right,
+                        last.sourceRectInLineImage.bottom
+                    )
+                    val mergedVisualRect = android.graphics.RectF(
+                        first.visualRectInDocument.left,
+                        first.visualRectInDocument.top,
+                        last.visualRectInDocument.right,
+                        last.visualRectInDocument.bottom
+                    )
+                    runs.add(LineClusterSnapshot(
+                        clusterId = first.clusterId,
+                        documentByteStart = first.documentByteStart,
+                        documentByteEndExclusive = last.documentByteEndExclusive,
+                        documentUtf16Start = first.documentUtf16Start,
+                        documentUtf16EndExclusive = last.documentUtf16EndExclusive,
+                        sourceRectInLineImage = mergedSourceRect,
+                        visualRectInDocument = mergedVisualRect,
+                        shapingFingerprint = first.shapingFingerprint,
+                        shapingIdentityConfident = first.shapingIdentityConfident
+                    ))
+                }
+                runStart = i
+            }
+        }
+        return runs
     }
 
     /**
@@ -1174,16 +1219,20 @@ class AndroidVisualPlanner {
      * whose geometry and byte range are identical in both revisions, and beyond which no
      * further lines differ.
      *
-     * Paragraph boundary truncation: a hard line break ([LineRange.endsWithHardBreak]) means
-     * this visual line ends a paragraph; reflow cannot propagate into the next paragraph, so
-     * the forward scan stops. This check uses [endsWithHardBreak] from the revision metadata
-     * (set during construction by inspecting source text), not byte-gap heuristics — adjacent
-     * visual lines in Android Layout have contiguous byte ranges even across `\n`, so byte-gap
-     * detection would never identify a paragraph boundary.
+     * Paragraph alignment: old/new lines are aligned by [paragraphId] + [paragraphLocalLineIndex],
+     * NOT by global lineIndex. When a paragraph gains or loses visual lines (e.g. soft-wrap
+     * reflow adds a line), global lineIndex alignment would cause the scan to stop at the wrong
+     * position — old paragraph line N and new paragraph line N may refer to different text if
+     * the paragraph's line count changed. Paragraph-level alignment ensures:
+     * - The current paragraph is fully scanned for cluster reflow;
+     * - When the current paragraph's visual line count changes, subsequent paragraphs generate
+     *   block-level vertical Move slices (their Y geometry shifts even though their text is unchanged);
+     * - Hard line breaks still stop reflow propagation at paragraph boundaries.
      *
-     * When geometry changes on a line that also has [endsWithHardBreak], the line itself is
-     * included in the affected set but the scan stops (reachedStableSuffix = true), preventing
-     * the next paragraph's lines from being unnecessarily captured.
+     * Stable suffix detection: after the current paragraph, the scan continues into subsequent
+     * paragraphs until finding a line whose geometry and byte range are identical in both
+     * revisions AND no later line differs. This handles the case where a paragraph above
+     * changes line count, shifting all subsequent paragraphs down.
      */
     private fun computeAffectedLines(
         visualIntent: VisualIntent,
@@ -1195,7 +1244,6 @@ class AndroidVisualPlanner {
         for ((start, end) in visualIntent.oldAffectedByteRanges) {
             for (i in oldRev.lineRanges.indices) {
                 val lineRange = oldRev.lineRanges[i]
-                // Half-open overlap: [start, end) ∩ [lineRange.startUtf8, lineRange.endUtf8)
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
@@ -1205,7 +1253,6 @@ class AndroidVisualPlanner {
         for ((start, end) in visualIntent.newAffectedByteRanges) {
             for (i in newRev.lineRanges.indices) {
                 val lineRange = newRev.lineRanges[i]
-                // Half-open overlap: same convention as above.
                 if (start < lineRange.endUtf8 && end > lineRange.startUtf8) {
                     affectedLines.add(i)
                 }
@@ -1217,78 +1264,86 @@ class AndroidVisualPlanner {
         if (editByteStart != null) {
             val oldEditLine = findLineForUtf8(oldRev, editByteStart)
             val newEditLine = findLineForUtf8(newRev, editByteStart)
-            val scanStart = minOf(oldEditLine, newEditLine)
-            val minCommonLines = minOf(oldRev.lineRanges.size, newRev.lineRanges.size)
 
-            // Walk forward from the edit line using lightweight geometry metadata only.
-            // Stop at the first stable suffix line; no fixed 3/10/30 line cap.
+            val editParagraphId = oldRev.lineRanges.getOrNull(oldEditLine)?.paragraphId ?: 0
+
+            val oldLinesByParagraph = oldRev.lineRanges.withIndex()
+                .groupBy { it.value.paragraphId }
+            val newLinesByParagraph = newRev.lineRanges.withIndex()
+                .groupBy { it.value.paragraphId }
+
+            val allParagraphIds = (oldLinesByParagraph.keys + newLinesByParagraph.keys).sorted()
+
             var reachedStableSuffix = false
-            for (i in scanStart until minCommonLines) {
-                val oldLine = oldRev.lineRanges[i]
-                val newLine = newRev.lineRanges[i]
-                val geometryChanged = kotlin.math.abs(oldLine.top - newLine.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    kotlin.math.abs(oldLine.bottom - newLine.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    kotlin.math.abs(oldLine.left - newLine.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    kotlin.math.abs(oldLine.right - newLine.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                    oldLine.startUtf8 != newLine.startUtf8 ||
-                    oldLine.endUtf8 != newLine.endUtf8
-                if (geometryChanged) {
-                    affectedLines.add(i)
-                    if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
-                        reachedStableSuffix = true
-                        break
-                    }
-                } else {
-                    if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
-                        reachedStableSuffix = true
-                        break
-                    }
-                    var laterUnstable = false
-                    for (j in (i + 1) until minCommonLines) {
-                        val ol = oldRev.lineRanges[j]
-                        val nl = newRev.lineRanges[j]
-                        val changed = kotlin.math.abs(ol.top - nl.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            kotlin.math.abs(ol.bottom - nl.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            kotlin.math.abs(ol.left - nl.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            kotlin.math.abs(ol.right - nl.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
-                            ol.startUtf8 != nl.startUtf8 ||
-                            ol.endUtf8 != nl.endUtf8
-                        if (changed) {
-                            laterUnstable = true
-                            break
+            for (pid in allParagraphIds) {
+                if (pid < editParagraphId) continue
+
+                val oldParaLines = oldLinesByParagraph[pid] ?: emptyList()
+                val newParaLines = newLinesByParagraph[pid] ?: emptyList()
+
+                for (oldEntry in oldParaLines) {
+                    affectedLines.add(oldEntry.index)
+                }
+                for (newEntry in newParaLines) {
+                    affectedLines.add(newEntry.index)
+                }
+
+                val maxLocalLines = maxOf(oldParaLines.size, newParaLines.size)
+                var paragraphHasGeometryChange = false
+                for (localIdx in 0 until maxLocalLines) {
+                    val oldLine = oldParaLines.getOrNull(localIdx)?.value
+                    val newLine = newParaLines.getOrNull(localIdx)?.value
+                    if (oldLine != null && newLine != null) {
+                        val geometryChanged = kotlin.math.abs(oldLine.top - newLine.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            kotlin.math.abs(oldLine.bottom - newLine.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            kotlin.math.abs(oldLine.left - newLine.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            kotlin.math.abs(oldLine.right - newLine.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                            oldLine.startUtf8 != newLine.startUtf8 ||
+                            oldLine.endUtf8 != newLine.endUtf8
+                        if (geometryChanged) {
+                            paragraphHasGeometryChange = true
                         }
+                    } else {
+                        paragraphHasGeometryChange = true
+                    }
+                }
+
+                if (pid > editParagraphId && !paragraphHasGeometryChange) {
+                    var laterUnstable = false
+                    for (laterPid in allParagraphIds) {
+                        if (laterPid <= pid) continue
+                        val laterOld = oldLinesByParagraph[laterPid] ?: emptyList()
+                        val laterNew = newLinesByParagraph[laterPid] ?: emptyList()
+                        val laterMax = maxOf(laterOld.size, laterNew.size)
+                        for (localIdx in 0 until laterMax) {
+                            val ol = laterOld.getOrNull(localIdx)?.value
+                            val nl = laterNew.getOrNull(localIdx)?.value
+                            if (ol != null && nl != null) {
+                                val changed = kotlin.math.abs(ol.top - nl.top) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                                    kotlin.math.abs(ol.bottom - nl.bottom) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                                    kotlin.math.abs(ol.left - nl.left) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                                    kotlin.math.abs(ol.right - nl.right) > STABLE_SUFFIX_GEOMETRY_TOLERANCE ||
+                                    ol.startUtf8 != nl.startUtf8 ||
+                                    ol.endUtf8 != nl.endUtf8
+                                if (changed) {
+                                    laterUnstable = true
+                                    break
+                                }
+                            } else {
+                                laterUnstable = true
+                                break
+                            }
+                        }
+                        if (laterUnstable) break
                     }
                     if (!laterUnstable) {
                         reachedStableSuffix = true
                         break
                     }
                 }
-                // Safety fallback: hard break stops reflow at paragraph boundary.
-                // The two branches above check endsWithHardBreak conditionally (only when
-                // geometryChanged or !geometryChanged), but this loop-level guard is
-                // unconditional — it ensures the scan cannot continue past a paragraph
-                // boundary even if the branching logic is restructured or a new branch is
-                // added that omits the check. The three checks are not strictly redundant:
-                // the first two are conditional on geometry state, while this one fires
-                // regardless, making it a stronger safety net.
-                if (i > scanStart && (oldLine.endsWithHardBreak || newLine.endsWithHardBreak)) {
-                    break
-                }
             }
-            // Lines present only on one side (soft wrap growth/shrink) always animate.
-            for (i in minCommonLines until oldRev.lineRanges.size) {
-                affectedLines.add(i)
-            }
-            for (i in minCommonLines until newRev.lineRanges.size) {
-                affectedLines.add(i)
-            }
-            // If no stable suffix was found (e.g. edit at end of document with no matching
-            // suffix lines), the entire suffix from the edit line is already in affectedLines
-            // or was added as exclusive old/new lines above. As a safety fallback, ensure the
-            // edit line itself is included even when the byte-range intersection above missed it
-            // (possible when old/new revisions have different line counts at the edit position).
+
             if (!reachedStableSuffix) {
-                // Ensure edit-line itself is included even when range intersection missed it.
                 affectedLines.add(oldEditLine)
                 affectedLines.add(newEditLine)
             }
@@ -1512,9 +1567,12 @@ class AndroidVisualPlanner {
     ): Int? {
         val lineIndex = slice.snapshot?.lineIndex ?: -1
         val compatibleRoles = compatibleRebaseRoles(slice.role)
+        val sliceByteStart = slice.clusterByteStart
         return rebaseSnapshot.sliceVisualStates.indices
             .filter { i -> i !in usedRebaseIndices && rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles && rebaseSnapshot.sliceVisualStates[i].lineIndex == lineIndex }
-            .firstOrNull()
+            .minByOrNull { i ->
+                kotlin.math.abs(rebaseSnapshot.sliceVisualStates[i].clusterByteStart - sliceByteStart)
+            }
     }
 
     private fun findRebaseIndexClosestByPosition(

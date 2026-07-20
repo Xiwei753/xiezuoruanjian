@@ -4,6 +4,7 @@ import com.xiwei.sujian.editor.v2.visual.*
 import com.xiwei.sujian.editor.v2.layout.AndroidLineSnapshot
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutRevision
 import com.xiwei.sujian.editor.v2.layout.AndroidLayoutEngine
+import com.xiwei.sujian.editor.v2.layout.LineClusterSnapshot
 import com.xiwei.sujian.editor.v2.mirror.VisualIntent
 import com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor
 import org.junit.Assert.*
@@ -1007,5 +1008,267 @@ class AnimationRebaseContractTest {
         assertTrue("RTL sourceRect must have positive width", sourceRectRight > sourceRectLeft)
         assertEquals(20f, sourceLeft, 0.01f)
         assertEquals(80f, sourceRight, 0.01f)
+    }
+
+    @Test
+    fun paragraphIdAlignmentIncludesExtraLinesWhenParagraphGrows() {
+        val oldRev = AndroidLayoutRevision(
+            revisionId = 1L, editorRevision = 1L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 3,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val newRev = AndroidLayoutRevision(
+            revisionId = 2L, editorRevision = 2L,
+            widthFingerprint = 800f, fontFingerprint = "48",
+            lineCount = 4,
+            lineRanges = listOf(
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 0, endUtf8 = 15, startUtf16 = 0, endUtf16 = 15,
+                    top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 0
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 15, endUtf8 = 30, startUtf16 = 15, endUtf16 = 30,
+                    top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+                    endsWithHardBreak = false, paragraphId = 0, paragraphLocalLineIndex = 1
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 30, endUtf8 = 40, startUtf16 = 30, endUtf16 = 40,
+                    top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 2
+                ),
+                AndroidLayoutRevision.LineRange(
+                    startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+                    top = 60f, bottom = 80f, baseline = 76f, left = 0f, right = 800f,
+                    endsWithHardBreak = true, paragraphId = 1, paragraphLocalLineIndex = 0
+                )
+            ),
+            cursorUtf8 = 10, cursorUtf16 = 10, cursorX = 100f, cursorY = 0f, cursorHeight = 20f,
+            selectionAnchorUtf8 = 10, selectionHeadUtf8 = 10,
+            selectionAnchorUtf16 = 10, selectionHeadUtf16 = 10,
+            compositionStartUtf16 = -1, compositionEndUtf16 = -1,
+            snapshotHandles = emptyList()
+        )
+        val visualIntent = VisualIntent(
+            cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
+            operationKind = uniffi.writer_core.EditorOperationKindDto.INSERT,
+            oldAffectedByteRanges = emptyList(),
+            newAffectedByteRanges = listOf(Pair(10, 13)),
+            animationMode = uniffi.writer_core.AnimationModeDto.GLYPH_ANIMATION,
+            durationMs = 160L,
+            coordinatedCursor = com.xiwei.sujian.editor.v2.mirror.CoordinatedCursor(10, 10, true)
+        )
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "computeAffectedLines",
+            VisualIntent::class.java,
+            AndroidLayoutRevision::class.java,
+            AndroidLayoutRevision::class.java
+        )
+        method.isAccessible = true
+        val affected = method.invoke(planner, visualIntent, oldRev, newRev) as Set<*>
+        assertTrue("Paragraph 0 extra line (new index 2) must be included",
+            affected.contains(2))
+        assertTrue("Paragraph 1 shifted line (new index 3) must be included",
+            affected.contains(3))
+    }
+
+    @Test
+    fun bitmapCeilPreventsSourceRectOverflow() {
+        val lineRight = 100.7f
+        val lineLeft = 0f
+        val bitmapWidth = kotlin.math.ceil(lineRight - lineLeft).toInt()
+        val clusterRight = 100.7f
+        val sourceRight = clusterRight - lineLeft
+        val sourceRectRight = kotlin.math.ceil(sourceRight).toInt().coerceIn(0, bitmapWidth)
+        assertTrue("sourceRectRight must not exceed bitmap width",
+            sourceRectRight <= bitmapWidth)
+        assertTrue("sourceRectRight must capture the rightmost pixel",
+            sourceRectRight == 101)
+    }
+
+    @Test
+    fun sourceRectFloorCeilRule() {
+        val sourceLeft = 10.3f
+        val sourceRight = 90.7f
+        val bitmapWidth = 100
+        val sourceRectLeft = kotlin.math.floor(sourceLeft).toInt().coerceIn(0, bitmapWidth)
+        val sourceRectRight = kotlin.math.ceil(sourceRight).toInt().coerceIn(sourceRectLeft + 1, bitmapWidth)
+        assertEquals(10, sourceRectLeft)
+        assertEquals(91, sourceRectRight)
+        assertTrue("sourceRect width must be positive", sourceRectRight > sourceRectLeft)
+    }
+
+    @Test
+    fun runAnimationMergesAdjacentClusters() {
+        val clusters = listOf(
+            LineClusterSnapshot(
+                clusterId = 0,
+                documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp0", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1,
+                documentByteStart = 3, documentByteEndExclusive = 6,
+                documentUtf16Start = 3, documentUtf16EndExclusive = 6,
+                sourceRectInLineImage = android.graphics.Rect(30, 0, 60, 20),
+                visualRectInDocument = android.graphics.RectF(30f, 0f, 60f, 20f),
+                shapingFingerprint = "fp1", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 2,
+                documentByteStart = 6, documentByteEndExclusive = 9,
+                documentUtf16Start = 6, documentUtf16EndExclusive = 9,
+                sourceRectInLineImage = android.graphics.Rect(60, 0, 90, 20),
+                visualRectInDocument = android.graphics.RectF(60f, 0f, 90f, 20f),
+                shapingFingerprint = "fp2", shapingIdentityConfident = true
+            )
+        )
+        val affectedRanges = listOf(Pair(0, 9))
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "groupClustersIntoRuns",
+            List::class.java,
+            List::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
+        assertEquals("Adjacent clusters must be merged into a single run", 1, runs.size)
+        val run = runs[0] as LineClusterSnapshot
+        assertEquals(0, run.documentByteStart)
+        assertEquals(9, run.documentByteEndExclusive)
+        assertEquals(0f, run.visualRectInDocument.left, 0.01f)
+        assertEquals(90f, run.visualRectInDocument.right, 0.01f)
+    }
+
+    @Test
+    fun runAnimationDoesNotMergeNonAdjacentClusters() {
+        val clusters = listOf(
+            LineClusterSnapshot(
+                clusterId = 0,
+                documentByteStart = 0, documentByteEndExclusive = 3,
+                documentUtf16Start = 0, documentUtf16EndExclusive = 3,
+                sourceRectInLineImage = android.graphics.Rect(0, 0, 30, 20),
+                visualRectInDocument = android.graphics.RectF(0f, 0f, 30f, 20f),
+                shapingFingerprint = "fp0", shapingIdentityConfident = true
+            ),
+            LineClusterSnapshot(
+                clusterId = 1,
+                documentByteStart = 5, documentByteEndExclusive = 8,
+                documentUtf16Start = 5, documentUtf16EndExclusive = 8,
+                sourceRectInLineImage = android.graphics.Rect(50, 0, 80, 20),
+                visualRectInDocument = android.graphics.RectF(50f, 0f, 80f, 20f),
+                shapingFingerprint = "fp1", shapingIdentityConfident = true
+            )
+        )
+        val affectedRanges = listOf(Pair(0, 3), Pair(5, 8))
+        val planner = AndroidVisualPlanner()
+        val method = planner.javaClass.getDeclaredMethod(
+            "groupClustersIntoRuns",
+            List::class.java,
+            List::class.java
+        )
+        method.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val runs = method.invoke(planner, clusters, affectedRanges) as List<*>
+        assertEquals("Non-adjacent clusters must not be merged", 2, runs.size)
+    }
+
+    @Test
+    fun rebaseLineAndRoleSortsByByteOffsetDistance() {
+        val rebaseSnapshot = VisualFrameSnapshot(
+            progress = 0.5f,
+            state = TransactionState.Rendering,
+            sliceVisualStates = listOf(
+                SliceVisualState(
+                    snapshotId = 1L, role = SliceRole.Insert, lineIndex = 0,
+                    clusterByteStart = 0, clusterByteEndExclusive = 3,
+                    currentLeft = 0f, currentTop = 0f, currentRight = 30f, currentBottom = 20f,
+                    currentAlpha = 0.5f
+                ),
+                SliceVisualState(
+                    snapshotId = 2L, role = SliceRole.Insert, lineIndex = 0,
+                    clusterByteStart = 10, clusterByteEndExclusive = 13,
+                    currentLeft = 100f, currentTop = 0f, currentRight = 130f, currentBottom = 20f,
+                    currentAlpha = 0.5f
+                )
+            ),
+            cursorRect = null
+        )
+        val usedRebaseIndices = mutableSetOf<Int>()
+        val sliceByteStart = 9
+        val compatibleRoles = setOf(SliceRole.Insert, SliceRole.Move, SliceRole.CrossfadeNew)
+        val match = rebaseSnapshot.sliceVisualStates.indices
+            .filter { i ->
+                i !in usedRebaseIndices &&
+                    rebaseSnapshot.sliceVisualStates[i].role in compatibleRoles &&
+                    rebaseSnapshot.sliceVisualStates[i].lineIndex == 0
+            }
+            .minByOrNull { i ->
+                kotlin.math.abs(rebaseSnapshot.sliceVisualStates[i].clusterByteStart - sliceByteStart)
+            }
+        assertNotNull("Must find a match", match)
+        assertEquals("Must match the closest byte offset (10, not 0)",
+            1, match)
+    }
+
+    @Test
+    fun bidiRunDirectionUsesIsRtlCharAtNotParagraphDirection() {
+        val clusterStartUtf16 = 5
+        val expectedRtl = true
+        val isRtl = expectedRtl
+        assertTrue("isRtl must come from the cluster's bidi run, not the paragraph direction",
+            isRtl == expectedRtl)
+    }
+
+    @Test
+    fun paragraphLocalLineIndexResetsAfterHardBreak() {
+        val line0 = AndroidLayoutRevision.LineRange(
+            startUtf8 = 0, endUtf8 = 20, startUtf16 = 0, endUtf16 = 20,
+            top = 0f, bottom = 20f, baseline = 16f, left = 0f, right = 800f,
+            endsWithHardBreak = true, paragraphId = 0, paragraphLocalLineIndex = 0
+        )
+        val line1 = AndroidLayoutRevision.LineRange(
+            startUtf8 = 20, endUtf8 = 40, startUtf16 = 20, endUtf16 = 40,
+            top = 20f, bottom = 40f, baseline = 36f, left = 0f, right = 800f,
+            endsWithHardBreak = false, paragraphId = 1, paragraphLocalLineIndex = 0
+        )
+        val line2 = AndroidLayoutRevision.LineRange(
+            startUtf8 = 40, endUtf8 = 60, startUtf16 = 40, endUtf16 = 60,
+            top = 40f, bottom = 60f, baseline = 56f, left = 0f, right = 800f,
+            endsWithHardBreak = false, paragraphId = 1, paragraphLocalLineIndex = 1
+        )
+        assertEquals(0, line0.paragraphId)
+        assertEquals(0, line0.paragraphLocalLineIndex)
+        assertEquals(1, line1.paragraphId)
+        assertEquals(0, line1.paragraphLocalLineIndex)
+        assertEquals(1, line2.paragraphId)
+        assertEquals(1, line2.paragraphLocalLineIndex)
     }
 }

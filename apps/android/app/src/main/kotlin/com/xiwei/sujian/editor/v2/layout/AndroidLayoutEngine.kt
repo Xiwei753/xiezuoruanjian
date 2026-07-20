@@ -111,6 +111,8 @@ class AndroidLayoutEngine(
         val indexMap = AndroidTextIndexMap(mirror)
         val text = mirror.getText()
         val lineRanges = mutableListOf<AndroidLayoutRevision.LineRange>()
+        var currentParagraphId = 0
+        var currentParagraphLocalLineIndex = 0
         for (i in 0 until l.lineCount) {
             val lineStartUtf16 = l.getLineStart(i)
             val lineEndUtf16 = l.getLineEnd(i)
@@ -135,6 +137,16 @@ class AndroidLayoutEngine(
             val endsWithHardBreak = lineEndUtf16 > 0 && lineEndUtf16 <= text.length &&
                 text[lineEndUtf16 - 1] == '\n'
 
+            if (i == 0) {
+                currentParagraphId = 0
+                currentParagraphLocalLineIndex = 0
+            } else if (lineRanges.lastOrNull()?.endsWithHardBreak == true) {
+                currentParagraphId++
+                currentParagraphLocalLineIndex = 0
+            } else {
+                currentParagraphLocalLineIndex++
+            }
+
             lineRanges.add(AndroidLayoutRevision.LineRange(
                 startUtf8 = startUtf8,
                 endUtf8 = endUtf8,
@@ -145,7 +157,9 @@ class AndroidLayoutEngine(
                 baseline = baseline,
                 left = left,
                 right = right,
-                endsWithHardBreak = endsWithHardBreak
+                endsWithHardBreak = endsWithHardBreak,
+                paragraphId = currentParagraphId,
+                paragraphLocalLineIndex = currentParagraphLocalLineIndex
             ))
         }
 
