@@ -1255,7 +1255,14 @@ class AndroidVisualPlanner {
     /**
      * Fallback cluster matching: pair old→new clusters by shaping fingerprint,
      * excluding clusters inside affected (inserted/deleted) byte ranges.
-     * First-match wins; no positional tiebreaker since offset map was unavailable.
+     *
+     * First-match wins with no positional tiebreaker. This is intentional: when the
+     * offset map provides no identity information (all clusters mapped to null), there
+     * is no reliable way to determine which old cluster corresponds to which new cluster
+     * by position alone — the layout may have shifted entirely. First-match is deterministic
+     * and avoids the complexity of positional heuristics that would be unreliable anyway.
+     * The planner compensates by requiring [shapingIdentityConfident] for Move; without
+     * confidence, Crossfade is used, which is visually correct regardless of pairing order.
      */
     private fun matchClustersByFingerprint(
         oldSnapshot: AndroidLineSnapshot,
@@ -1674,6 +1681,12 @@ class AndroidVisualPlanner {
             val shift = newRanges.sumOf { (s, e) -> e - s } - oldRanges.sumOf { (s, e) -> e - s }
             return newOffset - shift
         }
+        // Offsets inside the affected range have no unambiguous reverse mapping — the
+        // same new offset could correspond to multiple old positions via proportional
+        // mapping. Unlike [buildOffsetMapper] which uses [mapThroughRanges] for forward
+        // proportional mapping, reverse mapping does not need this precision: callers
+        // only use null as a signal that the offset falls inside newly-created content
+        // (e.g. a paragraph created by a hard-break split), not for exact offset translation.
         return null
     }
 
@@ -1985,6 +1998,20 @@ class AndroidVisualPlanner {
             }
     }
 
+    /**
+     * Tier-3 rebase matching: nearest position with role compatibility (fallback).
+     *
+     * Move slices are NOT filtered by lineIndex because cross-line Moves can originate
+     * from a different visual line than their destination — filtering by the destination
+     * line would miss the correct rebase source on the old line. All other roles
+     * (Insert/Delete/CrossfadeOld/CrossfadeNew) stay on their original line, so they
+     * are filtered by line to prevent matching against unrelated positions on other lines.
+     *
+     * Distance metric: Manhattan distance (|dx| + |dy|) in document coordinates.
+     * This is preferred over Euclidean distance because (a) it avoids a sqrt call per
+     * candidate, and (b) for text animation the visual error is proportional to the
+     * sum of horizontal and vertical displacement, not the diagonal.
+     */
     private fun findRebaseIndexClosestByPosition(
         slice: PreparedVisualTransaction.AnimatedSlice,
         rebaseSnapshot: VisualFrameSnapshot,

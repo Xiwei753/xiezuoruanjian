@@ -327,6 +327,11 @@ class AndroidTextAnimationEngine(
      * Interpolate each animated slice's position and alpha from its start/end values at [progress].
      * For Move slices, [fromDestinationRect] is the pre-move position; for other roles it falls
      * back to [destinationRect] (alpha-only animation).
+     *
+     * Exception after rebase: Insert/CrossfadeNew slices that were rebased onto a Move slice
+     * inherit [fromDestinationRect] from the Move's current position (see [applyRebaseState]).
+     * In this case the slice animates both position and alpha — it slides from the old Move's
+     * current position to its own destination while fading in.
      */
     private fun computeSliceVisualStates(
         transaction: PreparedVisualTransaction,

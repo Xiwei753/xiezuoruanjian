@@ -28,9 +28,14 @@ class AndroidTextAnimationRenderer {
                     // the interpolation moves the bitmap smoothly between them.
                     //
                     // sourceRect is always from the NEW layout's Bitmap (the slice's snapshot
-                    // belongs to the new revision). This is correct because the new Bitmap
-                    // contains the actual glyph pixels at the destination position — the old
-                    // Bitmap may have different sub-pixel rendering or font fallback.
+                    // belongs to the new revision). This is correct because:
+                    // (a) The new Bitmap contains the actual glyph pixels at the destination
+                    //     position — the old Bitmap may have different sub-pixel rendering or
+                    //     font fallback.
+                    // (b) Move is only generated when shapingIdentityConfident is true on BOTH
+                    //     old and new clusters, meaning the glyph pixels are visually identical.
+                    //     Using the new Bitmap therefore produces no visual difference from using
+                    //     the old Bitmap, while avoiding the need to store both snapshots.
                     val fromRect = slice.fromDestinationRect ?: slice.destinationRect
                     val currentLeft = fromRect.left + (slice.destinationRect.left - fromRect.left) * progress
                     val currentTop = fromRect.top + (slice.destinationRect.top - fromRect.top) * progress
